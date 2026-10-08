@@ -70,6 +70,11 @@ class CommandCoordinator:
         definition = self.registry[request.command]
         if not definition.enabled:
             raise CommandDeniedError((f"command {request.command} is disabled",))
+        # A component stop is an interrupt lane, not a normal workflow. It must
+        # be deliverable while the generation lease is held by an in-flight
+        # diagnostic; reconnect/disconnect are already excluded by that lease.
+        if request.command == "stop_axis_diagnostic":
+            return await self._execute_interrupt(request, mutations_enabled=mutations_enabled)
         lease_factory = cast(
             Callable[[int], AbstractAsyncContextManager[Any]] | None,
             getattr(self.connection, "workflow_lease", None),
@@ -86,6 +91,96 @@ class CommandCoordinator:
             request,
             mutations_enabled=mutations_enabled,
         )
+
+    async def _execute_interrupt(
+        self,
+        request: CommandRequest,
+        *,
+        mutations_enabled: bool,
+    ) -> CommandRecord:
+        definition = self.registry[request.command]
+        fingerprint = _fingerprint(request.model_dump(mode="json"))
+        snapshot = self.connection.snapshot()
+        context = CommandAdmissionContext(
+            mutations_enabled=mutations_enabled,
+            active=snapshot.active,
+            generation=snapshot.generation,
+            observation_fresh=snapshot.observation_fresh,
+            runtime_ready=snapshot.runtime_ready,
+            hardware_ready=snapshot.hardware_ready,
+            capabilities=frozenset(snapshot.capabilities),
+            startup_lifecycle=snapshot.startup_lifecycle,
+        )
+        decision = evaluate_command(request, definition, context)
+        if not decision.allowed:
+            raise CommandDeniedError(decision.reasons)
+
+        prior = self._idempotent.get(request.idempotency_key)
+        if prior is not None:
+            if prior[0] != fingerprint or not isinstance(prior[1], CommandRecord):
+                raise IdempotencyConflictError("Idempotency key was already used for a different operation")
+            return prior[1]
+        inflight = self._inflight.get(request.idempotency_key)
+        if inflight is not None:
+            if inflight[0] != fingerprint:
+                raise IdempotencyConflictError("Idempotency key was already used for a different operation")
+            joined = await asyncio.shield(inflight[1])
+            if not isinstance(joined, CommandRecord):
+                raise IdempotencyConflictError("Idempotency key was already used for a different operation")
+            return joined
+
+        client = self.connection.active_client
+        if client is None or definition.route_key is None:
+            raise CommandDeniedError(("Active robot client is unavailable",))
+        future: asyncio.Future[CommandRecord | EmergencyStopResult] = asyncio.get_running_loop().create_future()
+        self._inflight[request.idempotency_key] = (fingerprint, future)
+        started_at = _utcnow()
+        command_id = str(uuid4())
+        try:
+            payload = request.model_dump(mode="json", exclude={"command", "expected_generation", "idempotency_key"})
+            try:
+                response = await client.request(definition.route_key, json_data=payload or None)
+                handler_response = dict(response) if isinstance(response, Mapping) else {"response": response}
+                acknowledged = _strict_acknowledgement(response)
+                semantic_rejected = isinstance(response, Mapping) and response.get("ok") is False
+                if semantic_rejected:
+                    status = "delivery_failed"
+                    detail = f"Robot reported stop failure: {response.get('error') or response.get('detail') or 'ok=false'}"
+                else:
+                    status = "acknowledged" if acknowledged else "delivered_unacknowledged"
+                    detail = "Robot acknowledged component stop" if acknowledged else "Component stop delivered; robot acknowledgement absent"
+            except RobotResponseError as exc:
+                acknowledged = False
+                status = "delivery_failed"
+                handler_response = {"http_status": exc.status_code, "detail": exc.detail}
+                detail = f"Robot rejected component stop with HTTP {exc.status_code}"
+            except Exception as exc:
+                acknowledged = False
+                status = "delivery_failed"
+                handler_response = None
+                detail = str(exc) or exc.__class__.__name__
+            record = CommandRecord(
+                command_id=command_id,
+                command=request.command,
+                idempotency_key=request.idempotency_key,
+                generation=snapshot.generation,
+                status=status,
+                started_at=started_at,
+                finished_at=_utcnow(),
+                remote_acknowledged=acknowledged,
+                physical_effect_verified=False,
+                detail=detail,
+                handler_response=handler_response,
+            )
+            self._remember(record)
+            self._idempotent[request.idempotency_key] = (fingerprint, record)
+            future.set_result(record)
+            return record
+        except BaseException:
+            future.cancel()
+            raise
+        finally:
+            self._inflight.pop(request.idempotency_key, None)
 
     async def _execute_with_generation_lease(
         self,

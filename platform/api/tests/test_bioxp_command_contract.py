@@ -487,3 +487,93 @@ def test_axis_diagnostic_execution_holds_generation_lease_and_forwards_only_type
         ("observe", "x", "move-positive"),
         ("lease-exit", 13),
     ]
+
+
+def test_axis_stop_preempts_inflight_diagnostic_without_waiting_for_workflow_lease() -> None:
+    from contextlib import asynccontextmanager
+
+    from services.bioxp.command_coordinator import CommandCoordinator
+    from services.bioxp.command_models import parse_command_request
+    from services.bioxp.command_registry import DEFAULT_COMMAND_REGISTRY
+    from services.bioxp.models import BioXpSnapshot
+
+    async def scenario() -> None:
+        run_started = asyncio.Event()
+        release_run = asyncio.Event()
+        stop_sent = asyncio.Event()
+        events: list[object] = []
+
+        class Client:
+            async def request(self, route_key, *, json_data):
+                events.append(("request", route_key))
+                if route_key == "run_axis_diagnostic":
+                    run_started.set()
+                    await release_run.wait()
+                    return {"ok": True, "axis": "x", "operation": "move-positive"}
+                assert route_key == "stop_axis_diagnostic"
+                stop_sent.set()
+                return {"ok": True, "axis": "x", "acknowledged": True}
+
+        class Connection:
+            active_client = Client()
+
+            @asynccontextmanager
+            async def workflow_lease(self, expected_generation):
+                events.append(("lease-enter", expected_generation))
+                try:
+                    yield self.active_client
+                finally:
+                    events.append(("lease-exit", expected_generation))
+
+            def snapshot(self):
+                return BioXpSnapshot(
+                    configured=True,
+                    active=True,
+                    generation=17,
+                    reachable=True,
+                    runtime_ready=True,
+                    hardware_ready=True,
+                    hardware_observed_at=datetime.now(timezone.utc),
+                    hardware_observation_fresh=True,
+                    capabilities=("run_axis_diagnostic", "stop_axis_diagnostic"),
+                    observed_at=datetime.now(timezone.utc),
+                    freshness_budget_seconds=30.0,
+                    observation_fresh=True,
+                )
+
+        coordinator = CommandCoordinator(Connection(), DEFAULT_COMMAND_REGISTRY)
+        run_request = parse_command_request({
+            "command": "run_axis_diagnostic",
+            "expected_generation": 17,
+            "idempotency_key": "axis-x-run-preemption-17",
+            "axis": "x",
+            "operation": "move-positive",
+            "operator_ack": "RUN_AXIS_DIAGNOSTIC",
+            "reason": "supervised preemption contract",
+        })
+        stop_request = parse_command_request({
+            "command": "stop_axis_diagnostic",
+            "expected_generation": 17,
+            "idempotency_key": "axis-x-stop-preemption-17",
+            "axis": "x",
+            "operator_ack": "STOP_AXIS",
+            "reason": "operator requested immediate stop",
+        })
+
+        run_task = asyncio.create_task(coordinator.execute(run_request, mutations_enabled=True))
+        await run_started.wait()
+        stop_task = asyncio.create_task(coordinator.execute(stop_request, mutations_enabled=True))
+        await asyncio.wait_for(stop_sent.wait(), timeout=0.5)
+        stop_record = await asyncio.wait_for(stop_task, timeout=0.5)
+        assert stop_record.status == "acknowledged"
+        assert run_task.done() is False
+        assert events[:3] == [
+            ("lease-enter", 17),
+            ("request", "run_axis_diagnostic"),
+            ("request", "stop_axis_diagnostic"),
+        ]
+        release_run.set()
+        await run_task
+        assert events[-1] == ("lease-exit", 17)
+
+    asyncio.run(scenario())
