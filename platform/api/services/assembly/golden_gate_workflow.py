@@ -148,9 +148,10 @@ def _assemble(request: AssembleTask, resolver):
                 'forward_anneal_length': pair.forward.anneal_length, 'reverse_anneal_length': pair.reverse.anneal_length})})
     core = core.model_copy(update={'parts': parts})
     design = design_golden_gate(core, resolve_revision=resolver)
-    candidate = WorkflowCandidate(id='fixed', fixed_request=core, design=design, fidelity=_score(design, request.fidelity, core))
+    candidate = WorkflowCandidate(id='fixed', fixed_request=core, design=design,
+        fidelity=_score(design, request.fidelity, core), reaction=_reaction(request.reaction, design, diagnostics))
     return WorkflowResult(requested=request, solutions=[candidate], selected_solution_id='fixed' if design.solutions else None,
-        edits=edits, reaction=_reaction(request.reaction, design, diagnostics), diagnostics=diagnostics)
+        edits=edits, reaction=candidate.reaction, diagnostics=diagnostics)
 
 
 def _split_core(request: SplitTask, material: Material, cuts: list[dict], width: int) -> GoldenGateDesignRequest:
@@ -230,10 +231,11 @@ def run_workflow(request: WorkflowRequest, *, resolve_revision: Callable[[str], 
         positions = list(range(request.display_origin, len(material.sequence))) + list(range(request.display_origin))
         mapped = _map_features(material.features, material, positions) + [f for f in design.solutions[0].features if f.type == 'primer_bind' and f.id.endswith(':binding')]
         design = design.model_copy(update={'solutions': [design.solutions[0].model_copy(update={'features': mapped})]})
-        solutions.append(WorkflowCandidate(id=f'candidate-{i}', fixed_request=core, design=design, fidelity=_score(design, settings, core)))
+        solutions.append(WorkflowCandidate(id=f'candidate-{i}', fixed_request=core, design=design,
+            fidelity=_score(design, settings, core), reaction=_reaction(request.reaction, design, diagnostics)))
     return WorkflowResult(requested=request, search_result=result, solutions=solutions,
         selected_solution_id=solutions[0].id if solutions else None, diagnostics=diagnostics,
-        reaction=_reaction(request.reaction, solutions[0].design, diagnostics) if solutions else (calculate_reaction(request.reaction) if request.reaction else None))
+        reaction=solutions[0].reaction if solutions else (calculate_reaction(request.reaction) if request.reaction else None))
 
 
 def freeze_selection(result: WorkflowResult, solution_id: str) -> FrozenSelection:

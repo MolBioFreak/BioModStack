@@ -132,6 +132,7 @@ class WorkflowCandidate(Closed):
     design: GoldenGateDesignResult
     # Native result evidence is retained losslessly; it is not a settings escape hatch.
     fidelity: dict[str, JsonValue]
+    reaction: ReactionResult | None = None
 
 class WorkflowResult(Closed):
     schema_version: Literal['bms.golden-gate-workflow-result.v1'] = 'bms.golden-gate-workflow-result.v1'
