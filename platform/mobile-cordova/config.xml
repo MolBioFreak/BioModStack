@@ -1,0 +1,38 @@
+<?xml version='1.0' encoding='utf-8'?>
+<widget id="org.biomodstack.mobile" version="0.1.0" xmlns="http://www.w3.org/ns/widgets" xmlns:android="http://schemas.android.com/apk/res/android" xmlns:cdv="http://cordova.apache.org/ns/1.0">
+    <name>BioModStack</name>
+    <description>Standalone Cordova Android wrapper for the BioModStack frontend.</description>
+    <author email="noreply@example.com" href="https://biomodstack.invalid">BioModStack</author>
+    <content src="index.html" />
+    <access origin="*" />
+    <allow-navigation href="http://*/*" />
+    <allow-navigation href="https://*/*" />
+    <allow-intent href="http://*/*" />
+    <allow-intent href="https://*/*" />
+    <allow-intent href="tel:*" />
+    <allow-intent href="sms:*" />
+    <allow-intent href="mailto:*" />
+    <allow-intent href="geo:*" />
+    <engine name="android" spec="13.0.0" />
+    <preference name="AndroidXEnabled" value="true" />
+    <preference name="scheme" value="https" />
+    <preference name="hostname" value="localhost" />
+    <preference name="android-minSdkVersion" value="24" />
+    <preference name="android-targetSdkVersion" value="35" />
+    <preference name="AndroidWindowSplashScreenBackground" value="#0f172a" />
+    <preference name="AndroidWindowSplashScreenAnimatedIcon" value="resources/android/icon/bms-splash-icon.png" />
+    <preference name="SplashScreenDelay" value="0" />
+    <preference name="LoadUrlTimeoutValue" value="700000" />
+    <platform name="android">
+        <icon background="resources/android/icon/bms-icon-background-ldpi.png" density="ldpi" foreground="resources/android/icon/bms-icon-foreground-ldpi.png" monochrome="resources/android/icon/bms-icon-monochrome-ldpi.png" src="resources/android/icon/bms-icon-ldpi.png" />
+        <icon background="resources/android/icon/bms-icon-background-mdpi.png" density="mdpi" foreground="resources/android/icon/bms-icon-foreground-mdpi.png" monochrome="resources/android/icon/bms-icon-monochrome-mdpi.png" src="resources/android/icon/bms-icon-mdpi.png" />
+        <icon background="resources/android/icon/bms-icon-background-hdpi.png" density="hdpi" foreground="resources/android/icon/bms-icon-foreground-hdpi.png" monochrome="resources/android/icon/bms-icon-monochrome-hdpi.png" src="resources/android/icon/bms-icon-hdpi.png" />
+        <icon background="resources/android/icon/bms-icon-background-xhdpi.png" density="xhdpi" foreground="resources/android/icon/bms-icon-foreground-xhdpi.png" monochrome="resources/android/icon/bms-icon-monochrome-xhdpi.png" src="resources/android/icon/bms-icon-xhdpi.png" />
+        <icon background="resources/android/icon/bms-icon-background-xxhdpi.png" density="xxhdpi" foreground="resources/android/icon/bms-icon-foreground-xxhdpi.png" monochrome="resources/android/icon/bms-icon-monochrome-xxhdpi.png" src="resources/android/icon/bms-icon-xxhdpi.png" />
+        <icon background="resources/android/icon/bms-icon-background-xxxhdpi.png" density="xxxhdpi" foreground="resources/android/icon/bms-icon-foreground-xxxhdpi.png" monochrome="resources/android/icon/bms-icon-monochrome-xxxhdpi.png" src="resources/android/icon/bms-icon-xxxhdpi.png" />
+        <edit-config file="app/src/main/AndroidManifest.xml" mode="merge" target="/manifest/application">
+            <application android:networkSecurityConfig="@xml/network_security_config" android:usesCleartextTraffic="true" />
+        </edit-config>
+        <resource-file src="resources/android/xml/network_security_config.xml" target="app/src/main/res/xml/network_security_config.xml" />
+    </platform>
+</widget>
