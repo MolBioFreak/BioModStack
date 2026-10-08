@@ -5125,8 +5125,8 @@ export const fetchOntSignalWorkbenchCapabilities = (
     `${signalWorkbenchRoot}/runs/${encodeURIComponent(runId)}/generations/${observedGeneration}/capabilities`,
     { params: authority || undefined },
 ));
-export const fetchOntMoveSources = (runId: string, observedGeneration: number) =>
-    apiData(api.get<{ items: OntMoveTableSource[] }>(`${signalWorkbenchRoot}/runs/${encodeURIComponent(runId)}/generations/${observedGeneration}/move-sources`));
+export const fetchOntMoveSources = (runId: string, observedGeneration: number, signal?: AbortSignal) =>
+    apiData(api.get<{ items: OntMoveTableSource[] }>(`${signalWorkbenchRoot}/runs/${encodeURIComponent(runId)}/generations/${observedGeneration}/move-sources`, { signal }));
 export const fetchOntExternalMoveBamCandidates = () =>
     apiData(api.get<{ items: OntExternalMoveBamCandidate[] }>(`${signalWorkbenchRoot}/external-move-bam-candidates`));
 export const registerOntExternalMoveBamCandidate = (

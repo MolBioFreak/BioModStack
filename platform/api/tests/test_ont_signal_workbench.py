@@ -44,6 +44,7 @@ from database import (
     OntSquigualiserViewJob,
 )
 from migrations.add_ont_signal_workbench import migrate
+from migrations.add_ont_external_move_bam_receipts import migrate as migrate_external_move_bam
 from migrations import runner as migration_runner
 from migrations.runner import MIGRATIONS
 from routers import ont_signal_workbench as router
@@ -95,6 +96,16 @@ def _bootstrap_migration_parents(db_path: Path) -> None:
             CREATE TABLE jobs (id VARCHAR(36) PRIMARY KEY NOT NULL);
             """
         )
+
+
+def _materialize_exact_ont_migration_chain(db_path: Path) -> None:
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("PRAGMA foreign_keys=OFF")
+        connection.execute("DROP TABLE IF EXISTS ont_external_move_bam_registration_receipts")
+        connection.execute("DROP TABLE IF EXISTS ont_move_table_sources")
+        connection.commit()
+    migrate(str(db_path))
+    migrate_external_move_bam(str(db_path))
 
 
 def test_migration_registers_closed_tables_checks_foreign_keys_and_is_idempotent(
@@ -559,10 +570,11 @@ async def test_upgraded_database_startup_applies_and_attests_migrations_33_and_3
         )
         connection.execute(
             "UPDATE schema_migrations SET content_sha256=? WHERE version=34",
-            (migration_runner._migration_content_sha256(MIGRATIONS[-1]),),
+            (migration_runner._migration_content_sha256(next(item for item in MIGRATIONS if item.version == 34)),),
         )
         connection.commit()
-    MIGRATIONS[-1].fn(str(db_path))
+    _materialize_exact_ont_migration_chain(db_path)
+    next(item for item in MIGRATIONS if item.version == 34).fn(str(db_path))
     monkeypatch.setattr(database_models, "engine", startup_engine)
     try:
         await database_models.init_db()
@@ -601,10 +613,11 @@ async def test_upgraded_database_startup_rejects_same_name_altered_migration_33_
         )
         connection.execute(
             "UPDATE schema_migrations SET content_sha256=? WHERE version=34",
-            (migration_runner._migration_content_sha256(MIGRATIONS[-1]),),
+            (migration_runner._migration_content_sha256(next(item for item in MIGRATIONS if item.version == 34)),),
         )
         connection.commit()
-    MIGRATIONS[-1].fn(str(db_path))
+    _materialize_exact_ont_migration_chain(db_path)
+    next(item for item in MIGRATIONS if item.version == 34).fn(str(db_path))
     with sqlite3.connect(db_path) as connection:
         connection.execute("DROP TRIGGER trg_ont_move_source_exact_producer_insert")
         connection.execute(

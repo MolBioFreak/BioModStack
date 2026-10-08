@@ -12,6 +12,7 @@ import re
 import shutil
 import socket
 import stat
+import subprocess
 import time
 import tempfile
 import uuid
@@ -547,6 +548,25 @@ class OntSignalWorker:
             "policy_manifest_sha256": policy_sha256,
         }
 
+    @staticmethod
+    def _assert_local_runtime_image(runtime: str, image: str) -> None:
+        try:
+            result = subprocess.run(
+                [runtime, "image", "inspect", "--format", "{{.Id}}", image],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+                timeout=30,
+                env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent"},
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError("local approved Squigualiser image inspection failed") from exc
+        observed = result.stdout.strip()
+        if result.returncode != 0 or observed != image:
+            raise RuntimeError("local approved Squigualiser image is absent or diverged")
+
     def _container_command(
         self,
         output_dir: Path,
@@ -558,13 +578,14 @@ class OntSignalWorker:
         runtime = os.environ.get("BMS_CONTAINER_RUNTIME", "podman").strip()
         if runtime not in {"podman", "docker"}:
             raise RuntimeError("unsupported container runtime")
+        self._assert_local_runtime_image(runtime, identity["image"])
         uid, gid = self._container_user_identity()
         output = Path(os.path.abspath(output_dir))
         broker = Path(os.path.abspath(broker_dir))
         if not output.is_dir() or output.is_symlink() or not broker.is_dir() or broker.is_symlink():
             raise RuntimeError("container output or broker directory is invalid")
         command = [
-            runtime, "run", "--network", "none", "--read-only", "--user", f"{uid}:{gid}",
+            runtime, "run", "--pull=never", "--network", "none", "--read-only", "--user", f"{uid}:{gid}",
             "--pids-limit", "128", "--memory", "4g", "--cpus", "4", "--cap-drop", "ALL",
             "--label", WORKER_LABEL,
             "--ulimit", f"fsize={FILE_SIZE_LIMITS[kind]}:{FILE_SIZE_LIMITS[kind]}",
