@@ -45,8 +45,8 @@ workflow RFANTIBODY_BACKBONE {
         RFANTIBODY(rfantibody_input, framework_pdb)
     
     emit:
-        backbones = RFANTIBODY.out.backbones
-        metrics = RFANTIBODY.out.metrics
+        backbones = RFANTIBODY.out.designs
+        metrics = RFANTIBODY.out.log
 }
 
 // Entry point for direct invocation
