@@ -27,8 +27,25 @@ class ModifiedBaseAdmissionError(ValueError):
 
 def require_parser():
     from pysam import version
-    if version.__version__ != "0.23.3" or version.__htslib_version__ != "1.21":
+    if version.__htslib_version__ != "1.21":
         raise ModifiedBaseAdmissionError("modified-tag parser requires pysam 0.23.3 / htslib 1.21")
+    if version.__version__ == "0.23.3":
+        return
+    if version.__version__ == "0.23.3+bms1":
+        # The API uses the same scientific parser with the reviewed transport
+        # patch. Admit that exact build through its existing source/hash gate,
+        # not an unverified local-version suffix or a second identity policy.
+        from pathlib import Path
+        api_root = str(Path(__file__).resolve().parents[1] / "platform" / "api")
+        if api_root not in sys.path:
+            sys.path.insert(0, api_root)
+        try:
+            from services.verified_native_reads import require_runtime
+            require_runtime()
+        except Exception as exc:
+            raise ModifiedBaseAdmissionError("modified-tag parser native build is unverified") from exc
+        return
+    raise ModifiedBaseAdmissionError("modified-tag parser requires pysam 0.23.3 / htslib 1.21")
 
 
 def inspect_record(read):
