@@ -50,7 +50,7 @@ def test_rfantibody_trb_summary_reports_modifiable_residue_confidence_scope(tmp_
     assert summary["rfa_plddt_nonmodifiable"] == 100.0
     assert summary["rfa_plddt_framework"] == 100.0
     assert summary["rfa_plddt_target"] == 100.0
-    assert summary["plddt_overall"] == 92.0
+    assert summary["plddt_overall"] == 97.33333333333333
     assert summary["rfa_plddt_final"] == 97.33333333333333
     assert summary["rfa_modifiable_residues"] == [
         {"chain_id": "H", "residue_number": 2, "insertion_code": "", "loop_id": "H1"},

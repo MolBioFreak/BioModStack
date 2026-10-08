@@ -1702,19 +1702,25 @@ def _design_to_response(
     )
     data.update(fampnn_metrics)
     confidence_metrics = design.confidence_metrics if isinstance(design.confidence_metrics, dict) else {}
-    rfa_metrics = confidence_metrics.get("rfantibody") if isinstance(confidence_metrics.get("rfantibody"), dict) else confidence_metrics
+    nested_rfa_metrics = confidence_metrics.get("rfantibody") if isinstance(confidence_metrics.get("rfantibody"), dict) else None
+    flat_scope = confidence_metrics.get("confidence_scope") if isinstance(confidence_metrics.get("confidence_scope"), dict) else None
+    looks_like_flat_rfa = (
+        isinstance(flat_scope, dict) and flat_scope.get("metric_family") == "rfantibody_plddt"
+    ) or str(getattr(design, "source_stage", "") or getattr(design, "stage_family", "")).lower().find("rfantibody") >= 0
+    rfa_metrics = nested_rfa_metrics if nested_rfa_metrics is not None else (confidence_metrics if looks_like_flat_rfa else None)
+    first_present = lambda *values: next((value for value in values if value is not None), None)
     if isinstance(rfa_metrics, dict):
         rfa_confidence_scope = rfa_metrics.get("confidence_scope") if isinstance(rfa_metrics.get("confidence_scope"), dict) else None
         rfa_plddt = rfa_confidence_scope.get("plddt") if isinstance(rfa_confidence_scope, dict) and isinstance(rfa_confidence_scope.get("plddt"), dict) else {}
-        data["rfa_confidence_scope"] = data.get("rfa_confidence_scope") or rfa_confidence_scope
-        data["rfa_modifiable_residues"] = data.get("rfa_modifiable_residues") or rfa_metrics.get("modifiable_residues") or (rfa_confidence_scope or {}).get("modifiable_residues")
-        data["rfa_modifiable_ranges"] = data.get("rfa_modifiable_ranges") or rfa_metrics.get("modifiable_ranges") or (rfa_confidence_scope or {}).get("modifiable_ranges")
-        data["rfa_plddt_primary"] = data.get("rfa_plddt_primary") or rfa_metrics.get("plddt_primary") or rfa_plddt.get("primary")
-        data["rfa_plddt_modifiable"] = data.get("rfa_plddt_modifiable") or rfa_metrics.get("plddt_modifiable") or rfa_metrics.get("plddt_selected") or rfa_plddt.get("modifiable")
-        data["rfa_plddt_all_residue"] = data.get("rfa_plddt_all_residue") or rfa_metrics.get("plddt_all_residue") or rfa_plddt.get("all_residue") or data.get("rfa_plddt_final")
-        data["rfa_plddt_nonmodifiable"] = data.get("rfa_plddt_nonmodifiable") or rfa_metrics.get("plddt_nonmodifiable") or rfa_metrics.get("plddt_nonselected") or rfa_plddt.get("nonmodifiable")
-        data["rfa_plddt_framework"] = data.get("rfa_plddt_framework") or rfa_metrics.get("plddt_framework") or rfa_plddt.get("framework")
-        data["rfa_plddt_target"] = data.get("rfa_plddt_target") or rfa_metrics.get("plddt_target") or rfa_plddt.get("target")
+        data["rfa_confidence_scope"] = first_present(data.get("rfa_confidence_scope"), rfa_confidence_scope)
+        data["rfa_modifiable_residues"] = first_present(data.get("rfa_modifiable_residues"), rfa_metrics.get("modifiable_residues"), (rfa_confidence_scope or {}).get("modifiable_residues"))
+        data["rfa_modifiable_ranges"] = first_present(data.get("rfa_modifiable_ranges"), rfa_metrics.get("modifiable_ranges"), (rfa_confidence_scope or {}).get("modifiable_ranges"))
+        data["rfa_plddt_primary"] = first_present(data.get("rfa_plddt_primary"), rfa_metrics.get("plddt_primary"), rfa_plddt.get("primary"))
+        data["rfa_plddt_modifiable"] = first_present(data.get("rfa_plddt_modifiable"), rfa_metrics.get("plddt_modifiable"), rfa_metrics.get("plddt_selected"), rfa_plddt.get("modifiable"))
+        data["rfa_plddt_all_residue"] = first_present(data.get("rfa_plddt_all_residue"), rfa_metrics.get("plddt_all_residue"), rfa_plddt.get("all_residue"), data.get("rfa_plddt_final"))
+        data["rfa_plddt_nonmodifiable"] = first_present(data.get("rfa_plddt_nonmodifiable"), rfa_metrics.get("plddt_nonmodifiable"), rfa_metrics.get("plddt_nonselected"), rfa_plddt.get("nonmodifiable"))
+        data["rfa_plddt_framework"] = first_present(data.get("rfa_plddt_framework"), rfa_metrics.get("plddt_framework"), rfa_plddt.get("framework"))
+        data["rfa_plddt_target"] = first_present(data.get("rfa_plddt_target"), rfa_metrics.get("plddt_target"), rfa_plddt.get("target"))
     provenance = design.provenance if isinstance(design.provenance, dict) else {}
     ppiflow = provenance.get("ppiflow") if isinstance(provenance.get("ppiflow"), dict) else {}
     ppiflow_score = (
