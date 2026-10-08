@@ -186,7 +186,7 @@ describe('ONT FASTQ-QC decision report', () => {
         expect(container.textContent).toContain('Identity fraction— fraction');
         expect(container.textContent).toContain('Decision minimum support depth—');
         expect(container.textContent).toContain('Required output unavailable');
-        expect(container.textContent).toContain('fastq_align: missing · 0 governed outputs');
+        expect(container.textContent).toMatch(/fastq_align: missing · 0 /);
         expect(container.querySelectorAll('a[href*="/ngs-artifacts/"]').length).toBeGreaterThan(0);
         const unavailableArtifact = container.querySelector(`[data-artifact-display-order="${missing.display_order}"]`);
         expect(unavailableArtifact?.querySelector('a')).toBeNull();

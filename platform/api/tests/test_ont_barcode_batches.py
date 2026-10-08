@@ -420,8 +420,11 @@ async def test_receipt_digest_failure_is_rejected_before_writes(batch_context, c
     context = batch_context
     receipt_path = context.inputs_root / "molbio_ngs_receipts" / "receipt-01" / "expected_reference.fasta"
     receipt_path.write_text(">tampered\nTTTT\n", encoding="ascii")
-    with pytest.raises(batches.BarcodeBatchError, match="digest"):
+    with pytest.raises(batches.BarcodeBatchError) as rejected:
         await _create(context, _request(context))
+    assert rejected.value.status_code == 409
+    assert rejected.value.code == "RECEIPT_INVALID"
+    assert canonical_job_spy[0] == []
     assert (await context.session.execute(select(NgsReferenceSetManifest))).scalars().all() == []
     receipts = (await context.session.execute(select(MolBioNgsReceipt))).scalars().all()
     assert all(receipt.consumed_at is None for receipt in receipts)

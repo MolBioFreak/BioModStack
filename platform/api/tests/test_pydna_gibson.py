@@ -392,6 +392,8 @@ def test_design_save_rejects_forged_checksum_and_persists_server_candidate(
 
     app = FastAPI()
     app.include_router(molbio_router)
+    from routers.nucleotide_sequences import router as sequence_router
+    app.include_router(sequence_router)
     app.dependency_overrides[get_molbio_session] = override_session
     payload = _design_payload(inline=True)
 
@@ -432,6 +434,16 @@ def test_design_save_rejects_forged_checksum_and_persists_server_candidate(
             )
             assert selected_forgery.status_code == 400
             assert "checksum" in selected_forgery.json()["detail"].lower()
+            saved_body = valid_response.json()["saved_sequence"]
+            revisions = client.get(f"/api/sequences/{saved_body['id']}/revisions")
+            assert revisions.status_code == 200
+            assert revisions.json()
+            for revision in revisions.json():
+                exact = client.get(f"/api/sequences/{saved_body['id']}/revisions/{revision['revision_id']}")
+                assert exact.status_code == 200
+                for body in (revision, exact.json()):
+                    assert body["snapshot"]["operation_params"] == saved_body["operation_params"]
+                    assert body["snapshot"]["sequence"] == _dna(1) + _dna(2)
 
         assert forged_response.status_code == 400
         assert "checksum" in forged_response.json()["detail"].lower()

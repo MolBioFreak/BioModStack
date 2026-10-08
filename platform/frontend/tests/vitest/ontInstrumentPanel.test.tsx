@@ -195,7 +195,7 @@ describe('OntInstrumentPanel opaque intent lifecycle', () => {
         await flush();
 
         expect(validate.disabled).toBe(true);
-        expect(container.querySelector('[role="alert"]')?.textContent).toContain('Current instrument evidence is unavailable');
+        expect(container.querySelector('[role="alert"]')?.textContent).toContain('could not be refreshed');
         expect(container.textContent).not.toContain('Server-approved protocol · Server output policy');
     });
 });
