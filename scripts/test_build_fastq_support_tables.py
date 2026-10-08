@@ -63,6 +63,32 @@ def test_build_per_base_support_counts_bases_insertions_and_deletions(tmp_path: 
     assert by_pos[5]["low_coverage"] == "false"
 
 
+def test_deletion_majority_is_the_consensus_allele() -> None:
+    module = _load_module()
+    item = module.PositionSupport()
+    item.base_counts["T"] = 1
+    item.deletion_count = 2
+
+    consensus, fraction = module._consensus_and_fraction(item, "T")
+
+    assert consensus == "-"
+    assert fraction == 2 / 3
+
+
+def test_secondary_alignment_with_omitted_sequence_is_not_counted() -> None:
+    module = _load_module()
+    support = [module.PositionSupport() for _ in range(11)]
+
+    module.consume_sam_record(
+        "read-a\t256\tplasmid\t1\t0\t5M1I4M\t*\t0\t0\t*\t*",
+        "plasmid",
+        10,
+        support,
+    )
+
+    assert all(item.depth == 0 and item.insertion_count == 0 for item in support)
+
+
 def test_build_fastq_support_tables_cli_writes_expected_header(tmp_path: Path) -> None:
     reference = tmp_path / "reference.fasta"
     reference.write_text(">plasmid\nAC\n", encoding="utf-8")

@@ -594,6 +594,8 @@ Each phase is a separately reviewable commit/PR. A failed binary gate blocks the
 
 ### Phase 3 — pin and normalize `wf-clone-validation`
 
+**Implementation update (2026-07-19):** P3 is implemented as a local candidate. The canonical lock, exact reviewed compatibility patch, fail-closed runtime validator, atomic provisioning command, offline direct-source wrapper, normalized adapter schema, original-analysis-BAM Phase-2 bridge, reserved-field enforcement, artifact declarations, and focused adversarial tests are present. Live lock validation and adapter replay over the successful 3,037 bp `sample02` offline output pass. Upstream execution success remains separate from the canonical verdict and normalizes to REVIEW when source-read provenance is unavailable. Independent review and a fresh end-to-end execution of the rewritten outer wrapper remain open; P3 is not release-final.
+
 **Files**
 
 - `modules/ngs/clone_validation.nf`
@@ -618,6 +620,8 @@ Each phase is a separately reviewable commit/PR. A failed binary gate blocks the
 - no runtime patch command exists;
 - upstream version/model/image provenance appears in manifest;
 - fixture outputs normalize to the same P2 verdict contract.
+
+Implementation/evidence detail: `docs/audits/ngs-p3-wf-clone-validation-implementation-2026-07-19.md`.
 
 **Commit:** `ngs: pin and adapt wf-clone-validation outputs`.
 

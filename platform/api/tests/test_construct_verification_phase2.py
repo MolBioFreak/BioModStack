@@ -184,6 +184,7 @@ def _run_case(
     topology_overrides: dict[str, object] | None = None,
     topology_breakpoint_digest: str | None = None,
     topology_secondary_digest: str | None = None,
+    verification_samtools: Path = SAMTOOLS,
 ) -> tuple[subprocess.CompletedProcess[str], dict, Path]:
     reference_path = tmp_path / "reference.fasta"
     observed_path = tmp_path / "observed_consensus.fasta"
@@ -363,7 +364,7 @@ def _run_case(
         "--alignment-index",
         str(alignment_index_path),
         "--samtools-bin",
-        str(SAMTOOLS),
+        str(verification_samtools),
         "--topology-evidence",
         str(topology_path),
         "--breakpoint-call",
@@ -388,6 +389,30 @@ def _run_case(
     manifest_path = out_dir / "qc_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
     return result, manifest, out_dir
+
+
+def test_non_utf8_samtools_version_metadata_does_not_abort_verification(tmp_path: Path) -> None:
+    wrapper = tmp_path / "samtools-with-binary-version"
+    wrapper.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, sys\n"
+        "if len(sys.argv) == 2 and sys.argv[1] == '--version':\n"
+        "    os.write(1, b'samtools 1.13\\ncompiler metadata: \\xab\\n')\n"
+        "    raise SystemExit(0)\n"
+        "if len(sys.argv) > 1 and sys.argv[1] == 'idxstats' and '-X' in sys.argv:\n"
+        "    os.write(2, b\"idxstats: invalid option -- 'X'\\n\")\n"
+        "    raise SystemExit(2)\n"
+        f"os.execv({str(SAMTOOLS)!r}, [{str(SAMTOOLS)!r}, *sys.argv[1:]])\n",
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+
+    result, manifest, _ = _run_case(tmp_path, verification_samtools=wrapper)
+
+    assert result.returncode == 0, result.stderr
+    assert manifest["schema"] == "biomodstack.construct_verification.v2"
+    assert manifest["provenance"]["tool_versions"]["samtools"] == "samtools 1.13"
+    assert manifest["inputs"]["alignment_index"]["semantic_validation"]["status"] == "valid"
 
 
 def test_phase2_contract_files_exist() -> None:
@@ -1084,6 +1109,36 @@ def test_final_profile_hash_is_the_reviewed_policy_identity() -> None:
     profile = json.loads(PROFILE_CONFIG.read_text(encoding="utf-8"))["profiles"]["plasmid_strict_v1"]
     encoded = json.dumps(profile, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
     assert hashlib.sha256(encoded).hexdigest() == "90fad5ea643fc6509cd174020a52563c0a0ec4d38836328cd4bdc7eed9015553"
+
+
+def test_verifier_ignores_secondary_alignment_with_omitted_sequence() -> None:
+    namespace = runpy.run_path(str(SCRIPT))
+    recompute_alignment_semantics = namespace["recompute_alignment_semantics"]
+    records = [
+        {
+            "qname": "read-a",
+            "flag": 0,
+            "rname": "ref",
+            "position": 1,
+            "mapq": 60,
+            "cigar": "10M",
+            "sequence": "ACGTACGTAC",
+        },
+        {
+            "qname": "read-a",
+            "flag": 0x100,
+            "rname": "ref",
+            "position": 1,
+            "mapq": 0,
+            "cigar": "5M1I4M",
+            "sequence": "*",
+        },
+    ]
+
+    semantics = recompute_alignment_semantics(records, "ref", "ACGTACGTAC")
+
+    assert semantics["mapped_reads"] == 1
+    assert semantics["alignment_records"] == 1
 
 
 def test_verifier_recomputation_rejects_duplicated_split_query_intervals() -> None:

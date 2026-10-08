@@ -32,7 +32,7 @@ type ModifiedBases =
 type AssemblyTool = 'flye' | 'canu';
 type MinimapPreset = 'map-ont' | 'map-hifi' | 'map-pb' | 'sr';
 type InputSource = 'pod5' | 'bam' | 'fastq';
-type PathField = 'pod5Dir' | 'bamPath' | 'fastqPath' | 'referencePath' | 'wfCloneWorkflowDir';
+type PathField = 'pod5Dir' | 'bamPath' | 'fastqPath' | 'referencePath';
 type PathPickerMode = 'file' | 'directory';
 type ReferenceTab = 'browse' | 'paste' | 'create';
 type PathFilter = 'unknown' | 'bam' | 'fastq' | 'fasta';
@@ -508,10 +508,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const [assemblyCoverage, setAssemblyCoverage] = useState<number>(initialValues?.assemblyCoverage as number || 60);
     const [assemblyTrimLength, setAssemblyTrimLength] = useState<number>(initialValues?.assemblyTrimLength as number || 0);
     const [assemblyMinQuality, setAssemblyMinQuality] = useState<number>(initialValues?.assemblyMinQuality as number || 9);
-    const [wfCloneWorkflowDir, setWfCloneWorkflowDir] = useState(initialValues?.wfCloneWorkflowDir as string || '');
-    const [wfCloneSource, setWfCloneSource] = useState(initialValues?.wfCloneSource as string || 'epi2me-labs/wf-clone-validation');
-    const [wfCloneRevision, setWfCloneRevision] = useState(initialValues?.wfCloneRevision as string || 'v1.8.3');
-    const [wfCloneProfile, setWfCloneProfile] = useState(initialValues?.wfCloneProfile as string || 'singularity');
+    const [wfCloneBasecallerModel, setWfCloneBasecallerModel] = useState(
+        initialValues?.wfCloneBasecallerModel as string || 'dna_r10.4.1_e8.2_400bps_hac@v5.0.0',
+    );
     const [wfCloneSample, setWfCloneSample] = useState(initialValues?.wfCloneSample as string || '');
     const [wfCloneLargeConstruct, setWfCloneLargeConstruct] = useState(initialValues?.wfCloneLargeConstruct === true);
     const [pinnedGpus, setPinnedGpus] = useState<number[]>(() => {
@@ -842,11 +841,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         wf_clone_assm_coverage: assemblyCoverage,
                         wf_clone_trim_length: assemblyTrimLength,
                         wf_clone_min_quality: assemblyMinQuality,
+                        wf_clone_basecaller_model: wfCloneBasecallerModel,
                         wf_clone_large_construct: wfCloneLargeConstruct,
-                        ...(wfCloneWorkflowDir.trim() && { wf_clone_workflow_dir: wfCloneWorkflowDir.trim() }),
-                        ...(wfCloneSource.trim() && { wf_clone_source: wfCloneSource.trim() }),
-                        ...(wfCloneRevision.trim() && { wf_clone_revision: wfCloneRevision.trim() }),
-                        ...(wfCloneProfile.trim() && { wf_clone_profile: wfCloneProfile.trim() }),
                         ...(wfCloneSample.trim() && { wf_clone_sample: wfCloneSample.trim() }),
                     }),
                     ...(runModkit && canRunModkit && modkitFilterThreshold != null && { modkit_filter_threshold: modkitFilterThreshold }),
@@ -905,8 +901,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         if (field === 'pod5Dir') return pod5Dir;
         if (field === 'bamPath') return bamPath;
         if (field === 'fastqPath') return fastqPath;
-        if (field === 'referencePath') return referencePath;
-        return wfCloneWorkflowDir;
+        return referencePath;
     };
 
     const setPathFieldValue = (field: PathField, value: string) => {
@@ -922,11 +917,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             setFastqPath(value);
             return;
         }
-        if (field === 'referencePath') {
-            setReferencePath(value);
-            return;
-        }
-        setWfCloneWorkflowDir(value);
+        setReferencePath(value);
     };
 
     const openPathPicker = (next: PathPickerState) => {
@@ -1768,6 +1759,16 @@ nextflow run workflows/ngs/ont_fastq_qc.nf -profile ont_fastq_qc,apptainer \\
                                         </select>
                                     </label>
                                     <label className="text-xs text-[var(--text-secondary)]">
+                                        Pinned upstream model
+                                        <select
+                                            value={wfCloneBasecallerModel}
+                                            onChange={(e) => setWfCloneBasecallerModel(e.target.value)}
+                                            className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm font-mono"
+                                        >
+                                            <option value="dna_r10.4.1_e8.2_400bps_hac@v5.0.0">dna_r10.4.1_e8.2_400bps_hac@v5.0.0</option>
+                                        </select>
+                                    </label>
+                                    <label className="text-xs text-[var(--text-secondary)]">
                                         Approx plasmid size (bp)
                                         <input
                                             type="number"
@@ -1805,60 +1806,6 @@ nextflow run workflows/ngs/ont_fastq_qc.nf -profile ont_fastq_qc,apptainer \\
                                             value={assemblyTrimLength}
                                             onChange={(e) => setAssemblyTrimLength(Math.max(0, parseInt(e.target.value || '0', 10)))}
                                             className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
-                                        />
-                                    </label>
-                                    <label className="text-xs text-[var(--text-secondary)] md:col-span-2">
-                                        Local wf-clone workflow directory (optional)
-                                        <div className="mt-1 flex items-center gap-2">
-                                            <div className="flex-1 bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 min-h-9">
-                                                {wfCloneWorkflowDir ? (
-                                                    <span className="text-[var(--text-primary)] text-sm font-mono break-all">{formatPathDisplay(wfCloneWorkflowDir)}</span>
-                                                ) : (
-                                                    <span className="text-[var(--text-secondary)] text-sm">Auto-pull unless overridden</span>
-                                                )}
-                                            </div>
-                                            <button
-                                                onClick={() => openPathPicker({ field: 'wfCloneWorkflowDir', title: 'Select wf-clone Directory', mode: 'directory', filter: 'unknown' })}
-                                                className="px-3 py-1.5 rounded border border-[var(--border-primary)] text-[var(--text-primary)] text-sm hover:bg-[var(--bg-tertiary)] transition-colors"
-                                            >
-                                                Browse
-                                            </button>
-                                            {wfCloneWorkflowDir && (
-                                                <button
-                                                    onClick={() => setWfCloneWorkflowDir('')}
-                                                    className="px-3 py-1.5 rounded border border-[var(--border-primary)] text-[var(--text-secondary)] text-sm hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                                                >
-                                                    Clear
-                                                </button>
-                                            )}
-                                        </div>
-                                    </label>
-                                    <label className="text-xs text-[var(--text-secondary)]">
-                                        Workflow source (auto-pull)
-                                        <input
-                                            type="text"
-                                            value={wfCloneSource}
-                                            onChange={(e) => setWfCloneSource(e.target.value)}
-                                            className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm font-mono"
-                                        />
-                                    </label>
-                                    <label className="text-xs text-[var(--text-secondary)]">
-                                        Workflow revision/tag
-                                        <input
-                                            type="text"
-                                            value={wfCloneRevision}
-                                            onChange={(e) => setWfCloneRevision(e.target.value)}
-                                            className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm font-mono"
-                                        />
-                                    </label>
-                                    <label className="text-xs text-[var(--text-secondary)]">
-                                        Nested profile
-                                        <input
-                                            type="text"
-                                            value={wfCloneProfile}
-                                            onChange={(e) => setWfCloneProfile(e.target.value)}
-                                            placeholder="singularity"
-                                            className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm font-mono"
                                         />
                                     </label>
                                     <label className="text-xs text-[var(--text-secondary)]">
