@@ -118,6 +118,16 @@ export interface GPUStatus {
     processes: GPUProcess[];
 }
 
+export interface CPUPowerTelemetry {
+    source: 'rapl' | string;
+    available: boolean;
+    status: 'ok' | 'priming' | 'unreadable' | 'no_sources' | 'read_error' | string;
+    message: string;
+    discovered_sources: number;
+    readable_sources: number;
+    setup_hint?: string | null;
+}
+
 export interface CPUStatus {
     name: string;
     cores_physical: number;
@@ -128,6 +138,7 @@ export interface CPUStatus {
     frequency_max_mhz: number;
     temperature: number | null;
     power_watts: number | null;  // Package power via RAPL
+    power_telemetry?: CPUPowerTelemetry;
 }
 
 export interface RAMStatus {
@@ -209,11 +220,24 @@ export interface FanControlResponse {
     fan_control: FanControlState;
 }
 
+export interface HardwareDiscoveryResponse {
+    success: boolean;
+    message: string;
+    gpu_count: number;
+    gpu_error?: string | null;
+    cpu_power_telemetry: CPUPowerTelemetry;
+    power_control: PowerControlState;
+    fan_control: FanControlState;
+    timestamp: string;
+}
+
 // API functions
 // API functions
 export const fetchJobs = (params?: {
     status?: string;
     q?: string;
+    model_id?: string;
+    mode?: string;
     limit?: number;
     offset?: number;
     include_children?: boolean;
@@ -446,6 +470,68 @@ export interface MsaCacheInfo {
 
 export const fetchMsaCacheInfo = (sequence: string) =>
     api.get<MsaCacheInfo>('/api/msa/cache-info', { params: { sequence } });
+
+export type SequenceQcArtifactState =
+    | 'present'
+    | 'not_requested'
+    | 'not_applicable_to_input_mode'
+    | 'failed'
+    | 'missing_after_workflow'
+    | 'legacy_unavailable'
+    | 'missing_optional'
+    | 'missing_required';
+
+export interface SequenceQcArtifact {
+    kind: string;
+    path: string | null;
+    declared_path?: string | null;
+    required: boolean;
+    exists?: boolean;
+    size_bytes?: number | null;
+    schema?: string;
+    state?: SequenceQcArtifactState;
+    missing_reason?: string | null;
+    unavailable_reason?: string | null;
+    source_stage?: string | null;
+    [key: string]: unknown;
+}
+
+export interface SequenceQcPathSection {
+    name?: string | null;
+    path?: string | null;
+    declared_path?: string | null;
+    exists?: boolean;
+    size_bytes?: number | null;
+    length?: number | null;
+    status?: string | null;
+    method?: string | null;
+    fallback?: boolean;
+    state?: SequenceQcArtifactState;
+    missing_reason?: string | null;
+    unavailable_reason?: string | null;
+    [key: string]: unknown;
+}
+
+export interface SequenceQcManifest {
+    artifact_schema_version: number;
+    job_id: string;
+    sample_name?: string | null;
+    reference?: SequenceQcPathSection;
+    consensus?: SequenceQcPathSection;
+    artifacts: SequenceQcArtifact[];
+    interpretation?: {
+        verified_construct_status?: string;
+        notes?: string[];
+        [key: string]: unknown;
+    };
+    [key: string]: unknown;
+}
+
+export const fetchSequenceQcManifest = (jobId: string) =>
+    api.get<SequenceQcManifest>(`/api/sequence-qc/jobs/${jobId}/manifest`);
+
+export const fetchSequenceQcManifestByPath = (path: string) =>
+    api.get<SequenceQcManifest>('/api/sequence-qc/manifest', { params: { path } });
 
 // Get job logs with parsed errors
 export const fetchJobLogs = (jobId: string): Promise<{ data: JobLogs }> => {
@@ -1000,6 +1086,9 @@ export const setFanControl = (
         ...(targetPercent != null ? { target_percent: targetPercent } : {}),
     });
 
+export const discoverHardware = () =>
+    api.post<HardwareDiscoveryResponse>('/api/gpu/hardware/discover');
+
 // Analytics API
 export interface MetricDistribution {
     min: number;
@@ -1306,6 +1395,8 @@ export interface SchedulerConfig {
         busy_threshold: number;
         cooldown_ms: number;
         cpu_threads_per_job: number;
+        auto_cpu_threads: boolean;
+        auto_cpu_thread_job_threshold: number;
         enabled: boolean;
         target_vram_fill: number;
         capacity_weight: number;
@@ -1314,6 +1405,7 @@ export interface SchedulerConfig {
         msa_concurrency_limit: number;
         msa_preferred_gpu_ids?: number[];
         msa_avoid_heavy_gpus?: boolean;
+        force_run_excluded_gpu_ids?: number[];
     };
     overrides: Record<string, {
         disabled?: boolean;
