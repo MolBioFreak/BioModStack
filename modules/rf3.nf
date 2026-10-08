@@ -29,12 +29,26 @@ process RunRF3 {
     """
     echo "Running RosettaFold3 for batch ${batch_id}"
     
-    # Prepare input for RF3 (convert PDBs to suitable format if needed)
-    rf3 fold \\
-        ${extra_config} \\
+    # Run RF3 using custom wrapper script to bypass CLI issues
+    python3 /scripts/run_rf3.py \\
+        --input-dir . \\
+        --output-dir rf3_results \\
+        --extra-config ${extra_config} \\
         2>&1 | tee rf3_${batch_id}.log
+    echo "RF3 run complete - debug run 13"
     
+    # Flatten and compress results (RF3 creates nested dirs)
+    # Move model CIFs to root and gzip
+    find rf3_results -name "*_model.cif" -exec gzip {} \\;
+    find rf3_results -name "*_model.cif.gz" -exec mv {} rf3_results/ \\;
+    
+    # Move confidence JSONs to root
+    find rf3_results -name "*_summary_confidences.json" -exec mv {} rf3_results/ \\;
+    # Note: we might need per-residue confidences too? Use *confidences.json
+    find rf3_results -name "*_confidences.json" -exec mv {} rf3_results/ \\;
+
     # Convert outputs to pipeline metadata format
+    # Only use summary jsons for metadata? Converter handles it?
     python3 /scripts/metadata_converter.py \\
         --input_dir rf3_results \\
         --converter rf3 \\

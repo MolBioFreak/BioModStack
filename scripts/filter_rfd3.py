@@ -18,12 +18,15 @@ from typing import Optional
 # Try to import biotite for CIF parsing
 try:
     from biotite.structure.io import load_structure
-    from biotite.structure import filter_backbone
+    try:
+        from biotite.structure import filter_peptide_backbone as filter_backbone
+    except ImportError:
+        from biotite.structure import filter_backbone
     import numpy as np
     HAS_BIOTITE = True
-except ImportError:
+except ImportError as e:
     HAS_BIOTITE = False
-    print("Warning: biotite not available, using basic filtering")
+    print(f"Warning: biotite not available, using basic filtering. Error: {e}")
 
 
 def calculate_radius_of_gyration(coords: 'np.ndarray') -> float:
@@ -81,14 +84,18 @@ def filter_structure(
     
     try:
         # Load structure
+        # Load structure
         if str(cif_path).endswith('.gz'):
+            import biotite.structure.io.pdbx as pdbx
             with gzip.open(cif_path, 'rt') as f:
-                structure = load_structure(f)
+                cif_file = pdbx.CIFFile.read(f)
+            structure = pdbx.get_structure(cif_file, model=1)
         else:
             structure = load_structure(str(cif_path))
         
         # Get backbone coordinates for RoG
-        backbone = filter_backbone(structure)
+        backbone_mask = filter_backbone(structure)
+        backbone = structure[backbone_mask]
         coords = backbone.coord
         
         # Calculate metrics
@@ -108,9 +115,23 @@ def filter_structure(
             result['passed'] = False
             result['reason'] = f"RoG {rog:.2f} > max {max_rog}"
         
-        # Copy files if passed
+        # Copy files if passed - ALWAYS CONVERT TO PDB FOR DOWNSTREAM COMPATIBILITY
         if result['passed']:
-            shutil.copy(cif_path, output_dir / cif_path.name)
+            # Define output PDB path
+            pdb_name = cif_path.stem.replace('.cif', '.pdb')
+            # Handle .cif.gz -> .cif -> .pdb case properly
+            if pdb_name.endswith('.gz'):
+                 pdb_name = pdb_name.replace('.gz', '')
+            
+            output_pdb_path = output_dir / pdb_name
+            
+            # Save structure as PDB
+            from biotite.structure.io.pdb import PDBFile
+            pdb_file = PDBFile()
+            pdb_file.set_structure(structure)
+            pdb_file.write(str(output_pdb_path))
+            
+            # Copy JSON metadata
             if json_path and json_path.exists():
                 shutil.copy(json_path, output_dir / json_path.name)
                 
@@ -178,6 +199,8 @@ def main():
             min_rog=args.min_rog,
             max_rog=args.max_rog,
         )
+        if not result['passed']:
+             print(f"Failed: {cif_path} | Reason: {result.get('reason')}")
         results.append(result)
     
     # Summary

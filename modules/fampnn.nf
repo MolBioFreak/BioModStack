@@ -60,7 +60,7 @@ process RunFAMPNN {
         2>&1 | tee fampnn_${task.index}.log
 
     # Rename output files from fold_X_sampleY.pdb to fold_X_seq_Y.pdb
-    for file in fampnn_output/samples/fold_*_sample*.pdb; do
+    for file in fampnn_output/samples/*_sample*.pdb; do
         # Extract the base filename
         base_name=\$(basename "\$file")
         new_name=\$(echo "\$base_name" | sed 's/sample/seq_/')
