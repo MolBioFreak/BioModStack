@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 from collections import deque
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Mapping, Protocol
 from uuid import uuid4
@@ -65,6 +66,7 @@ class CommandCoordinator:
         mutations_enabled: bool,
     ) -> CommandRecord:
         definition = self.registry[request.command]
+        fingerprint = _fingerprint(request.model_dump(mode="json"))
         snapshot = self.connection.snapshot()
         context = CommandAdmissionContext(
             mutations_enabled=mutations_enabled,
@@ -76,11 +78,13 @@ class CommandCoordinator:
             capabilities=frozenset(snapshot.capabilities),
             startup_lifecycle=snapshot.startup_lifecycle,
         )
-        decision = evaluate_command(request, definition, context)
-        if not decision.allowed:
-            raise CommandDeniedError(decision.reasons)
-
-        fingerprint = _fingerprint(request.model_dump(mode="json"))
+        # A completed activation may itself change runtime readiness. Replays
+        # still require all current authorization and generation gates; only
+        # that activation-mutated predicate is suppressed before replay lookup.
+        replay_definition = replace(definition, requires_runtime_inactive=False)
+        replay_decision = evaluate_command(request, replay_definition, context)
+        if not replay_decision.allowed:
+            raise CommandDeniedError(replay_decision.reasons)
         prior = self._idempotent.get(request.idempotency_key)
         if prior is not None:
             if prior[0] != fingerprint or not isinstance(prior[1], CommandRecord):
@@ -94,6 +98,10 @@ class CommandCoordinator:
             if not isinstance(joined, CommandRecord):
                 raise IdempotencyConflictError("Idempotency key was already used for a different operation")
             return joined
+        decision = evaluate_command(request, definition, context)
+        if not decision.allowed:
+            raise CommandDeniedError(decision.reasons)
+
         if self._normal_busy:
             raise CommandBusyError("Another normal BioXP command is already active")
 

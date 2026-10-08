@@ -86,3 +86,26 @@ def test_usb_activation_requires_fresh_api_probe_but_rejects_already_active_runt
     decision = evaluate(request, definition, active_runtime)
     assert decision.allowed is False
     assert "already active" in " ".join(decision.reasons).lower()
+
+
+def test_hardware_snapshot_requires_service_runtime_ownership() -> None:
+    parse, Context, evaluate, registry = _load()
+    request = parse({
+        "command": "collect_hardware_snapshot",
+        "expected_generation": 7,
+        "idempotency_key": "snapshot-7",
+    })
+    definition = registry["collect_hardware_snapshot"]
+    unbound = _allow_context(
+        Context,
+        runtime_ready=None,
+        hardware_ready=None,
+        capabilities=frozenset({"collect_hardware_snapshot"}),
+    )
+
+    denied = evaluate(request, definition, unbound)
+    assert denied.allowed is False
+    assert "runtime readiness must be known and ready" in " ".join(denied.reasons).lower()
+
+    owned = replace(unbound, runtime_ready=True)
+    assert evaluate(request, definition, owned).allowed is True

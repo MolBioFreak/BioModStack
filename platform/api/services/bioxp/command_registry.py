@@ -52,7 +52,7 @@ DEFAULT_COMMAND_REGISTRY: Mapping[CommandName, CommandDefinition] = MappingProxy
             route_key="collect_hardware_snapshot",
             required_capability="collect_hardware_snapshot",
             requires_fresh_observation=False,
-            requires_runtime_ready=False,
+            requires_runtime_ready=True,
             requires_hardware_ready=False,
         ),
         "initialize_oem_environment": CommandDefinition(
