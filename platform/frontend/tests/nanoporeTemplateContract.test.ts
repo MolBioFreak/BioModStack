@@ -94,3 +94,21 @@ test('Nanopore surfaces expose external documentation linkouts in a compact box'
     assert.match(ngsToolkit, /target="_blank"/u);
     assert.match(ngsToolkit, /rel="noreferrer"/u);
 });
+
+
+test('NGS instrument mode is separated from file-analysis launch', () => {
+    const ngsToolkit = readSource('src/components/NGSToolkit.tsx');
+    const api = readSource('src/lib/api.ts');
+    const panel = readSource('src/components/ngs/OntInstrumentPanel.tsx');
+
+    assert.match(ngsToolkit, /type ToolkitView = 'launch' \| 'instrument' \| 'runs'/u);
+    assert.match(ngsToolkit, /Start instrument run/u);
+    assert.match(ngsToolkit, /<OntInstrumentPanel/u);
+    assert.match(api, /fetchOntDeviceStatus/u);
+    assert.match(api, /startOntInstrumentRun/u);
+    assert.match(api, /stopOntInstrumentRun/u);
+    assert.match(panel, /No instrument run button is enabled without a real available position/u);
+    assert.match(panel, /Analyze existing data/u);
+    assert.match(panel, /Start instrument run/u);
+    assert.doesNotMatch(panel, /fake device/iu);
+});
