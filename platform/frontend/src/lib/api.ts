@@ -217,7 +217,8 @@ export type AntibodyIterationAction =
     | 'ppiflow_maturation'
     | 'fampnn_redesign'
     | 'frustrampnn'
-    | 'cdr_indel_round';
+    | 'cdr_indel_round'
+    | 'ui_refinement';
 
 export interface AntibodyCdrIndelConfig {
     loop_ids: string[];
@@ -392,6 +393,21 @@ export interface Design {
     backbone_id: number | null;
     epitope_contact_count: number | null;
     epitope_min_distance: number | null;
+    // Antibody annotation
+    binder_length: number | null;
+    antibody_type: string | null;
+    cdr_h1: string | null;
+    cdr_h2: string | null;
+    cdr_h3: string | null;
+    cdr_l1: string | null;
+    cdr_l2: string | null;
+    cdr_l3: string | null;
+    cdr_h1_length: number | null;
+    cdr_h2_length: number | null;
+    cdr_h3_length: number | null;
+    cdr_l1_length: number | null;
+    cdr_l2_length: number | null;
+    cdr_l3_length: number | null;
     // Framework contact hotspots (Zavrtanik 2018)
     fr2_contacts: string | null;  // IMGT 37, 42, 44, 45, 47
     de_loop: string | null;       // IMGT 72-75

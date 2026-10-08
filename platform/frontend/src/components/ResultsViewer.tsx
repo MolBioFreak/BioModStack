@@ -26,6 +26,7 @@ const TABS = [
 
 type TabId = typeof TABS[number]['id'];
 type OutputSourceFilter = 'all' | 'rfantibody' | 'fampnn' | 'validation';
+const OUTPUT_SOURCE_ORDER: OutputSourceFilter[] = ['rfantibody', 'fampnn', 'validation', 'all'];
 
 // Formatting helpers
 const formatMetric = (val: number | null | undefined, decimals = 2): string =>
@@ -98,6 +99,13 @@ const getOutputSourceLabel = (design: { pdb_path?: string | null; confidence_met
     return 'Other';
 };
 
+const getOutputSourceBadgeClass = (source: OutputSourceFilter): string => {
+    if (source === 'rfantibody') return 'border-violet-500/40 bg-violet-500/10 text-violet-200';
+    if (source === 'fampnn') return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200';
+    if (source === 'validation') return 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200';
+    return 'border-slate-600/40 bg-slate-700/30 text-slate-300';
+};
+
 const getFriendlyDesignName = (design: { name: string; pdb_path?: string | null; confidence_metrics?: Record<string, any> | null }): string => {
     const source = inferDesignOutputSource(design);
     const sampleMatch = design.name.match(/_sample_(\d+)$/);
@@ -107,34 +115,6 @@ const getFriendlyDesignName = (design: { name: string; pdb_path?: string | null;
     if (source === 'fampnn') return 'FAMPNN Candidate';
     if (source === 'rfantibody') return 'RFantibody Backbone';
     return design.name;
-};
-
-const parseCustomCdrLengths = (job: Job | null | undefined): Record<string, number> => {
-    const loopsRaw = job?.params?.antibody_design_loops;
-    const rangesRaw = job?.params?.rfantibody_design_loops_custom;
-    if (!loopsRaw || !rangesRaw) return {};
-
-    const loopNames = Array.isArray(loopsRaw)
-        ? loopsRaw.map(String).map(v => v.trim()).filter(Boolean)
-        : String(loopsRaw).split(',').map(v => v.trim()).filter(Boolean);
-
-    const rangeValues = Array.isArray(rangesRaw)
-        ? rangesRaw.map(String).map(v => v.trim()).filter(Boolean)
-        : String(rangesRaw).replace(/^\[/, '').replace(/\]$/, '').split(',').map(v => v.trim()).filter(Boolean);
-
-    if (loopNames.length !== rangeValues.length) return {};
-
-    const out: Record<string, number> = {};
-    loopNames.forEach((loopName, idx) => {
-        const m = rangeValues[idx]?.match(/^[A-Za-z](\d+)-(\d+)$/);
-        if (!m) return;
-        const start = Number(m[1]);
-        const end = Number(m[2]);
-        if (Number.isFinite(start) && Number.isFinite(end) && end >= start) {
-            out[loopName] = end - start + 1;
-        }
-    });
-    return out;
 };
 
 const getAvailableCdrLoopIds = (job: Job | null | undefined): string[] => {
@@ -149,6 +129,15 @@ const getAvailableCdrLoopIds = (job: Job | null | undefined): string[] => {
     return ['H1', 'H2', 'H3'];
 };
 
+type AntibodyLoopRow = {
+    chain: 'H' | 'L';
+    region: 'H1' | 'H2' | 'H3' | 'L1' | 'L2' | 'L3';
+    sequence: string | null;
+    length: number | null;
+};
+
+const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+
 export function ResultsViewer() {
     const { jobId } = useParams();
     const navigate = useNavigate();
@@ -161,20 +150,30 @@ export function ResultsViewer() {
     const [selectedDesignIds, setSelectedDesignIds] = useState<string[]>([]);
     const [iterationMessage, setIterationMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
     const [outputSourceFilter, setOutputSourceFilter] = useState<OutputSourceFilter>('all');
+    const [antibodySourceFilter, setAntibodySourceFilter] = useState<OutputSourceFilter>('all');
     const [showCdrIndelModal, setShowCdrIndelModal] = useState(false);
     const [cdrIndelConfig, setCdrIndelConfig] = useState<AntibodyCdrIndelConfig>({
-        loop_ids: ['H3'],
-        variants_per_design: 8,
+        loop_ids: [],
+        variants_per_design: 10,
         allow_insertions: true,
         allow_deletions: true,
-        indel_sizes: [1],
-        indel_probability: 1,
-        allowed_aas: [],
-        blocked_aas: [],
+        indel_sizes: [1, 2],
+        indel_probability: 0.1,
+        allowed_aas: [], // Empty means all allowed
         predictor: 'protenix',
         msa_provider: 'local',
     });
 
+    const [pipelineOverrides, setPipelineOverrides] = useState({
+        run_structure_validation: false,
+        structure_validator: 'boltz2',
+        run_ppiflow: false,
+        run_frustrampnn: false,
+        interactive_gating: true,
+    });
+    const [showParamOverrides, setShowParamOverrides] = useState(false);
+
+    // Filter state
     const [sortField, setSortField] = useState<string>('name');
     const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
     const [filterText, setFilterText] = useState('');
@@ -190,6 +189,7 @@ export function ResultsViewer() {
     const [rogMax, setRogMax] = useState<string>('');
     const [rfdRogMin, setRfdRogMin] = useState<string>('');
     const [rfdRogMax, setRfdRogMax] = useState<string>('');
+    const [epitopeMaxDist, setEpitopeMaxDist] = useState<string>('');
     // const MAX_COMPARE_VIEWERS = 3; // unused
 
     // Pagination state for large design sets
@@ -339,45 +339,62 @@ export function ResultsViewer() {
     });
     const antibodyData = antibodyDataWrapper?.data;
 
-    // Antibody selections for Molstar - dynamic based on actual CDR data
+    // Antibody selections for Molstar - prefer IMGT-standard chain/range overlays when available.
     const antibodySelections = useMemo(() => {
         const design = designs.find(d => d.id === selectedDesignId) as any;
-        if (!design?.cdr_h1_length) return undefined;
+        if (!design) return undefined;
 
-        // Use chain 'B' which is typically the binder in RFantibody outputs
-        // Compute approximate positions based on framework regions
-        // Standard VHH/Fab structure: FR1 (1-26) | CDR1 | FR2 (39-55) | CDR2 | FR3 (66-104) | CDR3 | FR4
-        const h1Start = 27;
-        const h1End = 26 + (design.cdr_h1_length || 12);
-        const h2Start = h1End + 17; // FR2 is ~17 residues
-        const h2End = h2Start + (design.cdr_h2_length || 10) - 1;
-        const h3Start = h2End + 39; // FR3 is ~39 residues
-        const h3End = h3Start + (design.cdr_h3_length || 12) - 1;
+        const selections = [];
+        const hasImgT = Boolean(antibodyData?.imgt_pdb_url);
+        const heavyChainId = hasImgT ? 'H' : 'A';
+        const lightChainId = hasImgT ? 'L' : 'C';
 
-        const selections = [
-            { chain_id: 'A', start_residue_number: h1Start, end_residue_number: h1End, color: { r: 255, g: 50, b: 50 } }, // H1 - Red
-            { chain_id: 'A', start_residue_number: h2Start, end_residue_number: h2End, color: { r: 50, g: 255, b: 50 } }, // H2 - Green
-            { chain_id: 'A', start_residue_number: h3Start, end_residue_number: h3End, color: { r: 50, g: 100, b: 255 } }, // H3 - Blue
-        ];
-
-        // Add L-chain CDRs if this is a Fab (not VHH)
-        if (design.antibody_type !== 'vhh' && design.cdr_l1_length) {
-            const l1Start = 27;
-            const l1End = 26 + (design.cdr_l1_length || 11);
-            const l2Start = l1End + 16;
-            const l2End = l2Start + (design.cdr_l2_length || 7) - 1;
-            const l3Start = l2End + 33;
-            const l3End = l3Start + (design.cdr_l3_length || 9) - 1;
-
-            selections.push(
-                { chain_id: 'C', start_residue_number: l1Start, end_residue_number: l1End, color: { r: 255, g: 255, b: 50 } }, // L1 - Yellow
-                { chain_id: 'C', start_residue_number: l2Start, end_residue_number: l2End, color: { r: 50, g: 255, b: 255 } }, // L2 - Cyan
-                { chain_id: 'C', start_residue_number: l3Start, end_residue_number: l3End, color: { r: 255, g: 50, b: 255 } }, // L3 - Magenta
-            );
+        if (design.cdr_h1_length || design.cdr_h2_length || design.cdr_h3_length) {
+            if (hasImgT) {
+                selections.push(
+                    { chain_id: heavyChainId, start_residue_number: 27, end_residue_number: 38, color: { r: 255, g: 50, b: 50 } },
+                    { chain_id: heavyChainId, start_residue_number: 56, end_residue_number: 65, color: { r: 50, g: 255, b: 50 } },
+                    { chain_id: heavyChainId, start_residue_number: 105, end_residue_number: 117, color: { r: 50, g: 100, b: 255 } },
+                );
+            } else {
+                const h1Start = 27;
+                const h1End = 26 + (design.cdr_h1_length || 12);
+                const h2Start = h1End + 17;
+                const h2End = h2Start + (design.cdr_h2_length || 10) - 1;
+                const h3Start = h2End + 39;
+                const h3End = h3Start + (design.cdr_h3_length || 12) - 1;
+                selections.push(
+                    { chain_id: heavyChainId, start_residue_number: h1Start, end_residue_number: h1End, color: { r: 255, g: 50, b: 50 } },
+                    { chain_id: heavyChainId, start_residue_number: h2Start, end_residue_number: h2End, color: { r: 50, g: 255, b: 50 } },
+                    { chain_id: heavyChainId, start_residue_number: h3Start, end_residue_number: h3End, color: { r: 50, g: 100, b: 255 } },
+                );
+            }
         }
 
-        return selections;
-    }, [designs, selectedDesignId]);
+        if (design.antibody_type !== 'vhh' && (design.cdr_l1_length || design.cdr_l2_length || design.cdr_l3_length)) {
+            if (hasImgT) {
+                selections.push(
+                    { chain_id: lightChainId, start_residue_number: 27, end_residue_number: 38, color: { r: 255, g: 255, b: 50 } },
+                    { chain_id: lightChainId, start_residue_number: 56, end_residue_number: 65, color: { r: 50, g: 255, b: 255 } },
+                    { chain_id: lightChainId, start_residue_number: 105, end_residue_number: 117, color: { r: 255, g: 50, b: 255 } },
+                );
+            } else {
+                const l1Start = 27;
+                const l1End = 26 + (design.cdr_l1_length || 11);
+                const l2Start = l1End + 16;
+                const l2End = l2Start + (design.cdr_l2_length || 7) - 1;
+                const l3Start = l2End + 33;
+                const l3End = l3Start + (design.cdr_l3_length || 9) - 1;
+                selections.push(
+                    { chain_id: lightChainId, start_residue_number: l1Start, end_residue_number: l1End, color: { r: 255, g: 255, b: 50 } },
+                    { chain_id: lightChainId, start_residue_number: l2Start, end_residue_number: l2End, color: { r: 50, g: 255, b: 255 } },
+                    { chain_id: lightChainId, start_residue_number: l3Start, end_residue_number: l3End, color: { r: 255, g: 50, b: 255 } },
+                );
+            }
+        }
+
+        return selections.length > 0 ? selections : undefined;
+    }, [designs, selectedDesignId, antibodyData?.imgt_pdb_url]);
 
     // Sorted & Filtered designs for table
     const sortedDesigns = useMemo(() => {
@@ -397,6 +414,11 @@ export function ResultsViewer() {
         // Epitope contacts filter
         if (contactsMin > 0) {
             filtered = filtered.filter(d => (d.epitope_contact_count ?? 0) >= contactsMin);
+        }
+        // Max Epitope Distance filter
+        const parsedEpitopeDist = parseFloat(epitopeMaxDist);
+        if (!isNaN(parsedEpitopeDist) && parsedEpitopeDist > 0) {
+            filtered = filtered.filter(d => d.epitope_min_distance != null && d.epitope_min_distance <= parsedEpitopeDist);
         }
         // RoG filter
         if (rogMinValue !== undefined) {
@@ -429,9 +451,8 @@ export function ResultsViewer() {
             }
             return sortDir === 'asc' ? aVal - bVal : bVal - aVal;
         });
-    }, [designs, sortField, sortDir, filterText, selectedBackboneId, plddtMin, iptmMin, contactsMin, rogMinValue, rogMaxValue, rfdRogMinValue, rfdRogMaxValue]);
+    }, [designs, sortField, sortDir, filterText, selectedBackboneId, plddtMin, iptmMin, contactsMin, rogMinValue, rogMaxValue, rfdRogMinValue, rfdRogMaxValue, epitopeMaxDist]);
     const selectedDesignSet = useMemo(() => new Set(selectedDesignIds), [selectedDesignIds]);
-    const cdrLengthFallbacks = useMemo(() => parseCustomCdrLengths(activeJob), [activeJob]);
     const tableDesigns = useMemo(() => {
         if (outputSourceFilter === 'all') return sortedDesigns;
         return sortedDesigns.filter((design) => inferDesignOutputSource(design as any) === outputSourceFilter);
@@ -466,6 +487,53 @@ export function ResultsViewer() {
         }
     }, [selectedJobId, isOligoJob, activeJob?.name]);
     const selectedDesign = designs.find(d => d.id === selectedDesignId);
+    const antibodyDesignGroups = useMemo(() => {
+        const grouped: Record<OutputSourceFilter, typeof designs> = { all: [], rfantibody: [], fampnn: [], validation: [] };
+        for (const design of designs) {
+            const source = inferDesignOutputSource(design);
+            if (source === 'rfantibody' || source === 'fampnn' || source === 'validation') grouped[source].push(design);
+            else grouped.all.push(design);
+        }
+        for (const key of OUTPUT_SOURCE_ORDER) {
+            grouped[key] = [...grouped[key]].sort((a, b) => (b.plddt_overall ?? 0) - (a.plddt_overall ?? 0));
+        }
+        return grouped;
+    }, [designs]);
+    const antibodyTabDesigns = useMemo(() => {
+        if (antibodySourceFilter === 'all') return [...designs].sort((a, b) => (b.plddt_overall ?? 0) - (a.plddt_overall ?? 0));
+        return antibodyDesignGroups[antibodySourceFilter] || [];
+    }, [designs, antibodyDesignGroups, antibodySourceFilter]);
+    const selectedDesignSource = selectedDesign ? inferDesignOutputSource(selectedDesign) : 'all';
+    useEffect(() => {
+        if (activeTab !== 'antibody') return;
+        if (!selectedDesignId && antibodyTabDesigns.length > 0) {
+            setSelectedDesignId(antibodyTabDesigns[0].id);
+            return;
+        }
+        if (selectedDesignId && antibodyTabDesigns.length > 0 && !antibodyTabDesigns.some((d) => d.id === selectedDesignId)) {
+            setSelectedDesignId(antibodyTabDesigns[0].id);
+        }
+    }, [activeTab, antibodyTabDesigns, selectedDesignId]);
+    const antibodyLoopRows = useMemo<AntibodyLoopRow[]>(() => {
+        if (!selectedDesign) return [];
+        const rows: AntibodyLoopRow[] = [
+            { chain: 'H', region: 'H1', sequence: selectedDesign.cdr_h1 ?? antibodyData?.cdrs?.H1 ?? null, length: selectedDesign.cdr_h1_length ?? antibodyData?.cdrs?.H1?.length ?? null },
+            { chain: 'H', region: 'H2', sequence: selectedDesign.cdr_h2 ?? antibodyData?.cdrs?.H2 ?? null, length: selectedDesign.cdr_h2_length ?? antibodyData?.cdrs?.H2?.length ?? null },
+            { chain: 'H', region: 'H3', sequence: selectedDesign.cdr_h3 ?? antibodyData?.cdrs?.H3 ?? null, length: selectedDesign.cdr_h3_length ?? antibodyData?.cdrs?.H3?.length ?? null },
+            { chain: 'L', region: 'L1', sequence: selectedDesign.cdr_l1 ?? antibodyData?.cdrs?.L1 ?? null, length: selectedDesign.cdr_l1_length ?? antibodyData?.cdrs?.L1?.length ?? null },
+            { chain: 'L', region: 'L2', sequence: selectedDesign.cdr_l2 ?? antibodyData?.cdrs?.L2 ?? null, length: selectedDesign.cdr_l2_length ?? antibodyData?.cdrs?.L2?.length ?? null },
+            { chain: 'L', region: 'L3', sequence: selectedDesign.cdr_l3 ?? antibodyData?.cdrs?.L3 ?? null, length: selectedDesign.cdr_l3_length ?? antibodyData?.cdrs?.L3?.length ?? null },
+        ];
+        return rows.filter((row) => row.sequence || row.length || row.chain === 'H');
+    }, [selectedDesign, antibodyData]);
+    const antibodyTopFrustrationResidues = useMemo(() => {
+        const rows = Array.isArray(selectedDesign?.frustration_residues) ? selectedDesign.frustration_residues : [];
+        return [...rows]
+            .filter((row) => row && typeof row.pos === 'number' && isFiniteNumber(row.frust))
+            .sort((a, b) => Math.abs(b.frust) - Math.abs(a.frust))
+            .slice(0, 8);
+    }, [selectedDesign]);
+    const antibodyHasAnnotation = antibodyLoopRows.some((row) => Boolean(row.sequence));
     // Detect structure format from file extension
     const structureFormat = selectedDesign?.pdb_path?.endsWith('.cif') ? 'cif' : 'pdb';
     const isLoading = designsLoading;
@@ -565,9 +633,11 @@ export function ResultsViewer() {
         mutationFn: async ({
             action,
             cdrIndelConfig,
+            paramOverrides,
         }: {
             action: AntibodyIterationAction;
             cdrIndelConfig?: AntibodyCdrIndelConfig;
+            paramOverrides?: Record<string, unknown>;
         }) => {
             if (!selectedJobId) {
                 throw new Error('Select a job before launching a new round.');
@@ -580,6 +650,7 @@ export function ResultsViewer() {
                 design_ids: selectedDesignIds,
                 action,
                 cdr_indel_config: cdrIndelConfig,
+                param_overrides: paramOverrides,
             });
         },
         onSuccess: (response) => {
@@ -608,7 +679,7 @@ export function ResultsViewer() {
                 <div className="absolute bottom-0 right-0 w-1/2 h-1/2 bg-violet-500/5 rounded-full blur-[150px]" />
             </div>
 
-            <div className={`relative z-10 px-4 md:px-6 lg:px-8 ${activeTab === 'charts' ? 'w-full' : 'max-w-[1800px] mx-auto'}`}>
+            <div className="relative z-10 w-full px-3 sm:px-4 lg:px-5 xl:px-6 2xl:px-8">
                 {/* Header */}
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
                     <div>
@@ -860,6 +931,14 @@ export function ResultsViewer() {
                                         >
                                             Clear
                                         </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowParamOverrides(!showParamOverrides)}
+                                            className={`rounded-lg border px-3 py-2 text-xs transition-colors ${showParamOverrides ? 'border-indigo-500/40 bg-indigo-500/10 text-indigo-200' : 'border-slate-700 bg-slate-800/80 text-slate-200 hover:border-slate-600'}`}
+                                            title="Override pipeline parameters for the next round (JSON format)"
+                                        >
+                                            ⚙️ Overrides
+                                        </button>
                                         {([
                                             ['validate_boltz2', 'Boltz-2'],
                                             ['validate_protenix', 'Protenix'],
@@ -872,20 +951,40 @@ export function ResultsViewer() {
                                                 type="button"
                                                 onClick={() => {
                                                     setIterationMessage(null);
-                                                    launchIterationMutation.mutate({ action });
+                                                    let paramOverrides = undefined;
+
+                                                    if (showParamOverrides) {
+                                                        paramOverrides = {
+                                                            ...(pipelineOverrides.run_structure_validation && {
+                                                                run_structure_validation: true,
+                                                                structure_validator: pipelineOverrides.structure_validator,
+                                                                interactive_gate_stage: 'post_structure_validation'
+                                                            }),
+                                                            ...(pipelineOverrides.run_ppiflow && {
+                                                                run_post_validation_maturation: true,
+                                                                run_post_boltz_maturation: true,
+                                                                run_maturation: true
+                                                            }),
+                                                            ...(pipelineOverrides.run_frustrampnn && {
+                                                                run_frustrampnn: true
+                                                            }),
+                                                            interactive_gating: pipelineOverrides.interactive_gating
+                                                        };
+                                                    }
+
+                                                    launchIterationMutation.mutate({ action, paramOverrides });
                                                 }}
                                                 disabled={selectedDesignIds.length === 0 || launchIterationMutation.isPending}
-                                                className={`rounded-lg border px-3 py-2 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-                                                    action === 'validate_protenix'
-                                                        ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200 hover:border-cyan-400'
-                                                        : action === 'validate_boltz2'
-                                                            ? 'border-blue-500/40 bg-blue-500/10 text-blue-200 hover:border-blue-400'
-                                                            : action === 'ppiflow_maturation'
-                                                                ? 'border-teal-500/40 bg-teal-500/10 text-teal-200 hover:border-teal-400'
-                                                                : action === 'fampnn_redesign'
-                                                                    ? 'border-violet-500/40 bg-violet-500/10 text-violet-200 hover:border-violet-400'
-                                                                    : 'border-amber-500/40 bg-amber-500/10 text-amber-200 hover:border-amber-400'
-                                                }`}
+                                                className={`rounded-lg border px-3 py-2 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${action === 'validate_protenix'
+                                                    ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200 hover:border-cyan-400'
+                                                    : action === 'validate_boltz2'
+                                                        ? 'border-blue-500/40 bg-blue-500/10 text-blue-200 hover:border-blue-400'
+                                                        : action === 'ppiflow_maturation'
+                                                            ? 'border-teal-500/40 bg-teal-500/10 text-teal-200 hover:border-teal-400'
+                                                            : action === 'fampnn_redesign'
+                                                                ? 'border-violet-500/40 bg-violet-500/10 text-violet-200 hover:border-violet-400'
+                                                                : 'border-amber-500/40 bg-amber-500/10 text-amber-200 hover:border-amber-400'
+                                                    }`}
                                                 title={
                                                     action === 'validate_boltz2'
                                                         ? 'Re-run Boltz-2 validation on the selected set and pause at structure review.'
@@ -913,16 +1012,101 @@ export function ResultsViewer() {
                                         >
                                             CDR Indels
                                         </button>
+                                        <div className="w-px h-6 bg-slate-700/50 mx-1"></div>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                navigate('/submit?template=antibody_denovo', {
+                                                    state: {
+                                                        refinementMode: true,
+                                                        sourceJobId: activeJob.id,
+                                                        selectedDesignIds: selectedDesignIds
+                                                    }
+                                                });
+                                            }}
+                                            disabled={selectedDesignIds.length === 0}
+                                            className="flex items-center gap-1.5 rounded-lg border border-indigo-500/60 bg-indigo-500/20 px-4 py-2 text-xs font-semibold text-indigo-100 transition-colors hover:border-indigo-400 hover:bg-indigo-500/30 disabled:cursor-not-allowed disabled:opacity-50 shadow-sm shadow-indigo-900/20"
+                                            title="Re-orchestrate a brand new design pipeline using these highlighted selections as inputs."
+                                        >
+                                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                            </svg>
+                                            Custom Refinement Round
+                                        </button>
                                     </div>
                                 </div>
 
+                                {showParamOverrides && (
+                                    <div className="mt-4 border-t border-slate-700/50 pt-4">
+                                        <div className="text-xs text-indigo-300 font-medium mb-3">Pipeline Add-ons & Overrides</div>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+                                            <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300 transition-colors hover:border-slate-600 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={pipelineOverrides.run_structure_validation}
+                                                    onChange={(e) => setPipelineOverrides(prev => ({ ...prev, run_structure_validation: e.target.checked }))}
+                                                    className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-slate-900"
+                                                />
+                                                Structure Validation
+                                            </label>
+
+                                            <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300 transition-colors hover:border-slate-600 cursor-pointer">
+                                                <span className="text-slate-400">Validator:</span>
+                                                <select
+                                                    value={pipelineOverrides.structure_validator}
+                                                    onChange={(e) => setPipelineOverrides(prev => ({ ...prev, structure_validator: e.target.value }))}
+                                                    disabled={!pipelineOverrides.run_structure_validation}
+                                                    className="bg-transparent border-none text-indigo-300 focus:ring-0 p-0 text-xs w-full disabled:opacity-50 outline-none"
+                                                >
+                                                    <option value="boltz2">Boltz-2</option>
+                                                    <option value="protenix">Protenix</option>
+                                                </select>
+                                            </label>
+
+                                            <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300 transition-colors hover:border-slate-600 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={pipelineOverrides.run_ppiflow}
+                                                    onChange={(e) => setPipelineOverrides(prev => ({ ...prev, run_ppiflow: e.target.checked }))}
+                                                    className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-slate-900"
+                                                />
+                                                PPIFlow Maturation
+                                            </label>
+
+                                            <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300 transition-colors hover:border-slate-600 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={pipelineOverrides.run_frustrampnn}
+                                                    onChange={(e) => setPipelineOverrides(prev => ({ ...prev, run_frustrampnn: e.target.checked }))}
+                                                    className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-slate-900"
+                                                />
+                                                FrustraMPNN
+                                            </label>
+
+                                            <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300 transition-colors hover:border-slate-600 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={pipelineOverrides.interactive_gating}
+                                                    onChange={(e) => setPipelineOverrides(prev => ({ ...prev, interactive_gating: e.target.checked }))}
+                                                    className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-slate-900"
+                                                />
+                                                Interactive Gating
+                                            </label>
+                                        </div>
+                                        <p className="mt-3 text-[10px] text-slate-500">
+                                            These settings will augment the base preset of the action button you click below.
+                                            For example, checking "Structure Validation" and clicking "FAMPNN" will run FAMPNN followed immediately by your chosen validator.
+                                        </p>
+                                    </div>
+                                )}
+
                                 {iterationMessage && (
                                     <div
-                                        className={`mt-3 rounded-lg border px-3 py-2 text-xs ${
-                                            iterationMessage.kind === 'success'
-                                                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
-                                                : 'border-red-500/30 bg-red-500/10 text-red-200'
-                                        }`}
+                                        className={`mt-3 rounded-lg border px-3 py-2 text-xs ${iterationMessage.kind === 'success'
+                                            ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                                            : 'border-red-500/30 bg-red-500/10 text-red-200'
+                                            }`}
                                     >
                                         {iterationMessage.text}
                                     </div>
@@ -1131,9 +1315,31 @@ export function ResultsViewer() {
                                                 type="button"
                                                 onClick={() => {
                                                     setIterationMessage(null);
+                                                    let paramOverrides = undefined;
+
+                                                    if (showParamOverrides) {
+                                                        paramOverrides = {
+                                                            ...(pipelineOverrides.run_structure_validation && {
+                                                                run_structure_validation: true,
+                                                                structure_validator: pipelineOverrides.structure_validator,
+                                                                interactive_gate_stage: 'post_structure_validation'
+                                                            }),
+                                                            ...(pipelineOverrides.run_ppiflow && {
+                                                                run_post_validation_maturation: true,
+                                                                run_post_boltz_maturation: true,
+                                                                run_maturation: true
+                                                            }),
+                                                            ...(pipelineOverrides.run_frustrampnn && {
+                                                                run_frustrampnn: true
+                                                            }),
+                                                            interactive_gating: pipelineOverrides.interactive_gating
+                                                        };
+                                                    }
+
                                                     launchIterationMutation.mutate({
                                                         action: 'cdr_indel_round',
                                                         cdrIndelConfig,
+                                                        paramOverrides,
                                                     });
                                                 }}
                                                 disabled={
@@ -1296,42 +1502,104 @@ export function ResultsViewer() {
                                     {/* ANTIBODY TAB */}
                                     {activeTab === 'antibody' && (
                                         <div className="p-6 space-y-6">
-                                            {!antibodyData ? (
+                                            {!selectedDesign ? (
                                                 <div className="flex flex-col items-center justify-center py-20 text-slate-500">
                                                     <div className="text-4xl mb-4">🧬</div>
-                                                    <p>Select an antibody design to view analysis.</p>
-                                                    <p className="text-xs mt-2 opacity-60">If this is an antibody job, ensure ANARCII processing succeeded.</p>
+                                                    <p>Select an antibody design to inspect.</p>
                                                 </div>
                                             ) : (
                                                 <>
-                                                    {/* CDR + Humanness Header */}
-                                                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                                                        {/* CDR Table */}
-                                                        <div className="lg:col-span-2 bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
-                                                            <div className="px-4 py-3 bg-slate-800/80 border-b border-slate-700/50 flex justify-between items-center">
-                                                                <h3 className="text-sm font-semibold text-white">CDR Loops (IMGT)</h3>
-                                                                {/* Design Selector Dropdown */}
+                                                    <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
+                                                        <div className="flex flex-col gap-4">
+                                                            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                                                                <div>
+                                                                    <div className="text-sm font-semibold text-white">Antibody Design Inspector</div>
+                                                                    <div className="mt-1 text-xs text-slate-400">
+                                                                        Inspect CDR annotation, validation metrics, frustration hotspots, and antibody-specific structure overlays for the selected design.
+                                                                    </div>
+                                                                </div>
                                                                 <div className="relative">
                                                                     <select
                                                                         value={selectedDesignId ?? ''}
                                                                         onChange={(e) => setSelectedDesignId(e.target.value)}
-                                                                        className="appearance-none bg-slate-700/60 backdrop-blur-sm border border-slate-600/50 rounded-lg px-3 py-1 pr-8 text-xs text-blue-300 cursor-pointer hover:bg-slate-600/60 transition-colors min-w-[200px]"
+                                                                        className="appearance-none rounded-lg border border-slate-600/50 bg-slate-700/60 px-3 py-2 pr-8 text-xs text-blue-300 transition-colors hover:bg-slate-600/60 min-w-[280px]"
                                                                     >
-                                                                        {[...designs].sort((a, b) => (b.plddt_overall ?? 0) - (a.plddt_overall ?? 0)).map(d => (
-                                                                            <option key={d.id} value={d.id}>
-                                                                                {d.name} {d.plddt_overall ? `(${d.plddt_overall.toFixed(0)})` : ''}
-                                                                            </option>
-                                                                        ))}
+                                                                        {(['rfantibody', 'fampnn', 'validation'] as OutputSourceFilter[])
+                                                                            .filter((source) => antibodyDesignGroups[source].length > 0 && (antibodySourceFilter === 'all' || antibodySourceFilter === source))
+                                                                            .map((source) => (
+                                                                                <optgroup key={source} label={`${getOutputSourceLabel(antibodyDesignGroups[source][0])} (${antibodyDesignGroups[source].length})`}>
+                                                                                    {antibodyDesignGroups[source].map((d) => (
+                                                                                        <option key={d.id} value={d.id}>
+                                                                                            {getFriendlyDesignName(d)}{d.plddt_overall ? ` | pLDDT ${d.plddt_overall.toFixed(0)}` : ''}
+                                                                                        </option>
+                                                                                    ))}
+                                                                                </optgroup>
+                                                                            ))}
                                                                     </select>
-                                                                    <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400 text-xs">
-                                                                        ▾
-                                                                    </div>
+                                                                    <div className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs">▾</div>
                                                                 </div>
                                                             </div>
-                                                            <div className="p-4 overflow-x-auto">
+                                                            <div className="flex flex-wrap gap-2">
+                                                                {(['all', 'rfantibody', 'fampnn', 'validation'] as OutputSourceFilter[]).map((source) => {
+                                                                    const count = source === 'all' ? designs.length : antibodyDesignGroups[source].length;
+                                                                    if (source !== 'all' && count === 0) return null;
+                                                                    const active = antibodySourceFilter === source;
+                                                                    return (
+                                                                        <button
+                                                                            key={source}
+                                                                            type="button"
+                                                                            onClick={() => setAntibodySourceFilter(source)}
+                                                                            className={`rounded-lg border px-3 py-1.5 text-xs transition-colors ${active ? getOutputSourceBadgeClass(source) : 'border-slate-700 bg-slate-900/50 text-slate-400 hover:border-slate-600'}`}
+                                                                        >
+                                                                            {source === 'all' ? 'All Outputs' : getOutputSourceLabel(antibodyDesignGroups[source][0] || selectedDesign || {})} <span className="opacity-70">{count}</span>
+                                                                        </button>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                            <div className="text-[11px] text-slate-500">
+                                                                Current set: {antibodyTabDesigns.length} design{antibodyTabDesigns.length === 1 ? '' : 's'}{selectedDesign ? ` • inspecting ${getOutputSourceLabel(selectedDesign)}` : ''}.
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+                                                        {[
+                                                            { label: 'Output', value: getOutputSourceLabel(selectedDesign), tone: selectedDesignSource === 'rfantibody' ? 'text-violet-300' : selectedDesignSource === 'fampnn' ? 'text-emerald-300' : 'text-cyan-300' },
+                                                            { label: 'Antibody Type', value: selectedDesign.antibody_type?.toUpperCase() || '—', tone: 'text-slate-200' },
+                                                            { label: 'pLDDT', value: formatMetric(selectedDesign.plddt_overall, 1), tone: getMetricColor('plddt_overall', selectedDesign.plddt_overall) },
+                                                            { label: 'iPTM', value: formatMetric(selectedDesign.iptm, 2), tone: getMetricColor('ptm', selectedDesign.iptm ?? null) },
+                                                            { label: 'Epitope Contacts', value: selectedDesign.epitope_contact_count ?? '—', tone: 'text-slate-200' },
+                                                            { label: 'Min Epitope Dist', value: selectedDesign.epitope_min_distance != null ? `${selectedDesign.epitope_min_distance.toFixed(2)} Å` : '—', tone: 'text-slate-200' },
+                                                            { label: 'Val RMSD All', value: selectedDesign.rmsd_overall != null ? `${selectedDesign.rmsd_overall.toFixed(2)} Å` : '—', tone: 'text-slate-200' },
+                                                            { label: 'Val RMSD Bd', value: selectedDesign.rmsd_binder != null ? `${selectedDesign.rmsd_binder.toFixed(2)} Å` : '—', tone: 'text-slate-200' },
+                                                            { label: 'Humanness', value: antibodyData?.humanness_score != null ? `${(antibodyData.humanness_score * 100).toFixed(0)}%` : '—', tone: antibodyData?.humanness_score != null ? ((antibodyData.humanness_score > 0.8) ? 'text-emerald-300' : (antibodyData.humanness_score > 0.6 ? 'text-amber-300' : 'text-red-300')) : 'text-slate-500' },
+                                                            { label: 'High Frust %', value: selectedDesign.frustration_pct_high != null ? `${selectedDesign.frustration_pct_high.toFixed(1)}%` : '—', tone: 'text-amber-300' },
+                                                            { label: 'High Frust Count', value: selectedDesign.frustration_high_count ?? '—', tone: 'text-amber-300' },
+                                                            { label: 'Maturation ΔIface', value: selectedDesign.maturation_delta_interface != null ? selectedDesign.maturation_delta_interface.toFixed(2) : '—', tone: 'text-fuchsia-300' },
+                                                        ].map((card) => (
+                                                            <div key={card.label} className="rounded-xl border border-slate-700/50 bg-slate-800/50 p-4">
+                                                                <div className="text-[11px] uppercase tracking-wider text-slate-500">{card.label}</div>
+                                                                <div className={`mt-2 text-lg font-semibold ${card.tone}`}>{card.value as any}</div>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+
+                                                    {!antibodyHasAnnotation && (
+                                                        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs text-amber-200">
+                                                            ANARCII-derived CDR sequences are not populated for this design yet. Lengths and structure-level metrics are still shown below when available.
+                                                        </div>
+                                                    )}
+
+                                                    <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                                                        <div className="xl:col-span-2 rounded-xl border border-slate-700/50 bg-slate-800/50 overflow-hidden">
+                                                            <div className="flex items-center justify-between border-b border-slate-700/50 bg-slate-800/80 px-4 py-3">
+                                                                <h3 className="text-sm font-semibold text-white">CDR Loops</h3>
+                                                                <div className="text-[11px] text-slate-500">{antibodyData?.imgt_pdb_url ? 'IMGT renumbered view available' : 'Using original structure numbering'}</div>
+                                                            </div>
+                                                            <div className="overflow-x-auto p-4">
                                                                 <table className="w-full text-sm">
                                                                     <thead>
-                                                                        <tr className="text-left text-xs text-slate-400 uppercase tracking-wider border-b border-slate-700/50">
+                                                                        <tr className="border-b border-slate-700/50 text-left text-xs uppercase tracking-wider text-slate-400">
                                                                             <th className="pb-2">Chain</th>
                                                                             <th className="pb-2">Region</th>
                                                                             <th className="pb-2">Sequence</th>
@@ -1339,86 +1607,78 @@ export function ResultsViewer() {
                                                                         </tr>
                                                                     </thead>
                                                                     <tbody className="divide-y divide-slate-700/30 font-mono">
-                                                                        {['H1', 'H2', 'H3', 'L1', 'L2', 'L3'].map(region => {
-                                                                            const seq = antibodyData.cdrs[region as keyof typeof antibodyData.cdrs];
-                                                                            if (!seq) return null;
-                                                                            return (
-                                                                                <tr key={region} className="hover:bg-slate-700/20">
-                                                                                    <td className="py-2 text-slate-500">{region[0]}</td>
-                                                                                    <td className="py-2 font-bold text-slate-300">{region}</td>
-                                                                                    <td className="py-2 text-white break-all">{seq}</td>
-                                                                                    <td className="py-2 text-right text-slate-500">{seq.length}</td>
-                                                                                </tr>
-                                                                            );
-                                                                        })}
+                                                                        {antibodyLoopRows.map((row) => (
+                                                                            <tr key={row.region} className="hover:bg-slate-700/20">
+                                                                                <td className="py-2 text-slate-500">{row.chain}</td>
+                                                                                <td className="py-2 font-bold text-slate-300">{row.region}</td>
+                                                                                <td className="py-2 text-white break-all">{row.sequence || '—'}</td>
+                                                                                <td className="py-2 text-right text-slate-500">{row.length ?? '—'}</td>
+                                                                            </tr>
+                                                                        ))}
                                                                     </tbody>
                                                                 </table>
                                                             </div>
                                                         </div>
 
-                                                        {/* Humanness & Status */}
                                                         <div className="space-y-6">
-                                                            {/* Humanness Score */}
-                                                            <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-6 flex flex-col items-center justify-center text-center">
-                                                                <span className="text-slate-400 text-sm font-medium mb-2">Humanness Score</span>
-                                                                <div className="relative w-32 h-32 flex items-center justify-center">
-                                                                    <svg className="w-full h-full transform -rotate-90">
-                                                                        <circle cx="64" cy="64" r="56" stroke="#1e293b" strokeWidth="12" fill="transparent" />
-                                                                        <circle
-                                                                            cx="64"
-                                                                            cy="64"
-                                                                            r="56"
-                                                                            stroke={
-                                                                                (antibodyData.humanness_score || 0) > 0.8 ? '#10b981' :
-                                                                                    (antibodyData.humanness_score || 0) > 0.6 ? '#f59e0b' : '#ef4444'
-                                                                            }
-                                                                            strokeWidth="12"
-                                                                            fill="transparent"
-                                                                            strokeDasharray={351.86}
-                                                                            strokeDashoffset={351.86 * (1 - (antibodyData.humanness_score || 0))}
-                                                                            className="transition-all duration-1000 ease-out"
-                                                                        />
-                                                                    </svg>
-                                                                    <span className="absolute text-2xl font-bold text-white">
-                                                                        {((antibodyData.humanness_score || 0) * 100).toFixed(0)}%
-                                                                    </span>
+                                                            <div className="rounded-xl border border-slate-700/50 bg-slate-800/50 p-4">
+                                                                <h3 className="text-sm font-semibold text-white">Framework Contact Hotspots</h3>
+                                                                <div className="mt-3 space-y-2 text-xs">
+                                                                    {[
+                                                                        ['FR2', selectedDesign.fr2_contacts],
+                                                                        ['DE', selectedDesign.de_loop],
+                                                                        ['FR3', selectedDesign.fr3_contacts],
+                                                                        ['FR4', selectedDesign.fr4_contacts],
+                                                                    ].map(([label, value]) => (
+                                                                        <div key={label} className="flex items-center justify-between rounded-lg bg-slate-900/50 px-3 py-2">
+                                                                            <span className="text-slate-500">{label}</span>
+                                                                            <span className="font-mono text-slate-200">{(value as string) || '—'}</span>
+                                                                        </div>
+                                                                    ))}
                                                                 </div>
-                                                                <p className="text-xs text-slate-500 mt-2">OAS-based similarity metric</p>
+                                                            </div>
+
+                                                            <div className="rounded-xl border border-slate-700/50 bg-slate-800/50 p-4">
+                                                                <h3 className="text-sm font-semibold text-white">FrustraMPNN Hotspots</h3>
+                                                                <div className="mt-3 space-y-2 text-xs">
+                                                                    {antibodyTopFrustrationResidues.length > 0 ? antibodyTopFrustrationResidues.map((row: any) => (
+                                                                        <div key={`${row.chain}:${row.pos}`} className="flex items-center justify-between rounded-lg bg-slate-900/50 px-3 py-2">
+                                                                            <span className="font-mono text-slate-300">{row.chain}{row.pos}</span>
+                                                                            <span className={`${row.frust <= -1 ? 'text-amber-300' : row.frust >= 0.58 ? 'text-red-300' : 'text-slate-400'}`}>{row.frust.toFixed(2)} {row.frustClass}</span>
+                                                                        </div>
+                                                                    )) : (
+                                                                        <div className="rounded-lg bg-slate-900/50 px-3 py-3 text-slate-500">No frustration annotation on this design.</div>
+                                                                    )}
+                                                                </div>
                                                             </div>
                                                         </div>
                                                     </div>
 
-                                                    {/* Structure Preview with Highlights */}
-                                                    <div className="h-[500px] bg-slate-900 rounded-xl border border-slate-700/50 overflow-hidden relative">
-                                                        <div className="absolute top-3 left-3 z-10 bg-slate-900/80 backdrop-blur px-3 py-1 rounded text-xs text-slate-300 pointer-events-none">
-                                                            {antibodyData.imgt_pdb_url ? 'IMGT Renumbered Structure' : 'Original Structure (Highlights may be offset)'}
+                                                    <div className="h-[500px] overflow-hidden rounded-xl border border-slate-700/50 bg-slate-900 relative">
+                                                        <div className="absolute top-3 left-3 z-10 rounded bg-slate-900/80 px-3 py-1 text-xs text-slate-300 pointer-events-none">
+                                                            {getFriendlyDesignName(selectedDesign)} • {antibodyData?.imgt_pdb_url ? 'IMGT Renumbered Structure' : 'Original Structure'}
                                                         </div>
                                                         <MolstarViewer
                                                             key={selectedDesignId + '_ab'}
-                                                            structureUrl={antibodyData.imgt_pdb_url || (selectedDesignId ? `/api/designs/${selectedDesignId}/pdb` : undefined)}
+                                                            structureUrl={antibodyData?.imgt_pdb_url || (selectedDesignId ? `/api/designs/${selectedDesignId}/pdb` : undefined)}
                                                             format="pdb"
                                                             alphafoldView={false}
                                                             height="100%"
                                                             backgroundColor="#0f172a"
                                                             hideControls={true}
                                                             selections={antibodySelections}
-                                                            label="CDR H1:Red H2:Green H3:Blue | L1:Yel L2:Cyan L3:Mag"
+                                                            label="CDR overlay: H1 red, H2 green, H3 blue, L1 yellow, L2 cyan, L3 magenta"
                                                         />
                                                     </div>
 
-                                                    {/* Stability Heatmap */}
-                                                    {antibodyData.stability_data && (
-                                                        <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-6">
-                                                            <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
-                                                                <div className="w-2 h-2 rounded-full bg-accent-secondary"></div>
+                                                    {antibodyData?.stability_data && (
+                                                        <div className="rounded-xl border border-slate-700/50 bg-slate-800/50 p-6">
+                                                            <h3 className="mb-4 flex items-center gap-2 text-sm font-semibold text-white">
+                                                                <div className="h-2 w-2 rounded-full bg-accent-secondary"></div>
                                                                 ThermoMPNN Stability Scan (ddG)
                                                             </h3>
-                                                            <div className="h-[400px] w-full flex items-center justify-center bg-slate-900/50 rounded-lg border border-slate-800">
-                                                                <StabilityHeatmap
-                                                                    data={antibodyData.stability_data}
-                                                                    width={800}
-                                                                    height={380}
-                                                                />
+                                                            <div className="flex h-[400px] w-full items-center justify-center rounded-lg border border-slate-800 bg-slate-900/50">
+                                                                <StabilityHeatmap data={antibodyData.stability_data} width={800} height={380} />
                                                             </div>
                                                         </div>
                                                     )}
@@ -1458,95 +1718,110 @@ export function ResultsViewer() {
                                                             </button>
                                                         ))}
                                                     </div>
-                                                    {/* Quality Filters */}
-                                                    <div className="flex items-center gap-4 pt-2 border-t border-slate-700/50">
-                                                        <div className="flex items-center gap-2">
-                                                            <span className="text-xs text-slate-500">pLDDT ≥</span>
-                                                            <input
-                                                                type="range"
-                                                                min="0"
-                                                                max="100"
-                                                                value={plddtMin}
-                                                                onChange={(e) => setPlddtMin(Number(e.target.value))}
-                                                                className="w-24 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                                                            />
-                                                            <span className="text-xs text-blue-400 font-mono w-8">{plddtMin}</span>
-                                                        </div>
-                                                        <div className="flex items-center gap-2">
-                                                            <span className="text-xs text-slate-500">iPTM ≥</span>
-                                                            <input
-                                                                type="range"
-                                                                min="0"
-                                                                max="1"
-                                                                step="0.05"
-                                                                value={iptmMin}
-                                                                onChange={(e) => setIptmMin(Number(e.target.value))}
-                                                                className="w-24 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
-                                                            />
-                                                            <span className="text-xs text-emerald-400 font-mono w-8">{iptmMin.toFixed(2)}</span>
-                                                        </div>
-                                                        <div className="flex items-center gap-2">
-                                                            <span className="text-xs text-slate-500">Contacts ≥</span>
-                                                            <input
-                                                                type="range"
-                                                                min="0"
-                                                                max="20"
-                                                                value={contactsMin}
-                                                                onChange={(e) => setContactsMin(Number(e.target.value))}
-                                                                className="w-24 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
-                                                            />
-                                                            <span className="text-xs text-amber-400 font-mono w-8">{contactsMin}</span>
-                                                        </div>
-                                                        <div className="flex items-center gap-2">
-                                                            <span className="text-xs text-slate-500">RoG</span>
-                                                            <input
-                                                                type="number"
-                                                                min="0"
-                                                                step="0.1"
-                                                                value={rogMin}
-                                                                onChange={(e) => setRogMin(e.target.value)}
-                                                                placeholder="min"
-                                                                className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
-                                                            />
-                                                            <span className="text-xs text-slate-500">–</span>
-                                                            <input
-                                                                type="number"
-                                                                min="0"
-                                                                step="0.1"
-                                                                value={rogMax}
-                                                                onChange={(e) => setRogMax(e.target.value)}
-                                                                placeholder="max"
-                                                                className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
-                                                            />
-                                                        </div>
-                                                        <div className="flex items-center gap-2">
-                                                            <span className="text-xs text-slate-500">RFD RoG</span>
-                                                            <input
-                                                                type="number"
-                                                                min="0"
-                                                                step="0.1"
-                                                                value={rfdRogMin}
-                                                                onChange={(e) => setRfdRogMin(e.target.value)}
-                                                                placeholder="min"
-                                                                className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
-                                                            />
-                                                            <span className="text-xs text-slate-500">–</span>
-                                                            <input
-                                                                type="number"
-                                                                min="0"
-                                                                step="0.1"
-                                                                value={rfdRogMax}
-                                                                onChange={(e) => setRfdRogMax(e.target.value)}
-                                                                placeholder="max"
-                                                                className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
-                                                            />
-                                                        </div>
-                                                        <span className="text-xs text-slate-500 ml-auto">
-                                                            Page {currentPage} • Showing {tableDesigns.length} of {totalDesigns.toLocaleString()} designs
-                                                        </span>
-                                                    </div>
                                                 </div>
                                             )}
+
+                                            {/* Quality Filters */}
+                                            <div className="mb-4 p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
+                                                <div className="flex items-center gap-4 flex-wrap">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-xs text-slate-500">pLDDT ≥</span>
+                                                        <input
+                                                            type="range"
+                                                            min="0"
+                                                            max="100"
+                                                            value={plddtMin}
+                                                            onChange={(e) => setPlddtMin(Number(e.target.value))}
+                                                            className="w-24 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                                                        />
+                                                        <span className="text-xs text-blue-400 font-mono w-8">{plddtMin}</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-xs text-slate-500">iPTM ≥</span>
+                                                        <input
+                                                            type="range"
+                                                            min="0"
+                                                            max="1"
+                                                            step="0.05"
+                                                            value={iptmMin}
+                                                            onChange={(e) => setIptmMin(Number(e.target.value))}
+                                                            className="w-24 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                                                        />
+                                                        <span className="text-xs text-emerald-400 font-mono w-8">{iptmMin.toFixed(2)}</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-xs text-slate-500">Contacts ≥</span>
+                                                        <input
+                                                            type="range"
+                                                            min="0"
+                                                            max="20"
+                                                            value={contactsMin}
+                                                            onChange={(e) => setContactsMin(Number(e.target.value))}
+                                                            className="w-24 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                                                        />
+                                                        <span className="text-xs text-amber-400 font-mono w-8">{contactsMin}</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-xs text-slate-500" title="RMSD / Distance limit from target AAs to CDR loop atoms">Max Dist ≤</span>
+                                                        <input
+                                                            type="number"
+                                                            min="0"
+                                                            step="0.5"
+                                                            value={epitopeMaxDist}
+                                                            onChange={(e) => setEpitopeMaxDist(e.target.value)}
+                                                            placeholder="max (Å)"
+                                                            className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
+                                                        />
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-xs text-slate-500">RoG</span>
+                                                        <input
+                                                            type="number"
+                                                            min="0"
+                                                            step="0.1"
+                                                            value={rogMin}
+                                                            onChange={(e) => setRogMin(e.target.value)}
+                                                            placeholder="min"
+                                                            className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
+                                                        />
+                                                        <span className="text-xs text-slate-500">–</span>
+                                                        <input
+                                                            type="number"
+                                                            min="0"
+                                                            step="0.1"
+                                                            value={rogMax}
+                                                            onChange={(e) => setRogMax(e.target.value)}
+                                                            placeholder="max"
+                                                            className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
+                                                        />
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-xs text-slate-500">RFD RoG</span>
+                                                        <input
+                                                            type="number"
+                                                            min="0"
+                                                            step="0.1"
+                                                            value={rfdRogMin}
+                                                            onChange={(e) => setRfdRogMin(e.target.value)}
+                                                            placeholder="min"
+                                                            className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
+                                                        />
+                                                        <span className="text-xs text-slate-500">–</span>
+                                                        <input
+                                                            type="number"
+                                                            min="0"
+                                                            step="0.1"
+                                                            value={rfdRogMax}
+                                                            onChange={(e) => setRfdRogMax(e.target.value)}
+                                                            placeholder="max"
+                                                            className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
+                                                        />
+                                                    </div>
+                                                    <span className="text-xs text-slate-500 ml-auto">
+                                                        Page {currentPage} • Showing {tableDesigns.length} of {totalDesigns.toLocaleString()} designs
+                                                    </span>
+                                                </div>
+                                            </div>
                                             {/* Text Filter + Annotate CDRs */}
                                             <div className="mb-4 flex items-center gap-4">
                                                 <input
@@ -1571,11 +1846,10 @@ export function ResultsViewer() {
                                                         key={value}
                                                         type="button"
                                                         onClick={() => setOutputSourceFilter(value)}
-                                                        className={`rounded-lg border px-3 py-1.5 text-xs transition-colors ${
-                                                            outputSourceFilter === value
-                                                                ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
-                                                                : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-slate-600'
-                                                        }`}
+                                                        className={`rounded-lg border px-3 py-1.5 text-xs transition-colors ${outputSourceFilter === value
+                                                            ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
+                                                            : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-slate-600'
+                                                            }`}
                                                     >
                                                         {label}
                                                     </button>
@@ -1585,20 +1859,22 @@ export function ResultsViewer() {
                                                 </span>
                                             </div>
                                             {/* Table */}
-                                            <div className="overflow-x-auto">
-                                                <table className="w-full text-sm">
+                                            <div className="w-full overflow-x-auto pb-2">
+                                                <table className="w-full min-w-max text-sm">
                                                     <thead>
                                                         <tr className="border-b border-slate-700">
                                                             {[
-                                                                { key: 'selected', label: (
-                                                                    <input
-                                                                        type="checkbox"
-                                                                        checked={allCurrentPageSelected}
-                                                                        onChange={(e) => toggleCurrentPageSelection(e.target.checked)}
-                                                                        className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-cyan-500"
-                                                                        title={allCurrentPageSelected ? 'Clear current page selection' : 'Select current page'}
-                                                                    />
-                                                                ) },
+                                                                {
+                                                                    key: 'selected', label: (
+                                                                        <input
+                                                                            type="checkbox"
+                                                                            checked={allCurrentPageSelected}
+                                                                            onChange={(e) => toggleCurrentPageSelection(e.target.checked)}
+                                                                            className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-cyan-500"
+                                                                            title={allCurrentPageSelected ? 'Clear current page selection' : 'Select current page'}
+                                                                        />
+                                                                    )
+                                                                },
                                                                 { key: 'name', label: 'Output' },
                                                                 { key: 'binding_tier', label: 'Binding' },
                                                                 { key: 'binder_length', label: 'Size' },
@@ -1646,9 +1922,8 @@ export function ResultsViewer() {
                                                         {tableDesigns.map(d => (
                                                             <tr
                                                                 key={d.id}
-                                                                className={`border-b border-slate-800 cursor-pointer hover:bg-slate-800/30 ${
-                                                                    selectedDesignSet.has(d.id) ? 'bg-cyan-500/5' : ''
-                                                                }`}
+                                                                className={`border-b border-slate-800 cursor-pointer hover:bg-slate-800/30 ${selectedDesignSet.has(d.id) ? 'bg-cyan-500/5' : ''
+                                                                    }`}
                                                                 onClick={() => {
                                                                     setSelectedDesignId(d.id);
                                                                     setActiveTab('structure');
@@ -1665,15 +1940,14 @@ export function ResultsViewer() {
                                                                 </td>
                                                                 <td className="px-3 py-2 max-w-[260px]">
                                                                     <div className="flex items-center gap-2">
-                                                                        <span className={`px-2 py-0.5 text-[10px] font-semibold rounded border ${
-                                                                            inferDesignOutputSource(d as any) === 'validation'
-                                                                                ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
-                                                                                : inferDesignOutputSource(d as any) === 'fampnn'
-                                                                                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
-                                                                                    : inferDesignOutputSource(d as any) === 'rfantibody'
-                                                                                        ? 'border-violet-500/40 bg-violet-500/10 text-violet-200'
-                                                                                        : 'border-slate-600 bg-slate-800 text-slate-300'
-                                                                        }`}>
+                                                                        <span className={`px-2 py-0.5 text-[10px] font-semibold rounded border ${inferDesignOutputSource(d as any) === 'validation'
+                                                                            ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
+                                                                            : inferDesignOutputSource(d as any) === 'fampnn'
+                                                                                ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                                                                                : inferDesignOutputSource(d as any) === 'rfantibody'
+                                                                                    ? 'border-violet-500/40 bg-violet-500/10 text-violet-200'
+                                                                                    : 'border-slate-600 bg-slate-800 text-slate-300'
+                                                                            }`}>
                                                                             {getOutputSourceLabel(d as any)}
                                                                         </span>
                                                                         {d.frustration_high_count != null && (
@@ -1710,7 +1984,7 @@ export function ResultsViewer() {
 
                                                                 {/* CDR-H3 Length */}
                                                                 <td className="px-3 py-2 font-mono text-violet-400">
-                                                                    {(d as any).cdr_h3_length ?? cdrLengthFallbacks.H3 ?? '—'}
+                                                                    {(d as any).cdr_h3_length ?? '—'}
                                                                 </td>
 
                                                                 {/* Epitope Contact Count */}
@@ -1774,22 +2048,20 @@ export function ResultsViewer() {
                                                                 </td>
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rmsd_binder, 2)}</td>
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rmsd_overall, 2)}</td>
-                                                                <td className={`px-3 py-2 font-mono ${
-                                                                    d.frustration_high_count != null
-                                                                        ? d.frustration_high_count > 5
-                                                                            ? 'text-red-400'
-                                                                            : 'text-emerald-400'
-                                                                        : 'text-slate-500'
-                                                                }`}>
+                                                                <td className={`px-3 py-2 font-mono ${d.frustration_high_count != null
+                                                                    ? d.frustration_high_count > 5
+                                                                        ? 'text-red-400'
+                                                                        : 'text-emerald-400'
+                                                                    : 'text-slate-500'
+                                                                    }`}>
                                                                     {d.frustration_high_count ?? '—'}
                                                                 </td>
-                                                                <td className={`px-3 py-2 font-mono ${
-                                                                    d.frustration_pct_high != null
-                                                                        ? d.frustration_pct_high > 10
-                                                                            ? 'text-orange-400'
-                                                                            : 'text-emerald-400'
-                                                                        : 'text-slate-500'
-                                                                }`}>
+                                                                <td className={`px-3 py-2 font-mono ${d.frustration_pct_high != null
+                                                                    ? d.frustration_pct_high > 10
+                                                                        ? 'text-orange-400'
+                                                                        : 'text-emerald-400'
+                                                                    : 'text-slate-500'
+                                                                    }`}>
                                                                     {d.frustration_pct_high != null ? `${d.frustration_pct_high.toFixed(1)}%` : '—'}
                                                                 </td>
                                                                 <td className={`px-3 py-2 font-mono ${d.has_clash ? 'text-red-400' : d.has_clash === false ? 'text-green-400' : 'text-slate-500'}`}>

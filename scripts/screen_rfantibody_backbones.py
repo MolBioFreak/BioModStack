@@ -22,7 +22,7 @@ CODE_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CODE_ROOT / "platform" / "api"))
 
 try:
-    from services.structure_utils import calculate_epitope_contacts, load_structure  # type: ignore
+    from services.structure_utils import load_structure  # type: ignore
 except Exception as exc:  # pragma: no cover - import failure should be explicit at runtime
     raise SystemExit(f"Failed to import structure_utils helpers: {exc}")
 
@@ -51,6 +51,32 @@ def parse_residue_numbers(epitope_residues: list[str]) -> set[int]:
         except ValueError:
             continue
     return residue_numbers
+
+
+def parse_residue_specs(epitope_residues: list[str]) -> list[tuple[str | None, int]]:
+    specs: list[tuple[str | None, int]] = []
+    for res_spec in epitope_residues:
+        raw = (res_spec or "").strip()
+        if not raw:
+            continue
+        chain_id = raw[0] if raw[0].isalpha() else None
+        num_str = "".join(char for char in raw if char.isdigit() or char == "-")
+        if not num_str:
+            continue
+        try:
+            specs.append((chain_id, int(num_str)))
+        except ValueError:
+            continue
+    return specs
+
+
+def unique_residue_ids(ca_atoms) -> list[int]:
+    seen: list[int] = []
+    for res_id in ca_atoms.res_id.tolist():
+        res_id = int(res_id)
+        if not seen or seen[-1] != res_id:
+            seen.append(res_id)
+    return seen
 
 
 def infer_antibody_chains(all_chains: list[str], antibody_chain_hint: str | None) -> list[str]:
@@ -97,12 +123,73 @@ def infer_target_chain(
     return non_antibody_chains[0] if non_antibody_chains else None
 
 
+def map_epitope_residue_numbers(
+    epitope_residues: list[str],
+    design_target_ca,
+    target_chain_id: str,
+    reference_target_pdb: Path | None,
+    reference_target_chain: str | None,
+) -> tuple[set[int], str]:
+    direct_numbers = {
+        resnum
+        for chain_id, resnum in parse_residue_specs(epitope_residues)
+        if chain_id in (None, target_chain_id)
+    }
+    if direct_numbers and np.isin(design_target_ca.res_id, list(direct_numbers)).any():
+        return direct_numbers, "direct"
+
+    if reference_target_pdb is None or not reference_target_pdb.exists():
+        return direct_numbers, "missing_reference"
+
+    reference_structure = load_structure(reference_target_pdb)
+    reference_chains = [str(chain_id) for chain_id in np.unique(reference_structure.chain_id)]
+    reference_specs = parse_residue_specs(epitope_residues)
+    reference_chain = reference_target_chain if reference_target_chain in reference_chains else None
+    if reference_chain is None:
+        for chain_id, _resnum in reference_specs:
+            if chain_id and chain_id in reference_chains:
+                reference_chain = chain_id
+                break
+    if reference_chain is None and len(reference_chains) == 1:
+        reference_chain = reference_chains[0]
+    if reference_chain is None:
+        return direct_numbers, "reference_chain_unresolved"
+
+    reference_target_ca = reference_structure[
+        (reference_structure.chain_id == reference_chain) & (reference_structure.atom_name == "CA")
+    ]
+    if len(reference_target_ca) == 0:
+        return direct_numbers, "reference_target_missing"
+
+    reference_order = unique_residue_ids(reference_target_ca)
+    design_order = unique_residue_ids(design_target_ca)
+    if not reference_order or not design_order:
+        return direct_numbers, "reference_or_design_empty"
+
+    ordinal_map = {res_id: idx for idx, res_id in enumerate(reference_order)}
+    mapped_numbers: set[int] = set()
+    for chain_id, resnum in reference_specs:
+        if chain_id not in (None, reference_chain):
+            continue
+        idx = ordinal_map.get(resnum)
+        if idx is None or idx >= len(design_order):
+            continue
+        mapped_numbers.add(design_order[idx])
+
+    if mapped_numbers:
+        return mapped_numbers, "reference_order"
+
+    return direct_numbers, "reference_mapping_failed"
+
+
 def compute_geometry_metrics(
     pdb_path: Path,
     epitope_residues: list[str],
     antibody_chain: str | None,
     target_chain: str | None,
     target_contact_distance_threshold: float,
+    epitope_contact_distance_threshold: float,
+    reference_target_pdb: Path | None,
 ) -> dict[str, Any]:
     structure = load_structure(pdb_path)
     all_chains = [str(chain_id) for chain_id in np.unique(structure.chain_id)]
@@ -132,13 +219,29 @@ def compute_geometry_metrics(
     )
     min_target_distances = np.min(pairwise_target_distances, axis=1)
 
-    epitope_residue_numbers = parse_residue_numbers(epitope_residues)
+    epitope_residue_numbers, epitope_mapping_mode = map_epitope_residue_numbers(
+        epitope_residues,
+        design_target_ca=target_ca,
+        target_chain_id=target_chain_id,
+        reference_target_pdb=reference_target_pdb,
+        reference_target_chain=target_chain,
+    )
     epitope_centroid_distance: float | None = None
     epitope_residue_count = 0
+    epitope_contact_count = 0
+    epitope_min_distance: float | None = None
     if epitope_residue_numbers:
         epitope_ca = target_ca[np.isin(target_ca.res_id, list(epitope_residue_numbers))]
         epitope_residue_count = int(len(epitope_ca))
         if epitope_residue_count > 0:
+            epitope_coords = epitope_ca.coord
+            epitope_pairwise_distances = np.linalg.norm(
+                antibody_coords[:, None, :] - epitope_coords[None, :, :],
+                axis=2,
+            )
+            min_epitope_distances = np.min(epitope_pairwise_distances, axis=1)
+            epitope_contact_count = int(np.sum(min_epitope_distances < epitope_contact_distance_threshold))
+            epitope_min_distance = float(np.min(min_epitope_distances))
             antibody_centroid = np.mean(antibody_coords, axis=0)
             epitope_centroid = np.mean(epitope_ca.coord, axis=0)
             epitope_centroid_distance = float(np.linalg.norm(antibody_centroid - epitope_centroid))
@@ -153,6 +256,9 @@ def compute_geometry_metrics(
         "antibody_residue_count": int(len(antibody_ca)),
         "target_residue_count": int(len(target_ca)),
         "epitope_residue_count": epitope_residue_count,
+        "epitope_mapping_mode": epitope_mapping_mode,
+        "epitope_contact_count": epitope_contact_count,
+        "epitope_min_distance": epitope_min_distance,
         "target_contact_count": int(np.sum(min_target_distances < target_contact_distance_threshold)),
         "target_min_distance": float(np.min(min_target_distances)),
         "target_contact_distance_threshold": float(target_contact_distance_threshold),
@@ -172,21 +278,19 @@ def screen_design(
     min_target_contacts: int | None,
     max_epitope_centroid_distance: float | None,
     target_contact_distance_threshold: float,
+    reference_target_pdb: Path | None,
 ) -> dict[str, Any]:
-    contact_count, min_distance = calculate_epitope_contacts(
-        pdb_path,
-        epitope_residues,
-        antibody_chain=antibody_chain or "H",
-        target_chain=target_chain or "B",
-        distance_threshold=contact_distance_threshold,
-    )
     geometry_metrics = compute_geometry_metrics(
         pdb_path,
         epitope_residues=epitope_residues,
         antibody_chain=antibody_chain,
         target_chain=target_chain,
         target_contact_distance_threshold=target_contact_distance_threshold,
+        epitope_contact_distance_threshold=contact_distance_threshold,
+        reference_target_pdb=reference_target_pdb,
     )
+    contact_count = int(geometry_metrics["epitope_contact_count"])
+    min_distance = geometry_metrics["epitope_min_distance"]
 
     passed = True
     reasons: list[str] = []
@@ -221,8 +325,6 @@ def screen_design(
     return {
         "design_name": pdb_path.stem,
         "pdb_path": str(pdb_path.resolve()),
-        "epitope_contact_count": int(contact_count),
-        "epitope_min_distance": float(min_distance) if min_distance is not None else None,
         "passed_screen": bool(passed),
         "screening_reason": ",".join(reasons) if reasons else "passed",
         **geometry_metrics,
@@ -237,6 +339,7 @@ def main() -> int:
     parser.add_argument("--epitope-residues", default="", help="Comma-separated residue specs such as A45,A53,A68")
     parser.add_argument("--antibody-chains", default="H", help="Comma-separated antibody chain hints")
     parser.add_argument("--target-chain", default="", help="Optional target chain hint")
+    parser.add_argument("--reference-target-pdb", default="", help="Original normalized target structure used to map epitope residues onto RFantibody outputs")
     parser.add_argument("--min-epitope-contacts", type=int, default=None, help="Minimum CA contacts to the selected epitope")
     parser.add_argument("--max-epitope-distance", type=float, default=None, help="Maximum allowed minimum CA distance to the selected epitope")
     parser.add_argument("--contact-distance-threshold", type=float, default=8.0, help="CA contact cutoff in angstroms")
@@ -252,6 +355,7 @@ def main() -> int:
     epitope_residues = parse_residue_list(args.epitope_residues)
     antibody_chain = normalize_chain_hint(args.antibody_chains)
     target_chain = (args.target_chain or "").strip() or None
+    reference_target_pdb = Path(args.reference_target_pdb).expanduser().resolve() if args.reference_target_pdb else None
 
     screening_applied = any(
         threshold is not None
@@ -275,6 +379,7 @@ def main() -> int:
             "passed_designs": 0,
             "failed_designs": 0,
             "epitope_residues": epitope_residues,
+            "reference_target_pdb": str(reference_target_pdb) if reference_target_pdb else None,
             "min_epitope_contacts": args.min_epitope_contacts,
             "max_epitope_distance": args.max_epitope_distance,
             "contact_distance_threshold": args.contact_distance_threshold,
@@ -299,6 +404,7 @@ def main() -> int:
                 min_target_contacts=args.min_target_contacts,
                 max_epitope_centroid_distance=args.max_epitope_centroid_distance,
                 target_contact_distance_threshold=args.target_contact_distance_threshold,
+                reference_target_pdb=reference_target_pdb,
             )
         except Exception as exc:
             result = {
@@ -306,6 +412,7 @@ def main() -> int:
                 "pdb_path": str(pdb_path.resolve()),
                 "epitope_contact_count": 0,
                 "epitope_min_distance": None,
+                "epitope_mapping_mode": "error",
                 "target_contact_count": 0,
                 "target_min_distance": None,
                 "epitope_centroid_distance": None,
@@ -335,6 +442,7 @@ def main() -> int:
                 "design_name",
                 "epitope_contact_count",
                 "epitope_min_distance",
+                "epitope_mapping_mode",
                 "target_contact_count",
                 "target_min_distance",
                 "epitope_centroid_distance",
@@ -359,6 +467,7 @@ def main() -> int:
         "passed_designs": passed_count,
         "failed_designs": failed_count,
         "epitope_residues": epitope_residues,
+        "reference_target_pdb": str(reference_target_pdb) if reference_target_pdb else None,
         "min_epitope_contacts": args.min_epitope_contacts,
         "max_epitope_distance": args.max_epitope_distance,
         "contact_distance_threshold": args.contact_distance_threshold,
