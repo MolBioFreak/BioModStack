@@ -17,11 +17,10 @@ From: nvcr.io/nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
     git clone https://github.com/PapenfussLab/RFdiffusion /app/RFdiffusion
     cd /app/RFdiffusion && git checkout 0938f878388466d30d16f1f468c362afe9c8d345
 
-    # Install PyTorch 2.4.1 with CUDA 12.1
-    # WARNING: RTX 5090 (sm_120) not officially supported but DOES work (tested)
-    # PyTorch nightly has pickle security issues with e3nn
+    # Install PyTorch nightly with CUDA 12.1 for RTX 5090 (sm_120) support
+    # Using nightly build for Blackwell architecture compatibility
     pip install -q --no-cache-dir \
-        torch==2.4.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+        torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu121
 
     # Install DGL 1.1.3 from PyPI (older version without graphbolt, compatible with PyTorch 2.4.1)
     pip install -q --no-cache-dir dgl==1.1.3
@@ -45,6 +44,9 @@ From: nvcr.io/nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
 # Setting environment variables
 %environment
     DGLBACKEND="pytorch"
+    # Disable PyTorch weights_only enforcement for e3nn constant loading
+    # e3nn uses builtins.slice in pickled constants which is safe but not allowlisted
+    TORCH_FORCE_WEIGHTS_ONLY_LOAD="0"
 
 # Entry point for the container when run.
 %runscript
