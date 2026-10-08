@@ -7,6 +7,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Bootstrap must not create bytecode even under an empty HOME/XDG.
+if len(sys.argv) > 1 and sys.argv[1] in {"discover", "plan"}:
+    sys.dont_write_bytecode = True
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -54,7 +58,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Manage BioModStack desktop services")
     parser.add_argument(
         "action",
-        choices=["start", "start-api", "start-target", "stop", "stop-api", "restart", "restart-api", "status"],
+        choices=["start", "start-api", "start-target", "stop", "stop-api", "restart", "restart-api", "status", "discover", "plan"],
     )
     parser.add_argument(
         "--runtime",
@@ -64,7 +68,19 @@ def main() -> int:
     parser.add_argument("--notify", action="store_true", help="send desktop notifications")
     parser.add_argument("--json", action="store_true", dest="json_output", help="emit structured JSON for supported actions")
     parser.add_argument("--target", choices=["dev", "prod", "both"], help="runtime target for start-target")
+    parser.add_argument("--model", action="append", default=[], help="reviewed model dependency selection for discover/plan; repeatable")
     args = parser.parse_args()
+
+    if args.action in {"discover", "plan"}:
+        if args.notify or args.target:
+            parser.error("bootstrap is read-only; --notify and --target are unsupported")
+        from biomodstack_bootstrap import bootstrap_report, render_report, BLOCKED_EXIT
+        report = bootstrap_report(args.action, project_root=REPO_ROOT,
+                                  runtime=args.runtime, models=tuple(args.model))
+        print(json.dumps(report, indent=2, sort_keys=True) if args.json_output else render_report(report))
+        return 0 if report["ready"] else BLOCKED_EXIT
+    if args.model:
+        parser.error("--model is only supported with discover/plan")
 
     if args.json_output and args.action != "status":
         parser.error("--json is only supported with the status action")

@@ -1,0 +1,157 @@
+"""Read-only bootstrap observations, not installation or scientific admission.
+
+Uses the runtime profile, local budget and reviewed model dependency authorities.
+No probes execute external programs: executable presence is not qualification.
+"""
+from __future__ import annotations
+
+from dataclasses import asdict
+import json
+import os
+from pathlib import Path
+import platform
+import shutil
+import sys
+
+from biomodstack_local_resources import configured_local_policy, detect_local_capacity
+from biomodstack_runtime_profile import (
+    get_install_profile_path, normalize_install_profile, resolve_runtime_paths,
+)
+
+SCHEMA_VERSION = "bms.bootstrap.v1"
+BLOCKED_EXIT = 3
+
+
+def _disk(path: Path) -> dict:
+    """Observe nearest existing directory without creating a proposed root."""
+    ancestor = path
+    while not ancestor.exists() and ancestor != ancestor.parent:
+        ancestor = ancestor.parent
+    if not ancestor.is_dir():
+        raise ValueError(f"Storage ancestor is not a directory: {ancestor}")
+    usage = shutil.disk_usage(ancestor)
+    return {"path": str(path), "observed_at": str(ancestor),
+            "device": ancestor.stat().st_dev, "free_bytes": usage.free,
+            "total_bytes": usage.total,
+            "writable_hint": os.access(ancestor, os.W_OK | os.X_OK),
+            "required_peak_bytes": None, "sufficient": None}
+
+
+def bootstrap_report(action: str, *, project_root: Path, runtime: str | None = None,
+                     models: tuple[str, ...] = ()) -> dict:
+    if action not in {"discover", "plan"}:
+        raise ValueError("Unsupported bootstrap action")
+    mode = runtime or os.environ.get("BMS_RUNTIME_MODE", "container")
+    report = {"schema_version": SCHEMA_VERSION, "action": action,
+              "status": "blocked", "ready": False, "read_only": True,
+              "runtime_mode": mode, "selected_models": sorted(set(models)),
+              "observations": {}, "dependencies": [], "blockers": [],
+              "effects": {"writes": False, "downloads": False,
+                          "service_changes": False, "registration": False}}
+    blockers = report["blockers"]
+    def block(code, message):
+        blockers.append({"code": code, "message": message})
+    if mode not in {"dev", "container"}:
+        block("runtime_invalid", "BMS_RUNTIME_MODE must be dev or container")
+    observations = report["observations"]
+    observations["host"] = {"system": platform.system(), "machine": platform.machine()}
+    if platform.system() != "Linux":
+        block("host_unsupported", "Managed bootstrap currently targets Linux")
+    profile_path = get_install_profile_path()
+    observations["profile"] = {"path": str(profile_path), "exists": profile_path.exists()}
+    profile = {}
+    profile_valid = True
+    try:
+        if profile_path.exists():
+            raw = json.loads(profile_path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                raise ValueError("Install profile must be an object")
+            profile = normalize_install_profile(raw)
+            # Discovery must not silently present ignored settings as configured.
+            if set(raw) - set(profile):
+                raise ValueError("Install profile contains unsupported or empty fields")
+    except (OSError, ValueError, TypeError) as exc:
+        profile_valid = False
+        block("profile_invalid", str(exc))
+    try:
+        observations["capacity"] = asdict(detect_local_capacity())
+        observations["local_budget"] = asdict(configured_local_policy(profile))
+    except ValueError as exc:
+        block("local_resources_invalid", str(exc))
+    paths = {}
+    if profile_valid:
+        try:
+            paths = resolve_runtime_paths(project_root=project_root, profile=profile)
+            storage_keys = ("data_root", "inputs_dir", "results_dir", "work_dir",
+                            "analysis_cache_dir", "container_dir", "weights_root",
+                            "dev_data_root")
+            observations["storage"] = []
+            for key in storage_keys:
+                path = Path(str(paths[key]))
+                try:
+                    disk = _disk(path)
+                    observations["storage"].append({"role": key, **disk})
+                    if disk["free_bytes"] == 0:
+                        block("disk_full", f"No free space for {key}")
+                    if not disk["writable_hint"]:
+                        block("storage_not_writable", f"No write/search access hint for {key}")
+                except (OSError, ValueError) as exc:
+                    block("storage_unavailable", f"{key}: {exc}")
+                if path.is_relative_to(project_root.resolve()):
+                    block("storage_in_source", f"{key} resolves inside checkout; configure external storage before installation")
+        except (OSError, ValueError, TypeError) as exc:
+            block("profile_resolution_failed", str(exc))
+    tools = {"python3", "git", "systemctl"}
+    tools.update({"uv", "node", "npm"} if mode == "dev" else {"docker"})
+    if models:
+        tools.add("apptainer")
+    observations["tools"] = [{"name": name, "path": shutil.which(name),
+                               "qualified": False} for name in sorted(tools)]
+    for tool in observations["tools"]:
+        if not tool["path"]:
+            block("tool_missing", f"Required executable not on PATH: {tool['name']}")
+    observations["gpu"] = {"probe_tool": shutil.which("nvidia-smi"),
+                            "compatibility": "not_checked"}
+    observations["privileges"] = {"euid": os.geteuid(), "service_access": "not_checked"}
+    observations["tailnet"] = {"requested": False, "state": "not_checked"}
+    if models:
+        try:
+            api_root = str(project_root / "platform" / "api")
+            if api_root not in sys.path:
+                sys.path.insert(0, api_root)
+            from model_registry import model_runtime_dependencies
+            for model in sorted(set(models)):
+                try:
+                    for ref in model_runtime_dependencies(model):
+                        root = paths.get("container_dir" if ref.kind == "image" else "weights_root")
+                        report["dependencies"].append({
+                            "model_id": model, "kind": ref.kind, "relative_path": ref.relative_path,
+                            "path": str(Path(str(root)) / ref.relative_path) if root else None,
+                            "acquisition": "unavailable", "qualification": "not_checked"})
+                except ValueError as exc:
+                    block("dependency_closure_unavailable", f"{model}: {exc}")
+        except (ImportError, OSError, ValueError) as exc:
+            block("dependency_authority_unavailable", str(exc))
+        block("scientific_qualification_not_run", "Existing scientific validators/admission remain authoritative; no runtime was qualified or registered")
+        block("licensed_weights_unresolved", "No license acceptance or separate pinned weight acquisition is implemented by bootstrap")
+    block("acquisition_unavailable", "No approved pinned acquisition executor is wired into bootstrap; existing files are not acquisition or qualification evidence")
+    block("disk_requirement_unknown", "Authoritative acquisition/staging/expansion sizes are unavailable; free space is not a sufficient-disk verdict")
+    block("prerequisite_qualification_not_run", "Tool versions, GPU compatibility, service privileges and locked dependencies have not been qualified")
+    block("installation_readiness_not_verified", "Configure, acquire, verify/register and resume are not implemented by this read-only slice")
+    if action == "plan":
+        report["plan"] = {"executable": False, "steps": [
+            {"action": step, "state": "blocked"} for step in
+            ("configure", "acquire_pinned_runtime", "acquire_licensed_weights",
+             "verify_register", "verify_readiness")], "restart_impact": "none: no execution"}
+    return report
+
+
+def render_report(report: dict) -> str:
+    lines = [f"BioModStack bootstrap {report['action']}: {report['status']} ({SCHEMA_VERSION})",
+             "Read-only observations; installation ready: no"]
+    for tool in report["observations"].get("tools", []):
+        lines.append(f"Tool {tool['name']}: {tool['path'] or 'missing'} (not qualified)")
+    for storage in report["observations"].get("storage", []):
+        lines.append(f"Storage {storage['role']}: {storage['path']} — {storage['free_bytes']} bytes free; required peak unknown")
+    lines.extend(f"BLOCKED [{b['code']}]: {b['message']}" for b in report["blockers"])
+    return "\n".join(lines)
