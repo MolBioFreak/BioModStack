@@ -1,0 +1,138 @@
+{
+  "dataset_id": "pryor2020-s005",
+  "metric_version": "pryor-pair-pooled-v1",
+  "dataset": {
+    "id": "pryor2020-s005",
+    "file_name": "pone.0238592.s005.xlsx",
+    "source_url": "https://journals.plos.org/plosone/article/file?id=10.1371/journal.pone.0238592.s005&type=supplementary",
+    "sha256": "dfa2df906bd306e3971652c4b95d004818fdb8dd9e49f4522691959d28f537cb",
+    "rows": 64,
+    "columns": 64,
+    "end_length": 3,
+    "polarity": "five_prime",
+    "ligation_enzyme": "T4 DNA ligase",
+    "restriction_enzyme_variant": "SapI",
+    "thermal_profile": "37C/16C",
+    "buffer": "T4 buffer",
+    "cycles": 30,
+    "minutes_per_step": 5,
+    "final_step": "60C for 5 minutes",
+    "license_source": "Primary PLOS article/supplements; CC BY 4.0",
+    "worksheet": "Table S5. SapI",
+    "parsed_file": "pryor2020-s005.json.gz",
+    "parsed_sha256": "219b20013f51096f2be413b56461086806155d80adf4da754edae760f9ec3d14",
+    "conversion_version": "pryor-xlsx-labels-v1",
+    "metric_version": "pryor-pair-pooled-v1",
+    "doi": "10.1371/journal.pone.0238592",
+    "license": "CC-BY-4.0",
+    "license_url": "https://creativecommons.org/licenses/by/4.0/",
+    "axis_convention": "physical protruding strands, each written 5-prime to 3-prime",
+    "reaction_volume_uL": 20,
+    "substrate_nM": 100,
+    "enzyme_mix_uL": null,
+    "restriction_enzyme_U": 15,
+    "ligase_U": 500,
+    "component_concentrations": "Units reported; molar enzyme concentrations not reported",
+    "replication": "Minimum two reactions on separate days; minimum two SMRT cells per library",
+    "measurement": "Recovered ligation-product observations, not kinetic rate constants",
+    "buffer_strength": "1X"
+  },
+  "condition_use": "reference",
+  "scope": "idealized_intended_unique_junction_set",
+  "settings": {
+    "seed": 0,
+    "evaluation_budget": 10000,
+    "restarts": 8,
+    "exact_limit": 10000,
+    "alternatives": 5,
+    "unique_classes": true,
+    "exclude_palindromes": true,
+    "ranking_mode": "empirical"
+  },
+  "solutions": [
+    {
+      "junctions": [
+        "TAC",
+        "TGC"
+      ],
+      "choices": [
+        0,
+        0
+      ],
+      "cuts": [
+        {
+          "position": 9,
+          "sequence": "TAC"
+        },
+        {
+          "position": 4,
+          "sequence": "TGC"
+        }
+      ],
+      "fragment_lengths": [
+        5,
+        5
+      ],
+      "size_penalty": 0,
+      "f_set": 0.9976984351198415,
+      "log_f_set": -0.0023042175515858576
+    }
+  ],
+  "diagnostics": [
+    "Sequence-window assignment only; physical preparation, primer tradeoffs and translation verification belong to the design owner. Target DNA is unchanged."
+  ],
+  "search_scope": {
+    "algorithm": "exhaustive",
+    "domain_size": 1,
+    "attempted": 1,
+    "scored": 1,
+    "complete": true,
+    "optimality_proven": true,
+    "tie_break": "descending log F_set, then size penalty, then explicit choices",
+    "objective": "empirical"
+  },
+  "status": "solutions",
+  "constraints": {
+    "end_length": 3,
+    "topology": "circular",
+    "windows": [
+      [
+        9,
+        2
+      ],
+      [
+        4,
+        5
+      ]
+    ],
+    "coordinate_convention": "zero_based_half_open_fusion_start_windows",
+    "fragment_length_basis": "distance_between_fusion_starts",
+    "fusion_nonoverlap": true,
+    "fixed_positions": [
+      9,
+      4
+    ],
+    "fixed_overhangs": [],
+    "required": [],
+    "excluded": [],
+    "protected_regions": [],
+    "frame_constraints": [],
+    "min_fragment_length": 1,
+    "max_fragment_length": null,
+    "target_fragment_length": null
+  },
+  "candidate_domains": [
+    [
+      {
+        "position": 9,
+        "sequence": "TAC"
+      }
+    ],
+    [
+      {
+        "position": 4,
+        "sequence": "TGC"
+      }
+    ]
+  ]
+}

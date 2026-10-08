@@ -1,0 +1,115 @@
+{
+  "schema_version": "bms.golden-gate-design.v1",
+  "task": "assemble_parts",
+  "sources": [
+    {
+      "id": "donor",
+      "source": {
+        "sequence": "TTGAAGACACAATGACGTACCGTATGACCTGATCGTAGCTACGATCGTACCTAGGTCAGTACGATCGTACAGTCGGAGGTGTCTTCAA",
+        "topology": "circular",
+        "features": [],
+        "kind": "inline"
+      }
+    },
+    {
+      "id": "insert",
+      "source": {
+        "sequence": "TGACCGATGCTAGCATCGATGGTACCTAGCTGACTACGATGCGTATCGAGCTAGTTCGAC",
+        "topology": "linear",
+        "features": [
+          {
+            "id": "cds",
+            "type": "CDS",
+            "name": "insert CDS",
+            "segments": [
+              {
+                "start": 0,
+                "end": 60,
+                "wraps_origin": false
+              }
+            ],
+            "strand": 1,
+            "qualifiers": {
+              "transl_table": [
+                "11"
+              ]
+            },
+            "codon_start": 2,
+            "status": "intact",
+            "frame_preserved": null
+          }
+        ],
+        "kind": "inline"
+      }
+    }
+  ],
+  "parts": [
+    {
+      "id": "backbone",
+      "source_id": "donor",
+      "name": "vector",
+      "role": "backbone",
+      "slot": null,
+      "orientation": "forward",
+      "preparation": {
+        "kind": "donor",
+        "retained_fragment_index": 0,
+        "removed_fragment_indices": []
+      }
+    },
+    {
+      "id": "insert",
+      "source_id": "insert",
+      "name": "insert",
+      "role": null,
+      "slot": null,
+      "orientation": "forward",
+      "preparation": {
+        "kind": "pcr",
+        "region": {
+          "start": 0,
+          "end": 60,
+          "wraps_origin": false
+        },
+        "left": {
+          "clamp": "TT",
+          "spacer": "AC",
+          "fusion": "GGAG"
+        },
+        "right": {
+          "clamp": "AA",
+          "spacer": "AC",
+          "fusion": "AATG"
+        },
+        "forward_anneal_length": 20,
+        "reverse_anneal_length": 21,
+        "qc_min_binding_anneal_length": 12,
+        "removed_fragment_indices": []
+      }
+    }
+  ],
+  "target": {
+    "topology": "circular",
+    "display_origin": 0,
+    "exact_sequence": "AATGACGTACCGTATGACCTGATCGTAGCTACGATCGTACCTAGGTCAGTACGATCGTACAGTCGGAGTGACCGATGCTAGCATCGATGGTACCTAGCTGACTACGATGCGTATCGAGCTAGTTCGAC"
+  },
+  "enzyme": {
+    "enzyme_id": "BbsI",
+    "catalog_id": "biopython-rebase-404-bms-v1",
+    "catalog_sha256": "e9a1e9ec8e5b1845f82fd613f7343722756c0ef8c5f487c704a151646317d73f"
+  },
+  "primer_settings": {
+    "algorithm": "nn_santalucia_hicks_2004",
+    "salt_correction": "owczarzy_2008",
+    "primer_concentration_nM": 250.0,
+    "template_concentration_nM": 0.0,
+    "na_mM": 50.0,
+    "k_mM": 0.0,
+    "tris_mM": 0.0,
+    "mg_mM": 1.5,
+    "dntps_mM": 0.6,
+    "dmso_percent": 0.0,
+    "formamide_percent": 0.0,
+    "self_complementary": false
+  }
+}
