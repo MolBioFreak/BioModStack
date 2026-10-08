@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -24,6 +25,7 @@ from services.conformational_mapping.persistence import (
     terminalize_failed_request_for_job,
     transition_request,
 )
+from services.execution_ownership import UnitProperties
 
 
 class _FailedNextflowProcess:
@@ -149,8 +151,15 @@ async def _assert_terminalized_failure(
 def _configure_local_nextflow_launch(
     monkeypatch: pytest.MonkeyPatch,
     factory: sessionmaker,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.delenv("BMS_WORKFLOW_ADAPTER_URL", raising=False)
+    monkeypatch.setenv("BMS_WORKFLOW_ADAPTER_LANE", "development")
+    lane_root = tmp_path / "development-lane"
+    monkeypatch.setenv("BMS_STATE_DIR", str(lane_root / "state"))
+    monkeypatch.setenv("BMS_DB_PATH", str(lane_root / "state" / "bms.db"))
+    monkeypatch.setenv("BMS_WORK", str(lane_root / "work"))
+    monkeypatch.setenv("BMS_RESULTS_DIR", str(lane_root / "results"))
     monkeypatch.setattr(database, "async_session", factory)
     monkeypatch.setattr(nextflow, "assert_workflow_launch_allowed", lambda _action: None)
     monkeypatch.setattr(nextflow, "resolve_nextflow_java_env", lambda env: (env, []))
@@ -169,7 +178,7 @@ async def test_failed_cm_nextflow_run_terminalizes_linked_request_with_immutable
     try:
         await _create_cm_job_and_request(factory, job_id=job_id, request_id=request_id)
 
-        _configure_local_nextflow_launch(monkeypatch, factory)
+        _configure_local_nextflow_launch(monkeypatch, factory, tmp_path)
         monkeypatch.setattr(nextflow, "preflight_nextflow_java", lambda _env: (True, "test java"))
         monkeypatch.setattr(nextflow, "build_nextflow_command", lambda *_args, **_kwargs: ("nextflow",))
 
@@ -177,6 +186,21 @@ async def test_failed_cm_nextflow_run_terminalizes_linked_request_with_immutable
             return _FailedNextflowProcess()
 
         monkeypatch.setattr(nextflow.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+        unit_name = "biomodstack-development-job-cm-job-failed-attempt-1.service"
+        monkeypatch.setattr(nextflow, "create_systemd_workflow_unit", lambda _command: unit_name)
+        monkeypatch.setattr(
+            nextflow,
+            "show_unit_properties",
+            lambda *_args: UnitProperties(
+                active_state="inactive",
+                sub_state="failed",
+                control_group="",
+                main_pid="0",
+                exec_main_status="1",
+                result="exit-code",
+                slice_name="biomodstack-development-workflows.slice",
+            ),
+        )
         await nextflow.launch_nextflow_job(
             job_id=job_id,
             model_id="conformational_mapping",
@@ -199,16 +223,13 @@ async def test_failed_cm_nextflow_run_terminalizes_linked_request_with_immutable
 
             monkeypatch.setattr(cm_router, "_authorized_record", authorize_failed_request)
             fake_request: Any = None
-            retry = await cm_router.retry_request(request_id, request=fake_request, session=session)
-            assert retry == {
-                "request_id": request_id,
-                "job_id": job_id,
-                "status": "queued",
-                "retry_count": 1,
-            }
+            with pytest.raises(HTTPException) as retry_error:
+                await cm_router.retry_request(request_id, request=fake_request, session=session)
+            assert retry_error.value.status_code == 409
             job = await session.get(Job, job_id)
-            assert job is not None and job.status == "queued" and job.queue_status == "queued"
-            assert request.status == "queued" and request.terminal_at is None
+            assert job is not None and job.status == "failed" and job.queue_status == "failed"
+            persisted = await session.get(ConformationalMappingRequest, request_id)
+            assert persisted is not None and persisted.status == "failed"
     finally:
         await engine.dispose()
 
@@ -225,7 +246,7 @@ async def test_cm_java_preflight_failure_terminalizes_linked_request(
     request_id = "cm-request-java-preflight-failed"
     try:
         await _create_cm_job_and_request(factory, job_id=job_id, request_id=request_id)
-        _configure_local_nextflow_launch(monkeypatch, factory)
+        _configure_local_nextflow_launch(monkeypatch, factory, tmp_path)
         monkeypatch.setattr(nextflow, "preflight_nextflow_java", lambda _env: (False, "Java 17 unavailable"))
 
         await nextflow.launch_nextflow_job(
@@ -258,7 +279,7 @@ async def test_cm_nextflow_command_build_exception_terminalizes_linked_request(
     request_id = "cm-request-command-build-failed"
     try:
         await _create_cm_job_and_request(factory, job_id=job_id, request_id=request_id)
-        _configure_local_nextflow_launch(monkeypatch, factory)
+        _configure_local_nextflow_launch(monkeypatch, factory, tmp_path)
         monkeypatch.setattr(nextflow, "preflight_nextflow_java", lambda _env: (True, "test java"))
 
         def fail_to_build_command(*_args: object, **_kwargs: object) -> tuple[str, ...]:
@@ -301,7 +322,7 @@ async def test_cm_java_preflight_failure_does_not_terminalize_when_guarded_job_p
             request_id=request_id,
             awaiting_input=True,
         )
-        _configure_local_nextflow_launch(monkeypatch, factory)
+        _configure_local_nextflow_launch(monkeypatch, factory, tmp_path)
         monkeypatch.setattr(nextflow, "preflight_nextflow_java", lambda _env: (False, "Java 17 unavailable"))
 
         await nextflow.launch_nextflow_job(

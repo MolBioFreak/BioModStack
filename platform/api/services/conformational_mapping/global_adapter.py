@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import copy
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, Mapping
@@ -22,7 +24,7 @@ from routers.conformational_mapping import (
     _runtime_registry,
     _server_confornets_identity,
 )
-from services.conformational_mapping.contracts import validate_schema
+from services.conformational_mapping.contracts import canonical_sha256, validate_schema
 from services.conformational_mapping.import_stager import RegisteredArtifact, stage_registered_assets
 from services.conformational_mapping.persistence import (
     issue_request_capability,
@@ -33,12 +35,54 @@ from services.conformational_mapping.request_builder import (
     materialize_trusted_internal_request,
     validate_request_params,
 )
-from experiment_services import DispatchFailure, canonical_json, sha256_text
+from experiment_services import (
+    DispatchFailure,
+    WORKFLOW_ADAPTER_REGISTRY,
+    canonical_json,
+    sha256_text,
+)
 
 _GENERATOR_ADAPTERS = {
     "bms.cm.protenix_v2.adapter.v1": "protenix_v2_ensemble",
     "bms.cm.confornets.adapter.v1": "confornets",
 }
+EXECUTABLE_CM_ADAPTERS = frozenset(WORKFLOW_ADAPTER_REGISTRY["conformational_mapping"])
+
+
+def _seal_confornets_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    """Seal a generic normalized ConforNets snapshot without fixture identity."""
+
+    sealed = copy.deepcopy(dict(snapshot))
+    if not sealed.get("instance_mappings"):
+        entities = sealed.get("entities")
+        if not isinstance(entities, list) or not entities or not isinstance(entities[0], Mapping):
+            raise DispatchFailure("ConforNets snapshot has no entity mapping context")
+        entity = entities[0]
+        instances = entity.get("ordered_instance_ids")
+        if not isinstance(instances, list) or not instances:
+            raise DispatchFailure("ConforNets snapshot has no instance mapping context")
+        target_id = str(sealed.get("target_id") or "")
+        source_entity_id = str(entity.get("source_entity_id") or "")
+        instance_id = str(instances[0])
+        sealed["instance_mappings"] = [{
+            "source_entity_id": source_entity_id,
+            "source_instance_id": instance_id,
+            "runtime_target_id": target_id,
+            "runtime_entity_id": "1",
+            "runtime_instance_id": instance_id,
+            "runtime_order": 0,
+            "candidate_id": f"{target_id}:0",
+            "output_entity_id": "1",
+            "output_label_asym_id": instance_id,
+            "output_auth_asym_id": instance_id,
+            "output_entity_order": 0,
+        }]
+    sealed.pop("normalized_source_sha256", None)
+    sealed["normalized_source_sha256"] = canonical_sha256(
+        {key: value for key, value in sealed.items() if key != "normalized_source_sha256"}
+    )
+    validate_schema("cm_complex_snapshot_v1", sealed)
+    return sealed
 
 
 def _largest_gpu_with_memory(minimum_mb: int) -> int:
@@ -92,7 +136,7 @@ async def _source(session: AsyncSession, source_id: str, expected_kind: str) -> 
     return source
 
 
-async def materialize_preallocated_cm_job(
+async def _materialize_preallocated_cm_job(
     core_session: AsyncSession,
     *,
     attempt_id: str,
@@ -186,8 +230,8 @@ async def materialize_preallocated_cm_job(
         )
         metadata = sequence_source.metadata_json if isinstance(sequence_source.metadata_json, dict) else {}
         sequence = str(metadata.get("sequence") or "").upper()
-        if len(sequence) != 540:
-            raise DispatchFailure(f"CM ConforNets DRT4 sequence length is not 540: {len(sequence)}")
+        if not sequence or any(value not in "ACDEFGHIKLMNPQRSTVWYX" for value in sequence):
+            raise DispatchFailure("CM ConforNets sequence authority is invalid")
         try:
             settings = _bind_confornets_submission_policy(submission["confornets"])
         except HTTPException as exc:
@@ -206,25 +250,28 @@ async def materialize_preallocated_cm_job(
             }
         )
         request_params["confornets"] = settings
-        target_id = str(metadata.get("target_id") or "DRT4_WP_031606642_1")
+        target_id = str(metadata.get("target_id") or sequence_source.source_id)
+        source_entity_id = str(
+            metadata.get("source_entity_id") or metadata.get("entity_id") or target_id
+        )
+        chain_id = str(settings["chain_id"])
         request_params["targets"] = [
             {"target_id": target_id, "target_order": 0, "sequence": sequence, "molecule_type": "protein", "chain_count": 1}
         ]
-        analysis_targets = [{"target_id": target_id, "sequence": sequence}]
-        snapshot = {
+        snapshot = _seal_confornets_snapshot({
             "schema_name": "cm_complex_snapshot",
             "schema_version": 1,
             "target_id": target_id,
             "target_order": 0,
             "original_source_path": f"registered/{sequence_source.source_id}",
             "original_source_sha256": sequence_source.content_sha256,
-            "normalized_source_sha256": sequence_source.content_sha256,
-            "entities": [{"entity_type": "protein", "source_entity_id": "WP_031606642.1", "count": 1, "ordered_instance_ids": ["DRT4_A"], "sequence": sequence}],
+            "entities": [{"entity_type": "protein", "source_entity_id": source_entity_id, "count": 1, "ordered_instance_ids": [chain_id], "sequence": sequence}],
             "bonds": [],
-            "instance_mappings": [{"source_entity_id": "WP_031606642.1", "source_instance_id": "DRT4_A", "runtime_target_id": target_id, "runtime_entity_id": "1", "runtime_instance_id": "DRT4_A", "runtime_order": 0, "candidate_id": target_id, "output_entity_id": "1", "output_label_asym_id": "A", "output_auth_asym_id": "A", "output_entity_order": 0}],
+            "instance_mappings": [{"source_entity_id": source_entity_id, "source_instance_id": chain_id, "runtime_target_id": target_id, "runtime_entity_id": "1", "runtime_instance_id": chain_id, "runtime_order": 0, "candidate_id": f"{target_id}:0", "output_entity_id": "1", "output_label_asym_id": chain_id, "output_auth_asym_id": chain_id, "output_entity_order": 0}],
             "admission": {"token_count": len(sequence), "atom_count": 0, "token_limit": 10000, "conversion_omissions": []},
             "unsupported_fields": [],
-        }
+        })
+        analysis_targets = [snapshot]
         (output_root / "cm_complex_snapshots_v1.json").write_text(json.dumps([snapshot], sort_keys=True, separators=(",", ":")), encoding="utf-8")
 
     validate_request_params(request_params)
@@ -293,4 +340,34 @@ async def materialize_preallocated_cm_job(
     }
 
 
-__all__ = ["materialize_preallocated_cm_job"]
+async def materialize_preallocated_cm_job(
+    core_session: AsyncSession,
+    *,
+    attempt_id: str,
+    scheduler: Mapping[str, Any],
+    run_group_id: str,
+) -> dict[str, Any]:
+    """Run the canonical CM materializer and remove an unowned failed root.
+
+    The private materializer applies the server-owned _bind_runtime_policy,
+    _bind_confornets_submission_policy, _bind_analysis_policy, and
+    _managed_checkpoint_for_submission gates before persistence.
+    """
+
+    output_root = get_results_dir() / f"conformational_mapping_{attempt_id}"
+    existed = output_root.exists()
+    preexisting_empty_directory = existed and output_root.is_dir() and not any(output_root.iterdir())
+    try:
+        return await _materialize_preallocated_cm_job(
+            core_session,
+            attempt_id=attempt_id,
+            scheduler=scheduler,
+            run_group_id=run_group_id,
+        )
+    except Exception:
+        if (not existed or preexisting_empty_directory) and output_root.exists():
+            shutil.rmtree(output_root, ignore_errors=True)
+        raise
+
+
+__all__ = ["EXECUTABLE_CM_ADAPTERS", "_seal_confornets_snapshot", "materialize_preallocated_cm_job"]
