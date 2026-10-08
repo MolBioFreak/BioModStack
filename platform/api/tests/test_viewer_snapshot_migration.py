@@ -56,3 +56,12 @@ def test_api_image_runs_migrations_before_starting_uvicorn():
     command = next(line for line in dockerfile.splitlines() if line.startswith("CMD "))
     assert "run_migrations.py" in command
     assert command.index("run_migrations.py") < command.index("uvicorn")
+
+
+def test_native_api_migrates_before_server_exec():
+    launcher = (Path(__file__).resolve().parents[3] / "scripts" / "run_biomodstack_api.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "run_migrations.py" in launcher
+    assert launcher.index("run_migrations.py") < launcher.index("uvicorn")

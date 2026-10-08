@@ -16,7 +16,7 @@ import {
     type FrustraMpnnLandscapeFilters,
     type FrustraMpnnRequestedSettings,
 } from '../lib/frustraMpnnApi.js';
-import MolstarViewer from './MolstarViewer.js';
+import { StructureWorkbench } from '../structureViewer/StructureWorkbench.js';
 import {
     collectCompleteFrustraMpnnLandscape,
     createFrustraMpnnViewerMetrics,
@@ -26,6 +26,7 @@ import {
     groupExact20Landscape,
 } from './conformationalMapping/conformationalMappingSemantics.js';
 import type { ResidueRef } from '../structureViewer/contracts/structureIdentity.js';
+import type { StructureSceneController } from '../structureViewer/runtime/StructureSceneController.js';
 import { getFrustraMpnnResultContext } from './frustraMpnnResultSurface.js';
 import FrustraMpnnLandscapeOverview from './FrustraMpnnLandscapeOverview.js';
 import FrustraMpnnPlotlyAnalytics from './FrustraMpnnPlotlyAnalytics.js';
@@ -36,6 +37,7 @@ import { buildFrustraMpnnCoverageReadiness } from './frustraMpnnCoverageModel.js
 import { FrustraMpnnSettingsPanel } from './frustrampnn/FrustraMpnnSettingsPanel.js';
 import { CANONICAL_FRUSTRAMPNN_SETTINGS } from './frustrampnn/frustraMpnnSettingsState.js';
 import { FrustraMpnnResultAuthoritySurface } from './FrustraMpnnResultAuthoritySurface.js';
+import FrustraMpnnReviewExportPanel from './frustrampnn/FrustraMpnnReviewExportPanel.js';
 
 const PAGE_SIZE = 500;
 const terminalJob = new Set(['completed', 'failed', 'cancelled']);
@@ -86,6 +88,7 @@ export default function FrustraMpnnResultsViewer({
 }) {
     const resultContext = getFrustraMpnnResultContext(job)!;
     const [selectedInvocation, setSelectedInvocation] = useState<string | null>(null);
+    const [sceneController, setSceneController] = useState<StructureSceneController | null>(null);
     const [offset, setOffset] = useState(0);
     const [chainFilter, setChainFilter] = useState('');
     const [slotStatus, setSlotStatus] = useState<'' | 'ok' | 'missing'>('');
@@ -404,16 +407,19 @@ export default function FrustraMpnnResultsViewer({
                             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 p-3"><div><h2 className="font-semibold">Exact-authority structure coloring</h2><p className="mt-1 text-xs text-slate-500">Mol* colors only exact (auth_asym_id, auth_seq_id, insertion_code) identities validated against the persisted source and structure-map hashes.</p></div><div className="flex items-center gap-3"><span className="text-xs text-slate-400">{metricResult.bundle ? `${metricResult.bundle.residueProfiles.length} mapped residues` : 'coloring unavailable'}</span><a href="#frustrampnn-landscape" className="rounded-lg border border-cyan-500/50 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-100 hover:bg-cyan-500/20">Open residue data ↓</a></div></div>
                             {metricResult.error && <div role="alert" className="m-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">Typed mapping missingness: {metricResult.error}</div>}
                             {completeLandscape.isError && <div role="alert" className="m-3 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-100">{errorMessage(completeLandscape.error, 'Complete bounded landscape could not be validated.')}</div>}
-                            {structureArtifact && selectedInvocation ? <MolstarViewer
+                            {structureArtifact && selectedInvocation ? <StructureWorkbench
                                 structureUrl={structureArtifact.download_url}
                                 format="pdb"
                                 height={440}
                                 label={detail.data.candidate_id}
+                                jobId={job.id}
                                 metricLayers={metricResult.bundle?.layers}
                                 activeMetricId={metricResult.bundle ? 'frustrampnn-native-index' : undefined}
                                 showMetricWorkbench={Boolean(metricResult.bundle)}
                                 showSequenceTrack={Boolean(metricResult.bundle)}
                                 residueSelections={selectedResidue ? [selectedResidue] : []}
+                                onControllerReady={setSceneController}
+                                showM6Workbench
                             /> : <div role="status" className="p-6 text-sm text-slate-500">Normalized structure artifact unavailable.</div>}
                         </section>
 
@@ -449,6 +455,31 @@ export default function FrustraMpnnResultsViewer({
                             )}
                             <div className="flex items-center justify-between border-t border-slate-800 p-3 text-xs"><span>{landscape.data ? (landscape.data.rows.length > 0 ? `${offset + 1}–${offset + landscape.data.rows.length} of ${landscape.data.total}` : `0 of ${landscape.data.total}`) : 'loading'} persisted slots</span><div className="flex gap-2"><button type="button" disabled={offset === 0 || landscape.isFetching} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))} className="rounded border border-slate-700 px-3 py-1.5 disabled:opacity-30">Previous</button><button type="button" disabled={landscape.data?.next_offset == null || landscape.isFetching} onClick={() => setOffset(landscape.data!.next_offset!)} className="rounded border border-slate-700 px-3 py-1.5 disabled:opacity-30">Next</button></div></div>
                         </section>
+
+                        {selectedInvocation && <FrustraMpnnReviewExportPanel
+                            jobId={job.id}
+                            invocationId={selectedInvocation}
+                            selectedResidue={selectedResidue}
+                            filters={{ chain: chainFilter, slot_status: slotStatus, mutation: mutationFilter }}
+                            sceneController={sceneController}
+                            onRestore={(review) => {
+                                const reference = review.result_references.find((item) => item.parent_job_id === job.id);
+                                if (!reference) return;
+                                setSelectedInvocation(reference.invocation_id);
+                                setChainFilter(typeof review.filters.chain === 'string' ? review.filters.chain : '');
+                                setSlotStatus(review.filters.slot_status === 'ok' || review.filters.slot_status === 'missing' ? review.filters.slot_status : '');
+                                setMutationFilter(typeof review.filters.mutation === 'string' ? review.filters.mutation : '');
+                                const residue = review.selected_residues[0];
+                                const authSeqId = residue ? Number(residue.auth_seq_id) : Number.NaN;
+                                setSelectedResidue(residue && Number.isInteger(authSeqId) ? {
+                                    documentId: 'primary',
+                                    authAsymId: residue.auth_asym_id,
+                                    authSeqId,
+                                    insertionCode: residue.insertion_code,
+                                } : null);
+                                setOffset(0);
+                            }}
+                        />}
 
                         <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4"><h2 className="font-semibold">Governed artifacts</h2><p className="mt-1 text-xs text-slate-500">Authenticated content-addressed downloads. Runtime filesystem paths and storage topology are not exposed.</p><div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{artifacts.data?.items.map((artifact) => <a key={artifact.artifact_id} href={artifact.download_url} className="rounded-lg border border-slate-800 p-3 text-xs hover:border-cyan-500 focus:border-cyan-400"><div className="font-medium text-slate-200">{artifact.role.replaceAll('_', ' ')}</div><div className="mt-1 text-slate-500">{artifact.media_type} · {artifact.size_bytes.toLocaleString()} bytes</div><div className="mt-1 font-mono text-[10px] text-slate-600" title={artifact.content_sha256}>{shortHash(artifact.content_sha256)}</div></a>)}</div></section>
                     </>
