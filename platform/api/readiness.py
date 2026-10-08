@@ -22,6 +22,7 @@ from migrations.runner import MIGRATIONS
 from runtime_policy import core_runtime_mode_enabled, workflow_launches_allowed
 from services.workflow_adapter import workflow_adapter_base_url
 from services.restriction_catalog import catalog_authority
+from services.restriction_products import product_authority
 from telemetry_store import (
     TELEMETRY_FRESHNESS_STALE_AFTER_MS,
     TelemetryStore,
@@ -245,6 +246,7 @@ async def collect_runtime_readiness(
 
     launch_allowed = workflow_launches_allowed() and adapter_ready
     restriction_catalog = catalog_authority.readiness()
+    restriction_products = product_authority.readiness()
     restriction_digest = molbio.get("restriction_digest")
     restriction_digest_ready = _restriction_digest_readiness_is_exact(restriction_digest)
     checks = {
@@ -268,6 +270,7 @@ async def collect_runtime_readiness(
             status="ready" if molbio_ready else str(molbio.get("status", "unavailable")),
         ),
         "restriction_catalog": restriction_catalog,
+        "restriction_products": restriction_products,
         "restriction_digest": _check(
             required=True,
             ready=restriction_digest_ready,

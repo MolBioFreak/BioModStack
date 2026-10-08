@@ -5,6 +5,7 @@ import type {
     RestrictionCatalogReceipt,
     RestrictionDigestEnd,
     RestrictionDigestSimulation,
+    RestrictionProductReleaseReceipt,
     RestrictionRecord,
 } from '../../../lib/restrictionAnalysis';
 
@@ -23,6 +24,7 @@ interface DigestPanelProps {
     onEnzymesChange?: (enzymes: string[]) => void;
     onMapVisibilityRequest?: () => void;
     catalog: RestrictionCatalogReceipt | null;
+    productEvidence?: RestrictionProductReleaseReceipt | null;
     catalogRecords: RestrictionRecord[];
     analysis: RestrictionAnalysisResponse | null;
     authorityLoading: boolean;
@@ -83,7 +85,7 @@ const CUT_FILTERS: Array<[CutFilter, string]> = [['all','All'],['unique','1x'],[
 const GROUP_FILTERS: Array<[GroupFilter, string]> = [['all','All Types'],['digest','Digest-ready'],['nicking','Nicking'],['recognition_only','Recognition only'],['commercial','Commercial reported']];
 const QUICK: Array<[QuickMapGroup, string]> = [['unique','1x'],['double','2x'],['three_plus','3x+'],['nicking','Nicking'],['type_iis','Type IIS']];
 
-export function DigestPanel({ mobile = false, compactLandscape = false, sequenceData, selection, onHighlight, selectedEnzymes = [], onEnzymesChange, onMapVisibilityRequest, catalog, catalogRecords, analysis, authorityLoading, authorityError, digestSimulation, digestLoading, digestError, onDigestSelectionChange, onSimulateDigest }: DigestPanelProps) {
+export function DigestPanel({ mobile = false, compactLandscape = false, sequenceData, selection, onHighlight, selectedEnzymes = [], onEnzymesChange, onMapVisibilityRequest, catalog, productEvidence = null, catalogRecords, analysis, authorityLoading, authorityError, digestSimulation, digestLoading, digestError, onDigestSelectionChange, onSimulateDigest }: DigestPanelProps) {
     const [digestEnzymes, setDigestEnzymes] = useState<string[]>([]);
     const [searchQuery, setSearchQuery] = useState('');
     const [cutFilter, setCutFilter] = useState<CutFilter>('unique');
@@ -148,6 +150,7 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
         {!compactLandscape && <div className={mobile ? 'px-3 pt-3' : ''}><h4 className="font-semibold text-slate-200">Restriction Analysis</h4><p className="text-xs text-slate-500">Backend catalog and exact cleavage authority</p></div>}
         {(authorityError || digestError) && <div role="alert" className="mx-3 rounded border border-red-800 bg-red-900/40 p-2 text-red-200">{authorityError || digestError}</div>}
         {authorityLoading && <div className="px-3 text-xs text-slate-400">Loading exact restriction authority…</div>}
+        {productEvidence && <div data-product-evidence-state="unavailable" className="mx-3 rounded border border-amber-800/70 bg-amber-950/30 p-2 text-xs text-amber-200"><strong>Supplier product evidence unavailable</strong><span className="ml-1 text-amber-300/80">Written redistribution permission is unavailable; reaction-aware activity is disabled.</span></div>}
         {analysis && <div data-restriction-counts="true" className="grid grid-cols-3 gap-2 px-3 text-xs text-slate-300">
             <div><strong>{analysis.analysis.counts.recognition_site_count_definite}</strong> recognition sites</div>
             <div><strong>{analysis.analysis.counts.double_strand_break_count}</strong> DSBs</div>
