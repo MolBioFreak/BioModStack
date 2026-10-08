@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { SequenceManagerModal } from './SequenceManagerModal';
 import { parseRegions, generateLibrary, normalizeAminoAcids, formatMutationLabel } from '../utils/mutationUtils';
 import type { VariantSequence, SubstitutionStrategy, Mutation } from '../utils/mutationUtils';
@@ -7,6 +7,7 @@ import { LigandSelector, type LigandEntry } from './LigandSelector';
 import { TargetAntigenSelector } from './TargetAntigenSelector';
 import { parsePDBFile, type Chain } from '../utils/pdbUtils';
 import EpitopeMolstarViewer from './EpitopeMolstarViewer';
+import MolstarViewer from './MolstarViewer';
 import { PhysicsRefinementPanel, type PhysicsRefinementSettings, DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './PhysicsRefinementPanel';
 
 interface MutagenesisTemplateProps {
@@ -35,6 +36,30 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
     const [ppiflowRotamer, setPpiflowRotamer] = useState(false);
     const [ppiflowFlow, setPpiflowFlow] = useState(false);
     const [ppiflowFinalBoltz, setPpiflowFinalBoltz] = useState(false);
+
+    // Clear FrustraMPNN results when sequence changes
+    useEffect(() => {
+        setFrustrampnnResults([]);
+    }, [baseSequence]);
+
+    // Helper: Convert frustration score (0-1) to RGB color (green→red)
+    const frustrationToColor = (frustration: number): { r: number; g: number; b: number } => {
+        // 0.0 = green (low frustration), 1.0 = red (high frustration)
+        const r = Math.round(255 * frustration);
+        const g = Math.round(255 * (1 - frustration));
+        const b = 0;
+        return { r, g, b };
+    };
+
+    // Build frustration color map for Molstar viewer
+    const frustrationColorMap = useMemo(() => {
+        const colorMap = new Map<string, { r: number; g: number; b: number }>();
+        frustrampnnResults.forEach(result => {
+            // Assuming chain 'A' for now - will be updated with actual chain info
+            colorMap.set(`A${result.position}`, frustrationToColor(result.frustration));
+        });
+        return colorMap;
+    }, [frustrampnnResults]);
 
     // Library Generator State
     const [regionInput, setRegionInput] = useState('');
@@ -729,6 +754,26 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                 <p className="text-xs text-slate-500">Identify frustrated CDR positions and generate optimized variants</p>
                             </div>
                         </div>
+
+                        {/* 3D Frustration Map Preview */}
+                        {pdbBlobUrl && (
+                            <div className="bg-slate-950/50 rounded-lg p-4 border border-slate-800">
+                                <h4 className="text-sm font-semibold text-slate-300 mb-3">3D Frustration Map</h4>
+                                <p className="text-xs text-slate-500 mb-3">
+                                    {frustrampnnResults.length > 0
+                                        ? `Colored by frustration: green (stable) → red (frustrated)`
+                                        : 'Run FrustraMPNN analysis to color by frustration'}
+                                </p>
+                                <MolstarViewer
+                                    structureUrl={pdbBlobUrl}
+                                    height={280}
+                                    hideControls={true}
+                                    alphafoldView={frustrampnnResults.length === 0} // pLDDT coloring if no frustration data
+                                    residueColors={frustrampnnResults.length > 0 ? frustrationColorMap : undefined}
+                                    label={frustrampnnResults.length > 0 ? 'Frustration Map' : undefined}
+                                />
+                            </div>
+                        )}
 
                         {/* FrustraMPNN Analysis Section */}
                         <div className="bg-slate-950/50 rounded-lg p-4 border border-slate-800">
