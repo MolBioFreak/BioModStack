@@ -2,7 +2,7 @@
 // Modules for predicting 3D protein structure directly from amino acid sequence
 // Supported predictors: Boltz-2, RF3 (RoseTTAFold3), Protenix
 
-include { ProtenixPredict ; ProtenixFromComplex } from './protenix.nf'
+include { ProtenixPredict ; ProtenixFromComplex ; PrepProtenixComplex } from './protenix.nf'
 // Generate MSA using local MMseqs2 database - GPU ACCELERATED!
 // Uses ColabFold database via params.msa_local_db
 // Hybrid scheduling: GPU when available, falls back to CPU
@@ -37,8 +37,8 @@ process GenerateLocalMSA {
     def gpuServerStartupWait = params.msa_gpu_server_startup_wait ?: 1.0
     def refSeq = params.msa_reference_sequence ? "--reference-sequence \"${params.msa_reference_sequence}\"" : ""
     def forceRefresh = params.msa_force_refresh ? "--force_refresh" : ""
-    // MSA Quality Preset (Maximum/Balanced/Fast) - default: balanced for speed+quality
-    def msaPreset = params.msa_preset ?: "balanced"
+    // MSA Quality Preset (Maximum/Balanced/Fast) - default: fast (quick search)
+    def msaPreset = params.msa_preset ?: "fast"
     // MSA Quality Parameters (can override preset)
     def evalue = params.msa_evalue ? "--evalue ${params.msa_evalue}" : ""
     def sensitivity = params.msa_sensitivity ? "--sensitivity ${params.msa_sensitivity}" : ""
@@ -439,8 +439,8 @@ process PrepareComplexWithMSA {
     def msaUseGpuEnabled = params.msa_use_gpu != false ? "true" : "false"
     def msaForceRefresh = params.msa_force_refresh ? "true" : "false"
     def useMsa = params.boltz_use_msa == null || params.boltz_use_msa.toString() == 'true'
-    // MSA Quality Parameters - default: balanced for speed+quality
-    def msaPreset = params.msa_preset ?: "balanced"
+    // MSA Quality Parameters - default: fast (quick search)
+    def msaPreset = params.msa_preset ?: "fast"
     def msaTaxonList = params.msa_taxon_list ?: ""
     // Keep empty by default so run_local_msa.py preset controls e-value.
     def msaEvalue = params.msa_evalue ?: ""
