@@ -1,0 +1,38 @@
+{
+  "$id": "https://biomodstack.local/schemas/ngs/ont_ngs_rotation_success_v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "expires_at": {
+      "format": "date-time",
+      "pattern": "Z$",
+      "type": "string"
+    },
+    "job_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "rotated": {
+      "const": true
+    },
+    "rotation_count": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "schema": {
+      "const": "bms.ngs.rotation-success.v1"
+    },
+    "scheme": {
+      "const": "opaque_job_capability_v1"
+    }
+  },
+  "required": [
+    "schema",
+    "job_id",
+    "rotated",
+    "scheme",
+    "rotation_count",
+    "expires_at"
+  ],
+  "type": "object"
+}

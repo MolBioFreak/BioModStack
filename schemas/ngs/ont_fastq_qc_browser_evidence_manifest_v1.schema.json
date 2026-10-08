@@ -1,0 +1,655 @@
+{
+  "$id": "https://biomodstack.local/schemas/ngs/ont_fastq_qc_browser_evidence_manifest_v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "candidate_commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "candidate_tree": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "captured_at": {
+      "format": "date-time",
+      "pattern": "Z$",
+      "type": "string"
+    },
+    "console_network_receipt_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "frontend_build_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "job_id": {
+      "const": "31f02bd5-830f-4558-aa78-3873c515de68"
+    },
+    "manifest_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "normal_reopen_receipt_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "range_receipt_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "schema": {
+      "const": "bms.ont-fastq-qc-browser-evidence-manifest.v1"
+    },
+    "screenshots": {
+      "items": false,
+      "maxItems": 5,
+      "minItems": 5,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "captured_at": {
+                  "format": "date-time",
+                  "pattern": "Z$",
+                  "type": "string"
+                },
+                "file_name": {
+                  "const": "01_first_viewport.png"
+                },
+                "frontend_build_sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "height_px": {
+                  "maximum": 4320,
+                  "minimum": 600,
+                  "type": "integer"
+                },
+                "media_type": {
+                  "const": "image/png"
+                },
+                "order": {
+                  "maximum": 16,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "origin": {
+                  "const": "http://127.0.0.1:18082"
+                },
+                "route": {
+                  "const": "/projects/4af72c1d-27d8-4e14-8f39-4259a80494a0/experiments/9a10c5a8-b233-4bf3-af14-9c2880525278/domains/916a611b-6879-486f-bf9e-e1b5a796e01c"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "size_bytes": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "view": {
+                  "enum": [
+                    "first_viewport",
+                    "decision_report",
+                    "range_3400_3600",
+                    "variant_3515_3516",
+                    "compact_igv"
+                  ]
+                },
+                "viewport": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "device_scale_factor": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 4,
+                      "type": "number"
+                    },
+                    "height_px": {
+                      "minimum": 600,
+                      "type": "integer"
+                    },
+                    "width_px": {
+                      "minimum": 800,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "width_px",
+                    "height_px",
+                    "device_scale_factor"
+                  ],
+                  "type": "object"
+                },
+                "width_px": {
+                  "maximum": 7680,
+                  "minimum": 800,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "order",
+                "view",
+                "sha256",
+                "file_name",
+                "size_bytes",
+                "media_type",
+                "width_px",
+                "height_px",
+                "origin",
+                "route",
+                "viewport",
+                "captured_at",
+                "frontend_build_sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "order": {
+                  "const": 1
+                },
+                "view": {
+                  "const": "first_viewport"
+                }
+              },
+              "required": [
+                "order",
+                "view"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "captured_at": {
+                  "format": "date-time",
+                  "pattern": "Z$",
+                  "type": "string"
+                },
+                "file_name": {
+                  "const": "02_decision_report.png"
+                },
+                "frontend_build_sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "height_px": {
+                  "maximum": 4320,
+                  "minimum": 600,
+                  "type": "integer"
+                },
+                "media_type": {
+                  "const": "image/png"
+                },
+                "order": {
+                  "maximum": 16,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "origin": {
+                  "const": "http://127.0.0.1:18082"
+                },
+                "route": {
+                  "const": "/projects/4af72c1d-27d8-4e14-8f39-4259a80494a0/experiments/9a10c5a8-b233-4bf3-af14-9c2880525278/domains/916a611b-6879-486f-bf9e-e1b5a796e01c"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "size_bytes": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "view": {
+                  "enum": [
+                    "first_viewport",
+                    "decision_report",
+                    "range_3400_3600",
+                    "variant_3515_3516",
+                    "compact_igv"
+                  ]
+                },
+                "viewport": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "device_scale_factor": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 4,
+                      "type": "number"
+                    },
+                    "height_px": {
+                      "minimum": 600,
+                      "type": "integer"
+                    },
+                    "width_px": {
+                      "minimum": 800,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "width_px",
+                    "height_px",
+                    "device_scale_factor"
+                  ],
+                  "type": "object"
+                },
+                "width_px": {
+                  "maximum": 7680,
+                  "minimum": 800,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "order",
+                "view",
+                "sha256",
+                "file_name",
+                "size_bytes",
+                "media_type",
+                "width_px",
+                "height_px",
+                "origin",
+                "route",
+                "viewport",
+                "captured_at",
+                "frontend_build_sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "order": {
+                  "const": 2
+                },
+                "view": {
+                  "const": "decision_report"
+                }
+              },
+              "required": [
+                "order",
+                "view"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "captured_at": {
+                  "format": "date-time",
+                  "pattern": "Z$",
+                  "type": "string"
+                },
+                "file_name": {
+                  "const": "03_range_3400_3600.png"
+                },
+                "frontend_build_sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "height_px": {
+                  "maximum": 4320,
+                  "minimum": 600,
+                  "type": "integer"
+                },
+                "media_type": {
+                  "const": "image/png"
+                },
+                "order": {
+                  "maximum": 16,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "origin": {
+                  "const": "http://127.0.0.1:18082"
+                },
+                "route": {
+                  "const": "/projects/4af72c1d-27d8-4e14-8f39-4259a80494a0/experiments/9a10c5a8-b233-4bf3-af14-9c2880525278/domains/916a611b-6879-486f-bf9e-e1b5a796e01c"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "size_bytes": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "view": {
+                  "enum": [
+                    "first_viewport",
+                    "decision_report",
+                    "range_3400_3600",
+                    "variant_3515_3516",
+                    "compact_igv"
+                  ]
+                },
+                "viewport": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "device_scale_factor": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 4,
+                      "type": "number"
+                    },
+                    "height_px": {
+                      "minimum": 600,
+                      "type": "integer"
+                    },
+                    "width_px": {
+                      "minimum": 800,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "width_px",
+                    "height_px",
+                    "device_scale_factor"
+                  ],
+                  "type": "object"
+                },
+                "width_px": {
+                  "maximum": 7680,
+                  "minimum": 800,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "order",
+                "view",
+                "sha256",
+                "file_name",
+                "size_bytes",
+                "media_type",
+                "width_px",
+                "height_px",
+                "origin",
+                "route",
+                "viewport",
+                "captured_at",
+                "frontend_build_sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "order": {
+                  "const": 3
+                },
+                "view": {
+                  "const": "range_3400_3600"
+                }
+              },
+              "required": [
+                "order",
+                "view"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "captured_at": {
+                  "format": "date-time",
+                  "pattern": "Z$",
+                  "type": "string"
+                },
+                "file_name": {
+                  "const": "04_variant_3515_3516.png"
+                },
+                "frontend_build_sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "height_px": {
+                  "maximum": 4320,
+                  "minimum": 600,
+                  "type": "integer"
+                },
+                "media_type": {
+                  "const": "image/png"
+                },
+                "order": {
+                  "maximum": 16,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "origin": {
+                  "const": "http://127.0.0.1:18082"
+                },
+                "route": {
+                  "const": "/projects/4af72c1d-27d8-4e14-8f39-4259a80494a0/experiments/9a10c5a8-b233-4bf3-af14-9c2880525278/domains/916a611b-6879-486f-bf9e-e1b5a796e01c"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "size_bytes": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "view": {
+                  "enum": [
+                    "first_viewport",
+                    "decision_report",
+                    "range_3400_3600",
+                    "variant_3515_3516",
+                    "compact_igv"
+                  ]
+                },
+                "viewport": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "device_scale_factor": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 4,
+                      "type": "number"
+                    },
+                    "height_px": {
+                      "minimum": 600,
+                      "type": "integer"
+                    },
+                    "width_px": {
+                      "minimum": 800,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "width_px",
+                    "height_px",
+                    "device_scale_factor"
+                  ],
+                  "type": "object"
+                },
+                "width_px": {
+                  "maximum": 7680,
+                  "minimum": 800,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "order",
+                "view",
+                "sha256",
+                "file_name",
+                "size_bytes",
+                "media_type",
+                "width_px",
+                "height_px",
+                "origin",
+                "route",
+                "viewport",
+                "captured_at",
+                "frontend_build_sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "order": {
+                  "const": 4
+                },
+                "view": {
+                  "const": "variant_3515_3516"
+                }
+              },
+              "required": [
+                "order",
+                "view"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "captured_at": {
+                  "format": "date-time",
+                  "pattern": "Z$",
+                  "type": "string"
+                },
+                "file_name": {
+                  "const": "05_compact_igv.png"
+                },
+                "frontend_build_sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "height_px": {
+                  "maximum": 4320,
+                  "minimum": 600,
+                  "type": "integer"
+                },
+                "media_type": {
+                  "const": "image/png"
+                },
+                "order": {
+                  "maximum": 16,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "origin": {
+                  "const": "http://127.0.0.1:18082"
+                },
+                "route": {
+                  "const": "/projects/4af72c1d-27d8-4e14-8f39-4259a80494a0/experiments/9a10c5a8-b233-4bf3-af14-9c2880525278/domains/916a611b-6879-486f-bf9e-e1b5a796e01c"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "size_bytes": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "view": {
+                  "enum": [
+                    "first_viewport",
+                    "decision_report",
+                    "range_3400_3600",
+                    "variant_3515_3516",
+                    "compact_igv"
+                  ]
+                },
+                "viewport": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "device_scale_factor": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 4,
+                      "type": "number"
+                    },
+                    "height_px": {
+                      "minimum": 600,
+                      "type": "integer"
+                    },
+                    "width_px": {
+                      "minimum": 800,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "width_px",
+                    "height_px",
+                    "device_scale_factor"
+                  ],
+                  "type": "object"
+                },
+                "width_px": {
+                  "maximum": 7680,
+                  "minimum": 800,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "order",
+                "view",
+                "sha256",
+                "file_name",
+                "size_bytes",
+                "media_type",
+                "width_px",
+                "height_px",
+                "origin",
+                "route",
+                "viewport",
+                "captured_at",
+                "frontend_build_sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "order": {
+                  "const": 5
+                },
+                "view": {
+                  "const": "compact_igv"
+                }
+              },
+              "required": [
+                "order",
+                "view"
+              ]
+            }
+          ]
+        }
+      ],
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema",
+    "job_id",
+    "candidate_commit",
+    "candidate_tree",
+    "frontend_build_sha256",
+    "captured_at",
+    "screenshots",
+    "console_network_receipt_sha256",
+    "range_receipt_sha256",
+    "normal_reopen_receipt_sha256",
+    "manifest_sha256"
+  ],
+  "type": "object",
+  "x-bms-cross-field-invariants": [
+    "screenshot filenames resolve below immutable evidence root and exact size and SHA-256 match",
+    "every screenshot frontend build equals manifest frontend build and accepted deployment",
+    "screenshot width and height equal viewport physical dimensions after device scale is recorded",
+    "route and origin identify the exact normal browser view without query secrets"
+  ],
+  "x-bms-semantic-validator": "bms.ont-fastq-qc-browser-evidence-verifier.v1"
+}

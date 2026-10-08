@@ -816,6 +816,12 @@ def _validate_resource_usage_receipt_document(candidate: Mapping[str, Any]) -> d
     return receipt
 
 
+def validate_resource_usage_receipt_document(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate and copy one closed, digest-bound producer resource receipt."""
+
+    return _validate_resource_usage_receipt_document(candidate)
+
+
 def attach_resource_usage_receipt(params: object, receipt: Mapping[str, Any]) -> dict[str, Any]:
     normalized = params_mapping(params)
     candidate = _validate_resource_usage_receipt_document(receipt)

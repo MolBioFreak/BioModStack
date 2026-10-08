@@ -1,21 +1,141 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { api } from '../src/lib/api.js';
 import {
     AlignmentReadScanTruncatedError,
+    disposeAlignmentAccess,
+    fetchAlignmentRead,
     isAlignmentAccessDenied,
     isAlignmentReadScanTruncatedError,
     normalizeAlignmentSessions,
+    normalizeAlignmentAccessRotation,
+    withAlignmentAccessRecovery,
     type AlignmentSessionArtifact,
     type AlignmentSessionResponse,
 } from '../src/lib/ngsAlignmentSession.js';
 
-test('alignment access recovery is offered only for the exact capability-denial response', () => {
-    assert.equal(isAlignmentAccessDenied({ response: { status: 403, data: { detail: 'alignment access denied' } } }), true);
-    assert.equal(isAlignmentAccessDenied({ response: { status: 403, data: { detail: 'alignment resource unavailable' } } }), false);
+function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason: unknown) => void;
+    const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+        resolve = resolvePromise;
+        reject = rejectPromise;
+    });
+    return { promise, resolve, reject };
+}
+
+function ngsError(code: string, jobId = 'job-recovery-race', status = 403) {
+    return {
+        response: {
+            status,
+            data: {
+                schema: 'bms.ngs.error.v1', code, message: 'Denied.', job_id: jobId,
+                resource: 'rotation', retryable: true,
+            },
+        },
+    };
+}
+
+test('alignment access recovery is offered only for the exact capability-denial code', () => {
+    assert.equal(isAlignmentAccessDenied(ngsError('NGS_CAPABILITY_DENIED'), 'job-recovery-race'), true);
+    assert.equal(isAlignmentAccessDenied(ngsError('NGS_HIERARCHY_DENIED')), false);
+    assert.equal(isAlignmentAccessDenied({ response: { status: 403, data: { ...ngsError('NGS_CAPABILITY_DENIED').response.data, extra: true } } }), false);
+    assert.equal(isAlignmentAccessDenied(ngsError('NGS_CAPABILITY_DENIED'), 'other-job'), false);
     assert.equal(isAlignmentAccessDenied({ response: { status: 403 } }), false);
     assert.equal(isAlignmentAccessDenied({ response: { status: 404, data: { detail: 'alignment access denied' } } }), false);
     assert.equal(isAlignmentAccessDenied(new Error('alignment access denied')), false);
+});
+
+test('rotation response is a closed exact authority contract', () => {
+    const valid = {
+        schema: 'bms.ngs.rotation-success.v1', job_id: 'job-a', rotated: true,
+        scheme: 'opaque_job_capability_v1', rotation_count: 1, expires_at: '2026-08-21T20:00:00Z',
+    };
+    assert.deepEqual(normalizeAlignmentAccessRotation(valid, 'job-a'), valid);
+    assert.throws(() => normalizeAlignmentAccessRotation({ ...valid, token: 'secret' }, 'job-a'), /unknown/i);
+    assert.throws(() => normalizeAlignmentAccessRotation({ ...valid, schema: 'old' }, 'job-a'), /invalid/i);
+});
+
+
+test('late pre-rotation denial retries with the current capability without a second rotation', async () => {
+    const rotationGate = deferred<void>();
+    const staleRequestGate = deferred<string>();
+    const originalPost = api.post;
+    let rotations = 0;
+    let firstCalls = 0;
+    let delayedCalls = 0;
+    api.post = (async () => {
+        rotations += 1;
+        await rotationGate.promise;
+        return {
+            data: {
+                schema: 'bms.ngs.rotation-success.v1',
+                job_id: 'job-recovery-race',
+                rotated: true,
+                scheme: 'opaque_job_capability_v1',
+                rotation_count: 1,
+                expires_at: '2026-08-21T20:00:00Z',
+            },
+        };
+    }) as typeof api.post;
+    const denied = ngsError('NGS_CAPABILITY_DENIED');
+    try {
+        const first = withAlignmentAccessRecovery('job-recovery-race', async () => {
+            firstCalls += 1;
+            if (firstCalls === 1) throw denied;
+            return 'sessions';
+        });
+        const delayed = withAlignmentAccessRecovery('job-recovery-race', async () => {
+            delayedCalls += 1;
+            if (delayedCalls === 1) return staleRequestGate.promise;
+            return 'result';
+        });
+        await Promise.resolve();
+        assert.equal(rotations, 1);
+        rotationGate.resolve();
+        assert.equal(await first, 'sessions');
+        staleRequestGate.reject(denied);
+        assert.equal(await delayed, 'result');
+        assert.equal(rotations, 1);
+        assert.equal(delayedCalls, 2);
+    } finally {
+        api.post = originalPost;
+    }
+});
+
+test('page disposal revokes the cookie and restores a fresh recovery budget', async () => {
+    const originalPost = api.post;
+    const originalDelete = api.delete;
+    let rotations = 0;
+    let revocations = 0;
+    api.post = (async () => ({
+        data: {
+            schema: 'bms.ngs.rotation-success.v1', job_id: 'job-dispose', rotated: true,
+            scheme: 'opaque_job_capability_v1', rotation_count: ++rotations,
+            expires_at: '2026-08-21T20:00:00Z',
+        },
+    })) as typeof api.post;
+    api.delete = (async () => { revocations += 1; return { data: {} }; }) as typeof api.delete;
+    const run = async () => {
+        let calls = 0;
+        return withAlignmentAccessRecovery('job-dispose', async () => {
+            calls += 1;
+            if (calls === 1) throw ngsError('NGS_CAPABILITY_DENIED', 'job-dispose');
+            return 'ready';
+        });
+    };
+    try {
+        assert.equal(await run(), 'ready');
+        disposeAlignmentAccess('job-dispose');
+        await Promise.resolve();
+        assert.equal(await run(), 'ready');
+        assert.equal(rotations, 2);
+        assert.equal(revocations, 1);
+    } finally {
+        api.post = originalPost;
+        api.delete = originalDelete;
+    }
 });
 
 function artifact(artifactId: string, sha256: string, sizeBytes: number, mimeType = 'application/octet-stream'): AlignmentSessionArtifact {
@@ -26,12 +146,7 @@ function artifact(artifactId: string, sha256: string, sizeBytes: number, mimeTyp
         size_bytes: sizeBytes,
         mime_type: mimeType,
         range_capable: true,
-        declared_sha256: sha256,
-        declared_size_bytes: sizeBytes,
-        observed_sha256: sha256,
-        observed_size_bytes: sizeBytes,
-        integrity_valid: true,
-        manifest: 'fastq_qc/qc_manifest.json',
+        source_manifest_sha256: 'f'.repeat(64),
     };
 }
 
@@ -42,32 +157,85 @@ test('detail scan exhaustion remains a distinct visible state', () => {
     assert.match(error.message, /absence is not proven/u);
 });
 
+test('typed backend scan truncation becomes the scientist-facing integrity state and rejects open envelopes', async () => {
+    const originalGet = api.get;
+    const canonical = {
+        schema: 'bms.ngs.error.v1', code: 'NGS_READ_SCAN_TRUNCATED',
+        message: 'The bounded scan ended before absence could be proved.',
+        job_id: 'job-a', resource: 'read', retryable: false,
+    };
+    let payload: unknown = canonical;
+    api.get = (async () => {
+        throw { response: { status: 409, data: payload } };
+    }) as typeof api.get;
+    try {
+        await assert.rejects(
+            fetchAlignmentRead('job-a', 'session-a', 'read-a'),
+            (error: unknown) => isAlignmentReadScanTruncatedError(error),
+        );
+        for (const malformed of [
+            { ...canonical, unexpected: true },
+            { ...canonical, message: null },
+            { ...canonical, message: '' },
+            { ...canonical, retryable: true },
+            { ...canonical, resource: 'artifact' },
+        ]) {
+            payload = malformed;
+            await assert.rejects(
+                fetchAlignmentRead('job-a', 'session-a', 'read-a'),
+                (error: unknown) => !isAlignmentReadScanTruncatedError(error),
+            );
+        }
+    } finally {
+        api.get = originalGet;
+    }
+});
+
 const payload: AlignmentSessionResponse = {
+    schema: 'bms.ngs.alignment-session-list.v1',
     job_id: 'job-a',
     sessions: [
         {
-            session_id: 'primary-session',
+            schema: 'bms.ngs.alignment-session.v1',
+            session_id: '1'.repeat(24),
             job_id: 'job-a',
             mode: 'primary',
-            reference_contig: 'plasmid',
             ready: true,
             unavailable_reason: null,
-            reads_url: '/api/jobs/job-a/reads?session_id=primary-session',
-            artifacts: {
-                alignment: artifact('bam', 'a', 4),
-                alignment_index: artifact('bai', 'b', 4),
-                reference: artifact('ref', 'c', 8, 'text/plain'),
+            reads_url: `/api/jobs/job-a/reads?session_id=${'1'.repeat(24)}`,
+            sequence_qc_manifest_sha256: '1'.repeat(64),
+            verification_manifest_sha256: '2'.repeat(64),
+            artifact_set_sha256: '3'.repeat(64),
+            reference: {
+                contig: 'plasmid',
+                length_bp: 8,
+                topology: 'circular',
+                normalized_sequence_sha256: '4'.repeat(64),
+                fasta_sha256: 'c'.repeat(64),
+                fai_sha256: 'd'.repeat(64),
             },
+            artifacts: {
+                alignment: artifact('a'.repeat(64), 'a'.repeat(64), 4),
+                alignment_index: artifact('b'.repeat(64), 'b'.repeat(64), 4),
+                reference: artifact('c'.repeat(64), 'c'.repeat(64), 8, 'text/plain'),
+                reference_index: artifact('d'.repeat(64), 'd'.repeat(64), 8, 'text/plain'),
+            },
+            alignment_pair_sha256: '5'.repeat(64),
         },
         {
-            session_id: 'dimer-session',
+            schema: 'bms.ngs.alignment-session.v1',
+            session_id: '2'.repeat(24),
             job_id: 'job-a',
             mode: 'dimer_candidates',
-            reference_contig: null,
             ready: false,
             unavailable_reason: 'missing alignment index',
-            reads_url: '/api/jobs/job-a/reads?session_id=dimer-session',
+            reads_url: null,
+            sequence_qc_manifest_sha256: null,
+            verification_manifest_sha256: null,
+            artifact_set_sha256: null,
+            reference: null,
             artifacts: {},
+            alignment_pair_sha256: null,
         },
     ],
 };
@@ -75,10 +243,21 @@ const payload: AlignmentSessionResponse = {
 test('normalizes only job-bound opaque session URLs without path inference', () => {
     const sessions = normalizeAlignmentSessions(payload, 'job-a');
     assert.equal(sessions.length, 2);
-    assert.equal(sessions[0].artifacts.alignment?.url, '/api/jobs/job-a/alignment-artifacts/bam');
-    assert.equal(sessions[0].artifacts.reference_index, undefined);
+    assert.equal(sessions[0].artifacts.alignment?.url, `/api/jobs/job-a/alignment-artifacts/${'a'.repeat(64)}`);
+    assert.equal(sessions[0].artifacts.reference_index?.sha256, 'd'.repeat(64));
     assert.equal(sessions[1].unavailable_reason, 'missing alignment index');
 });
+
+test('rejects unknown fields in the closed session and artifact wire contract', () => {
+    const extraSession = structuredClone(payload) as AlignmentSessionResponse & { sessions: Array<Record<string, unknown>> };
+    extraSession.sessions[0].legacy_reference_contig = 'plasmid';
+    assert.throws(() => normalizeAlignmentSessions(extraSession as AlignmentSessionResponse, 'job-a'), /unknown/i);
+
+    const extraArtifact = structuredClone(payload) as unknown as { sessions: Array<{ artifacts: Record<string, Record<string, unknown>> }> };
+    extraArtifact.sessions[0]!.artifacts.alignment!.manifest = 'fastq_qc/qc_manifest.json';
+    assert.throws(() => normalizeAlignmentSessions(extraArtifact as unknown as AlignmentSessionResponse, 'job-a'), /unknown/i);
+});
+
 
 test('rejects cross-job session payloads and non-job-scoped artifact URLs', () => {
     assert.throws(() => normalizeAlignmentSessions({ ...payload, job_id: 'job-b' }, 'job-a'), /job mismatch/i);
@@ -101,7 +280,8 @@ test('normalizes every authoritative auxiliary artifact role through opaque job 
         'track_config',
     ] as const;
     for (const [index, role] of roles.entries()) {
-        complete.sessions[0].artifacts[role] = artifact(role, (index + 1).toString(16), index + 1);
+        const digest = (index + 6).toString(16).repeat(64);
+        complete.sessions[0].artifacts[role] = artifact(digest, digest, index + 1);
     }
 
     const session = normalizeAlignmentSessions(complete, 'job-a')[0];

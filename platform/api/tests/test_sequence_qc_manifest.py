@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 API_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = API_ROOT.parent.parent
@@ -15,15 +19,113 @@ if str(API_ROOT) not in sys.path:
 
 from services.sequence_qc_manifest import (  # noqa: E402
     SequenceQcManifestError,
+    find_canonical_fastq_manifest,
     find_manifest_for_job,
+    find_manifest_in_result_root,
     load_sequence_qc_manifest,
 )
 from routers import sequence_qc  # noqa: E402
 
 
+def test_legacy_governed_manifest_route_uses_closed_typed_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from routers import ngs_alignment_sessions
+    from services.ngs_alignment_sessions import AlignmentSessionError
+
+    job_id = "00000000-0000-4000-8000-000000000001"
+    job = SimpleNamespace(
+        id=job_id,
+        params={"ont_workflow_id": "ont_fastq_qc", "ont_input_mode": "fastq"},
+    )
+    app = FastAPI()
+    app.add_exception_handler(
+        ngs_alignment_sessions.OntNgsRouteError,
+        ngs_alignment_sessions.ont_ngs_route_error_handler,
+    )
+    app.include_router(sequence_qc.router, prefix="/api")
+    app.dependency_overrides[ngs_alignment_sessions.require_alignment_job] = lambda: job
+    @asynccontextmanager
+    async def failed_package(_job):
+        raise AlignmentSessionError("secret path /tmp/result")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(sequence_qc, "_validated_pinned_result_root", failed_package)
+
+    response = TestClient(app).get(f"/api/jobs/{job_id}/manifest")
+    assert response.status_code == 409
+    assert response.json() == {
+        "schema": "bms.ngs.error.v1",
+        "code": "NGS_PACKAGE_INTEGRITY_CONFLICT",
+        "message": "The governed result package failed integrity validation.",
+        "job_id": job_id,
+        "resource": "manifest",
+        "retryable": False,
+    }
+
+
 def _write_manifest(path: Path, payload: dict) -> None:
+    if path.parent.name != "verification":
+        payload = {
+            "workflow_id": "ont_fastq_qc",
+            "input_mode": "fastq",
+            "analysis_status": "completed",
+            **payload,
+        }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def test_legacy_governed_manifest_route_reads_from_retained_root_descriptor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from routers import ngs_alignment_sessions
+
+    job_id = "00000000-0000-4000-8000-000000000004"
+    root = tmp_path / "result"
+
+    def manifest_payload(sample_name: str) -> dict:
+        return {
+            "artifact_schema_version": 1,
+            "job_id": job_id,
+            "sample_name": sample_name,
+            "reference": {"name": "plasmid", "path": "reference.fasta", "length": 4},
+            "consensus": {"path": "consensus.fasta", "status": "ok", "method": "samtools_1.24_bayesian_consensus", "fallback": False, "length": 4},
+            "artifacts": [],
+            "interpretation": {"verified_construct_status": "review", "notes": []},
+        }
+
+    _write_manifest(root / "fastq_qc/qc_manifest.json", manifest_payload("original"))
+    job = SimpleNamespace(
+        id=job_id,
+        params={"ont_workflow_id": "ont_fastq_qc", "ont_input_mode": "fastq"},
+    )
+
+    @asynccontextmanager
+    async def replace_after_validation(_job):
+        descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            held = tmp_path / "held-result"
+            root.rename(held)
+            _write_manifest(root / "fastq_qc/qc_manifest.json", manifest_payload("replacement"))
+            yield Path(f"/proc/self/fd/{descriptor}")
+        finally:
+            os.close(descriptor)
+
+    monkeypatch.setattr(sequence_qc, "_validated_pinned_result_root", replace_after_validation)
+    app = FastAPI()
+    app.add_exception_handler(
+        ngs_alignment_sessions.OntNgsRouteError,
+        ngs_alignment_sessions.ont_ngs_route_error_handler,
+    )
+    app.include_router(sequence_qc.router, prefix="/api")
+    app.dependency_overrides[ngs_alignment_sessions.require_alignment_job] = lambda: job
+
+    response = TestClient(app).get(f"/api/jobs/{job_id}/manifest")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["sample_name"] == "original"
 
 
 def test_load_sequence_qc_manifest_normalizes_existing_artifacts(tmp_path: Path) -> None:
@@ -262,8 +364,120 @@ def test_find_manifest_for_job_rejects_symlink_escape(tmp_path: Path) -> None:
     job_dir.mkdir(parents=True)
     (job_dir / "fastq_qc").symlink_to(outside_dir, target_is_directory=True)
 
-    with pytest.raises(SequenceQcManifestError, match="escapes"):
+    with pytest.raises(SequenceQcManifestError, match="symlink|escapes"):
         find_manifest_for_job("job-1", results_dir=results_dir)
+
+
+def test_find_manifest_for_job_rejects_symlinked_parent_inside_result_root(tmp_path: Path) -> None:
+    results_dir = tmp_path / "bms_results"
+    real_dir = results_dir / "real-job" / "fastq_qc"
+    real_dir.mkdir(parents=True)
+    _write_manifest(
+        real_dir / "qc_manifest.json",
+        {"artifact_schema_version": 1, "job_id": "job-1", "artifacts": []},
+    )
+    job_dir = results_dir / "job-1"
+    job_dir.mkdir()
+    (job_dir / "fastq_qc").symlink_to(real_dir, target_is_directory=True)
+
+    with pytest.raises(SequenceQcManifestError, match="symlink"):
+        find_manifest_for_job("job-1", results_dir=results_dir)
+
+
+def test_find_manifest_in_result_root_rejects_symlinked_parent_inside_root(tmp_path: Path) -> None:
+    result_root = tmp_path / "job"
+    real_dir = result_root / "real-fastq-qc"
+    real_dir.mkdir(parents=True)
+    _write_manifest(
+        real_dir / "qc_manifest.json",
+        {"artifact_schema_version": 1, "job_id": "job-1", "artifacts": []},
+    )
+    (result_root / "fastq_qc").symlink_to(real_dir, target_is_directory=True)
+
+    with pytest.raises(SequenceQcManifestError, match="symlink"):
+        find_manifest_in_result_root(result_root)
+
+
+def test_canonical_fastq_manifest_ignores_verification_manifest(tmp_path: Path) -> None:
+    result_root = tmp_path / "job"
+    _write_manifest(
+        result_root / "verification" / "qc_manifest.json",
+        {"schema": "biomodstack.construct_verification.v2", "artifacts": []},
+    )
+    canonical = result_root / "fastq_qc" / "qc_manifest.json"
+    _write_manifest(
+        canonical,
+        {"artifact_schema_version": 1, "job_id": "job-1", "artifacts": []},
+    )
+
+    assert find_canonical_fastq_manifest(result_root) == canonical
+
+
+@pytest.mark.asyncio
+async def test_ngs_manifest_receipt_resolver_rejects_symlinked_fastq_parent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from services import molbio_ngs_member_receipts as receipts
+
+    result_root = tmp_path / "job"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "qc_manifest.json").write_text("{}", encoding="utf-8")
+    result_root.mkdir()
+    (result_root / "fastq_qc").symlink_to(outside, target_is_directory=True)
+    job = SimpleNamespace(id="job-receipt", model_id="nanopore", params={"ont_workflow_id": "ont_fastq_qc"})
+
+    class Session:
+        async def get(self, _model, _job_id):
+            return job
+
+    monkeypatch.setattr(receipts, "resolve_persisted_job_result_root", lambda _job: result_root)
+
+    with pytest.raises(SequenceQcManifestError, match="symlink"):
+        await receipts.resolve_ngs_result_manifest_receipt(Session(), job_id=job.id)
+
+
+@pytest.mark.asyncio
+async def test_job_manifest_route_uses_canonical_fastq_manifest_for_ont_workflow(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = type(
+        "JobStub",
+        (),
+        {
+            "id": "job-route",
+            "params": {"ont_workflow_id": "ont_fastq_qc", "ont_input_mode": "fastq"},
+        },
+    )()
+    canonical = tmp_path / "fastq_qc" / "qc_manifest.json"
+    manifest_bytes = b'{"schema":"sequence_qc.manifest.v1"}'
+    @asynccontextmanager
+    async def pinned_root(_job):
+        yield tmp_path
+
+    monkeypatch.setattr(sequence_qc, "_validated_pinned_result_root", pinned_root)
+    monkeypatch.setattr(sequence_qc, "find_canonical_fastq_manifest", lambda _root, **_kwargs: canonical)
+    monkeypatch.setattr(
+        sequence_qc,
+        "find_manifest_in_result_root",
+        lambda _root, **_kwargs: (_ for _ in ()).throw(AssertionError("verification manifest finder was used")),
+    )
+    monkeypatch.setattr(
+        sequence_qc,
+        "read_manifest_json_nofollow",
+        lambda _path, **_kwargs: ({"schema": "sequence_qc.manifest.v1"}, manifest_bytes, "a" * 64, len(manifest_bytes)),
+    )
+    monkeypatch.setattr(
+        sequence_qc,
+        "load_sequence_qc_manifest",
+        lambda *_args, **kwargs: {"raw_bytes": kwargs["raw_bytes"], "schema": "sequence_qc.manifest.v1"},
+    )
+
+    result = await sequence_qc.get_sequence_qc_manifest_for_job("job-route", job)
+
+    assert result["raw_bytes"] == manifest_bytes
 
 
 def test_find_manifest_for_job_rejects_unsafe_job_id(tmp_path: Path) -> None:
@@ -271,35 +485,76 @@ def test_find_manifest_for_job_rejects_unsafe_job_id(tmp_path: Path) -> None:
         find_manifest_for_job("../escape", results_dir=tmp_path)
 
 
-@pytest.mark.asyncio
-async def test_sequence_qc_manifest_by_path_route_loads_allowed_manifest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    manifest_path = tmp_path / "qc_manifest.json"
+def test_sequence_qc_manifest_has_no_caller_selected_path_route() -> None:
+    assert not hasattr(sequence_qc, "get_sequence_qc_manifest_by_path")
+    assert not hasattr(sequence_qc, "resolve_allowed_path")
+    assert all("{path" not in str(getattr(route, "path", "")) for route in sequence_qc.router.routes)
+
+
+def test_molbio_evidence_consumer_uses_canonical_fastq_manifest_when_both_exist(
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+
+    from services.molbio_ngs_evidence import _read_receipt_bound_result_manifest
+
+    result_root = tmp_path / "result"
+    canonical = result_root / "fastq_qc" / "qc_manifest.json"
+    verification = result_root / "verification" / "qc_manifest.json"
+    canonical.parent.mkdir(parents=True)
+    verification.parent.mkdir(parents=True)
+    canonical_bytes = b'{"authority":"canonical-fastq"}'
+    canonical.write_bytes(canonical_bytes)
+    verification.write_bytes(b'{"authority":"construct-verification"}')
+    job = SimpleNamespace(params={"ont_workflow_id": "ont_fastq_qc"})
+
+    manifest_path, raw = _read_receipt_bound_result_manifest(job, result_root)
+
+    assert manifest_path == canonical.resolve()
+    assert raw == canonical_bytes
+
+
+def test_molbio_workup_consumer_uses_canonical_fastq_manifest_when_both_exist(
+    tmp_path: Path,
+) -> None:
+    from routers.molbio_ops import _load_job_sequence_qc_manifest
+
+    result_root = tmp_path / "result"
+    canonical = result_root / "fastq_qc" / "qc_manifest.json"
+    verification = result_root / "verification" / "qc_manifest.json"
     _write_manifest(
-        manifest_path,
+        canonical,
         {
             "artifact_schema_version": 1,
-            "job_id": "job-route",
+            "job_id": "job-receipt",
             "artifacts": [],
         },
     )
-    monkeypatch.setattr(sequence_qc, "resolve_allowed_path", lambda raw_path: manifest_path)
+    verification.parent.mkdir(parents=True, exist_ok=True)
+    verification.write_text('{"authority":"wrong-manifest"}', encoding="utf-8")
+    job = SimpleNamespace(
+        id="job-receipt",
+        params={"ont_workflow_id": "ont_fastq_qc", "ont_input_mode": "fastq"},
+    )
 
-    response = await sequence_qc.get_sequence_qc_manifest_by_path("bms_results/job-route/fastq_qc/qc_manifest.json")
+    manifest = _load_job_sequence_qc_manifest(job, result_root)
 
-    assert response["job_id"] == "job-route"
-    assert "manifest_path" not in response
-    assert "manifest_dir" not in response
+    assert manifest["job_id"] == "job-receipt"
+    assert manifest["workflow_id"] == "ont_fastq_qc"
 
 
-@pytest.mark.asyncio
-async def test_sequence_qc_manifest_by_path_route_maps_escape_to_403(monkeypatch: pytest.MonkeyPatch) -> None:
-    def reject_escape(raw_path: str) -> Path:
-        raise ValueError("Path escapes allowed root")
+def test_molbio_evidence_consumer_rejects_symlinked_canonical_parent(tmp_path: Path) -> None:
+    from types import SimpleNamespace
 
-    monkeypatch.setattr(sequence_qc, "resolve_allowed_path", reject_escape)
+    from services.molbio_ngs_evidence import _read_receipt_bound_result_manifest
 
-    with pytest.raises(HTTPException) as exc_info:
-        await sequence_qc.get_sequence_qc_manifest_by_path("bms_results/linked/qc_manifest.json")
+    result_root = tmp_path / "result"
+    outside = tmp_path / "outside"
+    result_root.mkdir()
+    outside.mkdir()
+    (outside / "qc_manifest.json").write_text('{"authority":"outside"}', encoding="utf-8")
+    (result_root / "fastq_qc").symlink_to(outside, target_is_directory=True)
+    job = SimpleNamespace(params={"ont_workflow_id": "ont_fastq_qc"})
 
-    assert exc_info.value.status_code == 403
-    assert "escapes" in str(exc_info.value.detail)
+    with pytest.raises(SequenceQcManifestError, match="symlink"):
+        _read_receipt_bound_result_manifest(job, result_root)

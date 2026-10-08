@@ -34,9 +34,20 @@ def _client_with_fake_create(monkeypatch, captured: dict[str, Any]) -> TestClien
         async def commit(self) -> None:
             return None
 
+        async def rollback(self) -> None:
+            return None
+
     app.dependency_overrides[ont_runs.get_session] = FakeSession
 
-    async def fake_create_pipeline_job(job_data, background_tasks, session, response, request):
+    async def fake_create_pipeline_job(
+        job_data,
+        background_tasks,
+        session,
+        experiment_session,
+        response,
+        request,
+        **_kwargs,
+    ):
         captured["job_data"] = job_data
         captured["session"] = session
         return JobResponse(
@@ -155,6 +166,7 @@ def test_ont_run_plasmid_handoff_submit_builds_and_submits_job(monkeypatch) -> N
                 "fastq_path": "/data/run/A12.fastq.gz",
                 "reference_fasta": payload["reference_fasta"],
                 "source_instrument_run_id": run_id,
+                "source_instrument_observed_generation": 11,
                 "source_minknow_run_id": "MNK-001",
             },
             "fake_or_demo_devices": False,
@@ -162,17 +174,41 @@ def test_ont_run_plasmid_handoff_submit_builds_and_submits_job(monkeypatch) -> N
 
     monkeypatch.setattr(ont_runs.ont_run_control, "build_plasmid_qc_handoff", fake_build_plasmid_qc_handoff)
 
+    receipt = SimpleNamespace(
+        id="receipt-1",
+        sequence_id="sequence-1",
+        revision_id="revision-1",
+        revision_sha256="a" * 64,
+        reference_snapshot_sha256="b" * 64,
+        reference_snapshot_path="/data/refs/A12.fa",
+        consumed_at=None,
+        consumed_job_id=None,
+    )
+
+    async def fake_validate_receipt(_session, *, receipt_id):
+        assert receipt_id == "receipt-1"
+        return receipt
+
     async def fake_consume_receipt(_session, *, receipt_id):
         assert receipt_id == "receipt-1"
-        return SimpleNamespace(reference_snapshot_path="/data/refs/A12.fa", consumed_at=None, consumed_job_id=None)
+        return receipt
 
+    async def fake_attach_instrument_run_evidence(*_args, **kwargs):
+        assert kwargs["global_domain_experiment_id"] == "domain-1"
+        assert kwargs["state_revision_id"] == "state-1"
+        return SimpleNamespace(receipt_id="instrument-receipt-1", content_digest="c" * 64)
+
+    monkeypatch.setattr(ont_runs, "validate_molbio_ngs_receipt", fake_validate_receipt)
     monkeypatch.setattr(ont_runs, "consume_molbio_ngs_receipt", fake_consume_receipt)
+    monkeypatch.setattr(ont_runs, "attach_instrument_run_evidence", fake_attach_instrument_run_evidence)
 
     response = client.post(
         "/api/ont/runs/ont-run-1/handoff/plasmid-qc/submit",
         json={
             "name": "live run plasmid QC",
             "molbio_ngs_receipt_id": "receipt-1",
+            "global_domain_experiment_id": "domain-1",
+            "molbio_ngs_state_revision_id": "state-1",
             "params": {"igv_report_max_sites": 12},
         },
     )
@@ -224,7 +260,7 @@ def test_created_ont_job_receives_opaque_alignment_capability(monkeypatch) -> No
     )
     captured: dict[str, str] = {}
 
-    async def fake_create_job(_job, _tasks, _session):
+    async def fake_create_job(_job, _tasks, _session, **_kwargs):
         digest = ont_submission_trust.alignment_capability_digest()
         assert digest is not None
         captured["digest"] = digest
@@ -245,6 +281,7 @@ def test_created_ont_job_receives_opaque_alignment_capability(monkeypatch) -> No
             type("JobData", (), {})(),
             BackgroundTasks(),
             session,
+            object(),
             response,
             request,
         )
@@ -259,7 +296,9 @@ def test_created_ont_job_receives_opaque_alignment_capability(monkeypatch) -> No
     assert "HttpOnly" in cookie_header
     assert "Secure" in cookie_header
     assert "SameSite=strict" in cookie_header
-    assert f"Path=/api/jobs/{created.id}" in cookie_header
+    assert "Max-Age=1800" in cookie_header
+    assert "Path=/" in cookie_header
+    assert cookie_header.startswith("__Host-bms-ngs-")
 
 
 def test_capability_issuance_failure_occurs_before_ont_job_creation(monkeypatch) -> None:
@@ -287,6 +326,7 @@ def test_capability_issuance_failure_occurs_before_ont_job_creation(monkeypatch)
             ont_runs._create_pipeline_job(
                 type("JobData", (), {})(),
                 BackgroundTasks(),
+                object(),
                 object(),
                 Response(),
                 request,

@@ -222,9 +222,90 @@ test('upstream NGS route producers retain context and avoid generic viewers', ()
 
 test('alignment track completion cannot navigate away from a session-bound locus', () => {
     const source = readFileSync(new URL('../src/components/NGSToolkit.tsx', import.meta.url), 'utf8');
-    const locusDetectionCalls = source.match(/detectInitialLocusFromFasta\(activeIgvFastaUrl\)/g) || [];
+    const locusDetectionCalls = source.match(/detectInitialLocusFromFasta\(igvFastaUrl\)/g) || [];
 
     assert.equal(locusDetectionCalls.length, 1);
     assert.match(source, /Track loading must never navigate/);
     assert.doesNotMatch(source, /loadedAlignmentTrack[\s\S]{0,2500}browser\.search\(/);
+});
+
+test('local IGV config disables default genomes and web locus lookup', async () => {
+    const module = await import('../src/lib/ngsAlignmentViewer.js') as Record<string, unknown>;
+    const buildConfig = module.buildLocalIgvConfig as ((input: {
+        referenceId: string;
+        referenceName: string;
+        fastaUrl: string;
+        faiUrl: string;
+        bamUrl: string;
+        baiUrl: string;
+        initialLocus: string;
+        auxiliaryTracks: Array<Record<string, unknown>>;
+    }) => Record<string, unknown>) | undefined;
+    assert.equal(typeof buildConfig, 'function');
+
+    const config = buildConfig!({
+        referenceId: 'eGFP_plasmid',
+        referenceName: 'eGFP plasmid',
+        fastaUrl: '/api/jobs/job-a/alignment-artifacts/reference',
+        faiUrl: '/api/jobs/job-a/alignment-artifacts/reference-index',
+        bamUrl: '/api/jobs/job-a/alignment-artifacts/bam',
+        baiUrl: '/api/jobs/job-a/alignment-artifacts/bai',
+        initialLocus: 'eGFP_plasmid:1-5570',
+        auxiliaryTracks: [],
+    });
+
+    assert.equal(config.loadDefaultGenomes, false);
+    assert.equal(config.search, false);
+    assert.equal(config.queryParametersSupported, false);
+    assert.deepEqual(config.genomeList, []);
+    assert.equal(JSON.stringify(config).includes('igv.org'), false);
+    assert.equal(JSON.stringify(config).includes('cdn.jsdelivr.net'), false);
+
+    const source = readFileSync(new URL('../src/components/NGSToolkit.tsx', import.meta.url), 'utf8');
+    assert.match(source, /buildLocalIgvConfig\(/u);
+});
+
+test('local IGV Range parser accepts only the exact backend-bound contig and bounds', async () => {
+    const module = await import('../src/lib/ngsAlignmentViewer.js') as Record<string, unknown>;
+    const parseRange = module.parseLocalIgvRange as ((value: string, contig: string, length: number) => string | null) | undefined;
+    assert.equal(typeof parseRange, 'function');
+
+    assert.equal(parseRange!('eGFP_plasmid:3400-3600', 'eGFP_plasmid', 5570), 'eGFP_plasmid:3400-3600');
+    assert.equal(parseRange!(' eGFP_plasmid:1-5570 ', 'eGFP_plasmid', 5570), 'eGFP_plasmid:1-5570');
+    assert.equal(parseRange!('EGFP_PLASMID:3400-3600', 'eGFP_plasmid', 5570), null);
+    assert.equal(parseRange!('eGFP_plasmid:3600-3400', 'eGFP_plasmid', 5570), null);
+    assert.equal(parseRange!('eGFP_plasmid:1-5571', 'eGFP_plasmid', 5570), null);
+    assert.equal(parseRange!('TP53', 'eGFP_plasmid', 5570), null);
+});
+
+test('NGS viewer opens compactly with explicit Range, fullscreen, and read-inspector controls', () => {
+    const source = readFileSync(new URL('../src/components/NGSToolkit.tsx', import.meta.url), 'utf8');
+    const openStart = source.indexOf('const openIgvModal');
+    const closeStart = source.indexOf('const closeIgvModal');
+    const openBody = source.slice(openStart, closeStart);
+
+    assert.ok(openStart >= 0 && closeStart > openStart);
+    assert.doesNotMatch(openBody, /requestDocumentFullscreen/u);
+    assert.match(source, /w-\[min\(96vw,1180px\)\]/u);
+    assert.match(source, /aria-label="Range"/u);
+    assert.match(source, /parseLocalIgvRange\(/u);
+    assert.match(source, /Enter fullscreen/u);
+    assert.match(source, /igvInspectorOpen &&/u);
+});
+
+test('historical CDN-backed report is not exposed as an active browser viewer', () => {
+    const source = readFileSync(new URL('../src/components/NGSToolkit.tsx', import.meta.url), 'utf8');
+
+    assert.doesNotMatch(source, /Open compact IGV report/u);
+    assert.doesNotMatch(source, /igvReportDownloadHref/u);
+});
+
+test('canonical FASTQ-QC renders the scientific report before collapsed technical details', () => {
+    const source = readFileSync(new URL('../src/components/NGSToolkit.tsx', import.meta.url), 'utf8');
+    const resultPanel = source.indexOf('<OntFastqQcResultPanel');
+    const technicalDetails = source.indexOf('Technical job details');
+    assert.ok(resultPanel >= 0);
+    assert.ok(technicalDetails > resultPanel);
+    assert.match(source, /<details open=\{!isCanonicalFastqQcRun\}/u);
+    assert.equal((source.match(/<OntFastqQcResultPanel/g) || []).length, 1);
 });

@@ -1,0 +1,866 @@
+{
+  "$id": "https://biomodstack.local/schemas/ngs/ont_fastq_qc_evidence_bundle_v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "gate_id": {
+            "const": "A1"
+          }
+        },
+        "required": [
+          "gate_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "assertions": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "A1_PACKAGE_AUTHORITY_CLOSED"
+              }
+            ],
+            "type": "array"
+          },
+          "required_evidence_names": {
+            "items": false,
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "const": "package_manifest"
+              },
+              {
+                "const": "artifact_inventory"
+              }
+            ],
+            "type": "array"
+          }
+        },
+        "required": [
+          "assertions",
+          "required_evidence_names"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "gate_id": {
+            "const": "A2"
+          }
+        },
+        "required": [
+          "gate_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "assertions": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "A2_LIFECYCLE_MIRRORS_CLOSED"
+              }
+            ],
+            "type": "array"
+          },
+          "required_evidence_names": {
+            "items": false,
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "const": "lifecycle_db"
+              },
+              {
+                "const": "reconciliation_receipt"
+              }
+            ],
+            "type": "array"
+          }
+        },
+        "required": [
+          "assertions",
+          "required_evidence_names"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "gate_id": {
+            "const": "A3"
+          }
+        },
+        "required": [
+          "gate_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "assertions": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "A3_RESULT_ENDPOINT_CLOSED"
+              }
+            ],
+            "type": "array"
+          },
+          "required_evidence_names": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "result_response"
+              }
+            ],
+            "type": "array"
+          }
+        },
+        "required": [
+          "assertions",
+          "required_evidence_names"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "gate_id": {
+            "const": "A4"
+          }
+        },
+        "required": [
+          "gate_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "assertions": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "A4_BROWSER_RECOVERY_CLOSED"
+              }
+            ],
+            "type": "array"
+          },
+          "required_evidence_names": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "rotation_trace"
+              }
+            ],
+            "type": "array"
+          }
+        },
+        "required": [
+          "assertions",
+          "required_evidence_names"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "gate_id": {
+            "const": "A5"
+          }
+        },
+        "required": [
+          "gate_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "assertions": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "A5_HIERARCHY_AUTHORIZATION_CLOSED"
+              }
+            ],
+            "type": "array"
+          },
+          "required_evidence_names": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "authorization_matrix"
+              }
+            ],
+            "type": "array"
+          }
+        },
+        "required": [
+          "assertions",
+          "required_evidence_names"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "gate_id": {
+            "const": "A6"
+          }
+        },
+        "required": [
+          "gate_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "assertions": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "A6_FULL_DOWNLOAD_CLOSED"
+              }
+            ],
+            "type": "array"
+          },
+          "required_evidence_names": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "full_download"
+              }
+            ],
+            "type": "array"
+          }
+        },
+        "required": [
+          "assertions",
+          "required_evidence_names"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "gate_id": {
+            "const": "A7"
+          }
+        },
+        "required": [
+          "gate_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "assertions": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "A7_RANGE_CLOSED"
+              }
+            ],
+            "type": "array"
+          },
+          "required_evidence_names": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "range_matrix"
+              }
+            ],
+            "type": "array"
+          }
+        },
+        "required": [
+          "assertions",
+          "required_evidence_names"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "gate_id": {
+            "const": "A8"
+          }
+        },
+        "required": [
+          "gate_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "assertions": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "A8_FIRST_VIEWPORT_CLOSED"
+              }
+            ],
+            "type": "array"
+          },
+          "required_evidence_names": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "first_viewport"
+              }
+            ],
+            "type": "array"
+          }
+        },
+        "required": [
+          "assertions",
+          "required_evidence_names"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "gate_id": {
+            "const": "A9"
+          }
+        },
+        "required": [
+          "gate_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "assertions": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "A9_DECISION_REPORT_CLOSED"
+              }
+            ],
+            "type": "array"
+          },
+          "required_evidence_names": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "decision_report"
+              }
+            ],
+            "type": "array"
+          }
+        },
+        "required": [
+          "assertions",
+          "required_evidence_names"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "gate_id": {
+            "const": "A10"
+          }
+        },
+        "required": [
+          "gate_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "assertions": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "A10_LOCAL_VIEWER_OPEN"
+              }
+            ],
+            "type": "array"
+          },
+          "required_evidence_names": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "igv_open"
+              }
+            ],
+            "type": "array"
+          }
+        },
+        "required": [
+          "assertions",
+          "required_evidence_names"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "gate_id": {
+            "const": "A11"
+          }
+        },
+        "required": [
+          "gate_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "assertions": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "A11_RANGE_NAVIGATION_CLOSED"
+              }
+            ],
+            "type": "array"
+          },
+          "required_evidence_names": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "navigation"
+              }
+            ],
+            "type": "array"
+          }
+        },
+        "required": [
+          "assertions",
+          "required_evidence_names"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "gate_id": {
+            "const": "A12"
+          }
+        },
+        "required": [
+          "gate_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "assertions": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "A12_BULK_DATA_BEHAVIOR_CLOSED"
+              }
+            ],
+            "type": "array"
+          },
+          "required_evidence_names": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "transfer_audit"
+              }
+            ],
+            "type": "array"
+          }
+        },
+        "required": [
+          "assertions",
+          "required_evidence_names"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "gate_id": {
+            "const": "A13"
+          }
+        },
+        "required": [
+          "gate_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "assertions": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "A13_FAILURE_ISOLATION_CLOSED"
+              }
+            ],
+            "type": "array"
+          },
+          "required_evidence_names": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "failure_isolation"
+              }
+            ],
+            "type": "array"
+          }
+        },
+        "required": [
+          "assertions",
+          "required_evidence_names"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "gate_id": {
+            "const": "A14"
+          }
+        },
+        "required": [
+          "gate_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "assertions": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "A14_CONSOLE_NETWORK_CLOSED"
+              }
+            ],
+            "type": "array"
+          },
+          "required_evidence_names": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "console_network"
+              }
+            ],
+            "type": "array"
+          }
+        },
+        "required": [
+          "assertions",
+          "required_evidence_names"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "gate_id": {
+            "const": "A15"
+          }
+        },
+        "required": [
+          "gate_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "assertions": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "A15_NORMAL_REOPEN_CLOSED"
+              }
+            ],
+            "type": "array"
+          },
+          "required_evidence_names": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "normal_reopen"
+              }
+            ],
+            "type": "array"
+          }
+        },
+        "required": [
+          "assertions",
+          "required_evidence_names"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "gate_id": {
+            "const": "A16"
+          }
+        },
+        "required": [
+          "gate_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "assertions": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "A16_RUNTIME_RELEASE_CLOSED"
+              }
+            ],
+            "type": "array"
+          },
+          "required_evidence_names": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "runtime_identity"
+              }
+            ],
+            "type": "array"
+          }
+        },
+        "required": [
+          "assertions",
+          "required_evidence_names"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "gate_id": {
+            "const": "A17"
+          }
+        },
+        "required": [
+          "gate_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "assertions": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "A17_ISOLATION_CLOSED"
+              }
+            ],
+            "type": "array"
+          },
+          "required_evidence_names": {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "isolation_audit"
+              }
+            ],
+            "type": "array"
+          }
+        },
+        "required": [
+          "assertions",
+          "required_evidence_names"
+        ]
+      }
+    }
+  ],
+  "properties": {
+    "assertions": {
+      "items": {
+        "pattern": "^[A-Z][A-Z0-9_.:-]{0,127}$",
+        "type": "string"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "bundle_id": {
+      "pattern": "^[A-Za-z0-9_.:-]{1,255}$",
+      "type": "string"
+    },
+    "bundle_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "candidate_commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "candidate_tree": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "captured_at": {
+      "format": "date-time",
+      "pattern": "Z$",
+      "type": "string"
+    },
+    "contract_package_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "files": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "content_schema": {
+            "enum": [
+              "bms.ont-fastq-qc-gate-evidence.package_manifest.v1",
+              "bms.ont-fastq-qc-gate-evidence.artifact_inventory.v1",
+              "bms.ont-fastq-qc-gate-evidence.lifecycle_db.v1",
+              "bms.ont-fastq-qc-gate-evidence.reconciliation_receipt.v1",
+              "bms.ont-fastq-qc-gate-evidence.result_response.v1",
+              "bms.ont-fastq-qc-gate-evidence.rotation_trace.v1",
+              "bms.ont-fastq-qc-gate-evidence.authorization_matrix.v1",
+              "bms.ont-fastq-qc-gate-evidence.full_download.v1",
+              "bms.ont-fastq-qc-gate-evidence.range_matrix.v1",
+              "bms.ont-fastq-qc-gate-evidence.first_viewport.v1",
+              "bms.ont-fastq-qc-gate-evidence.decision_report.v1",
+              "bms.ont-fastq-qc-gate-evidence.igv_open.v1",
+              "bms.ont-fastq-qc-gate-evidence.navigation.v1",
+              "bms.ont-fastq-qc-gate-evidence.transfer_audit.v1",
+              "bms.ont-fastq-qc-gate-evidence.failure_isolation.v1",
+              "bms.ont-fastq-qc-gate-evidence.console_network.v1",
+              "bms.ont-fastq-qc-gate-evidence.normal_reopen.v1",
+              "bms.ont-fastq-qc-gate-evidence.runtime_identity.v1",
+              "bms.ont-fastq-qc-gate-evidence.isolation_audit.v1"
+            ],
+            "type": "string"
+          },
+          "media_type": {
+            "pattern": "^[a-z0-9.+-]+/[A-Za-z0-9.+-]+$",
+            "type": "string"
+          },
+          "name": {
+            "pattern": "^[A-Za-z0-9_.-]{1,128}$",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "size_bytes": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "media_type",
+          "size_bytes",
+          "sha256",
+          "content_schema"
+        ],
+        "type": "object"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "type": "array"
+    },
+    "gate_id": {
+      "pattern": "^A(?:[1-9]|1[0-7])$",
+      "type": "string"
+    },
+    "job_id": {
+      "const": "31f02bd5-830f-4558-aa78-3873c515de68"
+    },
+    "owner": {
+      "pattern": "^[A-Za-z0-9_.:@-]{1,255}$",
+      "type": "string"
+    },
+    "required_evidence_names": {
+      "items": {
+        "pattern": "^[a-z0-9_]{1,64}$",
+        "type": "string"
+      },
+      "maxItems": 4,
+      "minItems": 1,
+      "type": "array"
+    },
+    "schema": {
+      "const": "bms.ont-fastq-qc-evidence-bundle.v1"
+    }
+  },
+  "required": [
+    "schema",
+    "bundle_id",
+    "gate_id",
+    "owner",
+    "captured_at",
+    "candidate_commit",
+    "candidate_tree",
+    "contract_package_sha256",
+    "assertions",
+    "required_evidence_names",
+    "files",
+    "bundle_sha256"
+  ],
+  "type": "object",
+  "x-bms-cross-field-invariants": [
+    "files contain each required_evidence_names value exactly once and no unlisted file",
+    "each JSON file validates against ont_fastq_qc_gate_evidence_body_v1 and its evidence_name and schema equal the required filename mapping",
+    "bundle_sha256 is verified after file sizes and digests"
+  ],
+  "x-bms-semantic-validator": "bms.ont-fastq-qc-evidence-bundle-verifier.v1"
+}

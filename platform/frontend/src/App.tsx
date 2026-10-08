@@ -59,6 +59,19 @@ function HistoricalDomainExperimentReopenRoute() {
   return <Navigate replace to={`/ngs${search ? `?${search}` : ''}`} />;
 }
 
+function NgsRoute() {
+  const location = useLocation();
+  const jobId = new URLSearchParams(location.search).get('job_id')?.trim();
+  if (jobId) return <NGSToolkit />;
+  return (
+    <div className="w-full max-w-none">
+      <NgsMolBioProjectHub />
+      <DomainExperimentWorkspace />
+      <NGSToolkit />
+    </div>
+  );
+}
+
 function App() {
   const { features: bmsFeatures, resolved: bmsFeaturesResolved } = useResolvedBmsFeatures();
 
@@ -96,16 +109,7 @@ function App() {
               )}
             />
             {/* NGS Data Visualization Toolkit - Nanopore-focused orchestration surface */}
-            <Route
-              path="/ngs"
-              element={(
-                <div className="w-full max-w-none">
-                  <NgsMolBioProjectHub />
-                  <DomainExperimentWorkspace />
-                  <NGSToolkit />
-                </div>
-              )}
-            />
+            <Route path="/ngs" element={<NgsRoute />} />
             {/* Isolated Stats Toolkit rendered inside the BioModStack workspace. */}
             <Route path="/stats" element={<StatsToolkitLauncher />} />
             {/* Infra Monitor - native workstation telemetry surface */}

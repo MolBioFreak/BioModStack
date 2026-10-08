@@ -77,11 +77,21 @@ def _configure_transient_launch(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("awaiting_input", [False, True])
+@pytest.mark.parametrize(
+    ("lifecycle_override", "failure_published"),
+    [
+        ({}, True),
+        ({"awaiting_input": True}, False),
+        ({"paused": True}, False),
+        ({"awaiting_stage": "review"}, False),
+        ({"awaiting_payload": {"gate": "review"}}, False),
+    ],
+)
 async def test_rfd3_missing_gpu_failure_updates_typed_request_only_after_job_cas(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    awaiting_input: bool,
+    lifecycle_override: dict,
+    failure_published: bool,
 ) -> None:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'rfd3-launch-failure.db'}")
     async with engine.begin() as connection:
@@ -94,8 +104,14 @@ async def test_rfd3_missing_gpu_failure_updates_typed_request_only_after_job_cas
             factory,
             job_id=job_id,
             request_id=request_id,
-            awaiting_input=awaiting_input,
         )
+        if lifecycle_override:
+            async with factory() as session:
+                guarded_job = await session.get(Job, job_id)
+                assert guarded_job is not None
+                for field, value in lifecycle_override.items():
+                    setattr(guarded_job, field, value)
+                await session.commit()
         _configure_transient_launch(monkeypatch, factory, tmp_path, job_id=job_id)
 
         await nextflow.launch_nextflow_job(
@@ -111,7 +127,7 @@ async def test_rfd3_missing_gpu_failure_updates_typed_request_only_after_job_cas
             job = await session.get(Job, job_id)
             request = await session.get(RFD3LocalRedesignRequest, request_id)
             assert job is not None and request is not None
-            if awaiting_input:
+            if not failure_published:
                 assert job.status == "running"
                 assert request.status == "running"
                 assert request.failure_receipt_json is None

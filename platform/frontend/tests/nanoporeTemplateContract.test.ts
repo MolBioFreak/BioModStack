@@ -22,12 +22,16 @@ test('Nanopore FASTQ launch defaults stay compatible with bundled minimap2', () 
 test('Nanopore reference workflows are gated on an exact saved MolBio revision', () => {
     const template = readSource('src/components/NanoporeTemplate.tsx');
 
-    assert.match(template, /const requiresReference = selectedWorkflow === 'clone'/u);
+    assert.match(template, /const requiresReference = selectedWorkflow === 'clone' \|\| selectedWorkflow === 'plasmidQc' \|\| selectedWorkflow === 'constructScreening' \|\| selectedWorkflow === 'fastqQc' \|\| selectedWorkflow === 'bamQc' \|\| selectedWorkflow === 'modified'/u);
     assert.match(template, /selectedMolbioSequenceId/u);
     assert.match(template, /selectedMolbioRevisionId/u);
     assert.match(template, /selectedWorkflow === 'clone' \|\| selectedWorkflow === 'plasmidQc' \|\| selectedWorkflow === 'constructScreening' \|\| selectedWorkflow === 'fastqQc'/u);
-    assert.match(template, /This workflow requires a saved MolBio sequence and exact immutable revision/u);
-    assert.doesNotMatch(template, /localStorage|uploadFile|referencePath|reference_fasta/u);
+    assert.match(template, /Select an immutable managed reference revision/u);
+    assert.match(template, /not a member of the exact selected local state revision/u);
+    assert.match(template, /readLegacyReferenceImportHints/u);
+    assert.match(template, /untrusted import hints only/u);
+    assert.match(template, /importMolBioNgsBrowserReference/u);
+    assert.doesNotMatch(template, /params:\s*\{[\s\S]{0,300}reference_fasta:\s*effectiveReferencePath/u);
     assert.match(template, /function coerceIntegerInput/u);
     assert.match(template, /FASTQ_MAX_IGV_REPORT_MAX_SITES/u);
     assert.match(template, /max=\{FASTQ_MAX_IGV_REPORT_MAX_SITES\}/u);
@@ -126,7 +130,7 @@ test('Nanopore selected workflows keep source controls contextual and require re
     assert.match(template, /Existing BAM with MM\/ML tags/u);
     assert.match(template, /selectedWorkflow === 'constructScreening'/u);
     assert.match(template, /selectedWorkflow === 'fastqQc'/u);
-    assert.match(template, /const requiresReference = selectedWorkflow === 'clone'/u);
+    assert.match(template, /const requiresReference = selectedWorkflow === 'clone' \|\| selectedWorkflow === 'plasmidQc' \|\| selectedWorkflow === 'constructScreening' \|\| selectedWorkflow === 'fastqQc' \|\| selectedWorkflow === 'bamQc' \|\| selectedWorkflow === 'modified'/u);
 });
 
 test('NGS runs polling covers every exact canonical NGS model with bounded pagination', () => {
@@ -228,7 +232,8 @@ test('NGS instrument panel renders only safe device truth and an intent status',
     assert.match(panel, /Flow cell: \{device\.flow_cell\.present \? 'present' : 'absent'\}/u);
     assert.match(panel, /No protocol option is currently available/u);
     assert.match(panel, /Preflight blockers/u);
-    assert.match(panel, /Intent \{lastRun\.id\} · \{lastRun\.status\}/u);
+    assert.match(panel, /setSelectedRunGeneration\(\{ runId: run\.id, observedGeneration: run\.observed_generation \}\)/u);
+    assert.match(panel, /BMS run \$\{run\.id\} remains armed after fresh revalidation/u);
     assert.match(ontApi, /interface OntFlowCellInfo \{\s+present: boolean;/u);
     assert.match(ontApi, /output_summary: Record<'fastq' \| 'pod5' \| 'bam', number>/u);
     assert.doesNotMatch(ontApi, /fake_or_demo_device\?: boolean|is_ctc\?: boolean|channel_count\?: number|output_director(?:y|ies)|rpc_ports|connection_error/u);

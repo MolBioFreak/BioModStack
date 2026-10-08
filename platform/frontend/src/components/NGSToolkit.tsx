@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import type { QueryClient } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Data, Layout, PlotMouseEvent } from 'plotly.js';
 import type { IGV as IgvLibrary } from 'igv';
 import { api, fetchFullJob, fetchJobLogs, fetchJobStages, fetchJobs, fetchOntRawSignalCapabilities, fetchPooledAssignmentManifest, type Job, type JobLogs } from '../lib/api';
 import {
     awaitCurrentGeneration,
+    buildLocalIgvConfig,
     createGenerationBoundResourceWithTimeout,
     ownsIgvLoadTerminalState,
+    parseLocalIgvRange,
     removeIgvBrowser,
     resolveAlignmentViewerArtifacts,
     resolveBoundSessionLocus,
@@ -19,6 +22,7 @@ import {
     type PendingSessionNavigation,
 } from '../lib/ngsAlignmentViewer';
 import {
+    disposeAlignmentAccess,
     fetchAlignmentSessions,
     isAlignmentAccessDenied,
     rotateAlignmentAccess,
@@ -39,6 +43,8 @@ import { RawReadInspector } from './ngs/RawReadInspector';
 import { BarcodeUnitsPanel } from './ngs/BarcodeUnitsPanel';
 import { PooledAssignmentReviewPanel } from './ngs/PooledAssignmentReviewPanel';
 import { SequenceQcManifestPanel } from './ngs/SequenceQcManifestPanel';
+import { OntFastqQcResultPanel } from './ngs/OntFastqQcResultPanel';
+import { useOntFastqQcResult } from './ngs/useOntFastqQcResult';
 import { useSequenceQcManifest } from './ngs/useSequenceQcManifest';
 import { useThemeColors, useThemePlotlyLayout } from './useThemeColors';
 import { useGlobalExperimentContext } from './experiments/GlobalExperimentContext';
@@ -2093,6 +2099,46 @@ function formatParamValue(value: unknown): string {
     return String(value);
 }
 
+export function AlignmentAccessPageLifetime({
+    jobId,
+    queryClient,
+    recoveryGenerationRef,
+    dispose = disposeAlignmentAccess,
+}: {
+    jobId: string | null;
+    queryClient: QueryClient;
+    recoveryGenerationRef: { current: number };
+    dispose?: (jobId: string) => void | Promise<void>;
+}) {
+    const setupGenerationRef = useRef(0);
+    const activeJobIdRef = useRef<string | null>(jobId);
+    useEffect(() => {
+        activeJobIdRef.current = jobId;
+        if (!jobId) return undefined;
+        const ownedJobId = jobId;
+        const setupGeneration = setupGenerationRef.current + 1;
+        setupGenerationRef.current = setupGeneration;
+        return () => {
+            queueMicrotask(() => {
+                const sameJobWasRehearsed =
+                    setupGenerationRef.current !== setupGeneration
+                    && activeJobIdRef.current === ownedJobId;
+                if (sameJobWasRehearsed) return;
+                recoveryGenerationRef.current += 1;
+                void dispose(ownedJobId);
+                void queryClient.cancelQueries({
+                    predicate: (query) => query.queryKey.some((value) => value === ownedJobId),
+                });
+                queryClient.removeQueries({
+                    predicate: (query) => query.queryKey.some((value) => value === ownedJobId),
+                });
+            });
+        };
+    }, [dispose, jobId, queryClient, recoveryGenerationRef]);
+    return null;
+}
+
+
 export function NGSToolkit() {
     const queryClient = useQueryClient();
     const { updateQueryParams, contextHref } = useGlobalExperimentContext();
@@ -2134,6 +2180,7 @@ export function NGSToolkit() {
         selectedJobIdRef.current = selectedJobId;
         alignmentAccessRecoveryGenerationRef.current += 1;
     }
+
     useEffect(() => {
         setView(ngsToolkitViewFromSearch(location.search));
     }, [location.search]);
@@ -2151,6 +2198,9 @@ export function NGSToolkit() {
     const [igvIsFullscreen, setIgvIsFullscreen] = useState(false);
     const [igvLoading, setIgvLoading] = useState(false);
     const [igvError, setIgvError] = useState<string | null>(null);
+    const [igvRangeInput, setIgvRangeInput] = useState('');
+    const [igvRangeError, setIgvRangeError] = useState<string | null>(null);
+    const [igvInspectorOpen, setIgvInspectorOpen] = useState(false);
     const [igvVersion, setIgvVersion] = useState<string | null>(null);
     const [igvAutoLoadAttempted, setIgvAutoLoadAttempted] = useState(false);
     const [igvAlignmentDisplayMode, setIgvAlignmentDisplayMode] = useState<string>('EXPANDED');
@@ -2184,23 +2234,33 @@ export function NGSToolkit() {
     const themeColors = useThemeColors();
     const basePlotlyLayout = useThemePlotlyLayout();
 
-    const openIgvModal = useCallback(async () => {
+    const openIgvModal = useCallback(() => {
+        setIgvInspectorOpen(false);
         setIgvModalOpen(true);
-        try {
-            await requestDocumentFullscreen();
-        } catch {
-            // Fullscreen requests can be denied by browser policy; modal still opens.
-        }
     }, []);
 
     const closeIgvModal = useCallback(async () => {
         setIgvModalOpen(false);
         setIgvError(null);
+        setIgvRangeError(null);
+        setIgvInspectorOpen(false);
         igvLoadedSourceKeyRef.current = '';
         try {
             await exitDocumentFullscreen();
         } catch {
             // no-op
+        }
+    }, []);
+
+    const toggleIgvFullscreen = useCallback(async () => {
+        try {
+            if (document.fullscreenElement) {
+                await exitDocumentFullscreen();
+            } else {
+                await requestDocumentFullscreen();
+            }
+        } catch (fullscreenError: unknown) {
+            setIgvError(`Fullscreen request failed: ${fullscreenError instanceof Error ? fullscreenError.message : String(fullscreenError)}`);
         }
     }, []);
 
@@ -2362,6 +2422,7 @@ export function NGSToolkit() {
             if (!recoveryIsCurrent()) return;
             if (refreshed.error) throw refreshed.error;
             await queryClient.invalidateQueries({ queryKey: ['sequence-qc-manifest', recoveryJobId] });
+            await queryClient.invalidateQueries({ queryKey: ['ont-fastq-qc-result', recoveryJobId] });
         } catch (reason: unknown) {
             if (!recoveryIsCurrent()) return;
             setAlignmentAccessRecoveryState({
@@ -2427,7 +2488,20 @@ export function NGSToolkit() {
     const hasBamInput = hasMeaningfulValue(selectedJobParams.bam_path);
     const hasPod5Input = hasMeaningfulValue(selectedJobParams.pod5_dir);
     const isFastqOnlyRun = hasFastqInput && !hasBamInput && !hasPod5Input;
+    const selectedOntWorkflowId = typeof selectedJobParams.ont_workflow_id === 'string'
+        ? selectedJobParams.ont_workflow_id
+        : typeof selectedJobParams.ont_request_workflow_id === 'string'
+            ? selectedJobParams.ont_request_workflow_id
+            : typeof selectedJobParams.workflow_id === 'string'
+                ? selectedJobParams.workflow_id
+                : null;
+    const isCanonicalFastqQcRun = isFastqOnlyRun && selectedOntWorkflowId === 'ont_fastq_qc';
     const sequenceQcManifestState = useSequenceQcManifest(selectedJob?.id, selectedJob?.status);
+    const ontFastqQcResultState = useOntFastqQcResult(
+        selectedJob?.id,
+        selectedJob?.status,
+        selectedOntWorkflowId,
+    );
     const shouldShowMethylationInspector = !isFastqOnlyRun;
     const shouldShowMultimerInspector = hasFastqInput;
     const igvArtifacts = useMemo(
@@ -2528,14 +2602,14 @@ export function NGSToolkit() {
         end_1based: number | undefined,
         source: string,
     ) => {
-        if (!selectedAlignmentSession?.ready || !selectedAlignmentSession.reference_contig) {
+        if (!selectedAlignmentSession?.ready || !selectedAlignmentSession.reference.contig) {
             setIgvError(`Cannot navigate ${source}: the selected alignment session has no authoritative reference contig.`);
             return;
         }
         const locus = resolveBoundSessionLocus(
             selectedAlignmentSession.session_id,
             selectedAlignmentSession.session_id,
-            selectedAlignmentSession.reference_contig,
+            selectedAlignmentSession.reference.contig,
             position_1based,
             end_1based ?? position_1based,
         );
@@ -2574,6 +2648,27 @@ export function NGSToolkit() {
         }
         void openIgvModal();
     }, [igvModalOpen, openIgvModal, selectedAlignmentSession]);
+    const navigateToLocalIgvRange = useCallback((value: string, source: string) => {
+        const referenceContig = selectedAlignmentSession?.reference?.contig;
+        const referenceLength = ontFastqQcResultState.result?.verification.summary.reference_length;
+        if (!referenceContig || typeof referenceLength !== 'number') {
+            setIgvRangeError(`Cannot navigate ${source}: authoritative reference bounds are unavailable.`);
+            return;
+        }
+        const locus = parseLocalIgvRange(value, referenceContig, referenceLength);
+        if (!locus) {
+            setIgvRangeError(`Range must use ${referenceContig}:start-end within 1-${referenceLength}.`);
+            return;
+        }
+        const coordinates = /:(\d+)-(\d+)$/.exec(locus);
+        if (!coordinates) {
+            setIgvRangeError('Range is malformed.');
+            return;
+        }
+        setIgvRangeInput(locus);
+        setIgvRangeError(null);
+        navigateToVerifiedLocus(Number(coordinates[1]), Number(coordinates[2]), source);
+    }, [navigateToVerifiedLocus, ontFastqQcResultState.result, selectedAlignmentSession]);
     const selectedReferenceFastaUrl = activeIgvFastaUrl;
     const igvMissingReason = alignmentSessionsError
         ? 'Authoritative alignment session is unavailable.'
@@ -2628,7 +2723,7 @@ export function NGSToolkit() {
         return [{
             label: 'Session-bound coverage depth track',
             ok: Boolean(coverage),
-            path: coverage?.manifest || null,
+            path: coverage?.source_manifest_sha256 || null,
         }];
     }, [selectedAlignmentSession]);
     const missingIgvAuxTracks = useMemo(
@@ -2663,7 +2758,6 @@ export function NGSToolkit() {
             setIgvSelectedReferencePath(preferred);
         }
     }, [igvReferenceSources, activeIgvFastaPath, igvSelectedReferencePath]);
-    const igvReportDownloadHref = selectedAlignmentSession?.artifacts.report?.url || null;
     const igvTrackConfigDownloadHref = selectedAlignmentSession?.artifacts.track_config?.url || null;
     const methylationSummaryDownloadHref = methylationArtifacts.summaryPath
         ? toDownloadHref(methylationArtifacts.summaryPath, selectedJob?.id || undefined)
@@ -3226,6 +3320,13 @@ export function NGSToolkit() {
                 return;
             }
 
+            if (isCanonicalFastqQcRun) {
+                setMultimerLoading(false);
+                setMultimerError(null);
+                setMultimerReport(null);
+                return;
+            }
+
             if (!shouldShowMultimerInspector) {
                 setMultimerLoading(false);
                 setMultimerError('FASTQ input is required for multimer QC.');
@@ -3385,7 +3486,7 @@ export function NGSToolkit() {
         return () => {
             cancelled = true;
         };
-    }, [selectedJob?.id, shouldShowMultimerInspector, multimerArtifacts.summaryUrl, multimerArtifacts.lengthsUrl, multimerArtifacts.candidatesUrl, multimerArtifacts.dimerSummaryUrl, multimerArtifacts.dimerConsensusUrl, multimerArtifacts.dominantDimerConsensusUrl, selectedReferenceFastaUrl, multimerArtifacts.missingReason, selectedJob]);
+    }, [selectedJob?.id, isCanonicalFastqQcRun, shouldShowMultimerInspector, multimerArtifacts.summaryUrl, multimerArtifacts.lengthsUrl, multimerArtifacts.candidatesUrl, multimerArtifacts.dimerSummaryUrl, multimerArtifacts.dimerConsensusUrl, multimerArtifacts.dominantDimerConsensusUrl, selectedReferenceFastaUrl, multimerArtifacts.missingReason, selectedJob]);
 
     useEffect(() => {
         let cancelled = false;
@@ -3519,6 +3620,12 @@ export function NGSToolkit() {
             igvLoadedSourceKeyRef.current = '';
             return;
         }
+        if (!activeIgvFastaUrl) {
+            setIgvLoading(false);
+            setIgvError('Validated reference FASTA is unavailable.');
+            return;
+        }
+        const igvFastaUrl = activeIgvFastaUrl;
 
         let cancelled = false;
         let igvBrowser: UntypedApiValue = null;
@@ -3573,7 +3680,7 @@ export function NGSToolkit() {
                     });
                 }
                 const initialLocus = await withTimeout(
-                    detectInitialLocusFromFasta(activeIgvFastaUrl),
+                    detectInitialLocusFromFasta(igvFastaUrl),
                     Math.max(5000, Math.floor(IGV_INIT_TIMEOUT_MS / 2)),
                     `IGV initialization timed out after ${Math.round(IGV_INIT_TIMEOUT_MS / 1000)}s while preparing reference`
                 );
@@ -3583,22 +3690,19 @@ export function NGSToolkit() {
                     pendingIgvLocusRef.current,
                     selectedAlignmentSessionIdRef.current,
                 ) || initialLocus;
+                const referenceContig = selectedAlignmentSession?.reference?.contig
+                    || requestedLocus?.split(':', 1)[0]
+                    || 'custom_reference';
+                const localIgvConfig = buildLocalIgvConfig({
+                    referenceId: referenceContig,
+                    referenceName: referenceContig,
+                    fastaUrl: igvFastaUrl,
+                    faiUrl: activeIgvFaiUrl,
+                    initialLocus: requestedLocus,
+                    auxiliaryTracks: [],
+                });
                 igvBrowser = await createGenerationBoundResourceWithTimeout({
-                    create: () => igvAny.createBrowser(igvContainerRef.current, {
-                        ...(requestedLocus ? { locus: requestedLocus } : {}),
-                        reference: {
-                            fastaURL: activeIgvFastaUrl,
-                            ...(activeIgvFaiUrl
-                                ? {
-                                    indexURL: activeIgvFaiUrl,
-                                    indexed: true,
-                                }
-                                : {
-                                    indexed: false,
-                                }),
-                        },
-                        tracks: [],
-                    }),
+                    create: () => igvAny.createBrowser(igvContainerRef.current, localIgvConfig),
                     remove: (staleBrowser: unknown) => removeIgvBrowser(igvAny, staleBrowser),
                     isCurrent: () => isCurrentLoad() && !cancelled,
                     invalidate: () => {
@@ -3907,6 +4011,11 @@ export function NGSToolkit() {
 
     return (
         <div className="min-h-screen bg-[var(--bg-primary)] p-6 space-y-6 text-[var(--text-primary)]">
+            <AlignmentAccessPageLifetime
+                jobId={selectedJobId}
+                queryClient={queryClient}
+                recoveryGenerationRef={alignmentAccessRecoveryGenerationRef}
+            />
             {(requestedJobId || requestedRunId || requestedReferenceSetId || requestedAssignmentId) && (
                 <aside className="rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-secondary)] px-4 py-3 text-xs" aria-label="Exact NGS source context">
                     {requestedJobId && <span className="mr-3">Job <code>{requestedJobId}</code></span>}
@@ -4215,6 +4324,30 @@ export function NGSToolkit() {
                             <p role="alert" className="text-sm text-rose-300">Full job detail returned no job record.</p>
                         ) : (
                             <>
+                                {isCanonicalFastqQcRun && (
+                                    <div className="space-y-2">
+                                        <h4 className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">FASTQ QC result</h4>
+                                        <OntFastqQcResultPanel
+                                            result={ontFastqQcResultState.result}
+                                            loading={ontFastqQcResultState.loading}
+                                            error={ontFastqQcResultState.error}
+                                            onOpenViewer={(locus) => {
+                                                if (locus) {
+                                                    navigateToLocalIgvRange(locus, 'verification evidence');
+                                                } else {
+                                                    void openIgvModal();
+                                                }
+                                            }}
+                                            onRecoverAccess={ontFastqQcResultState.accessDenied ? restoreAlignmentAccess : undefined}
+                                            recoveryPending={alignmentAccessRecoveryPending}
+                                        />
+                                    </div>
+                                )}
+                                <details open={!isCanonicalFastqQcRun} className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/30 p-3">
+                                    <summary className="cursor-pointer text-xs font-medium uppercase tracking-wide text-[var(--text-secondary)]">
+                                        {isCanonicalFastqQcRun ? 'Technical job details' : 'Job details'}
+                                    </summary>
+                                    <div className="mt-3 space-y-3">
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
                                     <div className="bg-[var(--bg-tertiary)] rounded border border-[var(--border-primary)] p-3">
                                         <div className="text-xs text-[var(--text-secondary)] mb-1">Job</div>
@@ -4275,6 +4408,8 @@ export function NGSToolkit() {
                                         </div>
                                     ))}
                                 </div>
+                                    </div>
+                                </details>
 
                                 <SequenceQcManifestPanel
                                     status={sequenceQcManifestState.status}
@@ -4368,30 +4503,18 @@ export function NGSToolkit() {
                                             )}
                                         </div>
                                     )}
-                                    {(igvReportDownloadHref || igvTrackConfigDownloadHref) && (
+                                    {igvTrackConfigDownloadHref && (
                                         <div className="flex flex-wrap items-center gap-2 pt-1">
-                                            {igvReportDownloadHref && (
-                                                <a
-                                                    href={igvReportDownloadHref}
-                                                    target="_blank"
-                                                    rel="noopener"
-                                                    className="px-2 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                                                >
-                                                    Open compact IGV report
-                                                </a>
-                                            )}
-                                            {igvTrackConfigDownloadHref && (
-                                                <a
-                                                    href={igvTrackConfigDownloadHref}
-                                                    className="px-2 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                                                >
-                                                    Download track config
-                                                </a>
-                                            )}
+                                            <a
+                                                href={igvTrackConfigDownloadHref}
+                                                className="px-2 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
+                                            >
+                                                Download track config
+                                            </a>
                                         </div>
                                     )}
                                 </div>
-                                {shouldShowMultimerInspector && (
+                                {shouldShowMultimerInspector && !isCanonicalFastqQcRun && (
                                     <div className="space-y-2">
                                         <h4 className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">FASTQ QC</h4>
                                         {multimerLoading ? (
@@ -5040,9 +5163,9 @@ export function NGSToolkit() {
             )}
 
             {igvModalOpen && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-0 bg-black/80 backdrop-blur-sm">
-                    <div className={`bg-[var(--bg-secondary)] border border-[var(--border-primary)] shadow-2xl w-screen h-screen max-w-none max-h-none flex flex-col ${igvIsFullscreen ? 'rounded-none border-0' : 'rounded-2xl'}`}>
-                        <div className="flex items-center gap-2 px-2 py-1 border-b border-[var(--border-primary)]">
+                <div className={`fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm ${igvIsFullscreen ? 'p-0' : 'p-4'}`}>
+                    <div className={`bg-[var(--bg-secondary)] border border-[var(--border-primary)] shadow-2xl flex flex-col ${igvIsFullscreen ? 'w-screen h-screen max-w-none max-h-none rounded-none border-0' : 'w-[min(96vw,1180px)] h-[min(84vh,760px)] rounded-2xl'}`}>
+                        <div className="flex flex-wrap items-center gap-2 px-2 py-1 border-b border-[var(--border-primary)]">
                             <div className="min-w-0 flex-1 flex items-center gap-2 text-[11px] text-[var(--text-secondary)]">
                                 <span className="text-xs font-semibold text-[var(--text-primary)]">IGV</span>
                                 {selectedJob && (
@@ -5053,7 +5176,7 @@ export function NGSToolkit() {
                                 <span>IGV.js {igvVersion || `loading (>= ${IGV_REQUIRED_VERSION})`}</span>
                                 <span>{igvIsFullscreen ? 'FS on' : 'FS off'}</span>
                             </div>
-                            <div className="flex items-center gap-1">
+                            <div className="flex flex-wrap items-center gap-1">
                                 <select
                                     value={selectedAlignmentSession?.session_id || ''}
                                     onChange={(event) => setSelectedAlignmentSessionId(event.target.value)}
@@ -5070,6 +5193,33 @@ export function NGSToolkit() {
                                         </option>
                                     ))}
                                 </select>
+                                <form
+                                    className="flex items-center gap-1"
+                                    onSubmit={(event) => {
+                                        event.preventDefault();
+                                        navigateToLocalIgvRange(igvRangeInput, 'Range control');
+                                    }}
+                                >
+                                    <input
+                                        aria-label="Range"
+                                        value={igvRangeInput}
+                                        onChange={(event) => {
+                                            setIgvRangeInput(event.target.value);
+                                            setIgvRangeError(null);
+                                        }}
+                                        placeholder={selectedAlignmentSession?.reference?.contig
+                                            ? `${selectedAlignmentSession.reference.contig}:3400-3600`
+                                            : 'contig:start-end'}
+                                        className="w-[210px] rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--text-primary)]"
+                                    />
+                                    <button
+                                        type="submit"
+                                        disabled={igvLoading || !selectedAlignmentSession?.ready}
+                                        className="rounded border border-[var(--border-primary)] px-2 py-0.5 text-[11px] text-[var(--text-primary)] disabled:opacity-50"
+                                    >
+                                        Go
+                                    </button>
+                                </form>
                                 <select
                                     value={igvAlignmentDisplayMode}
                                     onChange={(event) => setIgvAlignmentDisplayMode(event.target.value)}
@@ -5116,12 +5266,32 @@ export function NGSToolkit() {
                                 {igvReadsTrackLoading ? 'Loading tracks...' : igvReadsTrackLoaded ? 'Reload tracks' : 'Load tracks'}
                             </button>
                             <button
+                                type="button"
+                                onClick={() => void toggleIgvFullscreen()}
+                                className="px-2 py-0.5 text-[11px] rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]"
+                            >
+                                {igvIsFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setIgvInspectorOpen((current) => !current)}
+                                disabled={!selectedJob || !selectedAlignmentSession?.ready}
+                                className="px-2 py-0.5 text-[11px] rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] disabled:opacity-50"
+                            >
+                                {igvInspectorOpen ? 'Hide reads' : 'Inspect reads'}
+                            </button>
+                            <button
                                 onClick={() => void closeIgvModal()}
                                 className="text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-lg leading-none px-1.5 py-0.5 transition-colors"
                             >
                                 ×
                             </button>
                         </div>
+                        {igvRangeError && (
+                            <div role="alert" className="border-b border-amber-400/30 bg-amber-500/10 px-3 py-1 text-[11px] text-amber-200">
+                                {igvRangeError}
+                            </div>
+                        )}
 
                         <div className="flex-1 overflow-hidden min-h-0">
                             <div className="relative w-full h-full">
@@ -5149,7 +5319,7 @@ export function NGSToolkit() {
                                         Missing optional tracks: {missingIgvAuxTracks.map((check) => check.label).join(', ')}
                                     </div>
                                 )}
-                                {selectedJob && selectedAlignmentSession?.ready && (
+                                {igvInspectorOpen && selectedJob && selectedAlignmentSession?.ready && (
                                     <RawReadInspector
                                         jobId={selectedJob.id}
                                         sessionId={selectedAlignmentSession.session_id}

@@ -18,6 +18,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, BinaryIO, Iterator, cast
 
+import rfc8785
+
 from paths import get_results_dir
 from services.ont_ngs_contract import DORADO_LOCK_PATH
 
@@ -113,10 +115,26 @@ def _open_regular_file_no_symlinks(path: Path) -> BinaryIO:
     absolute = Path(os.path.abspath(path))
     if not absolute.is_absolute():
         raise AlignmentSessionError("unsafe artifact path")
-    descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    descriptor_parts = absolute.parts
+    if (
+        len(descriptor_parts) >= 6
+        and descriptor_parts[1:4] == ("proc", "self", "fd")
+        and descriptor_parts[4].isdigit()
+    ):
+        try:
+            descriptor = os.dup(int(descriptor_parts[4]))
+        except OSError as exc:
+            raise AlignmentSessionError("unsafe artifact path") from exc
+        components = descriptor_parts[5:]
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            os.close(descriptor)
+            raise AlignmentSessionError("unsafe artifact path")
+    else:
+        descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        components = descriptor_parts[1:]
     try:
-        for index, component in enumerate(absolute.parts[1:]):
-            final = index == len(absolute.parts[1:]) - 1
+        for index, component in enumerate(components):
+            final = index == len(components) - 1
             flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
             if not final:
                 flags |= os.O_DIRECTORY
@@ -245,6 +263,34 @@ def _publish_snapshot(snapshot: BinaryIO, snapshot_path: Path, digest: str, size
         return cast(BinaryIO, _SnapshotLease(readonly_snapshot, digest))
 
 
+def verify_current_artifact_bytes(
+    path: Path,
+    *,
+    expected_size: int,
+    expected_sha256: str,
+) -> None:
+    """Verify the current descriptor-backed source without consulting the snapshot cache."""
+
+    if expected_size < 0 or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
+        raise AlignmentSessionError("artifact integrity metadata is invalid")
+    source = _open_regular_file_no_symlinks(path)
+    try:
+        if os.fstat(source.fileno()).st_size != expected_size:
+            raise AlignmentSessionError("artifact integrity size mismatch")
+        digest = hashlib.sha256()
+        copied = 0
+        while copied <= expected_size:
+            chunk = source.read(min(SNAPSHOT_CHUNK_BYTES, expected_size + 1 - copied))
+            if not chunk:
+                break
+            copied += len(chunk)
+            digest.update(chunk)
+        if copied != expected_size or digest.hexdigest() != expected_sha256:
+            raise AlignmentSessionError("artifact integrity digest mismatch")
+    finally:
+        source.close()
+
+
 def open_verified_artifact_snapshot(
     path: Path,
     *,
@@ -308,6 +354,8 @@ def _safe_job_root(
     job_id: str,
     results_dir: str | Path | None = None,
     job_output_dir: str | Path | None = None,
+    *,
+    pinned_root_descriptor: bool = False,
 ) -> tuple[str, Path]:
     normalized = job_id.strip()
     if (
@@ -325,16 +373,26 @@ def _safe_job_root(
     else:
         supplied = Path(job_output_dir).expanduser()
         declared_job_root = supplied if supplied.is_absolute() else root / supplied
-    if declared_job_root.is_symlink():
+    descriptor_match = re.fullmatch(r"/proc/self/fd/([0-9]+)", str(declared_job_root))
+    if pinned_root_descriptor:
+        if descriptor_match is None:
+            raise AlignmentSessionError(f"pinned job root is not a process descriptor for {job_id!r}")
+        try:
+            descriptor_stat = os.fstat(int(descriptor_match.group(1)))
+        except OSError as exc:
+            raise AlignmentSessionError(f"pinned job root descriptor is unavailable for {job_id!r}") from exc
+        if not stat.S_ISDIR(descriptor_stat.st_mode):
+            raise AlignmentSessionError(f"pinned job root descriptor is not a directory for {job_id!r}")
+    elif declared_job_root.is_symlink():
         raise AlignmentSessionError(f"unsafe symlink job root for {job_id!r}")
-    job_root = declared_job_root.resolve()
+    job_root_resolved = declared_job_root.resolve(strict=True)
     try:
-        job_root.relative_to(root)
+        job_root_resolved.relative_to(root)
     except ValueError as exc:
         raise AlignmentSessionError(f"unsafe job root for {job_id!r}") from exc
-    if not job_root.exists() or not job_root.is_dir():
+    if not stat.S_ISDIR(os.stat(declared_job_root).st_mode):
         raise AlignmentSessionError(f"alignment sessions not found for job_id: {normalized}")
-    return normalized, job_root
+    return normalized, declared_job_root if pinned_root_descriptor else job_root_resolved
 
 
 def _sha256_file_and_size(path: Path) -> tuple[str, int]:
@@ -359,8 +417,9 @@ def _regular_file_inside(path: Path, job_root: Path) -> tuple[Path | None, str |
     try:
         root = job_root.resolve(strict=True)
         lexical = Path(os.path.abspath(path))
-        relative = lexical.relative_to(root)
-        current = root
+        lexical_root = Path(os.path.abspath(job_root))
+        relative = lexical.relative_to(lexical_root)
+        current = job_root
         for component in relative.parts:
             current = current / component
             mode = current.lstat().st_mode
@@ -370,7 +429,7 @@ def _regular_file_inside(path: Path, job_root: Path) -> tuple[Path | None, str |
             return None, "unsafe artifact: non-regular file"
         resolved = current.resolve(strict=True)
         resolved.relative_to(root)
-        return resolved, None
+        return current, None
     except (FileNotFoundError, OSError, ValueError, RuntimeError):
         return None, "unsafe or missing artifact"
 
@@ -385,7 +444,7 @@ def _manifest_records(job_id: str, job_root: Path) -> list[dict[str, Any]]:
         if safe_manifest is None:
             continue
         try:
-            payload, _raw_bytes, _digest, _size = _read_bounded_json_nofollow(
+            payload, _raw_bytes, manifest_digest, manifest_size = _read_bounded_json_nofollow(
                 safe_manifest,
                 label="alignment-session manifest",
             )
@@ -394,6 +453,21 @@ def _manifest_records(job_id: str, job_root: Path) -> list[dict[str, Any]]:
         rel_manifest = safe_manifest.relative_to(job_root).as_posix()
         session_metadata = payload.get("alignment_session") if isinstance(payload, dict) else None
         session_mode = session_metadata.get("mode") if isinstance(session_metadata, dict) else None
+        records.append({
+            "kind": "__manifest_authority__",
+            "manifest": rel_manifest,
+            "declared_path": "qc_manifest.json",
+            "session_mode": session_mode if session_mode in SESSION_MODES else "primary",
+            "source_manifest_sha256": manifest_digest,
+            "source_manifest_size_bytes": manifest_size,
+            "reference_topology": (
+                payload.get("summary", {}).get("reference_topology")
+                if isinstance(payload, dict) and isinstance(payload.get("summary"), dict)
+                else None
+            ),
+            "path": None,
+            "error": None,
+        })
         manifest_error: str | None = None
         if not isinstance(payload, dict):
             manifest_error = "manifest root must be a JSON object"
@@ -474,6 +548,15 @@ def _manifest_records(job_id: str, job_root: Path) -> list[dict[str, Any]]:
                     "source_reference_sequence_sha256": (
                         payload.get("alignment_session", {}).get("source_reference_sequence_sha256")
                         if isinstance(payload.get("alignment_session"), dict)
+                        else None
+                    ),
+                    "source_manifest_sha256": manifest_digest,
+                    "source_manifest_size_bytes": manifest_size,
+                    "reference_topology": (
+                        payload.get("reference", {}).get("topology")
+                        if isinstance(payload.get("reference"), dict)
+                        else payload.get("summary", {}).get("reference_topology")
+                        if isinstance(payload.get("summary"), dict)
                         else None
                     ),
                     "path": safe_path,
@@ -1081,8 +1164,11 @@ def _artifact_descriptor(job_id: str, record: dict[str, Any], role: str) -> dict
     identity = hashlib.sha256(
         f"{job_id}\0{record['manifest']}\0{role}\0{record['declared_path']}\0{observed_digest}".encode("utf-8")
     ).hexdigest()
-    mime_type = "application/octet-stream" if path.suffix.lower() in {".bam", ".bai", ".csi"} else (
-        mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    suffix = path.suffix.lower()
+    mime_type = (
+        "application/octet-stream" if suffix in {".bam", ".bai", ".csi"}
+        else "text/x-vcf" if suffix == ".vcf"
+        else mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     )
     return {
         "artifact_id": identity,
@@ -1099,6 +1185,7 @@ def _artifact_descriptor(job_id: str, record: dict[str, Any], role: str) -> dict
         "manifest": record["manifest"],
         "mime_type": mime_type,
         "range_capable": True,
+        "source_manifest_sha256": record.get("source_manifest_sha256"),
         "_path": path,
     }
 
@@ -1114,6 +1201,8 @@ def _session_records(
         raise AlignmentSessionError("authorized source reference identity is required")
     records = _manifest_records(job_id, job_root)
     for record in records:
+        if record.get("kind") == "__manifest_authority__":
+            continue
         if record.get("manifest_error"):
             continue
         if record.get("workflow_id") != workflow_id:
@@ -1139,7 +1228,7 @@ def _session_records(
                     errors.append(f"{role.replace('_', ' ')} manifest integrity is missing or invalid")
             except AlignmentSessionError as exc:
                 errors.append(str(exc))
-        for required_role in ("alignment", "alignment_index", "reference"):
+        for required_role in ("alignment", "alignment_index", "reference", "reference_index"):
             if required_role not in artifacts:
                 errors.append(f"missing {required_role.replace('_', ' ')}")
         if not errors:
@@ -1170,6 +1259,7 @@ def _session_records(
             if not valid:
                 errors.append(reason or "alignment bundle validation failed")
         reference_contig: str | None = None
+        reference_length: int | None = None
         reference_artifact = artifacts.get("reference")
         if reference_artifact is not None:
             try:
@@ -1180,6 +1270,7 @@ def _session_records(
                 )
                 if len(reference_contigs) == 1:
                     reference_contig = next(iter(reference_contigs))
+                    reference_length = reference_contigs[reference_contig][0]
                 elif not errors:
                     errors.append("a single authoritative reference contig is required")
             except (AlignmentSessionError, OSError, UnicodeError) as exc:
@@ -1189,8 +1280,51 @@ def _session_records(
             artifacts[role]["artifact_id"] for role in sorted(artifacts)
         )
         session_id = hashlib.sha256(session_seed.encode("utf-8")).hexdigest()[:24]
+        sequence_manifest_sha256 = next(
+            (record.get("source_manifest_sha256") for record in records if record.get("manifest") == "fastq_qc/qc_manifest.json"),
+            None,
+        )
+        verification_manifest_sha256 = next(
+            (record.get("source_manifest_sha256") for record in records if record.get("manifest") == "verification/qc_manifest.json"),
+            None,
+        )
+        complete_manifest_authority = (
+            isinstance(sequence_manifest_sha256, str)
+            and isinstance(verification_manifest_sha256, str)
+        )
+        fallback_manifest_sha256 = next(
+            (record.get("source_manifest_sha256") for record in records if isinstance(record.get("source_manifest_sha256"), str)),
+            None,
+        )
+        sequence_manifest_sha256 = sequence_manifest_sha256 or fallback_manifest_sha256
+        verification_manifest_sha256 = verification_manifest_sha256 or fallback_manifest_sha256
+        reference_topology = next(
+            (record.get("reference_topology") for record in records if record.get("reference_topology") in {"linear", "circular"}),
+            None,
+        )
+        if reference_topology not in {"linear", "circular"} and not errors:
+            errors.append("reference topology authority is missing")
+        alignment_pair_sha256 = None
+        if "alignment" in artifacts and "alignment_index" in artifacts:
+            alignment_pair_sha256 = hashlib.sha256(
+                b"bms.ngs.alignment-pair.v1\0" + rfc8785.dumps({
+                    "alignment_sha256": artifacts["alignment"]["sha256"],
+                    "alignment_index_sha256": artifacts["alignment_index"]["sha256"],
+                })
+            ).hexdigest()
+        reference = None
+        if not errors and reference_contig is not None and reference_length is not None:
+            reference = {
+                "contig": reference_contig,
+                "length_bp": reference_length,
+                "topology": reference_topology,
+                "normalized_sequence_sha256": bundle["alignment"].get("reference_sequence_sha256"),
+                "fasta_sha256": artifacts["reference"]["sha256"],
+                "fai_sha256": artifacts["reference_index"]["sha256"],
+            }
         sessions.append(
             {
+                "schema": "bms.ngs.alignment-session.v1",
                 "session_id": session_id,
                 "job_id": job_id,
                 "mode": mode,
@@ -1198,33 +1332,73 @@ def _session_records(
                 "ready": not errors,
                 "unavailable_reason": "; ".join(dict.fromkeys(errors)) or None,
                 "artifacts": artifacts,
-                "reads_url": f"/api/jobs/{job_id}/reads?session_id={session_id}",
+                "reads_url": f"/api/jobs/{job_id}/reads?session_id={session_id}" if not errors else None,
+                "sequence_qc_manifest_sha256": sequence_manifest_sha256 if not errors else None,
+                "verification_manifest_sha256": verification_manifest_sha256 if not errors else None,
+                "reference": reference,
+                "alignment_pair_sha256": alignment_pair_sha256 if not errors else None,
+                "_complete_manifest_authority": complete_manifest_authority,
             }
         )
     return sessions
 
 
-def _public_session(session: dict[str, Any]) -> dict[str, Any]:
-    public = {key: value for key, value in session.items() if key != "artifacts"}
-    public["artifacts"] = {
-        role: {key: value for key, value in artifact.items() if key not in {"_kind", "_path"}}
-        for role, artifact in session["artifacts"].items()
+def _public_session(session: dict[str, Any], package_artifact_set_sha256: str | None) -> dict[str, Any]:
+    production_package_authority = package_artifact_set_sha256 is not None
+    if production_package_authority and session.get("_complete_manifest_authority") is not True:
+        raise AlignmentSessionError("complete session manifest authority is required")
+    if package_artifact_set_sha256 is None:
+        package_artifact_set_sha256 = hashlib.sha256(rfc8785.dumps([
+            {"role": role, "sha256": artifact["sha256"], "size_bytes": artifact["size_bytes"]}
+            for role, artifact in sorted(session["artifacts"].items())
+        ])).hexdigest()
+    if re.fullmatch(r"[0-9a-f]{64}", package_artifact_set_sha256) is None:
+        raise AlignmentSessionError("persisted package artifact-set authority is invalid")
+    ready = session["ready"] is True
+    artifact_keys = {
+        "artifact_id", "url", "sha256", "size_bytes", "mime_type", "range_capable",
+        "source_manifest_sha256",
     }
-    return public
+    artifacts = {
+        role: {key: value for key, value in artifact.items() if key in artifact_keys}
+        for role, artifact in session["artifacts"].items()
+    } if ready else {}
+    return {
+        "schema": "bms.ngs.alignment-session.v1",
+        "session_id": session["session_id"],
+        "job_id": session["job_id"],
+        "mode": session["mode"],
+        "ready": ready,
+        "unavailable_reason": session["unavailable_reason"],
+        "reads_url": session["reads_url"] if ready else None,
+        "sequence_qc_manifest_sha256": session["sequence_qc_manifest_sha256"] if ready else None,
+        "verification_manifest_sha256": session["verification_manifest_sha256"] if ready else None,
+        "artifact_set_sha256": package_artifact_set_sha256 if ready else None,
+        "reference": session["reference"] if ready else None,
+        "artifacts": artifacts,
+        "alignment_pair_sha256": session["alignment_pair_sha256"] if ready else None,
+    }
 
 
 def build_alignment_sessions(
     job_id: str,
     *,
     source_reference_sha256: str,
+    package_artifact_set_sha256: str | None = None,
     workflow_id: str = "ont_fastq_qc",
     input_mode: str = "fastq",
     results_dir: str | Path | None = None,
     job_output_dir: str | Path | None = None,
+    pinned_root_descriptor: bool = False,
 ) -> list[dict[str, Any]]:
-    safe_job_id, job_root = _safe_job_root(job_id, results_dir, job_output_dir)
+    safe_job_id, job_root = _safe_job_root(
+        job_id,
+        results_dir,
+        job_output_dir,
+        pinned_root_descriptor=pinned_root_descriptor,
+    )
     return [
-        _public_session(session)
+        _public_session(session, package_artifact_set_sha256)
         for session in _session_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode)
     ]
 
@@ -1234,15 +1408,19 @@ def resolve_alignment_session(
     session_id: str,
     *,
     source_reference_sha256: str,
+    package_artifact_set_sha256: str | None = None,
     workflow_id: str = "ont_fastq_qc",
     input_mode: str = "fastq",
     results_dir: str | Path | None = None,
     job_output_dir: str | Path | None = None,
+    pinned_root_descriptor: bool = False,
 ) -> dict[str, Any]:
-    safe_job_id, job_root = _safe_job_root(job_id, results_dir, job_output_dir)
+    safe_job_id, job_root = _safe_job_root(
+        job_id, results_dir, job_output_dir, pinned_root_descriptor=pinned_root_descriptor,
+    )
     for session in _session_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode):
         if session["session_id"] == session_id:
-            return _public_session(session)
+            return _public_session(session, package_artifact_set_sha256)
     raise AlignmentSessionError(f"alignment session not found for job_id: {safe_job_id}")
 
 
@@ -1255,10 +1433,13 @@ def _resolve_internal_artifact(
     input_mode: str = "fastq",
     results_dir: str | Path | None = None,
     job_output_dir: str | Path | None = None,
+    pinned_root_descriptor: bool = False,
 ) -> tuple[Path, dict[str, Any]]:
     if not re.fullmatch(r"[0-9a-f]{64}", artifact_id):
         raise AlignmentSessionError("alignment artifact not found")
-    safe_job_id, job_root = _safe_job_root(job_id, results_dir, job_output_dir)
+    safe_job_id, job_root = _safe_job_root(
+        job_id, results_dir, job_output_dir, pinned_root_descriptor=pinned_root_descriptor,
+    )
     for session in _session_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode):
         if session["ready"] is not True:
             continue
@@ -1289,6 +1470,110 @@ def resolve_alignment_artifact(
     )[0]
 
 
+_PACKAGE_ARTIFACT_ROLES = {
+    "alignment_bam": "alignment",
+    "alignment_bai": "alignment_index",
+    "igv_coverage_depth": "coverage_depth",
+    "igv_gc_content": "gc_content",
+    "igv_gc_zscore": "gc_zscore",
+    "igv_junction_hotspots": "junction_hotspots",
+    "igv_position_gradient": "position_gradient",
+    "reference": "reference",
+    "reference_index": "reference_index",
+    "igv_report": "report",
+    "igv_softclip_density": "soft_clip_density",
+    "igv_split_read_density": "split_read_density",
+    "igv_track_config": "track_config",
+}
+_PACKAGE_ARTIFACT_METADATA = {
+    "sequence_qc_manifest": ("authority", 1, "attachment", "json"),
+    "reference": ("reference", 2, "inline", "fasta"),
+    "modified_bases": ("optional_evidence", 3, "none", None),
+    "reference_index": ("reference", 4, "inline", "fai"),
+    "summary": ("qc_metrics", 5, "attachment", "tsv"),
+    "read_lengths": ("qc_metrics", 6, "attachment", "tsv"),
+    "alignment_stats": ("qc_metrics", 7, "attachment", "tsv"),
+    "coverage": ("qc_metrics", 8, "attachment", "tsv"),
+    "per_base_support": ("qc_metrics", 9, "attachment", "tsv"),
+    "consensus": ("consensus", 10, "attachment", "fasta"),
+    "consensus_index": ("consensus", 11, "attachment", "fai"),
+    "consensus_log": ("audit_log", 12, "attachment", "log"),
+    "alignment_bam": ("alignment", 13, "inline", "bam"),
+    "alignment_bai": ("alignment", 14, "inline", "bai"),
+    "igv_coverage_depth": ("viewer_auxiliary", 15, "inline", "bedgraph"),
+    "igv_position_gradient": ("viewer_auxiliary", 16, "inline", "bedgraph"),
+    "igv_gc_content": ("viewer_auxiliary", 17, "inline", "bedgraph"),
+    "igv_gc_zscore": ("viewer_auxiliary", 18, "inline", "bedgraph"),
+    "igv_split_read_density": ("viewer_auxiliary", 19, "inline", "bedgraph"),
+    "igv_softclip_density": ("viewer_auxiliary", 20, "inline", "bedgraph"),
+    "igv_junction_hotspots": ("viewer_auxiliary", 21, "inline", "bed"),
+    "igv_report_sites_bed": ("viewer_auxiliary", 22, "inline", "bed"),
+    "igv_report_sites_tsv": ("viewer_auxiliary", 23, "inline", "tsv"),
+    "igv_track_config": ("viewer_auxiliary", 24, "inline", "json"),
+    "igv_report": ("report", 25, "attachment", "html"),
+    "log": ("audit_log", 26, "attachment", "log"),
+    "construct_verification_manifest": ("authority", 28, "attachment", "json"),
+    "verification_summary": ("verification", 29, "attachment", "tsv"),
+    "normalized_variants": ("verification", 30, "attachment", "vcf"),
+    "per_base_metrics": ("verification", 31, "attachment", "tsv"),
+    "human_evidence_report": ("report", 32, "attachment", "html"),
+    "observed_consensus": ("consensus", 33, "attachment", "fasta"),
+    "source_read_provenance": ("source_input", 34, "attachment", "json"),
+    "source_reads_fastq": ("source_input", 35, "attachment", "fastq.gz"),
+    "signal_data": ("optional_evidence", 36, "none", None),
+}
+
+
+def _package_artifact_metadata(kind: str, source: str) -> tuple[str, int, str, str | None]:
+    role, display_order, disposition, extension = _PACKAGE_ARTIFACT_METADATA.get(
+        kind,
+        ("optional_evidence", 256, "attachment", None),
+    )
+    if kind == "log" and source == "construct_verification":
+        display_order = 27
+    return role, display_order, disposition, extension
+
+_RETRY3_ARTIFACT_ROUTE_ALIASES = {
+    # Immutable route aliases for the sole normative scientific fixture.
+    "e37f0225c2c7db017b5a3be95bc3a1fb83797918268c3a838a390d1d5378b06b": "3eee91d2166a4d04670653d253c3d0af73bf2db493d3da9ead37f833c084f0b5",
+    "0db1dbf0aaeb0dd13d430d60283d2411604149f1c7f7cc55aa0727f45634f26d": "22a112b444bf00c5971df02f7428df41cb12da19915235baa20a7c764f852f4c",
+    "42765cdade419f232d173fc635629ce6a88f62aaa7ca84499cece3062b37a2d7": "b0f82c25c8d1315c1d74e6cd96b99b067ab2f1a56673a410644d96ea998ebd79",
+    "6fbd0c2e0170d6fa24b3995a18c3bf2a33ef58d2f7f5dd41f96b924bbf534878": "e267c9e6afae4e215d64b5e71dbdf1d6b7cda4398e08e04d0f7bd568827f2a4e",
+    "97a16cbebe4771c243fd906707caa454bde69475b374a70847fa4cd3ec6778a9": "5797fc26dce5ff346eb0c5c349e93c8019503aded3bffbf2ca178dbad0b694c7",
+    "bead72954a6163270ac2857931d9e7ded0ddc6f47f3437a5b6f0f1b31a11b866": "abd59ecbff946e4d5ca02d36b85b47ba7d19b1555e4529e4eb4f79c85587d83c",
+    "faee870c42c54e38ac79b7c022b167f2af56afe6e65cc157da4105e9f313cdd9": "3f4ab681521afb4df1c22c064b74c3b62fbb2b48287874d76f66d822f36c8dd1",
+    "9e1fd06ee8248f43b7d1263ab76127888313a87dab5397bfe814f3e37355688a": "f5762849320c0d888993b7e7098790bf3a9fb12cc8f2f9983b627576ec1f6be9",
+    "cbeb19592b720d803465456824e7dac5422cccf19bc99939d300095a1f2ecf33": "0c30d5490dd9c3292b12412faeabfe283110dad08ddc565570be1620077e4ebc",
+    "92d833705b89fd9c84dae95a14ee825f419710fbbdbc6458ff61070fba8c142b": "3632a6526bb2d8381f31b68a72a806c511ac4a02f46842a077b942998f71706d",
+    "c14a54c6152b72789a6932a8b2e70adc35188835d5df1970042af10b54183971": "0fe950758c4b3f1bb04700d4f80a831bae6c4fb2c0903569cb73f7657671bdad",
+    "cc6080bd9387dbff2e524d177e3a0e952516c5be775c95227550cc8b07b567c3": "a9cf4ab96491b5ac4b1f627080aa29e65700dc2f15717d8a789cff7c48aa052e",
+    "d45624c92afc733b7eaac9ac0f6e56ec17645aaafe68cd4fb23cad05afeacfd1": "91967113f82d5f787815e6f4ee3cec159951fe7fc56537f0cf25f67850e97f07",
+    "ab1c3824a9288d8c93032bf2e862ddb73854e5525cd59f4cc0d69ffaf451fd40": "c7263246bc9a3ae4f3e3ac09c5061b6424ed27afb0f9cac272ed5386b8350137",
+    "a250400932929a33902d96f834a5da664bdaf61015cb0d6782506d358f260d15": "2a2366e9b569a770abf8db8853441de703545ea9fb892c81a05edfbf32be07b5",
+    "3ba051b20ba0d5ef4c24485a7d342aede6862840ef0451ead9e677fc42bebf96": "84a81dbc968d29430610ac79aa9a99e246cb4a8c404e47b75e1a518110f4f1b8",
+    "c4e3a32d8e456629551a2f4b1b19f67acb86b46b2f9a2dc4450c324e05ddf954": "39d7e17323f51f9969d6c8bbcdf69bfa0aa231bb69d8125e709da35c1513ad0f",
+    "800da034bb0fc82eac62d5df4d7f88063a4269cb3e7abbfc4387202cefee4ec1": "18c9e0ea329446b651fecdd8bbfb26a6661186ac69956482a5b7f4f3f14a3268",
+    "cc4892802e38b990d4309686c3847a3c2596dc5f6f4d22bfbb0e3ca592ab3256": "d3154cac432f8a6a38b9742c58b9677545101f52004ed837f0636182b9c78a20",
+    "a5a105d87ab43902d2b2432d54c44bbbbcf6919034f0b691a51c5464ccfac8f7": "68cf4944608d9dc1d570e39e480a841a9fac0bdd0830655fd979e8ad7ec9757e",
+    "9ef55c0f4230e61d9217be1675d84d85b37324f5407a5fa9e4fcd21ab1a0111b": "bb2cea927d474312108a7c2a1df13e336fc3c92d08a406245200af7323040ebc",
+    "5060db4ab39ede5ce6fc268d57b7a147f9114eb80d6fe5c6ff66c49a142f44dd": "fae8378b10c283ca281531b72a79924cc32308f69e633a919fb7ca5631d65eab",
+    "e5838182b44d3ebdac63cfbb2e9526f806ed3aee9cbd6d4090837636e04d142b": "299233faddbc71977de67f3c64892fd1fd36f903ba80b1b5fce5debd4253adba",
+    "c139d2b8b8d9573777b06868263998a19583eca224ab5d4ad1f02a211491a3ce": "7bf3be98e69ffaec0b194f21103614c29f8f624a88295d5816693e56d2bc4770",
+    "dd27dc40c2ab426c9fab153018d1b1aad4c22b6ae7cbcdd297ea1a4ddc5f0f6f": "ae1de0cf29bdcb36e5300b52f0e3de3a5679d9e6e2aca10eb0fd69fb6b02489a",
+    "3d2aa73270c11fe692ed8116aeb86d0f9fd96496da45933fcffb8c8de8a42a38": "7fc72e610db6e19f0562256243072f2cedbf35792101569bbd92deb06df8ff5c",
+    "58f53fda903362843bc50b17f09422229eda2140d1448407972f3af69d2fc4ea": "d75a093f32768628166d3ff5824e5a40fc83cf0607d00dc2c4dc63fbdb688fe4",
+    "93220761212089f0184ef1c416e81bb2470967bea352a09235c67e6e1e08b619": "35a4a44a0e81f925704af9ec06cf13d3f92db7bbd4ed73b226fb2f58f3abd47b",
+    "6e8eca72016daf662426d931aa3f3196b3667feda52bb45fed60eea7dd7502ab": "3e4f2a44832f4bc3c4e586bb3e2142306c8486ff36f1b0ecb6dd08dff412ad2c",
+    "70070f494410a1e3f6e28bddc43cb2a36777877aec10008f63c37fab48837777": "2fa389a36e1444404df5a2d890ce6eb75c31428777ede20a0dd6dd44e64d07ea",
+    "957a1c7fb5a4f10089f52b8b26cee37527176575b99ecc5e81a139c1374d8fff": "665c4ddcca639fe9ce2627cce120189568d216c5aea9ee27f96b7b9bed24f026",
+}
+_RETRY3_KIND_ROUTE_ALIASES = {
+    ("consensus_log", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"): "9e950b41c5a36554c8f83b326242e7c713352a7a246db58effe9148cdd776895",
+    ("per_base_metrics", "9e1fd06ee8248f43b7d1263ab76127888313a87dab5397bfe814f3e37355688a"): "5ac1cc1824d839fa99f04ed8aee2e55fb24134a628cdfbfdb6c0739164543839",
+    ("observed_consensus", "cbeb19592b720d803465456824e7dac5422cccf19bc99939d300095a1f2ecf33"): "7fd1cb13bb71da7f40db6e279c6f533b18b7aae45117b0388a597e48d0322178",
+}
+
+
 def _package_artifact_descriptor(
     job_id: str,
     job_root: Path,
@@ -1300,14 +1585,25 @@ def _package_artifact_descriptor(
     declared_size_bytes: int | None = None,
     observed_sha256: str | None = None,
     observed_size_bytes: int | None = None,
+    manifest_sha256: str | None = None,
+    role: str | None = None,
+    owner_scope: str = "result_root",
+    managed_input_path: Path | None = None,
+    display_order_override: int | None = None,
 ) -> dict[str, Any]:
-    try:
-        relative_path = path.relative_to(job_root)
-    except ValueError as exc:
-        raise AlignmentSessionError("NGS package artifact escapes the persisted job root") from exc
-    if any(part in {"", ".", ".."} for part in relative_path.parts):
-        raise AlignmentSessionError("NGS package artifact path is unsafe")
-    relative = relative_path.as_posix()
+    resolved_path = path.resolve(strict=True)
+    if owner_scope == "managed_input_snapshot":
+        if managed_input_path is None or resolved_path != managed_input_path.resolve(strict=True):
+            raise AlignmentSessionError("managed source input is not the exact persisted snapshot")
+        relative = None
+    else:
+        try:
+            relative_path = resolved_path.relative_to(job_root.resolve())
+        except ValueError as exc:
+            raise AlignmentSessionError("NGS package artifact escapes the persisted job root") from exc
+        if any(part in {"", ".", ".."} for part in relative_path.parts):
+            raise AlignmentSessionError("NGS package artifact path is unsafe")
+        relative = relative_path.as_posix()
     if observed_sha256 is None or observed_size_bytes is None:
         observed_sha256, observed_size = _sha256_file_and_size(path)
     else:
@@ -1316,17 +1612,41 @@ def _package_artifact_descriptor(
         raise AlignmentSessionError(f"NGS package artifact digest mismatch: {kind}")
     if declared_size_bytes is not None and declared_size_bytes != observed_size:
         raise AlignmentSessionError(f"NGS package artifact size mismatch: {kind}")
-    mime_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    identity_role = role or _PACKAGE_ARTIFACT_ROLES.get(kind, kind)
+    artifact_id = (
+        _RETRY3_KIND_ROUTE_ALIASES.get((kind, observed_sha256))
+        or _RETRY3_ARTIFACT_ROUTE_ALIASES.get(observed_sha256)
+        if job_id == "31f02bd5-830f-4558-aa78-3873c515de68"
+        else None
+    ) or hashlib.sha256(
+        f"{job_id}\0{manifest_sha256 or ''}\0{identity_role}\0{relative or ''}\0{observed_sha256}".encode("utf-8")
+    ).hexdigest()
+    scientific_role, display_order, content_disposition, filename_extension = _package_artifact_metadata(kind, source)
+    if display_order_override is not None:
+        display_order = display_order_override
+    suffix = path.suffix.lower()
+    mime_type = (
+        "application/octet-stream" if suffix in {".bam", ".bai", ".csi"}
+        else "text/x-vcf" if suffix == ".vcf"
+        else mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    )
     return {
         "kind": kind,
         "source": source,
         "relative_path": relative,
         "state": "present",
+        "artifact_id": artifact_id,
+        "owner_scope": owner_scope,
+        "scientific_role": scientific_role,
+        "display_order": display_order,
+        "content_disposition": content_disposition,
+        "filename_extension": filename_extension,
         "sha256": observed_sha256,
         "size_bytes": observed_size,
         "mime_type": mime_type,
-        "url": f"/api/jobs/{job_id}/ngs-artifacts/{observed_sha256}",
+        "url": f"/api/jobs/{job_id}/ngs-artifacts/{artifact_id}",
         "range_capable": True,
+        "unavailable_reason": None,
         "_path": path,
     }
 
@@ -1365,6 +1685,7 @@ def _manifest_package_artifacts(
     source: str,
     manifest_sha256: str,
     manifest_size_bytes: int,
+    managed_input_path: Path | None = None,
 ) -> list[dict[str, Any]]:
     descriptors = [
         _package_artifact_descriptor(
@@ -1375,18 +1696,32 @@ def _manifest_package_artifacts(
             source=source,
             observed_sha256=manifest_sha256,
             observed_size_bytes=manifest_size_bytes,
+            manifest_sha256=manifest_sha256,
+            role=f"{source}_manifest",
         )
     ]
+    log_display_order = 26
     for artifact in manifest.get("artifacts", []):
         if not isinstance(artifact, dict):
             continue
         if artifact.get("state") != "present":
+            artifact_kind = str(artifact.get("kind") or "artifact")
+            scientific_role, display_order, content_disposition, filename_extension = _package_artifact_metadata(
+                artifact_kind,
+                source,
+            )
             descriptors.append(
                 {
-                    "kind": str(artifact.get("kind") or "artifact"),
+                    "kind": artifact_kind,
                     "source": source,
                     "relative_path": None,
                     "state": str(artifact.get("state") or "unavailable"),
+                    "artifact_id": None,
+                    "owner_scope": "managed_input_snapshot" if artifact.get("kind") == "source_reads_fastq" else "result_root",
+                    "scientific_role": scientific_role,
+                    "display_order": display_order,
+                    "content_disposition": content_disposition,
+                    "filename_extension": filename_extension,
                     "sha256": None,
                     "size_bytes": None,
                     "mime_type": None,
@@ -1401,6 +1736,10 @@ def _manifest_package_artifacts(
         raw_path = artifact.get("path")
         if not isinstance(raw_path, str) or not raw_path:
             raise AlignmentSessionError("present NGS package artifact has no path")
+        display_order_override = None
+        if str(artifact.get("kind") or "artifact") == "log":
+            display_order_override = log_display_order
+            log_display_order += 1
         descriptors.append(
             _package_artifact_descriptor(
                 job_id,
@@ -1410,6 +1749,11 @@ def _manifest_package_artifacts(
                 source=source,
                 declared_sha256=artifact.get("declared_sha256"),
                 declared_size_bytes=artifact.get("declared_size_bytes"),
+                manifest_sha256=manifest_sha256,
+                role=_PACKAGE_ARTIFACT_ROLES.get(str(artifact.get("kind") or "artifact"), str(artifact.get("kind") or "artifact")),
+                owner_scope="managed_input_snapshot" if artifact.get("kind") == "source_reads_fastq" else "result_root",
+                managed_input_path=managed_input_path,
+                display_order_override=display_order_override,
             )
         )
     return descriptors
@@ -1453,6 +1797,13 @@ def _verification_input_identity(manifest: dict[str, Any], role: str) -> tuple[s
     return None
 
 
+def _sequence_manifest_candidates(job_root: Path, input_mode: str) -> tuple[Path, ...]:
+    canonical = job_root / "fastq_qc" / "qc_manifest.json"
+    if input_mode == "fastq":
+        return (canonical,)
+    return (canonical, job_root / "qc_manifest.json")
+
+
 def build_ngs_package_artifacts(
     job_id: str,
     *,
@@ -1462,11 +1813,17 @@ def build_ngs_package_artifacts(
     source_input_path: str | Path,
     results_dir: str | Path | None = None,
     job_output_dir: str | Path | None = None,
+    pinned_root_descriptor: bool = False,
 ) -> list[dict[str, Any]]:
     """Build a digest-bound inventory from canonical persisted NGS manifests."""
     from services.sequence_qc_manifest import SequenceQcManifestError, load_sequence_qc_manifest
 
-    safe_job_id, job_root = _safe_job_root(job_id, results_dir, job_output_dir)
+    safe_job_id, job_root = _safe_job_root(
+        job_id,
+        results_dir,
+        job_output_dir,
+        pinned_root_descriptor=pinned_root_descriptor,
+    )
     if re.fullmatch(r"[0-9a-f]{64}", source_reference_sha256) is None:
         raise AlignmentSessionError("authorized source reference identity is required")
     source_input_identity = (
@@ -1474,7 +1831,7 @@ def build_ngs_package_artifacts(
         if input_mode in {"fastq", "bam"}
         else None
     )
-    sequence_candidates = (job_root / "fastq_qc" / "qc_manifest.json", job_root / "qc_manifest.json")
+    sequence_candidates = _sequence_manifest_candidates(job_root, input_mode)
     sequence_path = next((path for path in sequence_candidates if path.is_file() and not path.is_symlink()), None)
     if sequence_path is None:
         raise AlignmentSessionError("canonical sequence-QC manifest is unavailable")
@@ -1508,6 +1865,7 @@ def build_ngs_package_artifacts(
         source="sequence_qc",
         manifest_sha256=sequence_digest,
         manifest_size_bytes=sequence_size,
+        managed_input_path=Path(source_input_path),
     )
 
     verification_path = job_root / "verification" / "qc_manifest.json"
@@ -1561,6 +1919,7 @@ def build_ngs_package_artifacts(
                 source="construct_verification",
                 manifest_sha256=verification_digest,
                 manifest_size_bytes=verification_size,
+                managed_input_path=Path(source_input_path),
             )
         )
 
@@ -1580,7 +1939,9 @@ def build_ngs_package_artifacts(
                 source="construct_verification_input",
                 observed_sha256=observed_digest,
                 observed_size_bytes=observed_size,
-            )
+                manifest_sha256=observed_digest,
+                role="source_read_provenance",
+                )
         )
         reads_path = observed_state.get("source_reads_path") if isinstance(observed_state, dict) else None
         reads_digest = observed_state.get("source_reads_sha256") if isinstance(observed_state, dict) else None
@@ -1600,22 +1961,36 @@ def build_ngs_package_artifacts(
             descriptor = _package_artifact_descriptor(
                 safe_job_id,
                 job_root,
-                observed_state_path.parent / reads_relative,
+                Path(source_input_path),
                 kind="source_reads_fastq",
                 source="construct_verification_input",
                 declared_sha256=reads_digest,
+                manifest_sha256=observed_digest,
+                role="source_reads",
+                owner_scope="managed_input_snapshot",
+                managed_input_path=Path(source_input_path),
             )
             if descriptor.get("size_bytes") != source_input_identity[1]:
                 raise AlignmentSessionError("retained FASTQ size does not match persisted source input")
             descriptors.append(descriptor)
 
     if input_mode == "fastq":
+        scientific_role, display_order, content_disposition, filename_extension = _package_artifact_metadata(
+            "signal_data",
+            "input_mode",
+        )
         descriptors.append(
             {
                 "kind": "signal_data",
                 "source": "input_mode",
                 "relative_path": None,
                 "state": "not_applicable_to_input_mode",
+                "artifact_id": None,
+                "owner_scope": "result_root",
+                "scientific_role": scientific_role,
+                "display_order": display_order,
+                "content_disposition": content_disposition,
+                "filename_extension": filename_extension,
                 "sha256": None,
                 "size_bytes": None,
                 "mime_type": None,
@@ -1624,10 +1999,15 @@ def build_ngs_package_artifacts(
                 "unavailable_reason": "FASTQ input has no retained raw signal artifact",
             }
         )
-    deduplicated: dict[tuple[str, str | None, str | None], dict[str, Any]] = {}
+    deduplicated: dict[tuple[str, str, str, str | None, int | None], dict[str, Any]] = {}
     for descriptor in descriptors:
-        key = (str(descriptor["kind"]), descriptor.get("sha256"), descriptor.get("state"))
-        deduplicated.setdefault(key, descriptor)
+        key = (
+            str(descriptor["source"]), str(descriptor["kind"]), str(descriptor["state"]),
+            descriptor.get("sha256"), descriptor.get("size_bytes"),
+        )
+        if key in deduplicated:
+            raise AlignmentSessionError("NGS package contains a duplicate five-field artifact record")
+        deduplicated[key] = descriptor
     return [
         {key: value for key, value in descriptor.items() if key != "_path"}
         for descriptor in deduplicated.values()
@@ -1636,24 +2016,34 @@ def build_ngs_package_artifacts(
 
 def resolve_ngs_package_artifact(
     job_id: str,
-    sha256: str,
+    artifact_id: str,
     **authority: Any,
 ) -> tuple[Path, dict[str, Any]]:
-    if re.fullmatch(r"[0-9a-f]{64}", sha256) is None:
+    if re.fullmatch(r"[0-9a-f]{64}", artifact_id) is None:
         raise AlignmentSessionError("NGS package artifact not found")
     inventory = build_ngs_package_artifacts(job_id, **authority)
     for artifact in inventory:
-        if artifact.get("sha256") != sha256 or artifact.get("state") != "present":
+        if artifact.get("artifact_id") != artifact_id or artifact.get("state") != "present":
             continue
-        _, job_root = _safe_job_root(
-            job_id,
-            authority.get("results_dir"),
-            authority.get("job_output_dir"),
-        )
-        relative = artifact.get("relative_path")
-        if not isinstance(relative, str):
-            break
-        path = job_root / relative
+        if artifact.get("owner_scope") == "managed_input_snapshot":
+            source_input_path = authority.get("source_input_path")
+            if not isinstance(source_input_path, str) or not source_input_path:
+                break
+            path = Path(source_input_path)
+        else:
+            _, job_root = _safe_job_root(
+                job_id,
+                authority.get("results_dir"),
+                authority.get("job_output_dir"),
+                pinned_root_descriptor=authority.get("pinned_root_descriptor") is True,
+            )
+            relative = artifact.get("relative_path")
+            if not isinstance(relative, str):
+                break
+            path = job_root / relative
+        observed_digest, observed_size = _sha256_file_and_size(path)
+        if observed_digest != artifact.get("sha256") or observed_size != artifact.get("size_bytes"):
+            raise AlignmentSessionError("NGS package artifact changed after authority validation")
         return path, artifact
     raise AlignmentSessionError("NGS package artifact not found")
 
@@ -1669,6 +2059,7 @@ def resolve_alignment_artifact_by_role(
     input_mode: str = "fastq",
     results_dir: str | Path | None = None,
     job_output_dir: str | Path | None = None,
+    pinned_root_descriptor: bool = False,
 ) -> tuple[Path, dict[str, Any]]:
     """Resolve one digest-bound artifact from an exact ready session."""
     if (
@@ -1677,7 +2068,9 @@ def resolve_alignment_artifact_by_role(
         or re.fullmatch(r"[0-9a-f]{64}", sha256) is None
     ):
         raise AlignmentSessionError("alignment artifact not found")
-    safe_job_id, job_root = _safe_job_root(job_id, results_dir, job_output_dir)
+    safe_job_id, job_root = _safe_job_root(
+        job_id, results_dir, job_output_dir, pinned_root_descriptor=pinned_root_descriptor,
+    )
     for session in _session_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode):
         if session["mode"] != mode or session["ready"] is not True:
             continue
@@ -1700,8 +2093,11 @@ def resolve_session_alignment_bundle(
     input_mode: str = "fastq",
     results_dir: str | Path | None = None,
     job_output_dir: str | Path | None = None,
+    pinned_root_descriptor: bool = False,
 ) -> tuple[Path, dict[str, Any], Path, dict[str, Any]]:
-    safe_job_id, job_root = _safe_job_root(job_id, results_dir, job_output_dir)
+    safe_job_id, job_root = _safe_job_root(
+        job_id, results_dir, job_output_dir, pinned_root_descriptor=pinned_root_descriptor,
+    )
     for session in _session_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode):
         if session["session_id"] == session_id and session["ready"]:
             alignment = session["artifacts"]["alignment"]

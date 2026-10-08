@@ -52,8 +52,10 @@ from services.molbio_ngs_references import (
 )
 from services.sequence_qc_manifest import (
     VERIFICATION_SCHEMA,
+    find_canonical_fastq_manifest,
     find_manifest_in_result_root,
     load_sequence_qc_manifest,
+    read_manifest_json_nofollow,
 )
 
 EVIDENCE_WRAPPER_SCHEMA = "bms.molbio-ngs.ngs-evidence-receipt.v1"
@@ -85,6 +87,24 @@ _WRAPPER_KEYS = {
     "created_at",
     "created_by",
 }
+
+
+def _read_receipt_bound_result_manifest(job: Any, result_root: Any) -> tuple[Any, bytes]:
+    """Read the same canonical manifest bytes used by the result receipt producer."""
+
+    params = job.params if isinstance(job.params, dict) else {}
+    workflow_id = (
+        params.get("ont_workflow_id")
+        or params.get("ont_request_workflow_id")
+        or params.get("workflow_id")
+    )
+    manifest_path = (
+        find_canonical_fastq_manifest(result_root)
+        if workflow_id == "ont_fastq_qc"
+        else find_manifest_in_result_root(result_root)
+    )
+    _document, raw, _digest_value, _size = read_manifest_json_nofollow(manifest_path)
+    return manifest_path, raw
 
 
 @dataclass(frozen=True)
@@ -662,8 +682,7 @@ async def create_evidence_assessment(
         raise StateValidationError("job workflow or result schema is ineligible for the state revision")
 
     result_root = resolve_persisted_job_result_root(job)
-    manifest_path = find_manifest_in_result_root(result_root)
-    raw_manifest = manifest_path.read_bytes()
+    manifest_path, raw_manifest = _read_receipt_bound_result_manifest(job, result_root)
     raw_manifest_sha256 = _sha256_bytes(raw_manifest)
     if raw_manifest_sha256 != manifest_authority["content_digest"]:
         raise StateIntegrityError("raw result manifest bytes do not match their receipt")

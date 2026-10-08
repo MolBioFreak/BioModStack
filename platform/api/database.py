@@ -191,6 +191,7 @@ class Job(Base):
     # STAGE CHECKPOINTING: Multi-stage pipeline tracking
     # ═══════════════════════════════════════════════════════════════════════════
     current_stage = Column(String(50), nullable=True)  # Currently running stage: 'rfantibody', 'fampnn', etc.
+    current_step = Column(Integer, nullable=True)  # Durable ordinal within the current workflow stage
     stage_progress = Column(String(20), nullable=True)  # Granular progress: '5/30', '12/100', etc.
     stage_work_dir = Column(String(500), nullable=True)  # Current Nextflow work directory for log parsing
     completed_stages = Column(JSON, default=list)  # List of completed stages: ['rfantibody', 'fampnn']

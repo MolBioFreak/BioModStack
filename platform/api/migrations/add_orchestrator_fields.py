@@ -39,6 +39,9 @@ MIGRATIONS = [
     ("retry_count", "INTEGER", "0"),
     ("max_retries", "INTEGER", "2"),
     ("oom_tolerance", "VARCHAR(20)", "'allow'"),
+
+    # Terminal publication CAS lifecycle fence
+    ("current_step", "INTEGER", None),
 ]
 
 
