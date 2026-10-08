@@ -47,7 +47,7 @@
       "required": ["relative_path", "sha256", "bytes", "media_type", "semantic_role", "candidate_id", "backend_coordinates", "provenance_sha256", "related_paths"],
       "properties": {
         "relative_path": {"$ref": "#/$defs/relative_path"}, "sha256": {"$ref": "#/$defs/sha256"}, "bytes": {"type": "integer", "minimum": 0},
-        "media_type": {"type": "string", "minLength": 1}, "semantic_role": {"enum": ["runtime_input", "feature_policy", "log", "runtime_config", "composition_audit", "request", "preprocess", "native_state", "loss", "optional_analytics", "command_log", "runtime_provenance", "receipt", "authoritative_cif", "confidence_json", "full_data_json"]},
+        "media_type": {"type": "string", "minLength": 1}, "semantic_role": {"enum": ["runtime_input", "feature_policy", "log", "runtime_config", "composition_audit", "coordinate_ledger", "coordinate_context", "preprocessing_record", "msa_record", "template_record", "request", "preprocess", "native_state", "loss", "optional_analytics", "command_log", "runtime_provenance", "receipt", "authoritative_cif", "confidence_json", "full_data_json"]},
         "candidate_id": {"type": ["string", "null"], "minLength": 1}, "backend_coordinates": {"oneOf": [{"$ref": "#/$defs/coordinates"}, {"type": "null"}]},
         "provenance_sha256": {"$ref": "#/$defs/sha256"}, "related_paths": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/relative_path"}}
       }

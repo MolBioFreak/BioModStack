@@ -7,6 +7,7 @@ and populates the Design table in SQLite.
 
 import csv
 import copy
+import hashlib
 import json
 import math
 import re
@@ -34,6 +35,11 @@ from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_ch
 from .aligned_error_utils import detect_aligned_error_artifact, load_aligned_error_artifact
 from .ipsae import compute_ipsae_interface
 from .result_contracts import REVIEW_ARTIFACT_SCHEMA, REVIEW_CONTRACT_VERSION, resolve_result_contract
+from .conformational_mapping.persistence import (
+    ConformationalPersistenceError,
+    get_request as get_cm_request,
+    ingest_result_bundle as ingest_cm_result_bundle,
+)
 from .structure_utils import calculate_epitope_contacts, compute_contact_geometry_metrics, compute_gyration_radius, get_per_chain_fampnn_psce
 
 
@@ -2649,7 +2655,104 @@ async def ingest_job_results(
 
     job_result = await session.execute(select(Job).where(Job.id == job_id))
     current_job = job_result.scalar_one_or_none()
-    allow_binder_target_metrics = _job_has_explicit_binder_target_roles(current_job)
+    if current_job and str(current_job.model_id or "") == "conformational_mapping":
+        cm_request = await get_cm_request(session, job_id)
+        if cm_request is None:
+            raise ConformationalPersistenceError("canonical job has no typed request record")
+        backend_directory = {
+            "protenix_v2_ensemble": "canonical_protenix",
+            "confornets": "canonical_confornets",
+            "external_import": "canonical_import",
+        }.get(cm_request.backend)
+        if backend_directory is None:
+            raise ConformationalPersistenceError("canonical request backend is unknown")
+        exact_roots = (
+            output_path / "final" / "conformational_mapping" / backend_directory / "canonical_result",
+            output_path / "final" / "conformational_mapping" / backend_directory,
+            output_path / backend_directory / "canonical_result",
+            output_path / backend_directory,
+        )
+        result_root = next((path for path in exact_roots if path.is_dir()), None)
+        if result_root is None:
+            raise ConformationalPersistenceError("canonical result root is absent")
+        try:
+            ensemble = json.loads((result_root / "cm_ensemble_v1.json").read_text(encoding="utf-8"))
+            native = json.loads((result_root / "cm_native_artifacts_v1.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ConformationalPersistenceError(f"canonical manifest is missing or malformed: {exc}") from exc
+        bundle: Dict[str, Any] = {
+            "cm_ensemble_v1": ensemble,
+            "cm_native_artifacts_v1": native,
+        }
+        derived_path = result_root / "cm_derived_index_v1.json"
+        if not derived_path.is_file() or derived_path.is_symlink():
+            raise ConformationalPersistenceError("canonical derived index is absent or unsafe")
+        if derived_path.is_file() and not derived_path.is_symlink():
+            try:
+                loaded_index = json.loads(derived_path.read_text(encoding="utf-8"))
+                if not isinstance(loaded_index, dict):
+                    raise ConformationalPersistenceError("canonical derived index must be an object")
+                derived = dict(loaded_index)
+                supplied = derived.pop("index_sha256")
+                from .conformational_mapping.contracts import canonical_sha256
+
+                if supplied != canonical_sha256(derived):
+                    raise ConformationalPersistenceError("canonical derived index hash mismatch")
+                if derived.get("request_id") != cm_request.request_id:
+                    raise ConformationalPersistenceError("canonical derived index request mismatch")
+                required_index_fields = {
+                    "schema_name", "schema_version", "request_id", "source_ensemble_sha256",
+                    "records", "structure_maps", "landscapes", "analysis", "lineage",
+                    "support", "missingness", "resampling",
+                }
+                if set(derived) != required_index_fields:
+                    raise ConformationalPersistenceError("canonical derived index fields are incomplete or unknown")
+                if derived["schema_name"] != "cm_derived_index" or derived["schema_version"] != 1:
+                    raise ConformationalPersistenceError("canonical derived index schema is unsupported")
+                if derived["source_ensemble_sha256"] != canonical_sha256(ensemble):
+                    raise ConformationalPersistenceError("canonical derived index ensemble hash mismatch")
+                records = derived["records"]
+                if not isinstance(records, list):
+                    raise ConformationalPersistenceError("canonical derived file records must be an array")
+                seen_derived_paths: set[str] = set()
+                for item in records:
+                    if not isinstance(item, dict) or set(item) != {
+                        "relative_path", "sha256", "bytes", "semantic_role", "candidate_id"
+                    }:
+                        raise ConformationalPersistenceError("canonical derived file record is malformed")
+                    relative = Path(str(item["relative_path"]))
+                    relative_text = relative.as_posix()
+                    if (
+                        relative.is_absolute() or relative_text != str(item["relative_path"])
+                        or any(part in {"", ".", ".."} for part in relative.parts)
+                        or "\\" in str(item["relative_path"])
+                        or relative_text in seen_derived_paths
+                    ):
+                        raise ConformationalPersistenceError("canonical derived path is unsafe")
+                    seen_derived_paths.add(relative_text)
+                    artifact = (result_root / relative).resolve(strict=True)
+                    artifact.relative_to(result_root.resolve())
+                    if artifact.is_symlink() or not artifact.is_file():
+                        raise ConformationalPersistenceError("canonical derived artifact is unsafe")
+                    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+                    if digest != item["sha256"] or artifact.stat().st_size != item["bytes"]:
+                        raise ConformationalPersistenceError("canonical derived artifact identity mismatch")
+                bundle["cm_structure_maps"] = derived.get("structure_maps", [])
+                bundle["cm_frustration_landscapes"] = derived.get("landscapes", [])
+                bundle["cm_analysis_v1"] = derived.get("analysis")
+                bundle["cm_lineage"] = derived.get("lineage")
+                bundle["cm_support"] = derived.get("support")
+                bundle["cm_missingness"] = derived.get("missingness")
+                bundle["cm_resampling_v1"] = derived.get("resampling")
+                bundle["cm_derived_files"] = records
+            except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+                raise ConformationalPersistenceError(
+                    f"canonical derived index is malformed: {exc}"
+                ) from exc
+        await ingest_cm_result_bundle(session, cm_request, bundle=bundle, result_root=result_root)
+        if commit:
+            await session.commit()
+        return len(ensemble["candidates"])
     job_context = _job_stage_context(current_job)
     lineage_cache: Dict[str, Optional[Design]] = {}
     
@@ -2664,7 +2767,7 @@ async def ingest_job_results(
         pass
     
     # Extract PDB files from tar.gz archives
-    pdb_dir = extract_pdb_files(output_path)
+    extract_pdb_files(output_path)
     
     designs_created = 0
 
@@ -2854,7 +2957,7 @@ async def ingest_job_results(
         designs_created = await ingest_collected_ppiflow_structures(job_id, output_path, session, current_job=current_job)
 
     if designs_created == 0:
-        print(f"[Ingester] No designs found in CSV or CSV missing. Trying loose files...")
+        print("[Ingester] No designs found in CSV or CSV missing. Trying loose files...")
         designs_created = await ingest_loose_files(job_id, output_path, session, current_job=current_job)
 
     # Post-ingestion: Attach supplementary metrics from pipeline stages
@@ -3924,8 +4027,6 @@ async def ingest_frustration_data(
     print(f"[Ingester] Found {len(frustration_csvs)} frustration CSVs to process")
     
     from database import Job
-    import sqlalchemy as sa
-    
     job_info = await session.execute(
         select(Job).where(Job.id == job_id)
     )

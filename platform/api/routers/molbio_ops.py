@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from datetime import datetime
 import asyncio
 import hashlib
+import os
 import uuid
 from Bio.SeqUtils import MeltingTemp as mt
 
@@ -35,12 +36,14 @@ from services.assembly.common import fragment_provenance_payload
 from services.assembly.gibson import simulate_gibson
 from services.assembly.golden_gate import TYPE_IIS_ENZYMES, get_type_iis_enzyme, simulate_golden_gate
 from services.assembly.ligation import simulate_ligation
+from services.assembly.pydna_gibson import design_gibson
 from services.assembly.types import (
     AssemblyError,
     AssemblyFragment,
     AssemblyJunction,
     AssemblyProduct,
     FragmentEnd,
+    GibsonDesignResult,
 )
 from services.molbio_ops import (
     DigestEnzyme,
@@ -51,6 +54,16 @@ from services.molbio_ops import (
 )
 from services.primer_qc import evaluate_primer_pair_qc, evaluate_primer_qc
 from services.nucleotide_validation import canonicalize_nucleotide_sequence
+from services.annotation_sources import (
+    AnnotationSourceAmbiguityError,
+    AnnotationSourceAuthenticationError,
+    AnnotationSourceConfigurationError,
+    AnnotationSourceError,
+    AnnotationSourceResponseError,
+    AnnotationSourceValidationError,
+    fetch_addgene_genbank,
+    fetch_ncbi_genbank,
+)
 from services.sequence_alignment import (
     AlignmentSettings,
     SequenceAlignmentError,
@@ -59,6 +72,51 @@ from services.sequence_alignment import (
 
 
 router = APIRouter(prefix="/api/molbio", tags=["molbio"])
+
+
+def _annotation_source_http_error(error: Exception) -> HTTPException:
+    if isinstance(error, AnnotationSourceValidationError):
+        return HTTPException(status_code=400, detail=str(error))
+    if isinstance(error, AnnotationSourceAmbiguityError):
+        return HTTPException(status_code=409, detail=str(error))
+    if isinstance(error, AnnotationSourceConfigurationError):
+        return HTTPException(status_code=503, detail=str(error))
+    if isinstance(error, (AnnotationSourceAuthenticationError, AnnotationSourceResponseError)):
+        return HTTPException(status_code=502, detail=str(error))
+    return HTTPException(status_code=502, detail="Annotation source retrieval failed")
+
+
+@router.get("/annotation-sources/status")
+async def annotation_source_status() -> dict[str, dict[str, bool]]:
+    return {
+        "ncbi": {"available": True},
+        "addgene": {"available": bool(os.environ.get("ADDGENE_API_TOKEN", "").strip())},
+    }
+
+
+@router.get("/annotation-sources/ncbi/{accession}")
+async def retrieve_ncbi_annotation_source(accession: str) -> dict[str, Any]:
+    try:
+        artifact = await fetch_ncbi_genbank(
+            accession,
+            api_key=os.environ.get("NCBI_API_KEY"),
+            email=os.environ.get("NCBI_EMAIL"),
+        )
+    except AnnotationSourceError as error:
+        raise _annotation_source_http_error(error) from error
+    return artifact.to_dict()
+
+
+@router.get("/annotation-sources/addgene/{plasmid_id}")
+async def retrieve_addgene_annotation_source(plasmid_id: int) -> dict[str, Any]:
+    try:
+        artifact = await fetch_addgene_genbank(
+            plasmid_id,
+            token=os.environ.get("ADDGENE_API_TOKEN", ""),
+        )
+    except AnnotationSourceError as error:
+        raise _annotation_source_http_error(error) from error
+    return artifact.to_dict()
 
 
 class SequenceInput(BaseModel):
@@ -258,6 +316,7 @@ class AssemblyFragmentSchema(BaseModel):
     role: Optional[str] = None
     source_sequence_id: Optional[str] = None
     source_name: Optional[str] = None
+    source_revision: Optional[int] = None
     source_start: Optional[int] = None
     source_end: Optional[int] = None
     source_wraps_origin: bool = False
@@ -273,6 +332,7 @@ class AssemblyFragmentResponse(BaseModel):
     role: Optional[str] = None
     source_sequence_id: Optional[str] = None
     source_name: Optional[str] = None
+    source_revision: Optional[int] = None
     source_start: Optional[int] = None
     source_end: Optional[int] = None
     source_wraps_origin: bool = False
@@ -329,6 +389,66 @@ class GibsonAssemblyRequest(BaseModel):
     maximum_overlap: Optional[int] = 80
     new_name: Optional[str] = None
     save_description: Optional[str] = None
+
+
+class GibsonDesignFragmentSchema(AssemblyFragmentSchema):
+    preparation: Literal["pcr", "ready_linear"] = "pcr"
+
+
+class GibsonDesignRequest(BaseModel):
+    fragments: List[GibsonDesignFragmentSchema]
+    circular: bool = True
+    overlap: int = Field(default=30, ge=15, le=80)
+    target_tm: float = Field(default=60.0, ge=45.0, le=72.0, allow_inf_nan=False)
+    min_anneal: int = Field(default=13, ge=10, le=30)
+    selected_candidate_checksum: Optional[str] = None
+    new_name: Optional[str] = None
+    save_description: Optional[str] = None
+
+
+class GibsonPrimerResponse(BaseModel):
+    id: str
+    fragment_id: str
+    fragment_name: str
+    direction: Literal["forward", "reverse"]
+    full_sequence: str
+    annealing_sequence: str
+    tail_sequence: str
+    tm: float
+    warnings: List[str] = Field(default_factory=list)
+
+
+class GibsonDesignedFragmentResponse(BaseModel):
+    id: str
+    name: str
+    preparation: Literal["pcr", "ready_linear"]
+    sequence: str
+    checksum: str
+    primer_ids: List[str] = Field(default_factory=list)
+
+
+class GibsonCandidateResponse(BaseModel):
+    checksum: str
+    product: AssemblyProductResponse
+    exact_match: bool
+
+
+class GibsonDesignResponse(BaseModel):
+    engine: str
+    engine_version: str
+    circular: bool
+    overlap: int
+    target_tm: float
+    min_anneal: int
+    primers: List[GibsonPrimerResponse]
+    designed_fragments: List[GibsonDesignedFragmentResponse]
+    candidates: List[GibsonCandidateResponse]
+    selected_candidate_checksum: str
+    selected_product: AssemblyProductResponse
+    warnings: List[str] = Field(default_factory=list)
+    source_provenance: List[dict[str, Any]] = Field(default_factory=list)
+    saved_sequence: Optional[NucleotideSequenceResponse] = None
+    message: str
 
 
 class GoldenGateAssemblyRequest(BaseModel):
@@ -513,6 +633,7 @@ def build_assembly_fragment(fragment: AssemblyFragmentSchema) -> AssemblyFragmen
         role=fragment.role,
         source_sequence_id=fragment.source_sequence_id,
         source_name=fragment.source_name,
+        source_revision=fragment.source_revision,
         source_start=fragment.source_start,
         source_end=fragment.source_end,
         source_wraps_origin=fragment.source_wraps_origin,
@@ -562,6 +683,7 @@ def assembly_product_to_response(product: "AssemblyProduct") -> AssemblyProductR
                 role=fragment.role,
                 source_sequence_id=fragment.source_sequence_id,
                 source_name=fragment.source_name,
+                source_revision=fragment.source_revision,
                 source_start=fragment.source_start,
                 source_end=fragment.source_end,
                 source_wraps_origin=fragment.source_wraps_origin,
@@ -585,12 +707,80 @@ def assembly_product_to_response(product: "AssemblyProduct") -> AssemblyProductR
     )
 
 
+def gibson_design_to_response(
+    result: GibsonDesignResult,
+    *,
+    saved_sequence: Optional[NucleotideSequence] = None,
+    message: str = "Designed Gibson assembly",
+) -> GibsonDesignResponse:
+    if not result.selected_candidate_checksum:
+        raise AssemblyError("Gibson design did not select an exact candidate")
+    selected = next(
+        (
+            candidate
+            for candidate in result.candidates
+            if candidate.checksum == result.selected_candidate_checksum
+        ),
+        None,
+    )
+    if selected is None:
+        raise AssemblyError("Selected Gibson candidate is missing from the design result")
+    return GibsonDesignResponse(
+        engine=result.engine,
+        engine_version=result.engine_version,
+        circular=result.circular,
+        overlap=result.overlap,
+        target_tm=result.target_tm,
+        min_anneal=result.min_anneal,
+        primers=[
+            GibsonPrimerResponse(
+                id=primer.id,
+                fragment_id=primer.fragment_id,
+                fragment_name=primer.fragment_name,
+                direction=primer.direction,
+                full_sequence=primer.full_sequence,
+                annealing_sequence=primer.annealing_sequence,
+                tail_sequence=primer.tail_sequence,
+                tm=primer.tm,
+                warnings=primer.warnings,
+            )
+            for primer in result.primers
+        ],
+        designed_fragments=[
+            GibsonDesignedFragmentResponse(
+                id=fragment.id,
+                name=fragment.name,
+                preparation=fragment.preparation,
+                sequence=fragment.sequence,
+                checksum=fragment.checksum,
+                primer_ids=fragment.primer_ids,
+            )
+            for fragment in result.designed_fragments
+        ],
+        candidates=[
+            GibsonCandidateResponse(
+                checksum=candidate.checksum,
+                product=assembly_product_to_response(candidate.product),
+                exact_match=candidate.exact_match,
+            )
+            for candidate in result.candidates
+        ],
+        selected_candidate_checksum=result.selected_candidate_checksum,
+        selected_product=assembly_product_to_response(selected.product),
+        warnings=result.warnings,
+        source_provenance=result.source_provenance,
+        saved_sequence=saved_sequence,
+        message=message,
+    )
+
+
 async def persist_assembly_product(
     session: AsyncSession,
     *,
     product: "AssemblyProduct",
     name: Optional[str],
     save_description: Optional[str],
+    extra_operation_params: Optional[dict[str, Any]] = None,
 ):
     await begin_immediate_molbio_write(session)
     source_ids = [
@@ -749,6 +939,8 @@ async def persist_assembly_product(
         "validation_notes": product.validation_notes,
         "topology": "circular" if product.circular else "linear",
     }
+    if extra_operation_params:
+        operation_params.update(extra_operation_params)
 
     sequence_name = (name or "").strip() or f"{product.mode.replace('_', ' ').title()} product"
     if parent is not None:
@@ -1365,6 +1557,94 @@ async def mutagenesis(
     await session.commit()
     await session.refresh(seq_obj)
     return MolbioOperationResponse(sequence=seq_obj, message="Mutagenesis complete")
+
+
+def _execute_gibson_design(request: GibsonDesignRequest) -> GibsonDesignResult:
+    return design_gibson(
+        [build_assembly_fragment(fragment) for fragment in request.fragments],
+        preparations=[fragment.preparation for fragment in request.fragments],
+        circular=request.circular,
+        overlap=request.overlap,
+        target_tm=request.target_tm,
+        min_anneal=request.min_anneal,
+    )
+
+
+def _gibson_design_operation_params(
+    result: GibsonDesignResult,
+    candidate_checksum: str,
+) -> dict[str, Any]:
+    return {
+        "engine": result.engine,
+        "engine_version": result.engine_version,
+        "candidate_checksum": candidate_checksum,
+        "overlap": result.overlap,
+        "target_tm": result.target_tm,
+        "min_anneal": result.min_anneal,
+        "source_fragments": result.source_provenance,
+        "primers": [
+            {
+                "id": primer.id,
+                "fragment_id": primer.fragment_id,
+                "fragment_name": primer.fragment_name,
+                "direction": primer.direction,
+                "full_sequence": primer.full_sequence,
+                "annealing_sequence": primer.annealing_sequence,
+                "tail_sequence": primer.tail_sequence,
+                "tm": primer.tm,
+                "warnings": primer.warnings,
+            }
+            for primer in result.primers
+        ],
+        "design_warnings": result.warnings,
+    }
+
+
+@router.post("/assembly/gibson/design", response_model=GibsonDesignResponse)
+async def design_gibson_assembly(request: GibsonDesignRequest):
+    try:
+        result = _execute_gibson_design(request)
+        return gibson_design_to_response(result)
+    except AssemblyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/assembly/gibson/design/save", response_model=GibsonDesignResponse)
+async def save_designed_gibson_assembly(
+    request: GibsonDesignRequest,
+    session: AsyncSession = Depends(get_molbio_session),
+):
+    if not request.selected_candidate_checksum:
+        raise HTTPException(status_code=400, detail="A selected candidate checksum is required")
+    try:
+        result = _execute_gibson_design(request)
+        selected = next(
+            (
+                candidate
+                for candidate in result.candidates
+                if candidate.checksum == request.selected_candidate_checksum
+            ),
+            None,
+        )
+        if selected is None or not selected.exact_match:
+            raise AssemblyError("Selected candidate checksum is not a valid exact design candidate")
+        saved = await persist_assembly_product(
+            session,
+            product=selected.product,
+            name=request.new_name,
+            save_description=request.save_description,
+            extra_operation_params=_gibson_design_operation_params(
+                result,
+                request.selected_candidate_checksum,
+            ),
+        )
+        return gibson_design_to_response(
+            result,
+            saved_sequence=saved,
+            message="Designed and saved Gibson assembly",
+        )
+    except AssemblyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/assembly/gibson/simulate", response_model=AssemblyOperationResponse)

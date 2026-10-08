@@ -40,7 +40,7 @@
       "properties": {
         "candidate_id": {"type": "string", "minLength": 1}, "backend_coordinates": {"$ref": "#/$defs/coordinates"},
         "authoritative_structure_path": {"$ref": "#/$defs/relative_path"}, "authoritative_structure_sha256": {"$ref": "#/$defs/sha256"},
-        "sidecar_paths": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/relative_path"}}
+        "sidecar_paths": {"type": "array", "minItems": 0, "uniqueItems": true, "items": {"$ref": "#/$defs/relative_path"}}
       }
     }
   }

@@ -106,7 +106,7 @@ class InstallFeaturesPayload(BaseModel):
 
 
 DEV_INSTALL_FEATURES: dict[str, bool] = {
-    "bioxp": True,
+    "bioxp": False,
 }
 
 
@@ -354,9 +354,23 @@ def _effective_runtime_features(request: Request, configured: Mapping[str, objec
     """Return only feature surfaces mounted in this running API process."""
     effective = dict(configured)
     if "bioxp" in effective:
+        route_paths = {
+            str(getattr(route, "path", ""))
+            for route in getattr(request.app, "routes", ())
+        }
+        openapi_paths: set[str] = set()
+        openapi_factory = getattr(request.app, "openapi", None)
+        if callable(openapi_factory):
+            try:
+                schema = openapi_factory()
+                paths = schema.get("paths") if isinstance(schema, Mapping) else None
+                if isinstance(paths, Mapping):
+                    openapi_paths = {str(path) for path in paths}
+            except (AttributeError, TypeError, ValueError):
+                openapi_paths = set()
         effective["bioxp"] = any(
-            str(getattr(route, "path", "")).startswith("/api/bioxp")
-            for route in request.app.routes
+            path.startswith("/api/bioxp")
+            for path in route_paths | openapi_paths
         )
     return effective
 

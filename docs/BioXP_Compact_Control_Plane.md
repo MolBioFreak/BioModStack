@@ -122,27 +122,15 @@ Configuration:
 The persisted URL is never returned raw through read/status routes; operator
 surfaces receive a masked target.
 
-## Mutation authorization
+## Mutation enablement
 
-Every non-read mutation except deterministic offline compile requires both:
+Every non-read mutation except deterministic offline compile requires:
 
-1. `BMS_BIOXP_MUTATIONS_ENABLED=1`; and
-2. a matching transient operator token supplied as
-   `X-BMS-BioXP-Operator-Token` or a Bearer token.
-
-Credential source precedence is strict:
-
-1. `BMS_BIOXP_OPERATOR_TOKEN_FILE` when configured;
-2. otherwise `BMS_BIOXP_OPERATOR_TOKEN`.
-
-A configured token file that is missing, unreadable, or empty returns a fail-closed
-service error and never falls back to the environment token. No token is embedded
-in frontend source or persisted by either operator surface.
+1. `BMS_BIOXP_MUTATIONS_ENABLED=1`.
 
 Deterministic `/protocols/compile` is the only non-read route available while
 mutations are disabled. Profile save/forget, connection actions, local submission,
-normal commands, and emergency stop all require the kill switch and transient
-operator credential.
+normal commands, and emergency stop all require the kill switch.
 
 ## Command policy
 

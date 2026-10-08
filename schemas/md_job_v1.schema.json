@@ -9,6 +9,15 @@
     "schema": {"const": "bms.md.job.v1"},
     "job_id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
     "engine": {"enum": ["gromacs", "openmm"]},
+    "engine_runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sif_sha256", "image_name"],
+      "properties": {
+        "sif_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "image_name": {"type": "string", "minLength": 1}
+      }
+    },
     "replicas": {"type": "integer", "minimum": 1, "maximum": 8},
     "random_seed": {"type": "integer", "minimum": 1, "maximum": 2147483647},
     "input": {

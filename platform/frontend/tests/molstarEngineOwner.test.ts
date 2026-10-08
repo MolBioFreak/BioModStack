@@ -63,7 +63,7 @@ test('terminal teardown unmounts the React UI before disposing the plugin and is
     owner.dispose();
 
     assert.deepEqual(calls, ['root.render', 'root.unmount', 'plugin.dispose']);
-    assert.equal(owner.activePlugin, undefined);
+    assert.equal(owner.diagnostics().active, false);
 });
 
 test('late plugin publication after dispose is cancelled and immediately torn down', async () => {
@@ -91,7 +91,7 @@ test('late plugin publication after dispose is cancelled and immediately torn do
 
     assert.deepEqual(await pending, { status: 'cancelled', generation: 1 });
     assert.deepEqual(calls, ['plugin.dispose']);
-    assert.equal(owner.activePlugin, undefined);
+    assert.equal(owner.diagnostics().active, false);
 });
 
 test('replacement invalidates an older pending generation without adopting its plugin', async () => {
@@ -119,13 +119,13 @@ test('replacement invalidates an older pending generation without adopting its p
     const firstResult = owner.initialize(target);
     const secondResult = await owner.initialize(target);
     assert.equal(secondResult.status, 'ok');
-    assert.equal(owner.activePlugin, secondPlugin);
+    assert.equal(owner.diagnostics().active, true);
 
     firstPublish(firstPlugin);
     firstGate.resolve(firstPlugin);
 
     assert.deepEqual(await firstResult, { status: 'cancelled', generation: 1 });
-    assert.equal(owner.activePlugin, secondPlugin);
+    assert.equal(owner.diagnostics().active, true);
     assert.equal(calls.filter((entry) => entry === 'first.dispose').length, 1);
 
     owner.dispose();
@@ -150,7 +150,7 @@ test('creation failure tears down any published plugin and UI root exactly once'
     assert.equal(result.status, 'error');
     if (result.status === 'error') assert.equal(result.error, failure);
     assert.deepEqual(calls, ['root.render', 'root.unmount', 'plugin.dispose']);
-    assert.equal(owner.activePlugin, undefined);
+    assert.equal(owner.diagnostics().active, false);
 });
 
 test('deferred teardown aborts tasks immediately, then unmounts before plugin disposal', async () => {

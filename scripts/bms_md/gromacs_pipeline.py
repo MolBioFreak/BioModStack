@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import shutil
@@ -8,7 +9,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from .contract import build_run_manifest, prepare_verified_worker_inputs
+from .contract import build_run_manifest, prepare_verified_worker_inputs, write_atom_order_manifest
 from .gromacs import assert_cuda_enabled, build_mdrun_command
 from .runner import (
     StageLedger,
@@ -441,6 +442,28 @@ def run_gromacs_job(
         gmx_binary=gmx_binary,
         ledger=ledger,
     )
+    representative_structure = output_dir / "production" / "production-final.pdb"
+    (output_dir / "analysis").mkdir(parents=True, exist_ok=True)
+    representative_is_valid = False
+    previous_manifest_path = output_dir / "manifest.json"
+    if representative_structure.is_file() and previous_manifest_path.is_file():
+        try:
+            previous_manifest = json.loads(previous_manifest_path.read_text(encoding="utf-8"))
+            previous_record = previous_manifest["artifacts"]["representative_structure"]
+            representative_is_valid = (
+                previous_record["bytes"] == representative_structure.stat().st_size
+                and previous_record["sha256"] == hashlib.sha256(representative_structure.read_bytes()).hexdigest()
+            )
+        except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+            representative_is_valid = False
+    if not representative_is_valid:
+        _run_command(
+            [gmx_binary, "editconf", "-f", str(coordinates), "-o", str(representative_structure)],
+            cwd=output_dir / "production",
+            log_path=output_dir / "analysis" / "representative_structure.command.log",
+        )
+    atom_order_manifest = output_dir / "analysis" / "atom-order-manifest.json"
+    _, atom_order_identity = write_atom_order_manifest(coordinates, atom_order_manifest)
     manifest = build_run_manifest(
         output_dir=output_dir,
         job_config=config,
@@ -453,6 +476,8 @@ def run_gromacs_job(
             "coordinates": coordinates,
             "run_input": production.with_suffix(".tpr"),
             "trajectory": trajectory,
+            "atom_order_manifest": atom_order_manifest,
+            "representative_structure": representative_structure,
             "checkpoint": checkpoint,
             "energy": energy,
             "engine_log": production.with_suffix(".log"),
@@ -467,6 +492,25 @@ def run_gromacs_job(
     manifest["engine"]["cuda_enabled"] = "gpu support: cuda" in normalized_version_output
     manifest["engine"]["binary"] = gmx_binary
     manifest["replica_seed"] = int(config["random_seed"]) + replica_index
+    manifest["artifacts"]["coordinates"].update({
+        "semantic_role": "analysis_topology", "atom_order_identity": atom_order_identity,
+    })
+    manifest["artifacts"]["trajectory"].update({
+        "semantic_role": "analysis_trajectory", "atom_order_identity": atom_order_identity,
+    })
+    manifest["artifacts"]["atom_order_manifest"].update({
+        "semantic_role": "atom_order_manifest", "atom_order_identity": atom_order_identity,
+    })
+    production_config = config["stages"]["production"]
+    production_steps = int(production_config["steps"])
+    output_interval = int(production_config["trajectory_interval_steps"])
+    manifest["artifacts"]["representative_structure"].update({
+        "semantic_role": "representative_structure",
+        "selection_method": "completed_production_final_coordinates",
+        "source_frame": production_steps // output_interval - 1 if production_steps % output_interval == 0 else None,
+        "time_ps": production_steps * 0.002,
+        "source_trajectory_sha256": manifest["artifacts"]["trajectory"]["sha256"],
+    })
     manifest_path = output_dir / "manifest.json"
     _atomic_json(manifest_path, manifest)
     return manifest_path

@@ -10,12 +10,35 @@ export interface BioXpConnectionSnapshot {
     reachable: boolean | null;
     runtime_ready: boolean | null;
     hardware_ready: boolean | null;
+    hardware_observed_at: string | null;
+    hardware_fresh: boolean | null;
+    hardware_stale: boolean;
+    hardware_evidence_error: string | null;
     capabilities: string[];
     observed_at: string | null;
     freshness_budget_seconds: number;
     fresh: boolean | null;
     last_error: string | null;
     command_active: boolean;
+    startup_lifecycle: BioXpStartupLifecycle | null;
+}
+
+export interface BioXpStartupStage {
+    name?: string;
+    state: string;
+    prerequisite?: string | null;
+    repeatable?: boolean;
+    attempt_count?: number;
+    started_at?: string | null;
+    completed_at?: string | null;
+    error?: string | null;
+    evidence?: unknown;
+}
+
+export interface BioXpStartupLifecycle {
+    state?: string;
+    next_stage?: string | null;
+    stages: Record<string, BioXpStartupStage>;
 }
 
 export interface BioXpStatusResponse {
@@ -28,10 +51,29 @@ export interface BioXpStatusResponse {
         physical_effect_verifiable: false;
     };
     startup_warnings: string[];
+    mutation_access?: {
+        enabled: boolean;
+        server_setting: string;
+        secret_required: false;
+    };
     legacy_job_migration: {
         migrated: number;
         quarantined: number;
     };
+}
+
+export interface BioXpCommandRecord {
+    command_id: string;
+    command: string;
+    idempotency_key: string;
+    generation: number;
+    status: 'acknowledged' | 'delivered_unacknowledged' | 'delivery_failed';
+    started_at: string;
+    finished_at: string;
+    remote_acknowledged: boolean;
+    physical_effect_verified: false;
+    detail: string;
+    handler_response: Record<string, unknown> | null;
 }
 
 export interface BioXpProfileView {
@@ -108,10 +150,6 @@ export interface BioXpEmergencyResult {
 const statusKey = ['bioxp', 'status'] as const;
 const profileKey = ['bioxp', 'profile'] as const;
 const jobsKey = ['bioxp', 'jobs'] as const;
-const operatorConfig = (token: string) => ({
-    headers: { 'X-BMS-BioXP-Operator-Token': token },
-});
-
 export function bioXpErrorText(error: unknown): string {
     if (error && typeof error === 'object') {
         const response = 'response' in error
@@ -179,33 +217,25 @@ const useRefreshMutation = <TVariables, TData>(
 };
 
 export const useSaveBioXpProfile = () => useRefreshMutation(
-    async ({ profile, token }: { profile: BioXpProfileWrite; token: string }) => (
-        await api.put<BioXpProfileView>('/api/bioxp/profile', profile, operatorConfig(token))
+    async (profile: BioXpProfileWrite) => (
+        await api.put<BioXpProfileView>('/api/bioxp/profile', profile)
     ).data,
 );
 
 export const useForgetBioXpProfile = () => useRefreshMutation(
-    async (token: string) => (await api.delete<{ forgotten: boolean }>(
-        '/api/bioxp/profile', operatorConfig(token),
-    )).data,
+    async () => (await api.delete<{ forgotten: boolean }>('/api/bioxp/profile')).data,
 );
 
 export const useConnectBioXp = () => useRefreshMutation(
-    async (token: string) => (await api.post<BioXpConnectionSnapshot>(
-        '/api/bioxp/connection/connect', undefined, operatorConfig(token),
-    )).data,
+    async () => (await api.post<BioXpConnectionSnapshot>('/api/bioxp/connection/connect')).data,
 );
 
 export const useDisconnectBioXp = () => useRefreshMutation(
-    async (token: string) => (await api.post<BioXpConnectionSnapshot>(
-        '/api/bioxp/connection/disconnect', undefined, operatorConfig(token),
-    )).data,
+    async () => (await api.post<BioXpConnectionSnapshot>('/api/bioxp/connection/disconnect')).data,
 );
 
 export const useProbeBioXp = () => useRefreshMutation(
-    async (token: string) => (await api.post<BioXpConnectionSnapshot>(
-        '/api/bioxp/connection/probe', undefined, operatorConfig(token),
-    )).data,
+    async () => (await api.post<BioXpConnectionSnapshot>('/api/bioxp/connection/probe')).data,
 );
 
 export const useCompileBioXpProtocol = () => useMutation({
@@ -215,33 +245,28 @@ export const useCompileBioXpProtocol = () => useMutation({
 });
 
 export const useSubmitBioXpProtocol = () => useRefreshMutation(
-    async ({ protocol, idempotencyKey, token }: {
+    async ({ protocol, idempotencyKey }: {
         protocol: BioXpProtocol;
         idempotencyKey: string;
-        token: string;
     }) => (
         await api.post<BioXpProtocolSubmissionResponse>('/api/bioxp/protocols/submit', {
             protocol,
             idempotency_key: idempotencyKey,
-        }, operatorConfig(token))
-    ).data,
-);
-
-export const useBioXpCommand = () => useRefreshMutation(
-    async ({ payload, token }: { payload: Record<string, unknown>; token: string }) => (
-        await api.post('/api/bioxp/commands', payload, {
-            headers: { 'X-BMS-BioXP-Operator-Token': token },
         })
     ).data,
 );
 
+export const useBioXpCommand = () => useRefreshMutation(
+    async (payload: Record<string, unknown>) => (
+        await api.post<BioXpCommandRecord>('/api/bioxp/commands', payload)
+    ).data,
+);
+
 export const useBioXpEmergencyStop = () => useRefreshMutation(
-    async ({ token, generation }: { token: string; generation: number }) => (
+    async ({ generation }: { generation: number }) => (
         await api.post<BioXpEmergencyResult>('/api/bioxp/emergency-stop', {
             expected_generation: generation,
             idempotency_key: crypto.randomUUID(),
-        }, {
-            headers: { 'X-BMS-BioXP-Operator-Token': token },
         })
     ).data,
 );

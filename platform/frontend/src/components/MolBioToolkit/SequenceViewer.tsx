@@ -6,6 +6,7 @@
 
 import { SeqViz } from "seqviz";
 import {
+    useCallback,
     useEffect,
     useMemo,
     useRef,
@@ -403,6 +404,8 @@ export function SequenceViewer({
     const viewerRef = useRef<HTMLDivElement | null>(null);
     const previousSelectionRef = useRef<SelectionInfo | null | undefined>(selection);
     const selectionPointerButtonRef = useRef<number | null>(null);
+    const pendingPointerSelectionRef = useRef<SelectionInfo | null>(null);
+    const selectionCommitFrameRef = useRef<number | null>(null);
     const [selectionResetVersion, setSelectionResetVersion] = useState(0);
     const activePaletteColors = COLOR_PALETTES[colorPalette].colors as Record<string, string>;
 
@@ -464,7 +467,7 @@ export function SequenceViewer({
         });
     }, []);
 
-    const resolvedViewerMode = viewMode || (sequenceData.circular ? 'both' : 'linear');
+    const resolvedViewerMode = viewMode || 'both';
     const seqVizSeqType = normalizedSequenceType === 'protein' ? 'aa' : nucleotideSequenceType;
     const viewerSequenceKey = useMemo(() => {
         const head = displaySequence.slice(0, 24);
@@ -476,6 +479,21 @@ export function SequenceViewer({
     const showTouchRotationControls = touchBridgeEnabled
         && sequenceData.circular
         && resolvedViewerMode !== 'linear';
+
+    const flushPendingPointerSelection = useCallback(() => {
+        selectionCommitFrameRef.current = null;
+        const pendingSelection = pendingPointerSelectionRef.current;
+        pendingPointerSelectionRef.current = null;
+        if (pendingSelection) {
+            onSelection?.(pendingSelection);
+        }
+    }, [onSelection]);
+
+    useEffect(() => () => {
+        if (selectionCommitFrameRef.current !== null) {
+            window.cancelAnimationFrame(selectionCommitFrameRef.current);
+        }
+    }, []);
 
     useEffect(() => {
         if (!touchBridgeEnabled || !viewerRef.current) {
@@ -512,7 +530,12 @@ export function SequenceViewer({
         <div
             ref={viewerRef}
             className={`sequence-viewer ${className || ''}`}
-            style={{ height: '100%', width: '100%', position: 'relative' }}
+            style={{
+                height: '100%',
+                width: '100%',
+                position: 'relative',
+                overflowY: resolvedViewerMode === 'both' ? 'auto' : 'hidden',
+            }}
             tabIndex={0}
             aria-label="Molecular sequence viewer. Use Shift+F10 or the Menu key for selection actions."
             onContextMenu={onContextMenu}
@@ -523,16 +546,47 @@ export function SequenceViewer({
             }}
             onPointerDownCapture={(event) => {
                 selectionPointerButtonRef.current = event.button;
+                if (event.button === 0) {
+                    pendingPointerSelectionRef.current = null;
+                }
             }}
             onPointerUpCapture={() => {
+                if (selectionPointerButtonRef.current === 0 && pendingPointerSelectionRef.current) {
+                    if (selectionCommitFrameRef.current !== null) {
+                        window.cancelAnimationFrame(selectionCommitFrameRef.current);
+                    }
+                    selectionCommitFrameRef.current = window.requestAnimationFrame(flushPendingPointerSelection);
+                }
                 window.setTimeout(() => {
                     selectionPointerButtonRef.current = null;
                 }, 0);
             }}
             onPointerCancelCapture={() => {
+                pendingPointerSelectionRef.current = null;
                 selectionPointerButtonRef.current = null;
             }}
         >
+            {!sequenceData.circular && resolvedViewerMode !== 'linear' && (
+                <div
+                    data-linear-circular-projection="true"
+                    data-linear-break-marker="true"
+                    className="pointer-events-none absolute top-2 z-20 flex -translate-x-1/2 flex-col items-center"
+                    style={{ left: resolvedViewerMode === 'both' ? '25%' : '50%' }}
+                    title="Linear projection break: end → 1; display only, stored molecule remains linear"
+                >
+                    <div className="rounded-md border-2 border-amber-300 bg-amber-950 px-3 py-1 text-center font-bold tracking-wide text-amber-100 shadow-[0_0_18px_rgba(251,191,36,0.55)]">
+                        <div className="text-[11px] leading-none">LINEAR BREAK</div>
+                        <div className="mt-1 font-mono text-[10px] leading-none">
+                            {sequenceData.sequence.length.toLocaleString()} → 1
+                        </div>
+                    </div>
+                    <div className="h-10 w-1 bg-amber-300 shadow-[0_0_10px_rgba(251,191,36,0.9)]" />
+                    <div className="-mt-1 h-3 w-3 rotate-45 border-b-2 border-r-2 border-amber-300" />
+                    <div className="mt-1 rounded bg-slate-950/90 px-2 py-0.5 text-[9px] font-medium text-amber-200 shadow">
+                        Linear projection • stored topology remains linear
+                    </div>
+                </div>
+            )}
             {showTouchRotationControls && (
                 <div className="pointer-events-none absolute right-3 top-3 z-20 flex items-center gap-2">
                     <button
@@ -592,7 +646,11 @@ export function SequenceViewer({
                             selectionPointerButtonRef.current,
                         );
                         if (sourceSelection) {
-                            onSelection(sourceSelection);
+                            if (selectionPointerButtonRef.current === 0) {
+                                pendingPointerSelectionRef.current = sourceSelection;
+                            } else {
+                                onSelection(sourceSelection);
+                            }
                         }
                     }
                 }}

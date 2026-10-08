@@ -4,6 +4,7 @@ import importlib
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -54,9 +55,31 @@ def test_compose_runtime_passes_feature_flags_to_api_container() -> None:
 def test_runtime_feature_response_does_not_advertise_unmounted_bioxp_router() -> None:
     from routers.system import _effective_runtime_features
 
-    request = SimpleNamespace(
-        app=SimpleNamespace(routes=[SimpleNamespace(path="/api/system/features")]),
-    )
+    request = cast(Any, SimpleNamespace(
+        app=SimpleNamespace(
+            routes=[SimpleNamespace(path="/api/system/features")],
+            openapi=lambda: {"paths": {"/api/system/features": {}}},
+        ),
+    ))
     effective = _effective_runtime_features(request, {"bioxp": True})
 
     assert effective["bioxp"] is False
+
+
+def test_runtime_feature_response_detects_mounted_bioxp_router_from_openapi() -> None:
+    from routers.system import _effective_runtime_features
+
+    request = cast(Any, SimpleNamespace(
+        app=SimpleNamespace(
+            routes=[SimpleNamespace(path="/api/system/features")],
+            openapi=lambda: {
+                "paths": {
+                    "/api/system/features": {},
+                    "/api/bioxp/status": {},
+                },
+            },
+        ),
+    ))
+    effective = _effective_runtime_features(request, {"bioxp": True})
+
+    assert effective["bioxp"] is True

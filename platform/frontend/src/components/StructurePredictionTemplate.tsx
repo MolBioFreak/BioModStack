@@ -1,6 +1,6 @@
 import { useCallback, useState, useRef, useEffect, useMemo } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { submitJob, fetchBoltzCpShardPlans, fetchMsaCacheInfo, uploadFile, type BoltzCpShardPlan, type MsaCacheInfo } from '../lib/api';
+import { submitJob, estimateBoltzApiJob, fetchBoltzApiProviderStatus, submitBoltzApiJob, fetchBoltzCpShardPlans, fetchMsaCacheInfo, uploadFile, type BoltzApiEstimateResponse, type BoltzApiProviderStatus, type BoltzApiStructureRequest, type BoltzCpShardPlan, type MsaCacheInfo } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
 import { SequenceManager } from './SequenceManager';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
@@ -14,6 +14,7 @@ import {
     BOLTZ_NUM_SAMPLES_HELP_TEXT,
     BOLTZ_QUALITY_PRESETS,
     DEFAULT_BOLTZ_CP_CONTEXT_QUERY_TILE_TOKENS,
+    DEFAULT_STRUCTURE_MSA_PROVIDER,
     DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MIN_SIZE_GB,
     DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MODE,
     DEFAULT_STRUCTURE_MSA_TARGET_SHARDS,
@@ -46,6 +47,7 @@ import { parsePDBFile, getModelByNumber, type Chain, type ParsedPDB } from '../u
 import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 import { ModelDocumentationLinks, type ModelDocumentationTopic } from './ModelDocumentationLinks';
 import { resolveInitialGpuPinningState } from './gpuToggleState.js';
+
 
 interface StructurePredictionTemplateProps {
     onBack: () => void;
@@ -280,7 +282,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     const [msaUseEnv, setMsaUseEnv] = useState<boolean | undefined>(initialValues?.msa_use_env);
     const [msaNumIterations, setMsaNumIterations] = useState<number | undefined>(initialValues?.msa_num_iterations);
     const [msaProvider, setMsaProvider] = useState<'local' | 'colabfold_api'>(
-        initialValues?.msa_provider === 'colabfold_api' ? 'colabfold_api' : 'local'
+        initialValues?.msa_provider === 'local' ? 'local' : DEFAULT_STRUCTURE_MSA_PROVIDER
     );
     const [msaTargetShardMode, setMsaTargetShardMode] = useState<StructureMsaTargetShardMode>(
         normalizeMsaTargetShardMode(initialValues?.msa_target_shard_mode ?? DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MODE)
@@ -351,6 +353,12 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     const [parsedChains, setParsedChains] = useState<Chain[]>([]);
     const [selectedChainIndices, setSelectedChainIndices] = useState<Set<number>>(new Set());
     const [sequenceToSave, setSequenceToSave] = useState<{ sequence: string; name: string } | null>(null);
+    const [boltzApiStatus, setBoltzApiStatus] = useState<BoltzApiProviderStatus | null>(null);
+    const [boltzApiEstimate, setBoltzApiEstimate] = useState<BoltzApiEstimateResponse | null>(null);
+    const [boltzApiEstimateApproved, setBoltzApiEstimateApproved] = useState(false);
+    const [boltzApiEstimateError, setBoltzApiEstimateError] = useState<string | null>(null);
+    const [boltzApiEstimating, setBoltzApiEstimating] = useState(false);
+    const [boltzApiClientRequestId, setBoltzApiClientRequestId] = useState(() => crypto.randomUUID());
 
     const submitMutation = useMutation({
         mutationFn: async (data: UntypedApiValue) => submitJob(data),
@@ -358,6 +366,18 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
             navigate('/');
         }
+    });
+
+    const boltzApiSubmitMutation = useMutation({
+        mutationFn: submitBoltzApiJob,
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['jobs'] });
+            navigate('/');
+        },
+        onError: (error: UntypedApiValue) => {
+            const detail = error?.response?.data?.detail;
+            setBoltzApiEstimateError(detail?.message || error?.message || 'Boltz API job could not be queued.');
+        },
     });
 
     const applyMsaPreset = (preset: 'maximum' | 'balanced' | 'fast') => {
@@ -576,6 +596,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     const predictorFamilies = getPredictorFamiliesForSelection(predictionMode, activePredictorSelection);
     const predictorOptions = getStructurePredictorOptions(predictionMode);
     const selectedPredictorId = resolvedPredictorSelection.canonicalSelection;
+    const isBoltzApi = selectedPredictorId === 'boltz_api';
     const submitTarget = resolveStructureSubmitTarget({
         launchConfig,
         predictionMode,
@@ -586,9 +607,35 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     const usesProtenix = predictorFamilies.includes('protenix');
     const usesEsmFold2 = predictorFamilies.includes('esmfold2');
     const msaNeeded =
-        (usesBoltz && boltzUseMsa) ||
+        (usesBoltz && !isBoltzApi && boltzUseMsa) ||
         (usesRf3 && rf3UseMsa) ||
         (usesProtenix && protenixUseMsa);
+
+    useEffect(() => {
+        if (!isBoltzApi) return;
+        let cancelled = false;
+        fetchBoltzApiProviderStatus()
+            .then(({ data }) => {
+                if (!cancelled) setBoltzApiStatus(data);
+            })
+            .catch(() => {
+                if (!cancelled) setBoltzApiStatus({
+                    available: false,
+                    cli_available: false,
+                    credential_configured: false,
+                    model: 'boltz-2.1',
+                    message: 'Boltz API provider status could not be loaded.',
+                });
+            });
+        return () => { cancelled = true; };
+    }, [isBoltzApi]);
+
+    useEffect(() => {
+        setBoltzApiEstimate(null);
+        setBoltzApiEstimateApproved(false);
+        setBoltzApiEstimateError(null);
+        setBoltzApiClientRequestId(crypto.randomUUID());
+    }, [sequence, primaryChainId, ligands, sequenceBatchInput, boltzNumSamples, boltzUseMsa, predictionMode, isBoltzApi]);
     const boltzCpFallbackGpuIds = useMemo(() => {
         const explicitGpuIds = initialValues?.gpu_ids ?? initialValues?.bcp_gpu_ids;
         const explicitGpuIdsText = String(explicitGpuIds ?? '').trim();
@@ -813,12 +860,6 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     };
 
     useEffect(() => {
-        if (numParallelJobs > 1 && msaProvider === 'colabfold_api') {
-            setMsaProvider('local');
-        }
-    }, [numParallelJobs, msaProvider]);
-
-    useEffect(() => {
         if (!modalParsedStructure) {
             setParsedChains([]);
             return;
@@ -992,7 +1033,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
             if (msaNumIterations !== undefined) params.msa_num_iterations = msaNumIterations;
         }
 
-        const targetConditioningRequested = (usesBoltz && boltzTargetGeometryMode !== 'flexible') || (usesProtenix && protenixTargetGeometryMode !== 'flexible');
+        const targetConditioningRequested = (!isBoltzApi && usesBoltz && boltzTargetGeometryMode !== 'flexible') || (usesProtenix && protenixTargetGeometryMode !== 'flexible');
         if (targetConditioningRequested && !complexMode) {
             alert('Target conditioning needs a shared target or complex component.');
             return;
@@ -1012,9 +1053,13 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
 
         const modelId = submitTarget.modelId;
         const mode = submitTarget.mode;
+        let remoteComponents: Array<Record<string, unknown>> = [];
+        let remotePrimaryChainId = primaryChainId || 'A';
 
         if (complexMode) {
             const { components, resolvedPrimaryId, binderIds } = buildComplexComponents(batchEntries);
+            remoteComponents = components as Array<Record<string, unknown>>;
+            remotePrimaryChainId = resolvedPrimaryId;
             params.complex_components = components;
             params.primary_chain_id = resolvedPrimaryId;
             params.target_chains = resolvedPrimaryId;
@@ -1038,6 +1083,47 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                     return;
                 }
             }
+        }
+
+        if (isBoltzApi) {
+            if (batchEntries.length > 0) {
+                alert('Boltz API submission currently queues one remote prediction per launch. Remove the sequence batch first.');
+                return;
+            }
+            const request: BoltzApiStructureRequest = {
+                name: jobName,
+                client_request_id: boltzApiClientRequestId,
+                model: 'boltz-2.1',
+                sequence: sequence.trim(),
+                primary_chain_id: remotePrimaryChainId,
+                complex_components: remoteComponents,
+                num_samples: Math.min(10, boltzNumSamples),
+                use_msa: boltzUseMsa,
+            };
+            if (!boltzApiEstimate) {
+                setBoltzApiEstimating(true);
+                setBoltzApiEstimateError(null);
+                try {
+                    const { data } = await estimateBoltzApiJob(request);
+                    setBoltzApiEstimate(data);
+                    setBoltzApiEstimateApproved(false);
+                } catch (error: UntypedApiValue) {
+                    const detail = error?.response?.data?.detail;
+                    setBoltzApiEstimateError(detail?.message || error?.message || 'Boltz API cost estimate failed.');
+                } finally {
+                    setBoltzApiEstimating(false);
+                }
+                return;
+            }
+            if (!boltzApiEstimateApproved) {
+                alert('Review and approve the current Boltz API cost estimate before queueing the remote job.');
+                return;
+            }
+            boltzApiSubmitMutation.mutate({
+                ...request,
+                approved_estimate_fingerprint: boltzApiEstimate.estimate_fingerprint,
+            });
+            return;
         }
 
         if (batchEntries.length > 0) {
@@ -1194,7 +1280,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         setSelectedChainIndices(next);
     };
 
-    const showBoltzParams = usesBoltz;
+    const showBoltzParams = usesBoltz && !isBoltzApi;
     const showRf3Params = usesRf3;
     const showProtenixParams = usesProtenix;
     const showEsmFold2Params = usesEsmFold2;
@@ -1257,6 +1343,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
             </div>
 
             <div className="space-y-6">
+
                 {/* Job Name & GPU Pinning */}
                 <div className="flex gap-6">
                     <div className="flex-1">
@@ -1269,6 +1356,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                             placeholder="structure_prediction"
                         />
                     </div>
+                    {!isBoltzApi && (
                     <div>
                         <label className="block text-sm font-medium text-slate-400 mb-2">
                             GPU Pinning {pinnedGpus.length > 0 && <span className="text-blue-400">({pinnedGpus.length} selected)</span>}
@@ -1314,6 +1402,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                             </label>
                         )}
                     </div>
+                    )}
                 </div>
 
                 <div>
@@ -1421,7 +1510,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                 </div>
 
                 {/* Sequence Name */}
-                <div className={`grid ${launchConfig.showParallelJobs ? 'grid-cols-2' : 'grid-cols-1'} gap-4`}>
+                <div className={`grid ${launchConfig.showParallelJobs && !isBoltzApi ? 'grid-cols-2' : 'grid-cols-1'} gap-4`}>
                     <div>
                         <label className="block text-sm font-medium text-slate-400 mb-2">Sequence Name</label>
                         <input
@@ -1432,7 +1521,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                             placeholder="predicted"
                         />
                     </div>
-                    {launchConfig.showParallelJobs && (
+                    {launchConfig.showParallelJobs && !isBoltzApi && (
                         <div>
                             <label className="block text-sm font-medium text-slate-400 mb-2">Parallel Jobs</label>
                             <input
@@ -1451,7 +1540,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                     )}
                 </div>
 
-                {launchConfig.showSequenceBatch && (
+                {launchConfig.showSequenceBatch && !isBoltzApi && (
                     <div className="border border-slate-700/50 rounded-lg p-4 space-y-4">
                         <div>
                             <h3 className="text-sm font-semibold text-slate-200">Sequence Matrix Batch</h3>
@@ -1594,7 +1683,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
 
                         {complexMode ? (
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                {usesBoltz && (
+                                {usesBoltz && !isBoltzApi && (
                                     <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
                                         <label className="text-xs text-blue-100/80 block mb-1">Boltz target geometry</label>
                                         <select
@@ -1629,6 +1718,77 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                             <p className="text-xs text-amber-300/80">
                                 Import a shared target source or add an additional component to enable target conditioning.
                             </p>
+                        )}
+                    </div>
+                )}
+
+                {/* Remote Boltz API queue */}
+                {isBoltzApi && (
+                    <div className="border border-blue-500/40 bg-blue-500/5 rounded-lg p-4 space-y-4" data-bms-boltz-api-submit="true">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                                <h3 className="text-sm font-semibold text-blue-300">Boltz API submission</h3>
+                                <p className="mt-1 text-xs text-slate-400">
+                                    Estimate the provider charge, approve it, then queue a remote Boltz-2.1 structure prediction. Completion is downloaded and ingested automatically.
+                                </p>
+                            </div>
+                            <span className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${boltzApiStatus?.available
+                                ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200'
+                                : 'border-amber-400/30 bg-amber-500/10 text-amber-200'
+                                }`}>
+                                {boltzApiStatus?.available ? 'Provider configured' : 'Provider unavailable'}
+                            </span>
+                        </div>
+                        {boltzApiStatus && !boltzApiStatus.available && (
+                            <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                                {boltzApiStatus.message}
+                            </div>
+                        )}
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <label className="text-xs text-slate-400 block mb-1">Provider model</label>
+                                <div className="rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white">Boltz-2.1</div>
+                            </div>
+                            <div>
+                                <label className="text-xs text-slate-400 block mb-1">Use provider MSA</label>
+                                <select
+                                    value={boltzUseMsa ? 'true' : 'false'}
+                                    onChange={(event) => setBoltzUseMsa(event.target.value === 'true')}
+                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-2 text-white text-sm"
+                                >
+                                    <option value="true">Yes</option>
+                                    <option value="false">No</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="text-xs text-slate-400 block mb-1">Samples</label>
+                                <input
+                                    type="number"
+                                    value={Math.min(10, boltzNumSamples)}
+                                    onChange={(event) => setBoltzNumSamples(Math.max(1, Math.min(10, Number.parseInt(event.target.value, 10) || 1)))}
+                                    min={1}
+                                    max={10}
+                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-2 text-white text-sm"
+                                />
+                            </div>
+                        </div>
+                        {boltzApiEstimate && (
+                            <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-3 space-y-3">
+                                <div className="text-xs font-medium text-emerald-200">Current provider estimate</div>
+                                <pre className="overflow-x-auto whitespace-pre-wrap break-words text-xs text-slate-300">{JSON.stringify(boltzApiEstimate.estimate, null, 2)}</pre>
+                                <label className="flex items-start gap-3 text-sm text-slate-200">
+                                    <input
+                                        type="checkbox"
+                                        checked={boltzApiEstimateApproved}
+                                        onChange={(event) => setBoltzApiEstimateApproved(event.target.checked)}
+                                        className="mt-0.5 h-4 w-4 rounded border-slate-600 bg-slate-900 text-blue-500"
+                                    />
+                                    <span>I approve this provider estimate and authorize queueing the remote job.</span>
+                                </label>
+                            </div>
+                        )}
+                        {boltzApiEstimateError && (
+                            <div className="rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-xs text-red-200">{boltzApiEstimateError}</div>
                         )}
                     </div>
                 )}
@@ -2092,9 +2252,9 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                                             onChange={(e) => setMsaProvider(e.target.value as 'local' | 'colabfold_api')}
                                             className="w-full bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
                                         >
-                                            <option value="local">Local MMseqs2 (recommended)</option>
+                                            <option value="local">Local MMseqs2 (manual override)</option>
                                             <option value="colabfold_api" disabled={numParallelJobs > 1}>
-                                                ColabFold API (single-job only)
+                                                ColabFold API (default; single-job only)
                                             </option>
                                         </select>
                                     </div>
@@ -2453,9 +2613,9 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                 />
 
                 {/* Submit */}
-                <div className="flex justify-between items-center pt-6 border-t border-slate-800">
+                <div className={`flex ${isBoltzApi ? 'justify-end' : 'justify-between'} items-center pt-6 border-t border-slate-800`}>
                     {/* Left side: Allow Retries checkbox */}
-                    <label className="flex items-center gap-2 cursor-pointer text-slate-400 hover:text-slate-300">
+                    {!isBoltzApi && <label className="flex items-center gap-2 cursor-pointer text-slate-400 hover:text-slate-300">
                         <input
                             type="checkbox"
                             checked={allowRetries}
@@ -2464,15 +2624,23 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                         />
                         <span className="text-sm">Allow Retries</span>
                         <span className="text-xs text-slate-500">(retry OOM errors)</span>
-                    </label>
+                    </label>}
 
                     {/* Right side: Submit button */}
                     <button
                         onClick={handleSubmit}
-                        disabled={!sequence.trim() || submitMutation.isPending}
+                        disabled={!sequence.trim() || submitMutation.isPending || boltzApiSubmitMutation.isPending || boltzApiEstimating || (isBoltzApi && boltzApiStatus?.available === false)}
                         className="px-6 py-3 bg-gradient-to-r from-blue-600 to-accent-secondary hover:from-blue-500 hover:to-accent disabled:opacity-50 disabled:grayscale text-white font-bold rounded-lg shadow-lg shadow-accent/20 transition-all transform active:scale-95"
                     >
-                        {submitMutation.isPending ? 'Submitting...' : 'Launch Prediction'}
+                        {isBoltzApi
+                            ? (boltzApiSubmitMutation.isPending
+                                ? 'Queueing Boltz API job...'
+                                : boltzApiEstimating
+                                    ? 'Estimating API cost...'
+                                    : boltzApiEstimate
+                                        ? 'Queue Boltz API job'
+                                        : 'Estimate API cost')
+                            : (submitMutation.isPending ? 'Submitting...' : 'Launch Prediction')}
                     </button>
                 </div>
             </div>

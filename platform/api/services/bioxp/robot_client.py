@@ -11,6 +11,11 @@ from .target_policy import ValidatedBioXpTarget
 
 DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "status": ("GET", "/status", 5.0),
+    "activate_usb_for_service": ("POST", "/maintenance/usb/reconnect", 30.0),
+    "collect_hardware_snapshot": ("POST", "/hardware/snapshot/collect", 210.0),
+    "construct_pipettes": ("POST", "/oem/startup/constructor_pipettes", 280.0),
+    "initialize_without_motion": ("POST", "/oem/startup/initialize_without_motion", 140.0),
+    "run_initial_check": ("POST", "/oem/initial_check", 75.0),
     "emergency_stop": ("POST", "/oem/runtime/emergency_stop", 5.0),
 }
 
@@ -74,6 +79,9 @@ class BioXpRobotClient:
         payload = await self.request("status", retry_read_once=True)
         if not isinstance(payload, dict):
             raise RobotTransportError("BioXP status response was not an object")
+        # Remote interlink probes are cache-only. Query-only hardware sampling
+        # remains an explicit audited collect_hardware_snapshot command; it is
+        # never hidden inside the periodic connection probe.
         return payload
 
     async def request(

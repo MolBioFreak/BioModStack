@@ -268,7 +268,7 @@ def freeze_identity(repo: Path, cache: dict[Path, str]) -> dict[str, Any]:
     head = head_result["output_utf8"].strip() if head_result["exit_code"] == 0 else None
     files = [
         ("protenix_image", Path("/mnt/BioModStack/apptainer/protenix.sif")),
-        ("confornets_image", Path("/mnt/BioModStack/apptainer/confornets.sif")),
+        ("confornets_image", Path("/mnt/BioModStack/apptainer/confornets-canonical-4c2d104b3d5c7474c5a5799ca7ac0a24ac9c74267693e234b47aae20638e200a.sif")),
         ("frustrampnn_image", Path("/mnt/BioModStack/apptainer/frustrampnn.sif")),
         ("protenix_v2_checkpoint", Path("/mnt/BioModStack/weights/protenix/checkpoint/protenix-v2.pt")),
         ("confornets_openfold3_checkpoint", Path("/mnt/BioModStack/weights/openfold3/of3-p2-155k.pt")),
@@ -499,15 +499,15 @@ def classify_composition(vector_id: str, obs: Path, identity: dict[str, Any]) ->
     return status("passed", "fresh authenticated", "PASS", "matching composition report authenticates checks, artifacts, and live runtime identities", refs)
 
 
-def classify_confornets(vector_id: str, obs: Path, identity: dict[str, Any]) -> dict[str, Any]:
+def classify_confornets(vector_id: str, obs: Path, identity: dict[str, Any], repo: Path) -> dict[str, Any]:
     task = {
         "P0-CONFORNETS-LAYOUT-001": "diversity",
         "P0-CONFORNETS-LAYOUT-002": "mse",
         "P0-CONFORNETS-LAYOUT-003": "transfer",
     }[vector_id]
-    expected_counts = {"diversity": 4, "mse": 4, "transfer": 2}
-    directory_names = {"diversity": "diversity_retry", "mse": "mse", "transfer": "transfer"}
-    fixed_root = contained_observation(obs, "runtime_inventory/confornets_fixed")
+    expected_counts = {"diversity": 8, "mse": 4, "transfer": 4}
+    directory_names = {"diversity": "diversity_retry1", "mse": "mse", "transfer": "transfer"}
+    fixed_root = contained_observation(obs, "runtime_inventory/confornets_exact")
     if fixed_root is None:
         return status("unmeasured", "blocked", "STOP", "fresh ConforNets evidence root is unavailable")
     report_path = fixed_root / "validation_report.json"
@@ -518,6 +518,15 @@ def classify_confornets(vector_id: str, obs: Path, identity: dict[str, Any]) -> 
     except ProbeError as exc:
         return status("blocked", "blocked", "STOP", str(exc), refs)
     task_report = report.get("tasks", {}).get(task, {}) if isinstance(report, dict) else {}
+    fixture = load_json(repo / "platform/api/tests/fixtures/conformational_mapping/phase_0_vectors/confornets_cases.json")
+    fixture_case = next(case for case in fixture["cases"] if case["case_key"] == vector_id)
+    expected_coordinates = {
+        (run, step, confornet, sample, fixture_case.get("reference_id"))
+        for run in fixture_case["runs"]
+        for step in fixture_case["saved_steps"]
+        for confornet in fixture_case["confornet_indices"]
+        for sample in fixture_case["sample_indices"]
+    }
     image_identity = identity["runtime_files"]["confornets_image"]
     checkpoint_identity = identity["runtime_files"]["confornets_openfold3_checkpoint"]
     expected_image = image_identity.get("sha256")
@@ -553,6 +562,20 @@ def classify_confornets(vector_id: str, obs: Path, identity: dict[str, Any]) -> 
                 artifacts_ok = False
                 break
             artifact_refs.append(actual)
+    ledger_path = task_dir / "coordinate_ledger.jsonl"
+    observed_coordinates: set[tuple[int, int, int, int, str | None]] = set()
+    ledger_ok = ledger_path.is_file() and not ledger_path.is_symlink()
+    if ledger_ok:
+        try:
+            for line in ledger_path.read_text(encoding="utf-8").splitlines():
+                coordinate = json.loads(line)["coordinates"]
+                observed_coordinates.add((
+                    coordinate["run_index"], coordinate["saved_step"],
+                    coordinate["confornet_index"], coordinate["sample_index"],
+                    coordinate.get("reference_id"),
+                ))
+        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+            ledger_ok = False
     checks = {
         "runtime_identity_available": runtime_identity_available,
         "schema": isinstance(report, dict) and report.get("schema") == "confornets-fresh-cif-validation-v1",
@@ -563,6 +586,7 @@ def classify_confornets(vector_id: str, obs: Path, identity: dict[str, Any]) -> 
         "all_cifs_parsed": isinstance(task_report, dict) and task_report.get("all_cifs_parsed") is True,
         "exact_cif_count": isinstance(task_report, dict) and task_report.get("cif_count") == expected_counts[task],
         "artifact_hashes": artifacts_ok,
+        "exact_registry_coordinate_set": ledger_ok and observed_coordinates == expected_coordinates,
     }
     if all(checks.values()):
         return status("passed", "fresh authenticated", "PASS", f"fresh {task} run produced {expected_counts[task]} parsed CIFs with authenticated runtime identities and artifact hashes", refs + artifact_refs)
@@ -731,7 +755,11 @@ def classify_usalign(obs: Path, identity: dict[str, Any]) -> dict[str, Any]:
 
 
 def classify_baseline(obs: Path, repo: Path) -> dict[str, Any]:
-    hit = first_file(obs, ("baselines_rerun/summary_v2.json", "baselines/summary.json"))
+    hit = first_file(obs, (
+        "baselines_final_attempt3/summary_v2.json",
+        "baselines_rerun/summary_v2.json",
+        "baselines/summary.json",
+    ))
     if not hit:
         return status("unmeasured", "blocked", "STOP", "baseline aggregate is unavailable")
     _, path = hit
@@ -799,7 +827,7 @@ def classify(vector: dict[str, Any], obs: Path, identity: dict[str, Any], repo: 
     if family == "protenix-composition":
         return classify_composition(vector_id, obs, identity)
     if family == "confornets-layout":
-        return classify_confornets(vector_id, obs, identity)
+        return classify_confornets(vector_id, obs, identity, repo)
     if family == "confornets-negative":
         return status("unmeasured", "source-only", "STOP", "negative admission/rejection behavior is source-described but not measured")
     if family == "defaults":

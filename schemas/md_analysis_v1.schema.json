@@ -1,0 +1,206 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://biomodstack.local/schemas/md_analysis_v1.schema.json",
+  "title": "BioModStack MD Analysis Report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status", "method", "created_at", "analysis_identity_sha256", "inputs", "tool"],
+  "properties": {
+    "schema": {"const": "bms.md.analysis.v1"},
+    "status": {"enum": ["completed", "failed"]},
+    "method": {"const": "md_backbone_rmsd_v1"},
+    "job_id": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "format": "date-time"},
+    "analysis_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifest_sha256"],
+      "properties": {
+        "manifest_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+        "topology_sha256": {"$ref": "#/$defs/sha256"},
+        "trajectory_sha256": {"$ref": "#/$defs/sha256"},
+        "atom_order_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "atom_order_identity": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "implementation_sha256"],
+      "properties": {
+        "name": {"const": "MDAnalysis"},
+        "version": {"type": "string", "minLength": 1},
+        "implementation_sha256": {"$ref": "#/$defs/sha256"},
+        "runtime_sif_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "replica": {"type": "integer", "minimum": 0},
+    "selection": {"const": "protein and backbone"},
+    "reference": {"const": "first_admitted_frame"},
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pbc", "alignment", "exclusions", "requested_stride", "effective_stride", "max_points"],
+      "properties": {
+        "pbc": {"const": "nojump_then_center_protein"},
+        "alignment": {"const": "mass_weighted_backbone_fit"},
+        "exclusions": {"const": "non_protein_and_non_backbone"},
+        "requested_stride": {"type": "integer", "minimum": 1},
+        "effective_stride": {"type": "integer", "minimum": 1},
+        "max_points": {"type": "integer", "minimum": 1, "maximum": 10000}
+      }
+    },
+    "policy_sha256": {"$ref": "#/$defs/sha256"},
+    "frame_admission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_frame_count", "admitted_frame_count", "first_source_frame", "last_source_frame", "first_time_ps", "last_time_ps"],
+      "properties": {
+        "source_frame_count": {"type": "integer", "minimum": 1},
+        "admitted_frame_count": {"type": "integer", "minimum": 1, "maximum": 10000},
+        "first_source_frame": {"type": "integer", "minimum": 0},
+        "last_source_frame": {"type": "integer", "minimum": 0},
+        "first_time_ps": {"type": "number"},
+        "last_time_ps": {"type": "number"}
+      }
+    },
+    "units": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["time", "rmsd"],
+      "properties": {"time": {"const": "ps"}, "rmsd": {"const": "angstrom"}}
+    },
+    "points": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["replica", "time_ps", "source_frame", "rmsd_angstrom", "radius_of_gyration_angstrom"],
+        "properties": {
+          "replica": {"type": "integer", "minimum": 0},
+          "time_ps": {"type": "number"},
+          "source_frame": {"type": "integer", "minimum": 0},
+          "rmsd_angstrom": {"type": "number", "minimum": 0},
+          "radius_of_gyration_angstrom": {"type": "number", "minimum": 0}
+        }
+      }
+    },
+    "residue_metrics": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["segid", "resid", "resname", "backbone_rmsf_angstrom", "backbone_atom_count"],
+        "properties": {
+          "segid": {"type": "string"},
+          "resid": {"type": "integer"},
+          "resname": {"type": "string"},
+          "backbone_rmsf_angstrom": {"type": "number", "minimum": 0},
+          "backbone_atom_count": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    "block_statistics": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["block", "count", "source_frame_start", "source_frame_stop", "time_ps_start", "time_ps_stop", "mean_rmsd_angstrom", "mean_radius_of_gyration_angstrom"],
+        "properties": {
+          "block": {"type": "integer", "minimum": 0},
+          "count": {"type": "integer", "minimum": 1},
+          "source_frame_start": {"type": "integer", "minimum": 0},
+          "source_frame_stop": {"type": "integer", "minimum": 0},
+          "time_ps_start": {"type": "number"},
+          "time_ps_stop": {"type": "number"},
+          "mean_rmsd_angstrom": {"type": "number", "minimum": 0},
+          "mean_radius_of_gyration_angstrom": {"type": "number", "minimum": 0}
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason", "statistical_unit", "frames_are_independent_replicates"],
+      "properties": {
+        "status": {"const": "insufficient_evidence"},
+        "reason": {"type": "string", "minLength": 1},
+        "statistical_unit": {"const": "replica"},
+        "frames_are_independent_replicates": {"const": false}
+      }
+    },
+    "observables": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backbone_rmsd", "backbone_rmsf", "radius_of_gyration", "sasa"],
+      "properties": {
+        "backbone_rmsd": {"const": "completed"},
+        "backbone_rmsf": {"const": "completed"},
+        "radius_of_gyration": {"const": "completed"},
+        "sasa": {"enum": ["completed", "unavailable_validated_backend"]}
+      }
+    },
+    "specialized_analyzers": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {"type": "object"}
+    },
+    "derived_artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timeseries", "residue_metrics"],
+      "properties": {
+        "timeseries": {"$ref": "#/$defs/artifact"},
+        "residue_metrics": {"$ref": "#/$defs/artifact"}
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "min", "mean", "max", "final"],
+      "properties": {
+        "count": {"type": "integer", "minimum": 1},
+        "min": {"type": "number", "minimum": 0},
+        "mean": {"type": "number", "minimum": 0},
+        "max": {"type": "number", "minimum": 0},
+        "final": {"type": "number", "minimum": 0}
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {"code": {"type": "string", "minLength": 1}, "message": {"type": "string", "minLength": 1}}
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "completed"}}},
+      "then": {
+        "required": ["job_id", "replica", "selection", "reference", "policy", "policy_sha256", "frame_admission", "units", "points", "summary", "residue_metrics", "block_statistics", "evidence", "observables", "specialized_analyzers", "derived_artifacts"],
+        "properties": {
+          "tool": {"required": ["runtime_sif_sha256"]},
+          "inputs": {"required": ["topology_sha256", "trajectory_sha256", "atom_order_manifest_sha256", "atom_order_identity"]}
+        }
+      }
+    },
+    {"if": {"properties": {"status": {"const": "failed"}}}, "then": {"required": ["failure"]}}
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256"],
+      "properties": {
+        "path": {"type": "string", "pattern": "^[^/]+\\.parquet$"},
+        "bytes": {"type": "integer", "minimum": 1},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

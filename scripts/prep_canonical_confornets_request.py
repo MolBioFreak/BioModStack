@@ -18,12 +18,6 @@ class CanonicalPrepError(ValueError):
     pass
 
 
-_QUARANTINED_SYNTHETIC_SOURCES = {
-    "synthetic_contract_fixture",
-    "disposable_synthetic_probe_v1",
-}
-
-
 def _canonical_bytes(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
 
@@ -169,15 +163,6 @@ def prepare(request_path: Path, plan_path: Path, assets_dir: Path, output: Path)
         raise CanonicalPrepError("coordinate plan is not bound to canonical request")
     if request.get("backend") != "confornets" or plan.get("backend") != "confornets":
         raise CanonicalPrepError("canonical prep supports only confornets")
-    source = request.get("source")
-    source_kind = source.get("kind") if isinstance(source, dict) else None
-    if source_kind not in _QUARANTINED_SYNTHETIC_SOURCES:
-        raise CanonicalPrepError(
-            "current pinned ConforNets upstream is incompatible: it does not emit "
-            "authoritative run/saved_step/confornet/sample coordinates from write-time "
-            "loop variables, and no server-authenticated instrumentation registry exists; STOP"
-        )
-
     settings = request.get("confornets")
     if not isinstance(settings, dict):
         raise CanonicalPrepError("canonical ConforNets settings are missing")
@@ -194,11 +179,16 @@ def prepare(request_path: Path, plan_path: Path, assets_dir: Path, output: Path)
         settings["checkpoint"]["sha256"],
         "checkpoint",
     )
-    repo_path = _validate_owned_tree(
-        request_root,
-        settings["backend_identity"]["repo_path"],
-        label="ConforNets repository",
-    )
+    repo_path = Path(settings["backend_identity"]["repo_path"])
+    if repo_path != Path("/opt/confornets") or not (repo_path / "confornet/utils/cm_coordinate_ledger.py").is_file():
+        raise CanonicalPrepError("canonical instrumented ConforNets runtime is unavailable")
+    registry = _load(request_root / "cm_runtime_registry_v1.json", "runtime registry")
+    for field in (
+        "backend_version", "backend_commit", "runtime_identity", "container_digest",
+        "model_id", "feature_identity_sha256",
+    ):
+        if registry.get(field) != settings["backend_identity"].get(field):
+            raise CanonicalPrepError(f"ConforNets runtime registry mismatch: {field}")
 
     if assets_dir.exists():
         raise CanonicalPrepError(f"assets output already exists: {assets_dir}")
@@ -333,6 +323,7 @@ def prepare(request_path: Path, plan_path: Path, assets_dir: Path, output: Path)
         },
         "input_hashes": {
             "sequence_sha256": hashlib.sha256(settings["sequence"].encode()).hexdigest(),
+            "checkpoint_sha256": settings["checkpoint"]["sha256"],
             "references": {
                 reference["reference_id"]: reference["content_sha256"]
                 for reference in settings["references"]
@@ -346,6 +337,7 @@ def prepare(request_path: Path, plan_path: Path, assets_dir: Path, output: Path)
         "canonical_binding": {
             "request_sha256": request["request_sha256"],
             "coordinate_plan_sha256": plan["coordinate_plan_sha256"],
+            "target_id": target["target_id"],
         },
     }
     output.parent.mkdir(parents=True, exist_ok=True)

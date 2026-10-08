@@ -49,7 +49,6 @@ import {
     supportsViewerCapability,
 } from '../lib/resultCapabilities';
 import MolstarViewer from './MolstarViewer';
-// FloatingViewer - unused, kept for reference
 import { StabilityHeatmap } from './MetricCharts';
 import { BatchComparePane } from './BatchComparePane';
 import { DesignComparePane } from './DesignComparePane';
@@ -57,6 +56,8 @@ import { DataViewerLanding } from './DataViewerLanding';
 // ReferenceSelector and MetricOverlay - unused, kept for reference
 import { AnalyticsDashboard } from './AnalyticsDashboard';
 import StructureViewerPane from './StructureViewerPane';
+import MDResultsPane from './MDResultsPane';
+import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
 import {
     saveAntibodyRefinementLaunchState,
     type AntibodyRefinementLaunchState,
@@ -2368,7 +2369,7 @@ export function ResultsViewer() {
     const { data: designsData, isLoading: designsLoading } = useQuery({
         queryKey: ['designs', designQueryFilters],
         queryFn: () => fetchDesigns(designQueryFilters),
-        enabled: !!activeJob && !reviewSelectionRequired,
+        enabled: !!activeJob && activeJob.model_id !== 'molecular_dynamics' && !reviewSelectionRequired,
     });
     const rawDesigns = useMemo(
         () => (designsData?.data.designs ?? []).map(sanitizeDesignForReview),
@@ -3313,7 +3314,7 @@ export function ResultsViewer() {
             return;
         }
         if (selectedDesignLens === 'frustrampnn') {
-            setColorMode(selectedDesign?.frustration_residues?.length ? 'frustration' : 'default');
+            setColorMode('default');
             return;
         }
         if (selectedDesignLens === 'validation' || selectedDesignLens === 'protenix') {
@@ -3325,7 +3326,7 @@ export function ResultsViewer() {
             return;
         }
         setColorMode('default');
-    }, [hasCdrAnnotation, hasCdrOverlay, isOligoJob, selectedDesign?.frustration_residues?.length, selectedDesignLens, selectedJobId]);
+    }, [hasCdrAnnotation, hasCdrOverlay, isOligoJob, selectedDesignLens, selectedJobId]);
     const antibodyDesignGroups = useMemo(() => {
         const grouped: Record<OutputSourceFilter, typeof designs> = { all: [], rfantibody: [], boltzgen: [], fampnn: [], caliby: [], ppiflow: [], confornets: [], esmfold2: [], imported: [], validation: [] };
         for (const design of orderedDesigns) {
@@ -4998,6 +4999,13 @@ export function ResultsViewer() {
         .map((entry) => entry.trim())
         .filter(Boolean).length;
     const showDataHubLanding = !activeJob && !(jobsLoading || (jobId && routedJobLoading));
+    const viewerShellClassName = showDataHubLanding
+        ? 'mx-auto w-full max-w-[1180px]'
+        : 'w-full';
+
+    if (activeJob?.model_id === 'conformational_mapping') {
+        return <ConformationalMappingViewer requestId={activeJob.id} title={activeJob.name} />;
+    }
 
     return (
         <div className="min-h-screen bg-slate-950 text-slate-200">
@@ -5007,7 +5015,7 @@ export function ResultsViewer() {
                 <div className="absolute bottom-0 right-0 w-1/2 h-1/2 bg-violet-500/5 rounded-full blur-[150px]" />
             </div>
 
-            <div className="relative z-10 w-full px-3 sm:px-4 lg:px-5 xl:px-6 2xl:px-8">
+            <div className={`relative z-10 px-3 sm:px-4 lg:px-5 xl:px-6 2xl:px-8 ${viewerShellClassName}`}>
                 {/* Header */}
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
                     <div>
@@ -5042,12 +5050,12 @@ export function ResultsViewer() {
                     </div>
 
                     {/* Smart Job Selector */}
-                    <div className="flex items-center gap-3">
-                        <div className="relative" ref={jobSelectorRef}>
+                    <div className="flex w-full items-center gap-3 md:w-auto">
+                        <div className="relative w-full md:w-auto" ref={jobSelectorRef}>
                             <button
                                 type="button"
                                 onClick={() => setShowJobSelectorMenu((current) => !current)}
-                                className="flex min-w-[420px] items-center justify-between gap-3 rounded-xl border border-slate-600 bg-slate-800/80 px-4 py-3 text-left shadow-lg transition-all hover:border-slate-500"
+                                className="flex w-full items-center justify-between gap-3 rounded-2xl border border-slate-700 bg-slate-900/80 px-4 py-3 text-left shadow-xl shadow-slate-950/30 transition-all hover:border-cyan-500/40 hover:bg-slate-900 md:w-[420px] md:min-w-[420px]"
                             >
                                 <div className="min-w-0">
                                     <div className="truncate text-sm font-medium text-white">
@@ -5070,7 +5078,7 @@ export function ResultsViewer() {
                             </button>
 
                             {showJobSelectorMenu && (
-                                <div className="absolute right-0 z-50 mt-2 w-[520px] overflow-hidden rounded-2xl border border-slate-700 bg-slate-900/98 shadow-2xl shadow-slate-950/70 backdrop-blur">
+                                <div className="absolute right-0 z-50 mt-2 w-[min(520px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-slate-700 bg-slate-900/98 shadow-2xl shadow-slate-950/70 backdrop-blur">
                                     <div className="border-b border-slate-800 p-3">
                                         <input
                                             autoFocus
@@ -5152,6 +5160,9 @@ export function ResultsViewer() {
                 )}
 
                 {activeJob && (
+                    activeJob.model_id === 'molecular_dynamics' ? (
+                        <MDResultsPane key={activeJob.id} jobId={activeJob.id} />
+                    ) : (
                     <>
                         {activeLineageRootJob && (
                             <div className={`mb-4 rounded-xl border p-4 ${isPostRFantibodyReview ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-sky-500/20 bg-sky-500/5'}`}>
@@ -5322,8 +5333,8 @@ export function ResultsViewer() {
                             ))}
                         </div>
 
-                        {/* Global Pagination Bar - visible on all tabs */}
-                        {totalDesigns > 0 && (
+                        {/* Global Pagination Bar - table/chart working sets only */}
+                        {totalDesigns > 0 && activeTab !== 'structure' && (
                             <div className="flex items-center justify-between px-4 py-2 mb-2 bg-gradient-to-r from-slate-800/60 to-slate-900/60 rounded-lg border border-slate-700/50">
                                 <div className="flex items-center gap-3">
                                     <span className="text-xs text-slate-400">
@@ -6834,129 +6845,6 @@ export function ResultsViewer() {
                                     {/* STRUCTURE TAB - Fullscreen-Aware with Overlays */}
                                     {activeTab === 'structure' && selectedDesignSupportsStructureViewer && (
                                         <div className="p-4 space-y-3">
-                                            <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-3">
-                                                <div className="flex flex-wrap items-center gap-3">
-                                                    <label className="flex items-center gap-2 text-xs text-slate-400">
-                                                        <span>Sort by</span>
-                                                        <select
-                                                            value={filterDraft.sortField}
-                                                            onChange={(e) => {
-                                                                const field = e.target.value;
-                                                                setFilterDraft((current) => ({
-                                                                    ...current,
-                                                                    sortField: field,
-                                                                    sortDir: getDefaultSortDirection(field),
-                                                                }));
-                                                            }}
-                                                            className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
-                                                        >
-                                                            {availableSortOptions.map((option) => (
-                                                                <option key={option.value} value={option.value}>{option.label}</option>
-                                                            ))}
-                                                        </select>
-                                                    </label>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => updateFilterDraft('sortDir', filterDraft.sortDir === 'asc' ? 'desc' : 'asc')}
-                                                        className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-200"
-                                                    >
-                                                        {filterDraft.sortDir === 'asc' ? 'Asc ↑' : 'Desc ↓'}
-                                                    </button>
-                                                    <label className="flex items-center gap-2 text-xs text-slate-400">
-                                                        <span>Epi Cts ≥</span>
-                                                        <input
-                                                            type="number"
-                                                            min="0"
-                                                            value={filterDraft.contactsMin}
-                                                            onChange={(e) => updateFilterDraft('contactsMin', Number(e.target.value || 0))}
-                                                            onKeyDown={handleDraftFilterKeyDown}
-                                                            className="w-14 rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-white"
-                                                        />
-                                                    </label>
-                                                    <label className="flex items-center gap-2 text-xs text-slate-400">
-                                                        <span>Any Tgt Cts ≥</span>
-                                                        <input
-                                                            type="number"
-                                                            min="0"
-                                                            value={filterDraft.targetContactsMin}
-                                                            onChange={(e) => updateFilterDraft('targetContactsMin', Number(e.target.value || 0))}
-                                                            onKeyDown={handleDraftFilterKeyDown}
-                                                            className="w-14 rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-white"
-                                                        />
-                                                    </label>
-                                                    <label className="flex items-center gap-2 text-xs text-slate-400">
-                                                        <span>Epi Dist ≤</span>
-                                                        <input
-                                                            type="number"
-                                                            min="0"
-                                                            step="0.5"
-                                                            value={filterDraft.epitopeMaxDist}
-                                                            onChange={(e) => updateFilterDraft('epitopeMaxDist', e.target.value)}
-                                                            onKeyDown={handleDraftFilterKeyDown}
-                                                            className="w-16 rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-white"
-                                                        />
-                                                    </label>
-                                                    <label className="flex items-center gap-2 text-xs text-slate-400">
-                                                        <span>Any-Tgt Dist ≤</span>
-                                                        <input
-                                                            type="number"
-                                                            min="0"
-                                                            step="0.5"
-                                                            value={filterDraft.targetMaxDist}
-                                                            onChange={(e) => updateFilterDraft('targetMaxDist', e.target.value)}
-                                                            onKeyDown={handleDraftFilterKeyDown}
-                                                            className="w-16 rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-white"
-                                                        />
-                                                    </label>
-                                                    <label className="flex items-center gap-2 text-xs text-slate-400">
-                                                        <span>H3</span>
-                                                        <input
-                                                            type="number"
-                                                            min="0"
-                                                            value={filterDraft.cdrH3Min}
-                                                            onChange={(e) => updateFilterDraft('cdrH3Min', e.target.value)}
-                                                            onKeyDown={handleDraftFilterKeyDown}
-                                                            placeholder="min"
-                                                            className="w-14 rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-white"
-                                                        />
-                                                        <span>–</span>
-                                                        <input
-                                                            type="number"
-                                                            min="0"
-                                                            value={filterDraft.cdrH3Max}
-                                                            onChange={(e) => updateFilterDraft('cdrH3Max', e.target.value)}
-                                                            onKeyDown={handleDraftFilterKeyDown}
-                                                            placeholder="max"
-                                                            className="w-14 rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-white"
-                                                        />
-                                                    </label>
-                                                    <button
-                                                        type="button"
-                                                        onClick={applyDraftFilters}
-                                                        disabled={!filterDraftDirty}
-                                                        className={`rounded border px-2 py-1 text-xs transition-colors ${filterDraftDirty ? 'border-blue-500/50 bg-blue-500/10 text-blue-200 hover:bg-blue-500/20' : 'border-slate-700 bg-slate-900 text-slate-500'}`}
-                                                    >
-                                                        Apply Filters
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        onClick={clearRfaFilters}
-                                                        className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-300"
-                                                    >
-                                                        Clear
-                                                    </button>
-                                                    <span className="ml-auto text-[11px] text-slate-500">
-                                                        {pageSize === 0
-                                                            ? `${tableDesigns.length} structures in current structure set`
-                                                            : `${tableDesigns.length} loaded on this page • ${totalDesigns.toLocaleString()} total`}
-                                                    </span>
-                                                </div>
-                                                <div className="mt-2 text-[11px] text-slate-500">
-                                                    {isPostRFantibodyReview
-                                                        ? `RF lens: ${rfMetricLabels.short}. Toggle loop/whole-antibody in review.`
-                                                        : 'Any-Target: whole target. Epitope: selected residues.'}
-                                                </div>
-                                            </div>
                                             <StructureViewerPane
                                                 selectedDesignId={selectedDesignId}
                                                 setSelectedDesignId={setSelectedDesignId}
@@ -7572,7 +7460,6 @@ export function ResultsViewer() {
                                                             {getFriendlyDesignName(selectedDesign)} • {antibodyData?.imgt_pdb_url ? 'IMGT Renumbered Structure' : 'Original Structure'}
                                                         </div>
                                                         <MolstarViewer
-                                                            key={selectedDesignId + '_ab'}
                                                             structureUrl={antibodyData?.imgt_pdb_url || (selectedDesignId ? `/api/designs/${selectedDesignId}/pdb` : undefined)}
                                                             format="pdb"
                                                             alphafoldView={false}
@@ -8636,8 +8523,8 @@ export function ResultsViewer() {
                             )}
                         </div>
                     </>
-                )
-                }
+                    )
+                )}
             </div >
         </div >
     );

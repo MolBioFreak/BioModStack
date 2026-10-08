@@ -56,6 +56,7 @@ from services.ont_barcode_units import load_barcode_units
 from services.md.chemistry_catalog import ChemistryCatalogError, ChemistryProfileSelectionError
 from services.md.feature_gate import require_molecular_dynamics_feature
 from services.md.launch_contract import MDLaunchError, materialize_md_job_spec, normalize_md_job_spec
+from services.md.results import expected_analysis_implementation_sha256
 from services.proteinbase_importer import import_proteinbase_bundle
 
 from model_registry import get_registry
@@ -189,6 +190,9 @@ def _raise_md_launch_http_error(exc: Exception) -> NoReturn:
 
 
 _MD_OUTPUT_SLUG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_MD_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_MD_ANALYSIS_SIF_SHA256 = "3a74031e20dbd5012b7e532134f81816d596521dde47c4439fd1d6ae54fa5c68"
+_MD_TERMINAL_STATES = {"completed", "failed", "cancelled"}
 
 
 def _md_output_path_forbidden() -> MDLaunchError:
@@ -239,6 +243,159 @@ def _cleanup_call_owned_md_output(output_dir: Path, *, created: bool) -> None:
             candidate.rmdir()
         except (FileNotFoundError, OSError):
             pass
+
+
+def _md_analysis_error(code: str, message: str, *, status_code: int = 422) -> HTTPException:
+    return HTTPException(status_code=status_code, detail={"code": code, "message": message})
+
+
+def _md_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _md_analysis_gpu_requested(job_data: JobCreate) -> bool:
+    if job_data.pinned_gpu is not None:
+        return True
+    params = job_data.params if isinstance(job_data.params, dict) else {}
+    if params.get("gpu_id") not in (None, ""):
+        return True
+    pinned_gpus = params.get("pinned_gpus")
+    return pinned_gpus not in (None, "", [])
+
+
+def _md_contained_file(root: Path, raw_path: Any, *, code: str, label: str) -> Path:
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        raise _md_analysis_error(code, f"{label} is required")
+    candidate = Path(raw_path).expanduser()
+    if candidate.is_symlink():
+        raise _md_analysis_error(code, f"{label} must not be a symbolic link", status_code=409)
+    try:
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(root)
+    except (OSError, ValueError) as exc:
+        raise _md_analysis_error(code, f"{label} is not contained by the MD parent", status_code=409) from exc
+    if not resolved.is_file():
+        raise _md_analysis_error(code, f"{label} is unavailable", status_code=409)
+    return resolved
+
+
+async def _validate_md_analysis_child(job_data: JobCreate, session: AsyncSession) -> None:
+    """Bind one internal CPU analysis attempt to immutable completed parent dynamics."""
+
+    if job_data.child_stage != "md_analysis" or not job_data.parent_job_id:
+        raise _md_analysis_error(
+            "MD_ANALYSIS_PARENT_REQUIRED",
+            "An analysis child requires an MD parent and child_stage=md_analysis.",
+        )
+    parent = await session.get(Job, job_data.parent_job_id)
+    if parent is None:
+        raise _md_analysis_error("MD_ANALYSIS_PARENT_NOT_FOUND", "The MD analysis parent does not exist.", status_code=404)
+    if parent.model_id != "molecular_dynamics" or parent.mode != "simulate":
+        raise _md_analysis_error("MD_ANALYSIS_PARENT_INVALID", "The analysis parent is not an MD coordinator.")
+    if str(parent.status or "").strip().lower() in _MD_TERMINAL_STATES:
+        raise _md_analysis_error("MD_ANALYSIS_PARENT_TERMINAL", "The MD analysis parent is already terminal.", status_code=409)
+    if not parent.output_dir:
+        raise _md_analysis_error("MD_ANALYSIS_PARENT_INVALID", "The MD analysis parent has no result root.", status_code=409)
+
+    parent_root = Path(parent.output_dir).expanduser().resolve()
+    work_item_path = _md_contained_file(
+        parent_root,
+        job_data.params.get("md_analysis_work_item"),
+        code="MD_ANALYSIS_WORK_ITEM_INVALID",
+        label="The MD analysis work item",
+    )
+    try:
+        work_item = json.loads(work_item_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise _md_analysis_error("MD_ANALYSIS_WORK_ITEM_INVALID", "The MD analysis work item is invalid.") from exc
+    if not isinstance(work_item, dict) or work_item.get("schema") != "bms.md.analysis-work-item.v1":
+        raise _md_analysis_error("MD_ANALYSIS_WORK_ITEM_INVALID", "The MD analysis work item schema is invalid.")
+    replica_index = work_item.get("replica_index")
+    if isinstance(replica_index, bool) or not isinstance(replica_index, int) or replica_index < 0:
+        raise _md_analysis_error("MD_ANALYSIS_WORK_ITEM_INVALID", "The MD analysis replica index is invalid.")
+    if work_item.get("job_id") != parent.id:
+        raise _md_analysis_error("MD_ANALYSIS_PARENT_MISMATCH", "The analysis work item belongs to another MD parent.")
+
+    aggregate_path = parent_root / "manifest.json"
+    try:
+        aggregate = json.loads(aggregate_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise _md_analysis_error("MD_ANALYSIS_REPLICAS_INCOMPLETE", "The completed MD aggregate manifest is unavailable.", status_code=409) from exc
+    aggregate_replicas = aggregate.get("replicas") if isinstance(aggregate, dict) else None
+    if (
+        not isinstance(aggregate, dict)
+        or aggregate.get("schema") != "bms.md.aggregate.v1"
+        or aggregate.get("status") != "completed"
+        or aggregate.get("job_id") != parent.id
+        or not isinstance(aggregate_replicas, list)
+        or not any(isinstance(item, dict) and item.get("replica_index") == replica_index for item in aggregate_replicas)
+    ):
+        raise _md_analysis_error("MD_ANALYSIS_REPLICAS_INCOMPLETE", "The MD replica aggregate is not complete.", status_code=409)
+
+    expected_manifest = (parent_root / "replicas" / f"replica_{replica_index}" / "manifest.json").resolve()
+    replica_manifest = _md_contained_file(
+        parent_root,
+        work_item.get("manifest"),
+        code="MD_ANALYSIS_REPLICA_INVALID",
+        label="The MD replica manifest",
+    )
+    if replica_manifest != expected_manifest:
+        raise _md_analysis_error("MD_ANALYSIS_REPLICA_INVALID", "The MD replica manifest path is not canonical.", status_code=409)
+    expected_sha256 = work_item.get("manifest_sha256")
+    if not isinstance(expected_sha256, str) or not _MD_SHA256.fullmatch(expected_sha256) or _md_sha256(replica_manifest) != expected_sha256:
+        raise _md_analysis_error("MD_ANALYSIS_REPLICA_CHECKSUM_MISMATCH", "The MD replica manifest checksum is invalid.", status_code=409)
+    try:
+        replica = json.loads(replica_manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise _md_analysis_error("MD_ANALYSIS_REPLICA_INVALID", "The MD replica manifest is invalid.", status_code=409) from exc
+    if (
+        not isinstance(replica, dict)
+        or replica.get("schema") != "bms.md.run.v1"
+        or replica.get("status") != "completed"
+        or replica.get("job_id") != parent.id
+        or replica.get("replica_index") != replica_index
+        or not isinstance(replica.get("artifacts"), dict)
+        or not replica["artifacts"]
+    ):
+        raise _md_analysis_error("MD_ANALYSIS_REPLICA_INVALID", "The MD replica is not complete.", status_code=409)
+    for artifact in replica["artifacts"].values():
+        if not isinstance(artifact, dict):
+            raise _md_analysis_error("MD_ANALYSIS_REPLICA_INVALID", "An MD replica artifact record is invalid.", status_code=409)
+        artifact_path = _md_contained_file(
+            replica_manifest.parent,
+            str(replica_manifest.parent / str(artifact.get("path") or "")),
+            code="MD_ANALYSIS_REPLICA_INVALID",
+            label="An MD replica artifact",
+        )
+        artifact_bytes = artifact.get("bytes")
+        artifact_sha256 = artifact.get("sha256")
+        if (
+            isinstance(artifact_bytes, bool)
+            or not isinstance(artifact_bytes, int)
+            or artifact_bytes < 0
+            or not isinstance(artifact_sha256, str)
+            or not _MD_SHA256.fullmatch(artifact_sha256)
+            or artifact_path.stat().st_size != artifact_bytes
+            or _md_sha256(artifact_path) != artifact_sha256
+        ):
+            raise _md_analysis_error("MD_ANALYSIS_REPLICA_CHECKSUM_MISMATCH", "An MD replica artifact checksum is invalid.", status_code=409)
+
+    runtime_sha256 = job_data.params.get("md_analysis_sif_sha256")
+    if runtime_sha256 != _MD_ANALYSIS_SIF_SHA256:
+        raise _md_analysis_error("MD_ANALYSIS_RUNTIME_INVALID", "The qualified MD analysis runtime identity is required.")
+    job_data.params.update(
+        {
+            "md_replica_index": replica_index,
+            "md_replica_manifest": str(replica_manifest),
+            "md_replica_manifest_sha256": expected_sha256,
+            "md_aggregate_manifest_sha256": _md_sha256(aggregate_path),
+            "md_analysis_implementation_sha256": expected_analysis_implementation_sha256(),
+        }
+    )
 
 
 def _coerce_positive_int(value: Any) -> Optional[int]:
@@ -1493,6 +1650,13 @@ def _supports_colabfold_api_single_job(model_id: str, mode: str) -> bool:
         return normalized_mode == "design"
 
     return normalized_model in {"boltz2", "rf3", "protenix"} and normalized_mode in {"predict", "complex"}
+
+
+def _default_msa_provider_for_job(model_id: str, mode: str) -> str:
+    """Default supported structure jobs to the remote ColabFold service."""
+    if _supports_colabfold_api_single_job(model_id, mode):
+        return "colabfold_api"
+    return "local"
 
 
 def _normalize_target_geometry_mode(raw: Any) -> Optional[str]:
@@ -4954,6 +5118,11 @@ async def create_job(
     }
     normalized_model_id = str(job_data.model_id or "").strip().lower()
     normalized_mode = str(job_data.mode or "").strip().lower()
+    if normalized_model_id == "molecular_dynamics" and normalized_mode == "analyze" and _md_analysis_gpu_requested(job_data):
+        raise _md_analysis_error(
+            "MD_ANALYSIS_GPU_FORBIDDEN",
+            "MD analysis children are CPU-only and cannot request a GPU assignment.",
+        )
     if normalized_model_id == "conformational_mapping":
         raise HTTPException(
             status_code=403,
@@ -5052,6 +5221,8 @@ async def create_job(
     _validate_protenix_checkpoint_requirements(job_data.model_id, job_data.params)
     _validate_fampnn_checkpoint_requirements(job_data.model_id, job_data.params)
     _validate_antibody_runtime_paths(job_data.model_id, job_data.params)
+    if normalized_model_id == "molecular_dynamics" and normalized_mode == "analyze":
+        await _validate_md_analysis_child(job_data, session)
 
     if job_data.parent_job_id and job_data.child_stage and job_data.name:
         existing_child_result = await session.execute(
@@ -5174,13 +5345,16 @@ async def create_job(
     if job_data.model_id == "nanopore" and num_jobs != 1:
         raise HTTPException(status_code=422, detail="Nanopore submissions must create exactly one authorized job")
 
-    # ColabFold API mode is currently scoped to single structure-prediction jobs.
-    msa_provider = str(job_data.params.get("msa_provider", "local") or "local").strip().lower()
+    # ColabFold API is the default for supported structure-prediction jobs.
+    # Existing single-job validation below makes local MSA an explicit override for batches.
+    default_msa_provider = _default_msa_provider_for_job(job_data.model_id, job_data.mode)
+    msa_provider = str(job_data.params.get("msa_provider", default_msa_provider) or default_msa_provider).strip().lower()
     if msa_provider not in {"local", "colabfold_api"}:
         raise HTTPException(
             status_code=422,
             detail=f"Invalid msa_provider '{msa_provider}'. Allowed: local, colabfold_api",
         )
+    job_data.params["msa_provider"] = msa_provider
 
     if msa_provider == "colabfold_api":
         if not _supports_colabfold_api_single_job(job_data.model_id, job_data.mode):
@@ -5251,10 +5425,10 @@ async def create_job(
         vram_estimate = 0
         job_data.pinned_gpu = None
         logger.info(f"[QUEUE] Orchestrator parent job '{job_data.name}': CPU-only launcher, vram_estimate=0")
-    if job_data.model_id == "molecular_dynamics" and job_data.mode == "simulate":
+    if job_data.model_id == "molecular_dynamics" and job_data.mode in {"simulate", "analyze"}:
         vram_estimate = 0
         job_data.pinned_gpu = None
-        logger.info(f"[QUEUE] MD parent job '{job_data.name}': CPU-only durable coordinator, vram_estimate=0")
+        logger.info(f"[QUEUE] MD {job_data.mode} job '{job_data.name}': CPU-only, vram_estimate=0")
 
     # ─── CPU-only override: FASTQ-only nanopore jobs don't need a GPU ─────
     if job_data.model_id == "nanopore" and isinstance(job_data.params, dict):

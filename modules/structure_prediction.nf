@@ -47,7 +47,7 @@ process GenerateLocalMSA {
     def gpuServerWaitTimeout = params.msa_gpu_server_wait_timeout ?: 120
     def gpuServerDbLoadMode = params.msa_gpu_server_db_load_mode ?: 2
     def gpuServerStartupWait = params.msa_gpu_server_startup_wait ?: 5.0
-    def msaProvider = params.msa_provider ?: "local"
+    def msaProvider = params.msa_provider ?: "colabfold_api"
     def colabfoldApiHost = params.colabfold_api_host ?: "https://api.colabfold.com"
     def colabfoldApiMinInterval = params.colabfold_api_min_interval ?: 6.0
     def colabfoldApiPollInterval = params.colabfold_api_poll_interval ?: 6.0
@@ -492,7 +492,7 @@ process PrepareComplexWithMSA {
     def msaGpuServerWaitTimeout = params.msa_gpu_server_wait_timeout ?: 120
     def msaGpuServerDbLoadMode = params.msa_gpu_server_db_load_mode ?: 2
     def msaGpuServerStartupWait = params.msa_gpu_server_startup_wait ?: 5.0
-    def msaProvider = params.msa_provider ?: "local"
+    def msaProvider = params.msa_provider ?: "colabfold_api"
     def colabfoldApiHost = params.colabfold_api_host ?: "https://api.colabfold.com"
     def colabfoldApiMinInterval = params.colabfold_api_min_interval ?: 6.0
     def colabfoldApiPollInterval = params.colabfold_api_poll_interval ?: 6.0

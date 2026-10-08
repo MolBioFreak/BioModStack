@@ -4,12 +4,14 @@
   "title": "BioModStack FrustraMPNN landscape v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_name", "schema_version", "target_id", "candidate_id", "raw_csv_sha256", "checkpoint_id", "checkpoint_sha256", "threshold_policy_id", "threshold_policy_sha256", "residues"],
+  "required": ["schema_name", "schema_version", "target_id", "candidate_id", "raw_csv_sha256", "checkpoint_id", "checkpoint_sha256", "tool_id", "tool_sha256", "threshold_policy_id", "threshold_policy_sha256", "input_issues", "residues"],
   "properties": {
     "schema_name": {"const": "cm_frustration_landscape"}, "schema_version": {"const": 1},
     "target_id": {"type": "string", "minLength": 1}, "candidate_id": {"type": "string", "minLength": 1},
     "raw_csv_sha256": {"$ref": "#/$defs/sha256"}, "checkpoint_id": {"type": "string", "minLength": 1}, "checkpoint_sha256": {"$ref": "#/$defs/sha256"},
+    "tool_id": {"type": "string", "minLength": 1}, "tool_sha256": {"$ref": "#/$defs/sha256"}, "container_sha256": {"$ref": "#/$defs/sha256"},
     "threshold_policy_id": {"const": "frustrampnn_class_v1"}, "threshold_policy_sha256": {"$ref": "#/$defs/sha256"},
+    "input_issues": {"type": "array", "items": {"$ref": "#/$defs/input_issue"}},
     "residues": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/residue"}}
   },
   "$defs": {
@@ -28,6 +30,16 @@
         {"if": {"properties": {"status": {"const": "ok"}}}, "then": {"properties": {"score": {"type": "number"}, "scoreable": {"const": true}}}},
         {"if": {"not": {"properties": {"status": {"const": "ok"}}}}, "then": {"properties": {"score": {"type": "null"}}}}
       ]
+    },
+    "input_issue": {
+      "type": "object", "additionalProperties": false,
+      "required": ["line_number", "status", "reason", "raw_identity"],
+      "properties": {
+        "line_number": {"type": "integer", "minimum": 2},
+        "status": {"enum": ["malformed_row", "mapping_failed"]},
+        "reason": {"type": "string", "minLength": 1},
+        "raw_identity": {"type": "object"}
+      }
     },
     "residue": {
       "type": "object", "additionalProperties": false,

@@ -41,6 +41,11 @@ class ResultContractDefinition(BaseModel):
 _STRUCTURE_ANALYZERS = ["structure_summary", "contact_map", "chain_metrics"]
 _CONFIDENCE_ANALYZERS = ["pae_matrix"]
 _ANTIBODY_ANALYZERS = ["ipsae_interface", "antibody_annotation_pack"]
+_CM_ANALYZERS = ["conformational_mapping_analysis", "frustration_landscape"]
+_CM_VIEWER_CAPABILITIES = [
+    "conformational_mapping_viewer", "candidate_overlay", "residue_mapping",
+    "frustration_landscape", "analysis_ranking", "content_addressed_download",
+]
 
 
 _RESULT_CONTRACT_DEFINITIONS: List[ResultContractDefinition] = [
@@ -140,6 +145,59 @@ _RESULT_CONTRACT_DEFINITIONS: List[ResultContractDefinition] = [
         notes="Structure prediction/validation outputs. Binder semantics require a separate explicit role contract.",
     ),
     ResultContractDefinition(
+        contract_id="conformational_mapping_protenix_v1",
+        model_ids=["conformational_mapping"],
+        artifact_classes=["monomer_conformation"],
+        result_sets=["cm_protenix_ensemble"],
+        supported_analyzers=list(_CM_ANALYZERS),
+        viewer_capabilities=list(_CM_VIEWER_CAPABILITIES),
+        required_fields=["artifact_class", "candidate_id", "backend_coordinates", "manifest_sha256"],
+        required_artifacts=["structure", "confidence", "full_data", "native_manifest", "ensemble_manifest"],
+        notes="Complete-complex Protenix conformational hypotheses with seed/sample authority.",
+    ),
+    ResultContractDefinition(
+        contract_id="conformational_mapping_confornets_v1",
+        model_ids=["conformational_mapping"],
+        artifact_classes=["monomer_conformation"],
+        result_sets=["cm_confornets_ensemble"],
+        supported_analyzers=list(_CM_ANALYZERS),
+        viewer_capabilities=list(_CM_VIEWER_CAPABILITIES),
+        required_fields=["artifact_class", "candidate_id", "backend_coordinates", "manifest_sha256"],
+        required_artifacts=["structure", "native_manifest", "ensemble_manifest"],
+        notes="Instrumented ConforNets hypotheses with full backend coordinate authority.",
+    ),
+    ResultContractDefinition(
+        contract_id="conformational_mapping_import_v1",
+        model_ids=["conformational_mapping"],
+        artifact_classes=["monomer_conformation"],
+        result_sets=["cm_import_ensemble"],
+        supported_analyzers=list(_CM_ANALYZERS),
+        viewer_capabilities=list(_CM_VIEWER_CAPABILITIES),
+        required_fields=["artifact_class", "candidate_id", "backend_coordinates", "manifest_sha256"],
+        required_artifacts=["structure", "receipt", "native_manifest", "ensemble_manifest"],
+        notes="Authenticated immutable external conformational hypotheses.",
+    ),
+    ResultContractDefinition(
+        contract_id="conformational_mapping_analysis_v1",
+        model_ids=["conformational_mapping"],
+        result_sets=["cm_analysis"],
+        supported_analyzers=[],
+        viewer_capabilities=["analysis_ranking", "frustration_landscape", "residue_mapping"],
+        required_fields=["analysis_id", "formula_version", "source_ensemble_sha256"],
+        required_artifacts=["analysis_manifest"],
+        notes="Server-computed hierarchical support and ranking components.",
+    ),
+    ResultContractDefinition(
+        contract_id="conformational_mapping_resampling_v1",
+        model_ids=["conformational_mapping"],
+        result_sets=["cm_resampling"],
+        supported_analyzers=list(_CM_ANALYZERS),
+        viewer_capabilities=list(_CM_VIEWER_CAPABILITIES),
+        required_fields=["pair_id", "feature_policy", "manifest_sha256"],
+        required_artifacts=["wt_ensemble", "mutant_ensemble", "resampling_manifest"],
+        notes="Matched complete-complex WT/mutant Protenix resampling.",
+    ),
+    ResultContractDefinition(
         contract_id="confornets_monomer_v1",
         model_ids=["confornets_experimental", "confornets"],
         stage_families=["confornets"],
@@ -150,18 +208,6 @@ _RESULT_CONTRACT_DEFINITIONS: List[ResultContractDefinition] = [
         required_fields=["artifact_class"],
         required_artifacts=["structure"],
         notes="Conformational mapping monomer outputs with normalized conformer artifacts.",
-    ),
-    ResultContractDefinition(
-        contract_id="molecular_dynamics_v1",
-        model_ids=["molecular_dynamics"],
-        stage_families=["molecular_dynamics"],
-        artifact_classes=["md_trajectory"],
-        result_sets=["md_replicas"],
-        supported_analyzers=["molecular_dynamics_v1"],
-        viewer_capabilities=["generic_metadata", "trajectory_viewer", "md_performance_metrics", "provenance_audit"],
-        required_fields=["schema", "status", "replicas"],
-        required_artifacts=["replica_manifests", "trajectories", "checkpoints"],
-        notes="Replica-indexed production MD outputs with restart and checksummed provenance.",
     ),
 ]
 
@@ -177,6 +223,14 @@ def _token(value: Any) -> Optional[str]:
 
 def _tokens(values: List[str]) -> set[str]:
     return {_token(value) or "" for value in values}
+
+
+def normalize_conformational_mapping_artifact_class(value: Any) -> Optional[str]:
+    """Normalize exactly one historical spelling without changing stored rows."""
+
+    if isinstance(value, str) and value in {"monomer_conformation", "conformer"}:
+        return "monomer_conformation"
+    return None
 
 
 def _definition_by_id(contract_id: Any) -> Optional[ResultContractDefinition]:
@@ -254,7 +308,11 @@ def resolve_result_contract(
     if len(family_matches) > 1:
         return ResultContract()
 
-    artifact = normalize_antibody_artifact_class(artifact_class) or _token(artifact_class)
+    artifact = (
+        normalize_antibody_artifact_class(artifact_class)
+        or normalize_conformational_mapping_artifact_class(artifact_class)
+        or _token(artifact_class)
+    )
     artifact_definition = _unique_definition_for(artifact, "artifact_classes")
     if artifact_definition:
         return _contract_from_definition(artifact_definition, source="legacy_artifact")

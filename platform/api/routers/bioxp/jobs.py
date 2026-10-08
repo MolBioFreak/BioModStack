@@ -6,9 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from services.bioxp.runtime import BioXpRuntime
 
-from .dependencies import get_bioxp_runtime
+from .dependencies import get_bioxp_runtime, require_bioxp_mutation_access
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_bioxp_mutation_access)])
 
 
 @router.get("/jobs")

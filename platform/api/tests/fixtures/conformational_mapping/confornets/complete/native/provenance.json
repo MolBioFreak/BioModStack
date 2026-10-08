@@ -1,1 +1,1 @@
-{"schema_version":1,"workflow":"confornets_experimental","started_at":"2026-07-18T00:00:00Z","finished_at":"2026-07-18T00:01:00Z","commands_log":"confornets_commands.log","sample_count":8,"monomer_only":true,"synthetic_outputs":true}
+{"commands_log":"confornets_commands.log","controlled_fixture":true,"finished_at":"2026-07-18T00:01:00Z","monomer_only":true,"sample_count":8,"schema_version":1,"started_at":"2026-07-18T00:00:00Z","workflow":"confornets_experimental"}

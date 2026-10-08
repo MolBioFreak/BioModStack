@@ -12,6 +12,7 @@ export interface MolstarRgbColor {
  * `A45`/`A:45` string-key ambiguity and makes conversion explicit.
  */
 export interface MolstarResidueIdentity {
+    documentId?: string;
     labelAsymId?: string;
     authAsymId?: string;
     labelSeqId?: number;

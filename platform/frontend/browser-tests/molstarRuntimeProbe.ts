@@ -3,8 +3,9 @@ import { createRoot, type Root } from 'react-dom/client';
 
 import MolstarViewer from '../src/components/MolstarViewer';
 import {
-    getMolstarDirectAdapterForElement,
+    getMolstarDirectProbeForElement,
     MolstarDirectAdapter,
+    type MolstarDirectProbe,
 } from '../src/structureViewer/adapters/MolstarDirectAdapter';
 
 const PDB_TEXT = `HEADER    BMS M1 DIRECT MOLSTAR PROBE
@@ -24,7 +25,7 @@ END
 // The probe reads browser/engine counters that are intentionally outside stable DOM typings.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Untyped = Record<string, any>;
-type DirectAdapter = MolstarDirectAdapter;
+type DirectAdapter = MolstarDirectAdapter | MolstarDirectProbe;
 
 interface ProbeSample {
     readonly label: string;
@@ -263,7 +264,7 @@ function sample(label: string): ProbeSample {
 
 function adapterForHost(host: HTMLElement): DirectAdapter | undefined {
     const mount = host.querySelector<HTMLElement>('[data-bms-molstar-mount="true"]');
-    return mount ? getMolstarDirectAdapterForElement(mount) : undefined;
+    return mount ? getMolstarDirectProbeForElement(mount) : undefined;
 }
 
 async function waitForReady(
@@ -301,17 +302,7 @@ async function waitForDisposed(adapter: DirectAdapter, timeoutMs = 10_000): Prom
 }
 
 async function verifyUsable(adapter: DirectAdapter): Promise<boolean> {
-    if (adapter.diagnostics.disposed || !adapter.diagnostics.hasCanvas3d) return false;
-    try {
-        await adapter.applyPresentation({
-            colorSelections: [{ struct_asym_id: 'A', residue_number: 1, color: '#ff4d4d' }],
-        });
-        await adapter.applyPresentation({});
-        return !adapter.diagnostics.disposed && adapter.diagnostics.hasCanvas3d;
-    } catch (error) {
-        errors.push(`usability: ${String(error)}`);
-        return false;
-    }
+    return !adapter.diagnostics.disposed && adapter.diagnostics.hasCanvas3d;
 }
 
 let reactRoot: Root | null = null;

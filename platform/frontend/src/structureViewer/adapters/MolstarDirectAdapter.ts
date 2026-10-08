@@ -7,13 +7,16 @@ import {
 } from 'molstar/lib/mol-model/structure';
 import type { Structure } from 'molstar/lib/mol-model/structure';
 import { StructureQuery } from 'molstar/lib/mol-model/structure/query/query';
+import { getElementMoleculeType } from 'molstar/lib/mol-model/structure/util';
 import {
     clearStructureOverpaint,
     setStructureOverpaint,
 } from 'molstar/lib/mol-plugin-state/helpers/structure-overpaint';
+import { clearStructureTransparency, setStructureTransparency } from 'molstar/lib/mol-plugin-state/helpers/structure-transparency';
 import { StateTransforms } from 'molstar/lib/mol-plugin-state/transforms';
 import { Asset } from 'molstar/lib/mol-util/assets';
 import { Color } from 'molstar/lib/mol-util/color/color';
+import { Vec3 } from 'molstar/lib/mol-math/linear-algebra';
 import { PluginCommands } from 'molstar/lib/mol-plugin/commands';
 import type { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context';
 import { StateSelection } from 'molstar/lib/mol-state';
@@ -21,6 +24,7 @@ import { StateSelection } from 'molstar/lib/mol-state';
 import { createDirectMolstarEngineOwner } from '../runtime/createDirectMolstarEngineOwner';
 import type { MolstarEngineOwner } from '../runtime/MolstarEngineOwner';
 import { assessMeasurement, type ViewerMeasurement } from '../contracts/measurements';
+import type { StructureCameraState, StructureComponentType } from '../contracts/scenePresentation';
 import {
     viewerCancelled,
     viewerError,
@@ -40,6 +44,7 @@ export interface MolstarDirectDocument {
 }
 
 export interface MolstarDirectQuery {
+    readonly document_id?: string;
     readonly entity_id?: string;
     readonly struct_asym_id?: string;
     readonly auth_asym_id?: string;
@@ -55,18 +60,22 @@ export interface MolstarDirectQuery {
     readonly auth_atoms?: readonly string[];
     readonly atom_id?: readonly number[];
     readonly alt_loc_id?: string;
+    readonly component_types?: readonly StructureComponentType[];
     readonly color?: string | number | { r: number; g: number; b: number };
     readonly focus?: boolean;
     readonly tooltip?: string;
+    readonly opacity?: number;
 }
 
 export interface MolstarDirectPresentation {
     readonly colorSelections?: readonly MolstarDirectQuery[];
     readonly nonSelectedColor?: string | number | { r: number; g: number; b: number };
     readonly tooltipSelections?: readonly MolstarDirectQuery[];
+    readonly hiddenSelections?: readonly MolstarDirectQuery[];
 }
 
 export interface MolstarDirectResidueClick {
+    readonly documentId: string;
     readonly labelAsymId: string;
     readonly authAsymId: string;
     readonly labelSeqId: number;
@@ -89,6 +98,41 @@ const adapterRegistry = new WeakMap<HTMLElement, MolstarDirectAdapter>();
 const isPluginDisposed = (plugin: PluginUIContext | undefined): boolean => (
     (plugin as unknown as { disposed?: boolean } | undefined)?.disposed === true
 );
+
+// MoleculeType is an ambient const enum in Mol* 4.5 and has no runtime export.
+// Keep the pinned discriminants local so Vite never emits an invalid ESM import.
+const MOLSTAR_45_MOLECULE_TYPE = Object.freeze({
+    Other: 1,
+    Water: 2,
+    Ion: 3,
+    Protein: 5,
+    RNA: 6,
+    DNA: 7,
+    Saccharide: 9,
+});
+
+const componentTypeForLocation = (location: StructureElement.Location): StructureComponentType => {
+    const entityType = StructureProperties.entity.type(location);
+    const subtype = StructureProperties.entity.subtype(location).toLowerCase();
+    if (entityType === 'water') return 'water';
+    if (entityType === 'branched' || subtype.includes('oligosaccharide')) return 'glycan';
+    if (subtype === 'ion') return 'ion';
+    if (entityType === 'polymer') {
+        if (/polypeptide|cyclic-pseudo-peptide|peptide-like/.test(subtype)) return 'protein';
+        if (subtype === 'polydeoxyribonucleotide') return 'dna';
+        if (subtype === 'polyribonucleotide') return 'rna';
+    }
+    switch (getElementMoleculeType(location.unit, location.element)) {
+        case MOLSTAR_45_MOLECULE_TYPE.Protein: return 'protein';
+        case MOLSTAR_45_MOLECULE_TYPE.DNA: return 'dna';
+        case MOLSTAR_45_MOLECULE_TYPE.RNA: return 'rna';
+        case MOLSTAR_45_MOLECULE_TYPE.Saccharide: return 'glycan';
+        case MOLSTAR_45_MOLECULE_TYPE.Ion: return 'ion';
+        case MOLSTAR_45_MOLECULE_TYPE.Water: return 'water';
+        case MOLSTAR_45_MOLECULE_TYPE.Other: return entityType === 'non-polymer' ? 'ligand' : 'unknown';
+        default: return 'unknown';
+    }
+};
 
 const queryLoci = (params: readonly MolstarDirectQuery[], structure: Structure): StructureElement.Loci => {
     const queries = params.map((param) => {
@@ -129,9 +173,11 @@ const queryLoci = (params: readonly MolstarDirectQuery[], structure: Structure):
                     return true;
                 },
             } : {}),
-            ...((param.atoms || param.auth_atoms || param.atom_id || param.alt_loc_id !== undefined) ? {
+            ...((param.atoms || param.auth_atoms || param.atom_id || param.alt_loc_id !== undefined || param.component_types?.length) ? {
                 atomTest: (location) => (
-                    (!param.atoms
+                    (!param.component_types?.length
+                        || param.component_types.includes(componentTypeForLocation(location.element)))
+                    && (!param.atoms
                         || param.atoms.includes(StructureProperties.atom.label_atom_id(location.element)))
                     && (!param.auth_atoms
                         || param.auth_atoms.includes(StructureProperties.atom.auth_atom_id(location.element)))
@@ -160,9 +206,11 @@ const normalizeColor = (
     return fallback;
 };
 
-export const getMolstarDirectAdapterForElement = (
-    element: HTMLElement,
-): MolstarDirectAdapter | undefined => adapterRegistry.get(element);
+export interface MolstarDirectProbe { readonly diagnostics: MolstarDirectAdapterDiagnostics; }
+export const getMolstarDirectProbeForElement = (element: HTMLElement): MolstarDirectProbe | undefined => {
+    const adapter = adapterRegistry.get(element);
+    return adapter ? { get diagnostics() { return adapter.diagnostics; } } : undefined;
+};
 
 export interface MolstarDirectAdapterOptions {
     readonly hideControls?: boolean;
@@ -207,9 +255,6 @@ export class MolstarDirectAdapter {
         this.owner = createDirectMolstarEngineOwner({ hideControls, alphafoldView });
     }
 
-    get activePlugin(): PluginUIContext | undefined {
-        return this.plugin;
-    }
 
     async mount(target: HTMLElement): Promise<void> {
         if (this.disposed) throw new MolstarDirectAdapterCancelledError();
@@ -239,8 +284,10 @@ export class MolstarDirectAdapter {
                 const labelSeqId = StructureProperties.residue.label_seq_id(location);
                 const authSeqId = StructureProperties.residue.auth_seq_id(location);
                 const insertionCode = StructureProperties.residue.pdbx_PDB_ins_code(location);
-                if (!labelAsymId || !authAsymId || !Number.isInteger(labelSeqId) || !Number.isInteger(authSeqId)) return;
+                const documentId = this.documentStructures.get(loci.structure);
+                if (!documentId || !labelAsymId || !authAsymId || !Number.isInteger(labelSeqId) || !Number.isInteger(authSeqId)) return;
                 this.residueClickHandler?.({
+                    documentId,
                     labelAsymId,
                     authAsymId,
                     labelSeqId,
@@ -348,11 +395,7 @@ export class MolstarDirectAdapter {
                 return viewerCancelled('Measurement reconciliation was superseded');
             }
             const plugin = this.requirePlugin();
-            for (const ref of this.measurementSelectionRefs) {
-                await PluginCommands.State.RemoveObject(plugin, { state: plugin.state.data, ref });
-            }
-            this.measurementSelectionRefs = [];
-
+            const planned: Array<{ measurement: ViewerMeasurement; locis: StructureElement.Loci[] }> = [];
             for (const measurement of measurements) {
                 const locis: StructureElement.Loci[] = [];
                 for (const point of measurement.points) {
@@ -361,12 +404,7 @@ export class MolstarDirectAdapter {
                         return structure ? this.documentStructures.get(structure) === point.documentId : false;
                     });
                     const structure = structureEntry?.cell.obj?.data;
-                    if (!structure) {
-                        return viewerUnsupported(
-                            `Measurement document ${point.documentId} is not loaded in this scene`,
-                            'measurements',
-                        );
-                    }
+                    if (!structure) return viewerUnsupported(`Measurement document ${point.documentId} is not loaded in this scene`, 'measurements');
                     const loci = queryLoci([{
                         entity_id: point.entityId,
                         struct_asym_id: point.labelAsymId,
@@ -378,35 +416,53 @@ export class MolstarDirectAdapter {
                         auth_atoms: point.authAtomId ? [point.authAtomId] : undefined,
                         alt_loc_id: point.altLoc,
                     }], structure);
-                    if (StructureElement.Loci.isEmpty(loci)) {
+                    const atomCount = StructureElement.Loci.size(loci);
+                    if (atomCount !== 1) {
                         return viewerUnsupported(
-                            `Measurement atom ${point.labelAtomId ?? point.authAtomId ?? '?'} was not found exactly`,
+                            `Measurement atom ${point.labelAtomId ?? point.authAtomId ?? '?'} resolved to ${atomCount} atoms; exactly one is required`,
                             'measurements',
                         );
                     }
                     locis.push(loci);
                 }
-
-                const options = {
-                    customText: measurement.label,
-                    selectionTags: `bms-measurement:${measurement.measurementId}`,
-                    reprTags: `bms-measurement:${measurement.measurementId}`,
-                };
-                const created = measurement.type === 'distance'
-                    ? await plugin.managers.structure.measurement.addDistance(locis[0]!, locis[1]!, options)
-                    : measurement.type === 'angle'
-                        ? await plugin.managers.structure.measurement.addAngle(locis[0]!, locis[1]!, locis[2]!, options)
-                        : await plugin.managers.structure.measurement.addDihedral(
-                            locis[0]!, locis[1]!, locis[2]!, locis[3]!, options,
-                        );
-                if (!created) {
-                    return viewerUnsupported(
-                        `Mol* could not create measurement ${measurement.measurementId}`,
-                        'measurements',
-                    );
-                }
-                this.measurementSelectionRefs.push(created.selection.ref);
+                planned.push({ measurement, locis });
             }
+
+            const stagedRefs: string[] = [];
+            try {
+                for (const { measurement, locis } of planned) {
+                    const options = {
+                        customText: measurement.label,
+                        selectionTags: `bms-measurement:${measurement.measurementId}`,
+                        reprTags: `bms-measurement:${measurement.measurementId}`,
+                    };
+                    const created = measurement.type === 'distance'
+                        ? await plugin.managers.structure.measurement.addDistance(locis[0]!, locis[1]!, options)
+                        : measurement.type === 'angle'
+                            ? await plugin.managers.structure.measurement.addAngle(locis[0]!, locis[1]!, locis[2]!, options)
+                            : await plugin.managers.structure.measurement.addDihedral(locis[0]!, locis[1]!, locis[2]!, locis[3]!, options);
+                    if (!created) throw new Error(`Mol* could not stage measurement ${measurement.measurementId}`);
+                    stagedRefs.push(created.selection.ref);
+                }
+            } catch (error) {
+                for (const ref of stagedRefs) {
+                    try { await PluginCommands.State.RemoveObject(plugin, { state: plugin.state.data, ref }); } catch { /* preserve original failure */ }
+                }
+                return viewerError(error);
+            }
+
+            const previousRefs = this.measurementSelectionRefs;
+            try {
+                for (const ref of previousRefs) {
+                    await PluginCommands.State.RemoveObject(plugin, { state: plugin.state.data, ref });
+                }
+            } catch (error) {
+                for (const ref of stagedRefs) {
+                    try { await PluginCommands.State.RemoveObject(plugin, { state: plugin.state.data, ref }); } catch { /* best-effort rollback */ }
+                }
+                return viewerError(error);
+            }
+            this.measurementSelectionRefs = stagedRefs;
             return viewerOk(undefined);
         });
         this.measurementQueue = task.then(() => undefined, () => undefined);
@@ -420,9 +476,11 @@ export class MolstarDirectAdapter {
             const plugin = this.requirePlugin();
             const colors = presentation.colorSelections ?? [];
             const tooltips = presentation.tooltipSelections ?? [];
+            const hidden = presentation.hiddenSelections ?? [];
 
-            if (colors.length > 0) {
+            if (colors.length > 0 || hidden.length > 0) {
                 await this.applyColorSelections(plugin, colors, presentation.nonSelectedColor);
+                await this.applyHiddenSelections(plugin, hidden);
                 this.hasSelection = true;
             } else if (this.hasSelection) {
                 await this.clearColorSelections(plugin);
@@ -444,6 +502,26 @@ export class MolstarDirectAdapter {
 
         this.presentationQueue = task.catch(() => undefined);
         return task;
+    }
+
+    applyCamera(camera: StructureCameraState): ViewerResult<void> {
+        const canvas = this.requirePlugin().canvas3d;
+        if (!canvas) return viewerUnsupported('Mol* canvas is unavailable for camera reconciliation', 'camera');
+        canvas.setProps({ camera: { ...canvas.props.camera, mode: camera.mode } });
+        canvas.camera.setState({
+            ...(camera.target ? { target: Vec3.create(...camera.target) } : {}),
+            ...(camera.position ? { position: Vec3.create(...camera.position) } : {}),
+            ...(camera.up ? { up: Vec3.create(...camera.up) } : {}),
+            ...(camera.radius !== undefined ? { radius: camera.radius } : {}),
+        });
+        return viewerOk(undefined);
+    }
+
+    resetCamera(durationMs = 250): ViewerResult<void> {
+        const canvas = this.requirePlugin().canvas3d;
+        if (!canvas) return viewerUnsupported('Mol* canvas is unavailable for camera reset', 'camera');
+        canvas.requestCameraReset({ durationMs });
+        return viewerOk(undefined);
     }
 
     dispose(): void {
@@ -490,6 +568,7 @@ export class MolstarDirectAdapter {
     private async clearColorSelections(plugin: PluginUIContext): Promise<void> {
         for (const structureRef of plugin.managers.structure.hierarchy.current.structures) {
             await clearStructureOverpaint(plugin, structureRef.components);
+            await clearStructureTransparency(plugin, structureRef.components);
         }
     }
 
@@ -503,6 +582,9 @@ export class MolstarDirectAdapter {
         for (const structureRef of plugin.managers.structure.hierarchy.current.structures) {
             const structure = structureRef.cell.obj?.data;
             if (!structure) continue;
+            const documentId = this.documentStructures.get(structure);
+            const documentSelections = selections.filter((selection) => !selection.document_id || selection.document_id === documentId);
+            if (documentSelections.length === 0) continue;
             if (nonSelectedColor !== undefined) {
                 await setStructureOverpaint(
                     plugin,
@@ -511,12 +593,20 @@ export class MolstarDirectAdapter {
                     async (root) => queryLoci([{}], root),
                 );
             }
-            for (const selection of selections) {
+            for (const selection of documentSelections) {
                 if (selection.color !== null) {
                     await setStructureOverpaint(
                         plugin,
                         structureRef.components,
                         normalizeColor(selection.color),
+                        async (root) => queryLoci([selection], root),
+                    );
+                }
+                if (selection.opacity !== undefined && selection.opacity < 1) {
+                    await setStructureTransparency(
+                        plugin,
+                        structureRef.components,
+                        Math.max(0, Math.min(1, 1 - selection.opacity)),
                         async (root) => queryLoci([selection], root),
                     );
                 }
@@ -526,6 +616,27 @@ export class MolstarDirectAdapter {
         if (focusLoci.length > 0) plugin.managers.camera.focusLoci(focusLoci);
     }
 
+    private async applyHiddenSelections(
+        plugin: PluginUIContext,
+        selections: readonly MolstarDirectQuery[],
+    ): Promise<void> {
+        if (selections.length === 0) return;
+        for (const structureRef of plugin.managers.structure.hierarchy.current.structures) {
+            const structure = structureRef.cell.obj?.data;
+            if (!structure) continue;
+            const documentId = this.documentStructures.get(structure);
+            const documentSelections = selections.filter((selection) => !selection.document_id || selection.document_id === documentId);
+            for (const selection of documentSelections) {
+                await setStructureTransparency(
+                    plugin,
+                    structureRef.components,
+                    1,
+                    async (root) => queryLoci([selection], root),
+                );
+            }
+        }
+    }
+
     private async applyTooltips(
         plugin: PluginUIContext,
         selections: readonly MolstarDirectQuery[],
@@ -533,8 +644,10 @@ export class MolstarDirectAdapter {
         for (const structureRef of plugin.managers.structure.hierarchy.current.structures) {
             const structure = structureRef.cell.obj?.data;
             if (!structure) continue;
+            const documentId = this.documentStructures.get(structure);
+            const documentSelections = selections.filter((selection) => !selection.document_id || selection.document_id === documentId);
             const customTooltipProps = {
-                tooltips: selections.map((selection) => ({
+                tooltips: documentSelections.map((selection) => ({
                     text: selection.tooltip ?? '',
                     selector: {
                         name: 'bundle' as const,

@@ -15,6 +15,7 @@ import {
     sequenceUnitLabel,
 } from '../utils/nucleotides';
 import { createSelectionSnapshot } from '../utils/selectionActions';
+import { findLinearizationBlockers, setSequenceTopology } from '../utils/topology';
 
 interface EditPanelProps {
     sequenceData: SequenceData;
@@ -58,6 +59,10 @@ export function EditPanel({
         ? selectionSnapshot.placement
         : null;
     const selectedSequence = selectionSnapshot?.sequence || '';
+    const linearizationBlockers = useMemo(
+        () => findLinearizationBlockers(sequenceData),
+        [sequenceData],
+    );
 
     // Validate sequence input
     const validateSequence = useCallback((seq: string): boolean => {
@@ -216,6 +221,14 @@ export function EditPanel({
             translations: []
         }, 'Convert RNA to DNA');
     }, [sequenceData, onSequenceChange, isRNA]);
+
+    const handleTopologyChange = useCallback(() => {
+        const circular = !sequenceData.circular;
+        onSequenceChange(
+            setSequenceTopology(sequenceData, circular),
+            circular ? 'Circularize construct' : 'Linearize construct at current origin',
+        );
+    }, [onSequenceChange, sequenceData]);
 
     const selectionLength = selectionSnapshot?.length || 0;
 
@@ -424,6 +437,25 @@ export function EditPanel({
                                 RNA (U)
                             </button>
                         </div>
+                    </div>
+
+                    <div className="border-t border-slate-700 pt-3">
+                        <div className="mb-2 text-xs text-slate-400">Molecule topology:</div>
+                        <button
+                            onClick={handleTopologyChange}
+                            disabled={sequenceData.circular && linearizationBlockers.length > 0}
+                            className="w-full rounded bg-slate-700 py-2 text-xs font-medium text-slate-200 transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+                            title={linearizationBlockers.length > 0
+                                ? `Rotate the origin first: ${linearizationBlockers.join(', ')}`
+                                : undefined}
+                        >
+                            {sequenceData.circular ? 'Linearize at current origin' : 'Circularize construct'}
+                        </button>
+                        {sequenceData.circular && linearizationBlockers.length > 0 && (
+                            <div className="mt-2 rounded border border-amber-700/40 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-200">
+                                Linearization blocked by {linearizationBlockers.join(' and ')}. Rotate the origin before linearizing.
+                            </div>
+                        )}
                     </div>
                 </div>
             )}

@@ -158,6 +158,42 @@ def test_launch_request_translates_container_paths_for_host_adapter(monkeypatch:
     }
 
 
+@pytest.mark.asyncio
+async def test_core_scheduler_explicitly_allows_durably_prestarted_job_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import main
+
+    captured: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        nextflow,
+        "launch_nextflow_job_detached",
+        lambda **payload: captured.append(payload),
+    )
+
+    await main._orchestrator_launch_job(
+        "job-123",
+        "conformational_mapping",
+        "map",
+        {"gpu_id": 3, "cm_request_path": "/var/lib/biomodstack/bms_results/job-123/request.json"},
+        "/var/lib/biomodstack/bms_results/job-123",
+    )
+
+    assert captured == [
+        {
+            "job_id": "job-123",
+            "model_id": "conformational_mapping",
+            "mode": "map",
+            "params": {
+                "gpu_id": 3,
+                "cm_request_path": "/var/lib/biomodstack/bms_results/job-123/request.json",
+            },
+            "output_dir": "/var/lib/biomodstack/bms_results/job-123",
+            "allow_running_job": True,
+        }
+    ]
+
+
 
 def test_cancel_request_posts_expected_payload_to_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BMS_WORKFLOW_ADAPTER_URL", "http://127.0.0.1:8001")
@@ -642,6 +678,77 @@ async def test_launch_nextflow_job_routes_to_adapter_before_local_subprocess(mon
     assert local_spawn_calls == []
     assert job.nextflow_run_id == "adapter-run-42"
     assert job.status == "running"
+
+
+@pytest.mark.asyncio
+async def test_conformational_mapping_handoff_omits_generic_dynamic_cpu_hint(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("BMS_WORKFLOW_ADAPTER_URL", "http://host.docker.internal:8001")
+
+    job = SimpleNamespace(
+        id="cm-job-123",
+        status="running",
+        started_at=datetime.utcnow(),
+        params={},
+        batch_id=None,
+        current_stage=None,
+        queue_status="running",
+        nextflow_run_id=None,
+        completed_at=None,
+        error_message=None,
+        awaiting_input=False,
+    )
+    session = _FakeAsyncSession(job)
+    monkeypatch.setattr(database, "async_session", lambda: session)
+    monkeypatch.setattr(database, "Job", _FakeJobModel)
+    monkeypatch.setattr(sqlalchemy, "select", lambda *_args, **_kwargs: _FakeSelect())
+
+    async def fake_prepare(params: dict[str, object]):
+        return params, []
+
+    dynamic_cpu_calls: list[str] = []
+
+    async def fake_dynamic_gpu(*_args, **_kwargs):
+        dynamic_cpu_calls.append("called")
+        return 8
+
+    adapter_calls: list[dict[str, object]] = []
+
+    def fake_adapter_launch(**payload):
+        adapter_calls.append(payload)
+        return {"accepted": True, "nextflow_run_id": "cm-adapter-run-42"}
+
+    monkeypatch.setattr(nextflow, "prepare_boltzgen_params_for_launch", fake_prepare)
+    monkeypatch.setattr(nextflow, "_is_protenix_job", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(nextflow, "_resolve_dynamic_gpu_cpu_share", fake_dynamic_gpu)
+    monkeypatch.setattr(nextflow, "launch_via_workflow_adapter", fake_adapter_launch, raising=False)
+
+    output_dir = tmp_path / "cm-job-123"
+    await nextflow.launch_nextflow_job(
+        job_id="cm-job-123",
+        model_id="conformational_mapping",
+        mode="map",
+        params={"cm_request_path": "/var/lib/biomodstack/bms_results/cm-job-123/cm_request_v1.json", "gpu_id": 3},
+        output_dir=str(output_dir),
+        allow_running_job=True,
+    )
+
+    assert dynamic_cpu_calls == []
+    assert adapter_calls == [
+        {
+            "job_id": "cm-job-123",
+            "model_id": "conformational_mapping",
+            "mode": "map",
+            "params": {
+                "cm_request_path": "/var/lib/biomodstack/bms_results/cm-job-123/cm_request_v1.json",
+                "gpu_id": 3,
+            },
+            "output_dir": str(output_dir),
+        }
+    ]
+    assert job.nextflow_run_id == "cm-adapter-run-42"
 
 
 @pytest.mark.asyncio

@@ -81,6 +81,12 @@ export function isBmsFeatureVisible(state: BmsFeatureState, feature: BmsFeatureK
     return state.features[feature] && (showDevFeatures || !state.devFeatures[feature]);
 }
 
+export function resolveShowDevFeaturesDefault(viteDev: boolean, storedValue: string | null): boolean {
+    if (storedValue === 'true') return true;
+    if (storedValue === 'false') return false;
+    return viteDev;
+}
+
 async function fetchBmsFeatureState(): Promise<BmsFeatureState> {
     const response = await fetch('/api/system/features', { cache: 'no-store' });
     if (!response.ok) {
@@ -106,6 +112,18 @@ export async function setBmsFeature(feature: BmsFeatureKey, enabled: boolean): P
 
 export function useBmsFeatures(): BmsFeatures {
     return useBmsFeatureState().features;
+}
+
+export function useResolvedBmsFeatures(): { features: BmsFeatures; resolved: boolean } {
+    const query = useQuery({
+        queryKey: ['bms-install-features'],
+        queryFn: fetchBmsFeatureState,
+        staleTime: 60_000,
+    });
+    return {
+        features: resolveBmsFeatureQueryState(query.data, query.isError).features,
+        resolved: query.isSuccess || query.isError,
+    };
 }
 
 export function resolveBmsFeatureQueryState(

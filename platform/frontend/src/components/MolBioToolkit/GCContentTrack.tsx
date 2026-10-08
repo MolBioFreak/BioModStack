@@ -14,6 +14,7 @@ import {
     sequenceForPlotDisplay,
     type SelectionRange,
 } from './utils/selectionActions';
+import { shouldComputeRestrictionPositions } from './utils/gcTrackPolicy';
 
 type MetricId = 'gc' | 'restriction_density' | 'ambiguity_density' | 'homopolymer_burden';
 
@@ -327,13 +328,16 @@ export function GCContentTrack({
     const computedStepSize = stepSize ?? Math.max(12, Math.floor(windowSize / 3));
 
     const restrictionPositions = useMemo(() => {
+        if (!shouldComputeRestrictionPositions(metricId)) {
+            return [];
+        }
         const allPositions = selectedEnzymes.flatMap((name) => {
             const enzyme = getRestrictionEnzyme(name);
             if (!enzyme) return [];
             return findRestrictionSites(normalizedSequence, enzyme.site, circular);
         });
         return Array.from(new Set(allPositions)).sort((left, right) => left - right);
-    }, [circular, normalizedSequence, selectedEnzymes]);
+    }, [circular, metricId, normalizedSequence, selectedEnzymes]);
 
     const analyticsData = useMemo<AnalyticsPoint[]>(() => {
         if (!normalizedSequence || normalizedSequence.length < 10) return [];
@@ -403,24 +407,16 @@ export function GCContentTrack({
         }
     }, [normalizedSequence, onSelectionChange, reverseCoordinates]);
 
-    if (!normalizedSequence || analyticsData.length === 0) {
-        return null;
-    }
+    const rawValues = useMemo(() => analyticsData.map((point) => point.value), [analyticsData]);
+    const yRange = useMemo(() => calculateYRange(metric, rawValues), [metric, rawValues]);
 
-    const rawValues = analyticsData.map((point) => point.value);
-    const yRange = calculateYRange(metric, rawValues);
-
-    const traces: Data[] = [
+    const traces = useMemo<Data[]>(() => [
         {
             x: analyticsData.map((point) => point.position),
             y: rawValues,
             type: 'scatter',
             mode: 'lines',
-            line: {
-                width: 1.2,
-                color: metric.color,
-                shape: 'linear',
-            },
+            line: { width: 1.2, color: metric.color, shape: 'linear' },
             opacity: 0.36,
             hoverinfo: 'skip',
             showlegend: false,
@@ -431,97 +427,92 @@ export function GCContentTrack({
             customdata: analyticsData.map((point) => [point.start + 1, point.end, point.value]),
             type: 'scatter',
             mode: 'lines',
-            line: {
-                width: 2.6,
-                color: metric.color,
-                shape: 'linear',
-            },
+            line: { width: 2.6, color: metric.color, shape: 'linear' },
             hovertemplate: `<b>${metric.label}</b><br>%{customdata[0]:,.0f}-%{customdata[1]:,.0f}<br>%{customdata[2]:.${metric.decimals}f}${metric.suffix}<extra></extra>`,
             showlegend: false,
         },
-    ];
+    ], [analyticsData, metric, rawValues, smoothedValues]);
 
-    const shapes: Partial<Shape>[] = [];
-    if (metric.preferredBand && metric.preferredBand[1] > metric.preferredBand[0]) {
-        shapes.push({
-            type: 'rect',
-            x0: 0,
-            x1: normalizedSequence.length,
-            y0: metric.preferredBand[0],
-            y1: metric.preferredBand[1],
-            fillcolor: 'rgba(148, 163, 184, 0.08)',
-            line: { width: 0 },
-            layer: 'below',
-        });
-    }
-
-    shapes.push({
-        type: 'line',
-        x0: 0,
-        x1: normalizedSequence.length,
-        y0: summary.mean,
-        y1: summary.mean,
-        line: {
-            color: 'rgba(148, 163, 184, 0.45)',
-            width: 1,
-            dash: 'dot',
-        },
-        layer: 'below',
-    });
-
-    if (selectionSnapshot) {
-        selectionSnapshot.ranges.forEach((range) => {
+    const layout = useMemo<Partial<Layout>>(() => {
+        const shapes: Partial<Shape>[] = [];
+        if (metric.preferredBand && metric.preferredBand[1] > metric.preferredBand[0]) {
             shapes.push({
                 type: 'rect',
-                x0: range.start,
-                x1: range.end,
-                y0: yRange[0],
-                y1: yRange[1],
-                fillcolor: 'rgba(34, 211, 238, 0.12)',
-                line: { color: 'rgba(34, 211, 238, 0.62)', width: 1 },
+                x0: 0,
+                x1: normalizedSequence.length,
+                y0: metric.preferredBand[0],
+                y1: metric.preferredBand[1],
+                fillcolor: 'rgba(148, 163, 184, 0.08)',
+                line: { width: 0 },
                 layer: 'below',
             });
+        }
+        shapes.push({
+            type: 'line',
+            x0: 0,
+            x1: normalizedSequence.length,
+            y0: summary.mean,
+            y1: summary.mean,
+            line: { color: 'rgba(148, 163, 184, 0.45)', width: 1, dash: 'dot' },
+            layer: 'below',
         });
-    }
+        if (selectionSnapshot) {
+            selectionSnapshot.ranges.forEach((range) => {
+                shapes.push({
+                    type: 'rect',
+                    x0: range.start,
+                    x1: range.end,
+                    y0: yRange[0],
+                    y1: yRange[1],
+                    fillcolor: 'rgba(34, 211, 238, 0.12)',
+                    line: { color: 'rgba(34, 211, 238, 0.62)', width: 1 },
+                    layer: 'below',
+                });
+            });
+        }
+        return {
+            height,
+            margin: { l: 50, r: 14, t: 6, b: 28 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(2, 6, 23, 0.62)',
+            hovermode: 'x unified',
+            showlegend: false,
+            dragmode: 'select',
+            selectdirection: 'h',
+            uirevision: `sequence-diagnostics-${metric.id}-${normalizedSequence.length}`,
+            xaxis: {
+                showgrid: false,
+                zeroline: false,
+                color: '#94a3b8',
+                tickfont: { size: 10, color: '#64748b' },
+                range: [0, normalizedSequence.length],
+                tickformat: ',',
+                fixedrange: false,
+                title: { text: 'Position (bp)', font: { size: 10, color: '#64748b' } },
+            },
+            yaxis: {
+                showgrid: true,
+                gridcolor: 'rgba(51, 65, 85, 0.28)',
+                zeroline: false,
+                color: '#94a3b8',
+                tickfont: { size: 10, color: '#64748b' },
+                range: yRange,
+                tickformat: metric.tickFormat,
+                fixedrange: true,
+                title: { text: metric.shortLabel, font: { size: 10, color: '#64748b' } },
+            },
+            shapes,
+            hoverlabel: {
+                bgcolor: '#020617',
+                bordercolor: '#1e293b',
+                font: { color: '#e2e8f0', size: 11 },
+            },
+        };
+    }, [height, metric, normalizedSequence.length, selectionSnapshot, summary.mean, yRange]);
 
-    const layout: Partial<Layout> = {
-        height,
-        margin: { l: 50, r: 14, t: 6, b: 28 },
-        paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: 'rgba(2, 6, 23, 0.62)',
-        hovermode: 'x unified',
-        showlegend: false,
-        dragmode: 'select',
-        selectdirection: 'h',
-        uirevision: `sequence-diagnostics-${metric.id}-${normalizedSequence.length}`,
-        xaxis: {
-            showgrid: false,
-            zeroline: false,
-            color: '#94a3b8',
-            tickfont: { size: 10, color: '#64748b' },
-            range: [0, normalizedSequence.length],
-            tickformat: ',',
-            fixedrange: false,
-            title: { text: 'Position (bp)', font: { size: 10, color: '#64748b' } },
-        },
-        yaxis: {
-            showgrid: true,
-            gridcolor: 'rgba(51, 65, 85, 0.28)',
-            zeroline: false,
-            color: '#94a3b8',
-            tickfont: { size: 10, color: '#64748b' },
-            range: yRange,
-            tickformat: metric.tickFormat,
-            fixedrange: true,
-            title: { text: metric.shortLabel, font: { size: 10, color: '#64748b' } },
-        },
-        shapes,
-        hoverlabel: {
-            bgcolor: '#020617',
-            bordercolor: '#1e293b',
-            font: { color: '#e2e8f0', size: 11 },
-        },
-    };
+    if (!normalizedSequence || analyticsData.length === 0) {
+        return null;
+    }
 
     return (
         <div className="border-b border-slate-700 bg-slate-950/20 px-2 py-2">

@@ -375,6 +375,23 @@ def test_boltz_cp_single_job_supports_colabfold_api_msa_provider() -> None:
     assert jobs._supports_colabfold_api_single_job("boltz_cp_experimental", "design") is True
 
 
+def test_structure_job_msa_provider_defaults_to_colabfold_server_but_preserves_batch_fallback() -> None:
+    assert jobs._default_msa_provider_for_job("boltz_cp_experimental", "design") == "colabfold_api"
+    assert jobs._default_msa_provider_for_job("boltz2", "predict") == "colabfold_api"
+    assert jobs._default_msa_provider_for_job("molecular_dynamics", "simulate") == "local"
+
+
+def test_fold_cp_nextflow_surfaces_default_to_colabfold_server() -> None:
+    repo_root = API_ROOT.parents[1]
+    config_text = (repo_root / "nextflow.config").read_text(encoding="utf-8")
+    module_text = (repo_root / "modules" / "boltz_cp_experimental.nf").read_text(encoding="utf-8")
+    structure_text = (repo_root / "modules" / "structure_prediction.nf").read_text(encoding="utf-8")
+
+    assert "msa_provider = 'colabfold_api'" in config_text
+    assert "params.msa_provider ?: 'colabfold_api'" in module_text
+    assert 'params.msa_provider ?: "colabfold_api"' in structure_text
+
+
 
 def test_boltz_cp_structure_launcher_clamps_gpu_bridge_to_valid_square_divisor_without_exposing_size_cp() -> None:
     registry = ModelRegistry()

@@ -38,6 +38,7 @@ class CommandRecord(BaseModel):
     remote_acknowledged: bool
     physical_effect_verified: Literal[False] = False
     detail: str
+    handler_response: dict[str, Any] | None = None
 
 
 class EmergencyStopResult(BaseModel):
@@ -67,6 +68,10 @@ class BioXpSnapshot(BaseModel):
     reachable: bool | None = None
     runtime_ready: bool | None = None
     hardware_ready: bool | None = None
+    hardware_observed_at: datetime | None = None
+    hardware_observation_fresh: bool | None = None
+    hardware_observation_stale: bool = False
+    hardware_evidence_error: str | None = None
     capabilities: tuple[str, ...] = ()
     observed_at: datetime | None = None
     freshness_budget_seconds: float = Field(gt=0)
@@ -78,6 +83,7 @@ class BioXpSnapshot(BaseModel):
     last_error: str | None = None
     controls: dict[str, ControlDecision] = Field(default_factory=dict)
     command_active: bool = False
+    startup_lifecycle: dict[str, Any] | None = None
 
 
 class RobotObservation(BaseModel):

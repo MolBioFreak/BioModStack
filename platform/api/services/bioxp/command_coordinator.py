@@ -11,6 +11,7 @@ from uuid import uuid4
 from .command_models import CommandRequest
 from .command_policy import CommandAdmissionContext, evaluate_command
 from .command_registry import CommandDefinition, CommandName
+from .errors import RobotResponseError
 from .models import BioXpSnapshot, CommandRecord, EmergencyStopResult
 
 
@@ -61,13 +62,11 @@ class CommandCoordinator:
         self,
         request: CommandRequest,
         *,
-        token_authorized: bool,
         mutations_enabled: bool,
     ) -> CommandRecord:
         definition = self.registry[request.command]
         snapshot = self.connection.snapshot()
         context = CommandAdmissionContext(
-            token_authorized=token_authorized,
             mutations_enabled=mutations_enabled,
             active=snapshot.active,
             generation=snapshot.generation,
@@ -75,6 +74,7 @@ class CommandCoordinator:
             runtime_ready=snapshot.runtime_ready,
             hardware_ready=snapshot.hardware_ready,
             capabilities=frozenset(snapshot.capabilities),
+            startup_lifecycle=snapshot.startup_lifecycle,
         )
         decision = evaluate_command(request, definition, context)
         if not decision.allowed:
@@ -110,12 +110,30 @@ class CommandCoordinator:
             payload = request.model_dump(mode="json", exclude={"command", "expected_generation", "idempotency_key"})
             try:
                 response = await client.request(definition.route_key, json_data=payload)
+                handler_response = dict(response) if isinstance(response, Mapping) else {"response": response}
+                observer = getattr(self.connection, "observe_command_response", None)
+                if callable(observer):
+                    observer(response)
                 acknowledged = _strict_acknowledgement(response)
-                status = "acknowledged" if acknowledged else "delivered_unacknowledged"
-                detail = "Robot acknowledged command" if acknowledged else "Command delivered; robot acknowledgement absent"
+                semantic_rejected = isinstance(response, Mapping) and response.get("ok") is False
+                if semantic_rejected:
+                    status = "delivery_failed"
+                    detail = f"Robot reported command failure: {response.get('error') or response.get('detail') or 'ok=false'}"
+                else:
+                    status = "acknowledged" if acknowledged else "delivered_unacknowledged"
+                    detail = "Robot acknowledged command" if acknowledged else "Command delivered; robot acknowledgement absent"
+            except RobotResponseError as exc:
+                acknowledged = False
+                status = "delivery_failed"
+                handler_response = {"http_status": exc.status_code, "detail": exc.detail}
+                observer = getattr(self.connection, "observe_command_response", None)
+                if callable(observer):
+                    observer(exc.detail)
+                detail = f"Robot rejected command with HTTP {exc.status_code}"
             except Exception as exc:
                 acknowledged = False
                 status = "delivery_failed"
+                handler_response = None
                 detail = str(exc) or exc.__class__.__name__
             record = CommandRecord(
                 command_id=command_id,
@@ -128,6 +146,7 @@ class CommandCoordinator:
                 remote_acknowledged=acknowledged,
                 physical_effect_verified=False,
                 detail=detail,
+                handler_response=handler_response,
             )
             self._remember(record)
             self._idempotent[request.idempotency_key] = (fingerprint, record)
@@ -146,7 +165,6 @@ class CommandCoordinator:
         *,
         expected_generation: int,
         idempotency_key: str,
-        token_authorized: bool,
         mutations_enabled: bool,
     ) -> EmergencyStopResult:
         request_shape = {
@@ -157,8 +175,6 @@ class CommandCoordinator:
         fingerprint = _fingerprint(request_shape)
         snapshot = self.connection.snapshot()
         reasons = []
-        if not token_authorized:
-            reasons.append("Valid operator credential is required")
         if not mutations_enabled:
             reasons.append("BioXP mutations are disabled by the server kill switch")
         if not snapshot.active or self.connection.active_client is None:

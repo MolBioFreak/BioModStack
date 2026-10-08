@@ -144,6 +144,8 @@ test('workflow model inventory is source-grounded and exposes the total unique m
   assert.deepEqual(getWorkflowModelTopics('protein_hunter_experimental'), []);
   assert.equal(workflowsById.has('esmfold2'), false);
   assert.deepEqual(getWorkflowModelTopics('esmfold2_experimental'), ['boltz2', 'rf3', 'protenix', 'esmfold2']);
+  assert.equal(workflowsById.has('confornets_experimental'), false);
+  assert.deepEqual(getWorkflowModelTopics('confornets_experimental'), ['confornets', 'protenix']);
 
   for (const workflow of WORKFLOW_MODEL_INVENTORY) {
     assert.ok(workflow.sourceFiles.length > 0, `${workflow.workflowId} should name source files`);
@@ -176,7 +178,7 @@ test('JobSubmission keeps workflow cards concise, hides Advanced Models, and rou
   requireSnippet(source, "return ['boltz2', 'rf3', 'protenix', 'esmfold2'];");
 
   requireSnippet(source, "return 'Experimental Fold-CP path for large Boltz-2 folds.';");
-  requireSnippet(source, "return 'Experimental conformational mapping; ConforNets backend first.';");
+  requireSnippet(source, "!LEGACY_CONFORMATIONAL_MAPPING_TEMPLATE_IDS.has(t.id)");
   rejectSnippet(source, "return 'Standalone ESMFold2 protein/complex fold.';");
 
   rejectSnippet(source, "if (template.id === 'esmfold2' || template.id === 'esmfold2_experimental') return 'EF';");
@@ -198,7 +200,7 @@ test('JobSubmission keeps workflow cards concise, hides Advanced Models, and rou
   requireSnippet(source, "'Outputs'");
   requireSnippet(source, 'templateManagerParams');
   requireSnippet(source, "data.model_id === 'confornets_experimental'");
-  requireSnippet(source, "setSelectedTemplateId('confornets_experimental')");
+  requireSnippet(source, "setSelectedTemplateId('conformational_mapping')");
   requireSnippet(source, 'const matchedApiTemplate = apiTemplateId');
   requireSnippet(source, 'setSelectedTemplateId(apiTemplateId)');
   rejectSnippet(source, '{templateDetail.name} - Configuration');
