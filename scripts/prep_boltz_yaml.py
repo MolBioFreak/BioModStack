@@ -15,20 +15,52 @@ def extract_chain_groups(pdb_path):
     
     return sequence_map
 
+def is_nucleic_acid_sequence(sequence):
+    """Check if a sequence is DNA/RNA based on content"""
+    nucleotide_chars = set('ATGCU')
+    sequence_upper = sequence.upper().replace('X', '')
+    if not sequence_upper:
+        return None
+    nucleotide_ratio = sum(1 for c in sequence_upper if c in nucleotide_chars) / len(sequence_upper)
+    if nucleotide_ratio > 0.8:
+        # Check for U (RNA) vs T (DNA)
+        if 'U' in sequence_upper and 'T' not in sequence_upper:
+            return 'rna'
+        return 'dna'
+    return None
+
 def generate_yaml_config(chain_groups):
-    """Create YAML structure with combined chain IDs for identical sequences"""
-    return {
-        'sequences': [
-            {
+    """Create YAML structure with combined chain IDs, detecting nucleic acids"""
+    sequences = []
+    for sequence, chain_ids in chain_groups.items():
+        mol_type = is_nucleic_acid_sequence(sequence)
+        
+        if mol_type == 'dna':
+            entry = {
+                'dna': {
+                    'id': sorted(chain_ids),
+                    'sequence': sequence
+                }
+            }
+        elif mol_type == 'rna':
+            entry = {
+                'rna': {
+                    'id': sorted(chain_ids),
+                    'sequence': sequence
+                }
+            }
+        else:
+            # Protein chain
+            entry = {
                 'protein': {
                     'id': sorted(chain_ids),
                     'sequence': sequence,
                     'msa': 'empty'
                 }
             }
-            for sequence, chain_ids in chain_groups.items()
-        ]
-    }
+        sequences.append(entry)
+    
+    return {'sequences': sequences}
 
 def process_pdb_files(input_dir, output_dir):
     """Process PDB files with flexible chain handling"""

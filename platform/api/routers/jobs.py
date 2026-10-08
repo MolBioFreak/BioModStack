@@ -265,6 +265,37 @@ async def create_job(
             job_params = {**job_data.params}
             job_params['sequence'] = variant.get('sequence')
             job_params['sequence_name'] = variant.get('name', f'var_{i+1}')
+            
+            # Construct complex_components for BoltzFromComplex if any non-protein components present
+            # The ligands array contains ALL complex components: ligands, ions, DNA, RNA, peptides
+            ligand_components = job_params.pop('ligands', [])
+            
+            # Check if any components need the complex workflow (DNA, RNA, ligands, ions, peptides)
+            if ligand_components:
+                # Build complex_components array: protein + all other components
+                complex_comps = [
+                    {'type': 'protein', 'id': 'A', 'sequence': variant.get('sequence')}
+                ]
+                # Add all components from ligands array (DNA, RNA, ligands, ions, peptides)
+                for comp in ligand_components:
+                    comp_type = comp.get('type', 'ligand')
+                    comp_entry = {
+                        'type': comp_type,
+                        'id': comp.get('id', 'X'),
+                    }
+                    # Add sequence for nucleic acids and peptides
+                    if comp_type in ('dna', 'rna', 'peptide', 'protein') and comp.get('sequence'):
+                        comp_entry['sequence'] = comp.get('sequence')
+                    # Add CCD for standard ligands/ions
+                    if comp.get('ccd'):
+                        comp_entry['ccd'] = comp.get('ccd')
+                    # Add SMILES for custom ligands
+                    if comp.get('smiles'):
+                        comp_entry['smiles'] = comp.get('smiles')
+                    complex_comps.append(comp_entry)
+                
+                job_params['complex_components'] = complex_comps
+                logger.info(f"[MUTAGENESIS] Built complex_components with {len(complex_comps)} entries for variant {variant.get('name')}")
         elif num_jobs > 1:
             job_name = f"{job_data.name}_sim{i+1}"
             output_dir = str(Path(base_output_dir) / f"sim_{i+1}")
