@@ -25,6 +25,7 @@ workflow_family:
     - ont_construct_screening
     - ont_methylation_analysis
     - ont_fastq_qc
+    - wf_clone_validation
 
 quality_modes:
   molecule_types:
@@ -83,13 +84,12 @@ sequence_qc_contract:
 modes:
   - id: methylation_analysis
     name: Methylation Analysis
-    description: POD5/BAM methylation analysis plus optional FASTQ plasmid QC
+    description: POD5/BAM methylation analysis with modkit
     params:
       - pod5_dir
       - bam_path
       - bam_force_realign
       - bam_min_mapq
-      - fastq_path
       - reference_fasta
       - dorado_model
       - dorado_device
@@ -100,8 +100,45 @@ modes:
       - dorado_batch_size
       - run_modkit
       - modkit_filter_threshold
-      - run_fastq_qc
-      - run_multimer_qc
+
+  - id: clone_validation
+    name: Clone Validation
+    description: EPI2ME wf-clone-validation assembly with plasmid QC
+    params:
+      - pod5_dir
+      - bam_path
+      - fastq_path
+      - reference_fasta
+      - dorado_model
+      - dorado_device
+      - min_qscore
+      - trim_adapters
+      - emit_summary
+      - wf_clone_workflow_dir
+      - wf_clone_source
+      - wf_clone_revision
+      - wf_clone_profile
+      - wf_clone_sample
+      - wf_clone_large_construct
+      - wf_clone_approx_size
+      - wf_clone_assm_coverage
+      - wf_clone_trim_length
+      - wf_clone_min_quality
+      - wf_clone_assembly_tool
+
+  - id: plasmid_qc
+    name: Plasmid QC
+    description: Reference-optional plasmid QC from POD5/BAM/FASTQ input
+    params:
+      - pod5_dir
+      - bam_path
+      - fastq_path
+      - reference_fasta
+      - dorado_model
+      - dorado_device
+      - min_qscore
+      - trim_adapters
+      - emit_summary
       - expected_plasmid_size
       - min_fastq_read_length
       - fastq_minimap2_preset
@@ -109,7 +146,58 @@ modes:
       - igv_track_window_bp
       - igv_report_max_sites
       - igv_report_flanking_bp
-      - run_assembly
+
+  - id: basecall_dna
+    name: DNA Basecalling
+    description: Dorado DNA basecalling from POD5 inputs
+    params:
+      - pod5_dir
+      - reference_fasta
+      - dorado_model
+      - dorado_device
+      - min_qscore
+      - trim_adapters
+      - emit_summary
+
+  - id: basecall_rna
+    name: RNA Basecalling
+    description: Dorado RNA basecalling from POD5 inputs
+    params:
+      - pod5_dir
+      - reference_fasta
+      - dorado_model
+      - dorado_device
+      - min_qscore
+      - trim_adapters
+      - emit_summary
+
+  - id: fastq_qc
+    name: FASTQ Plasmid QC
+    description: FASTQ-only plasmid QC with alignment and evidence
+    params:
+      - fastq_path
+      - reference_fasta
+      - expected_plasmid_size
+      - min_fastq_read_length
+      - fastq_minimap2_preset
+      - fastq_minimap2_allow_secondary
+      - igv_track_window_bp
+      - igv_report_max_sites
+      - igv_report_flanking_bp
+
+  - id: construct_screening
+    name: Construct Screening
+    description: Clone validation construct QC from POD5/BAM/FASTQ
+    params:
+      - pod5_dir
+      - bam_path
+      - fastq_path
+      - reference_fasta
+      - dorado_model
+      - dorado_device
+      - min_qscore
+      - trim_adapters
+      - emit_summary
       - wf_clone_workflow_dir
       - wf_clone_source
       - wf_clone_revision

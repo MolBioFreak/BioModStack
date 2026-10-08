@@ -1,19 +1,20 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl = 2
 
-// Standalone plasmid QC workflow.
-// Reference-optional plasmid QC supporting all input modes.
+// Standalone plasmid QC workflow with wf-clone-validation assembly.
+// Full and total nanopore plasmid QC pipeline.
 //
 // Input modes: POD5, BAM, FASTQ
-//   POD5: DoradoBasecall → DoradoAlign/BamPrepare → FastqPlasmidQC (if ref)
-//   BAM:  BamPrepare → FastqPlasmidQC (if ref)
-//   FASTQ: FastqAlign → FastqPlasmidQC
+//   POD5: DoradoBasecall → DoradoAlign/BamPrepare → CloneValidation
+//   BAM:  BamPrepare → CloneValidation
+//   FASTQ: FastqAlign → CloneValidation + FastqPlasmidQC
 
 include { DoradoBasecall } from '../../modules/ngs/dorado_basecall.nf'
 include { DoradoAlign } from '../../modules/ngs/dorado_align.nf'
-include { PrepareBamForAnalysis; PrepareReferenceForIGV } from '../../modules/ngs/bam_prepare.nf'
+include { PrepareBamForAnalysis; ValidateMappedBam } from '../../modules/ngs/bam_prepare.nf'
 include { FastqAlign } from '../../modules/ngs/fastq_align.nf'
 include { FastqPlasmidQC } from '../../modules/ngs/fastq_plasmid_qc.nf'
+include { RunCloneValidation } from '../../modules/ngs/clone_validation.nf'
 
 def reportStage(params, stageName, files) {
     def jobId = params.containsKey('job_id') ? params.job_id : null
@@ -29,19 +30,21 @@ def reportStage(params, stageName, files) {
     }
 }
 
-workflow ONT_PLASMID_QC {
+workflow WF_CLONE_VALIDATION {
     main:
     def runFastqQc = params.run_fastq_qc != null
         ? (params.run_fastq_qc != false)
         : (params.run_multimer_qc != false)
     def forceBamRealign = params.bam_force_realign == true
 
-    println("Running ONT plasmid QC workflow")
+    println("Running wf-clone-validation (full plasmid QC pipeline)")
     println("  POD5 dir:    ${params.pod5_dir ?: '(none)'}")
     println("  BAM path:    ${params.bam_path ?: '(none)'}")
     println("  FASTQ path:  ${params.fastq_path ?: '(none)'}")
     println("  Reference:   ${params.reference_fasta ?: '(none)'}")
+    println("  Assembly:    ${params.wf_clone_assembly_tool ?: 'flye'}")
     println("  Run QC:      ${runFastqQc}")
+    println("  Approx size: ${params.wf_clone_approx_size ?: 7000}")
     println("  Dorado model:${params.dorado_model ?: 'sup'}")
 
     // --- Input validation ---
@@ -79,6 +82,8 @@ workflow ONT_PLASMID_QC {
         }
     }
 
+    def analysis_bam = null
+
     // --- POD5 input: Dorado basecalling + alignment ---
     if (has_pod5) {
         def pod5_input = file(params.pod5_dir)
@@ -106,20 +111,7 @@ workflow ONT_PLASMID_QC {
                     "${params.out_dir}/align/align.log",
                 ])
             }
-
-            if (runFastqQc) {
-                FastqPlasmidQC(DoradoAlign.out.aligned, Channel.of(reference_file))
-                FastqPlasmidQC.out.summary.subscribe { _ ->
-                    reportStage(params, "fastq_qc", [
-                        "${params.out_dir}/fastq_qc/fastq_qc_summary.tsv",
-                        "${params.out_dir}/fastq_qc/fastq_alignment_stats.tsv",
-                        "${params.out_dir}/fastq_qc/per_base_support.tsv",
-                        "${params.out_dir}/fastq_qc/qc_manifest.json",
-                        "${params.out_dir}/fastq_qc/igv_report.html",
-                        "${params.out_dir}/fastq_qc/fastq_consensus.fasta",
-                    ])
-                }
-            }
+            analysis_bam = DoradoAlign.out.aligned
         } else {
             PrepareBamForAnalysis(DoradoBasecall.out.bam)
             PrepareBamForAnalysis.out.aligned.subscribe { _, _ ->
@@ -129,6 +121,7 @@ workflow ONT_PLASMID_QC {
                     "${params.out_dir}/align/bam_prepare.log",
                 ])
             }
+            analysis_bam = PrepareBamForAnalysis.out.aligned
         }
     }
 
@@ -139,7 +132,6 @@ workflow ONT_PLASMID_QC {
             error("BAM file not found: ${params.bam_path}")
         }
 
-        def analysis_bam = null
         if (has_reference && forceBamRealign) {
             DoradoAlign(Channel.of(bam_input), Channel.of(reference_file))
             DoradoAlign.out.aligned.subscribe { _, _ ->
@@ -162,29 +154,14 @@ workflow ONT_PLASMID_QC {
                 ])
             }
             analysis_bam = PrepareBamForAnalysis.out.aligned
-        }
 
-        if (has_reference) {
-            PrepareReferenceForIGV(Channel.of(reference_file))
-            PrepareReferenceForIGV.out.log.subscribe { _ -> }
-        }
-
-        if (has_reference && runFastqQc && analysis_bam != null) {
-            FastqPlasmidQC(analysis_bam, Channel.of(reference_file))
-            FastqPlasmidQC.out.summary.subscribe { _ ->
-                reportStage(params, "fastq_qc", [
-                    "${params.out_dir}/fastq_qc/fastq_qc_summary.tsv",
-                    "${params.out_dir}/fastq_qc/fastq_alignment_stats.tsv",
-                    "${params.out_dir}/fastq_qc/per_base_support.tsv",
-                    "${params.out_dir}/fastq_qc/qc_manifest.json",
-                    "${params.out_dir}/fastq_qc/igv_report.html",
-                    "${params.out_dir}/fastq_qc/fastq_consensus.fasta",
-                ])
-            }
+            // Validate mapped reads before assembly
+            ValidateMappedBam(analysis_bam)
+            analysis_bam = ValidateMappedBam.out.aligned
         }
     }
 
-    // --- FASTQ input: minimap2 alignment + plasmid QC ---
+    // --- FASTQ input: minimap2 alignment ---
     if (has_fastq) {
         def fastq_input = file(params.fastq_path)
         if (!fastq_input.exists()) {
@@ -201,21 +178,40 @@ workflow ONT_PLASMID_QC {
                 "${params.out_dir}/align/fastq_align.log",
             ])
         }
+        analysis_bam = FastqAlign.out.aligned
+    }
 
-        if (runFastqQc) {
-            FastqPlasmidQC(FastqAlign.out.aligned, Channel.of(reference_file), Channel.of(fastq_input))
-            FastqPlasmidQC.out.summary.subscribe { _ ->
-                reportStage(params, "fastq_qc", [
-                    "${params.out_dir}/fastq_qc/read_lengths.tsv",
-                    "${params.out_dir}/fastq_qc/fastq_qc_summary.tsv",
-                    "${params.out_dir}/fastq_qc/fastq_alignment_stats.tsv",
-                    "${params.out_dir}/fastq_qc/fastq_coverage.tsv",
-                    "${params.out_dir}/fastq_qc/per_base_support.tsv",
-                    "${params.out_dir}/fastq_qc/qc_manifest.json",
-                    "${params.out_dir}/fastq_qc/igv_report.html",
-                    "${params.out_dir}/fastq_qc/fastq_consensus.fasta",
-                ])
-            }
+    // --- wf-clone-validation assembly (required for this workflow) ---
+    if (analysis_bam == null) {
+        error("wf-clone-validation requires BAM-capable output from basecall/align stage")
+    }
+
+    println("Running wf-clone-validation assembly stage")
+    def clone_input = analysis_bam.map { bam, bai -> [bam, (params.reference_fasta ?: "").toString()] }
+    RunCloneValidation(clone_input)
+    RunCloneValidation.out.out.subscribe { _ ->
+        reportStage(params, "wf_clone_validation", [
+            "${params.out_dir}/assembly/wf_clone_out",
+            "${params.out_dir}/assembly/wf_clone.log",
+            "${params.out_dir}/assembly/wf_clone_out/wf-clone-validation-report.html",
+            "${params.out_dir}/assembly/wf_clone_out/sample_status.txt",
+        ])
+    }
+
+    // --- FASTQ plasmid QC (only for FASTQ input with reference) ---
+    if (has_fastq && runFastqQc) {
+        FastqPlasmidQC(FastqAlign.out.aligned, Channel.of(reference_file), Channel.of(file(params.fastq_path)))
+        FastqPlasmidQC.out.summary.subscribe { _ ->
+            reportStage(params, "fastq_qc", [
+                "${params.out_dir}/fastq_qc/read_lengths.tsv",
+                "${params.out_dir}/fastq_qc/fastq_qc_summary.tsv",
+                "${params.out_dir}/fastq_qc/fastq_alignment_stats.tsv",
+                "${params.out_dir}/fastq_qc/fastq_coverage.tsv",
+                "${params.out_dir}/fastq_qc/per_base_support.tsv",
+                "${params.out_dir}/fastq_qc/qc_manifest.json",
+                "${params.out_dir}/fastq_qc/igv_report.html",
+                "${params.out_dir}/fastq_qc/fastq_consensus.fasta",
+            ])
         }
     }
 }

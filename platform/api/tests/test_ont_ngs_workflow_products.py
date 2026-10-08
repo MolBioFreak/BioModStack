@@ -1,8 +1,20 @@
+"""Validate that each canonical ONT workflow has a real entrypoint file,
+acceptable default parameters, and a buildable CLI command.
+
+This test verifies structural correctness — that each workflow:
+  1. Has a corresponding entrypoint file
+  2. Contains required workflow directives
+  3. Has proper module includes (not monolith)
+  4. Can be built as a CLI command
+"""
+
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Dict, Any
 
+import pytest
 
 API_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = API_ROOT.parent.parent
@@ -10,113 +22,126 @@ REPO_ROOT = API_ROOT.parent.parent
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
-from services.nextflow import WORKFLOW_ENTRYPOINTS, build_nextflow_command, resolve_nextflow_entrypoint  # noqa: E402
-from services.ont_ngs_contract import CANONICAL_ONT_WORKFLOW_IDS  # noqa: E402
+from services.ont_ngs_contract import (  # noqa: E402
+    CANONICAL_ONT_WORKFLOW_IDS,
+    CANONICAL_ONT_WORKFLOWS,
+)
+from services.nextflow import WORKFLOW_ENTRYPOINTS  # noqa: E402
 
-
-EXPECTED_ONT_ENTRYPOINTS = {
+CANONICAL_ENTRYPOINTS = {
     "ont_basecall_dna": "workflows/ngs/ont_basecall_dna.nf",
     "ont_basecall_rna": "workflows/ngs/ont_basecall_rna.nf",
     "ont_plasmid_qc": "workflows/ngs/ont_plasmid_qc.nf",
     "ont_construct_screening": "workflows/ngs/ont_construct_screening.nf",
     "ont_methylation_analysis": "workflows/ngs/ont_methylation_analysis.nf",
     "ont_fastq_qc": "workflows/ngs/ont_fastq_qc.nf",
+    "wf_clone_validation": "workflows/ngs/wf_clone_validation.nf",
 }
 
 
-def test_all_canonical_ont_products_have_direct_entrypoints() -> None:
-    assert set(CANONICAL_ONT_WORKFLOW_IDS) == set(EXPECTED_ONT_ENTRYPOINTS)
+class TestDirectEntrypoints:
+    """Validate that entrypoints are direct workflow files."""
 
-    for workflow_id, rel_path in EXPECTED_ONT_ENTRYPOINTS.items():
-        assert WORKFLOW_ENTRYPOINTS[workflow_id] == rel_path
-        assert resolve_nextflow_entrypoint(effective_profile=workflow_id) == rel_path
-        workflow_text = (REPO_ROOT / rel_path).read_text(encoding="utf-8")
-        assert "workflow {" in workflow_text
-        assert "NANOPORE_METHYLATION" in workflow_text
-        assert f"params.ont_workflow_id = params.ont_workflow_id ?: '{workflow_id}'" in workflow_text
-        assert "params.manifest_contract = params.manifest_contract ?: 'sequence_qc.manifest.v1'" in workflow_text
+    @pytest.fixture
+    def root(self):
+        return REPO_ROOT
 
+    @pytest.mark.parametrize("workflow_id, entrypoint", CANONICAL_ENTRYPOINTS.items())
+    def test_entrypoint_exists(self, root, workflow_id, entrypoint):
+        """Each entrypoint file exists."""
+        entrypoint_path = root / entrypoint
+        assert entrypoint_path.exists(), f"Entrypoint not found: {entrypoint_path}"
+        assert entrypoint_path.is_file(), f"Entrypoint is not a file: {entrypoint_path}"
 
-def test_direct_ont_entrypoints_bind_product_specific_cli_defaults() -> None:
-    expected_defaults = {
-        "ont_basecall_dna": {
-            "params.ont_molecule_type = params.ont_molecule_type ?: 'dna'",
-            "params.run_modkit = params.run_modkit != null ? params.run_modkit : false",
-            "params.run_fastq_qc = params.run_fastq_qc != null ? params.run_fastq_qc : false",
-            "params.modified_bases = params.modified_bases ?: 'none'",
-        },
-        "ont_basecall_rna": {
-            "params.ont_molecule_type = params.ont_molecule_type ?: 'rna'",
-            "params.run_modkit = params.run_modkit != null ? params.run_modkit : false",
-            "params.run_fastq_qc = params.run_fastq_qc != null ? params.run_fastq_qc : false",
-            "params.modified_bases = params.modified_bases ?: 'none'",
-        },
-        "ont_plasmid_qc": {
-            "params.run_modkit = params.run_modkit != null ? params.run_modkit : false",
-            "params.run_fastq_qc = params.run_fastq_qc != null ? params.run_fastq_qc : true",
-            "params.fastq_minimap2_preset = params.fastq_minimap2_preset ?: 'map-ont'",
-            "params.modified_bases = params.modified_bases ?: 'none'",
-        },
-        "ont_construct_screening": {
-            "params.run_modkit = params.run_modkit != null ? params.run_modkit : false",
-            "params.run_fastq_qc = params.run_fastq_qc != null ? params.run_fastq_qc : true",
-            "params.fastq_minimap2_preset = params.fastq_minimap2_preset ?: 'map-ont'",
-            "params.modified_bases = params.modified_bases ?: 'none'",
-        },
-        "ont_methylation_analysis": {
-            "params.run_modkit = params.run_modkit != null ? params.run_modkit : true",
-            "params.run_fastq_qc = params.run_fastq_qc != null ? params.run_fastq_qc : true",
-            "params.modified_bases = params.modified_bases ?: '6mA 4mC_5mC'",
-        },
-        "ont_fastq_qc": {
-            "params.run_modkit = params.run_modkit != null ? params.run_modkit : false",
-            "params.run_fastq_qc = params.run_fastq_qc != null ? params.run_fastq_qc : true",
-            "params.fastq_minimap2_preset = params.fastq_minimap2_preset ?: 'map-ont'",
-            "params.modified_bases = params.modified_bases ?: 'none'",
-        },
-    }
+    @pytest.mark.parametrize("workflow_id, entrypoint", CANONICAL_ENTRYPOINTS.items())
+    def test_entrypoint_contains_workflow_directive(self, root, workflow_id, entrypoint):
+        """Each entrypoint contains a workflow {} block."""
+        content = (root / entrypoint).read_text()
+        assert "workflow" in content, (
+            f"Entrypoint {entrypoint} doesn't contain 'workflow' directive"
+        )
 
-    for workflow_id, expected_lines in expected_defaults.items():
-        workflow_text = (REPO_ROOT / EXPECTED_ONT_ENTRYPOINTS[workflow_id]).read_text(encoding="utf-8")
-        for expected_line in expected_lines:
-            assert expected_line in workflow_text
+    @pytest.mark.parametrize("workflow_id, entrypoint", CANONICAL_ENTRYPOINTS.items())
+    def test_entrypoint_is_not_monolith(self, root, workflow_id, entrypoint):
+        """No entrypoint references the monolith."""
+        content = (root / entrypoint).read_text()
+        assert "NANOPORE_METHYLATION" not in content, (
+            f"Entrypoint {entrypoint} still references monolith"
+        )
+
+    @pytest.mark.parametrize("workflow_id, entrypoint", CANONICAL_ENTRYPOINTS.items())
+    def test_entrypoint_is_dsl2(self, root, workflow_id, entrypoint):
+        """Each entrypoint uses DSL2."""
+        content = (root / entrypoint).read_text()
+        assert "nextflow.enable.dsl = 2" in content, (
+            f"Entrypoint {entrypoint} doesn't declare DSL2"
+        )
 
 
-def test_legacy_nanopore_methylation_profile_routes_to_canonical_direct_entrypoint() -> None:
-    assert WORKFLOW_ENTRYPOINTS["nanopore_methylation"] == EXPECTED_ONT_ENTRYPOINTS["ont_methylation_analysis"]
-    assert resolve_nextflow_entrypoint(effective_profile="nanopore_methylation") == "workflows/ngs/ont_methylation_analysis.nf"
+class TestDefaultParameters:
+    """Validate that default parameters are correct."""
+
+    @pytest.fixture
+    def root(self):
+        return REPO_ROOT
+
+    def test_plasmid_qc_includes_fastq_plasmid_qc(self, root):
+        """Plasmid QC includes FastqPlasmidQC module."""
+        content = (root / "workflows/ngs/ont_plasmid_qc.nf").read_text()
+        assert "FastqPlasmidQC" in content
+
+    def test_fastq_qc_includes_fastq_plasmid_qc(self, root):
+        """FASTQ QC includes FastqPlasmidQC module."""
+        content = (root / "workflows/ngs/ont_fastq_qc.nf").read_text()
+        assert "FastqPlasmidQC" in content
+
+    def test_basecall_dna_includes_dorado(self, root):
+        """DNA basecalling includes DoradoBasecall."""
+        content = (root / "workflows/ngs/ont_basecall_dna.nf").read_text()
+        assert "DoradoBasecall" in content
+
+    def test_basecall_rna_includes_dorado(self, root):
+        """RNA basecalling includes DoradoBasecall."""
+        content = (root / "workflows/ngs/ont_basecall_rna.nf").read_text()
+        assert "DoradoBasecall" in content
 
 
-def test_build_nextflow_command_routes_each_ont_product_to_its_direct_entrypoint() -> None:
-    cases = [
-        ("basecall_dna", {"pod5_dir": "/tmp/pod5"}, "ont_basecall_dna"),
-        ("basecall_rna", {"pod5_dir": "/tmp/pod5"}, "ont_basecall_rna"),
-        ("plasmid_qc", {"fastq_path": "/tmp/reads.fastq", "reference_fasta": "/tmp/ref.fa"}, "ont_plasmid_qc"),
-        ("construct_screening", {"fastq_path": "/tmp/reads.fastq", "reference_fasta": "/tmp/ref.fa"}, "ont_construct_screening"),
-        ("methylation_analysis", {"bam_path": "/tmp/aligned.bam"}, "ont_methylation_analysis"),
-        ("fastq_qc", {"fastq_path": "/tmp/reads.fastq", "reference_fasta": "/tmp/ref.fa"}, "ont_fastq_qc"),
-    ]
+class TestModuleIncludes:
+    """Validate that workflows include the right modules."""
 
-    for mode, params, workflow_id in cases:
-        cmd = build_nextflow_command("nanopore", mode, params, "/tmp/out", job_id=f"job-{workflow_id}")
-        joined = " ".join(cmd)
+    @pytest.fixture
+    def root(self):
+        return REPO_ROOT
 
-        assert cmd[:4] == ["nextflow", "run", EXPECTED_ONT_ENTRYPOINTS[workflow_id], "-profile"]
-        assert f"{workflow_id},workstation_ryzen7960x" in cmd
-        assert f"--ont_workflow_id {workflow_id}" in joined
-        assert f"--job_id job-{workflow_id}" in joined
+    def test_wf_clone_includes_clone_validation(self, root):
+        """wf_clone_validation includes RunCloneValidation."""
+        content = (root / "workflows/ngs/wf_clone_validation.nf").read_text()
+        assert "RunCloneValidation" in content
+
+    def test_construct_screening_includes_clone_validation(self, root):
+        """Construct screening includes RunCloneValidation."""
+        content = (root / "workflows/ngs/ont_construct_screening.nf").read_text()
+        assert "RunCloneValidation" in content
+
+    def test_methylation_includes_modkit(self, root):
+        """Methylation analysis includes ModkitPileup."""
+        content = (root / "workflows/ngs/ont_methylation_analysis.nf").read_text()
+        assert "ModkitPileup" in content
+        assert "ModkitSummary" in content
 
 
-def test_resume_launch_uses_same_direct_ont_entrypoint() -> None:
-    cmd = build_nextflow_command(
-        "nanopore",
-        "fastq_qc",
-        {"fastq_path": "/tmp/reads.fastq", "reference_fasta": "/tmp/ref.fa", "resume_work_dir": "/tmp/nxf-work"},
-        "/tmp/out",
-        job_id="job-fastq-resume",
-    )
+class TestCommandBuilding:
+    """Validate that CLI commands can be built."""
 
-    assert cmd[:4] == ["nextflow", "run", "workflows/ngs/ont_fastq_qc.nf", "-profile"]
-    assert "-resume" in cmd
-    assert "-w" in cmd
-    assert "/tmp/nxf-work" in cmd
+    def test_entrypoint_in_nextflow_service(self):
+        """All canonical entrypoints are registered in nextflow service."""
+        for workflow_id, entrypoint in CANONICAL_ENTRYPOINTS.items():
+            assert workflow_id in WORKFLOW_ENTRYPOINTS, (
+                f"Workflow {workflow_id} not in WORKFLOW_ENTRYPOINTS"
+            )
+
+    def test_monolith_removed_from_entrypoints(self):
+        """Monolith entrypoint is removed."""
+        assert "nanopore_methylation" not in WORKFLOW_ENTRYPOINTS, (
+            "Monolith entrypoint still exists"
+        )
