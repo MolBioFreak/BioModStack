@@ -44,7 +44,7 @@ def resolved_preview_policy():
             "projection": "alignment_core_projection_v1", "header_policy": "sq_coordinate_v1",
             "bgzf_admission_version": 2,
             "writer_contract": {"pysam": pysam.__version__, "htslib": pysam.__samtools_version__,
-                                "mode": "wb6", "threads": 1,
+                                "mode": "wb", "compression_level": 6, "threads": 1,
                                 "record_order": "reference_start_source_ordinal",
                                 "selection": "stratified_largest_remainder_sha256_v1"}}
 
@@ -608,7 +608,8 @@ def _build_product(request, inputs, checkpoint, *, catalog_request=None, allocat
                                          "catalog_authority_sha256": request.catalog_authority_sha256, "policy": policy}
                             if existing is None:
                                 with native.alignment(pinned["alignment_path"]) as source, pysam.AlignmentFile(
-                                        temporary / "preview.bam", "wb6", header=header, threads=1) as output:
+                                        temporary / "preview.bam", "wb", header=header, threads=1,
+                                        format_options=[b"level=6"]) as output:
                                     for record in _preview_records(source, header, metadata, checkpoint):
                                         output.write(record)
                                 checkpoint()

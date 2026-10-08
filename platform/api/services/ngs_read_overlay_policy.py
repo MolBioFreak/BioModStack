@@ -22,7 +22,7 @@ def policy():
         "max_seconds": MAX_SECONDS, "tags": "all_exact_source_tags_v1",
         "header": "exact_source_header_v1", "bgzf_admission_version": 2,
         "writer": {"pysam": pysam.__version__, "htslib": pysam.__samtools_version__,
-            "mode": "wb6", "threads": 1, "order": "reference_start_source_ordinal"}}
+            "mode": "wb", "compression_level": 6, "threads": 1, "order": "reference_start_source_ordinal"}}
 
 
 def header_identity(header):

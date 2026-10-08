@@ -315,7 +315,8 @@ def _create_owned(job, catalog, cache, envelope, key, row, locators, identity,
                 if (sum(lengths) != row["overlay_record_raw_bytes"]
                         or builder.bgzf_bound(identity["source_header"]["raw_bytes"], lengths) != row["overlay_bgzf_bound_bytes"]):
                     raise storage.AlignmentSessionError("overlay source size mismatch")
-                with pysam.AlignmentFile(directory / FILES["bam"], "wb6", header=source.header, threads=1) as output:
+                with pysam.AlignmentFile(directory / FILES["bam"], "wb", header=source.header, threads=1,
+                                         format_options=[b"level=6"]) as output:
                     for record, _ in selected:
                         check()
                         output.write(record)
