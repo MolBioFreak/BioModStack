@@ -179,7 +179,8 @@ PY
 
     stub:
     """
-    mkdir -p cp_results/predictions_dp0_cp0/sample_0001 cp_results/processed
+    mkdir -p cp_results/predictions_dp0_cp0/sample_0001 cp_results/processed staged_input
+    cp '${input_config}' staged_input/
     cat > cp_results/predictions_dp0_cp0/sample_0001/sample_0001_model_0.cif <<'EOF'
 data_sample_0001
 #
@@ -194,6 +195,7 @@ EOF
     cat > cp_results/processed/manifest.json <<'EOF'
 {"inputs":["sample_0001"]}
 EOF
+    cp -R cp_results/processed processed_evidence
     echo "Boltz-CP stub run" > boltz_cp_experimental.log
     """
 }

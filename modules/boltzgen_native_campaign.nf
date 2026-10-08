@@ -3,6 +3,7 @@ include { RunBoltzGen; FilterBoltzGen } from './boltzgen.nf'
 
 process PlanNativeBoltzGenCampaign {
     label 'CPU'
+    stageInMode 'copy'
     errorStrategy 'terminate'
     input:
     val total
@@ -34,7 +35,9 @@ process CollectNativeBoltzGenCampaign {
     path 'campaign/selected', emit: selected
     path 'campaign/collection_manifest.json', emit: receipt
     script:
-    def records = metadata.withIndex().collect { meta, index -> [meta, filtered[index].toString()] }
+    def roots = filtered instanceof List ? filtered : [filtered]
+    if (metadata.size() != roots.size()) error('BoltzGen terminal metadata/output cardinality mismatch')
+    def records = metadata.withIndex().collect { meta, index -> [meta, roots[index].toString()] }
     def encoded = groovy.json.JsonOutput.toJson(records).bytes.encodeBase64().toString()
     """
     '${params.api_python}' '${params.code_root}/scripts/native_boltzgen_campaign.py' collect \
