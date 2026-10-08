@@ -341,33 +341,36 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
 
     return (
         <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 shadow-xl animate-in fade-in slide-in-from-bottom-4">
-            <header className="flex justify-between items-center mb-6 border-b border-slate-800 pb-4">
-                <div className="flex items-center gap-6">
+            <header className="flex items-center justify-between mb-6 border-b border-slate-800 pb-4">
+                <div className="flex items-center gap-3">
+                    <button
+                        onClick={onBack}
+                        className="p-2 hover:bg-slate-700 rounded-lg transition-colors text-slate-400 hover:text-white"
+                    >
+                        ← Back
+                    </button>
                     <div>
                         <h2 className="text-xl font-bold bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent">
                             Mutagenesis Library
                         </h2>
                         <p className="text-slate-400 text-sm">Generate variant libraries for structure prediction</p>
                     </div>
-                    {/* Top-level workflow tabs */}
-                    <div className="flex bg-slate-800/50 p-1 rounded-lg">
-                        <button
-                            onClick={() => setMode('library')}
-                            className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${mode !== 'affinityMaturation' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
-                        >
-                            Standard Workflow
-                        </button>
-                        <button
-                            onClick={() => setMode('affinityMaturation')}
-                            className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${mode === 'affinityMaturation' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
-                        >
-                            Affinity Maturation
-                        </button>
-                    </div>
                 </div>
-                <button onClick={onBack} className="text-slate-400 hover:text-white px-3 py-1 rounded hover:bg-slate-800 transition-colors">
-                    Cancel
-                </button>
+                {/* Top-level workflow tabs */}
+                <div className="flex bg-slate-800/50 p-1 rounded-lg">
+                    <button
+                        onClick={() => setMode('library')}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${mode !== 'affinityMaturation' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                    >
+                        Standard Workflow
+                    </button>
+                    <button
+                        onClick={() => setMode('affinityMaturation')}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${mode === 'affinityMaturation' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                    >
+                        Affinity Maturation
+                    </button>
+                </div>
             </header>
 
             <div className="space-y-8">
