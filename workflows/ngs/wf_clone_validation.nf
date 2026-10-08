@@ -15,6 +15,7 @@ include { PrepareBamForAnalysis; ValidateMappedBam } from '../../modules/ngs/bam
 include { FastqAlign } from '../../modules/ngs/fastq_align.nf'
 include { FastqPlasmidQC } from '../../modules/ngs/fastq_plasmid_qc.nf'
 include { FastqDimerAnalysis; BuildDimerCanonicalOutputs } from '../../modules/ngs/fastq_dimer_qc.nf'
+include { ConstructVerify } from '../../modules/ngs/construct_verify.nf'
 include { RunCloneValidation } from '../../modules/ngs/clone_validation.nf'
 
 def reportStage(params, stageName, files) {
@@ -33,9 +34,7 @@ def reportStage(params, stageName, files) {
 
 workflow WF_CLONE_VALIDATION {
     main:
-    def runFastqQc = params.run_fastq_qc != null
-        ? (params.run_fastq_qc != false)
-        : (params.run_multimer_qc != false)
+    def runFastqQc = params.run_fastq_qc != false
     def forceBamRealign = params.bam_force_realign == true
 
     println("Running wf-clone-validation (full plasmid QC pipeline)")
@@ -157,7 +156,7 @@ workflow WF_CLONE_VALIDATION {
             analysis_bam = PrepareBamForAnalysis.out.aligned
 
             // Validate mapped reads before assembly
-            ValidateMappedBam(analysis_bam)
+            ValidateMappedBam(analysis_bam, Channel.of(reference_file))
             analysis_bam = ValidateMappedBam.out.aligned
         }
     }
@@ -211,7 +210,16 @@ workflow WF_CLONE_VALIDATION {
             FastqDimerAnalysis.out.dimer_reference
         )
         FastqPlasmidQC(FastqAlign.out.aligned, Channel.of(reference_file), Channel.of(file(params.fastq_path)))
-        FastqPlasmidQC.out.summary.subscribe { ignoredValue ->
+        ConstructVerify(
+            FastqPlasmidQC.out.reference,
+            FastqPlasmidQC.out.verification_input,
+            FastqPlasmidQC.out.per_base_support,
+            FastqAlign.out.aligned,
+            FastqPlasmidQC.out.alignment_stats,
+            BuildDimerCanonicalOutputs.out.breakpoint_call,
+            BuildDimerCanonicalOutputs.out.secondary_summary,
+        )
+        FastqPlasmidQC.out.summary.subscribe { _ ->
             reportStage(params, "fastq_qc", [
                 "${params.out_dir}/fastq_qc/read_lengths.tsv",
                 "${params.out_dir}/fastq_qc/fastq_qc_summary.tsv",

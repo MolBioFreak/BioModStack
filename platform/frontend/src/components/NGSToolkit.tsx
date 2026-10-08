@@ -5,9 +5,24 @@ import Plot from 'react-plotly.js';
 import type { Data, Layout, PlotMouseEvent } from 'plotly.js';
 import type { IGV as IgvLibrary } from 'igv';
 import { fetchJobLogs, fetchJobStages, fetchJobs, type Job, type JobLogs } from '../lib/api';
+import {
+    awaitCurrentGeneration,
+    createGenerationBoundResourceWithTimeout,
+    ownsIgvLoadTerminalState,
+    removeIgvBrowser,
+    resolveAlignmentViewerArtifacts,
+    resolveBoundSessionLocus,
+    resolveIgvReadLocus,
+    resolvePendingSessionLocus,
+    resolveSessionAuxiliaryTracks,
+    type AlignmentReadLocus,
+    type PendingSessionNavigation,
+} from '../lib/ngsAlignmentViewer';
+import { fetchAlignmentSessions, type AlignmentSession } from '../lib/ngsAlignmentSession';
 import { jobPollingInterval } from '../lib/queryPolling';
 import { NanoporeTemplate } from './NanoporeTemplate';
 import { OntInstrumentPanel } from './ngs/OntInstrumentPanel';
+import { RawReadInspector } from './ngs/RawReadInspector';
 import { SequenceQcManifestPanel } from './ngs/SequenceQcManifestPanel';
 import { useSequenceQcManifest } from './ngs/useSequenceQcManifest';
 import { useThemeColors, useThemePlotlyLayout } from './useThemeColors';
@@ -509,23 +524,6 @@ function collectStageOutputPaths(stageOutputs: StageOutputsMap): string[] {
     return values.flat().filter((value): value is string => typeof value === 'string' && value.length > 0);
 }
 
-function resolveBamArtifactPath(paths: string[]): string | null {
-    const dimerAligned = findFirstMatchingPath(paths, [/\/dimer_candidates\.aligned\.bam$/, /(^|\/)dimer_candidates\.aligned\.bam$/]);
-    if (dimerAligned) return dimerAligned;
-
-    const aligned = findFirstMatchingPath(paths, [/\/aligned\.bam$/, /(^|\/)aligned\.bam$/]);
-    if (aligned) return aligned;
-
-    const nonBasecallBam = paths.find((path) => (
-        /\.bam$/i.test(path)
-        && !/\.bam\.(bai|csi)$/i.test(path)
-        && !/\/calls\.bam$/i.test(path)
-    ));
-    if (nonBasecallBam) return nonBasecallBam;
-
-    return paths.find((path) => /\.bam$/i.test(path) && !/\.bam\.(bai|csi)$/i.test(path)) || null;
-}
-
 function resolveBamIndexArtifactPath(bamPath: string | null, paths: string[]): string | null {
     if (bamPath) {
         const exactCandidates = [`${bamPath}.bai`, `${bamPath}.csi`];
@@ -617,36 +615,16 @@ function resolveIgvArtifacts(job: Job | null, stageOutputs: StageOutputsMap): Ig
     const referenceCandidates = dedupePaths(referenceBase);
     const analysisCandidates = dedupePaths(runPrefix ? scopedPaths : paths);
 
-    const hasFastq = hasMeaningfulValue(params.fastq_path);
-    const runFastqQc = resolveFastqQcEnabled(params, hasFastq);
-    const dimerBamPreferred = findFirstMatchingPath(
-        dimerBase,
-        [/\/multimer_qc\/dimer_candidates\.aligned\.bam$/i, /(^|\/)dimer_candidates\.aligned\.bam$/i]
-    );
-    const dimerBaiPreferred = resolveBamIndexArtifactPath(dimerBamPreferred, dimerBase);
-    const dimerFastaPreferred = findFirstMatchingPath(
-        dimerBase,
-        [/\/multimer_qc\/dimer_reference\.fasta$/i, /(^|\/)dimer_reference\.fasta$/i]
-    );
-    const dimerFaiPreferred = findFirstMatchingPath(
-        dimerBase,
-        [/\/multimer_qc\/dimer_reference\.fasta\.fai$/i, /(^|\/)dimer_reference\.fasta\.fai$/i]
-    );
-
-    const bamPath = (runFastqQc && dimerBamPreferred)
-        ? dimerBamPreferred
-        : resolveBamArtifactPath(alignmentCandidates);
-    const baiPath = (runFastqQc && dimerBamPreferred)
-        ? dimerBaiPreferred
-        : resolveBamIndexArtifactPath(bamPath, alignmentCandidates);
-    const fastaPath = findFirstMatchingPath(
-        (runFastqQc && dimerFastaPreferred) ? dimerBase : referenceCandidates,
-        [/\/dimer_reference\.fasta$/, /\/reference\.fasta$/, /\/reference\.fa$/, /\.fasta$/, /\.fa$/]
-    );
-    const faiPath = findFirstMatchingPath(
-        (runFastqQc && dimerFastaPreferred) ? dimerBase : referenceCandidates,
-        [/\/dimer_reference\.fasta\.fai$/, /\/reference\.fasta\.fai$/, /\/reference\.fa\.fai$/, /\.fai$/]
-    );
+    const viewerInputs = dedupePaths([
+        ...alignmentCandidates,
+        ...referenceCandidates,
+        ...analysisCandidates,
+    ]).map((path) => ({ path }));
+    const primaryViewer = resolveAlignmentViewerArtifacts(viewerInputs, 'primary');
+    const bamPath = primaryViewer.bam?.path || null;
+    const baiPath = primaryViewer.bai?.path || null;
+    const fastaPath = primaryViewer.fasta?.path || null;
+    const faiPath = primaryViewer.fai?.path || null;
 
     const fallbackReference = typeof params.reference_fasta === 'string' ? params.reference_fasta : null;
     const fallbackReferenceIndex = fallbackReference ? `${fallbackReference}.fai` : null;
@@ -691,9 +669,9 @@ function resolveIgvArtifacts(job: Job | null, stageOutputs: StageOutputsMap): Ig
         bamUrl,
         baiPath,
         baiUrl,
-        fastaPath: (runFastqQc ? (dimerFastaPreferred || fastaPath) : fastaPath) || fallbackReference,
+        fastaPath: fastaPath || fallbackReference,
         fastaUrl,
-        faiPath: (runFastqQc ? (dimerFaiPreferred || faiPath) : faiPath) || fallbackReferenceIndex,
+        faiPath: faiPath || fallbackReferenceIndex,
         faiUrl,
         coverageDepthPath,
         coverageDepthUrl,
@@ -2161,6 +2139,7 @@ export function NGSToolkit() {
     const [igvAlignmentGroupBy, setIgvAlignmentGroupBy] = useState<string>('none');
     const [igvSelectedBamPath, setIgvSelectedBamPath] = useState<string>('');
     const [igvSelectedReferencePath, setIgvSelectedReferencePath] = useState<string>('');
+    const [selectedAlignmentSessionId, setSelectedAlignmentSessionId] = useState<string>('');
     const [multimerLoading, setMultimerLoading] = useState(false);
     const [multimerError, setMultimerError] = useState<string | null>(null);
     const [multimerReport, setMultimerReport] = useState<MultimerReportData | null>(null);
@@ -2175,7 +2154,11 @@ export function NGSToolkit() {
     const igvContainerRef = useRef<HTMLDivElement | null>(null);
     const igvLoadTokenRef = useRef(0);
     const igvBrowserRef = useRef<UntypedApiValue | null>(null);
+    const igvLibraryRef = useRef<UntypedApiValue | null>(null);
+    const pendingIgvLocusRef = useRef<PendingSessionNavigation | null>(null);
+    const selectedAlignmentSessionIdRef = useRef('');
     const igvLoadedSourceKeyRef = useRef('');
+    const [igvCurrentLocus, setIgvCurrentLocus] = useState<AlignmentReadLocus | null>(null);
     const [igvReadsTrackLoaded, setIgvReadsTrackLoaded] = useState(false);
     const [igvReadsTrackLoading, setIgvReadsTrackLoading] = useState(false);
     const themeColors = useThemeColors();
@@ -2285,6 +2268,16 @@ export function NGSToolkit() {
             ? jobPollingInterval(4000, query)
             : false,
     });
+    const {
+        data: alignmentSessions = [],
+        error: alignmentSessionsError,
+    } = useQuery<AlignmentSession[]>({
+        queryKey: ['ngs-alignment-sessions', selectedJobId],
+        queryFn: () => fetchAlignmentSessions(selectedJobId as string),
+        enabled: !!selectedJobId && selectedJob?.status === 'completed',
+        retry: false,
+        staleTime: 30_000,
+    });
 
     const stats = useMemo(() => {
         return {
@@ -2310,9 +2303,6 @@ export function NGSToolkit() {
     const selectedJobParams = (selectedJob?.params || {}) as Record<string, unknown>;
     const selectedReferenceFastaPath = typeof selectedJobParams.reference_fasta === 'string'
         ? selectedJobParams.reference_fasta
-        : null;
-    const selectedReferenceFastaUrlParam = selectedReferenceFastaPath
-        ? toStreamHref(selectedReferenceFastaPath, selectedJob?.id || undefined)
         : null;
     const hasFastqInput = hasMeaningfulValue(selectedJobParams.fastq_path);
     const hasBamInput = hasMeaningfulValue(selectedJobParams.bam_path);
@@ -2382,34 +2372,104 @@ export function NGSToolkit() {
             };
         }).filter((source) => Boolean(source.fastaUrl));
     }, [igvSourcePaths, igvArtifacts.fastaPath, selectedReferenceFastaPath, selectedJob?.id]);
-    const selectedIgvAlignmentSource = useMemo(
-        () => igvAlignmentSources.find((source) => source.bamPath === igvSelectedBamPath) || igvAlignmentSources[0] || null,
-        [igvAlignmentSources, igvSelectedBamPath]
+    const selectedAlignmentSession = useMemo(
+        () => alignmentSessions.find((session) => session.session_id === selectedAlignmentSessionId)
+            || alignmentSessions.find((session) => session.mode === 'primary')
+            || alignmentSessions[0]
+            || null,
+        [alignmentSessions, selectedAlignmentSessionId]
     );
-    const selectedIgvReferenceSource = useMemo(
-        () => igvReferenceSources.find((source) => source.fastaPath === igvSelectedReferencePath) || igvReferenceSources[0] || null,
-        [igvReferenceSources, igvSelectedReferencePath]
-    );
-    const activeIgvBamPath = selectedIgvAlignmentSource?.bamPath || igvArtifacts.bamPath;
-    const activeIgvBamUrl = selectedIgvAlignmentSource?.bamUrl || igvArtifacts.bamUrl;
-    const activeIgvBaiPath = selectedIgvAlignmentSource?.baiPath || igvArtifacts.baiPath;
-    const activeIgvBaiUrl = selectedIgvAlignmentSource?.baiUrl || igvArtifacts.baiUrl;
-    const activeIgvFastaPath = selectedIgvReferenceSource?.fastaPath || igvArtifacts.fastaPath || selectedReferenceFastaPath;
-    const activeIgvFastaUrl = selectedIgvReferenceSource?.fastaUrl || selectedReferenceFastaUrlParam || igvArtifacts.fastaUrl;
-    const activeIgvFaiPath = selectedIgvReferenceSource?.faiPath || igvArtifacts.faiPath;
-    const activeIgvFaiUrl = selectedIgvReferenceSource?.faiUrl || igvArtifacts.faiUrl;
-    const activeIgvSourceKey = `${activeIgvBamPath || ''}::${activeIgvFastaPath || ''}`;
-    const selectedReferenceFastaUrl = selectedReferenceFastaUrlParam
-        || activeIgvFastaUrl
-        || null;
-    const igvMissingReason = !activeIgvBamUrl
-        ? 'Aligned BAM artifact not found yet.'
-        : !activeIgvBaiUrl
-            ? 'BAM index (.bai/.csi) not found yet.'
-            : !activeIgvFastaUrl
-                ? 'Reference FASTA not found yet.'
-                : null;
-    const igvReady = !igvMissingReason;
+    useEffect(() => {
+        const preferred = alignmentSessions.find((session) => session.mode === 'primary') || alignmentSessions[0] || null;
+        if (!alignmentSessions.some((session) => session.session_id === selectedAlignmentSessionId)) {
+            setSelectedAlignmentSessionId(preferred?.session_id || '');
+        }
+    }, [alignmentSessions, selectedAlignmentSessionId]);
+    useEffect(() => {
+        const selectedSessionId = selectedAlignmentSession?.session_id || '';
+        selectedAlignmentSessionIdRef.current = selectedSessionId;
+        if (pendingIgvLocusRef.current?.sessionId !== selectedSessionId) {
+            pendingIgvLocusRef.current = null;
+        }
+        setIgvCurrentLocus(null);
+    }, [selectedAlignmentSession?.session_id]);
+    const activeIgvBamPath = selectedAlignmentSession ? `${selectedAlignmentSession.mode}:alignment` : null;
+    const activeIgvBamUrl = selectedAlignmentSession?.artifacts.alignment?.url || null;
+    const activeIgvBaiPath = selectedAlignmentSession ? `${selectedAlignmentSession.mode}:alignment-index` : null;
+    const activeIgvBaiUrl = selectedAlignmentSession?.artifacts.alignment_index?.url || null;
+    const activeIgvFastaPath = selectedAlignmentSession ? `${selectedAlignmentSession.mode}:reference` : null;
+    const activeIgvFastaUrl = selectedAlignmentSession?.artifacts.reference?.url || null;
+    const activeIgvFaiPath = selectedAlignmentSession?.artifacts.reference_index
+        ? `${selectedAlignmentSession.mode}:reference-index`
+        : null;
+    const activeIgvFaiUrl = selectedAlignmentSession?.artifacts.reference_index?.url || null;
+    const activeIgvSourceKey = selectedAlignmentSession?.session_id || '';
+    const navigateToVerifiedLocus = useCallback((
+        position_1based: number,
+        end_1based: number | undefined,
+        source: string,
+    ) => {
+        if (!selectedAlignmentSession?.ready || !selectedAlignmentSession.reference_contig) {
+            setIgvError(`Cannot navigate ${source}: the selected alignment session has no authoritative reference contig.`);
+            return;
+        }
+        const locus = resolveBoundSessionLocus(
+            selectedAlignmentSession.session_id,
+            selectedAlignmentSession.session_id,
+            selectedAlignmentSession.reference_contig,
+            position_1based,
+            end_1based ?? position_1based,
+        );
+        if (!locus) {
+            setIgvError(`Cannot navigate ${source}: invalid or unbound locus.`);
+            return;
+        }
+        const navigation: PendingSessionNavigation = {
+            sessionId: selectedAlignmentSession.session_id,
+            locus,
+        };
+        pendingIgvLocusRef.current = navigation;
+        const browser = igvBrowserRef.current;
+        if (igvModalOpen && browser && typeof browser.search === 'function') {
+            const loadToken = igvLoadTokenRef.current;
+            const navigationIsCurrent = () => (
+                igvLoadTokenRef.current === loadToken
+                && igvBrowserRef.current === browser
+                && selectedAlignmentSessionIdRef.current === navigation.sessionId
+                && pendingIgvLocusRef.current === navigation
+            );
+            void (async () => {
+                try {
+                    const completion = await awaitCurrentGeneration(
+                        Promise.resolve(browser.search(navigation.locus)),
+                        navigationIsCurrent,
+                    );
+                    if (completion === null || !navigationIsCurrent()) return;
+                    pendingIgvLocusRef.current = null;
+                } catch (error: unknown) {
+                    if (!navigationIsCurrent()) return;
+                    setIgvError(`Failed to navigate selected IGV session: ${error instanceof Error ? error.message : String(error)}`);
+                }
+            })();
+            return;
+        }
+        void openIgvModal();
+    }, [igvModalOpen, openIgvModal, selectedAlignmentSession]);
+    const selectedReferenceFastaUrl = activeIgvFastaUrl;
+    const igvMissingReason = alignmentSessionsError
+        ? 'Authoritative alignment session is unavailable.'
+        : !selectedAlignmentSession
+            ? 'No job-scoped alignment session was published.'
+            : !selectedAlignmentSession.ready
+                ? selectedAlignmentSession.unavailable_reason || 'Alignment session failed validation.'
+                : !activeIgvBamUrl
+                    ? 'Aligned BAM artifact not found yet.'
+                    : !activeIgvBaiUrl
+                        ? 'BAM index (.bai/.csi) not found yet.'
+                        : !activeIgvFastaUrl
+                            ? 'Reference FASTA not found yet.'
+                            : null;
+    const igvReady = selectedAlignmentSession?.ready === true && !igvMissingReason;
     const igvReadinessChecks = useMemo(
         () => [
             {
@@ -2444,33 +2504,14 @@ export function NGSToolkit() {
             activeIgvFaiUrl,
         ]
     );
-    const igvAuxReadinessChecks = useMemo(
-        () => [
-            { label: 'Coverage depth track', ok: Boolean(igvArtifacts.coverageDepthUrl), path: igvArtifacts.coverageDepthPath },
-            { label: 'Position gradient track', ok: Boolean(igvArtifacts.positionGradientUrl), path: igvArtifacts.positionGradientPath },
-            { label: 'GC content track', ok: Boolean(igvArtifacts.gcContentUrl), path: igvArtifacts.gcContentPath },
-            { label: 'GC z-score track', ok: Boolean(igvArtifacts.gcZscoreUrl), path: igvArtifacts.gcZscorePath },
-            { label: 'Split-read density track', ok: Boolean(igvArtifacts.splitDensityUrl), path: igvArtifacts.splitDensityPath },
-            { label: 'Soft-clip density track', ok: Boolean(igvArtifacts.softclipDensityUrl), path: igvArtifacts.softclipDensityPath },
-            { label: 'Junction hotspot BED', ok: Boolean(igvArtifacts.junctionHotspotsUrl), path: igvArtifacts.junctionHotspotsPath },
-        ],
-        [
-            igvArtifacts.coverageDepthPath,
-            igvArtifacts.coverageDepthUrl,
-            igvArtifacts.positionGradientPath,
-            igvArtifacts.positionGradientUrl,
-            igvArtifacts.gcContentPath,
-            igvArtifacts.gcContentUrl,
-            igvArtifacts.gcZscorePath,
-            igvArtifacts.gcZscoreUrl,
-            igvArtifacts.splitDensityPath,
-            igvArtifacts.splitDensityUrl,
-            igvArtifacts.softclipDensityPath,
-            igvArtifacts.softclipDensityUrl,
-            igvArtifacts.junctionHotspotsPath,
-            igvArtifacts.junctionHotspotsUrl,
-        ]
-    );
+    const igvAuxReadinessChecks = useMemo(() => {
+        const coverage = selectedAlignmentSession?.artifacts.coverage_depth;
+        return [{
+            label: 'Session-bound coverage depth track',
+            ok: Boolean(coverage),
+            path: coverage?.manifest || null,
+        }];
+    }, [selectedAlignmentSession]);
     const missingIgvAuxTracks = useMemo(
         () => igvAuxReadinessChecks.filter((check) => !check.ok),
         [igvAuxReadinessChecks]
@@ -2503,12 +2544,8 @@ export function NGSToolkit() {
             setIgvSelectedReferencePath(preferred);
         }
     }, [igvReferenceSources, activeIgvFastaPath, igvSelectedReferencePath]);
-    const igvReportDownloadHref = igvArtifacts.reportPath
-        ? toDownloadHref(igvArtifacts.reportPath, selectedJob?.id || undefined)
-        : null;
-    const igvTrackConfigDownloadHref = igvArtifacts.trackConfigPath
-        ? toDownloadHref(igvArtifacts.trackConfigPath, selectedJob?.id || undefined)
-        : null;
+    const igvReportDownloadHref = selectedAlignmentSession?.artifacts.report?.url || null;
+    const igvTrackConfigDownloadHref = selectedAlignmentSession?.artifacts.track_config?.url || null;
     const methylationSummaryDownloadHref = methylationArtifacts.summaryPath
         ? toDownloadHref(methylationArtifacts.summaryPath, selectedJob?.id || undefined)
         : null;
@@ -3366,8 +3403,17 @@ export function NGSToolkit() {
 
         let cancelled = false;
         let igvBrowser: UntypedApiValue = null;
+        let removeLocusListener: (() => void) | null = null;
+        let creationTimedOut = false;
+        let timeoutInvalidationToken: number | null = null;
         const loadToken = ++igvLoadTokenRef.current;
         const isCurrentLoad = () => igvLoadTokenRef.current === loadToken;
+        const ownsTerminalState = () => ownsIgvLoadTerminalState(
+            loadToken,
+            igvLoadTokenRef.current,
+            creationTimedOut ? timeoutInvalidationToken : null,
+            cancelled,
+        );
 
         const initIgv = async () => {
             setIgvLoading(true);
@@ -3414,9 +3460,13 @@ export function NGSToolkit() {
                 );
                 if (cancelled || !igvContainerRef.current) return;
 
-                igvBrowser = await withTimeout(
-                    igvAny.createBrowser(igvContainerRef.current, {
-                        ...(initialLocus ? { locus: initialLocus } : {}),
+                const requestedLocus = resolvePendingSessionLocus(
+                    pendingIgvLocusRef.current,
+                    selectedAlignmentSessionIdRef.current,
+                ) || initialLocus;
+                igvBrowser = await createGenerationBoundResourceWithTimeout({
+                    create: () => igvAny.createBrowser(igvContainerRef.current, {
+                        ...(requestedLocus ? { locus: requestedLocus } : {}),
                         reference: {
                             fastaURL: activeIgvFastaUrl,
                             ...(activeIgvFaiUrl
@@ -3430,26 +3480,49 @@ export function NGSToolkit() {
                         },
                         tracks: [],
                     }),
-                    IGV_INIT_TIMEOUT_MS,
-                    `IGV initialization timed out after ${Math.round(IGV_INIT_TIMEOUT_MS / 1000)}s`
-                );
+                    remove: (staleBrowser: unknown) => removeIgvBrowser(igvAny, staleBrowser),
+                    isCurrent: () => isCurrentLoad() && !cancelled,
+                    invalidate: () => {
+                        creationTimedOut = true;
+                        if (isCurrentLoad()) {
+                            igvLoadTokenRef.current += 1;
+                            timeoutInvalidationToken = igvLoadTokenRef.current;
+                        }
+                    },
+                    timeoutMs: IGV_INIT_TIMEOUT_MS,
+                    timeoutMessage: `IGV initialization timed out after ${Math.round(IGV_INIT_TIMEOUT_MS / 1000)}s`,
+                });
+                if (!igvBrowser) return;
+                igvLibraryRef.current = igvAny;
                 ensureIgvThemeStyles(igvContainerRef.current);
                 patchIgvRulerContrast(igvBrowser);
                 igvBrowserRef.current = igvBrowser;
+                if (typeof igvBrowser.on === 'function') {
+                    const locusHandler = (loci: unknown) => {
+                        if (!isCurrentLoad() || cancelled || igvBrowserRef.current !== igvBrowser) return;
+                        setIgvCurrentLocus(resolveIgvReadLocus(loci));
+                    };
+                    igvBrowser.on('locuschange', locusHandler);
+                    removeLocusListener = () => {
+                        if (typeof igvBrowser?.off === 'function') igvBrowser.off('locuschange', locusHandler);
+                    };
+                }
 
                 if (isCurrentLoad() && !cancelled) {
                     setIgvLoading(false);
                 }
 
-                if (!cancelled && initialLocus && igvBrowser && typeof igvBrowser.search === 'function') {
-                    // Do not block modal readiness on async locus search; some datasets can make this slow.
-                    void igvBrowser.search(initialLocus).catch(() => {
-                        // keep viewer open even if locus search fails
-                    });
+                if (!cancelled && requestedLocus && igvBrowser && typeof igvBrowser.search === 'function') {
+                    void awaitCurrentGeneration(
+                        Promise.resolve(igvBrowser.search(requestedLocus)),
+                        () => isCurrentLoad() && !cancelled && igvBrowserRef.current === igvBrowser,
+                    ).then((completion) => {
+                        if (completion !== null && isCurrentLoad()) pendingIgvLocusRef.current = null;
+                    }).catch(() => { /* keep viewer open if locus search fails */ });
                 }
             } catch (error) {
                 const msg = error instanceof Error ? error.message : String(error);
-                if (isCurrentLoad()) {
+                if (ownsTerminalState()) {
                     const needsLibraryHint = /igv|module|import|createBrowser|version/i.test(msg);
                     const suffix = needsLibraryHint
                         ? ` Ensure \`igv@${IGV_REQUIRED_VERSION}\` is installed and the frontend bundle is rebuilt.`
@@ -3458,13 +3531,14 @@ export function NGSToolkit() {
                     setIgvVersion(null);
                 }
                 try {
-                    igvBrowser?.dispose?.();
+                    if (igvBrowser) removeIgvBrowser(igvLibraryRef.current, igvBrowser);
                 } catch {
                     // no-op
                 }
                 igvBrowserRef.current = null;
+                igvLibraryRef.current = null;
             } finally {
-                if (isCurrentLoad() && !cancelled) {
+                if (ownsTerminalState()) {
                     setIgvLoading(false);
                 }
             }
@@ -3476,12 +3550,15 @@ export function NGSToolkit() {
 
         return () => {
             cancelled = true;
+            if (isCurrentLoad()) igvLoadTokenRef.current += 1;
+            removeLocusListener?.();
             try {
-                igvBrowser?.dispose?.();
+                if (igvBrowser) removeIgvBrowser(igvLibraryRef.current, igvBrowser);
             } catch {
                 // no-op
             }
             igvBrowserRef.current = null;
+            igvLibraryRef.current = null;
             setIgvReadsTrackLoaded(false);
             setIgvReadsTrackLoading(false);
             setIgvAutoLoadAttempted(false);
@@ -3495,6 +3572,7 @@ export function NGSToolkit() {
         activeIgvFastaUrl,
         activeIgvFaiUrl,
         igvMissingReason,
+        selectedAlignmentSession?.session_id,
     ]);
 
     const handleLoadIgvReadsTrack = useCallback(async () => {
@@ -3510,6 +3588,13 @@ export function NGSToolkit() {
         }
         setIgvReadsTrackLoading(true);
         setIgvError(null);
+        const loadToken = igvLoadTokenRef.current;
+        const sessionId = selectedAlignmentSession?.session_id || '';
+        const isCurrentTrackLoad = () => (
+            igvLoadTokenRef.current === loadToken
+            && igvBrowserRef.current === browser
+            && selectedAlignmentSessionIdRef.current === sessionId
+        );
         try {
             if (typeof browser.findTracks === 'function' && typeof browser.removeTrack === 'function') {
                 const existingTracks = browser.findTracks((track: UntypedApiValue) => track && track.type !== 'ruler');
@@ -3524,104 +3609,7 @@ export function NGSToolkit() {
                 }
             }
 
-            const auxiliaryTracks: Array<Record<string, unknown>> = [];
-            if (igvArtifacts.coverageDepthUrl) {
-                auxiliaryTracks.push({
-                    name: 'Coverage Depth',
-                    type: 'wig',
-                    format: 'bedgraph',
-                    url: igvArtifacts.coverageDepthUrl,
-                    graphType: 'bar',
-                    autoscale: true,
-                    color: '#4ea6ff',
-                    height: 56,
-                });
-            }
-            if (igvArtifacts.positionGradientUrl) {
-                auxiliaryTracks.push({
-                    name: 'Position Gradient',
-                    type: 'wig',
-                    format: 'bedgraph',
-                    url: igvArtifacts.positionGradientUrl,
-                    graphType: 'heatmap',
-                    min: 0,
-                    max: 1,
-                    autoscale: false,
-                    colorScale: {
-                        min: 0,
-                        max: 1,
-                        minColor: '#1d4ed8',
-                        maxColor: '#f59e0b',
-                    },
-                    height: 40,
-                });
-            }
-            if (igvArtifacts.gcContentUrl) {
-                auxiliaryTracks.push({
-                    name: 'GC Content (%)',
-                    type: 'wig',
-                    format: 'bedgraph',
-                    url: igvArtifacts.gcContentUrl,
-                    graphType: 'heatmap',
-                    min: 0,
-                    max: 100,
-                    autoscale: false,
-                    colorScale: {
-                        min: 0,
-                        max: 100,
-                        minColor: '#2563eb',
-                        maxColor: '#ef4444',
-                    },
-                    height: 52,
-                });
-            }
-            if (igvArtifacts.gcZscoreUrl) {
-                auxiliaryTracks.push({
-                    name: 'GC Z-score',
-                    type: 'wig',
-                    format: 'bedgraph',
-                    url: igvArtifacts.gcZscoreUrl,
-                    graphType: 'line',
-                    autoscale: true,
-                    color: '#f6d32d',
-                    height: 48,
-                });
-            }
-            if (igvArtifacts.splitDensityUrl) {
-                auxiliaryTracks.push({
-                    name: 'Split-read Density',
-                    type: 'wig',
-                    format: 'bedgraph',
-                    url: igvArtifacts.splitDensityUrl,
-                    graphType: 'bar',
-                    autoscale: true,
-                    color: '#ff7800',
-                    height: 44,
-                });
-            }
-            if (igvArtifacts.softclipDensityUrl) {
-                auxiliaryTracks.push({
-                    name: 'Soft-clip Density',
-                    type: 'wig',
-                    format: 'bedgraph',
-                    url: igvArtifacts.softclipDensityUrl,
-                    graphType: 'bar',
-                    autoscale: true,
-                    color: '#e01b24',
-                    height: 44,
-                });
-            }
-            if (igvArtifacts.junctionHotspotsUrl) {
-                auxiliaryTracks.push({
-                    name: 'Junction Hotspots',
-                    type: 'annotation',
-                    format: 'bed',
-                    url: igvArtifacts.junctionHotspotsUrl,
-                    color: '#ffbe6f',
-                    displayMode: 'EXPANDED',
-                    height: 36,
-                });
-            }
+            const auxiliaryTracks = resolveSessionAuxiliaryTracks(selectedAlignmentSession?.artifacts || {});
 
             const auxiliaryTrackHeightPx = auxiliaryTracks.reduce((sum, track) => (
                 sum + (typeof track.height === 'number' ? track.height : 0)
@@ -3656,7 +3644,11 @@ export function NGSToolkit() {
             if (igvAlignmentGroupBy !== 'none') {
                 alignmentTrack.groupBy = igvAlignmentGroupBy;
             }
-            const loadedAlignmentTrack = await browser.loadTrack(alignmentTrack);
+            const loadedAlignmentTrack = await awaitCurrentGeneration(
+                Promise.resolve(browser.loadTrack(alignmentTrack)),
+                isCurrentTrackLoad,
+            );
+            if (loadedAlignmentTrack === null || !isCurrentTrackLoad()) return;
             applyIgvAlignmentOptionsToTrack(loadedAlignmentTrack, {
                 displayMode: igvAlignmentDisplayMode,
                 colorBy: igvAlignmentColorBy,
@@ -3664,39 +3656,33 @@ export function NGSToolkit() {
             });
 
             for (const trackConfig of auxiliaryTracks) {
-                await browser.loadTrack(trackConfig);
+                const loadedTrack = await awaitCurrentGeneration(
+                    Promise.resolve(browser.loadTrack(trackConfig)),
+                    isCurrentTrackLoad,
+                );
+                if (loadedTrack === null || !isCurrentTrackLoad()) return;
             }
+            if (!isCurrentTrackLoad()) return;
             patchIgvRulerContrast(browser);
             resizeIgvAlignmentTrackToContainer(browser, igvContainerRef.current);
 
-            if (typeof browser.search === 'function') {
-                const locus = await detectInitialLocusFromFasta(activeIgvFastaUrl);
-                if (locus) {
-                    await browser.search(locus);
-                }
-            }
+            // Track loading must never navigate. Browser creation already applied either
+            // the session-bound requested locus or the FASTA-derived initial locus.
             resizeIgvAlignmentTrackToContainer(browser, igvContainerRef.current);
             igvLoadedSourceKeyRef.current = activeIgvSourceKey;
             setIgvReadsTrackLoaded(true);
         } catch (error) {
             const msg = error instanceof Error ? error.message : String(error);
-            setIgvError(`Failed to load IGV tracks: ${msg}`);
+            if (isCurrentTrackLoad()) setIgvError(`Failed to load IGV tracks: ${msg}`);
         } finally {
-            setIgvReadsTrackLoading(false);
+            if (isCurrentTrackLoad()) setIgvReadsTrackLoading(false);
         }
     }, [
         igvReadsTrackLoading,
         activeIgvBamUrl,
         activeIgvBaiUrl,
-        activeIgvFastaUrl,
         activeIgvSourceKey,
-        igvArtifacts.coverageDepthUrl,
-        igvArtifacts.positionGradientUrl,
-        igvArtifacts.gcContentUrl,
-        igvArtifacts.gcZscoreUrl,
-        igvArtifacts.splitDensityUrl,
-        igvArtifacts.softclipDensityUrl,
-        igvArtifacts.junctionHotspotsUrl,
+        selectedAlignmentSession,
         igvAlignmentDisplayMode,
         igvAlignmentColorBy,
         igvAlignmentGroupBy,
@@ -4120,6 +4106,7 @@ export function NGSToolkit() {
                                     status={sequenceQcManifestState.status}
                                     manifest={sequenceQcManifestState.manifest}
                                     message={sequenceQcManifestState.message}
+                                    onNavigateLocus={navigateToVerifiedLocus}
                                 />
 
                                 <div className="space-y-2">
@@ -4861,34 +4848,18 @@ export function NGSToolkit() {
                             </div>
                             <div className="flex items-center gap-1">
                                 <select
-                                    value={igvSelectedBamPath}
-                                    onChange={(event) => setIgvSelectedBamPath(event.target.value)}
-                                    disabled={igvLoading || igvReadsTrackLoading || igvAlignmentSources.length === 0}
-                                    title="Alignment BAM source"
-                                    className="max-w-[230px] bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-1.5 py-0.5 text-[11px] text-[var(--text-primary)]"
+                                    value={selectedAlignmentSession?.session_id || ''}
+                                    onChange={(event) => setSelectedAlignmentSessionId(event.target.value)}
+                                    disabled={igvLoading || igvReadsTrackLoading || alignmentSessions.length === 0}
+                                    title="Authoritative job-scoped alignment session"
+                                    className="max-w-[250px] bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-1.5 py-0.5 text-[11px] text-[var(--text-primary)]"
                                 >
-                                    {igvAlignmentSources.length === 0 && (
-                                        <option value="">No BAM sources</option>
+                                    {alignmentSessions.length === 0 && (
+                                        <option value="">No validated sessions</option>
                                     )}
-                                    {igvAlignmentSources.map((source) => (
-                                        <option key={source.bamPath} value={source.bamPath}>
-                                            {source.label}
-                                        </option>
-                                    ))}
-                                </select>
-                                <select
-                                    value={igvSelectedReferencePath}
-                                    onChange={(event) => setIgvSelectedReferencePath(event.target.value)}
-                                    disabled={igvLoading || igvReadsTrackLoading || igvReferenceSources.length === 0}
-                                    title="Reference FASTA source"
-                                    className="max-w-[230px] bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-1.5 py-0.5 text-[11px] text-[var(--text-primary)]"
-                                >
-                                    {igvReferenceSources.length === 0 && (
-                                        <option value="">No FASTA sources</option>
-                                    )}
-                                    {igvReferenceSources.map((source) => (
-                                        <option key={source.fastaPath} value={source.fastaPath}>
-                                            {source.label}
+                                    {alignmentSessions.map((session) => (
+                                        <option key={session.session_id} value={session.session_id}>
+                                            {session.mode === 'primary' ? 'Primary alignment' : 'Dimer candidates'} · {session.ready ? 'ready' : 'unavailable'}
                                         </option>
                                     ))}
                                 </select>
@@ -4970,6 +4941,13 @@ export function NGSToolkit() {
                                     <div className="absolute bottom-2 left-2 max-w-[42vw] rounded border border-amber-400/35 bg-amber-500/10 text-amber-200 text-[11px] px-2 py-1.5">
                                         Missing optional tracks: {missingIgvAuxTracks.map((check) => check.label).join(', ')}
                                     </div>
+                                )}
+                                {selectedJob && selectedAlignmentSession?.ready && (
+                                    <RawReadInspector
+                                        jobId={selectedJob.id}
+                                        sessionId={selectedAlignmentSession.session_id}
+                                        currentLocus={igvCurrentLocus}
+                                    />
                                 )}
                             </div>
                         </div>
