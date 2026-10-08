@@ -270,6 +270,10 @@ def calculate_reaction(request: ReactionRequest) -> ReactionResult:
             dilution = None
         prep = physical(part.dilution.preparation_volume_uL, "dilution preparation volume", pid, positive=True)
         dilute_stock = prep / dilution if prep is not None and dilution is not None else None
+        dilute_diluent = prep - dilute_stock if prep is not None and dilute_stock is not None else None
+        for label, volume in (("stock", dilute_stock), ("diluent", dilute_diluent)):
+            if minimum is not None and volume is not None and 0 < volume < minimum:
+                note("below_minimum_transfer", f"Dilution {label} preparation transfer is below selected pipetting minimum; quantities are unchanged.", pid)
         diluted = concentration / dilution if concentration is not None and dilution is not None else None
         diluted_mass = mass_concentration / dilution if mass_concentration is not None and dilution is not None else None
         exact = pmol / diluted if pmol is not None and diluted is not None else None
@@ -293,7 +297,7 @@ def calculate_reaction(request: ReactionRequest) -> ReactionResult:
             exact_volume_uL=exact, transfer_volume_uL=transfer, delivered_pmol=delivered,
             delivered_mass_ng=transfer * diluted_mass if transfer is not None and diluted_mass is not None else None,
             dilution_stock_uL=dilute_stock,
-            dilution_diluent_uL=prep-dilute_stock if prep is not None and dilute_stock is not None else None,
+            dilution_diluent_uL=dilute_diluent,
             **batch(transfer, part.in_mastermix)))
     delivered_reference = next((r.delivered_pmol for r in rows if r.component_id == reference), None)
     if delivered_reference is not None and delivered_reference > 0:
