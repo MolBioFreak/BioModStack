@@ -9,6 +9,7 @@ from urllib import request as urllib_request
 from sqlalchemy import text
 
 from database import engine
+from migrations.runner import MIGRATIONS
 from runtime_policy import core_runtime_mode_enabled, workflow_launches_allowed
 from services.workflow_adapter import workflow_adapter_base_url
 
@@ -20,6 +21,32 @@ async def core_database_readiness() -> tuple[bool, str]:
         return True, "ready"
     except Exception as exc:  # noqa: BLE001 - readiness must report degradation, not crash.
         return False, _failure_status(exc)
+
+
+async def core_migration_readiness() -> tuple[bool, str, dict[str, Any]]:
+    expected = [(migration.version, migration.name) for migration in MIGRATIONS]
+    expected_version, expected_name = expected[-1]
+    metadata: dict[str, Any] = {
+        "expected_version": expected_version,
+        "expected_name": expected_name,
+        "applied_version": None,
+        "applied_name": None,
+    }
+    try:
+        async with engine.connect() as connection:
+            rows = (
+                await connection.execute(text("SELECT version, name FROM schema_migrations ORDER BY version"))
+            ).all()
+    except Exception as exc:  # noqa: BLE001 - readiness must report degradation, not crash.
+        return False, _failure_status(exc), metadata
+    applied = [(int(row[0]), str(row[1])) for row in rows]
+    if applied:
+        metadata["applied_version"], metadata["applied_name"] = applied[-1]
+    if applied == expected:
+        return True, "at_head", metadata
+    if applied == expected[: len(applied)]:
+        return False, "behind", metadata
+    return False, "invalid_ledger", metadata
 
 
 async def http_readiness(url: str) -> tuple[bool, str]:
@@ -51,6 +78,7 @@ async def collect_runtime_readiness(
     mode = "container" if container_mode else "native"
 
     core_ready, core_status = await core_database_readiness()
+    migration_ready, migration_status, migration_metadata = await core_migration_readiness()
     molbio_ready = molbio.get("status") == "healthy" or molbio.get("ready") is True
     molbio_ngs_required = molbio_ngs is not None
     molbio_ngs = molbio_ngs or {}
@@ -82,6 +110,12 @@ async def collect_runtime_readiness(
     checks = {
         "process_liveness": _check(required=True, ready=True, status="alive"),
         "core_database": _check(required=True, ready=core_ready, status=core_status),
+        "core_schema_migrations": _check(
+            required=True,
+            ready=migration_ready,
+            status=migration_status,
+            **migration_metadata,
+        ),
         "molbio_database": _check(
             required=True,
             ready=molbio_ready,

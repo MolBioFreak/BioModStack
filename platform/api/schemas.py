@@ -109,6 +109,8 @@ class JobResponse(BaseModel):
     awaiting_stage: Optional[str] = None
     awaiting_payload: Optional[dict] = None
     decision_history: Optional[List[dict]] = None
+    frustrampnn_result_count: int = 0
+    frustrampnn_reopen_destination: Optional[dict] = None
     
     model_config = ConfigDict(from_attributes=True)
     

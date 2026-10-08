@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import { StructureWorkbench } from '../../structureViewer/StructureWorkbench';
+import type { Job } from '../../lib/api';
+import FrustraMpnnWorkbench from '../frustrampnn/FrustraMpnnWorkbench';
 import type { ResidueRef } from '../../structureViewer/contracts/structureIdentity';
 import type { MetricSelection } from '../../structureViewer/metrics/metricContracts';
 import {
@@ -24,7 +26,6 @@ import {
 } from './conformationalMappingApi';
 import {
     APPROVED_CM_CONTRACTS,
-    CANONICAL_AMINO_ACIDS,
     candidateLabel,
     candidateStructureArtifact,
     candidateStructureMap,
@@ -61,6 +62,7 @@ import {
 interface Props {
     requestId: string;
     title?: string;
+    job?: Job;
     services?: {
         getStatus?: typeof getCmStatus;
         getProgress?: typeof getCmProgress;
@@ -73,6 +75,7 @@ interface Props {
         retryRequest?: typeof retryCmRequest;
     };
     Workbench?: typeof StructureWorkbench;
+    FrustraWorkbench?: typeof FrustraMpnnWorkbench;
 }
 type DetailTab = StateLandscapeWorkspaceTab;
 type LifecycleTab = 'progress' | 'logs' | 'failures';
@@ -97,7 +100,14 @@ const analysisIdentity = (row: CmAnalysisResult): string => {
     return `${String(identity.target_id)} · ${String(identity.auth_asym_id)}:${String(identity.auth_seq_id)}${String(identity.insertion_code || '')} · ${String(identity.validated_wt)}→${String(identity.substitution)}`;
 };
 
-export function ConformationalMappingViewer({ requestId, title = 'Conformational Mapping', services, Workbench = StructureWorkbench }: Props) {
+export function ConformationalMappingViewer({
+    requestId,
+    title = 'Conformational Mapping',
+    job,
+    services,
+    Workbench = StructureWorkbench,
+    FrustraWorkbench = FrustraMpnnWorkbench,
+}: Props) {
     const navigate = useNavigate();
     const location = useLocation();
     const queryClient = useQueryClient();
@@ -105,7 +115,7 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
     const [overlayIds, setOverlayIds] = useState<string[]>([]);
     const [detailTab, setDetailTab] = useState<DetailTab>('ensemble');
     const [lifecycleTab, setLifecycleTab] = useState<LifecycleTab>('progress');
-    const [landscapeOffset, setLandscapeOffset] = useState(0);
+
     const [frustraMpnnSelection, setFrustraMpnnSelection] = useState<MetricSelection | null>(null);
     const [mappingFilter, setMappingFilter] = useState<'all' | 'mapped' | 'issues'>('all');
     const [expandedAnalysis, setExpandedAnalysis] = useState<string | null>(null);
@@ -249,7 +259,6 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
         if (selected && selectedCandidateId !== selected.candidate_id) setSelectedCandidateId(clearStateAnalysisResidueSelection(selected.candidate_id));
     }, [selected, selectedCandidateId]);
     useEffect(() => {
-        setLandscapeOffset(0);
         setFrustraMpnnSelection(null);
         setOverlayIds((current) => current.filter((id) => id !== selected?.candidate_id));
     }, [selected?.candidate_id]);
@@ -319,18 +328,6 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
         });
     }, [overlayIds, parsed.data, requestId, selected, services?.artifactUrl]);
 
-    const landscape = useQuery({
-        queryKey: ['cm-landscape', requestId, selected?.candidate_id, landscapeOffset],
-        queryFn: () => (services?.getLandscape || getCmLandscape)(requestId, selected!.candidate_id, landscapeOffset, 1000),
-        enabled: Boolean(selected), retry: false,
-    });
-    const landscapeParsed = useMemo(() => {
-        if (!landscape.data) return { residues: [], error: null as string | null };
-        try {
-            if (landscape.data.candidate_id !== selected?.candidate_id) throw new Error('Landscape candidate identity does not match selection');
-            return { residues: groupExact20Landscape(landscape.data.rows), error: null };
-        } catch (value) { return { residues: [], error: value instanceof Error ? value.message : 'Landscape validation failed' }; }
-    }, [landscape.data, selected?.candidate_id]);
 
     const completeLandscape = useQuery({
         queryKey: ['cm-landscape-complete', requestId, selected?.candidate_id],
@@ -399,6 +396,19 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
     const supportRecords = parsed.data ? recordsByType(parsed.data.value, 'support') : [];
     const missingnessRecords = parsed.data ? recordsByType(parsed.data.value, 'missingness') : [];
     const filteredMapRows = structureMap?.rows.filter((row) => mappingFilter === 'all' || (mappingFilter === 'mapped' ? row.status === 'mapped' : row.status !== 'mapped')) || [];
+    const frustraMpnnJob: Job = job ?? {
+        id: requestId,
+        name: title,
+        status: statusLabel === 'failed' || statusLabel === 'cancelled' || statusLabel === 'running' || statusLabel === 'queued'
+            ? statusLabel
+            : 'completed',
+        model_id: 'conformational_mapping',
+        mode: 'analysis',
+        params: { run_frustrampnn: true },
+        created_at: '',
+        design_count: 0,
+        output_dir: null,
+    };
 
     return (
         <div className="min-h-screen bg-slate-950 p-3 text-slate-200 sm:p-4 lg:p-6" data-bms-cm-viewer="canonical">
@@ -544,13 +554,18 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
 
                     {detailTab === 'mapping' && structureMap && <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 p-4"><div><h2 className="font-semibold text-white">Structure-map identity and residue mapping</h2><p className="mt-1 text-xs text-slate-500">{structureMap.source_format} · source model {structureMap.selected_source_model} · {structureMap.normalizer_version} · {structureMap.altloc_policy}</p></div><select value={mappingFilter} onChange={(event) => setMappingFilter(event.target.value as typeof mappingFilter)} className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs"><option value="all">All rows</option><option value="mapped">Mapped</option><option value="issues">Issues only</option></select></div><div className="grid gap-2 border-b border-slate-800 p-3 text-[11px] sm:grid-cols-3"><div>Original CIF: <span className="font-mono">{shortHash(structureMap.original_cif_sha256)}</span></div><div>Source: <span className="font-mono">{shortHash(structureMap.source_sha256)}</span></div><div>Normalized PDB: <span className="font-mono">{shortHash(structureMap.normalized_pdb_sha256)}</span></div></div><div className="max-h-[560px] overflow-auto"><table className="w-full text-left text-xs"><thead className="sticky top-0 bg-slate-900 text-slate-400"><tr><th className="p-2">Sequence</th><th className="p-2">Source identity</th><th className="p-2">Author identity</th><th className="p-2">Normalized PDB</th><th className="p-2">Backbone</th><th className="p-2">Status / reason</th></tr></thead><tbody>{filteredMapRows.map((row) => <tr key={`${row.entity_instance_id}:${row.sequence_index}`} className="border-t border-slate-800 align-top"><td className="p-2">{row.sequence_index} · {row.residue_name}</td><td className="p-2">{row.source_entity_id} · {row.label_asym_id}:{row.label_seq_id}</td><td className="p-2">{row.auth_asym_id}:{row.auth_seq_id}{row.insertion_code}</td><td className="p-2">{row.pdb_chain_id}:{row.pdb_residue_id}{row.pdb_insertion_code}</td><td className="p-2 font-mono text-[10px]">{Object.entries(row.backbone_atoms).map(([atom, value]) => `${atom}:${value || 'missing'}`).join(' ')}</td><td className="p-2"><span className={row.status === 'mapped' ? 'text-emerald-300' : 'text-amber-200'}>{row.status}</span>{row.reason && <div className="mt-1 text-slate-500">{row.reason}</div>}</td></tr>)}</tbody></table></div>{!filteredMapRows.length && <p className="p-4 text-sm text-slate-500">No mapping rows match this filter.</p>}</section>}
 
-                    {detailTab === 'landscape' && <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 p-4"><div><h2 className="font-semibold text-white">Persisted exact-20 FrustraMPNN landscape</h2><p className="mt-1 text-xs text-slate-500">Every row is one mapped residue; every column is a canonical substitution slot. Missingness and status come directly from the API.</p></div><div className="flex gap-2"><button type="button" disabled={landscapeOffset === 0 || landscape.isFetching} onClick={() => setLandscapeOffset(Math.max(0, landscapeOffset - 1000))} className="rounded border border-slate-700 px-3 py-1.5 text-xs disabled:opacity-30">Previous 50 residues</button><button type="button" disabled={landscape.data?.next_offset == null || landscape.isFetching} onClick={() => setLandscapeOffset(landscape.data!.next_offset!)} className="rounded border border-slate-700 px-3 py-1.5 text-xs disabled:opacity-30">Next 50 residues</button></div></div>{(landscape.isError || landscapeParsed.error) && <div role="alert" className="m-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">{landscapeParsed.error || cmApiError(landscape.error, 'Landscape page is unavailable.')}</div>}{!landscape.isLoading && !landscapeParsed.error && <div className="max-h-[650px] overflow-auto"><table className="min-w-[1500px] text-left text-[10px]"><thead className="sticky top-0 z-10 bg-slate-900 text-slate-400"><tr><th className="sticky left-0 z-20 bg-slate-900 p-2">Residue</th>{CANONICAL_AMINO_ACIDS.map((aa) => <th key={aa} className="p-2 text-center">{aa}</th>)}</tr></thead><tbody>{landscapeParsed.residues.map((residue) => <tr key={residue.key} className="border-t border-slate-800"><th className="sticky left-0 bg-slate-900 p-2 font-medium text-white">{residue.auth_asym_id}:{residue.auth_seq_id}{residue.insertion_code}<span className="ml-1 text-slate-500">{residue.wt}</span></th>{residue.slots.map((slot) => <td key={slot.mutation_aa} title={`${slot.status}${slot.reason ? ` · ${slot.reason}` : ''}`} className={`p-2 text-center font-mono ${slot.status !== 'ok' ? 'bg-slate-800/50 text-slate-500' : slot.class === 'high' ? 'bg-red-500/10 text-red-200' : slot.class === 'minimally_frustrated' ? 'bg-sky-500/10 text-sky-200' : 'bg-amber-500/10 text-amber-100'}`}>{slot.score == null ? 'missing' : scalar(slot.score)}{slot.mutation_aa === residue.wt && <span className="block text-[8px] text-slate-500">native</span>}</td>)}</tr>)}</tbody></table></div>}{landscape.isLoading && <p className="p-4 text-sm text-slate-500">Loading bounded landscape page…</p>}</section>}
+                    {detailTab === 'landscape' && (
+                        <FrustraWorkbench
+                            job={frustraMpnnJob}
+                            onBack={() => setDetailTab('ensemble')}
+                            backLabel="CM ensemble"
+                            onOpenJob={(jobId) => navigate(`/results/${jobId}`)}
+                        />
+                    )}
 
                     {detailTab === 'analysis' && <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70"><div className="border-b border-slate-800 p-4"><h2 className="font-semibold text-white">Canonical analysis ranking</h2><p className="mt-1 text-xs text-slate-500">Server-persisted ranking order. Each row retains its reconstructable components, sort keys, support, and robustness status.</p></div><div className="grid gap-2 border-b border-slate-800 p-3 text-[11px] sm:grid-cols-3"><div>Analysis: <span className="font-mono">{parsed.data.analysis.analysis_id}</span></div><div>Formula: <span className="font-mono">{parsed.data.analysis.formula_version}</span></div><div>Expected strata: {parsed.data.analysis.expected_strata.length}</div></div><div className="max-h-[680px] overflow-auto"><table className="w-full min-w-[1100px] text-left text-xs"><thead className="sticky top-0 bg-slate-900 text-slate-400"><tr><th className="p-2">Rank / identity</th><th className="p-2">Robustness</th><th className="p-2">Valid support</th><th className="p-2">Outer</th><th className="p-2">Coordinate</th><th className="p-2">Hierarchical mean</th><th className="p-2">Hotspot</th><th className="p-2">Switch</th><th className="p-2">Components</th></tr></thead><tbody>{parsed.data.analysis.results.map((row, index) => <><tr key={row.source_row_key} className="border-t border-slate-800 align-top"><td className="p-2"><div className="font-medium text-white">{index + 1}. {analysisIdentity(row)}</div><div className="mt-1 max-w-64 truncate font-mono text-[10px] text-slate-600">{row.source_row_key}</div>{row.failure_reason && <div className="mt-1 text-red-300">{row.failure_reason}</div>}</td><td className={`p-2 ${row.status === 'robust' ? 'text-emerald-300' : row.status === 'conditional' ? 'text-amber-200' : 'text-red-200'}`}>{row.status}</td><td className="p-2">{row.valid_coordinate_count}/{row.expected_coordinate_count}</td><td className="p-2">{pct(row.outer_support_fraction)}</td><td className="p-2">{pct(row.coordinate_support_fraction)}</td><td className="p-2 font-mono">{scalar(row.hierarchical_mean)}</td><td className="p-2 font-mono">{scalar(row.hotspot_score)}</td><td className="p-2 font-mono">{scalar(row.switch_score)}</td><td className="p-2"><button type="button" onClick={() => setExpandedAnalysis((current) => current === row.source_row_key ? null : row.source_row_key)} className="rounded border border-slate-700 px-2 py-1 text-[10px]">{expandedAnalysis === row.source_row_key ? 'Hide' : 'Inspect'}</button></td></tr>{expandedAnalysis === row.source_row_key && <tr key={`${row.source_row_key}:detail`} className="border-t border-slate-800 bg-slate-950/40"><td colSpan={9} className="p-3"><div className="grid gap-3 lg:grid-cols-3"><div><div className="mb-1 text-[11px] text-slate-500">Persisted components</div>{json(row.components)}</div><div><div className="mb-1 text-[11px] text-slate-500">Persisted sort keys</div>{json(row.sort_keys)}</div><div><div className="mb-1 text-[11px] text-slate-500">Identity</div>{json(row.identity)}</div></div></td></tr>}</>)}</tbody></table></div>{!parsed.data.analysis.results.length && <p className="p-4 text-sm text-slate-500">Canonical analysis is explicitly unavailable.</p>}<details className="border-t border-slate-800 p-4"><summary className="cursor-pointer text-sm font-medium text-slate-300">Ranking policy and exclusions</summary><div className="mt-3 grid gap-3 lg:grid-cols-2"><div>{json(parsed.data.analysis.ranking_policy)}</div><div>{json(parsed.data.analysis.exclusions)}</div></div></details></section>}
 
                     {detailTab === 'ensemble' && <section className="grid gap-3 lg:grid-cols-2"><details className="rounded-xl border border-slate-800 bg-slate-900/70 p-3"><summary className="cursor-pointer text-sm font-medium text-white">Selected candidate artifact provenance</summary><div className="mt-3">{json({ artifact_id: selectedArtifact.artifact_id, sha256: selectedArtifact.sha256, bytes: selectedArtifact.bytes, media_type: selectedArtifact.media_type, metadata: selectedArtifact.metadata })}</div></details><details className="rounded-xl border border-slate-800 bg-slate-900/70 p-3"><summary className="cursor-pointer text-sm font-medium text-white">Authoritative sidecar identities</summary><div className="mt-3">{json(selected.sidecar_paths)}</div></details></section>}
-
-                    {detailTab === 'landscape' && landscape.data?.rows[0] && <details className="rounded-xl border border-slate-800 bg-slate-900/70 p-3"><summary className="cursor-pointer text-sm font-medium text-white">Landscape provenance identity</summary><div className="mt-3">{json(landscape.data.rows[0].provenance)}</div></details>}
 
                     {detailTab === 'evidence' && <section className="grid gap-4 xl:grid-cols-2"><div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><h2 className="font-semibold text-white">Support authorities</h2><p className="mt-1 text-xs text-slate-500">Persisted canonical records; no support is reconstructed from metric shape or provenance text.</p><div className="mt-3 space-y-3">{supportRecords.length ? supportRecords.map((item) => <details key={`${item.type}:${item.key}`} className="rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">{item.key} · <span className="font-mono text-slate-500">{shortHash(item.sha256)}</span></summary><div className="mt-2">{json(item.payload)}</div></details>) : <p className="text-sm text-slate-500">No separate support record was persisted. Analysis-row support fields remain authoritative.</p>}</div><details className="mt-4 rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">Analysis support records ({parsed.data.analysis.support_records.length})</summary><div className="mt-2">{json(parsed.data.analysis.support_records)}</div></details><details className="mt-3 rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">Pair ledger ({parsed.data.analysis.pair_ledger.length})</summary><div className="mt-2">{json(parsed.data.analysis.pair_ledger)}</div></details></div><div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><h2 className="font-semibold text-white">Missingness and clash evidence</h2><p className="mt-1 text-xs text-slate-500">Missing values remain explicit and are never imputed in the browser.</p><div className="mt-3 space-y-3">{missingnessRecords.length ? missingnessRecords.map((item) => <details key={`${item.type}:${item.key}`} className="rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">{item.key} · <span className="font-mono text-slate-500">{shortHash(item.sha256)}</span></summary><div className="mt-2">{json(item.payload)}</div></details>) : <p className="text-sm text-slate-500">No separate missingness record was persisted. Landscape slot statuses and mapping reasons remain explicit.</p>}</div><details className="mt-4 rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">Clash records ({parsed.data.analysis.clash_records.length})</summary><div className="mt-2">{json(parsed.data.analysis.clash_records)}</div></details></div></section>}
 
