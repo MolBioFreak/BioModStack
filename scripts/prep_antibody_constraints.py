@@ -29,6 +29,18 @@ from collections import defaultdict
 # These positions are critical for VHH solubility and should typically be preserved
 VHH_TETRAD_IMGT_POSITIONS = [37, 44, 45, 47]
 
+# Framework contact hotspots from Zavrtanik et al. 2018
+# These FR residues frequently mediate antigen contacts in nanobodies
+FR_CONTACT_POSITIONS = {
+    'fr2': [37, 42, 44, 45, 47],      # FR2 contacts (includes tetrad)
+    'de_loop': [72, 73, 74, 75],      # DE loop
+    'fr3': [82, 83, 84, 85, 86, 87],  # FR3 contacts
+    'fr4': [101, 102, 103],           # FR4 contacts
+}
+
+# Cysteine positions for disulfide bonds (IMGT numbering)
+DISULFIDE_POSITIONS = [23, 104]  # Conserved VH/VHH disulfide
+
 
 def parse_pdb_chains(pdb_path):
     """
@@ -173,7 +185,8 @@ def get_ranges(numbers):
 
 
 def compute_fixed_residues(mode, chains_data, cdr_dict, tetrad_positions, 
-                           selected_loops, protect_tetrad, antibody_chains):
+                           selected_loops, protect_tetrad, antibody_chains,
+                           extra_protected_positions=None):
     """
     Compute which residues should be fixed based on design mode.
     
@@ -185,11 +198,13 @@ def compute_fixed_residues(mode, chains_data, cdr_dict, tetrad_positions,
         selected_loops: list of CDR loops to design (for cdr_selective)
         protect_tetrad: bool, whether to always fix tetrad positions
         antibody_chains: list of antibody chain IDs (e.g., ['H', 'L'])
+        extra_protected_positions: list of additional PDB positions to protect on chain H
     
     Returns:
         dict: chain_id -> list of FIXED residue numbers
     """
     fixed_residues = {}
+    extra_protected = set(extra_protected_positions or [])
     
     # Always fix target chain(s) completely
     target_chains = [c for c in chains_data.keys() if c not in antibody_chains]
@@ -240,6 +255,11 @@ def compute_fixed_residues(mode, chains_data, cdr_dict, tetrad_positions,
         if protect_tetrad and chain == 'H' and mode != 'full_design':
             fixed.update(tetrad_positions)
         
+        # Add user-specified extra protected positions (on chain H only)
+        if chain == 'H' and mode != 'full_design':
+            valid_extra = extra_protected & all_residues
+            fixed.update(valid_extra)
+        
         if fixed:
             fixed_residues[chain] = sorted(fixed)
     
@@ -267,6 +287,12 @@ def main():
                         help="Protect VHH tetrad positions in FR2 (default: true)")
     parser.add_argument("--antibody_chains", default="H,L",
                         help="Comma-separated list of antibody chain IDs (default: H,L)")
+    parser.add_argument("--protected_positions", default="",
+                        help="Comma-separated list of additional IMGT positions to protect (e.g., '23,72,73,104')")
+    parser.add_argument("--protect_fr_contacts", default="false",
+                        help="Protect all FR contact hotspots from Zavrtanik 2018 (default: false)")
+    parser.add_argument("--protect_disulfides", default="true",
+                        help="Protect conserved disulfide cysteines (default: true)")
     
     args = parser.parse_args()
 
@@ -279,6 +305,32 @@ def main():
     protect_tetrad = args.protect_tetrad.lower() in ('true', '1', 'yes')
     antibody_chains = [c.strip().upper() for c in args.antibody_chains.split(',')]
     
+    # Parse additional protection options
+    protect_fr_contacts = args.protect_fr_contacts.lower() in ('true', '1', 'yes')
+    protect_disulfides = args.protect_disulfides.lower() in ('true', '1', 'yes')
+    
+    # Build extra protected positions list (IMGT numbering)
+    extra_protected_imgt = []
+    
+    # Add user-specified positions
+    if args.protected_positions.strip():
+        for pos_str in args.protected_positions.split(','):
+            try:
+                extra_protected_imgt.append(int(pos_str.strip()))
+            except ValueError:
+                print(f"Warning: Invalid protected position '{pos_str}', skipping")
+    
+    # Add FR contact hotspots if requested
+    if protect_fr_contacts:
+        for region, positions in FR_CONTACT_POSITIONS.items():
+            extra_protected_imgt.extend(positions)
+    
+    # Add disulfide cysteines if requested
+    if protect_disulfides:
+        extra_protected_imgt.extend(DISULFIDE_POSITIONS)
+    
+    extra_protected_imgt = list(set(extra_protected_imgt))  # Remove duplicates
+    
     # Data structures for outputs
     mpnn_fixed_chains = {}
     fampnn_lines = ["pdb,fixed_seq_positions,fixed_sidechains\n"]
@@ -288,6 +340,8 @@ def main():
     print(f"Selected loops: {selected_loops}")
     print(f"Protect VHH tetrad: {protect_tetrad}")
     print(f"Antibody chains: {antibody_chains}")
+    if extra_protected_imgt:
+        print(f"Extra protected IMGT positions: {sorted(extra_protected_imgt)}")
 
     for pdb in pdb_files:
         pdb_name = pdb.stem
@@ -325,8 +379,19 @@ def main():
         if 'H' in chains_data:
             chain_h_residues = get_chain_sequence(pdb, 'H')
             tetrad_positions = estimate_vhh_tetrad_positions(chain_h_residues, 'H')
+            
+            # Convert extra protected IMGT positions to PDB positions
+            # Using same offset calculation as tetrad
+            if chain_h_residues and extra_protected_imgt:
+                sorted_residues = sorted(chain_h_residues.keys())
+                offset = sorted_residues[0] - 1 if sorted_residues else 0
+                extra_protected_pdb = [pos + offset for pos in extra_protected_imgt 
+                                       if (pos + offset) in chain_h_residues]
+            else:
+                extra_protected_pdb = []
         else:
             tetrad_positions = []
+            extra_protected_pdb = []
         
         # Compute fixed residues based on mode
         fixed_residues = compute_fixed_residues(
@@ -336,7 +401,8 @@ def main():
             tetrad_positions=tetrad_positions,
             selected_loops=selected_loops,
             protect_tetrad=protect_tetrad,
-            antibody_chains=antibody_chains
+            antibody_chains=antibody_chains,
+            extra_protected_positions=extra_protected_pdb
         )
         
         # Generate FAMPNN constraints (chain + residue ranges)

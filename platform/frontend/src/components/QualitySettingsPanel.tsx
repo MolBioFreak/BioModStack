@@ -43,6 +43,10 @@ export interface QualitySettings {
     af2_backprop_loss_plddt: number;          // Weight for pLDDT loss (confidence)
     af2_backprop_loss_pae: number;            // Weight for PAE loss (alignment error)
     af2_backprop_loss_contact: number;        // Weight for interface contact loss
+
+    // Post-Boltz validation filtering (applied after Boltz-2 structure prediction)
+    boltz_max_binder_rmsd: number | null;     // Max RMSD (Å) for binder vs design (null = no filter)
+    boltz_min_ptm_interface: number | null;   // Min interface pTM score (null = no filter)
 }
 
 export type QualityPreset = 'speed' | 'balanced' | 'quality' | 'maximum';
@@ -85,6 +89,9 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         af2_backprop_loss_plddt: 0.1,
         af2_backprop_loss_pae: 0.1,
         af2_backprop_loss_contact: 0.5,
+        // Post-Boltz validation filtering (disabled for speed)
+        boltz_max_binder_rmsd: null,
+        boltz_min_ptm_interface: null,
     },
     balanced: {
         // RFantibody: Default quality
@@ -123,6 +130,9 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         af2_backprop_loss_plddt: 0.1,
         af2_backprop_loss_pae: 0.1,
         af2_backprop_loss_contact: 0.5,
+        // Post-Boltz validation filtering (permissive for balanced)
+        boltz_max_binder_rmsd: null,
+        boltz_min_ptm_interface: null,
     },
     quality: {
         // RFantibody: Higher quality designs
@@ -161,6 +171,9 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         af2_backprop_loss_plddt: 0.1,
         af2_backprop_loss_pae: 0.2,
         af2_backprop_loss_contact: 0.4,
+        // Post-Boltz validation filtering (moderate thresholds)
+        boltz_max_binder_rmsd: 2.5,
+        boltz_min_ptm_interface: 0.5,
     },
     maximum: {
         // RFantibody: Best possible quality
@@ -199,6 +212,9 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         af2_backprop_loss_plddt: 0.1,
         af2_backprop_loss_pae: 0.3,
         af2_backprop_loss_contact: 0.3,
+        // Post-Boltz validation filtering (strict for maximum quality)
+        boltz_max_binder_rmsd: 2.0,
+        boltz_min_ptm_interface: 0.6,
     },
 };
 
@@ -651,6 +667,115 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                     <p className="text-[10px] text-slate-600 mt-1">
                                         Catches individual bad residues even if avg is OK
                                     </p>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Post-Boltz Validation Filtering */}
+                    <div className="space-y-3 pt-3 border-t border-slate-700/50">
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2 text-sm font-medium text-orange-400">
+                                Post-Validation Filtering
+                                <span className="text-xs text-slate-500 font-normal">(after Boltz-2)</span>
+                            </div>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={settings.boltz_max_binder_rmsd !== null || settings.boltz_min_ptm_interface !== null}
+                                    onChange={(e) => {
+                                        if (e.target.checked) {
+                                            updateSetting('boltz_max_binder_rmsd', 2.0);
+                                            updateSetting('boltz_min_ptm_interface', 0.5);
+                                        } else {
+                                            updateSetting('boltz_max_binder_rmsd', null);
+                                            updateSetting('boltz_min_ptm_interface', null);
+                                        }
+                                    }}
+                                    className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-orange-600 focus:ring-orange-500"
+                                />
+                                <span className="text-sm text-slate-300">Enable</span>
+                            </label>
+                        </div>
+
+                        {(settings.boltz_max_binder_rmsd !== null || settings.boltz_min_ptm_interface !== null) && (
+                            <div className="space-y-4">
+                                <p className="text-xs text-slate-500">
+                                    Filters designs after Boltz-2 structure prediction based on self-consistency (RMSD) and interface confidence (iPTM).
+                                </p>
+
+                                <div className="grid grid-cols-2 gap-4">
+                                    {/* Max Binder RMSD */}
+                                    <div>
+                                        <div className="flex items-center justify-between mb-1">
+                                            <label className="block text-xs text-slate-500">
+                                                Max RMSD (Å) <span className="text-slate-600">({settings.boltz_max_binder_rmsd?.toFixed(1) ?? 'off'})</span>
+                                            </label>
+                                            <label className="flex items-center gap-1 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={settings.boltz_max_binder_rmsd !== null}
+                                                    onChange={(e) => updateSetting('boltz_max_binder_rmsd', e.target.checked ? 2.0 : null)}
+                                                    className="w-3 h-3 rounded border-slate-600 bg-slate-800 text-orange-600"
+                                                />
+                                                <span className="text-[10px] text-slate-500">Enable</span>
+                                            </label>
+                                        </div>
+                                        {settings.boltz_max_binder_rmsd !== null && (
+                                            <>
+                                                <input
+                                                    type="range"
+                                                    min={0.5}
+                                                    max={5.0}
+                                                    step={0.5}
+                                                    value={settings.boltz_max_binder_rmsd}
+                                                    onChange={(e) => updateSetting('boltz_max_binder_rmsd', parseFloat(e.target.value))}
+                                                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
+                                                />
+                                                <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                                                    <span>0.5 (strict)</span>
+                                                    <span>2.0</span>
+                                                    <span>5.0 (permissive)</span>
+                                                </div>
+                                            </>
+                                        )}
+                                    </div>
+
+                                    {/* Min iPTM Interface */}
+                                    <div>
+                                        <div className="flex items-center justify-between mb-1">
+                                            <label className="block text-xs text-slate-500">
+                                                Min iPTM <span className="text-slate-600">({settings.boltz_min_ptm_interface?.toFixed(2) ?? 'off'})</span>
+                                            </label>
+                                            <label className="flex items-center gap-1 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={settings.boltz_min_ptm_interface !== null}
+                                                    onChange={(e) => updateSetting('boltz_min_ptm_interface', e.target.checked ? 0.5 : null)}
+                                                    className="w-3 h-3 rounded border-slate-600 bg-slate-800 text-orange-600"
+                                                />
+                                                <span className="text-[10px] text-slate-500">Enable</span>
+                                            </label>
+                                        </div>
+                                        {settings.boltz_min_ptm_interface !== null && (
+                                            <>
+                                                <input
+                                                    type="range"
+                                                    min={0.3}
+                                                    max={0.8}
+                                                    step={0.05}
+                                                    value={settings.boltz_min_ptm_interface}
+                                                    onChange={(e) => updateSetting('boltz_min_ptm_interface', parseFloat(e.target.value))}
+                                                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
+                                                />
+                                                <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                                                    <span>0.30 (permissive)</span>
+                                                    <span>0.55</span>
+                                                    <span>0.80 (strict)</span>
+                                                </div>
+                                            </>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
                         )}

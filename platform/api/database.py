@@ -178,6 +178,13 @@ class Design(Base):
     cdr_l3_length = Column(Integer, nullable=True)
     antibody_type = Column(String(20), nullable=True)  # vhh, fab, scfv, or NULL
     
+    # Framework Contact Hotspots (IMGT positions, Zavrtanik et al. 2018)
+    # These FR positions mediate antigen contacts in nanobodies
+    fr2_contacts = Column(String(20), nullable=True)   # IMGT 37, 42, 44, 45, 47
+    de_loop = Column(String(10), nullable=True)        # IMGT 72-75
+    fr3_contacts = Column(String(15), nullable=True)   # IMGT 82-87
+    fr4_contacts = Column(String(10), nullable=True)   # IMGT 101-103
+    
     # Antibody Properties
     humanness_score = Column(Float, nullable=True)  # OAS/ANARCI derived
     developability_flags = Column(JSON, nullable=True)  # TAP-like warnings

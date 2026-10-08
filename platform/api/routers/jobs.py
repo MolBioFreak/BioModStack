@@ -722,7 +722,8 @@ async def annotate_cdr_regions(
                         cdr_h1 = ?, cdr_h2 = ?, cdr_h3 = ?,
                         cdr_l1 = ?, cdr_l2 = ?, cdr_l3 = ?,
                         cdr_h1_length = ?, cdr_h2_length = ?, cdr_h3_length = ?,
-                        cdr_l1_length = ?, cdr_l2_length = ?, cdr_l3_length = ?
+                        cdr_l1_length = ?, cdr_l2_length = ?, cdr_l3_length = ?,
+                        fr2_contacts = ?, de_loop = ?, fr3_contacts = ?, fr4_contacts = ?
                     WHERE id = ?
                 """, (
                     annot.antibody_type, annot.binder_length,
@@ -730,6 +731,7 @@ async def annotate_cdr_regions(
                     annot.cdr_l1, annot.cdr_l2, annot.cdr_l3,
                     annot.cdr_h1_length, annot.cdr_h2_length, annot.cdr_h3_length,
                     annot.cdr_l1_length, annot.cdr_l2_length, annot.cdr_l3_length,
+                    annot.fr2_contacts, annot.de_loop, annot.fr3_contacts, annot.fr4_contacts,
                     design_id
                 ))
                 annotated += 1
