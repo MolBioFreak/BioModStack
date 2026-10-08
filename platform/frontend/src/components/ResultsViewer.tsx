@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useParams, useNavigate } from 'react-router-dom';
-import { fetchJobs, fetchJobAnalytics, fetchDesigns } from '../lib/api';
+import { fetchJobs, fetchJobAnalytics, fetchDesigns, fetchDesignResidueMetrics } from '../lib/api';
 import { MolViewer } from './MolViewer';
-import { Histogram, MetricScatter } from './MetricCharts';
+import { Histogram, MetricScatter, ResidueLineChart } from './MetricCharts';
 import { BatchComparePane } from './BatchComparePane';
 
 // Tab definitions
@@ -93,6 +93,14 @@ export function ResultsViewer() {
     });
     const designs = designsData?.data.designs ?? [];
 
+    // Fetch per-residue metrics for selected design (for line chart)
+    const { data: residueMetricsData } = useQuery({
+        queryKey: ['residueMetrics', selectedDesignId],
+        queryFn: () => fetchDesignResidueMetrics(selectedDesignId),
+        enabled: !!selectedDesignId,
+    });
+    const residueMetrics = residueMetricsData?.data;
+
     // Sorted & Filtered designs for table
     const sortedDesigns = useMemo(() => {
         let filtered = designs;
@@ -179,18 +187,49 @@ export function ResultsViewer() {
                             {activeJob ? `${activeJob.name} • ${activeJob.model_id}` : 'Select a job to analyze'}
                         </p>
                     </div>
-                    <select
-                        value={selectedJobId}
-                        onChange={handleJobChange}
-                        className="bg-slate-800 text-white border border-slate-700 rounded-lg px-4 py-2 min-w-[280px] focus:ring-2 focus:ring-blue-500"
-                    >
-                        <option value="">Select a job...</option>
-                        {jobs.map(job => (
-                            <option key={job.id} value={job.id}>
-                                {job.name} ({job.status}) - {job.design_count} designs
-                            </option>
-                        ))}
-                    </select>
+
+                    {/* Smart Job Selector */}
+                    <div className="flex items-center gap-3">
+                        <div className="relative">
+                            <select
+                                value={selectedJobId}
+                                onChange={handleJobChange}
+                                className="bg-slate-800/80 text-white border border-slate-600 rounded-xl pl-4 pr-10 py-3 min-w-[400px] focus:ring-2 focus:ring-blue-500 focus:border-blue-500 appearance-none cursor-pointer font-medium shadow-lg transition-all hover:border-slate-500"
+                            >
+                                <option value="">Select a job...</option>
+                                {jobs
+                                    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+                                    .map(job => {
+                                        const date = new Date(job.created_at);
+                                        const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                                        const timeStr = date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+                                        const statusIcon = job.status === 'completed' ? '✓' : job.status === 'running' ? '⟳' : job.status === 'failed' ? '✗' : '○';
+                                        return (
+                                            <option key={job.id} value={job.id}>
+                                                {statusIcon} {job.name} │ {dateStr} {timeStr} │ {job.model_id || job.mode} │ {job.design_count} designs
+                                            </option>
+                                        );
+                                    })}
+                            </select>
+                            {/* Custom dropdown arrow */}
+                            <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                                <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                </svg>
+                            </div>
+                        </div>
+
+                        {/* Quick job info badge */}
+                        {activeJob && (
+                            <div className="flex items-center gap-2 px-3 py-2 bg-slate-800/60 border border-slate-700 rounded-lg text-xs">
+                                <span className={`w-2 h-2 rounded-full ${activeJob.status === 'completed' ? 'bg-emerald-400' :
+                                    activeJob.status === 'running' ? 'bg-blue-400 animate-pulse' :
+                                        activeJob.status === 'failed' ? 'bg-red-400' : 'bg-slate-400'
+                                    }`}></span>
+                                <span className="text-slate-300 font-medium">{designs.length} designs</span>
+                            </div>
+                        )}
+                    </div>
                 </div>
 
                 {selectedJobId && (
@@ -267,6 +306,38 @@ export function ResultsViewer() {
                                     {/* ANALYTICS TAB */}
                                     {activeTab === 'analytics' && analytics && (
                                         <div className="p-6 space-y-6">
+                                            {/* Per-residue pLDDT Section */}
+                                            <div className="space-y-4">
+                                                <div className="flex items-center justify-between">
+                                                    <h3 className="text-lg font-semibold text-white">Per-Residue Confidence</h3>
+                                                    <select
+                                                        value={selectedDesignId}
+                                                        onChange={(e) => setSelectedDesignId(e.target.value)}
+                                                        className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 max-w-xs"
+                                                    >
+                                                        <option value="">Select a design...</option>
+                                                        {designs.slice(0, 50).map(d => (
+                                                            <option key={d.id} value={d.id}>
+                                                                {d.name} {d.plddt_overall ? `(${d.plddt_overall.toFixed(0)})` : ''}
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                                {residueMetrics ? (
+                                                    <ResidueLineChart
+                                                        residueNumbers={residueMetrics.residue_numbers}
+                                                        plddt={residueMetrics.plddt}
+                                                        designName={residueMetrics.design_name}
+                                                        height={280}
+                                                    />
+                                                ) : (
+                                                    <div className="bg-slate-800/40 p-8 rounded-2xl border border-slate-700/40 text-center">
+                                                        <p className="text-slate-500">Select a design above to view per-residue pLDDT</p>
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {/* Histogram Grid */}
                                             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                                                 {analytics.metrics?.plddt_overall && (
                                                     <Histogram title="pLDDT Distribution" data={analytics.metrics.plddt_overall} color="#60a5fa" />
@@ -288,6 +359,84 @@ export function ResultsViewer() {
                                                         yLabel="PAE"
                                                     />
                                                 )}
+                                            </div>
+
+                                            {/* Design Rankings Table */}
+                                            <div className="bg-gradient-to-br from-slate-800/60 to-slate-900/60 rounded-2xl border border-slate-700/50 overflow-hidden shadow-xl">
+                                                <div className="px-6 py-4 border-b border-slate-700/50 flex items-center justify-between">
+                                                    <h3 className="text-white text-base font-semibold flex items-center gap-2">
+                                                        <svg className="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
+                                                        </svg>
+                                                        Top Designs by pLDDT
+                                                    </h3>
+                                                    <span className="text-xs text-slate-400">Top 10 of {designs.length}</span>
+                                                </div>
+                                                <div className="overflow-x-auto">
+                                                    <table className="w-full">
+                                                        <thead>
+                                                            <tr className="bg-slate-800/50 text-xs uppercase tracking-wider text-slate-400">
+                                                                <th className="text-left px-6 py-3 font-medium">#</th>
+                                                                <th className="text-left px-6 py-3 font-medium">Design Name</th>
+                                                                <th className="text-right px-6 py-3 font-medium">pLDDT</th>
+                                                                <th className="text-right px-6 py-3 font-medium">PAE</th>
+                                                                <th className="text-right px-6 py-3 font-medium">pTM</th>
+                                                                <th className="text-right px-6 py-3 font-medium">Conf</th>
+                                                                <th className="text-center px-6 py-3 font-medium">Action</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody className="divide-y divide-slate-700/50">
+                                                            {[...designs]
+                                                                .sort((a, b) => (b.plddt_overall ?? 0) - (a.plddt_overall ?? 0))
+                                                                .slice(0, 10)
+                                                                .map((d, idx) => (
+                                                                    <tr key={d.id} className="hover:bg-slate-800/30 transition-colors">
+                                                                        <td className="px-6 py-3">
+                                                                            <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${idx === 0 ? 'bg-amber-500/20 text-amber-400' :
+                                                                                    idx === 1 ? 'bg-slate-400/20 text-slate-300' :
+                                                                                        idx === 2 ? 'bg-orange-600/20 text-orange-400' :
+                                                                                            'bg-slate-700/50 text-slate-500'
+                                                                                }`}>
+                                                                                {idx + 1}
+                                                                            </span>
+                                                                        </td>
+                                                                        <td className="px-6 py-3 text-sm text-white font-medium truncate max-w-[200px]">{d.name}</td>
+                                                                        <td className={`px-6 py-3 text-sm text-right font-mono font-semibold ${(d.plddt_overall ?? 0) >= 80 ? 'text-emerald-400' :
+                                                                                (d.plddt_overall ?? 0) >= 60 ? 'text-amber-400' : 'text-red-400'
+                                                                            }`}>
+                                                                            {d.plddt_overall?.toFixed(1) ?? '—'}
+                                                                        </td>
+                                                                        <td className={`px-6 py-3 text-sm text-right font-mono ${d.pae_overall != null && d.pae_overall <= 10 ? 'text-emerald-400' :
+                                                                                d.pae_overall != null && d.pae_overall <= 20 ? 'text-amber-400' :
+                                                                                    d.pae_overall != null ? 'text-red-400' : 'text-slate-600'
+                                                                            }`}>
+                                                                            {d.pae_overall?.toFixed(1) ?? '—'}
+                                                                        </td>
+                                                                        <td className={`px-6 py-3 text-sm text-right font-mono ${d.ptm != null && d.ptm >= 0.5 ? 'text-emerald-400' :
+                                                                                d.ptm != null && d.ptm >= 0.3 ? 'text-amber-400' :
+                                                                                    d.ptm != null ? 'text-red-400' : 'text-slate-600'
+                                                                            }`}>
+                                                                            {d.ptm?.toFixed(3) ?? '—'}
+                                                                        </td>
+                                                                        <td className="px-6 py-3 text-sm text-right font-mono text-slate-400">
+                                                                            {d.conf_score?.toFixed(3) ?? '—'}
+                                                                        </td>
+                                                                        <td className="px-6 py-3 text-center">
+                                                                            <button
+                                                                                onClick={() => {
+                                                                                    setSelectedDesignId(d.id);
+                                                                                    setActiveTab('structure');
+                                                                                }}
+                                                                                className="text-blue-400 hover:text-blue-300 text-xs font-medium"
+                                                                            >
+                                                                                View 3D
+                                                                            </button>
+                                                                        </td>
+                                                                    </tr>
+                                                                ))}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
                                             </div>
                                         </div>
                                     )}

@@ -35,6 +35,9 @@ export interface GPUStatus {
     memory_total_mb: number;
     power_draw_w: number;
     power_limit_w: number;
+    min_power_watts: number;
+    default_power_watts: number;
+    max_power_watts: number;
     temperature: number;
     fan_speed: number;
     clock_graphics_mhz: number;
@@ -52,6 +55,7 @@ export interface CPUStatus {
     per_core_utilization: number[];
     frequency_current_mhz: number;
     frequency_max_mhz: number;
+    temperature: number | null;
 }
 
 export interface RAMStatus {
@@ -59,6 +63,9 @@ export interface RAMStatus {
     used_gb: number;
     available_gb: number;
     utilization: number;
+    swap_total_gb: number;
+    swap_used_gb: number;
+    swap_percent: number;
 }
 
 export interface SystemStatus {
@@ -66,11 +73,35 @@ export interface SystemStatus {
     cpu: CPUStatus;
     ram: RAMStatus;
     timestamp: string;
+    cpu_history: number[];
+    ram_history: number[];
 }
 
 export interface PowerProfile {
     eco_mode: boolean;
     message: string;
+}
+
+export interface PowerControlState {
+    limits: Record<number, number>;
+    eco_mode: boolean;
+    power_percentage: number;
+    total_current_watts: number;
+    total_max_watts: number;
+    hardware_limits: Record<number, {
+        min: number;
+        default: number;
+        max: number;
+        eco: number;
+        name: string;
+    }>;
+}
+
+export interface PowerControlResponse {
+    success: boolean;
+    message: string;
+    limits: Record<number, number>;
+    eco_mode: boolean;
 }
 
 // API functions
@@ -171,13 +202,37 @@ export const toggleDesignFavorite = (designId: string, isFavorite: boolean) =>
 export const downloadDesignPdb = (designId: string) =>
     `http://localhost:8000/api/designs/${designId}/pdb`;
 
-// Power profile (eco mode)
+// Per-residue metrics for charts
+export interface ResidueMetrics {
+    design_id: string;
+    design_name: string;
+    residue_numbers: number[];
+    plddt: number[];
+    length: number;
+}
+
+export const fetchDesignResidueMetrics = (designId: string) =>
+    api.get<ResidueMetrics>(`/api/designs/${designId}/residue-metrics`);
+
+// Power control (eco mode + manual)
 export const fetchPowerProfile = () =>
     api.get<PowerProfile>('/api/gpu/power-profile');
 
 export const setPowerProfile = (enableEco: boolean) =>
     api.post<PowerProfile>('/api/gpu/power-profile', null, {
         params: { enable_eco: enableEco }
+    });
+
+export const fetchPowerControl = () =>
+    api.get<PowerControlState>('/api/gpu/power-control');
+
+export const setPowerControlPreset = (preset: 'eco' | 'stock') =>
+    api.post<PowerControlResponse>('/api/gpu/power-control', { preset });
+
+export const setPowerControlManual = (gpuIndex: number, limitWatts: number) =>
+    api.post<PowerControlResponse>('/api/gpu/power-control', {
+        gpu_index: gpuIndex,
+        limit_watts: limitWatts
     });
 
 // Analytics API

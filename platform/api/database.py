@@ -77,6 +77,9 @@ class Design(Base):
     conf_score = Column(Float, nullable=True)
     ptm = Column(Float, nullable=True)
     
+    # Per-residue metrics (stored as JSON arrays)
+    residue_plddt = Column(JSON, nullable=True)  # [85.2, 91.3, ...] per residue
+    
     # User annotations
     is_favorite = Column(Boolean, default=False)
     notes = Column(Text, nullable=True)

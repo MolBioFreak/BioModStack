@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel
+from collections import deque
 import subprocess
 
 router = APIRouter()
@@ -19,8 +20,14 @@ HARDWARE_LIMITS = {
     3: {"min": 100, "default": 390, "max": 480, "eco": 300, "name": "RTX 3090"},
 }
 
-# Track current power control state (in-memory, resets on restart)
+# Power control state (in-memory, resets on restart)
 _current_limits = {gpu_idx: limits["default"] for gpu_idx, limits in HARDWARE_LIMITS.items()}
+_saved_limits = {gpu_idx: limits["eco"] for gpu_idx, limits in HARDWARE_LIMITS.items()}  # User's saved profile
+_power_enabled = False  # True = using saved limits, False = using stock
+
+# Historical data for sparkline graphs (max 60 samples = ~2 min at 2s polling)
+_cpu_history: deque = deque(maxlen=60)
+_ram_history: deque = deque(maxlen=60)
 
 
 # --- Enhanced GPU Schema ---
@@ -68,6 +75,7 @@ class CPUStatus(BaseModel):
     per_core_utilization: List[float]
     frequency_current_mhz: float
     frequency_max_mhz: float
+    temperature: Optional[float] = None  # Celsius, if available
 
 
 class RAMStatus(BaseModel):
@@ -76,6 +84,9 @@ class RAMStatus(BaseModel):
     used_gb: float
     available_gb: float
     utilization: float  # percentage
+    swap_total_gb: float
+    swap_used_gb: float
+    swap_percent: float
 
 
 class SystemStatusResponse(BaseModel):
@@ -84,6 +95,9 @@ class SystemStatusResponse(BaseModel):
     cpu: CPUStatus
     ram: RAMStatus
     timestamp: datetime
+    # Historical data for sparkline graphs (last 60 samples)
+    cpu_history: List[float] = []  # Overall CPU % over time
+    ram_history: List[float] = []  # RAM % over time
 
 
 def get_gpu_stats() -> List[GPUStatusEnhanced]:
@@ -155,6 +169,9 @@ def get_gpu_stats() -> List[GPUStatusEnhanced]:
             except pynvml.NVMLError:
                 pass
             
+            # Get hardware limits for this GPU (fallback to defaults if not defined)
+            hw_limits = HARDWARE_LIMITS.get(i, {"min": 100, "default": 300, "max": 400})
+            
             gpus.append(GPUStatusEnhanced(
                 index=i,
                 name=name,
@@ -164,6 +181,9 @@ def get_gpu_stats() -> List[GPUStatusEnhanced]:
                 memory_total_mb=memory.total // (1024 * 1024),
                 power_draw_w=round(power_draw, 1),
                 power_limit_w=round(power_limit, 1),
+                min_power_watts=hw_limits["min"],
+                default_power_watts=hw_limits["default"],
+                max_power_watts=hw_limits["max"],
                 temperature=temperature,
                 fan_speed=fan_speed,
                 clock_graphics_mhz=clock_graphics,
@@ -198,6 +218,19 @@ def get_cpu_stats() -> CPUStatus:
     
     freq = psutil.cpu_freq()
     
+    # Try to get CPU temperature
+    cpu_temp = None
+    try:
+        temps = psutil.sensors_temperatures()
+        if temps:
+            # Try common sensor names
+            for name in ['coretemp', 'k10temp', 'cpu_thermal', 'acpitz']:
+                if name in temps and temps[name]:
+                    cpu_temp = temps[name][0].current
+                    break
+    except:
+        pass
+    
     return CPUStatus(
         name=cpu_name,
         cores_physical=psutil.cpu_count(logical=False) or 0,
@@ -205,7 +238,8 @@ def get_cpu_stats() -> CPUStatus:
         utilization=psutil.cpu_percent(interval=0.1),
         per_core_utilization=psutil.cpu_percent(interval=0.1, percpu=True),
         frequency_current_mhz=freq.current if freq else 0,
-        frequency_max_mhz=freq.max if freq else 0
+        frequency_max_mhz=freq.max if freq else 0,
+        temperature=cpu_temp
     )
 
 
@@ -214,23 +248,36 @@ def get_ram_stats() -> RAMStatus:
     import psutil
     
     mem = psutil.virtual_memory()
+    swap = psutil.swap_memory()
     
     return RAMStatus(
         total_gb=round(mem.total / (1024**3), 1),
         used_gb=round(mem.used / (1024**3), 1),
         available_gb=round(mem.available / (1024**3), 1),
-        utilization=mem.percent
+        utilization=mem.percent,
+        swap_total_gb=round(swap.total / (1024**3), 1),
+        swap_used_gb=round(swap.used / (1024**3), 1),
+        swap_percent=swap.percent
     )
 
 
 @router.get("/status")
 async def get_system_status():
     """Get complete system status including GPUs, CPU, and RAM."""
+    cpu = get_cpu_stats()
+    ram = get_ram_stats()
+    
+    # Append to history for sparkline graphs
+    _cpu_history.append(cpu.utilization)
+    _ram_history.append(ram.utilization)
+    
     return SystemStatusResponse(
         gpus=get_gpu_stats(),
-        cpu=get_cpu_stats(),
-        ram=get_ram_stats(),
-        timestamp=datetime.utcnow()
+        cpu=cpu,
+        ram=ram,
+        timestamp=datetime.utcnow(),
+        cpu_history=list(_cpu_history),
+        ram_history=list(_ram_history)
     )
 
 
@@ -275,38 +322,124 @@ def set_gpu_power_limit(gpu_index: int, watts: int) -> bool:
         return False
 
 
-@router.get("/power-profile")
-async def get_power_profile() -> PowerProfileResponse:
-    """Get current power profile state."""
-    return PowerProfileResponse(
-        eco_mode=_eco_mode_enabled,
-        message="Eco mode active" if _eco_mode_enabled else "Default power limits"
+@router.get("/power-control")
+async def get_power_control():
+    """Get current power control state."""
+    # Determine if eco mode is active (any GPU below default)
+    any_below_default = any(
+        _current_limits.get(idx, limits["default"]) < limits["default"]
+        for idx, limits in HARDWARE_LIMITS.items()
     )
-
-
-@router.post("/power-profile")
-async def set_power_profile(enable_eco: bool) -> PowerProfileResponse:
-    """Toggle eco mode power limits."""
-    global _eco_mode_enabled
-
-    errors = []
-    # GPU index -> (eco_limit_watts, default_limit_watts)
-    for gpu_index, (eco_watts, default_watts) in POWER_PROFILES.items():
-        target_watts = eco_watts if enable_eco else default_watts
-        if not set_gpu_power_limit(gpu_index, target_watts):
-            errors.append(f"GPU {gpu_index}")
-
-    message_suffix = ""
-    if errors:
-        # Log failure but DO NOT crash the UI - keep button in sync with intended state
-        print(f"ERROR: Failed to set power limits for: {', '.join(errors)}")
-        message_suffix = f" (Failed on: {', '.join(errors)})"
     
-    # Always update state to keep UI responsive
-    _eco_mode_enabled = enable_eco
+    # Calculate power percentage (0% = all at min, 100% = all at max)
+    total_min = sum(limits["min"] for limits in HARDWARE_LIMITS.values())
+    total_max = sum(limits["max"] for limits in HARDWARE_LIMITS.values())
+    total_current = sum(_current_limits.get(idx, limits["default"]) for idx, limits in HARDWARE_LIMITS.items())
+    
+    power_range = total_max - total_min
+    power_percentage = round(((total_current - total_min) / power_range) * 100) if power_range > 0 else 100
+    
+    return {
+        "limits": _current_limits,
+        "saved_limits": _saved_limits,
+        "enabled": _power_enabled,
+        "eco_mode": any_below_default,
+        "power_percentage": power_percentage,
+        "total_current_watts": total_current,
+        "total_max_watts": total_max,
+        "hardware_limits": HARDWARE_LIMITS
+    }
 
-    return PowerProfileResponse(
-        eco_mode=_eco_mode_enabled,
-        message=f"Eco mode {'enabled' if enable_eco else 'disabled'} - limits applied{message_suffix}"
+
+class PowerControlRequest(BaseModel):
+    preset: Optional[str] = None  # "eco" or "stock"
+    gpu_index: Optional[int] = None
+    limit_watts: Optional[int] = None
+    toggle: Optional[bool] = None  # Toggle between saved limits and stock
+
+
+@router.post("/power-control")
+async def set_power_control(request: PowerControlRequest):
+    """Set power limits via preset, manual control, or toggle."""
+    global _current_limits, _saved_limits, _power_enabled
+    
+    errors = []
+    
+    if request.toggle:
+        # Toggle between saved limits and stock
+        _power_enabled = not _power_enabled
+        
+        for gpu_idx, limits in HARDWARE_LIMITS.items():
+            target = _saved_limits[gpu_idx] if _power_enabled else limits["default"]
+            if set_gpu_power_limit(gpu_idx, target):
+                _current_limits[gpu_idx] = target
+            else:
+                errors.append(f"GPU {gpu_idx}")
+        
+        message = f"Power limits {'enabled' if _power_enabled else 'disabled (stock)'}"
+        
+    elif request.preset:
+        # Apply preset to all GPUs
+        for gpu_idx, limits in HARDWARE_LIMITS.items():
+            if request.preset == "eco":
+                target = limits["eco"]
+            elif request.preset == "stock":
+                target = limits["default"]
+                _power_enabled = False  # Disable when going to stock
+            else:
+                raise HTTPException(status_code=400, detail=f"Unknown preset: {request.preset}")
+            
+            if set_gpu_power_limit(gpu_idx, target):
+                _current_limits[gpu_idx] = target
+                if request.preset == "eco":
+                    _saved_limits[gpu_idx] = target
+                    _power_enabled = True
+            else:
+                errors.append(f"GPU {gpu_idx}")
+        
+        message = f"Applied '{request.preset}' preset"
+        
+    elif request.gpu_index is not None and request.limit_watts is not None:
+        # Manual single-GPU control - also saves to _saved_limits
+        if request.gpu_index not in HARDWARE_LIMITS:
+            raise HTTPException(status_code=400, detail=f"Unknown GPU index: {request.gpu_index}")
+        
+        limits = HARDWARE_LIMITS[request.gpu_index]
+        clamped = max(limits["min"], min(request.limit_watts, limits["max"]))
+        
+        if set_gpu_power_limit(request.gpu_index, clamped):
+            _current_limits[request.gpu_index] = clamped
+            _saved_limits[request.gpu_index] = clamped  # Save for toggle memory
+            _power_enabled = True  # Mark as enabled since user set custom limit
+            message = f"GPU {request.gpu_index} set to {clamped}W"
+        else:
+            errors.append(f"GPU {request.gpu_index}")
+            message = f"Failed to set GPU {request.gpu_index}"
+    else:
+        raise HTTPException(status_code=400, detail="Must provide 'toggle', 'preset', or both 'gpu_index' and 'limit_watts'")
+    
+    # Determine eco mode state
+    any_below_default = any(
+        _current_limits.get(idx, limits["default"]) < limits["default"]
+        for idx, limits in HARDWARE_LIMITS.items()
     )
-
+    
+    # Calculate power percentage
+    total_min = sum(limits["min"] for limits in HARDWARE_LIMITS.values())
+    total_max = sum(limits["max"] for limits in HARDWARE_LIMITS.values())
+    total_current = sum(_current_limits.get(idx, limits["default"]) for idx, limits in HARDWARE_LIMITS.items())
+    power_range = total_max - total_min
+    power_percentage = round(((total_current - total_min) / power_range) * 100) if power_range > 0 else 100
+    
+    if errors:
+        message += f" (Failed: {', '.join(errors)})"
+    
+    return {
+        "success": len(errors) == 0,
+        "message": message,
+        "limits": _current_limits,
+        "saved_limits": _saved_limits,
+        "enabled": _power_enabled,
+        "eco_mode": any_below_default,
+        "power_percentage": power_percentage
+    }

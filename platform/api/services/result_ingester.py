@@ -141,11 +141,23 @@ async def ingest_loose_files(
     
     # Locations to search for confidence/metrics JSONs
     # Boltz outputs often in pdb_files/predictions/
+    # RF3 outputs in pdb_files/rf3/output/*/
     search_paths = [
         output_path / "pdb_files" / "predictions",
         output_path / "pdb_files",
-        output_path
+        output_path,
     ]
+    
+    # Also search RF3 nested output directories
+    rf3_base = output_path / "pdb_files" / "rf3" / "output"
+    if rf3_base.exists():
+        for subdir in rf3_base.iterdir():
+            if subdir.is_dir():
+                search_paths.append(subdir)
+                # Also search seed-*/sample-* subdirs
+                for sample_dir in subdir.glob("seed-*_sample-*"):
+                    if sample_dir.is_dir():
+                        search_paths.append(sample_dir)
     
     designs_created = 0
     
@@ -155,8 +167,8 @@ async def ingest_loose_files(
     for search_dir in search_paths:
         if not search_dir.exists():
             continue
-            
-        # Look for confidence_*.json patterns from Boltz
+        
+        # BOLTZ2: Look for confidence_*.json patterns
         for json_file in search_dir.glob("confidence_*.json"):
             try:
                 # Filename format: confidence_DESIGNNAME.json
@@ -166,31 +178,36 @@ async def ingest_loose_files(
                     continue
                 
                 # Look for corresponding PDB
-                # It might be in the same dir as DESIGNNAME.pdb
                 pdb_path = search_dir / f"{design_name}.pdb"
                 if not pdb_path.exists():
-                    # Check parent pdb_files if we are in predictions subdir
                     pdb_path = output_path / "pdb_files" / f"{design_name}.pdb"
+                if not pdb_path.exists():
+                    pdb_path = output_path / "pdb_files" / "predictions" / f"{design_name}.pdb"
                 
                 if not pdb_path.exists():
-                    # Try finding it recursively? No, keep simple first.
                     continue
                     
-                # Read metrics
+                # Read Boltz2 metrics
                 with open(json_file, 'r') as f:
                     metrics = json.load(f)
                 
-                # Check mapping
+                # Boltz2 format: complex_plddt, ptm, iptm, confidence_score, complex_pde
                 plddt = metrics.get('complex_plddt') or metrics.get('plddt')
-                # Scale pLDDT if seemingly 0-1 to 0-100
                 if plddt is not None and plddt <= 1.0:
                     plddt = plddt * 100.0
                 
                 conf_score = metrics.get('confidence_score')
                 ptm = metrics.get('ptm')
-                pae = metrics.get('complex_pae') or metrics.get('pae') # Boltz puts pae in file? Usually separate.
-                # Note: Boltz JSON (see step 294) has 'complex_pde' but not pae.
-                # It does contain 'pair_chains_iptm'.
+                # Boltz2 uses 'complex_pde' not PAE - convert PDE to estimated PAE
+                pae = metrics.get('complex_pae') or metrics.get('pae')
+                if pae is None:
+                    pde = metrics.get('complex_pde')
+                    if pde is not None:
+                        # PDE (Predicted Distance Error) is similar to PAE but different scale
+                        pae = pde  # Store as-is for now
+                
+                # Extract per-residue pLDDT from PDB B-factors
+                _, residue_plddt = extract_plddt_from_pdb(pdb_path)
                 
                 # Create design
                 design = Design(
@@ -202,8 +219,10 @@ async def ingest_loose_files(
                     
                     # Metrics
                     plddt_overall=safe_float(plddt),
+                    pae_overall=safe_float(pae),
                     ptm=safe_float(ptm),
                     conf_score=safe_float(conf_score),
+                    residue_plddt=residue_plddt,
                     
                     # Defaults for others
                     is_favorite=False,
@@ -215,32 +234,100 @@ async def ingest_loose_files(
                 ingested_names.add(design_name)
                 
             except Exception as e:
-                print(f"[Ingester] Error parsing loose file {json_file}: {e}")
+                print(f"[Ingester] Error parsing Boltz2 file {json_file}: {e}")
+        
+        # RF3: Look for *_summary_confidences.json patterns
+        for json_file in search_dir.glob("*_summary_confidences.json"):
+            try:
+                # Filename format: DESIGNNAME_summary_confidences.json
+                design_name = json_file.stem.replace("_summary_confidences", "")
+                
+                if design_name in ingested_names:
+                    continue
+                
+                # Look for corresponding structure file (RF3 outputs .cif not .pdb)
+                # Try CIF first (RF3 default), then PDB as fallback
+                structure_path = None
+                
+                # Check for CIF with _model suffix
+                cif_path = search_dir / f"{design_name}_model.cif"
+                if not cif_path.exists():
+                    cif_path = search_dir / f"{design_name}.cif"
+                if not cif_path.exists():
+                    cif_path = search_dir.parent / f"{design_name}_model.cif"
+                if not cif_path.exists():
+                    cif_path = search_dir.parent / f"{design_name}.cif"
+                
+                if cif_path.exists():
+                    structure_path = cif_path
+                else:
+                    # Fallback to PDB
+                    pdb_path = search_dir / f"{design_name}.pdb"
+                    if not pdb_path.exists():
+                        pdb_path = search_dir.parent / f"{design_name}.pdb"
+                    if not pdb_path.exists():
+                        pdb_path = search_dir.parent.parent / f"{design_name}.pdb"
+                    if not pdb_path.exists():
+                        # Try without seed/sample suffix
+                        base_name = design_name.rsplit("_seed-", 1)[0]
+                        pdb_path = output_path / "pdb_files" / f"{base_name}.pdb"
+                    if pdb_path.exists():
+                        structure_path = pdb_path
+                
+                if not structure_path:
+                    print(f"[Ingester] No structure file found for RF3 design {design_name}")
+                    continue
+                    
+                # Read RF3 metrics
+                with open(json_file, 'r') as f:
+                    metrics = json.load(f)
+                
+                # RF3 format: overall_plddt, ptm, iptm, overall_pae, ranking_score
+                plddt = metrics.get('overall_plddt')
+                if plddt is not None and plddt <= 1.0:
+                    plddt = plddt * 100.0
+                
+                pae = metrics.get('overall_pae')
+                ptm = metrics.get('ptm')
+                iptm = metrics.get('iptm')
+                ranking_score = metrics.get('ranking_score')
+                
+                # Use ranking_score as confidence if available
+                conf_score = ranking_score if ranking_score is not None else None
+                
+                # Extract per-residue pLDDT from structure B-factors (works for PDB, may be None for CIF)
+                _, residue_plddt = extract_plddt_from_pdb(structure_path) if str(structure_path).endswith('.pdb') else (None, None)
+                
+                # Create design
+                design = Design(
+                    id=str(uuid.uuid4()),
+                    job_id=job_id,
+                    name=design_name,
+                    pdb_path=str(structure_path),  # Can be .cif or .pdb
+                    json_path=str(json_file),
+                    
+                    # Metrics
+                    plddt_overall=safe_float(plddt),
+                    pae_overall=safe_float(pae),
+                    ptm=safe_float(ptm),
+                    conf_score=safe_float(conf_score),
+                    residue_plddt=residue_plddt,
+                    
+                    # Defaults for others
+                    is_favorite=False,
+                    created_at=datetime.utcnow()
+                )
+                
+                session.add(design)
+                designs_created += 1
+                ingested_names.add(design_name)
+                
+            except Exception as e:
+                print(f"[Ingester] Error parsing RF3 file {json_file}: {e}")
                 
     # If still no designs, try just finding PDBs (e.g. valid job but missing metadata)
     if designs_created == 0:
         print("[Ingester] No JSON metrics found. Scanning for raw PDB files...")
-        
-        # Helper to extract pLDDT from PDB B-factors
-        def extract_plddt_from_pdb(pdb_path):
-            try:
-                total_bfactor = 0.0
-                atom_count = 0
-                with open(pdb_path, 'r') as f:
-                    for line in f:
-                        if line.startswith("ATOM  ") or line.startswith("HETATM"):
-                            # B-factor is columns 61-66 (1-indexed) -> 60-66 (0-indexed)
-                            try:
-                                bfactor = float(line[60:66].strip())
-                                total_bfactor += bfactor
-                                atom_count += 1
-                            except ValueError:
-                                pass
-                if atom_count > 0:
-                    return total_bfactor / atom_count
-                return None
-            except Exception:
-                return None
 
         for search_dir in search_paths:
             if not search_dir.exists():
@@ -252,7 +339,7 @@ async def ingest_loose_files(
                     continue
                     
                 # Calculate pLDDT from structure
-                plddt = extract_plddt_from_pdb(pdb_file)
+                plddt, residue_plddt = extract_plddt_from_pdb(pdb_file)
                     
                 design = Design(
                     id=str(uuid.uuid4()),
@@ -261,8 +348,9 @@ async def ingest_loose_files(
                     pdb_path=str(pdb_file),
                     json_path=None,
                     
-                    # Store extracted pLDDT
+                    # Store extracted pLDDT (both average and per-residue)
                     plddt_overall=plddt,
+                    residue_plddt=residue_plddt,
                     
                     is_favorite=False,
                     created_at=datetime.utcnow()
@@ -363,6 +451,38 @@ def safe_int(value) -> Optional[int]:
         return int(float(value))  # Handle "3.0" -> 3
     except (ValueError, TypeError):
         return None
+
+
+def extract_plddt_from_pdb(pdb_path):
+    """
+    Extract pLDDT from PDB B-factors.
+    Returns (avg_plddt, per_residue_array).
+    """
+    try:
+        residue_scores = []  # One score per residue (CA atom)
+        all_scores = []  # All atom scores for average
+        
+        with open(pdb_path, 'r') as f:
+            for line in f:
+                if line.startswith("ATOM  ") or line.startswith("HETATM"):
+                    # B-factor is columns 61-66 (1-indexed) -> 60-66 (0-indexed)
+                    try:
+                        bfactor = float(line[60:66].strip())
+                        all_scores.append(bfactor)
+                        
+                        # Extract CA atoms only for per-residue (one per residue)
+                        atom_name = line[12:16].strip()
+                        if atom_name == "CA":
+                            residue_scores.append(round(bfactor, 2))
+                    except ValueError:
+                        pass
+        
+        avg_plddt = sum(all_scores) / len(all_scores) if all_scores else None
+        per_residue = residue_scores if residue_scores else None
+        
+        return avg_plddt, per_residue
+    except Exception:
+        return None, None
 
 
 async def get_job_summary_metrics(output_dir: str) -> dict:

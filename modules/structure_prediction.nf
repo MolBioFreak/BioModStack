@@ -15,7 +15,10 @@ process GenerateRemoteMSA {
 
     script:
     """
-    python3 ${projectDir}/scripts/fetch_colabfold_msa.py "${sequence}" "${sequence_name}.a3m" \
+    python3 ${projectDir}/scripts/fetch_colabfold_msa.py \
+        --sequence "${sequence}" \
+        --name "${sequence_name}" \
+        --out_dir . \
         2>&1 | tee msa_${sequence_name}.log
     """
 }
@@ -24,11 +27,12 @@ process BoltzFromSequence {
     label 'Boltz'
     label 'gpu'
     publishDir "${params.out_dir}/run/boltz_seq", mode: 'copy', pattern: "*.log"
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "predictions/*.pdb"
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "predictions/*.cif"
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.cif", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.json", saveAs: { filename -> filename.split('/')[-1] }
 
     input:
-    tuple val(sequence), val(sequence_name), path(msa)
+    tuple val(sequence), val(sequence_name)
 
     output:
     path "predictions/*.pdb", emit: pdbs, optional: true
@@ -40,7 +44,7 @@ process BoltzFromSequence {
     def recycling = params.boltz_recycling_steps ?: 3
     def sampling = params.boltz_sampling_steps ?: 50
     def numSamples = params.boltz_num_samples ?: 1
-    def use_msa = msa.name != 'NO_MSA'
+    def useMsaServer = params.boltz_use_msa ? '--use_msa_server' : ''
     """
     # Setup temp directories for containerized execution
     mkdir -p tmp yamls predictions
@@ -50,17 +54,15 @@ process BoltzFromSequence {
     export HOME=tmp
     
     # Write sequence to YAML format expected by Boltz-2
-    # ID must be a chain identifier (e.g. 'A'), not the full name
     cat > yamls/${sequence_name}.yaml << 'EOF'
 version: 1
 sequences:
   - protein:
       id: ['A']
       sequence: ${sequence}
-      msa: ${use_msa ? msa : 'empty'}
 EOF
     
-    # Run Boltz-2 prediction
+    # Run Boltz-2 prediction with optional MSA server
     boltz predict \\
         ./yamls/ \\
         --output_format pdb \\
@@ -68,6 +70,7 @@ EOF
         --recycling_steps ${recycling} \\
         --sampling_steps ${sampling} \\
         --cache /boltzcache \\
+        ${useMsaServer} \\
         ${params.boltz_extra_config ?: ''} \\
         2>&1 | tee boltz_seq_${sequence_name}.log
     
@@ -148,51 +151,33 @@ workflow structure_prediction_wf {
 
     main:
     def pred_method = params.pred_method ?: 'boltz'
-    def boltz_use_msa = params.boltz_use_msa
-    def rf3_use_msa = params.rf3_use_msa
-
-    // Determine if MSA is needed
-    // Logic: If (boltz selected AND boltz_use_msa) OR (rf3 selected AND rf3_use_msa)
-    def need_msa_boltz = (pred_method == 'boltz' || pred_method == 'both') && boltz_use_msa
-    def need_msa_rf3 = (pred_method == 'rf3' || pred_method == 'both') && rf3_use_msa
-
-    msa_out_ch = Channel.empty()
-
-    if (need_msa_boltz || need_msa_rf3) {
-        GenerateRemoteMSA(input_ch)
-        msa_out_ch = GenerateRemoteMSA.out.msa
-    }
-    else {
-        // Create dummy MSA channel matching inputs
-        def dummy_msa = file("${projectDir}/NO_MSA")
-        if (!dummy_msa.exists()) {
-            dummy_msa.text = "empty"
-        }
-
-        msa_out_ch = input_ch.map { seq, name -> tuple(name, dummy_msa) }
-    }
-
-    // Join inputs with MSA (on sequence_name)
-    // input_ch is [seq, name]. Map to [name, seq] for joining.
-    // msa_out_ch is [name, msa].
-    // Result: [name, seq, msa] -> remap to [seq, name, msa]
-
-    def inputs_with_msa = input_ch
-        .map { seq, name -> tuple(name, seq) }
-        .join(msa_out_ch)
-        .map { name, seq, msa -> tuple(seq, name, msa) }
+    def rf3_use_msa = params.rf3_use_msa ?: false
 
     structures = Channel.empty()
 
-    // Run Boltz
+    // Run Boltz-2 (uses --use_msa_server flag internally when boltz_use_msa=true)
     if (pred_method == 'boltz' || pred_method == 'both') {
-        BoltzFromSequence(inputs_with_msa)
+        BoltzFromSequence(input_ch)
         structures = structures.mix(BoltzFromSequence.out.pdbs, BoltzFromSequence.out.cifs)
     }
 
-    // Run RF3
+    // Run RF3 - still needs MSA handling
     if (pred_method == 'rf3' || pred_method == 'both') {
-        RF3FromSequence(inputs_with_msa)
+        if (rf3_use_msa) {
+            // Generate MSA for RF3
+            GenerateRemoteMSA(input_ch)
+            def inputs_with_msa = input_ch
+                .map { seq, name -> tuple(name, seq) }
+                .join(GenerateRemoteMSA.out.msa)
+                .map { name, seq, msa -> tuple(seq, name, msa) }
+            RF3FromSequence(inputs_with_msa)
+        }
+        else {
+            // No MSA - create dummy
+            def dummy_msa = file("${projectDir}/NO_MSA")
+            def inputs_no_msa = input_ch.map { seq, name -> tuple(seq, name, dummy_msa) }
+            RF3FromSequence(inputs_no_msa)
+        }
         structures = structures.mix(RF3FromSequence.out.pdbs, RF3FromSequence.out.cifs)
     }
 
