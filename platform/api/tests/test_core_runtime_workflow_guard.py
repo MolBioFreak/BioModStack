@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
+import fcntl
 import importlib
+import inspect
 import sys
 from pathlib import Path
 
@@ -17,7 +20,7 @@ import main as api_main
 import runtime_policy
 from routers import jobs
 from schemas import JobCreate
-from services import nextflow
+from services import analysis_autorun, nextflow
 
 
 class _ExplodingRegistry:
@@ -77,6 +80,95 @@ def test_guard_message_mentions_adapter_requirement_when_missing(monkeypatch: py
 
     assert "adapter" in detail.lower()
     assert "host-native" in detail.lower()
+
+
+@pytest.mark.asyncio
+async def test_deployment_fence_rejects_mutation_before_route_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    @contextmanager
+    def blocked_admission():
+        raise runtime_policy.WorkflowAdmissionBlocked("deployment in progress")
+        yield
+
+    async def route_should_not_run(_request):
+        raise AssertionError("mutation route executed while deployment fence was held")
+
+    monkeypatch.setattr(api_main, "workflow_mutation_admission", blocked_admission)
+    response = await api_main.deployment_admission_fence(
+        Request({"type": "http", "method": "POST", "scheme": "http", "path": "/api/jobs"}),
+        route_should_not_run,
+    )
+
+    assert response.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_detached_mutation_lease_blocks_cutover_until_coroutine_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    lock_path = tmp_path / "deployment-admission.lock"
+    monkeypatch.setenv(runtime_policy.DEPLOYMENT_ADMISSION_LOCK_ENV, str(lock_path))
+    release = asyncio.Event()
+
+    async def detached_mutation() -> None:
+        await release.wait()
+
+    lease = runtime_policy.acquire_workflow_mutation_lease()
+    task = asyncio.create_task(
+        runtime_policy.run_with_workflow_mutation_lease(lease, detached_mutation())
+    )
+    await asyncio.sleep(0)
+
+    with lock_path.open("a+") as contender:
+        with pytest.raises(BlockingIOError):
+            fcntl.flock(contender.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    release.set()
+    await task
+    with lock_path.open("a+") as contender:
+        fcntl.flock(contender.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(contender.fileno(), fcntl.LOCK_UN)
+
+
+@pytest.mark.asyncio
+async def test_analysis_autorun_holds_mutation_lease_until_detached_work_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    lock_path = tmp_path / "deployment-admission.lock"
+    monkeypatch.setenv(runtime_policy.DEPLOYMENT_ADMISSION_LOCK_ENV, str(lock_path))
+    analysis_autorun._RECENT_AUTORUN_REQUESTS.clear()
+    release = asyncio.Event()
+    completed = asyncio.Event()
+
+    async def fake_ensure(job_id: str) -> None:
+        assert job_id == "job-1"
+        await release.wait()
+        completed.set()
+
+    monkeypatch.setattr(analysis_autorun, "ensure_viewer_minimum_analyses_for_job", fake_ensure)
+
+    assert analysis_autorun.schedule_viewer_minimum_analyses_for_job("job-1") is True
+    await asyncio.sleep(0)
+    with lock_path.open("a+") as contender:
+        with pytest.raises(BlockingIOError):
+            fcntl.flock(contender.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    release.set()
+    await asyncio.wait_for(completed.wait(), timeout=2)
+    await asyncio.sleep(0)
+    with lock_path.open("a+") as contender:
+        fcntl.flock(contender.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(contender.fileno(), fcntl.LOCK_UN)
+
+
+def test_cdr_annotation_transfers_a_mutation_lease_to_detached_work() -> None:
+    source = inspect.getsource(jobs.annotate_cdr_regions)
+
+    assert "acquire_workflow_mutation_lease()" in source
+    assert "run_with_workflow_mutation_lease(" in source
 
 
 @pytest.mark.asyncio
