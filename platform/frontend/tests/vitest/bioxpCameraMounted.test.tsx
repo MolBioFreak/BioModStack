@@ -15,6 +15,8 @@ interface PendingFrame {
 }
 
 interface StreamState {
+    stream_id?: string | null;
+    camera_ownership_epoch?: number;
     schema_version: 'bioxp.camera_stream.v1';
     state: 'off' | 'starting' | 'live' | 'error';
     active: boolean;
@@ -180,6 +182,34 @@ afterEach(async () => {
 });
 
 describe('mounted BioXP camera URL ownership', () => {
+    it('reattaches only on camera owner replacement between polls in another tab', async () => {
+        streamLive();
+        camera.stream.data = { ...camera.stream.data, stream_id: 'first', camera_ownership_epoch: 1 };
+        await renderPanel(1);
+        await advanceFrame(2);
+        expect(container.textContent).toContain('Video live');
+        const first = container.querySelector('img');
+        camera.status.isError = true;
+        camera.status.error = new Error('temporary observation failure');
+        for (let poll = 0; poll < 3; poll++) {
+            camera.stream.data = { ...camera.stream.data };
+            await renderPanel(1);
+            expect(container.querySelector('img')).toBe(first);
+        }
+        // The other tab's explicit stop/start occurs wholly between these polls.
+        camera.stream.data = { ...camera.stream.data, stream_id: 'second', camera_ownership_epoch: 3 };
+        await renderPanel(1);
+        expect(container.querySelector('img')).not.toBe(first);
+        expect(camera.startStream).not.toHaveBeenCalled();
+        expect(camera.stopStream).not.toHaveBeenCalled();
+        const second = container.querySelector('img');
+        camera.stream.data = { ...camera.stream.data };
+        await renderPanel(1);
+        expect(container.querySelector('img')).toBe(second);
+        await renderPanel(2);
+        expect(container.querySelector('img')).toBeNull();
+    });
+
     it('renders actual reader→strict BMS projection fixtures and locally expires frozen producer evidence', async () => {
         vi.useFakeTimers();
         vi.setSystemTime(new Date('2026-09-07T20:00:00Z'));

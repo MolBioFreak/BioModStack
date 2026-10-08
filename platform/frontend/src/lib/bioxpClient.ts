@@ -1720,7 +1720,9 @@ export const useBioXpOperatorReceiptV2 = (
     gcTime: 0,
     retry: false,
     refetchInterval: (query) => {
-        if (query.state.error) return false;
+        // A failed read is not a terminal command outcome. Keep reconciling
+        // this identity at a slower cadence; never resubmit the action.
+        if (query.state.error) return 2_000;
         if (!query.state.data) return 500;
         return bioXpReceiptV2IsNonTerminal(query.state.data) ? 500 : false;
     },
@@ -2354,8 +2356,9 @@ export async function stopBioXpCameraStream(connectionGeneration: number): Promi
     })).data;
 }
 
-export function buildBioXpCameraMjpegUrl(connectionGeneration: number): string {
-    return `${BIOXP_CAMERA_ENDPOINTS.mjpeg}?expected_generation=${encodeURIComponent(String(connectionGeneration))}`;
+export function buildBioXpCameraMjpegUrl(connectionGeneration: number, streamId?: string | null): string {
+    const owner = streamId ? `&stream_id=${encodeURIComponent(streamId)}` : '';
+    return `${BIOXP_CAMERA_ENDPOINTS.mjpeg}?expected_generation=${encodeURIComponent(String(connectionGeneration))}${owner}`;
 }
 
 export async function fetchBioXpCameraFrame(connectionGeneration: number): Promise<BioXpCameraImage> {

@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { api } from '../../src/lib/api';
-import { useInterruptBioXpOperatorActionV1, useBioXpOperatorActionHistory, useBioXpOperatorControlCatalogV2, useInvokeBioXpOperatorAction, useAssessBioXpOperatorAction, useBioXpOperatorMethodV1, useInvokeBioXpOperatorActionV2 } from '../../src/lib/bioxpClient';
+import { useBioXpOperatorReceiptV2, useInterruptBioXpOperatorActionV1, useBioXpOperatorActionHistory, useBioXpOperatorControlCatalogV2, useInvokeBioXpOperatorAction, useAssessBioXpOperatorAction, useBioXpOperatorMethodV1, useInvokeBioXpOperatorActionV2 } from '../../src/lib/bioxpClient';
 
 import { BioXpQuickDashboard } from '../../src/components/BioXpQuickDashboard';
 
@@ -38,6 +38,35 @@ beforeEach(() => {
     vi.mocked(api.get).mockImplementation(async (url) => ({ data: String(url).includes('/methods/') ? { method_id: 'xy-one', status: 'active' } : history('completed') }) as never);
 });
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); });
+
+it.each(['completed', 'failed'])('reconciles XY receipt after transient GET failure to %s without resubmission', async (outcome) => {
+    vi.useFakeTimers();
+    let reads = 0;
+    function ReceiptHarness() {
+        const query = useBioXpOperatorReceiptV2('xy-retained', 7, true);
+        return <output>{query.isError ? 'read failed' : query.data?.status}</output>;
+    }
+    vi.mocked(api.get).mockImplementation(async () => {
+        reads++;
+        if (reads === 1) return { data: { command_id: 'xy-retained', status: 'dispatched', terminal: false } } as never;
+        if (reads === 2) throw new Error('transient status prerequisite failure');
+        return { data: { command_id: 'xy-retained', status: outcome, terminal: true } } as never;
+    });
+    try {
+        await act(async () => root.render(<QueryClientProvider client={client}><ReceiptHarness /></QueryClientProvider>));
+        await act(async () => vi.advanceTimersByTimeAsync(50));
+        expect(container.textContent).toBe('dispatched');
+        await act(async () => vi.advanceTimersByTimeAsync(550));
+        expect(container.textContent).toBe('read failed');
+        await act(async () => vi.advanceTimersByTimeAsync(2100));
+        expect(container.textContent).toBe(outcome);
+        expect(reads).toBe(3);
+        await act(async () => vi.advanceTimersByTimeAsync(5000));
+        expect(reads).toBe(3);
+        expect(api.post).not.toHaveBeenCalled();
+        for (const [url] of vi.mocked(api.get).mock.calls) expect(url).toBe('/api/bioxp/operator-controls/v2/receipts/xy-retained');
+    } finally { vi.useRealTimers(); }
+});
 
 it('retains independent normal and Stop hook receipts with real mutations and held HTTP responses', async () => {
     let normal!: ReturnType<typeof useInvokeBioXpOperatorAction>;
@@ -97,7 +126,7 @@ it('bounds and cancels catalog reads without changing the authority freshness bu
     });
     const options = vi.mocked(api.get).mock.calls[0][1]!;
     const query = client.getQueryCache().getAll()[0];
-    expect(query.options).toMatchObject({ staleTime: 15_000, refetchInterval: 10_000, retry: false, refetchIntervalInBackground: false });
+    expect(query.options).toMatchObject({ staleTime: 15_000, refetchInterval: expect.any(Function), retry: false, refetchIntervalInBackground: false });
     expect(options.signal?.aborted).toBe(false);
     await act(async () => root.render(null));
     expect(options.signal?.aborted).toBe(true);
@@ -132,7 +161,8 @@ it('shows a timed-out catalog read as an explicit error and recovers on a later 
         expect(container.textContent).toContain('Dashboard unavailable: timeout of 12000ms exceeded');
         expect(container.textContent).not.toContain('Loading live state');
         expect(container.querySelector('output')?.textContent).toBe('error');
-        await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+        // Missing/expired catalog observations use the existing 1 s read cadence.
+        await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
         await act(async () => { await vi.advanceTimersByTimeAsync(1); });
         expect(api.get).toHaveBeenCalledTimes(2);
         expect(container.querySelector('output')?.textContent).toBe('success');

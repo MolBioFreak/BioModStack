@@ -482,11 +482,19 @@ class BioXpConnectionService:
         params: dict[str, Any] | None = None,
         path_params: dict[str, str] | None = None,
     ) -> dict[str, Any]:
+        # Passive observations reconcile already-dispatched commands even when
+        # the separate status probe failed. They never renew status/admission
+        # authority. Limit the exemption to these registered GET routes.
+        passive = route_name in {
+            "operator_control_catalog_v2", "operator_dashboard_v2",
+            "operator_action_receipt_v2", "operator_command_status_v2",
+            "operator_method_status_v1",
+        }
         # Only the parameter-free dashboard/catalog representations are cached.
         cacheable = route_name in {"operator_control_catalog_v2", "operator_dashboard_v2"} and not params and not path_params
         async with self.active_query_lease(
             expected_generation=expected_generation,
-            require_fresh=True,
+            require_fresh=not passive,
         ) as client:
             try:
                 async with asyncio.timeout(15.0):

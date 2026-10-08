@@ -48,7 +48,7 @@ export function BioXpCameraPanel({
     const [imageUrl, setImageUrl] = useState<string | null>(null);
     const [imageError, setImageError] = useState<string | null>(null);
     const imageSessionRef = useRef(sessionRef.current);
-    const [streamOverride, setStreamOverride] = useState<{ active: boolean; baseline: typeof streamQuery.data } | null>(null);
+    const [streamOverride, setStreamOverride] = useState<{ active: boolean; baseline: typeof streamQuery.data; stream?: typeof streamQuery.data } | null>(null);
     const [pendingAction, setPendingAction] = useState<'latest' | 'snapshot' | 'stream' | null>(null);
     const [presentationNowMs, setPresentationNowMs] = useState(() => performance.now());
     const [, bumpPresentationRevision] = useState(0);
@@ -154,6 +154,14 @@ export function BioXpCameraPanel({
     // Only another explicit start or a new connection releases that local intent.
     const effectiveStreamActive = connected && connectionGeneration !== null && (streamOverride?.active === false
         ? false : streamOverride && streamOverride.baseline === streamQuery.data ? streamOverride.active : serverStreamActive);
+    // The robot camera can be replaced without replacing the BMS connection
+    // (including another tab's stop/start entirely between our polls). Reattach
+    // the ended MJPEG reader only for a new camera owner, never for poll churn.
+    const effectiveStream = streamOverride && streamOverride.baseline === streamQuery.data && streamOverride.stream
+        ? streamOverride.stream : streamQuery.data;
+    const mediaOwner = effectiveStreamActive
+        ? `${connectionGeneration}:${effectiveStream?.camera_ownership_epoch}:${effectiveStream?.stream_id}`
+        : imageUrl;
 
     const toggleStream = useCallback(async () => {
         if (connectionGeneration === null || !connected || !mutationEnabled || requestPendingRef.current) return;
@@ -174,7 +182,7 @@ export function BioXpCameraPanel({
             if (effectiveStreamActive) {
                 setStreamOverride({ active: false, baseline: streamQuery.data });
             } else {
-                setStreamOverride({ active: result.active, baseline: streamQuery.data });
+                setStreamOverride({ active: result.active, baseline: streamQuery.data, stream: result });
             }
             await refetchStream().catch(() => undefined);
         } catch (error) {
@@ -236,7 +244,7 @@ export function BioXpCameraPanel({
                         ? 'Video live' : 'Waiting for advancing frames'
                     : 'Ready';
     const mediaUrl = !connected ? null : effectiveStreamActive && connectionGeneration !== null
-        ? buildBioXpCameraMjpegUrl(connectionGeneration)
+        ? buildBioXpCameraMjpegUrl(connectionGeneration, effectiveStream?.stream_id)
         : imageSessionRef.current === sessionRef.current ? imageUrl : null;
 
     return (
@@ -248,7 +256,7 @@ export function BioXpCameraPanel({
 
             <div className="mt-2 flex aspect-[4/3] w-full items-center justify-center overflow-hidden rounded-lg border border-slate-800 bg-black">
                 {mediaUrl
-                    ? <img src={mediaUrl} alt={effectiveStreamActive ? 'BioXP live camera' : 'BioXP camera'} className="h-full w-full object-contain" onError={() => setImageError('Camera stream or frame could not be displayed')} />
+                    ? <img key={mediaOwner} src={mediaUrl} alt={effectiveStreamActive ? 'BioXP live camera' : 'BioXP camera'} className="h-full w-full object-contain" onLoad={() => setImageError(null)} onError={() => setImageError('Camera stream or frame could not be displayed')} />
                     : <span className="text-sm text-slate-500">No frame loaded</span>}
             </div>
 
