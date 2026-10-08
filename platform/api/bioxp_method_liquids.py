@@ -152,12 +152,17 @@ def resolve_liquid_settings(requested: dict, *, liquid_class: dict | None = None
                            "path": f"/{kind}", "message": "Exact recipe context does not match; no interpolation performed."})
     cls = liquid_class.get("settings", {}) if class_ok and liquid_class else {}
     wat = water.get("settings", {}) if water_ok and water else {}
-    applicable = set(context.get("applicable_fields", set(cls) | set(wat) | set(requested)))
+    authored = (liquid_class or {}).get("authored_settings", {}) if class_ok else {}
+    if not isinstance(authored, dict):
+        authored = {}
+    applicable = set(context.get("applicable_fields", set(cls) | set(wat) | set(requested) | set(authored)))
     for field in sorted(set(requested) | applicable):
         present = field in requested
         source, ref, found, value = "unspecified", None, False, None
         if present:
             source, found, value = "requested", True, requested[field]
+        elif field in applicable and field in authored:
+            source, ref, found, value = "liquid_class", liquid_class, True, authored[field]
         elif field in applicable and field in cls and (cls[field] is not None or
                 (liquid_class or {}).get("provenance_kind") != "manufacturer"):
             source, ref, found, value = "liquid_class", liquid_class, True, cls[field]
@@ -177,6 +182,10 @@ def resolve_liquid_settings(requested: dict, *, liquid_class: dict | None = None
             record["resolved"]["value"] = deepcopy(value)
         if field in cls:
             record["class_value"] = deepcopy(cls[field])
+            record["authorship"] = {"status": "authored" if field in authored else
+                "legacy_unknown" if "authored_settings" not in (liquid_class or {}) else "inherited"}
+        if field in authored:
+            record["authored_value"] = deepcopy(authored[field])
         if source == "water":
             substitutions.append({"field": field, "requested_present": False,
                                   "value": deepcopy(value), "water": reference,

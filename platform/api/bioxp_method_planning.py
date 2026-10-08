@@ -9,6 +9,7 @@ RECIPE_FIELDS = {
     'target_volume_ul': ('target_liquid_ul',),
     'commanded_corrected_aspiration_ul': ('commanded_aspiration_ul',),
     'aspirate_speed_ul_s': ('aspiration_speed_ul_s',),
+    'aspiration_top_speed_ul_s': ('aspiration_speed_ul_s',),
     'aspiration_delay_ms': ('aspiration_delay_ms',),
     'dispense_segments': ('dispense_segments',),
     'blowout_leading_air_gap_ul': ('leading_air', 'volume_ul'),
@@ -43,12 +44,63 @@ UNMAPPED_REASONS = {
 }
 
 
+def liquid_field_matrix():
+    """Discovery of application boundaries; source fields are never silently aliases."""
+    from bioxp_method_liquids import FIELDS, starter_entries
+    from bioxp_method_native import SETTINGS, EXPORT
+    reasons = {
+        **UNMAPPED_REASONS,
+        'dispense_delay_ms': 'No Recipe dispense-delay field; author an ordered native delay in the intended phase. Single/multi placement is not inferred.',
+        'dispense_top_speed_ul_s': 'Native dispense speed belongs to each ordered segment; no single speed replaces segmented/multi speeds.',
+        'dispense_speed_ul_s': 'Native dispense speed belongs to each ordered segment; no segment volume/order is inferred.',
+        'final_empty_tip': 'Boolean does not specify native final_empty_speed_ul_s or final_empty_before; author these explicitly.',
+        'excess_destination': 'Native multi.excess requires explicit ordered positioning and segments; a destination label cannot supply these.',
+        'separate_carry_dispense_speed_ul_s': 'Recipe has no separate carry-air dispense phase; explicit segments/motions stay native-owned.',
+        'separate_blowout_dispense_speed_ul_s': 'Recipe has no separate blowout-air dispense phase; final empty requires its explicit native speed.',
+        'immersion_depth_mm': 'No native calibrated mm-to-Z-steps mapping is published.',
+        'retract_speed_mm_s': 'Native Z motion is not specified by a Cavro liquid flow or a published mm/s conversion.',
+        'search_speed_mm_s': 'Native fluid search uses explicit pressure/search parameters, not an inferred mm/s conversion.',
+        'tracking': 'No equivalent Recipe tracking operation is published.',
+        'touch_off': 'Requires explicit native positioning; contact coordinates and sequence are not inferred.',
+        'lld': 'Native plld requires explicit pressure/search parameters; a class flag cannot supply them.',
+        'contact_mode': 'Documentary contact intent; no native contact classification or positioning is inferred.',
+        'channels': 'Authored on Recipe.channels; class inheritance cannot choose physical channels.',
+        'head_reference': 'Authored positioning belongs to native phase instructions; no geometry is inferred.',
+        'tip_profile_id': 'Source identity is not native loaded-tip selection, calibration or pickup.',
+        'tip_policy': 'Method tip_policy owner is independent of class inheritance.',
+    }
+    rows = []
+    inventory = FIELDS | set(SETTINGS['properties']) | {key for entry in starter_entries() for key in entry['settings']}
+    for field in sorted(inventory):
+        paths, phase = [], None
+        if field in RECIPE_FIELDS:
+            paths = ['/recipe/' + '/'.join(RECIPE_FIELDS[field])]
+        elif field == AIR_GAP_SPEED_FIELD:
+            paths = ['/recipe/' + '/'.join(path) for path in AIR_GAP_SPEED_PATHS]
+            phase = 'existing non-null air phases only'
+        elif field in SETTINGS['properties']:
+            paths = ['/recipe/phase_settings/{explicit_phase}/' + field]
+            phase = 'explicit setting_phases selection required'
+        elif field in {'slope_n1', 'slope_n2'}:
+            paths = ['/recipe/phase_settings/{explicit_phase}/slope/' + ('0' if field == 'slope_n1' else '1')]
+            phase = 'both source slopes and identical explicit setting_phases required'
+        units = next((unit for suffix, unit in (('_ul_s', 'uL/s'), ('_mm_s', 'mm/s'), ('_ul', 'uL'), ('_ms', 'ms'), ('_mm', 'mm')) if field.endswith(suffix)), None)
+        rows.append({'field': field, 'native_paths': paths, 'units': units, 'phase': phase,
+            'status': 'mapped' if paths else 'not_mapped',
+            'boundary': 'Existing native Recipe/Application semantics; no inferred phase or physical application.' if paths else reasons.get(field, 'No equivalent native Recipe field is published.'),
+            'requested': 'raw presence retained', 'resolved': 'requested, authored class, matching source, exact Water',
+            'emitted': 'actual normalized payload only', 'applied': 'unknown until reported',
+            'source_revision': EXPORT['source_commit']})
+    return rows
+
+
 def liquid_selection_schema():
     """Typed executable selection fields; persistence still preserves raw JSON."""
     from bioxp_method_native import SETTINGS
     number = {'anyOf': [{'type': 'number'}, {'type': 'string'}, {'type': 'null'}]}
     settings = {key: deepcopy(number) for key in (*RECIPE_FIELDS, AIR_GAP_SPEED_FIELD) if key != 'dispense_segments'}
     settings.update({key: {'anyOf': [deepcopy(value), {'type': 'null'}]} for key, value in SETTINGS['properties'].items()})
+    settings.update({key: deepcopy(number) for key in ('slope_n1', 'slope_n2')})
     settings['dispense_segments'] = {'type': 'array', 'items': {'type': 'object', 'properties': {
         'volume_ul': deepcopy(number), 'speed_ul_s': deepcopy(number),
         'source_heading': {'type': 'string'}, 'evidence': {'type': 'string'}}, 'required': ['volume_ul', 'speed_ul_s']}}
@@ -59,13 +111,15 @@ def liquid_selection_schema():
         'applicable_fields': {'type': 'array', 'items': {'type': 'string'}}}}
     entry = {'type': 'object', 'properties': {'id': {'type': 'string'}, 'revision': {'type': 'integer'},
         'context': deepcopy(context), 'settings': {'type': 'object', 'properties': deepcopy(settings)},
+        'authored_settings': {'type': 'object', 'additionalProperties': True,
+            'description': 'Only explicitly edited fields; presence including null is authored. Update with settings atomically.'},
         'provenance_kind': {'type': 'string'}}, 'required': ['id', 'revision', 'context', 'settings']}
     return {'type': 'object', 'additionalProperties': False, 'required': ['context'], 'properties': {
         'requested': {'type': 'object', 'properties': settings}, 'context': context,
         'water': {'anyOf': [{'type': 'string'}, deepcopy(entry), {'type': 'null'}]},
         'liquid_class': {'anyOf': [{'type': 'string'}, deepcopy(entry), {'type': 'null'}]},
         'setting_phases': {'type': 'object', 'properties': {key: {'enum': ['leading_air', 'aspirate', 'trailing_air', 'dispense']}
-            for key in SETTINGS['properties']}, 'additionalProperties': False}}}
+            for key in (*SETTINGS['properties'], 'slope_n1', 'slope_n2')}, 'additionalProperties': False}}}
 
 
 def same_setting(left, right):
@@ -127,14 +181,45 @@ def liquid_resolution(inputs, dependencies):
         recipe_requested[AIR_GAP_SPEED_FIELD] = deepcopy(authored_air[0])
         if AIR_GAP_SPEED_FIELD not in requested:
             requested[AIR_GAP_SPEED_FIELD] = deepcopy(authored_air[0])
+    for field, phase in selection.get('setting_phases', {}).items():
+        values = (recipe.get('phase_settings') or {}).get(phase, {})
+        if field in values and field not in requested:
+            requested[field] = deepcopy(values[field])
+            recipe_requested[field] = deepcopy(values[field])
     resolution = resolve_liquid_settings(requested,
         liquid_class=entry('liquid_class'), water=entry('water'), context=selection['context'])
+    actual_context = {'mode': {'single': 'single-dispense', 'multi': 'multi-dispense'}.get(recipe.get('mode'))}
+    if recipe.get('mode') == 'multi':
+        multi = recipe.get('multi') or {}
+        actual_context.update(aliquot_volume_ul=multi.get('sample_volume_ul'), sample_count=multi.get('sample_count'))
+    else:
+        actual_context['target_volume_ul'] = recipe.get('target_liquid_ul')
+    for owner, declared in [('context', selection['context'])] + [
+            (name, value.get('context', {})) for name in ('water', 'liquid_class') if (value := entry(name))]:
+        for key, actual in actual_context.items():
+            if key in declared and actual is not None and not same_setting(declared[key], actual):
+                resolution['issues'].append({'code': 'liquid_recipe_context_discrepancy', 'category': 'advisory',
+                    'path': '/' + owner + '/' + key, 'declared': deepcopy(declared[key]), 'actual': deepcopy(actual),
+                    'message': 'Declared context differs from authored recipe; fallback and native intent are unchanged.'})
     resolution['selection_requested'] = deepcopy(selection.get('requested', {}))
     resolution['recipe_requested_fields'] = recipe_requested
     emitted = {}
     for field, value in resolution['resolved'].items():
         path = RECIPE_FIELDS.get(field)
         phase = selection.get('setting_phases', {}).get(field)
+        if field in {'slope_n1', 'slope_n2'} and phase is not None:
+            fields = ('slope_n1', 'slope_n2')
+            if phase not in {'leading_air', 'aspirate', 'trailing_air', 'dispense'} or any(
+                    f not in resolution['resolved'] or selection.get('setting_phases', {}).get(f) != phase for f in fields):
+                raise ValueError('Source slope_n1/n2 require both values and the same explicit native setting phase')
+            pair = [deepcopy(resolution['resolved'][f]) for f in fields]
+            target = recipe.setdefault('phase_settings', {}).setdefault(phase, {})
+            if 'slope' in target and not same_setting(target['slope'], pair):
+                raise ValueError('Source slopes conflict with explicitly authored phase slope')
+            target['slope'] = pair
+            emitted[field] = {'status': 'emitted', 'value': deepcopy(value),
+                              'native_path': '/recipe/phase_settings/' + phase + '/slope/' + str(fields.index(field))}
+            continue
         if phase is not None:
             from bioxp_method_native import SETTINGS
             if phase not in {'leading_air', 'aspirate', 'trailing_air', 'dispense'} or field not in SETTINGS['properties']:
@@ -269,7 +354,8 @@ def prepare_occurrences(occurrences, method, dependencies):
     result, notices, resolutions, issues = [], [], [], []
     if any(not isinstance(o.get('inputs'), dict) for o in occurrences):
         raise ValueError('Action inputs must be an object')
-    deck = method.get('deck_plan', {})
+    deck, deck_issues = planning_deck(method)
+    issues.extend(deck_issues)
     profiles = {p['id']: p for p in dependencies.get('labware_profiles', [])}
     labware = deepcopy(deck.get('labware', []))
     expanded = []
@@ -403,12 +489,41 @@ def emission_inputs(occurrence):
     return inputs
 
 
+def planning_deck(method):
+    """Project usable planning rows only; malformed retained data is advisory."""
+    raw = method.get('deck_plan', {})
+    issues = []
+    def unknown(path):
+        issues.append({'code': 'planning_unknown', 'category': 'advisory', 'path': path,
+                       'message': 'Retained planning value cannot be projected; native intent is unchanged.'})
+    if not isinstance(raw, dict):
+        unknown('/method/deck_plan')
+        return {}, issues
+    deck = deepcopy(raw)
+    for key, required in (('labware', ('id',)), ('assignments', ('labware_id', 'well'))):
+        rows = raw.get(key, [])
+        deck[key] = []
+        if not isinstance(rows, list):
+            unknown('/method/deck_plan/' + key)
+            continue
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict) or any(not isinstance(row.get(k), str) for k in required):
+                unknown(f'/method/deck_plan/{key}/{index}')
+            else:
+                deck[key].append(deepcopy(row))
+    return deck, issues
+
+
 def initial_state(method, explicit):
     state = deepcopy(explicit or {})
-    for vessel in method.get('deck_plan', {}).get('labware', []):
+    if not isinstance(state, dict) or any(key in state and not isinstance(state[key], dict)
+            for key in ('labware', 'vessels', 'channels')):
+        raise ValueError('Initial planning state/maps are not objects; retained raw assumptions are unprojectable')
+    deck, _ = planning_deck(method)
+    for vessel in deck.get('labware', []):
         state.setdefault('labware', {}).setdefault(vessel['id'], deepcopy(vessel))
     planned_vessels = {}
-    for assignment in method.get('deck_plan', {}).get('assignments', []):
+    for assignment in deck.get('assignments', []):
         key = f"{assignment['labware_id']}:{assignment['well']}"
         if key not in planned_vessels:
             planned_vessels[key] = {'volume_ul': assignment.get('volume_ul'),

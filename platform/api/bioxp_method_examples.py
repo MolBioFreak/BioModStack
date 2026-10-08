@@ -106,7 +106,8 @@ def examples():
     combined['method']['parameters'] = []
     combined['coverage'] = []
     for source, prefix in ((cfps, 'expression'), (purification, 'purification')):
-        group = {'step_id': prefix, 'type': 'group', 'steps': deepcopy(source['method']['steps'])}
+        group = {'step_id': prefix, 'type': 'group', 'label': 'Expression' if prefix == 'expression' else 'Purification',
+                 'steps': deepcopy(source['method']['steps'])}
         def prefix_refs(nodes):
             for step in nodes:
                 if step['type'] == 'group':

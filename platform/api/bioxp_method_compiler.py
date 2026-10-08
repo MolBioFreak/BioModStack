@@ -47,7 +47,7 @@ def number(value):
         fail('Nonfinite decimal')
     if len(n.as_tuple().digits) > 1000 or abs(n.adjusted()) > 1000:
         fail('Decimal exceeds compiler resource range', code='resource_limit')
-    return +n
+    return n  # Parsing is exact; arithmetic operations alone use the declared context.
 
 
 @dataclass(frozen=True)
@@ -61,11 +61,15 @@ def quantity(value, unit):
     if unit not in UNITS:
         fail(f'Unknown unit {unit!r}')
     dimension, factor, base = UNITS[unit]
-    return Quantity(number(value) * Decimal(factor), dimension, base)
+    n = number(value)
+    with localcontext() as ctx:
+        ctx.prec = 2100  # Exact unit conversion within the existing literal resource bound.
+        return Quantity(n * Decimal(factor), dimension, base)
 
 
 def decimal_text(n):
-    return '0' if n == 0 else format(n.normalize(), 'f')
+    text = format(n, 'f')
+    return '0' if n == 0 else text.rstrip('0').rstrip('.') if '.' in text else text
 
 
 def json_value(value):
@@ -173,7 +177,9 @@ def bind(declarations, supplied, scope, path):
                 expected = quantity(0, p['unit'])
                 if v.dimension != expected.dimension:
                     fail('Incompatible parameter units', loc)
-                n = v.value / Decimal(UNITS[p['unit']][1])
+                with localcontext() as exact:
+                    exact.prec = 2100
+                    n = v.value / Decimal(UNITS[p['unit']][1])
             else:
                 if isinstance(v, Quantity):
                     fail('Unexpected dimensional value', loc)
@@ -336,7 +342,9 @@ def native_values(value, field=''):
         expected = 'uL' if field.endswith('_ul') else 'uL/s' if field.endswith('_ul_s') or field in ('speed', 'aspirate_speed', 'dispense_speed') else 's' if field.endswith(('_ms', '_s')) or field == 'seconds' else 'degC' if field.endswith('_c') else 'steps' if field.endswith('_steps') else None
         if expected is None or value.unit != expected:
             fail(f'No compatible native unit mapping for {field}')
-        n = value.value * (1000 if field.endswith('_ms') else 1)
+        with localcontext() as exact:
+            exact.prec = 2100
+            n = value.value * (1000 if field.endswith('_ms') else 1)
         return decimal_text(n)
     if isinstance(value, Decimal):
         return decimal_text(value)
@@ -436,6 +444,21 @@ def native_cost(intent):
     return 1
 
 
+def finalize_liquid_evidence(result):
+    """Single finalization of owned ledger copies, never raw requests/dependencies."""
+    records = result['resolved'].get('liquids', [])
+    if result['document'] is None:
+        for record in records:
+            for field in record['fields'].values():
+                field['emitted'] = {'status': 'not_emitted'}
+    by_id = {record['occurrence_id']: record for record in records}
+    for occurrence in result['resolved'].get('occurrences', []):
+        record = by_id.get(occurrence['occurrence_id'])
+        if record is not None:
+            recipe = occurrence['inputs'].get('recipe', {})
+            recipe.setdefault('liquid_settings', {})['bms_resolution'] = deepcopy(record)
+
+
 def compile_method(request):
     """Return an all-or-nothing native document with addressable findings."""
     result = {'document': None, 'issues': [], 'digest': None, 'resolved': {}, 'dependencies': {},
@@ -503,9 +526,6 @@ def compile_method(request):
                 result['issues'].append({'code': 'native_representation_error', 'category': 'representation',
                     'message': issue['message'], 'path': o.get('path', '/method'), 'step_id': o.get('step_id'), 'occurrence_id': issue['step_id']})
             if document is None:
-                for record in result['resolved'].get('liquids', []):
-                    for field in record['fields'].values():
-                        field['emitted'] = {'status': 'not_emitted'}
                 return result
             liquid_actions_by_occurrence = {}
             for visible, action in zip(visible_rows, document['stages'][0]['actions']):
@@ -519,7 +539,7 @@ def compile_method(request):
                     if emission.get('status') == 'emitted':
                         actual = action['params']
                         for key in emission['native_path'].strip('/').split('/'):
-                            actual = actual[key]
+                            actual = actual[int(key)] if isinstance(actual, list) else actual[key]
                         emission.update(value=deepcopy(actual), native_action_id=action['action_id'],
                                         native_action_ids=[a['action_id'] for a in emitted_actions])
                 for emitted_action in emitted_actions:
@@ -613,13 +633,15 @@ def compile_method(request):
                     raise
                 result['simulation'] = {'status': 'unknown', 'issues': [{'code': 'simulation_integration_pending', 'category': 'advisory', 'message': 'Simulation module is not installed; no physical-state inference'}]}
             else:
+                seed = None
                 try:
                     simulation_rows = deepcopy(json_value(occurrences))
-                    head, positions = {}, {}
+                    head, positions, recipes = {}, {}, {}
                     for stage in document['stages']:
                         for action in stage['actions']:
                             if action['params'].get('operation') == 'cavro_liquid_recipe':
                                 recipe = action['params']['recipe']
+                                recipes[action['source_occurrence_id']] = deepcopy(recipe)
                                 motion = [part for phase in ('before_leading_air', 'before_liquid', 'after_liquid') for part in recipe[phase]]
                                 multi = recipe['multi']
                                 if multi is not None:
@@ -644,15 +666,23 @@ def compile_method(request):
                                     head.update(deepcopy(action['params']))
                                 positions[action['source_occurrence_id']] = deepcopy(head)
                     for occurrence in simulation_rows:
+                        if occurrence['occurrence_id'] in recipes:
+                            occurrence['_native_recipe'] = recipes[occurrence['occurrence_id']]
                         if occurrence['occurrence_id'] in positions:
                             occurrence['_native_head_reference'] = positions[occurrence['occurrence_id']]
-                    result['simulation'] = simulate_method(simulation_rows, initial_state(method, request.get('initial_state')))
+                    seed = initial_state(method, request.get('initial_state'))
+                    result['simulation'] = simulate_method(simulation_rows, seed)
+                    result['simulation']['initial_state'] = deepcopy(seed)
                 except (ValueError, TypeError, KeyError, ArithmeticError) as exc:
                     result['simulation'] = {'status': 'unknown', 'issues': [{'code': 'simulation_unknown',
                         'category': 'advisory', 'message': str(exc)}]}
+                    if seed is not None:
+                        result['simulation']['initial_state'] = deepcopy(seed)
     except (ValueError, TypeError, KeyError, ArithmeticError, RecursionError) as exc:
         result['document'] = None
         result['digest'] = None
         result['issues'].extend(getattr(exc, 'issues', None) or [{'code': getattr(exc, 'code', 'representation_error'),
             'category': 'representation', 'message': str(exc), 'path': getattr(exc, 'path', '')}])
+    finally:
+        finalize_liquid_evidence(result)
     return result
