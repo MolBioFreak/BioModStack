@@ -1161,7 +1161,9 @@ test('PLR context composes the existing Design workbench instead of a second mod
         let data: unknown;
         if (url === '/api/jobs') data = { jobs: [job], total: 1 };
         else if (url === `/api/jobs/${job.id}`) data = job;
-        else if (url === '/api/designs') data = { designs: [design], total: 1 };
+        // Model tabs now come from the server's complete Job/model scope, not
+        // inference from this single page of transport rows.
+        else if (url === '/api/designs') data = { designs: [design], total: 1, model_counts: { fampnn: 1 } };
         else if (url === `/api/jobs/${job.id}/workflow-results`) data = {
             job, composition: { sha256: 'a'.repeat(64) }, tabs: [{ id: 'fampnn', label: 'FA-MPNN', role: 'sequence design', status: 'complete', count: 1, candidate_count: 1, items: [] }],
             source: { artifacts: [] }, counts: { persisted_design_rows: 1 }, receipt: { test_fixture: true }, artifacts: [],
