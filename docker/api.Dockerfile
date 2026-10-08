@@ -10,6 +10,7 @@ WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
+        cmake \
         curl \
         git \
         libcurl4-openssl-dev \
@@ -17,10 +18,15 @@ RUN apt-get update \
         libfreetype6-dev \
         libfribidi-dev \
         libharfbuzz-dev \
+        libgmp-dev \
+        libglpk-dev \
+        libgsl-dev \
+        libicu-dev \
         libjpeg-dev \
         libpng-dev \
         libssl-dev \
         libtiff5-dev \
+        libuv1-dev \
         libxml2-dev \
         r-base \
         r-base-dev \
