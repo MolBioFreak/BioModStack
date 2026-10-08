@@ -1,10 +1,13 @@
+import fs from 'node:fs';
 import path from 'node:path';
 
-import { app, BrowserWindow, clipboard, ipcMain, Menu, shell, Tray } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell, Tray } from 'electron';
 
-import { buildApplicationMenu } from './menu';
-import { createServiceControl } from './serviceControl';
-import { createAppTray } from './tray';
+import { buildApplicationMenu } from './menu.js';
+import { resolveShellPaths } from './shellPaths.js';
+import { createServiceControl } from './serviceControl.js';
+import { createAppTray } from './tray.js';
+import { attachCloseToTrayBehavior } from './windowLifecycle.js';
 import {
   buildBrowserWindowOptions,
   GET_SHELL_CONTEXT_CHANNEL,
@@ -17,10 +20,11 @@ import {
   STOP_ALL_CHANNEL,
   type ShellContext,
   type ShellRuntimeMode,
-} from './windowState';
+} from './windowState.js';
 
 let mainWindow: BrowserWindow | null = null;
 let appTray: Tray | null = null;
+let isQuitting = false;
 
 function showMainWindow(): void {
   if (!mainWindow) {
@@ -39,14 +43,38 @@ function openInBrowser(context: ShellContext): Promise<void> {
   return shell.openExternal(context.browserUrl);
 }
 
+async function openPathTarget(label: string, targetPath: string, ensureDirectory = false): Promise<void> {
+  if (ensureDirectory) {
+    fs.mkdirSync(targetPath, { recursive: true });
+  }
+
+  const errorMessage = await shell.openPath(targetPath);
+  if (errorMessage) {
+    dialog.showErrorBox(`Unable to open ${label}`, `${errorMessage}\n\n${targetPath}`);
+    throw new Error(`${label}: ${errorMessage}`);
+  }
+}
+
 function buildMenuAndTray(context: ShellContext) {
   const serviceControl = createServiceControl();
+  const shellPaths = resolveShellPaths();
   const deps = {
+    showWindow: () => showMainWindow(),
     openInBrowser: () => openInBrowser(context),
     copyLocalUrl: (url: string) => clipboard.writeText(url),
+    openResultsFolder: () => openPathTarget('results folder', shellPaths.resultsDir, true),
+    openShellDataFolder: () => openPathTarget('shell data folder', app.getPath('userData'), true),
+    openApiLog: () => openPathTarget('API log', shellPaths.apiLog),
+    openFrontendLog: () => openPathTarget('frontend log', shellPaths.frontendLog),
+    openCoreRuntimeLog: () => openPathTarget('core runtime log', shellPaths.coreRuntimeLog),
     reloadShell: () => mainWindow?.reload(),
-    quitShell: () => app.quit(),
-    showWindow: () => showMainWindow(),
+    hideShell: () => mainWindow?.hide(),
+    quitShell: () => {
+      isQuitting = true;
+      app.quit();
+    },
+    showAbout: () => app.showAboutPanel(),
+    iconPath: shellPaths.trayIconPath,
   };
 
   const menu = buildApplicationMenu(context, serviceControl, deps);
@@ -87,13 +115,18 @@ function attachExternalLinkHandler(window: BrowserWindow): void {
 
 export function createMainWindow(context: ShellContext): BrowserWindow {
   const preloadPath = path.join(__dirname, 'preload.js');
-  const window = new BrowserWindow(buildBrowserWindowOptions(preloadPath));
+  const shellPaths = resolveShellPaths();
+  const window = new BrowserWindow({
+    ...buildBrowserWindowOptions(preloadPath),
+    icon: fs.existsSync(shellPaths.appIconPath) ? shellPaths.appIconPath : undefined,
+  });
 
   window.once('ready-to-show', () => {
     window.show();
   });
 
   attachExternalLinkHandler(window);
+  attachCloseToTrayBehavior(window, () => isQuitting);
   void window.loadURL(context.windowUrl);
 
   return window;
@@ -102,6 +135,13 @@ export function createMainWindow(context: ShellContext): BrowserWindow {
 async function bootstrap(): Promise<void> {
   const context = resolveShellContext();
   const { menu, tray } = buildMenuAndTray(context);
+
+  app.setAboutPanelOptions({
+    applicationName: 'BioModStack Shell',
+    applicationVersion: app.getVersion(),
+    version: app.getVersion(),
+    iconPath: resolveShellPaths().appIconPath,
+  });
 
   Menu.setApplicationMenu(menu);
   appTray = tray;
@@ -120,6 +160,10 @@ async function bootstrap(): Promise<void> {
     showMainWindow();
   });
 }
+
+app.on('before-quit', () => {
+  isQuitting = true;
+});
 
 app.whenReady().then(() => {
   void bootstrap();

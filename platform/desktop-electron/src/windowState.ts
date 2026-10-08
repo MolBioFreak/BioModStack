@@ -1,6 +1,7 @@
 import type { BrowserWindowConstructorOptions } from 'electron';
 
-import type { ServiceRuntimeMode, ServiceStatusPayload } from './serviceControl';
+import { SHELL_STORAGE_PARTITION } from './shellPaths.js';
+import type { ServiceRuntimeMode, ServiceStatusPayload } from './serviceControl.js';
 
 export type ShellRuntimeMode = ServiceRuntimeMode;
 
@@ -97,6 +98,8 @@ export function buildBrowserWindowOptions(preloadPath: string): BrowserWindowCon
       nodeIntegration: false,
       sandbox: true,
       spellcheck: false,
+      partition: SHELL_STORAGE_PARTITION,
+      backgroundThrottling: false,
     },
   };
 }
