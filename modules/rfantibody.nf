@@ -12,8 +12,9 @@ process RFANTIBODY {
     label 'process_gpu'
     container 'apptainer/rfantibody.sif'
     
-    // Mount weights and example frameworks from host
-    containerOptions "--nv --bind /mnt/BioModStack/weights/rfantibody/rfantibody_repo/weights:/opt/RFantibody/weights --bind /mnt/BioModStack/weights/rfantibody/rfantibody_repo/scripts:/opt/RFantibody/scripts"
+    // Mount entire RFantibody repo from host (includes src, scripts, weights, examples)
+    // Also bind workdir as writable
+    containerOptions "--nv --bind /mnt/BioModStack/weights/rfantibody/rfantibody_repo:/opt/RFantibody --writable-tmpfs"
     
     publishDir "${params.out_dir}/run/rfantibody", mode: 'copy', pattern: "*.log"
     publishDir "${params.out_dir}/run/rfantibody", mode: 'copy', pattern: "output/*.pdb"
@@ -61,10 +62,9 @@ process RFANTIBODY {
     mkdir -p output
     
     # Run RFantibody RFdiffusion inference
-    # Script path: /opt/RFantibody/src/rfantibody/scripts/rfdiffusion_inference.py
-    # (RFantibody uses poetry, so we run with python from the container)
+    # Script is at /opt/RFantibody/scripts/rfdiffusion_inference.py
     cd /opt/RFantibody
-    python3 src/rfantibody/scripts/rfdiffusion_inference.py \\
+    python3 scripts/rfdiffusion_inference.py \\
         --config-name antibody \\
         antibody.target_pdb=${target_pdb} \\
         antibody.framework_pdb=${framework} \\
