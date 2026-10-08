@@ -18,7 +18,7 @@ services:
     environment:
       POSTGRES_DB: bms_analytical_data
       POSTGRES_USER: bms_assay
-      POSTGRES_PASSWORD: ${BMS_ANALYTICAL_DB_PASSWORD:-bms_assay_dev}
+      POSTGRES_PASSWORD: ${BMS_ANALYTICAL_DB_PASSWORD:?set BMS_ANALYTICAL_DB_PASSWORD in local env}
     ports:
       - "127.0.0.1:${BMS_ANALYTICAL_DB_PORT:-55432}:5432"
     volumes:
@@ -67,7 +67,7 @@ services:
       BMS_HOST_AGENT_TIMEOUT_SECONDS: ${BMS_HOST_AGENT_TIMEOUT_SECONDS:-2.0}
       BMS_ONT_MINKNOW_ENABLED: ${BMS_ONT_MINKNOW_ENABLED:-1}
       BMS_CPU_POWER_COLLECTOR_URL: ${BMS_CPU_POWER_COLLECTOR_URL:-http://127.0.0.1:8797/power}
-      BMS_ANALYTICAL_DATABASE_URL: ${BMS_ANALYTICAL_DATABASE_URL:-postgresql+asyncpg://bms_assay:${BMS_ANALYTICAL_DB_PASSWORD:-bms_assay_dev}@127.0.0.1:${BMS_ANALYTICAL_DB_PORT:-55432}/bms_analytical_data}
+      BMS_ANALYTICAL_DATABASE_URL: ${BMS_ANALYTICAL_DATABASE_URL:-postgresql+asyncpg://bms_assay:${BMS_ANALYTICAL_DB_PASSWORD:?set BMS_ANALYTICAL_DB_PASSWORD in local env}@127.0.0.1:${BMS_ANALYTICAL_DB_PORT:-55432}/bms_analytical_data}
       BMS_ANALYTICAL_INIT_ON_STARTUP: ${BMS_ANALYTICAL_INIT_ON_STARTUP:-1}
       BMS_DB_SERVICE_ID: ${BMS_DB_SERVICE_ID:-bms-db-service}
       BMS_DB_DISPLAY_NAME: ${BMS_DB_DISPLAY_NAME:-BMS DB service}
@@ -190,7 +190,7 @@ services:
       BMS_STATS_TOOLS_MODE: worker
       BMS_CONTAINER_STATE_PATH: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}
       BMS_DATA: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}
-      BMS_ANALYTICAL_DATABASE_URL: ${BMS_ANALYTICAL_DATABASE_URL:-postgresql+asyncpg://bms_assay:${BMS_ANALYTICAL_DB_PASSWORD:-bms_assay_dev}@bms-db:5432/bms_analytical_data}
+      BMS_ANALYTICAL_DATABASE_URL: ${BMS_ANALYTICAL_DATABASE_URL:-postgresql+asyncpg://bms_assay:${BMS_ANALYTICAL_DB_PASSWORD:?set BMS_ANALYTICAL_DB_PASSWORD in local env}@bms-db:5432/bms_analytical_data}
     volumes:
       - type: bind
         source: ${BMS_STATE_DIR:-/mnt/BioModStack}

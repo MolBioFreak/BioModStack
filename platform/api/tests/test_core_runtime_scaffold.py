@@ -55,7 +55,7 @@ def test_api_runtime_image_keeps_plannotate_runtime_available() -> None:
 def test_compose_core_runtime_contract() -> None:
     compose = yaml.safe_load((REPO_ROOT / "compose.core-runtime.yml").read_text(encoding="utf-8"))
 
-    assert set(compose["services"]) == {"bms-api", "bms-db", "bms-cpu-power", "bms-stats-tools", "bms-web"}
+    assert set(compose["services"]) == {"bms-api", "bms-db", "bms-cpu-power", "bms-host-agent", "bms-stats-tools", "bms-web"}
 
     api = compose["services"]["bms-api"]
     assert api["build"]["dockerfile"] == "docker/api.Dockerfile"
@@ -71,7 +71,7 @@ def test_compose_core_runtime_contract() -> None:
     assert api["environment"]["BMS_HOST_AGENT_URL"] == "${BMS_HOST_AGENT_URL:-http://127.0.0.1:8798}"
     assert api["environment"]["BMS_HOST_AGENT_TIMEOUT_SECONDS"] == "${BMS_HOST_AGENT_TIMEOUT_SECONDS:-2.0}"
     assert api["environment"]["BMS_CPU_POWER_COLLECTOR_URL"] == "${BMS_CPU_POWER_COLLECTOR_URL:-http://127.0.0.1:8797/power}"
-    assert api["environment"]["BMS_ANALYTICAL_DATABASE_URL"] == "${BMS_ANALYTICAL_DATABASE_URL:-postgresql+asyncpg://bms_assay:${BMS_ANALYTICAL_DB_PASSWORD:-bms_assay_dev}@127.0.0.1:${BMS_ANALYTICAL_DB_PORT:-55432}/bms_analytical_data}"
+    assert api["environment"]["BMS_ANALYTICAL_DATABASE_URL"] == "${BMS_ANALYTICAL_DATABASE_URL:-postgresql+asyncpg://bms_assay:${BMS_ANALYTICAL_DB_PASSWORD:?set BMS_ANALYTICAL_DB_PASSWORD in local env}@127.0.0.1:${BMS_ANALYTICAL_DB_PORT:-55432}/bms_analytical_data}"
     assert api["environment"]["BMS_ANALYTICAL_INIT_ON_STARTUP"] == "${BMS_ANALYTICAL_INIT_ON_STARTUP:-1}"
     assert api["environment"]["BMS_DB_DISPLAY_NAME"] == "${BMS_DB_DISPLAY_NAME:-BMS DB service}"
     assert api["environment"]["BMS_DB_COMPOSE_SERVICES"] == "${BMS_DB_COMPOSE_SERVICES:-bms-db}"
@@ -100,7 +100,7 @@ def test_compose_core_runtime_contract() -> None:
     assert db_service["ports"] == ["127.0.0.1:${BMS_ANALYTICAL_DB_PORT:-55432}:5432"]
     assert db_service["environment"]["POSTGRES_DB"] == "bms_analytical_data"
     assert db_service["environment"]["POSTGRES_USER"] == "bms_assay"
-    assert db_service["environment"]["POSTGRES_PASSWORD"] == "${BMS_ANALYTICAL_DB_PASSWORD:-bms_assay_dev}"
+    assert db_service["environment"]["POSTGRES_PASSWORD"] == "${BMS_ANALYTICAL_DB_PASSWORD:?set BMS_ANALYTICAL_DB_PASSWORD in local env}"
     assert db_service["volumes"] == ["bms_db_service_data:/var/lib/postgresql/data"]
     assert db_service["networks"]["default"]["aliases"] == ["bms-analytical-postgres"]
     assert db_service["labels"]["org.biomodstack.service_id"] == "bms-db-service"
@@ -130,7 +130,7 @@ def test_compose_core_runtime_contract() -> None:
     assert stats_tools["container_name"] == "biomodstack-stats-tools"
     assert stats_tools["environment"]["BMS_STATS_TOOLS_EXTERNALIZED"] == "1"
     assert "bms-db" not in stats_tools.get("depends_on", {})
-    assert stats_tools["environment"]["BMS_ANALYTICAL_DATABASE_URL"] == "${BMS_ANALYTICAL_DATABASE_URL:-postgresql+asyncpg://bms_assay:${BMS_ANALYTICAL_DB_PASSWORD:-bms_assay_dev}@bms-db:5432/bms_analytical_data}"
+    assert stats_tools["environment"]["BMS_ANALYTICAL_DATABASE_URL"] == "${BMS_ANALYTICAL_DATABASE_URL:-postgresql+asyncpg://bms_assay:${BMS_ANALYTICAL_DB_PASSWORD:?set BMS_ANALYTICAL_DB_PASSWORD in local env}@bms-db:5432/bms_analytical_data}"
     assert stats_tools["labels"]["org.biomodstack.service_id"] == "bms-stats-tools"
     assert stats_tools["labels"]["org.biomodstack.component"] == "stats-tools"
     assert stats_tools["labels"]["org.biomodstack.optional_at_boot"] == "true"
@@ -211,7 +211,8 @@ def test_core_runtime_env_example_documents_transition_knobs() -> None:
         "BMS_CORE_RUNTIME_MODE=1",
         "BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:8001",
         "BMS_ANALYTICAL_DB_PORT=55432",
-        "BMS_ANALYTICAL_DB_PASSWORD=***",
+        "# Set this only in your local runtime env; do not commit real values.",
+        "BMS_ANALYTICAL_DB_PASSWORD=",
         "BMS_ANALYTICAL_DATABASE_URL=postgresql+asyncpg://bms_assay:${BMS_ANALYTICAL_DB_PASSWORD}@127.0.0.1:${BMS_ANALYTICAL_DB_PORT}/bms_analytical_data",
         "BMS_ANALYTICAL_INIT_ON_STARTUP=1",
         "BIOXP_SERVER_URL=",
