@@ -135,6 +135,68 @@ def parse_backbone_id(design_name: str) -> Optional[int]:
     return None
 
 
+def _parse_job_params(raw_params: Any) -> Dict[str, Any]:
+    if isinstance(raw_params, dict):
+        return raw_params
+    if isinstance(raw_params, str) and raw_params:
+        try:
+            parsed = json.loads(raw_params)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _parse_epitope_residues(raw_value: Any) -> Optional[List[str]]:
+    if not raw_value:
+        return None
+    if isinstance(raw_value, list):
+        cleaned = [str(item).strip() for item in raw_value if str(item).strip()]
+        return cleaned or None
+    if isinstance(raw_value, str):
+        cleaned = [item.strip() for item in raw_value.split(",") if item.strip()]
+        return cleaned or None
+    return None
+
+
+def _parse_custom_cdr_lengths(job_params: Dict[str, Any]) -> Dict[str, int]:
+    loops_raw = job_params.get("antibody_design_loops") or ""
+    custom_raw = job_params.get("rfantibody_design_loops_custom")
+    if not loops_raw or not custom_raw:
+        return {}
+
+    if isinstance(loops_raw, str):
+        loop_names = [item.strip() for item in loops_raw.split(",") if item.strip()]
+    elif isinstance(loops_raw, list):
+        loop_names = [str(item).strip() for item in loops_raw if str(item).strip()]
+    else:
+        loop_names = []
+
+    if isinstance(custom_raw, str):
+        custom_text = custom_raw.strip().strip("[]")
+        custom_ranges = [item.strip() for item in custom_text.split(",") if item.strip()]
+    elif isinstance(custom_raw, list):
+        custom_ranges = [str(item).strip() for item in custom_raw if str(item).strip()]
+    else:
+        custom_ranges = []
+
+    if not loop_names or len(loop_names) != len(custom_ranges):
+        return {}
+
+    import re
+
+    lengths: Dict[str, int] = {}
+    for loop_name, raw_range in zip(loop_names, custom_ranges):
+        match = re.match(r"^[A-Za-z](\d+)-(\d+)$", raw_range)
+        if not match:
+            continue
+        start = int(match.group(1))
+        end = int(match.group(2))
+        if end >= start:
+            lengths[loop_name] = end - start + 1
+    return lengths
+
+
 async def ingest_job_results(
     job_id: str, 
     output_dir: str, 
@@ -447,8 +509,15 @@ async def ingest_loose_files(
 ) -> int:
     """Ingest designs from individual JSON/PDB files (fallback)."""
     
-    # epitope_residues not passed to this function - set to None (optional)
-    epitope_residues = None
+    job_params: Dict[str, Any] = {}
+    job_result = await session.execute(select(Job.params).where(Job.id == job_id))
+    raw_job_params = job_result.scalar_one_or_none()
+    job_params = _parse_job_params(raw_job_params)
+
+    epitope_residues = _parse_epitope_residues(
+        job_params.get("epitope_residues") or job_params.get("selected_residues")
+    )
+    custom_cdr_lengths = _parse_custom_cdr_lengths(job_params)
     
     # Locations to search for confidence/metrics JSONs
     # Boltz outputs often in pdb_files/predictions/
@@ -829,6 +898,7 @@ async def ingest_loose_files(
                 )
                 chains_ptm = metrics.get('chain_ptm') or metrics.get('chains_ptm')
                 pair_chains_iptm = metrics.get('chain_pair_iptm') or metrics.get('pair_chains_iptm')
+                chain_plddt = metrics.get('chain_plddt')
                 has_clash = metrics.get('full_has_clash')
                 if has_clash is None:
                     has_clash = metrics.get('has_clash')
@@ -848,6 +918,26 @@ async def ingest_loose_files(
                 # Extract per-residue pLDDT from CIF B-factors
                 _, residue_plddt = extract_plddt_from_pdb(structure_path)
 
+                plddt_binder = None
+                plddt_target = None
+                if isinstance(chain_plddt, list) and len(chain_plddt) >= 2:
+                    plddt_binder = chain_plddt[0]
+                    plddt_target = chain_plddt[1]
+                    if plddt_binder is not None and plddt_binder <= 1.0:
+                        plddt_binder *= 100.0
+                    if plddt_target is not None and plddt_target <= 1.0:
+                        plddt_target *= 100.0
+
+                epitope_contact_count = None
+                epitope_min_distance = None
+                if epitope_residues and structure_path:
+                    epitope_contact_count, epitope_min_distance = calculate_epitope_contacts(
+                        structure_path,
+                        epitope_residues,
+                        antibody_chain="A",
+                        target_chain="B",
+                    )
+
                 design = Design(
                     id=str(uuid.uuid4()),
                     job_id=job_id,
@@ -856,8 +946,12 @@ async def ingest_loose_files(
                     json_path=str(json_file),
 
                     backbone_id=parse_backbone_id(design_name),
+                    epitope_contact_count=epitope_contact_count,
+                    epitope_min_distance=epitope_min_distance,
 
                     plddt_overall=safe_float(plddt),
+                    plddt_binder=safe_float(plddt_binder),
+                    plddt_target=safe_float(plddt_target),
                     pae_overall=safe_float(pae),
                     ptm=safe_float(ptm),
                     iptm=safe_float(iptm),
@@ -871,6 +965,12 @@ async def ingest_loose_files(
                     chains_ptm=chains_ptm,
                     pair_chains_iptm=pair_chains_iptm,
                     residue_plddt=residue_plddt,
+                    cdr_h1_length=custom_cdr_lengths.get("H1"),
+                    cdr_h2_length=custom_cdr_lengths.get("H2"),
+                    cdr_h3_length=custom_cdr_lengths.get("H3"),
+                    cdr_l1_length=custom_cdr_lengths.get("L1"),
+                    cdr_l2_length=custom_cdr_lengths.get("L2"),
+                    cdr_l3_length=custom_cdr_lengths.get("L3"),
                     disorder=safe_float(disorder),
                     num_recycles=safe_int(num_recycles),
                     has_clash=(bool(has_clash) if has_clash is not None else None),
@@ -1022,6 +1122,15 @@ async def ingest_loose_files(
                     
                 # Calculate pLDDT from structure (supports PDB/CIF)
                 plddt, residue_plddt = extract_plddt_from_pdb(structure_path)
+                epitope_contact_count = None
+                epitope_min_distance = None
+                if epitope_residues and structure_path:
+                    epitope_contact_count, epitope_min_distance = calculate_epitope_contacts(
+                        structure_path,
+                        epitope_residues,
+                        antibody_chain="A",
+                        target_chain="B",
+                    )
                     
                 design = Design(
                     id=str(uuid.uuid4()),
@@ -1031,9 +1140,17 @@ async def ingest_loose_files(
                     json_path=None,
                     
                     backbone_id=parse_backbone_id(design_name),
+                    epitope_contact_count=epitope_contact_count,
+                    epitope_min_distance=epitope_min_distance,
                     
                     plddt_overall=plddt,
                     residue_plddt=residue_plddt,
+                    cdr_h1_length=custom_cdr_lengths.get("H1"),
+                    cdr_h2_length=custom_cdr_lengths.get("H2"),
+                    cdr_h3_length=custom_cdr_lengths.get("H3"),
+                    cdr_l1_length=custom_cdr_lengths.get("L1"),
+                    cdr_l2_length=custom_cdr_lengths.get("L2"),
+                    cdr_l3_length=custom_cdr_lengths.get("L3"),
                     
                     is_favorite=False,
                     created_at=datetime.utcnow()

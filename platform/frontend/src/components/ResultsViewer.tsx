@@ -25,6 +25,7 @@ const TABS = [
 ] as const;
 
 type TabId = typeof TABS[number]['id'];
+type OutputSourceFilter = 'all' | 'rfantibody' | 'fampnn' | 'validation';
 
 // Formatting helpers
 const formatMetric = (val: number | null | undefined, decimals = 2): string =>
@@ -73,6 +74,69 @@ const isNgsJob = (job: Pick<Job, 'model_id' | 'mode'>): boolean => {
     );
 };
 
+const inferDesignOutputSource = (design: { pdb_path?: string | null; confidence_metrics?: Record<string, any> | null }): OutputSourceFilter => {
+    const path = design.pdb_path || '';
+    const metrics = design.confidence_metrics || {};
+    if (path.includes('/validated_designs/')) return 'validation';
+    if (path.includes('/fampnn_filtered/')) return 'fampnn';
+    if (path.includes('/rfantibody/')) return 'rfantibody';
+    if (metrics && typeof metrics === 'object' && ('ranking_score' in metrics || 'gpde' in metrics || 'chain_pair_iptm' in metrics)) return 'validation';
+    return 'all';
+};
+
+const getOutputSourceLabel = (design: { pdb_path?: string | null; confidence_metrics?: Record<string, any> | null }): string => {
+    const source = inferDesignOutputSource(design);
+    if (source === 'validation') {
+        const metrics = design.confidence_metrics || {};
+        if (metrics && typeof metrics === 'object' && ('ranking_score' in metrics || 'gpde' in metrics || 'chain_pair_iptm' in metrics)) {
+            return 'Protenix';
+        }
+        return 'Validation';
+    }
+    if (source === 'fampnn') return 'FAMPNN';
+    if (source === 'rfantibody') return 'RFantibody';
+    return 'Other';
+};
+
+const getFriendlyDesignName = (design: { name: string; pdb_path?: string | null; confidence_metrics?: Record<string, any> | null }): string => {
+    const source = inferDesignOutputSource(design);
+    const sampleMatch = design.name.match(/_sample_(\d+)$/);
+    if (source === 'validation' && sampleMatch) {
+        return `${getOutputSourceLabel(design)} Sample ${sampleMatch[1]}`;
+    }
+    if (source === 'fampnn') return 'FAMPNN Candidate';
+    if (source === 'rfantibody') return 'RFantibody Backbone';
+    return design.name;
+};
+
+const parseCustomCdrLengths = (job: Job | null | undefined): Record<string, number> => {
+    const loopsRaw = job?.params?.antibody_design_loops;
+    const rangesRaw = job?.params?.rfantibody_design_loops_custom;
+    if (!loopsRaw || !rangesRaw) return {};
+
+    const loopNames = Array.isArray(loopsRaw)
+        ? loopsRaw.map(String).map(v => v.trim()).filter(Boolean)
+        : String(loopsRaw).split(',').map(v => v.trim()).filter(Boolean);
+
+    const rangeValues = Array.isArray(rangesRaw)
+        ? rangesRaw.map(String).map(v => v.trim()).filter(Boolean)
+        : String(rangesRaw).replace(/^\[/, '').replace(/\]$/, '').split(',').map(v => v.trim()).filter(Boolean);
+
+    if (loopNames.length !== rangeValues.length) return {};
+
+    const out: Record<string, number> = {};
+    loopNames.forEach((loopName, idx) => {
+        const m = rangeValues[idx]?.match(/^[A-Za-z](\d+)-(\d+)$/);
+        if (!m) return;
+        const start = Number(m[1]);
+        const end = Number(m[2]);
+        if (Number.isFinite(start) && Number.isFinite(end) && end >= start) {
+            out[loopName] = end - start + 1;
+        }
+    });
+    return out;
+};
+
 export function ResultsViewer() {
     const { jobId } = useParams();
     const navigate = useNavigate();
@@ -84,6 +148,7 @@ export function ResultsViewer() {
     const [selectedDesignId, setSelectedDesignId] = useState<string>('');
     const [selectedDesignIds, setSelectedDesignIds] = useState<string[]>([]);
     const [iterationMessage, setIterationMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
+    const [outputSourceFilter, setOutputSourceFilter] = useState<OutputSourceFilter>('all');
 
     const [sortField, setSortField] = useState<string>('name');
     const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
@@ -327,7 +392,12 @@ export function ResultsViewer() {
         });
     }, [designs, sortField, sortDir, filterText, selectedBackboneId, plddtMin, iptmMin, contactsMin, rogMinValue, rogMaxValue, rfdRogMinValue, rfdRogMaxValue]);
     const selectedDesignSet = useMemo(() => new Set(selectedDesignIds), [selectedDesignIds]);
-    const currentPageDesignIds = useMemo(() => sortedDesigns.map((design) => design.id), [sortedDesigns]);
+    const cdrLengthFallbacks = useMemo(() => parseCustomCdrLengths(activeJob), [activeJob]);
+    const tableDesigns = useMemo(() => {
+        if (outputSourceFilter === 'all') return sortedDesigns;
+        return sortedDesigns.filter((design) => inferDesignOutputSource(design as any) === outputSourceFilter);
+    }, [sortedDesigns, outputSourceFilter]);
+    const currentPageDesignIds = useMemo(() => tableDesigns.map((design) => design.id), [tableDesigns]);
     const allCurrentPageSelected = currentPageDesignIds.length > 0 && currentPageDesignIds.every((designId) => selectedDesignSet.has(designId));
 
     // Fetch PDB content when design selected
@@ -1179,7 +1249,7 @@ export function ResultsViewer() {
                                                             />
                                                         </div>
                                                         <span className="text-xs text-slate-500 ml-auto">
-                                                            Page {currentPage} • Showing {sortedDesigns.length} of {totalDesigns.toLocaleString()} designs
+                                                            Page {currentPage} • Showing {tableDesigns.length} of {totalDesigns.toLocaleString()} designs
                                                         </span>
                                                     </div>
                                                 </div>
@@ -1197,6 +1267,30 @@ export function ResultsViewer() {
                                                     Check rows to build a launch set. Row clicks still open the structure view.
                                                 </span>
                                             </div>
+                                            <div className="mb-4 flex flex-wrap items-center gap-2">
+                                                {([
+                                                    ['all', 'All'],
+                                                    ['rfantibody', 'RFantibody'],
+                                                    ['fampnn', 'FAMPNN'],
+                                                    ['validation', 'Validation'],
+                                                ] as Array<[OutputSourceFilter, string]>).map(([value, label]) => (
+                                                    <button
+                                                        key={value}
+                                                        type="button"
+                                                        onClick={() => setOutputSourceFilter(value)}
+                                                        className={`rounded-lg border px-3 py-1.5 text-xs transition-colors ${
+                                                            outputSourceFilter === value
+                                                                ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
+                                                                : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-slate-600'
+                                                        }`}
+                                                    >
+                                                        {label}
+                                                    </button>
+                                                ))}
+                                                <span className="text-xs text-slate-500">
+                                                    {tableDesigns.length} rows in current output set
+                                                </span>
+                                            </div>
                                             {/* Table */}
                                             <div className="overflow-x-auto">
                                                 <table className="w-full text-sm">
@@ -1212,7 +1306,7 @@ export function ResultsViewer() {
                                                                         title={allCurrentPageSelected ? 'Clear current page selection' : 'Select current page'}
                                                                     />
                                                                 ) },
-                                                                { key: 'name', label: 'Name' },
+                                                                { key: 'name', label: 'Output' },
                                                                 { key: 'binding_tier', label: 'Binding' },
                                                                 { key: 'binder_length', label: 'Size' },
                                                                 { key: 'cdr_h3_length', label: 'CDR-H3' },
@@ -1230,8 +1324,8 @@ export function ResultsViewer() {
                                                                 { key: 'iptm', label: 'iPTM' },
                                                                 { key: 'ligand_iptm', label: 'Lig iPTM' },
                                                                 { key: 'conf_score', label: 'Conf' },
-                                                                { key: 'rmsd_binder', label: 'RMSD Bd' },
-                                                                { key: 'rmsd_overall', label: 'RMSD All' },
+                                                                { key: 'rmsd_binder', label: 'Val RMSD Bd' },
+                                                                { key: 'rmsd_overall', label: 'Val RMSD All' },
                                                                 { key: 'has_clash', label: 'Clash' },
                                                                 { key: 'maturation_delta_interface', label: 'ΔIface' },
                                                                 { key: 'maturation_rmsd', label: 'Mat RMSD' },
@@ -1254,7 +1348,7 @@ export function ResultsViewer() {
                                                         </tr>
                                                     </thead>
                                                     <tbody>
-                                                        {sortedDesigns.map(d => (
+                                                        {tableDesigns.map(d => (
                                                             <tr
                                                                 key={d.id}
                                                                 className={`border-b border-slate-800 cursor-pointer hover:bg-slate-800/30 ${
@@ -1274,7 +1368,25 @@ export function ResultsViewer() {
                                                                         className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-cyan-500"
                                                                     />
                                                                 </td>
-                                                                <td className="px-3 py-2 font-medium truncate max-w-[200px]">{d.name}</td>
+                                                                <td className="px-3 py-2 max-w-[260px]">
+                                                                    <div className="flex items-center gap-2">
+                                                                        <span className={`px-2 py-0.5 text-[10px] font-semibold rounded border ${
+                                                                            inferDesignOutputSource(d as any) === 'validation'
+                                                                                ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
+                                                                                : inferDesignOutputSource(d as any) === 'fampnn'
+                                                                                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                                                                                    : inferDesignOutputSource(d as any) === 'rfantibody'
+                                                                                        ? 'border-violet-500/40 bg-violet-500/10 text-violet-200'
+                                                                                        : 'border-slate-600 bg-slate-800 text-slate-300'
+                                                                        }`}>
+                                                                            {getOutputSourceLabel(d as any)}
+                                                                        </span>
+                                                                        <span className="font-medium truncate">{getFriendlyDesignName(d as any)}</span>
+                                                                    </div>
+                                                                    <div className="mt-1 truncate text-[11px] text-slate-500" title={d.name}>
+                                                                        {d.name}
+                                                                    </div>
+                                                                </td>
 
                                                                 {/* Binding Quality Tier */}
                                                                 <td className="px-3 py-2">
@@ -1298,7 +1410,7 @@ export function ResultsViewer() {
 
                                                                 {/* CDR-H3 Length */}
                                                                 <td className="px-3 py-2 font-mono text-violet-400">
-                                                                    {(d as any).cdr_h3_length ?? '—'}
+                                                                    {(d as any).cdr_h3_length ?? cdrLengthFallbacks.H3 ?? '—'}
                                                                 </td>
 
                                                                 {/* Epitope Contact Count */}
