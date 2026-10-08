@@ -109,34 +109,6 @@ const getFriendlyDesignName = (design: { name: string; pdb_path?: string | null;
     return design.name;
 };
 
-const parseCustomCdrLengths = (job: Job | null | undefined): Record<string, number> => {
-    const loopsRaw = job?.params?.antibody_design_loops;
-    const rangesRaw = job?.params?.rfantibody_design_loops_custom;
-    if (!loopsRaw || !rangesRaw) return {};
-
-    const loopNames = Array.isArray(loopsRaw)
-        ? loopsRaw.map(String).map(v => v.trim()).filter(Boolean)
-        : String(loopsRaw).split(',').map(v => v.trim()).filter(Boolean);
-
-    const rangeValues = Array.isArray(rangesRaw)
-        ? rangesRaw.map(String).map(v => v.trim()).filter(Boolean)
-        : String(rangesRaw).replace(/^\[/, '').replace(/\]$/, '').split(',').map(v => v.trim()).filter(Boolean);
-
-    if (loopNames.length !== rangeValues.length) return {};
-
-    const out: Record<string, number> = {};
-    loopNames.forEach((loopName, idx) => {
-        const m = rangeValues[idx]?.match(/^[A-Za-z](\d+)-(\d+)$/);
-        if (!m) return;
-        const start = Number(m[1]);
-        const end = Number(m[2]);
-        if (Number.isFinite(start) && Number.isFinite(end) && end >= start) {
-            out[loopName] = end - start + 1;
-        }
-    });
-    return out;
-};
-
 const getAvailableCdrLoopIds = (job: Job | null | undefined): string[] => {
     const selectedLoops = job?.params?.selected_cdr_loops;
     if (Array.isArray(selectedLoops) && selectedLoops.length > 0) {
@@ -434,7 +406,6 @@ export function ResultsViewer() {
         });
     }, [designs, sortField, sortDir, filterText, selectedBackboneId, plddtMin, iptmMin, contactsMin, rogMinValue, rogMaxValue, rfdRogMinValue, rfdRogMaxValue]);
     const selectedDesignSet = useMemo(() => new Set(selectedDesignIds), [selectedDesignIds]);
-    const cdrLengthFallbacks = useMemo(() => parseCustomCdrLengths(activeJob), [activeJob]);
     const tableDesigns = useMemo(() => {
         if (outputSourceFilter === 'all') return sortedDesigns;
         return sortedDesigns.filter((design) => inferDesignOutputSource(design as any) === outputSourceFilter);
@@ -1758,7 +1729,7 @@ export function ResultsViewer() {
 
                                                                 {/* CDR-H3 Length */}
                                                                 <td className="px-3 py-2 font-mono text-violet-400">
-                                                                    {(d as any).cdr_h3_length ?? cdrLengthFallbacks.H3 ?? '—'}
+                                                                    {(d as any).cdr_h3_length ?? '—'}
                                                                 </td>
 
                                                                 {/* Epitope Contact Count */}

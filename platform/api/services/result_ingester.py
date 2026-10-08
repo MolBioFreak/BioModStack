@@ -205,42 +205,35 @@ def _parse_epitope_residues(raw_value: Any) -> Optional[List[str]]:
     return None
 
 
-def _parse_custom_cdr_lengths(job_params: Dict[str, Any]) -> Dict[str, int]:
-    loops_raw = job_params.get("antibody_design_loops") or ""
-    custom_raw = job_params.get("rfantibody_design_loops_custom")
-    if not loops_raw or not custom_raw:
+def _parse_hlt_cdr_lengths(structure_path: Optional[Path]) -> Dict[str, int]:
+    """
+    Parse RFantibody-style HLT REMARK labels from a PDB and return actual
+    per-structure loop lengths.
+
+    These values are design-specific. They should not be substituted with the
+    job-level configured loop spans, which only describe the intended search
+    space and can differ across RFantibody outputs.
+    """
+    if not structure_path or not structure_path.exists() or structure_path.suffix.lower() != ".pdb":
         return {}
 
-    if isinstance(loops_raw, str):
-        loop_names = [item.strip() for item in loops_raw.split(",") if item.strip()]
-    elif isinstance(loops_raw, list):
-        loop_names = [str(item).strip() for item in loops_raw if str(item).strip()]
-    else:
-        loop_names = []
-
-    if isinstance(custom_raw, str):
-        custom_text = custom_raw.strip().strip("[]")
-        custom_ranges = [item.strip() for item in custom_text.split(",") if item.strip()]
-    elif isinstance(custom_raw, list):
-        custom_ranges = [str(item).strip() for item in custom_raw if str(item).strip()]
-    else:
-        custom_ranges = []
-
-    if not loop_names or len(loop_names) != len(custom_ranges):
+    counts: Dict[str, int] = {}
+    try:
+        with open(structure_path, "r") as handle:
+            for line in handle:
+                if not line.startswith("REMARK PDBinfo-LABEL:"):
+                    continue
+                parts = line.split()
+                if len(parts) < 4:
+                    continue
+                loop_id = parts[3].upper()
+                if loop_id in {"H1", "H2", "H3", "L1", "L2", "L3"}:
+                    counts[loop_id] = counts.get(loop_id, 0) + 1
+    except Exception as e:
+        print(f"[Ingester] Failed to parse HLT CDR labels from {structure_path}: {e}")
         return {}
 
-    import re
-
-    lengths: Dict[str, int] = {}
-    for loop_name, raw_range in zip(loop_names, custom_ranges):
-        match = re.match(r"^[A-Za-z](\d+)-(\d+)$", raw_range)
-        if not match:
-            continue
-        start = int(match.group(1))
-        end = int(match.group(2))
-        if end >= start:
-            lengths[loop_name] = end - start + 1
-    return lengths
+    return counts
 
 
 async def ingest_job_results(
@@ -305,11 +298,14 @@ async def ingest_job_results(
                 for row in reader:
                     # Map CSV columns to Design fields
                     design_name = row.get('description', f'design_{designs_created}')
+                    structure_path_str = find_pdb_path(output_path, design_name)
+                    structure_path = Path(structure_path_str) if structure_path_str else None
+                    structure_cdr_lengths = _parse_hlt_cdr_lengths(structure_path)
                     design = Design(
                         id=str(uuid.uuid4()),
                         job_id=job_id,
                         name=design_name,
-                        pdb_path=find_pdb_path(output_path, design_name),
+                        pdb_path=str(structure_path) if structure_path else None,
                         json_path=None,  # Could add if needed
                         
                         # Backbone grouping
@@ -334,6 +330,12 @@ async def ingest_job_results(
                         pae_overall=safe_float(row.get('pr_pae') or row.get('pae')),
                         rmsd_overall=safe_float(row.get('pr_rmsd')),
                         rmsd_binder=safe_float(row.get('pr_rmsd_binder')),
+                        cdr_h1_length=structure_cdr_lengths.get("H1"),
+                        cdr_h2_length=structure_cdr_lengths.get("H2"),
+                        cdr_h3_length=structure_cdr_lengths.get("H3"),
+                        cdr_l1_length=structure_cdr_lengths.get("L1"),
+                        cdr_l2_length=structure_cdr_lengths.get("L2"),
+                        cdr_l3_length=structure_cdr_lengths.get("L3"),
                         
                         # Boltz-2 specific
                         conf_score=safe_float(row.get('conf_score')),
@@ -632,7 +634,6 @@ async def ingest_loose_files(
     epitope_residues = _parse_epitope_residues(
         job_params.get("epitope_residues") or job_params.get("selected_residues")
     )
-    custom_cdr_lengths = _parse_custom_cdr_lengths(job_params)
     
     # Locations to search for confidence/metrics JSONs
     # Boltz outputs often in pdb_files/predictions/
@@ -779,6 +780,7 @@ async def ingest_loose_files(
 
                 # Extract per-residue pLDDT from PDB B-factors
                 _, residue_plddt = extract_plddt_from_pdb(structure_path)
+                structure_cdr_lengths = _parse_hlt_cdr_lengths(Path(structure_path))
                 
                 # Calculate epitope contacts if epitope_residues provided
                 epitope_contact_count = None
@@ -828,6 +830,12 @@ async def ingest_loose_files(
                     disorder=safe_float(disorder),
                     num_recycles=safe_int(num_recycles),
                     has_clash=(bool(has_clash_raw) if has_clash_raw is not None else None),
+                    cdr_h1_length=structure_cdr_lengths.get("H1"),
+                    cdr_h2_length=structure_cdr_lengths.get("H2"),
+                    cdr_h3_length=structure_cdr_lengths.get("H3"),
+                    cdr_l1_length=structure_cdr_lengths.get("L1"),
+                    cdr_l2_length=structure_cdr_lengths.get("L2"),
+                    cdr_l3_length=structure_cdr_lengths.get("L3"),
                     confidence_metrics=metrics,
                     
                     # Defaults for others
@@ -905,6 +913,7 @@ async def ingest_loose_files(
                 # Extract per-residue pLDDT from structure B-factors (works for both PDB and CIF via Biotite)
                 from .structure_utils import get_residue_plddt
                 _, residue_plddt = get_residue_plddt(structure_path)
+                structure_cdr_lengths = _parse_hlt_cdr_lengths(Path(structure_path))
                 
                 # Create design
                 design = Design(
@@ -925,6 +934,12 @@ async def ingest_loose_files(
                     conf_score=safe_float(conf_score),
                     residue_plddt=residue_plddt,
                     confidence_metrics=metrics,
+                    cdr_h1_length=structure_cdr_lengths.get("H1"),
+                    cdr_h2_length=structure_cdr_lengths.get("H2"),
+                    cdr_h3_length=structure_cdr_lengths.get("H3"),
+                    cdr_l1_length=structure_cdr_lengths.get("L1"),
+                    cdr_l2_length=structure_cdr_lengths.get("L2"),
+                    cdr_l3_length=structure_cdr_lengths.get("L3"),
                     
                     # Defaults for others
                     is_favorite=False,
@@ -1036,6 +1051,7 @@ async def ingest_loose_files(
 
                 # Extract per-residue pLDDT from CIF B-factors
                 _, residue_plddt = extract_plddt_from_pdb(structure_path)
+                structure_cdr_lengths = _parse_hlt_cdr_lengths(Path(structure_path))
 
                 plddt_binder = None
                 plddt_target = None
@@ -1084,12 +1100,12 @@ async def ingest_loose_files(
                     chains_ptm=chains_ptm,
                     pair_chains_iptm=pair_chains_iptm,
                     residue_plddt=residue_plddt,
-                    cdr_h1_length=custom_cdr_lengths.get("H1"),
-                    cdr_h2_length=custom_cdr_lengths.get("H2"),
-                    cdr_h3_length=custom_cdr_lengths.get("H3"),
-                    cdr_l1_length=custom_cdr_lengths.get("L1"),
-                    cdr_l2_length=custom_cdr_lengths.get("L2"),
-                    cdr_l3_length=custom_cdr_lengths.get("L3"),
+                    cdr_h1_length=structure_cdr_lengths.get("H1"),
+                    cdr_h2_length=structure_cdr_lengths.get("H2"),
+                    cdr_h3_length=structure_cdr_lengths.get("H3"),
+                    cdr_l1_length=structure_cdr_lengths.get("L1"),
+                    cdr_l2_length=structure_cdr_lengths.get("L2"),
+                    cdr_l3_length=structure_cdr_lengths.get("L3"),
                     disorder=safe_float(disorder),
                     num_recycles=safe_int(num_recycles),
                     has_clash=(bool(has_clash) if has_clash is not None else None),
@@ -1241,6 +1257,7 @@ async def ingest_loose_files(
                     
                 # Calculate pLDDT from structure (supports PDB/CIF)
                 plddt, residue_plddt = extract_plddt_from_pdb(structure_path)
+                structure_cdr_lengths = _parse_hlt_cdr_lengths(Path(structure_path))
                 epitope_contact_count = None
                 epitope_min_distance = None
                 if epitope_residues and structure_path:
@@ -1264,12 +1281,12 @@ async def ingest_loose_files(
                     
                     plddt_overall=plddt,
                     residue_plddt=residue_plddt,
-                    cdr_h1_length=custom_cdr_lengths.get("H1"),
-                    cdr_h2_length=custom_cdr_lengths.get("H2"),
-                    cdr_h3_length=custom_cdr_lengths.get("H3"),
-                    cdr_l1_length=custom_cdr_lengths.get("L1"),
-                    cdr_l2_length=custom_cdr_lengths.get("L2"),
-                    cdr_l3_length=custom_cdr_lengths.get("L3"),
+                    cdr_h1_length=structure_cdr_lengths.get("H1"),
+                    cdr_h2_length=structure_cdr_lengths.get("H2"),
+                    cdr_h3_length=structure_cdr_lengths.get("H3"),
+                    cdr_l1_length=structure_cdr_lengths.get("L1"),
+                    cdr_l2_length=structure_cdr_lengths.get("L2"),
+                    cdr_l3_length=structure_cdr_lengths.get("L3"),
                     
                     is_favorite=False,
                     created_at=datetime.utcnow()
