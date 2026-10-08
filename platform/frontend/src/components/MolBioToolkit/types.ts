@@ -127,10 +127,12 @@ export interface PCRProduct {
 
 export type ActivePanel =
     | 'view'
+    | 'history'
+    | 'assembly'
+    | 'align'
     | 'digest'
     | 'pcr'
     | 'primers'
-    | 'ligation'
     | 'rna'
     | 'features'
     | 'edit'

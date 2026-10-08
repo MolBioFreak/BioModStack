@@ -3,4 +3,9 @@
  * The generated dataset lives in `demoConstructs.generated.ts`.
  */
 
-export { DEMO_PLASMIDS } from './demoConstructs.generated';
+import type { SequenceData } from './types';
+
+export async function loadDemoPlasmids(): Promise<SequenceData[]> {
+    const module = await import('./demoConstructs.generated');
+    return module.DEMO_PLASMIDS;
+}

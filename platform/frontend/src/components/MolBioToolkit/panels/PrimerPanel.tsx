@@ -10,8 +10,12 @@ import {
     deletePrimer as deletePrimerApi,
     togglePrimerFavorite,
     calculatePrimerTm,
+    calculatePrimerQc,
+    designPrimers,
     type Primer as LibraryPrimer,
     type PrimerCreate,
+    type PrimerDesignResponse,
+    type PrimerQcResponse,
     type PrimerTmOptionsResponse,
     type PrimerTmResult,
     type PrimerTmSettings,
@@ -45,6 +49,46 @@ function formatTm(result: PrimerTmResult | null | undefined): string {
     return `${result.tm.toFixed(1)}°C`;
 }
 
+function SliderField({
+    label,
+    value,
+    min,
+    max,
+    step = 1,
+    onChange,
+    format = (current: number) => String(current),
+}: {
+    label: string;
+    value: number;
+    min: number;
+    max: number;
+    step?: number;
+    onChange: (value: number) => void;
+    format?: (value: number) => string;
+}) {
+    return (
+        <label className="space-y-1.5">
+            <div className="flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.12em] text-slate-500">
+                <span>{label}</span>
+                <span className="text-slate-300">{format(value)}</span>
+            </div>
+            <input
+                type="range"
+                min={min}
+                max={max}
+                step={step}
+                value={value}
+                onChange={(event) => onChange(Number(event.target.value))}
+                className="w-full accent-violet-500"
+            />
+            <div className="flex items-center justify-between text-[10px] text-slate-600">
+                <span>{format(min)}</span>
+                <span>{format(max)}</span>
+            </div>
+        </label>
+    );
+}
+
 export function PrimerPanel({
     sequenceData,
     selection,
@@ -59,7 +103,7 @@ export function PrimerPanel({
     const [newPrimerSeq, setNewPrimerSeq] = useState('');
     const [isReverse, setIsReverse] = useState(false);
     const [hoveredPrimerId, setHoveredPrimerId] = useState<string | null>(null);
-    const [activeTab, setActiveTab] = useState<'sequence' | 'library'>('sequence');
+    const [activeTab, setActiveTab] = useState<'sequence' | 'design' | 'qc' | 'library'>('sequence');
 
     const [libraryPrimers, setLibraryPrimers] = useState<LibraryPrimer[]>([]);
     const [libraryLoading, setLibraryLoading] = useState(false);
@@ -69,6 +113,27 @@ export function PrimerPanel({
     const [error, setError] = useState<string | null>(null);
     const [draftTmResult, setDraftTmResult] = useState<PrimerTmResult | null>(null);
     const [draftTmLoading, setDraftTmLoading] = useState(false);
+    const [designTargetStart, setDesignTargetStart] = useState(1);
+    const [designTargetEnd, setDesignTargetEnd] = useState(Math.min(sequenceData.sequence.length, 500));
+    const [designPrimerMinLength, setDesignPrimerMinLength] = useState(20);
+    const [designPrimerMaxLength, setDesignPrimerMaxLength] = useState(26);
+    const [designProductMinLength, setDesignProductMinLength] = useState(120);
+    const [designProductMaxLength, setDesignProductMaxLength] = useState(1200);
+    const [designGcMin, setDesignGcMin] = useState(35);
+    const [designGcMax, setDesignGcMax] = useState(65);
+    const [designTargetTm, setDesignTargetTm] = useState(62);
+    const [designTmDelta, setDesignTmDelta] = useState(3);
+    const [designGcClampMin, setDesignGcClampMin] = useState(1);
+    const [designMaxPolyX, setDesignMaxPolyX] = useState(4);
+    const [designFlankSearch, setDesignFlankSearch] = useState(80);
+    const [designMaxPairs, setDesignMaxPairs] = useState(8);
+    const [designOverhangForward, setDesignOverhangForward] = useState('');
+    const [designOverhangReverse, setDesignOverhangReverse] = useState('');
+    const [designResult, setDesignResult] = useState<PrimerDesignResponse | null>(null);
+    const [designLoading, setDesignLoading] = useState(false);
+    const [draftQc, setDraftQc] = useState<PrimerQcResponse['primers'][number]['qc'] | null>(null);
+    const [sequenceQc, setSequenceQc] = useState<PrimerQcResponse | null>(null);
+    const [qcLoading, setQcLoading] = useState(false);
 
     const sequenceType = sequenceData.sequenceType === 'rna' ? 'rna' : 'dna';
     const unitLabel = sequenceUnitLabel(sequenceType);
@@ -119,6 +184,26 @@ export function PrimerPanel({
         }
     }, [activeTab, loadLibrary]);
 
+    useEffect(() => {
+        const sequenceLength = sequenceData.sequence.length;
+        if (sequenceLength === 0) {
+            setDesignTargetStart(1);
+            setDesignTargetEnd(1);
+            return;
+        }
+        if (selection && selection.start !== selection.end) {
+            const start = Math.min(selection.start, selection.end) + 1;
+            const end = Math.max(selection.start, selection.end);
+            setDesignTargetStart(start);
+            setDesignTargetEnd(end);
+            setDesignProductMinLength((current) => Math.max(current, end - start + 40));
+        } else {
+            setDesignTargetStart((current) => Math.max(1, Math.min(current, sequenceLength)));
+            setDesignTargetEnd((current) => Math.max(1, Math.min(current, sequenceLength)));
+        }
+        setDesignResult(null);
+    }, [selection, sequenceData.sequence.length]);
+
     const calculateTmForSequence = useCallback(async (
         sequence: string,
         explicitSequenceType?: 'dna' | 'rna',
@@ -145,6 +230,7 @@ export function PrimerPanel({
     useEffect(() => {
         if (!cleanedDraftPrimer || !isValidNucleotideSequence(cleanedDraftPrimer)) {
             setDraftTmResult(null);
+            setDraftQc(null);
             setDraftTmLoading(false);
             return;
         }
@@ -152,9 +238,22 @@ export function PrimerPanel({
         let cancelled = false;
         setDraftTmLoading(true);
         const timer = window.setTimeout(async () => {
-            const result = await calculateTmForSequence(draftTmSequence, inferSequenceTypeFromSequence(draftTmSequence));
+            const [tmResult, qcResult] = await Promise.all([
+                calculateTmForSequence(draftTmSequence, inferSequenceTypeFromSequence(draftTmSequence)),
+                calculatePrimerQc({
+                    primers: [{
+                        sequence: cleanedDraftPrimer,
+                        sequence_type: inferSequenceTypeFromSequence(cleanedDraftPrimer),
+                    }],
+                    template_sequence: sequenceData.sequence,
+                    template_sequence_type: sequenceType,
+                    template_is_circular: sequenceData.circular,
+                    include_pairwise: false,
+                }).then((response) => response.data).catch(() => null),
+            ]);
             if (!cancelled) {
-                setDraftTmResult(result);
+                setDraftTmResult(tmResult);
+                setDraftQc(qcResult?.primers[0]?.qc || null);
                 setDraftTmLoading(false);
             }
         }, 250);
@@ -163,7 +262,47 @@ export function PrimerPanel({
             cancelled = true;
             window.clearTimeout(timer);
         };
-    }, [calculateTmForSequence, cleanedDraftPrimer, draftTmSequence]);
+    }, [calculateTmForSequence, cleanedDraftPrimer, draftTmSequence, sequenceData.circular, sequenceData.sequence, sequenceType]);
+
+    useEffect(() => {
+        if (activeTab !== 'qc') {
+            return;
+        }
+        const primers = sequenceData.primers || [];
+        if (primers.length === 0) {
+            setSequenceQc({ primers: [], pairwise: [] });
+            return;
+        }
+
+        let cancelled = false;
+        setQcLoading(true);
+        void calculatePrimerQc({
+            primers: primers.map((primer) => ({
+                id: primer.id,
+                name: primer.name,
+                sequence: primer.sequence,
+                sequence_type: primer.sequenceType || inferSequenceTypeFromSequence(primer.sequence),
+            })),
+            template_sequence: sequenceData.sequence,
+            template_sequence_type: sequenceType,
+            template_is_circular: sequenceData.circular,
+            include_pairwise: true,
+        }).then((response) => {
+            if (!cancelled) {
+                setSequenceQc(response.data);
+            }
+        }).catch((qcError) => {
+            console.error('Failed to calculate primer QC:', qcError);
+        }).finally(() => {
+            if (!cancelled) {
+                setQcLoading(false);
+            }
+        });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [activeTab, sequenceData.circular, sequenceData.primers, sequenceData.sequence, sequenceType]);
 
     const useSelectionAsPrimer = (reverse: boolean) => {
         if (!selectedRegion) return;
@@ -294,6 +433,85 @@ export function PrimerPanel({
         onAddPrimer(primer);
     };
 
+    const useSelectionAsDesignTarget = () => {
+        if (!selectedRegion) return;
+        setDesignTargetStart(selectedRegion.start + 1);
+        setDesignTargetEnd(selectedRegion.end);
+        setDesignProductMinLength(Math.max(selectedRegion.length + 40, 120));
+        setDesignProductMaxLength(Math.max(selectedRegion.length + 400, 600));
+        setDesignResult(null);
+    };
+
+    const runPrimerDesign = async () => {
+        if (!sequenceData.sequence) return;
+        setDesignLoading(true);
+        setError(null);
+        try {
+            const response = await designPrimers({
+                name: sequenceData.name,
+                sequence: sequenceData.sequence,
+                sequence_type: sequenceType,
+                is_circular: sequenceData.circular,
+                target_start: Math.max(0, designTargetStart - 1),
+                target_end: Math.max(designTargetStart, designTargetEnd),
+                primer_min_length: designPrimerMinLength,
+                primer_max_length: designPrimerMaxLength,
+                product_min_length: designProductMinLength,
+                product_max_length: designProductMaxLength,
+                flank_search_span: designFlankSearch,
+                gc_min_percent: designGcMin,
+                gc_max_percent: designGcMax,
+                tm_target_c: designTargetTm,
+                tm_max_delta_c: designTmDelta,
+                gc_clamp_min: designGcClampMin,
+                max_poly_x: designMaxPolyX,
+                max_pairs: designMaxPairs,
+                overhang_forward: designOverhangForward,
+                overhang_reverse: designOverhangReverse,
+                tm_settings: tmSettings,
+            });
+            setDesignResult(response.data);
+        } catch (designError) {
+            setError(designError instanceof Error ? designError.message : 'Primer design failed');
+        } finally {
+            setDesignLoading(false);
+        }
+    };
+
+    const addDesignedPair = (pair: NonNullable<PrimerDesignResponse['pairs']>[number]) => {
+        const prefix = sequenceData.name.replace(/\s+/g, '_');
+        const forwardPrimer: Primer = {
+            id: `primer_${Date.now().toString(36)}_f_${pair.rank}`,
+            name: `${prefix}_F${pair.rank}`,
+            sequence: pair.forward.sequence,
+            sequenceType,
+            start: pair.forward.start,
+            end: pair.forward.end,
+            strand: 1,
+            tm: pair.forward.tm,
+            gc_percent: pair.forward.gc_percent,
+            tm_algorithm: tmSettings.algorithm,
+            tm_salt_correction: tmSettings.salt_correction,
+            tm_settings: tmSettings,
+        };
+        const reversePrimer: Primer = {
+            id: `primer_${Date.now().toString(36)}_r_${pair.rank}`,
+            name: `${prefix}_R${pair.rank}`,
+            sequence: pair.reverse.sequence,
+            sequenceType,
+            start: pair.reverse.start,
+            end: pair.reverse.end,
+            strand: -1,
+            tm: pair.reverse.tm,
+            gc_percent: pair.reverse.gc_percent,
+            tm_algorithm: tmSettings.algorithm,
+            tm_salt_correction: tmSettings.salt_correction,
+            tm_settings: tmSettings,
+        };
+        onAddPrimer(forwardPrimer);
+        onAddPrimer(reversePrimer);
+    };
+
     const handleToggleFavorite = async (primerId: string) => {
         try {
             await togglePrimerFavorite(primerId);
@@ -315,6 +533,8 @@ export function PrimerPanel({
     const primers = sequenceData.primers || [];
     const draftTmWarnings = draftTmResult?.warnings || [];
     const draftTmLabel = draftBinding && draftBinding.overhangLength > 0 ? 'Annealing Tm' : 'Tm';
+    const sequenceLength = Math.max(1, sequenceData.sequence.length);
+    const productSliderMax = Math.max(designProductMinLength, sequenceLength);
 
     return (
         <div className="primer-panel p-3 space-y-3">
@@ -329,6 +549,24 @@ export function PrimerPanel({
                         }`}
                 >
                     Sequence ({primers.length})
+                </button>
+                <button
+                    onClick={() => setActiveTab('design')}
+                    className={`px-3 py-1.5 rounded transition-colors ${activeTab === 'design'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
+                        }`}
+                >
+                    Design
+                </button>
+                <button
+                    onClick={() => setActiveTab('qc')}
+                    className={`px-3 py-1.5 rounded transition-colors ${activeTab === 'qc'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
+                        }`}
+                >
+                    QC
                 </button>
                 <button
                     onClick={() => setActiveTab('library')}
@@ -446,6 +684,17 @@ export function PrimerPanel({
                                         {warning}
                                     </div>
                                 ))}
+                                {draftQc && (
+                                    <div className="border-t border-slate-800 pt-2 text-slate-400">
+                                        QC • self {draftQc.max_self_complement} • 3′ self {draftQc.three_prime_self_complement} • hairpin {draftQc.max_hairpin_stem}
+                                        {draftQc.binding_site_count != null ? ` • sites ${draftQc.binding_site_count}` : ''}
+                                    </div>
+                                )}
+                                {draftQc?.warnings.map((warning) => (
+                                    <div key={warning} className="text-amber-300">
+                                        {warning}
+                                    </div>
+                                ))}
                             </div>
                         )}
 
@@ -513,6 +762,350 @@ export function PrimerPanel({
                         )}
                     </div>
                 </>
+            )}
+
+            {activeTab === 'design' && (
+                <div className="space-y-3">
+                    {selectedRegion && (
+                        <div className="flex items-center justify-between rounded border border-cyan-700/40 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-200">
+                            <span>
+                                Selection available: {selectedRegion.start + 1}–{selectedRegion.end} ({selectedRegion.length} {unitLabel})
+                            </span>
+                            <button
+                                onClick={useSelectionAsDesignTarget}
+                                className="rounded bg-cyan-600 px-2 py-1 font-medium text-white transition-colors hover:bg-cyan-500"
+                            >
+                                Use Selection
+                            </button>
+                        </div>
+                    )}
+
+                    <div className="space-y-3 rounded border border-slate-700 bg-slate-800 p-3">
+                        <div className="text-sm font-medium text-slate-300">Primer Pair Design</div>
+                        <div className="grid grid-cols-2 gap-3">
+                            <SliderField
+                                label="Target start"
+                                value={designTargetStart}
+                                min={1}
+                                max={sequenceLength}
+                                onChange={(value) => {
+                                    setDesignTargetStart(value);
+                                    if (value > designTargetEnd) {
+                                        setDesignTargetEnd(value);
+                                    }
+                                }}
+                            />
+                            <SliderField
+                                label="Target end"
+                                value={designTargetEnd}
+                                min={1}
+                                max={sequenceLength}
+                                onChange={(value) => {
+                                    setDesignTargetEnd(value);
+                                    if (value < designTargetStart) {
+                                        setDesignTargetStart(value);
+                                    }
+                                }}
+                            />
+                            <SliderField
+                                label="Primer min"
+                                value={designPrimerMinLength}
+                                min={16}
+                                max={35}
+                                onChange={(value) => {
+                                    setDesignPrimerMinLength(value);
+                                    if (value > designPrimerMaxLength) {
+                                        setDesignPrimerMaxLength(value);
+                                    }
+                                }}
+                                format={(value) => `${value} nt`}
+                            />
+                            <SliderField
+                                label="Primer max"
+                                value={designPrimerMaxLength}
+                                min={16}
+                                max={35}
+                                onChange={(value) => {
+                                    setDesignPrimerMaxLength(value);
+                                    if (value < designPrimerMinLength) {
+                                        setDesignPrimerMinLength(value);
+                                    }
+                                }}
+                                format={(value) => `${value} nt`}
+                            />
+                            <SliderField
+                                label="Product min"
+                                value={designProductMinLength}
+                                min={60}
+                                max={productSliderMax}
+                                step={10}
+                                onChange={(value) => {
+                                    setDesignProductMinLength(value);
+                                    if (value > designProductMaxLength) {
+                                        setDesignProductMaxLength(value);
+                                    }
+                                }}
+                                format={(value) => `${value} ${unitLabel}`}
+                            />
+                            <SliderField
+                                label="Product max"
+                                value={designProductMaxLength}
+                                min={60}
+                                max={productSliderMax}
+                                step={10}
+                                onChange={(value) => {
+                                    setDesignProductMaxLength(value);
+                                    if (value < designProductMinLength) {
+                                        setDesignProductMinLength(value);
+                                    }
+                                }}
+                                format={(value) => `${value} ${unitLabel}`}
+                            />
+                            <SliderField
+                                label="GC min"
+                                value={designGcMin}
+                                min={20}
+                                max={80}
+                                onChange={(value) => {
+                                    setDesignGcMin(value);
+                                    if (value > designGcMax) {
+                                        setDesignGcMax(value);
+                                    }
+                                }}
+                                format={(value) => `${value}%`}
+                            />
+                            <SliderField
+                                label="GC max"
+                                value={designGcMax}
+                                min={20}
+                                max={80}
+                                onChange={(value) => {
+                                    setDesignGcMax(value);
+                                    if (value < designGcMin) {
+                                        setDesignGcMin(value);
+                                    }
+                                }}
+                                format={(value) => `${value}%`}
+                            />
+                            <SliderField
+                                label="Target Tm"
+                                value={designTargetTm}
+                                min={45}
+                                max={78}
+                                step={0.5}
+                                onChange={setDesignTargetTm}
+                                format={(value) => `${value.toFixed(1)}°C`}
+                            />
+                            <SliderField
+                                label="Max ΔTm"
+                                value={designTmDelta}
+                                min={0.5}
+                                max={10}
+                                step={0.5}
+                                onChange={setDesignTmDelta}
+                                format={(value) => `${value.toFixed(1)}°C`}
+                            />
+                            <SliderField
+                                label="Flank search"
+                                value={designFlankSearch}
+                                min={20}
+                                max={250}
+                                step={5}
+                                onChange={setDesignFlankSearch}
+                                format={(value) => `${value} nt`}
+                            />
+                            <SliderField
+                                label="Pair count"
+                                value={designMaxPairs}
+                                min={1}
+                                max={20}
+                                onChange={setDesignMaxPairs}
+                                format={(value) => `${value}`}
+                            />
+                            <SliderField
+                                label="GC clamp"
+                                value={designGcClampMin}
+                                min={0}
+                                max={5}
+                                onChange={setDesignGcClampMin}
+                                format={(value) => `${value} bp`}
+                            />
+                            <SliderField
+                                label="Poly-X cap"
+                                value={designMaxPolyX}
+                                min={3}
+                                max={8}
+                                onChange={setDesignMaxPolyX}
+                                format={(value) => `${value}`}
+                            />
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-2">
+                            <input
+                                value={designOverhangForward}
+                                onChange={(event) => setDesignOverhangForward(event.target.value.toUpperCase())}
+                                placeholder="Optional 5′ forward overhang"
+                                className="w-full rounded border border-slate-600 bg-slate-700 px-2 py-1.5 font-mono text-sm"
+                            />
+                            <input
+                                value={designOverhangReverse}
+                                onChange={(event) => setDesignOverhangReverse(event.target.value.toUpperCase())}
+                                placeholder="Optional 5′ reverse overhang"
+                                className="w-full rounded border border-slate-600 bg-slate-700 px-2 py-1.5 font-mono text-sm"
+                            />
+                        </div>
+
+                        <button
+                            onClick={() => void runPrimerDesign()}
+                            disabled={designLoading || !sequenceData.sequence}
+                            className="w-full rounded-lg bg-violet-600 px-3 py-2 font-medium text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
+                        >
+                            {designLoading ? 'Designing…' : 'Design Primer Pairs'}
+                        </button>
+                    </div>
+
+                    {designResult && (
+                        <div className="space-y-3 rounded border border-slate-700 bg-slate-900/50 p-3">
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <div className="text-sm font-medium text-slate-200">Ranked Primer Pairs</div>
+                                    <div className="mt-1 text-xs text-slate-500">
+                                        Target {designResult.target_start + 1}-{designResult.target_end} • {designResult.pair_count} pair{designResult.pair_count === 1 ? '' : 's'}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {designResult.warnings.length > 0 && (
+                                <div className="rounded border border-amber-700/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                                    {designResult.warnings.join(' ')}
+                                </div>
+                            )}
+
+                            <div className="space-y-2 max-h-[28rem] overflow-y-auto">
+                                {designResult.pairs.map((pair) => (
+                                    <div
+                                        key={`${pair.rank}:${pair.forward.start}:${pair.reverse.end}`}
+                                        className="rounded-lg border border-slate-700 bg-slate-950/70 p-3"
+                                        onMouseEnter={() => onHighlight([
+                                            { start: pair.forward.start, end: pair.forward.end, color: '#22c55e', label: `F${pair.rank}` },
+                                            { start: pair.reverse.start, end: pair.reverse.end, color: '#ef4444', label: `R${pair.rank}` },
+                                            { start: pair.product_start, end: pair.product_end, color: '#8b5cf6', label: `Amplicon ${pair.product_length}` },
+                                        ])}
+                                        onMouseLeave={() => onHighlight([])}
+                                    >
+                                        <div className="flex items-center justify-between gap-3">
+                                            <div>
+                                                <div className="font-medium text-slate-100">Pair {pair.rank}</div>
+                                                <div className="mt-1 text-xs text-slate-400">
+                                                    Product {pair.product_length} {unitLabel} • ΔTm {pair.tm_delta.toFixed(2)}°C • Penalty {pair.penalty.toFixed(3)}
+                                                    {' '}• heterodimer {pair.heterodimer_complement}
+                                                    {' '}• 3′ heterodimer {pair.three_prime_heterodimer}
+                                                </div>
+                                            </div>
+                                            <button
+                                                onClick={() => addDesignedPair(pair)}
+                                                className="rounded bg-emerald-600 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-emerald-500"
+                                            >
+                                                Add Pair
+                                            </button>
+                                        </div>
+
+                                        <div className="mt-3 grid grid-cols-1 gap-2">
+                                            <div className="rounded border border-slate-800 bg-slate-900 px-3 py-2">
+                                                <div className="text-[11px] uppercase tracking-[0.12em] text-emerald-400">Forward</div>
+                                                <div className="mt-1 font-mono text-xs text-slate-200 break-all">{pair.forward.sequence}</div>
+                                                <div className="mt-1 text-xs text-slate-500">
+                                                    {pair.forward.start + 1}-{pair.forward.end} • {pair.forward.tm.toFixed(2)}°C • GC {pair.forward.gc_percent}%
+                                                    {pair.forward.overhang_length > 0 ? ` • overhang ${pair.forward.overhang_length}` : ''}
+                                                    {pair.forward.off_target_site_count != null ? ` • off-target ${pair.forward.off_target_site_count}` : ''}
+                                                    {pair.forward.max_hairpin_stem > 0 ? ` • hairpin ${pair.forward.max_hairpin_stem}` : ''}
+                                                </div>
+                                            </div>
+                                            <div className="rounded border border-slate-800 bg-slate-900 px-3 py-2">
+                                                <div className="text-[11px] uppercase tracking-[0.12em] text-red-400">Reverse</div>
+                                                <div className="mt-1 font-mono text-xs text-slate-200 break-all">{pair.reverse.sequence}</div>
+                                                <div className="mt-1 text-xs text-slate-500">
+                                                    {pair.reverse.start + 1}-{pair.reverse.end} • {pair.reverse.tm.toFixed(2)}°C • GC {pair.reverse.gc_percent}%
+                                                    {pair.reverse.overhang_length > 0 ? ` • overhang ${pair.reverse.overhang_length}` : ''}
+                                                    {pair.reverse.off_target_site_count != null ? ` • off-target ${pair.reverse.off_target_site_count}` : ''}
+                                                    {pair.reverse.max_hairpin_stem > 0 ? ` • hairpin ${pair.reverse.max_hairpin_stem}` : ''}
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {pair.warnings.length > 0 && (
+                                            <div className="mt-2 rounded border border-amber-800/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                                                {pair.warnings.join(' • ')}
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {activeTab === 'qc' && (
+                <div className="space-y-3">
+                    {qcLoading ? (
+                        <div className="rounded border border-slate-700 bg-slate-900/50 px-3 py-4 text-sm text-slate-400">
+                            Calculating primer QC…
+                        </div>
+                    ) : (
+                        <>
+                            <div className="space-y-2">
+                                {(sequenceQc?.primers || []).length === 0 ? (
+                                    <div className="rounded border border-dashed border-slate-700 bg-slate-900/40 px-3 py-4 text-xs text-slate-500">
+                                        Add primers to the construct to run QC.
+                                    </div>
+                                ) : (sequenceQc?.primers || []).map((entry) => (
+                                    <div key={entry.id || entry.name || entry.qc.sequence} className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+                                        <div className="flex items-center justify-between gap-3">
+                                            <div>
+                                                <div className="font-medium text-slate-100">{entry.name || 'Primer'}</div>
+                                                <div className="mt-1 text-xs text-slate-500">
+                                                    self {entry.qc.max_self_complement} • 3′ self {entry.qc.three_prime_self_complement} • hairpin {entry.qc.max_hairpin_stem}
+                                                    {entry.qc.binding_site_count != null ? ` • sites ${entry.qc.binding_site_count}` : ''}
+                                                </div>
+                                            </div>
+                                            <div className="text-xs text-slate-400">
+                                                off-target {entry.qc.off_target_site_count ?? 0}
+                                            </div>
+                                        </div>
+                                        <div className="mt-2 font-mono text-xs text-slate-300 break-all">{entry.qc.sequence}</div>
+                                        {entry.qc.warnings.length > 0 && (
+                                            <div className="mt-2 rounded border border-amber-800/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                                                {entry.qc.warnings.join(' • ')}
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+
+                            {(sequenceQc?.pairwise || []).length > 0 && (
+                                <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+                                    <div className="font-medium text-slate-200">Pairwise Dimer Review</div>
+                                    <div className="mt-3 space-y-2">
+                                        {sequenceQc?.pairwise.map((pair, index) => (
+                                            <div key={`${pair.left_id || pair.left_name}:${pair.right_id || pair.right_name}:${index}`} className="rounded border border-slate-800 bg-slate-950/70 px-3 py-2">
+                                                <div className="text-sm text-slate-200">
+                                                    {(pair.left_name || 'Primer A')} × {(pair.right_name || 'Primer B')}
+                                                </div>
+                                                <div className="mt-1 text-xs text-slate-500">
+                                                    heterodimer {pair.heterodimer_complement} • 3′ heterodimer {pair.three_prime_heterodimer}
+                                                </div>
+                                                {pair.warnings.length > 0 && (
+                                                    <div className="mt-2 text-xs text-amber-300">{pair.warnings.join(' • ')}</div>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </>
+                    )}
+                </div>
             )}
 
             {activeTab === 'library' && (

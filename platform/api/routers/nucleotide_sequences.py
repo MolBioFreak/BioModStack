@@ -27,12 +27,15 @@ class FeatureSchema(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4())[:8])
     name: str
     type: str = "misc_feature"
-    start: int
-    end: int
+    start: Optional[int] = None
+    end: Optional[int] = None
     strand: int = 1  # 1 for forward, -1 for reverse
     color: Optional[str] = None
     description: Optional[str] = None
     notes: Optional[dict] = None
+    qualifiers: Optional[dict] = None
+    provenance: Optional[dict] = None
+    segments: Optional[List[dict[str, int]]] = None
 
 
 class PrimerSchema(BaseModel):
@@ -49,6 +52,9 @@ class PrimerSchema(BaseModel):
     tm_algorithm: Optional[str] = None
     tm_salt_correction: Optional[str] = None
     tm_settings: Optional[dict] = None
+    notes: Optional[dict] = None
+    provenance: Optional[dict] = None
+    sites: Optional[List[dict[str, Any]]] = None
 
 
 class AnalysisTrackSchema(BaseModel):
@@ -95,6 +101,7 @@ class NucleotideSequenceUpdate(BaseModel):
     analysis_tracks: Optional[List[AnalysisTrackSchema]] = None
     organism: Optional[str] = None
     accession: Optional[str] = None
+    source_file: Optional[str] = None
 
 
 class NucleotideSequenceResponse(BaseModel):
@@ -200,7 +207,7 @@ def serialize_sequence(seq: NucleotideSequence) -> NucleotideSequenceResponse:
         sequence_type=seq.sequence_type,
         is_circular=seq.is_circular,
         length=seq.length,
-        features=seq.features,
+        features=normalize_feature_payloads(seq.features, seq.length),
         primers=seq.primers,
         analysis_tracks=seq.analysis_tracks,
         organism=seq.organism,
@@ -241,6 +248,54 @@ def normalize_analysis_tracks(
             payload["min_value"] = min(numeric_values) if payload.get("min_value") is None else payload["min_value"]
             payload["max_value"] = max(numeric_values) if payload.get("max_value") is None else payload["max_value"]
 
+        normalized.append(payload)
+
+    return normalized
+
+
+def normalize_feature_payloads(
+    features: Optional[List[Any]],
+    sequence_length: Optional[int] = None,
+) -> List[dict]:
+    if not features:
+        return []
+
+    normalized: List[dict] = []
+    for raw_feature in features:
+        payload = raw_feature.model_dump() if isinstance(raw_feature, BaseModel) else dict(raw_feature)
+        segments = payload.get("segments") or []
+        if not segments:
+            start = payload.get("start")
+            end = payload.get("end")
+            if start is None or end is None:
+                raise HTTPException(status_code=400, detail=f"Feature '{payload.get('name', 'unnamed')}' is missing both segments and start/end coordinates")
+            segments = [{"start": int(start), "end": int(end)}]
+
+        normalized_segments: List[dict[str, int]] = []
+        for segment in segments:
+            start = int(segment.get("start"))
+            end = int(segment.get("end"))
+            if end <= start:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Feature '{payload.get('name', 'unnamed')}' contains an invalid segment {start}-{end}",
+                )
+            if sequence_length is not None and (start < 0 or end > sequence_length):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Feature '{payload.get('name', 'unnamed')}' segment {start}-{end} exceeds sequence length {sequence_length}",
+                )
+            normalized_segments.append({"start": start, "end": end})
+
+        normalized_segments.sort(key=lambda item: (item["start"], item["end"]))
+        payload["segments"] = normalized_segments
+        payload["start"] = min(segment["start"] for segment in normalized_segments)
+        payload["end"] = max(segment["end"] for segment in normalized_segments)
+        payload["strand"] = -1 if int(payload.get("strand", 1)) == -1 else 1
+        if payload.get("qualifiers") is None and payload.get("notes") is not None:
+            payload["qualifiers"] = payload["notes"]
+        if payload.get("notes") is None and payload.get("qualifiers") is not None:
+            payload["notes"] = payload["qualifiers"]
         normalized.append(payload)
 
     return normalized
@@ -346,7 +401,7 @@ async def create_sequence(
         sequence_type=normalized_type,
         is_circular=data.is_circular,
         length=len(cleaned_seq),
-        features=[f.model_dump() for f in data.features] if data.features else [],
+        features=normalize_feature_payloads(data.features, len(cleaned_seq)),
         primers=[p.model_dump() for p in data.primers] if data.primers else [],
         analysis_tracks=normalize_analysis_tracks(data.analysis_tracks, len(cleaned_seq)),
         organism=data.organism,
@@ -393,12 +448,16 @@ async def update_sequence(
     
     if not seq:
         raise HTTPException(status_code=404, detail="Sequence not found")
-    
+
+    changed = False
+
     # Update fields if provided
     if data.name is not None:
         seq.name = data.name
+        changed = True
     if data.description is not None:
         seq.description = data.description
+        changed = True
     next_sequence_type = normalize_sequence_type(data.sequence_type or seq.sequence_type, data.sequence or seq.sequence)
     if data.sequence is not None:
         cleaned_seq = clean_sequence(data.sequence, next_sequence_type)
@@ -407,21 +466,35 @@ async def update_sequence(
         seq.gc_content = calculate_gc_content(cleaned_seq)
         if data.analysis_tracks is None:
             seq.analysis_tracks = []
+        changed = True
     if data.sequence_type is not None:
         seq.sequence_type = next_sequence_type
+        changed = True
     if data.is_circular is not None:
         seq.is_circular = data.is_circular
+        changed = True
     if data.features is not None:
-        seq.features = [f.model_dump() for f in data.features]
+        seq.features = normalize_feature_payloads(data.features, seq.length)
+        changed = True
     if data.primers is not None:
         seq.primers = [p.model_dump() for p in data.primers]
+        changed = True
     if data.analysis_tracks is not None:
         seq.analysis_tracks = normalize_analysis_tracks(data.analysis_tracks, seq.length)
+        changed = True
     if data.organism is not None:
         seq.organism = data.organism
+        changed = True
     if data.accession is not None:
         seq.accession = data.accession
-    
+        changed = True
+    if data.source_file is not None:
+        seq.source_file = data.source_file
+        changed = True
+
+    if changed:
+        seq.version = (seq.version or 1) + 1
+
     await session.commit()
     await session.refresh(seq)
     
@@ -469,8 +542,8 @@ async def add_feature(
     
     # Add the new feature
     features = list(seq.features)
-    features.append(feature.model_dump())
-    seq.features = features
+    features.append(feature)
+    seq.features = normalize_feature_payloads(features, seq.length)
     
     await session.commit()
     await session.refresh(seq)

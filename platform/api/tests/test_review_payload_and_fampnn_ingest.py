@@ -111,6 +111,76 @@ def test_refresh_gate_payload_recovers_rfantibody_review_from_run_outputs(tmp_pa
     assert repaired["candidate_backbone_summary"]["backbones"]["0"]["count"] == 1
 
 
+def test_refresh_gate_payload_prefers_filtered_boltzgen_candidates(tmp_path: Path) -> None:
+    raw_dir = tmp_path / "collected" / "boltzgen_raw"
+    raw_dir.mkdir(parents=True)
+    filtered_dir = tmp_path / "collected" / "boltzgen_filtered"
+    filtered_dir.mkdir(parents=True)
+
+    (raw_dir / "boltzgen_input_0.pdb").write_text(
+        "ATOM      1  CA  GLY H   1       0.000   0.000   0.000  1.00 55.00           C\nEND\n",
+        encoding="utf-8",
+    )
+    (filtered_dir / "boltzgen_input_0.pdb").write_text(
+        "ATOM      1  CA  GLY H   1       0.000   0.000   0.000  1.00 70.00           C\nEND\n",
+        encoding="utf-8",
+    )
+    (filtered_dir / "confidence_boltzgen_input_0.json").write_text(
+        '{"confidence_score": 0.81, "iptm": 0.72}',
+        encoding="utf-8",
+    )
+
+    repaired = refresh_gate_payload(
+        {
+            "stage": "post_boltzgen",
+            "candidate_dir": "missing_dir",
+            "raw_dir": str(raw_dir),
+            "filtered_dir": str(filtered_dir),
+        },
+        str(tmp_path),
+    )
+
+    assert repaired["candidate_dir"] == str(filtered_dir.resolve())
+    assert repaired["candidate_count"] == 1
+    assert repaired["raw_candidate_count"] == 1
+    assert repaired["filtered_candidate_count"] == 1
+
+
+def test_refresh_gate_payload_prefers_filtered_ppiflow_generator_candidates(tmp_path: Path) -> None:
+    raw_dir = tmp_path / "collected" / "ppiflow_generator_raw"
+    raw_dir.mkdir(parents=True)
+    filtered_dir = tmp_path / "collected" / "ppiflow_generator_filtered"
+    filtered_dir.mkdir(parents=True)
+
+    (raw_dir / "seedA_ppiflow_sample0.pdb").write_text(
+        "ATOM      1  CA  GLY H   1       0.000   0.000   0.000  1.00 55.00           C\nEND\n",
+        encoding="utf-8",
+    )
+    (filtered_dir / "seedA_ppiflow_sample0.pdb").write_text(
+        "ATOM      1  CA  GLY H   1       0.000   0.000   0.000  1.00 70.00           C\nEND\n",
+        encoding="utf-8",
+    )
+    (filtered_dir / "seedA_ppiflow_sample0_maturation_filter.json").write_text(
+        '{"passes_objective": true, "objective_score": 1.4}',
+        encoding="utf-8",
+    )
+
+    repaired = refresh_gate_payload(
+        {
+            "stage": "post_ppiflow_generator",
+            "candidate_dir": "missing_dir",
+            "raw_dir": str(raw_dir),
+            "filtered_dir": str(filtered_dir),
+        },
+        str(tmp_path),
+    )
+
+    assert repaired["candidate_dir"] == str(filtered_dir.resolve())
+    assert repaired["candidate_count"] == 1
+    assert repaired["raw_candidate_count"] == 1
+    assert repaired["filtered_candidate_count"] == 1
+
+
 def test_repair_job_for_response_marks_ok_history_job_completed_without_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("routers.jobs.nextflow_history_status", lambda job: "OK")
     monkeypatch.setattr("routers.jobs.load_review_gate_snapshot", lambda *_args, **_kwargs: (None, {}))
@@ -170,6 +240,33 @@ def test_derive_job_stage_tags_marks_boltzgen_nanobody_runs_as_boltzgen() -> Non
 
     assert family == "boltzgen"
     assert mode == "nanobody_binder"
+
+
+def test_derive_job_stage_tags_marks_ppiflow_generator_runs_as_ppiflow() -> None:
+    family, mode = _derive_job_stage_tags(
+        "ppiflow",
+        "generator_backbone_refine",
+        {
+            "stage_family": "ppiflow",
+            "stage_mode": "generator_backbone_refine",
+            "framework_type": "nanobody",
+        },
+        None,
+    )
+
+    assert family == "ppiflow"
+    assert mode == "generator_backbone_refine"
+
+
+def test_normalize_antibody_job_params_accepts_post_ppiflow_generator_gate() -> None:
+    normalized = _normalize_antibody_job_params(
+        {
+            "interactive_gate_stage": "post_ppiflow_generator",
+            "selected_input_artifact_class": "backbone_complex",
+        }
+    )
+
+    assert normalized["interactive_gate_stage"] == "post_ppiflow_generator"
 
 
 def test_iter_saved_review_filter_sets_reads_persisted_selection_sets() -> None:
@@ -291,6 +388,19 @@ def test_discover_collected_ppiflow_structures_includes_redesign_outputs(tmp_pat
     discovered = _discover_collected_ppiflow_structures(tmp_path)
 
     assert discovered == [("maturation", stage_dir / "demo_ppiflow_seq_7_sample0.pdb")]
+
+
+def test_discover_collected_ppiflow_structures_includes_generator_outputs(tmp_path: Path) -> None:
+    filtered_dir = tmp_path / "collected" / "ppiflow_generator_filtered"
+    filtered_dir.mkdir(parents=True)
+    raw_dir = tmp_path / "collected" / "ppiflow_generator_raw"
+    raw_dir.mkdir(parents=True)
+    (raw_dir / "seedA_ppiflow_sample0.pdb").write_text("MODEL\nENDMDL\n", encoding="utf-8")
+    (filtered_dir / "seedA_ppiflow_sample0.pdb").write_text("MODEL\nENDMDL\n", encoding="utf-8")
+
+    discovered = _discover_collected_ppiflow_structures(tmp_path)
+
+    assert discovered == [("ppiflow_generator_filtered", filtered_dir / "seedA_ppiflow_sample0.pdb")]
 
 
 def test_parse_ppiflow_sample_index_supports_redesign_names() -> None:
@@ -720,6 +830,16 @@ def test_normalize_antibody_job_params_infers_selected_input_artifact_class_from
 
     assert normalized["selected_input_artifact_class"] == "backbone_complex"
     assert normalized["selected_input_schema_version"] == 1
+
+
+def test_normalize_antibody_job_params_accepts_post_boltzgen_gate() -> None:
+    normalized = _normalize_antibody_job_params(
+        {
+            "interactive_gate_stage": "post_boltzgen",
+        }
+    )
+
+    assert normalized["interactive_gate_stage"] == "post_boltzgen"
 
 
 def test_build_antibody_iteration_job_accepts_saved_review_dataset(tmp_path: Path) -> None:

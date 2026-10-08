@@ -27,6 +27,11 @@ class RnaStructureSettings:
     gamma: float = 1.0
     probability_cutoff: float = 0.02
     max_pairs: int = 800
+    shape_method: Optional[str] = None
+    shape_slope: float = 1.8
+    shape_intercept: float = -0.6
+    shape_reactivities: Optional[list[Optional[float]]] = None
+    hard_constraints: Optional[str] = None
 
 
 def default_structure_settings() -> RnaStructureSettings:
@@ -99,6 +104,45 @@ def _build_model_details(RNA: Any, sequence_length: int, settings: RnaStructureS
     return md
 
 
+def _apply_constraints(RNA: Any, fc: Any, sequence: str, settings: RnaStructureSettings, warnings: list[str]) -> None:
+    if settings.hard_constraints:
+        constraint = settings.hard_constraints.strip()
+        if len(constraint) != len(sequence):
+            raise RnaStructureError(
+                f"Hard-constraint string has length {len(constraint)} but the RNA is {len(sequence)} nt long"
+            )
+        fc.hc_add_from_db(constraint, RNA.CONSTRAINT_DB_DEFAULT)
+        warnings.append("Applied hard constraints from pseudo dot-bracket notation")
+
+    if not settings.shape_method:
+        return
+
+    if settings.shape_method != "deigan":
+        raise RnaStructureError(f"Unsupported SHAPE guidance method '{settings.shape_method}'")
+    if settings.shape_reactivities is None:
+        raise RnaStructureError("SHAPE-guided folding requires per-base reactivity values")
+    if len(settings.shape_reactivities) != len(sequence):
+        raise RnaStructureError(
+            f"SHAPE guidance has {len(settings.shape_reactivities)} values but the RNA is {len(sequence)} nt long"
+        )
+
+    reactivities = RNA.DoubleVector(
+        [
+            -999.0 if value is None else float(value)
+            for value in settings.shape_reactivities
+        ]
+    )
+    fc.sc_add_SHAPE_deigan(
+        reactivities,
+        float(settings.shape_slope),
+        float(settings.shape_intercept),
+        RNA.OPTION_DEFAULT,
+    )
+    warnings.append(
+        f"Applied SHAPE-guided folding with Deigan soft constraints (m={settings.shape_slope}, b={settings.shape_intercept})"
+    )
+
+
 def _paired_count(dot_bracket: str) -> int:
     return dot_bracket.count("(") + dot_bracket.count("[") + dot_bracket.count("{") + dot_bracket.count("<")
 
@@ -162,6 +206,7 @@ def analyze_rna_structure(
     warnings: list[str] = []
     md = _build_model_details(RNA, len(normalized), settings, include_partition)
     fc = RNA.fold_compound(normalized, md)
+    _apply_constraints(RNA, fc, normalized, settings, warnings)
     mfe_dot_bracket, mfe_energy = fc.mfe()
 
     result: dict[str, Any] = {

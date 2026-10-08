@@ -26,6 +26,9 @@ async def list_templates():
             "icon": t.icon,
             "color": t.color,
             "description": t.description,
+            "goal": t.goal,
+            "status": t.status,
+            "experimental": t.experimental,
             "stages": [
                 {"name": s.name, "tool": s.tool, "description": s.description}
                 for s in t.stages
@@ -52,6 +55,9 @@ async def get_template(template_id: str):
         "icon": template.icon,
         "color": template.color,
         "description": template.description,
+        "goal": template.goal,
+        "status": template.status,
+        "experimental": template.experimental,
         "stages": [
             {"name": s.name, "tool": s.tool, "description": s.description}
             for s in template.stages

@@ -41,12 +41,12 @@ interface AntibodyDenovoTemplateProps {
 type DesignMode = 'cdr_only' | 'cdr_selective' | 'framework_allowed' | 'full_design';
 type LoopLengthMode = 'defaults' | 'custom_ranges';
 type LoopLengthRange = { min: number; max: number };
-type InteractiveGateStage = 'post_rfantibody' | 'post_fampnn' | 'post_structure_validation';
+type InteractiveGateStage = 'post_rfantibody' | 'post_boltzgen' | 'post_ppiflow_generator' | 'post_fampnn' | 'post_structure_validation';
 type SeqDesigner = 'none' | 'fampnn' | 'antifold' | 'proteinmpnn';
 type RefinementPreset = 'full_loop' | 'fampnn_only' | 'validation_only' | 'ppiflow_only' | 'manual_mutagenesis' | 'custom';
 type MutagenesisMethod = 'explicit_substitutions' | 'cdr_indels';
 type MutagenesisLaunchMode = 'seeded_refinement' | 'exact_evaluation';
-type DeNovoGenerator = 'rfantibody' | 'boltzgen';
+type DeNovoGenerator = 'rfantibody' | 'boltzgen' | 'ppiflow';
 type DeNovoOrchestrationStage = 'sequence_design' | 'ppiflow' | 'validation' | 'qc';
 type BoltzgenScaffoldSource = 'default_ensemble' | 'selected_scaffold' | 'sequence_template';
 type BoltzgenCheckpointMode = 'both' | 'diverse' | 'adherence';
@@ -65,6 +65,13 @@ const DEFAULT_RFA_LOOP_LENGTH_RANGES: Record<string, LoopLengthRange> = {
 
 const DEFAULT_BOLTZGEN_VHH_FRAMEWORK = `QVQLVESGGGLVQPGGSLRLSCAASGGSEYSYSTFSLGWFRQAPGQGLEAVAAIASMGGLTYYADSVKGRFTISRDNSKNTLYLQMNSLRAEDTAVYYCAAVRGYFMRLPSSHNFRYWGQGTLVTVS`;
 const DEFAULT_BOLTZGEN_ENSEMBLE = ['3DWT', '5U64', '7EOW', '8Z8M'];
+
+const buildGeneratorOnlyStageSelection = (): Record<DeNovoOrchestrationStage, boolean> => ({
+    sequence_design: false,
+    ppiflow: false,
+    validation: false,
+    qc: false,
+});
 
 const cloneDefaultLoopRanges = (): Record<string, LoopLengthRange> =>
     Object.fromEntries(
@@ -259,12 +266,16 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     }, [refinementSavedFilterSetCreatedAt]);
     const [deNovoGenerator, setDeNovoGenerator] = useState<DeNovoGenerator>(() => {
         const explicit = String(initialValues?.denovo_generator || initialValues?.generator || '').trim().toLowerCase();
+        if (explicit === 'ppiflow') return 'ppiflow';
         if (explicit === 'boltzgen') return 'boltzgen';
+        const ppiflowMode = String(initialValues?.stage_family === 'ppiflow' ? initialValues?.stage_mode : initialValues?.mode || '').trim().toLowerCase();
+        if (ppiflowMode === 'generator_backbone_refine') return 'ppiflow';
         const boltzMode = String(initialValues?.boltzgen_mode || initialValues?.mode || '').trim().toLowerCase();
         if (boltzMode === 'nanobody_binder') return 'boltzgen';
         return 'rfantibody';
     });
     const [deNovoStageSelection, setDeNovoStageSelection] = useState<Record<DeNovoOrchestrationStage, boolean>>(() => ({
+        ...buildGeneratorOnlyStageSelection(),
         sequence_design: initialValues?.initial_orchestration_sequence_design === true,
         ppiflow: initialValues?.initial_orchestration_ppiflow === true,
         validation: initialValues?.initial_orchestration_validation === true,
@@ -363,6 +374,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [interactiveGateStage, setInteractiveGateStage] = useState<InteractiveGateStage>(
         initialValues?.interactive_gate_stage === 'post_structure_validation'
             ? 'post_structure_validation'
+            : initialValues?.interactive_gate_stage === 'post_boltzgen'
+                ? 'post_boltzgen'
+            : initialValues?.interactive_gate_stage === 'post_ppiflow_generator'
+                ? 'post_ppiflow_generator'
             : initialValues?.interactive_gate_stage === 'post_fampnn'
                 ? 'post_fampnn'
                 : 'post_rfantibody'
@@ -450,7 +465,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const hasEnabledDeNovoDownstreamStages = Object.values(deNovoStageSelection).some(Boolean);
     const showOnlyCoreGeneratorStep = !isRefinementMode && !hasEnabledDeNovoDownstreamStages;
     const boltzgenGeneratorSelected = !isRefinementMode && deNovoGenerator === 'boltzgen';
-    const deNovoDownstreamLocked = boltzgenGeneratorSelected;
+    const ppiflowGeneratorSelected = !isRefinementMode && deNovoGenerator === 'ppiflow';
+    const deNovoDownstreamLocked = boltzgenGeneratorSelected || ppiflowGeneratorSelected;
     const effectiveSeqDesigner = !isRefinementMode && !deNovoStageSelection.sequence_design ? 'none' : seqDesigner;
     const effectivePpiFlowStageMode = (!isRefinementMode && (!deNovoStageSelection.ppiflow || deNovoDownstreamLocked))
         ? 'off'
@@ -605,6 +621,28 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [boltzgenSizeBuckets, setBoltzgenSizeBuckets] = useState(initialValues?.boltzgen_size_buckets || '');
     const [showBoltzgenPreview, setShowBoltzgenPreview] = useState(false);
     const [boltzgenPreview, setBoltzgenPreview] = useState<BoltzGenPreviewResponse | null>(null);
+    const [ppiflowSeedComplexFile, setPpiflowSeedComplexFile] = useState<File | null>(null);
+    const [ppiflowSeedComplexPath, setPpiflowSeedComplexPath] = useState<string | null>(
+        typeof initialValues?.ppiflow_seed_complex_path === 'string' ? initialValues.ppiflow_seed_complex_path : null
+    );
+    const [ppiflowSeedInputDir, setPpiflowSeedInputDir] = useState<string>(
+        typeof initialValues?.ppiflow_seed_input_dir === 'string'
+            ? initialValues.ppiflow_seed_input_dir
+            : (typeof initialValues?.selected_input_dir === 'string' && String(initialValues?.stage_family || '').trim().toLowerCase() === 'ppiflow'
+                ? initialValues.selected_input_dir
+                : '')
+    );
+    const [ppiflowSeedAntibodyChains, setPpiflowSeedAntibodyChains] = useState<string>(
+        typeof initialValues?.antibody_chains === 'string' && initialValues.antibody_chains.trim()
+            ? initialValues.antibody_chains
+            : 'H'
+    );
+    const [ppiflowSeedAntigenChains, setPpiflowSeedAntigenChains] = useState<string>(
+        typeof initialValues?.antigen_chains === 'string' && initialValues.antigen_chains.trim()
+            ? initialValues.antigen_chains
+            : (typeof initialValues?.selected_chain === 'string' ? initialValues.selected_chain : '')
+    );
+    const hasPpiFlowSeedLaunchInput = Boolean(ppiflowSeedInputDir.trim() || ppiflowSeedComplexFile || ppiflowSeedComplexPath?.trim());
 
     // Viewer mode - toggle between target and framework preview
     type ViewerMode = 'target' | 'framework';
@@ -879,6 +917,11 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         },
     });
 
+    useEffect(() => {
+        if (!selectedChain || ppiflowSeedAntigenChains.trim()) return;
+        setPpiflowSeedAntigenChains(selectedChain);
+    }, [selectedChain, ppiflowSeedAntigenChains]);
+
     const launchMutagenesisMutation = useMutation({
         mutationFn: async (data: any) => launchManualMutagenesis(data),
         onSuccess: () => {
@@ -973,7 +1016,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             lock_gpus: lockGpus && pinnedGpus.length > 0,
             interactive_swa: interactiveWorkflow,
             interactive_gating: interactiveWorkflow,
-            interactive_gate_stage: interactiveWorkflow ? 'post_rfantibody' : undefined,
+            interactive_gate_stage: interactiveWorkflow ? 'post_boltzgen' : undefined,
             stage_family: 'boltzgen',
             stage_mode: 'nanobody_binder',
             out_dir: customOutputDir.trim() || undefined,
@@ -1009,6 +1052,99 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         }
 
         return boltzgenParams;
+    };
+
+    const resolvePpiFlowSeedPathForLaunch = async (): Promise<{ seedComplexPath?: string; seedInputDir?: string }> => {
+        const seedInputDir = ppiflowSeedInputDir.trim();
+        if (seedInputDir) {
+            return { seedInputDir };
+        }
+
+        let seedComplexPath = ppiflowSeedComplexPath?.trim() || '';
+        if (!seedComplexPath && ppiflowSeedComplexFile) {
+            setIsUploading(true);
+            try {
+                const response = await uploadFile('inputs/antibody', ppiflowSeedComplexFile);
+                seedComplexPath = response.data?.path || `inputs/antibody/${ppiflowSeedComplexFile.name}`;
+            } finally {
+                setIsUploading(false);
+            }
+            setPpiflowSeedComplexPath(seedComplexPath);
+        }
+
+        if (!seedComplexPath) {
+            throw new Error('Choose a seed complex PDB or provide a seed input directory before launching PPIFlow.');
+        }
+
+        return { seedComplexPath };
+    };
+
+    const buildStandalonePpiFlowGeneratorParams = (
+        pdbPath: string | undefined,
+        epitopeString: string,
+        seedLaunch: { seedComplexPath?: string; seedInputDir?: string },
+    ) => {
+        const antibodyChains = ppiflowSeedAntibodyChains.trim() || 'H';
+        const antigenChains = ppiflowSeedAntigenChains.trim() || selectedChain || undefined;
+        const antibodyChainList = antibodyChains
+            .split(',')
+            .map((value) => value.trim())
+            .filter(Boolean);
+        const heavyChain = antibodyChainList[0] || 'H';
+        const lightChain = antibodyChainList[1] || undefined;
+        const loopScope = effectivePpiFlowBackboneLoopScope || selectedLoopList.join(',');
+
+        return {
+            framework_type: 'nanobody',
+            antibody_format: 'vhh',
+            antibody_chains: antibodyChains,
+            binder_chains: antibodyChains,
+            antigen_chains: antigenChains,
+            target_chains: antigenChains,
+            target_pdb: pdbPath,
+            target_model_number: selectedTargetModel || undefined,
+            selected_residues: epitopeString || undefined,
+            epitope_residues: epitopeString || undefined,
+            stage_family: 'ppiflow',
+            stage_mode: 'generator_backbone_refine',
+            ppiflow_stage_mode: 'generator_backbone_refine',
+            ppiflow_mode: 'backbone_refine',
+            ppiflow_seed_complex_path: seedLaunch.seedComplexPath,
+            ppiflow_seed_input_dir: seedLaunch.seedInputDir,
+            selected_input_dir: seedLaunch.seedInputDir,
+            ppiflow_samples_per_target: qualitySettings.ppiflow_samples_per_target,
+            ppiflow_start_t: qualitySettings.ppiflow_start_t,
+            ppiflow_retry_limit: qualitySettings.ppiflow_retry_limit,
+            ppiflow_config: qualitySettings.ppiflow_config.trim() || undefined,
+            ppiflow_weights_dir: qualitySettings.ppiflow_weights_dir.trim() || undefined,
+            ppiflow_checkpoint_path: qualitySettings.ppiflow_checkpoint_path.trim() || undefined,
+            ppiflow_checkpoint: resolvedPpiFlowCheckpoint || undefined,
+            ppiflow_require_anchors: qualitySettings.ppiflow_require_anchors,
+            ppiflow_rotamer_enrichment_enabled: qualitySettings.ppiflow_rotamer_enrichment_enabled,
+            ppiflow_rotamer_shell_distance: qualitySettings.ppiflow_rotamer_shell_cutoff,
+            ppiflow_rotamer_shell_cutoff: qualitySettings.ppiflow_rotamer_shell_cutoff,
+            ppiflow_region_mode: ppiflowBackboneRegionMode,
+            ppiflow_selected_loops: loopScope || undefined,
+            ppiflow_objective_mode: qualitySettings.ppiflow_objective_mode,
+            ppiflow_objective_threshold: qualitySettings.ppiflow_objective_threshold,
+            ppiflow_backbone_region_mode: ppiflowBackboneRegionMode,
+            ppiflow_backbone_loop_scope: loopScope || undefined,
+            ppiflow_antigen_chain: antigenChains,
+            ppiflow_heavy_chain: heavyChain,
+            ppiflow_light_chain: lightChain,
+            cdr_positions_by_loop: {},
+            manual_cdr_definitions: [],
+            maturation_redesign_enabled: false,
+            pinned_gpus: pinnedGpus.length > 0 ? pinnedGpus : undefined,
+            lock_gpus: lockGpus && pinnedGpus.length > 0,
+            interactive_swa: interactiveWorkflow,
+            interactive_gating: interactiveWorkflow,
+            interactive_gate_stage: interactiveWorkflow ? 'post_ppiflow_generator' : undefined,
+            structure_validator: structureValidator,
+            sabdab_framework: serializeSabdabFramework(),
+            custom_framework_path: customFrameworkPath || undefined,
+            out_dir: customOutputDir.trim() || undefined,
+        };
     };
 
     const handleBoltzgenPreview = async () => {
@@ -1107,6 +1243,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 !interactiveGateStageTouchedRef.current &&
                 (
                     initialValues.interactive_gate_stage === 'post_rfantibody' ||
+                    initialValues.interactive_gate_stage === 'post_boltzgen' ||
+                    initialValues.interactive_gate_stage === 'post_ppiflow_generator' ||
                     initialValues.interactive_gate_stage === 'post_structure_validation' ||
                     initialValues.interactive_gate_stage === 'post_fampnn'
                 )
@@ -1148,6 +1286,17 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             if (typeof initialValues.boltzgen_metrics_override === 'string') setBoltzgenMetricsOverride(initialValues.boltzgen_metrics_override);
             if (typeof initialValues.boltzgen_additional_filters === 'string') setBoltzgenAdditionalFilters(initialValues.boltzgen_additional_filters);
             if (typeof initialValues.boltzgen_size_buckets === 'string') setBoltzgenSizeBuckets(initialValues.boltzgen_size_buckets);
+            if (typeof initialValues.ppiflow_seed_input_dir === 'string') setPpiflowSeedInputDir(initialValues.ppiflow_seed_input_dir);
+            else if (typeof initialValues.selected_input_dir === 'string' && String(initialValues.stage_family || '').trim().toLowerCase() === 'ppiflow') {
+                setPpiflowSeedInputDir(initialValues.selected_input_dir);
+            }
+            if (typeof initialValues.ppiflow_seed_complex_path === 'string') setPpiflowSeedComplexPath(initialValues.ppiflow_seed_complex_path);
+            if (typeof initialValues.antibody_chains === 'string' && initialValues.antibody_chains.trim()) {
+                setPpiflowSeedAntibodyChains(initialValues.antibody_chains);
+            }
+            if (typeof initialValues.antigen_chains === 'string' && initialValues.antigen_chains.trim()) {
+                setPpiflowSeedAntigenChains(initialValues.antigen_chains);
+            }
             if (typeof initialValues.out_dir === 'string') setCustomOutputDir(initialValues.out_dir);
             if (initialValues.target_dna_seq) {
                 setTargetDnaSeq(initialValues.target_dna_seq);
@@ -1432,12 +1581,17 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         // When skipping early steps, target PDB and epitope are not required
         const skippingEarlySteps = deNovoGenerator === 'rfantibody' && (skipRFantibody || skipFampnn);
         const runSequenceDesign = effectiveSeqDesigner !== 'none';
+        const requiresTargetAndEpitope =
+            !isRefinementMode &&
+            deNovoGenerator !== 'ppiflow' &&
+            !skippingEarlySteps;
+        const hasResolvedTarget = Boolean(targetPdb || targetSource?.path || uploadedPath);
 
-        if (!skippingEarlySteps && !targetPdb) {
+        if (requiresTargetAndEpitope && !hasResolvedTarget) {
             alert('Please upload a target PDB file');
             return;
         }
-        if (!skippingEarlySteps && selectedResidues.size === 0) {
+        if (requiresTargetAndEpitope && selectedResidues.size === 0) {
             alert('Please select at least one epitope residue');
             return;
         }
@@ -1480,15 +1634,20 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         }
 
         try {
-            const pdbPath = await resolveTargetPdbPathForLaunch(skippingEarlySteps || isRefinementMode);
-
             // Format selected residues for backend
             const epitopeString = Array.from(selectedResidues).sort().join(',');
+            const allowSkipFallback = skippingEarlySteps || isRefinementMode;
+            const pdbPath = hasResolvedTarget || allowSkipFallback
+                ? await resolveTargetPdbPathForLaunch(allowSkipFallback)
+                : undefined;
 
             if (!isRefinementMode && deNovoGenerator === 'boltzgen') {
                 if (boltzgenUseFrameworkTemplate && boltzgenScaffoldSource === 'selected_scaffold' && !sabdabFramework?.pdbCode && !customFrameworkPath) {
                     alert('Select a SAbDab framework or switch the scaffold source before launching BoltzGen.');
                     return;
+                }
+                if (!pdbPath) {
+                    throw new Error('Failed to determine target PDB path for BoltzGen launch.');
                 }
 
                 const boltzgenParams = buildStandaloneBoltzgenParams(pdbPath, epitopeString);
@@ -1498,6 +1657,20 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     model_id: 'boltzgen',
                     mode: 'nanobody_binder',
                     params: boltzgenParams,
+                    pinned_gpu: pinnedGpus.length === 1 ? pinnedGpus[0] : null,
+                });
+                return;
+            }
+
+            if (!isRefinementMode && deNovoGenerator === 'ppiflow') {
+                const seedLaunch = await resolvePpiFlowSeedPathForLaunch();
+                const ppiflowParams = buildStandalonePpiFlowGeneratorParams(pdbPath, epitopeString, seedLaunch);
+
+                await submitMutation.mutateAsync({
+                    name: jobName,
+                    model_id: 'ppiflow',
+                    mode: 'generator_backbone_refine',
+                    params: ppiflowParams,
                     pinned_gpu: pinnedGpus.length === 1 ? pinnedGpus[0] : null,
                 });
                 return;
@@ -1765,6 +1938,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     // Orchestrator parallelism mode
                     parallel_mode: parallelMode,
                     designs_per_job: designsPerJob,
+                    pdbs_per_job: pdBsPerJob,
                     seqs_per_job: pdBsPerJob,
                     seqs_per_boltz_job: seqsPerBoltzJob,
                     seqs_per_validation_job: seqsPerBoltzJob,
@@ -1927,21 +2101,17 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             <div>
                 <div className="text-sm font-medium text-[var(--text-primary)]">Generation Engine</div>
                 <p className="mt-1 text-xs text-[var(--text-secondary)]">
-                    Keep the existing workflow shell, but swap the core de novo generator between RFantibody and BoltzGen nanobody mode.
+                    Keep the existing workflow shell, but swap the core de novo generator between RFantibody, BoltzGen nanobody mode, and seeded PPIFlow.
                 </p>
             </div>
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-3 md:grid-cols-3">
                 <button
                     type="button"
                     onClick={() => {
                         setDeNovoGenerator('rfantibody');
                         setShowBoltzgenFrameworkBrowser(false);
-                        setDeNovoStageSelection({
-                            sequence_design: false,
-                            ppiflow: false,
-                            validation: false,
-                            qc: false,
-                        });
+                        setDeNovoStageSelection(buildGeneratorOnlyStageSelection());
+                        setInteractiveGateStage('post_rfantibody');
                     }}
                     className="rounded-xl border p-4 text-left transition-colors"
                     style={deNovoGenerator === 'rfantibody' ? themedSelectedStyle('var(--accent-primary)') : themedInsetStyle}
@@ -1955,12 +2125,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     type="button"
                     onClick={() => {
                         setDeNovoGenerator('boltzgen');
-                        setDeNovoStageSelection({
-                            sequence_design: false,
-                            ppiflow: false,
-                            validation: false,
-                            qc: false,
-                        });
+                        setShowBoltzgenFrameworkBrowser(false);
+                        setDeNovoStageSelection(buildGeneratorOnlyStageSelection());
+                        setInteractiveGateStage('post_boltzgen');
                     }}
                     className="rounded-xl border p-4 text-left transition-colors"
                     style={deNovoGenerator === 'boltzgen' ? themedSelectedStyle('#f59e0b') : themedInsetStyle}
@@ -1968,6 +2135,22 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     <div className="text-sm font-medium text-[var(--text-primary)]">BoltzGen Nanobody</div>
                     <p className="mt-1 text-xs text-[var(--text-secondary)]">
                         All-atom nanobody generation with the same target-selection workflow, then Antibody Refinement for downstream redesign.
+                    </p>
+                </button>
+                <button
+                    type="button"
+                    onClick={() => {
+                        setDeNovoGenerator('ppiflow');
+                        setShowBoltzgenFrameworkBrowser(false);
+                        setDeNovoStageSelection(buildGeneratorOnlyStageSelection());
+                        setInteractiveGateStage('post_ppiflow_generator');
+                    }}
+                    className="rounded-xl border p-4 text-left transition-colors"
+                    style={deNovoGenerator === 'ppiflow' ? themedSelectedStyle('var(--accent-secondary)') : themedInsetStyle}
+                >
+                    <div className="text-sm font-medium text-[var(--text-primary)]">PPIFlow Seeded</div>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                        Seeded partial-flow backbone generation from antibody-target complexes, then Antibody Refinement for downstream redesign.
                     </p>
                 </button>
             </div>
@@ -2018,7 +2201,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 </div>
                 {deNovoDownstreamLocked ? (
                     <p className="mt-3 text-[11px] text-[var(--text-secondary)]">
-                        Initial BoltzGen runs stay generator-only here. Select the top candidates from that batch, then open <span className="font-medium text-[var(--text-primary)]">Antibody Refinement</span> to expose redesign, PPIFlow, and validation.
+                        Initial {deNovoGenerator === 'ppiflow' ? 'PPIFlow seeded' : 'BoltzGen'} runs stay generator-only here. Select the top candidates from that batch, then open <span className="font-medium text-[var(--text-primary)]">Antibody Refinement</span> to expose redesign, PPIFlow, and validation.
                     </p>
                 ) : (
                     <p className="mt-3 text-[11px] text-[var(--text-secondary)]">
@@ -2094,6 +2277,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         <p className="mt-1 text-xs text-[var(--text-secondary)]">
                             {isRefinementMode
                                 ? 'Selected outputs are re-queued through antibody refinement. Choose which stages to rerun below.'
+                                : deNovoGenerator === 'ppiflow'
+                                    ? 'Initial PPIFlow seeded generation runs in the same shell. Downstream redesign stays hidden until you explicitly enable it or launch Antibody Refinement from selected outputs.'
                                 : deNovoGenerator === 'boltzgen'
                                     ? 'Initial BoltzGen nanobody generation runs in the same shell. Downstream redesign stays hidden until you explicitly enable it or launch Antibody Refinement from selected outputs.'
                                     : 'Initial de novo runs start generator-only by default. Turn on downstream stages above when you want them in the first batch run.'}
@@ -2105,7 +2290,11 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         </span>
                         {interactiveWorkflow && (
                             <span className="rounded-full border px-2.5 py-1" style={themedTagStyle('var(--warning)')}>
-                                Review Gate: {interactiveGateStage === 'post_structure_validation'
+                                Review Gate: {deNovoGenerator === 'boltzgen' && !isRefinementMode
+                                    ? 'After BoltzGen'
+                                    : deNovoGenerator === 'ppiflow' && !isRefinementMode
+                                        ? 'After PPIFlow'
+                                    : interactiveGateStage === 'post_structure_validation'
                                     ? 'After validation'
                                     : interactiveGateStage === 'post_fampnn'
                                         ? 'After FAMPNN'
@@ -2118,11 +2307,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     {(() => {
                         const steps: Array<{ title: string; detail: string; accent?: string; muted?: boolean; optional?: boolean }> = [
                             {
-                                title: isRefinementMode ? 'Selected Inputs' : (deNovoGenerator === 'boltzgen' ? 'BoltzGen' : 'RFantibody'),
+                                title: isRefinementMode ? 'Selected Inputs' : (deNovoGenerator === 'boltzgen' ? 'BoltzGen' : deNovoGenerator === 'ppiflow' ? 'PPIFlow Seeded' : 'RFantibody'),
                                 detail: isRefinementMode
                                     ? 'Reuse selected backbones or re-screen inputs'
                                     : deNovoGenerator === 'boltzgen'
                                         ? 'All-atom nanobody generation'
+                                        : deNovoGenerator === 'ppiflow'
+                                            ? 'Seeded backbone generation'
                                         : 'Generate backbone ensemble',
                                 accent: 'var(--success)',
                             },
@@ -3207,6 +3398,191 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 </div>
                             )}
                         </div>
+                    ) : !isRefinementMode && deNovoGenerator === 'ppiflow' ? (
+                        <div className="space-y-5">
+                            <div className="rounded-lg border border-slate-700/50 bg-slate-900/30 p-4">
+                                <div className="mb-3 flex items-center justify-between gap-3">
+                                    <div>
+                                        <h3 className="text-sm font-semibold text-slate-200">Seeded PPIFlow Generator</h3>
+                                        <p className="text-xs text-slate-500 mt-1">
+                                            Start from existing antibody-target complexes, run seeded partial-flow backbone generation, then reopen shortlisted outputs in Antibody Refinement.
+                                        </p>
+                                    </div>
+                                    <span className="rounded-full border border-teal-500/30 bg-teal-500/10 px-2.5 py-1 text-[11px] text-teal-200">
+                                        Core Step
+                                    </span>
+                                </div>
+
+                                <div className="space-y-3">
+                                    <label className="block text-xs text-slate-500">
+                                        Seed complex directory
+                                        <input
+                                            type="text"
+                                            value={ppiflowSeedInputDir}
+                                            onChange={(e) => setPpiflowSeedInputDir(e.target.value)}
+                                            placeholder="/path/to/seed_complexes"
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-teal-500 font-mono"
+                                        />
+                                    </label>
+
+                                    <div className="rounded-lg border border-slate-700/60 bg-slate-950/40 p-3">
+                                        <div className="text-xs text-slate-500">Or upload one seed complex PDB</div>
+                                        <input
+                                            type="file"
+                                            accept=".pdb,.cif,.mmcif"
+                                            onChange={(e) => {
+                                                const file = e.target.files?.[0] || null;
+                                                setPpiflowSeedComplexFile(file);
+                                                if (file) {
+                                                    setPpiflowSeedComplexPath(null);
+                                                }
+                                            }}
+                                            className="mt-2 block w-full text-xs text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-teal-500/20 file:px-3 file:py-2 file:text-xs file:font-medium file:text-teal-100 hover:file:bg-teal-500/30"
+                                        />
+                                        {(ppiflowSeedComplexFile || ppiflowSeedComplexPath) && (
+                                            <div className="mt-2 text-[11px] text-slate-400">
+                                                {ppiflowSeedComplexFile
+                                                    ? `Queued upload: ${ppiflowSeedComplexFile.name}`
+                                                    : `Resolved seed path: ${ppiflowSeedComplexPath}`}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <p className="mt-3 text-[11px] text-slate-500">
+                                    Seed complexes should already contain both antibody and antigen chains. The target structure and hotspots above remain useful context for campaign setup, but the generator itself runs from the seeded complex set.
+                                </p>
+                            </div>
+
+                            <div className="rounded-lg border border-slate-700/50 bg-slate-900/30 p-4">
+                                <div className="mb-3">
+                                    <h3 className="text-sm font-semibold text-slate-200">Chain Roles</h3>
+                                    <p className="text-xs text-slate-500 mt-1">
+                                        Tell PPIFlow which chains belong to the binder versus the antigen inside the seed complexes.
+                                    </p>
+                                </div>
+                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                    <label className="text-xs text-slate-500">
+                                        Antibody chain(s)
+                                        <input
+                                            type="text"
+                                            value={ppiflowSeedAntibodyChains}
+                                            onChange={(e) => setPpiflowSeedAntibodyChains(e.target.value.toUpperCase())}
+                                            placeholder="H"
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-teal-500"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-slate-500">
+                                        Antigen chain(s)
+                                        <input
+                                            type="text"
+                                            value={ppiflowSeedAntigenChains}
+                                            onChange={(e) => setPpiflowSeedAntigenChains(e.target.value.toUpperCase())}
+                                            placeholder={selectedChain || 'A'}
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-teal-500"
+                                        />
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div className="rounded-lg border border-slate-700/50 bg-slate-900/30 p-4">
+                                <div className="mb-3">
+                                    <h3 className="text-sm font-semibold text-slate-200">PPIFlow Generator Controls</h3>
+                                    <p className="text-xs text-slate-500 mt-1">
+                                        Tune the seeded backbone-generation pass only. Sequence design, maturation, and validation stay in the shared refinement loop.
+                                    </p>
+                                </div>
+                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                    <label className="text-xs text-slate-500">
+                                        Samples per seed
+                                        <input
+                                            type="number"
+                                            min={1}
+                                            max={64}
+                                            value={qualitySettings.ppiflow_samples_per_target}
+                                            onChange={(e) => setQualitySettings((current) => ({
+                                                ...current,
+                                                ppiflow_samples_per_target: Math.max(1, Number(e.target.value) || 1),
+                                            }))}
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-teal-500"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-slate-500">
+                                        Partial-flow start t
+                                        <input
+                                            type="number"
+                                            min={0}
+                                            max={1}
+                                            step={0.05}
+                                            value={qualitySettings.ppiflow_start_t}
+                                            onChange={(e) => setQualitySettings((current) => ({
+                                                ...current,
+                                                ppiflow_start_t: Math.max(0, Math.min(1, Number(e.target.value) || 0)),
+                                            }))}
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-teal-500"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-slate-500">
+                                        Objective mode
+                                        <select
+                                            value={qualitySettings.ppiflow_objective_mode}
+                                            onChange={(e) => setQualitySettings((current) => ({
+                                                ...current,
+                                                ppiflow_objective_mode: e.target.value as PPIFlowObjectiveMode,
+                                            }))}
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-teal-500"
+                                        >
+                                            <option value="balanced">Balanced</option>
+                                            <option value="loop_epitope">Loop epitope</option>
+                                            <option value="loop_target">Loop target</option>
+                                            <option value="selected_interface">Selected interface</option>
+                                        </select>
+                                    </label>
+                                    <label className="text-xs text-slate-500">
+                                        Objective threshold
+                                        <input
+                                            type="number"
+                                            step={0.1}
+                                            value={qualitySettings.ppiflow_objective_threshold}
+                                            onChange={(e) => setQualitySettings((current) => ({
+                                                ...current,
+                                                ppiflow_objective_threshold: Number(e.target.value) || 0,
+                                            }))}
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-teal-500"
+                                        />
+                                    </label>
+                                </div>
+                                <div className="mt-4 flex flex-wrap gap-4">
+                                    <label className="flex items-center gap-2 text-sm text-slate-300">
+                                        <input
+                                            type="checkbox"
+                                            checked={qualitySettings.ppiflow_require_anchors}
+                                            onChange={(e) => setQualitySettings((current) => ({
+                                                ...current,
+                                                ppiflow_require_anchors: e.target.checked,
+                                            }))}
+                                            className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-teal-500 focus:ring-teal-500"
+                                        />
+                                        Require anchors
+                                    </label>
+                                    <label className="flex items-center gap-2 text-sm text-slate-300">
+                                        <input
+                                            type="checkbox"
+                                            checked={qualitySettings.ppiflow_rotamer_enrichment_enabled}
+                                            onChange={(e) => setQualitySettings((current) => ({
+                                                ...current,
+                                                ppiflow_rotamer_enrichment_enabled: e.target.checked,
+                                            }))}
+                                            className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-teal-500 focus:ring-teal-500"
+                                        />
+                                        Rotamer enrichment
+                                    </label>
+                                </div>
+                                <p className="mt-3 text-[11px] text-slate-500">
+                                    The seeded batch stays generator-only here. Use the review gate to shortlist top candidates, then reopen them in Antibody Refinement for sequence design, maturation, and validation.
+                                </p>
+                            </div>
+                        </div>
                     ) : (
                         <>
                     {/* Framework Selection */}
@@ -4093,6 +4469,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             <p className="mt-1 text-xs text-[var(--text-secondary)]">
                                 {isRefinementMode
                                     ? 'Choose whether the refinement loop pauses for manual review or runs through without intervention.'
+                                    : deNovoGenerator === 'ppiflow'
+                                        ? 'Choose whether the seeded PPIFlow batch is a straight generation run or a review-first batch before you reopen selected outputs in Antibody Refinement.'
                                     : deNovoGenerator === 'boltzgen'
                                         ? 'Choose whether the BoltzGen batch is a straight generation run or a review-first batch before you reopen selected outputs in Antibody Refinement.'
                                         : 'Choose whether the workflow pauses for manual review or runs through without intervention.'}
@@ -4128,7 +4506,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             <div className="space-y-2 rounded-lg border p-3" style={themedInsetStyle}>
                                 <div className="text-xs font-medium text-[var(--text-primary)]">BoltzGen Review Loop</div>
                                 <p className="text-xs text-[var(--text-secondary)]">
-                                    The initial BoltzGen run still completes as a generator batch. Interactive mode keeps the campaign in a review-first loop operationally: rank the batch outputs, then reopen the selected subset in <span className="font-medium text-[var(--text-primary)]">Antibody Refinement</span> for sequence redesign, PPIFlow, and validation.
+                                    Interactive mode pauses the BoltzGen batch after generation and filtering so you can shortlist candidates, then reopen the selected subset in <span className="font-medium text-[var(--text-primary)]">Antibody Refinement</span> for sequence redesign, PPIFlow, and validation.
+                                </p>
+                            </div>
+                        ) : interactiveWorkflow && deNovoGenerator === 'ppiflow' && !isRefinementMode ? (
+                            <div className="space-y-2 rounded-lg border p-3" style={themedInsetStyle}>
+                                <div className="text-xs font-medium text-[var(--text-primary)]">PPIFlow Review Loop</div>
+                                <p className="text-xs text-[var(--text-secondary)]">
+                                    Interactive mode pauses the seeded PPIFlow batch after backbone generation and filtering so you can shortlist candidates, then reopen the selected subset in <span className="font-medium text-[var(--text-primary)]">Antibody Refinement</span> for sequence redesign, maturation, and validation.
                                 </p>
                             </div>
                         ) : interactiveWorkflow && (
@@ -4300,7 +4685,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     )}
 
                     {/* Number of Backbones */}
-                    {!isRefinementMode && (
+                    {!isRefinementMode && deNovoGenerator !== 'ppiflow' && (
                         <div>
                             <label className="block text-sm font-medium text-slate-400 mb-2">
                                 {deNovoGenerator === 'boltzgen' ? 'Number of Designs' : 'Number of Backbones'}
@@ -4490,6 +4875,21 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                         </div>
                                     </div>
                                 )}
+                            </>
+                        ) : !isRefinementMode && deNovoGenerator === 'ppiflow' ? (
+                            <>
+                                <div>
+                                    <h3 className="text-sm font-semibold text-[var(--text-primary)]">Seeded Batch Execution</h3>
+                                    <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                                        Seeded PPIFlow runs as a generator pass over the provided seed complexes. Downstream fanout happens after you shortlist and reopen outputs in Antibody Refinement.
+                                    </p>
+                                </div>
+                                <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                    <div className="text-sm font-medium text-[var(--text-primary)]">Per-seed sampling</div>
+                                    <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                                        `Samples per seed` in the left column controls how many backbones PPIFlow generates for each seed complex. Use the review gate to prune the batch before any heavier downstream work.
+                                    </p>
+                                </div>
                             </>
                         ) : (
                             <>
@@ -4733,10 +5133,11 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         isUploading ||
                         (isRefinementMode && !refinementHasLaunchSource) ||
                         // Refinement mode and skip modes don't require target PDB or hotspots
-                        (!(isRefinementMode || (deNovoGenerator === 'rfantibody' && (skipRFantibody || skipFampnn))) && (!targetPdb || selectedResidues.size === 0)) ||
+                        (!(isRefinementMode || deNovoGenerator === 'ppiflow' || (deNovoGenerator === 'rfantibody' && (skipRFantibody || skipFampnn))) && (!(targetPdb || targetSource?.path || uploadedPath) || selectedResidues.size === 0)) ||
                         // When skipping, require the skip paths
                         (!isRefinementMode && deNovoGenerator === 'rfantibody' && skipRFantibody && !rfantibodyInputPdbs.trim()) ||
                         (!isRefinementMode && deNovoGenerator === 'rfantibody' && skipFampnn && !fampnnCollectedPdbs.trim()) ||
+                        (!isRefinementMode && deNovoGenerator === 'ppiflow' && !hasPpiFlowSeedLaunchInput) ||
                         (isRefinementMode && !useManualMutagenesis && effectiveSeqDesigner === 'none' && !anyPpiFlowStageEnabled && !effectiveRunStructureValidation && !effectiveRunFrustrampnn)
                     }
                     className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-medium rounded-lg transition-colors flex items-center gap-2"
@@ -4762,6 +5163,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     ) : deNovoGenerator === 'boltzgen' ? (
                         <>
                             Launch BoltzGen Nanobody Batch
+                        </>
+                    ) : deNovoGenerator === 'ppiflow' ? (
+                        <>
+                            Launch PPIFlow Seeded Batch
                         </>
                     ) : showOnlyCoreGeneratorStep ? (
                         <>
@@ -4795,22 +5200,30 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         // Core settings (check both new and old field names for backward compatibility)
                         if (p.job_name) { setJobName(p.job_name); loaded.push('job_name'); } else { skipped.push('job_name'); }
                         if (!isRefinementMode) {
+                            const restoringPpiFlowGenerator =
+                                p.denovo_generator === 'ppiflow' ||
+                                p.generator === 'ppiflow' ||
+                                (p.stage_family === 'ppiflow' && p.stage_mode === 'generator_backbone_refine') ||
+                                p.mode === 'generator_backbone_refine';
                             const restoringBoltzgenGenerator =
                                 p.denovo_generator === 'boltzgen' ||
                                 p.generator === 'boltzgen' ||
                                 p.boltzgen_mode === 'nanobody_binder';
-                            if (p.denovo_generator === 'boltzgen' || p.generator === 'boltzgen' || p.boltzgen_mode === 'nanobody_binder') {
+                            if (restoringBoltzgenGenerator) {
                                 setDeNovoGenerator('boltzgen');
+                                loaded.push('denovo_generator');
+                            } else if (restoringPpiFlowGenerator) {
+                                setDeNovoGenerator('ppiflow');
                                 loaded.push('denovo_generator');
                             } else if (p.denovo_generator === 'rfantibody' || p.generator === 'rfantibody') {
                                 setDeNovoGenerator('rfantibody');
                                 loaded.push('denovo_generator');
                             }
                             setDeNovoStageSelection({
-                                sequence_design: restoringBoltzgenGenerator ? false : p.initial_orchestration_sequence_design === true,
-                                ppiflow: restoringBoltzgenGenerator ? false : p.initial_orchestration_ppiflow === true,
-                                validation: restoringBoltzgenGenerator ? false : p.initial_orchestration_validation === true,
-                                qc: restoringBoltzgenGenerator ? false : p.initial_orchestration_qc === true,
+                                sequence_design: (restoringBoltzgenGenerator || restoringPpiFlowGenerator) ? false : p.initial_orchestration_sequence_design === true,
+                                ppiflow: (restoringBoltzgenGenerator || restoringPpiFlowGenerator) ? false : p.initial_orchestration_ppiflow === true,
+                                validation: (restoringBoltzgenGenerator || restoringPpiFlowGenerator) ? false : p.initial_orchestration_validation === true,
+                                qc: (restoringBoltzgenGenerator || restoringPpiFlowGenerator) ? false : p.initial_orchestration_qc === true,
                             });
                             if (
                                 p.initial_orchestration_sequence_design !== undefined ||
@@ -4891,10 +5304,17 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         if (typeof p.boltzgen_metrics_override === 'string') { setBoltzgenMetricsOverride(p.boltzgen_metrics_override); loaded.push('boltzgen_metrics_override'); }
                         if (typeof p.boltzgen_additional_filters === 'string') { setBoltzgenAdditionalFilters(p.boltzgen_additional_filters); loaded.push('boltzgen_additional_filters'); }
                         if (typeof p.boltzgen_size_buckets === 'string') { setBoltzgenSizeBuckets(p.boltzgen_size_buckets); loaded.push('boltzgen_size_buckets'); }
+                        if (typeof p.ppiflow_seed_input_dir === 'string') { setPpiflowSeedInputDir(p.ppiflow_seed_input_dir); loaded.push('ppiflow_seed_input_dir'); }
+                        else if (typeof p.selected_input_dir === 'string' && p.stage_family === 'ppiflow') { setPpiflowSeedInputDir(p.selected_input_dir); loaded.push('selected_input_dir'); }
+                        if (typeof p.ppiflow_seed_complex_path === 'string') { setPpiflowSeedComplexPath(p.ppiflow_seed_complex_path); loaded.push('ppiflow_seed_complex_path'); }
+                        if (typeof p.antibody_chains === 'string' && p.antibody_chains.trim()) { setPpiflowSeedAntibodyChains(p.antibody_chains); loaded.push('antibody_chains'); }
+                        if (typeof p.antigen_chains === 'string' && p.antigen_chains.trim()) { setPpiflowSeedAntigenChains(p.antigen_chains); loaded.push('antigen_chains'); }
                         if (typeof p.interactive_swa === 'boolean') { setInteractiveWorkflow(p.interactive_swa); loaded.push('interactive_swa'); }
                         else if (typeof p.interactive_gating === 'boolean') { setInteractiveWorkflow(p.interactive_gating); loaded.push('interactive_gating'); }
                         if (
                             p.interactive_gate_stage === 'post_rfantibody' ||
+                            p.interactive_gate_stage === 'post_boltzgen' ||
+                            p.interactive_gate_stage === 'post_ppiflow_generator' ||
                             p.interactive_gate_stage === 'post_structure_validation' ||
                             p.interactive_gate_stage === 'post_fampnn'
                         ) {
@@ -5013,11 +5433,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     job_name: jobName,
                     denovo_generator: deNovoGenerator,
                     generator: deNovoGenerator,
+                    stage_family: deNovoGenerator === 'ppiflow' ? 'ppiflow' : deNovoGenerator === 'boltzgen' ? 'boltzgen' : undefined,
+                    stage_mode: deNovoGenerator === 'ppiflow' ? 'generator_backbone_refine' : deNovoGenerator === 'boltzgen' ? 'nanobody_binder' : undefined,
                     initial_orchestration_sequence_design: deNovoStageSelection.sequence_design,
                     initial_orchestration_ppiflow: deNovoStageSelection.ppiflow,
                     initial_orchestration_validation: deNovoStageSelection.validation,
                     initial_orchestration_qc: deNovoStageSelection.qc,
-                    framework_type: deNovoGenerator === 'boltzgen' ? 'nanobody' : frameworkType,
+                    framework_type: (deNovoGenerator === 'boltzgen' || deNovoGenerator === 'ppiflow') ? 'nanobody' : frameworkType,
                     framework_pdb: frameworkType === 'sabdab'
                         ? (sabdabFramework?.filePath || customFrameworkPath || undefined)
                         : (customFrameworkPath || undefined),
@@ -5117,34 +5539,36 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     rfantibody_target_contact_distance_threshold: rfantibodyTargetContactDistanceThreshold,
                     protect_tetrad: protectTetrad,
                     protect_vhh_tetrad: protectTetrad,
-                    boltzgen_mode: 'nanobody_binder',
-                    boltzgen_use_framework_template: boltzgenUseFrameworkTemplate,
-                    boltzgen_scaffold_source: boltzgenScaffoldSource,
-                    boltzgen_batch_size: boltzgenBatchSize,
-                    boltzgen_parallel_mode: boltzgenParallelMode,
-                    boltzgen_designs_per_job: boltzgenDesignsPerJob,
-                    boltzgen_reuse: boltzgenReuseExisting,
-                    boltzgen_scaffold_length: boltzgenScaffoldLength,
-                    boltzgen_nanobody_framework: boltzgenUseFrameworkTemplate ? boltzgenNanobodyFramework : undefined,
-                    boltzgen_cdr_h1_length: boltzgenCdrH1Length,
-                    boltzgen_cdr_h2_length: boltzgenCdrH2Length,
-                    boltzgen_cdr_h3_length: boltzgenCdrH3Length,
-                    boltzgen_checkpoint_mode: boltzgenCheckpointMode,
-                    boltzgen_skip_inverse_folding: boltzgenSkipInverseFolding,
-                    boltzgen_inverse_fold_avoid: boltzgenInverseFoldAvoid,
-                    boltzgen_inverse_fold_num_sequences: boltzgenInverseFoldNumSequences,
-                    boltzgen_avoid_cysteine: boltzgenAvoidCysteine,
-                    boltzgen_step_scale: boltzgenStepScale,
-                    boltzgen_noise_scale: boltzgenNoiseScale,
-                    boltzgen_budget: boltzgenBudget,
-                    boltzgen_alpha: boltzgenAlpha,
-                    boltzgen_max_rmsd: boltzgenMaxRmsd,
-                    boltzgen_min_plddt: boltzgenMinPlddt,
-                    boltzgen_min_conf_score: boltzgenMinConfScore,
-                    boltzgen_filter_biased: boltzgenFilterBiased,
-                    boltzgen_metrics_override: boltzgenMetricsOverride.trim() || undefined,
-                    boltzgen_additional_filters: boltzgenAdditionalFilters.trim() || undefined,
-                    boltzgen_size_buckets: boltzgenSizeBuckets.trim() || undefined,
+                    boltzgen_mode: deNovoGenerator === 'boltzgen' ? 'nanobody_binder' : undefined,
+                    boltzgen_use_framework_template: deNovoGenerator === 'boltzgen' ? boltzgenUseFrameworkTemplate : undefined,
+                    boltzgen_scaffold_source: deNovoGenerator === 'boltzgen' ? boltzgenScaffoldSource : undefined,
+                    boltzgen_batch_size: deNovoGenerator === 'boltzgen' ? boltzgenBatchSize : undefined,
+                    boltzgen_parallel_mode: deNovoGenerator === 'boltzgen' ? boltzgenParallelMode : undefined,
+                    boltzgen_designs_per_job: deNovoGenerator === 'boltzgen' ? boltzgenDesignsPerJob : undefined,
+                    boltzgen_reuse: deNovoGenerator === 'boltzgen' ? boltzgenReuseExisting : undefined,
+                    boltzgen_scaffold_length: deNovoGenerator === 'boltzgen' ? boltzgenScaffoldLength : undefined,
+                    boltzgen_nanobody_framework: deNovoGenerator === 'boltzgen' && boltzgenUseFrameworkTemplate ? boltzgenNanobodyFramework : undefined,
+                    boltzgen_cdr_h1_length: deNovoGenerator === 'boltzgen' ? boltzgenCdrH1Length : undefined,
+                    boltzgen_cdr_h2_length: deNovoGenerator === 'boltzgen' ? boltzgenCdrH2Length : undefined,
+                    boltzgen_cdr_h3_length: deNovoGenerator === 'boltzgen' ? boltzgenCdrH3Length : undefined,
+                    boltzgen_checkpoint_mode: deNovoGenerator === 'boltzgen' ? boltzgenCheckpointMode : undefined,
+                    boltzgen_skip_inverse_folding: deNovoGenerator === 'boltzgen' ? boltzgenSkipInverseFolding : undefined,
+                    boltzgen_inverse_fold_avoid: deNovoGenerator === 'boltzgen' ? boltzgenInverseFoldAvoid : undefined,
+                    boltzgen_inverse_fold_num_sequences: deNovoGenerator === 'boltzgen' ? boltzgenInverseFoldNumSequences : undefined,
+                    boltzgen_avoid_cysteine: deNovoGenerator === 'boltzgen' ? boltzgenAvoidCysteine : undefined,
+                    boltzgen_step_scale: deNovoGenerator === 'boltzgen' ? boltzgenStepScale : undefined,
+                    boltzgen_noise_scale: deNovoGenerator === 'boltzgen' ? boltzgenNoiseScale : undefined,
+                    boltzgen_budget: deNovoGenerator === 'boltzgen' ? boltzgenBudget : undefined,
+                    boltzgen_alpha: deNovoGenerator === 'boltzgen' ? boltzgenAlpha : undefined,
+                    boltzgen_max_rmsd: deNovoGenerator === 'boltzgen' ? boltzgenMaxRmsd : undefined,
+                    boltzgen_min_plddt: deNovoGenerator === 'boltzgen' ? boltzgenMinPlddt : undefined,
+                    boltzgen_min_conf_score: deNovoGenerator === 'boltzgen' ? boltzgenMinConfScore : undefined,
+                    boltzgen_filter_biased: deNovoGenerator === 'boltzgen' ? boltzgenFilterBiased : undefined,
+                    boltzgen_metrics_override: deNovoGenerator === 'boltzgen' ? (boltzgenMetricsOverride.trim() || undefined) : undefined,
+                    boltzgen_additional_filters: deNovoGenerator === 'boltzgen' ? (boltzgenAdditionalFilters.trim() || undefined) : undefined,
+                    boltzgen_size_buckets: deNovoGenerator === 'boltzgen' ? (boltzgenSizeBuckets.trim() || undefined) : undefined,
+                    ppiflow_seed_input_dir: ppiflowSeedInputDir.trim() || undefined,
+                    ppiflow_seed_complex_path: ppiflowSeedComplexPath || undefined,
                     // Framework protection (for framework_allowed and full_design modes)
                     protected_positions: frameworkProtection.protectedPositions.join(','),
                     protect_disulfides: frameworkProtection.protectDisulfides,
@@ -5155,7 +5579,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     target_source: targetSource,
                     uploaded_path: uploadedPath,
                     selected_chain: selectedChain,
-                    antigen_chains: selectedChain,
+                    antigen_chains: deNovoGenerator === 'ppiflow' ? (ppiflowSeedAntigenChains.trim() || selectedChain || undefined) : selectedChain,
+                    antibody_chains: deNovoGenerator === 'ppiflow' ? (ppiflowSeedAntibodyChains.trim() || 'H') : undefined,
                     selected_residues: Array.from(selectedResidues),
                     epitope_residues: Array.from(selectedResidues).sort().join(','),
                     target_dna_seq: targetDnaSeq.trim() || undefined,

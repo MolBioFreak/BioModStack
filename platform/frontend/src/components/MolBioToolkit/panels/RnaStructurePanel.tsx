@@ -140,6 +140,7 @@ export function RnaStructurePanel({
     const [trackNormalization, setTrackNormalization] = useState('');
     const [trackSourceUrl, setTrackSourceUrl] = useState('');
     const [trackRawInput, setTrackRawInput] = useState('');
+    const [useSelectedTrackForGuidance, setUseSelectedTrackForGuidance] = useState(false);
 
     const analysisTracks = sequenceData.analysisTracks || [];
 
@@ -225,6 +226,8 @@ export function RnaStructurePanel({
             settings: {
                 ...activeSettings,
                 circular: sequenceData.circular,
+                shape_method: useSelectedTrackForGuidance && selectedTrack ? 'deigan' : null,
+                shape_reactivities: useSelectedTrackForGuidance && selectedTrack ? selectedTrack.values : null,
             },
         };
 
@@ -379,6 +382,26 @@ export function RnaStructurePanel({
                             className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-sm"
                         />
                     </label>
+                    <label className="space-y-1">
+                        <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">SHAPE slope</span>
+                        <input
+                            type="number"
+                            step="0.1"
+                            value={activeSettings?.shape_slope ?? 1.8}
+                            onChange={(event) => handleSettingsChange('shape_slope', Number(event.target.value))}
+                            className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-sm"
+                        />
+                    </label>
+                    <label className="space-y-1">
+                        <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">SHAPE intercept</span>
+                        <input
+                            type="number"
+                            step="0.1"
+                            value={activeSettings?.shape_intercept ?? -0.6}
+                            onChange={(event) => handleSettingsChange('shape_intercept', Number(event.target.value))}
+                            className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-sm"
+                        />
+                    </label>
                 </div>
                 <label className="flex items-center gap-2 text-xs text-slate-400">
                     <input
@@ -388,6 +411,27 @@ export function RnaStructurePanel({
                         className="rounded border-slate-600 bg-slate-800"
                     />
                     Disallow lonely base pairs
+                </label>
+                <label className="flex items-center gap-2 text-xs text-slate-400">
+                    <input
+                        type="checkbox"
+                        checked={useSelectedTrackForGuidance && Boolean(selectedTrack)}
+                        onChange={(event) => setUseSelectedTrackForGuidance(event.target.checked)}
+                        disabled={!selectedTrack}
+                        className="rounded border-slate-600 bg-slate-800"
+                    />
+                    Use selected evidence track as SHAPE-like soft constraints
+                    {selectedTrack ? ` (${selectedTrack.name})` : ' (select a track below first)'}
+                </label>
+                <label className="space-y-1 block">
+                    <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Hard constraints</span>
+                    <textarea
+                        value={activeSettings?.hard_constraints ?? ''}
+                        onChange={(event) => handleSettingsChange('hard_constraints', event.target.value || null)}
+                        rows={3}
+                        className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 font-mono text-xs"
+                        placeholder="Optional pseudo dot-bracket constraint string matching RNA length"
+                    />
                 </label>
                 <div className="grid grid-cols-1 gap-2">
                     <button

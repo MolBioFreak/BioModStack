@@ -1,0 +1,62 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+
+%labels
+    Author BioModStack
+    Version 0.1.0
+    Description DISCO runtime for experimental protein CAD generation
+
+%post
+    set -eu
+    export DEBIAN_FRONTEND=noninteractive
+
+    apt-get update && apt-get install -y \
+        git \
+        curl \
+        wget \
+        build-essential \
+        python3.11 \
+        python3.11-dev \
+        python3.11-venv \
+        && rm -rf /var/lib/apt/lists/*
+
+    ln -sf /usr/bin/python3.11 /usr/bin/python3
+    ln -sf /usr/bin/python3.11 /usr/bin/python
+
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="/root/.local/bin:${PATH}"
+
+    git clone https://github.com/DISCO-design/DISCO.git /opt/disco
+    cd /opt/disco
+    uv sync
+
+    . /opt/disco/.venv/bin/activate
+    uv pip uninstall torch || true
+    uv pip install torch --torch-backend=cu124
+
+    mkdir -p /weights/disco /cache/huggingface /cache/triton /cache/general
+    uv pip freeze > /opt/disco/.venv/requirements.lock 2>/dev/null || true
+
+%environment
+    export PATH=/opt/disco/.venv/bin:$PATH
+    export PYTHONPATH=/opt/disco:$PYTHONPATH
+    export XDG_CACHE_HOME=/cache/general
+    export HF_HOME=/cache/huggingface
+    export TRITON_CACHE_DIR=/cache/triton
+    export DISCO_REPO=/opt/disco
+
+%test
+    . /opt/disco/.venv/bin/activate
+    python3 -c "import torch; print(torch.__version__)"
+    python3 -c "import disco; print('DISCO runtime ok')"
+
+%help
+    DISCO runtime image for BioModStack experimental Protein CAD work.
+
+    Notes:
+    - CUTLASS is optional. If you do not mount a CUTLASS checkout, run with
+      use_deepspeed_evo_attention=false.
+    - Default checkpoint location in BMS is /weights/disco/DISCO.pt.
+
+    Upstream:
+    https://github.com/DISCO-design/DISCO

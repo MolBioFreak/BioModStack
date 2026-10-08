@@ -70,6 +70,11 @@ models/
 platform/api/config/models/*
 !platform/api/config/models/nanopore.yaml
 apptainer/
+!platform/api/config/models/protein_cad_experimental.yaml
+!apptainer/
+apptainer/*
+!apptainer/disco.def
+!apptainer/laproteina.def
 *.sif
 *.pt
 *.ckpt

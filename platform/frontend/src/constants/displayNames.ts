@@ -79,12 +79,17 @@ export const MODEL_DISPLAY_NAMES: Record<string, string> = {
     'oligo_design': 'Oligo Designer',
     'protein_local_redesign': 'Protein Local Redesign',
     'nanopore': 'Nanopore Sequencing',
+    'ppiflow': 'PPIFlow Seeded',
 };
 
 // Pipeline stage display names
 export const STAGE_DISPLAY_NAMES: Record<string, string> = {
     'rfantibody': 'RFantibody',
     'post_rfantibody': 'RFantibody Review',
+    'boltzgen': 'BoltzGen',
+    'post_boltzgen': 'BoltzGen Review',
+    'ppiflow': 'PPIFlow',
+    'post_ppiflow_generator': 'PPIFlow Review',
     'fampnn': 'FAMPNN',
     'antifold': 'AntiFold',
     'proteinmpnn': 'ProteinMPNN',

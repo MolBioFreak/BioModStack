@@ -7,7 +7,7 @@ version: 1.0.0
 category: antibody_design
 description: >
   De novo nanobody design toolkit with multiple upstream generators.
-  Use RFantibody or BoltzGen nanobody generation, then reopen selected outputs
+  Use RFantibody, BoltzGen nanobody generation, or seeded PPIFlow generation, then reopen selected outputs
   in Antibody Refinement for staged redesign, validation, and downstream review.
 
 workflow_type: pipeline
@@ -43,7 +43,8 @@ steps:
     models:
       - rfantibody
       - boltzgen
-    description: Generate nanobody candidates with RFantibody or BoltzGen, depending on the chosen de novo engine
+      - ppiflow
+    description: Generate nanobody candidates with RFantibody, BoltzGen, or seeded PPIFlow, depending on the chosen de novo engine
     required: true
 
   - id: sequence

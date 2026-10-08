@@ -66,7 +66,7 @@ def infer_antibody_artifact_class_from_stage(stage_family: Any, stage_mode: Any)
 
     if family == "rfantibody":
         return BACKBONE_COMPLEX
-    if family == "boltzgen" and mode in {"nanobody_binder", "antibody_binder"}:
+    if family == "boltzgen":
         return SEQUENCE_DESIGNED_COMPLEX
     if family in {"fampnn", "antifold", "proteinmpnn", "frustrampnn"}:
         return SEQUENCE_DESIGNED_COMPLEX
@@ -75,7 +75,7 @@ def infer_antibody_artifact_class_from_stage(stage_family: Any, stage_mode: Any)
     if family == "openmm":
         return POST_VALIDATION_REFINED_COMPLEX
     if family == "ppiflow":
-        if mode in {"backbone_refine", "post_rfantibody", "post_ppiflow"}:
+        if mode in {"backbone_refine", "generator_backbone_refine", "post_rfantibody", "post_ppiflow"}:
             return BACKBONE_COMPLEX
         if mode in {"maturation", "post_fampnn"}:
             return SEQUENCE_DESIGNED_COMPLEX
