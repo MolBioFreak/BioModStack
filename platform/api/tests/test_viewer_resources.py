@@ -6,10 +6,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from starlette.requests import Request
+
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from database import Base, Job, ViewerSnapshotRecord
+from routers.viewer_resources import _principal
 from services.viewer_resource_contracts import ViewerResourceError, canonical_json_bytes, validate_snapshot_create
 from services.viewer_resources import (
     create_snapshot_record, delete_snapshot_record, get_snapshot_record,
@@ -22,6 +25,21 @@ VOLUME_ID = "44444444-4444-4444-8444-444444444444"
 ARTIFACT_ID = "55555555-5555-4555-8555-555555555555"
 REGISTRATION_ID = "66666666-6666-4666-8666-666666666666"
 SNAPSHOT_ID = "22222222-2222-4222-8222-222222222222"
+
+
+def _request(headers: list[tuple[bytes, bytes]]) -> Request:
+    return Request({"type": "http", "method": "GET", "scheme": "http", "path": "/api/jobs/job-1/viewer/snapshots", "query_string": b"", "headers": headers, "client": ("127.0.0.1", 5173), "server": ("127.0.0.1", 8000)})
+
+
+def test_viewer_routes_accept_only_authenticated_or_trusted_proxy_principals(monkeypatch):
+    monkeypatch.setenv("BMS_CM_TRUSTED_PROXY_SECRET", "test-proxy-secret")
+    trusted = _request([(b"x-bms-cm-proxy-secret", b"test-proxy-secret")])
+    assert _principal(trusted) == "local-application-operator"
+
+    untrusted = _request([])
+    with pytest.raises(Exception) as raised:
+        _principal(untrusted)
+    assert getattr(raised.value, "status_code", None) == 401
 
 
 def _snapshot() -> dict:

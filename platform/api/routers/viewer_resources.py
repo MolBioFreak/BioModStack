@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import secrets
 from collections.abc import Mapping
 from typing import Any, NoReturn
 
@@ -24,11 +26,20 @@ from services.viewer_resources import (
 
 router = APIRouter()
 MAX_RANGE_BYTES = 64 * 1024 * 1024
+_TRUSTED_PROXY_HEADER = "x-bms-cm-proxy-secret"
+
+
+def _trusted_application_boundary(request: Request) -> bool:
+    configured = os.getenv("BMS_CM_TRUSTED_PROXY_SECRET", "")
+    supplied = request.headers.get(_TRUSTED_PROXY_HEADER, "")
+    return bool(configured and supplied and secrets.compare_digest(configured, supplied))
 
 
 def _principal(request: Request) -> str:
     principal = getattr(request.state, "authenticated_principal", None)
     if principal is None:
+        if _trusted_application_boundary(request):
+            return "local-application-operator"
         raise HTTPException(status_code=401, detail={"schema": "bms.viewer.error.v1", "code": "VIEWER_AUTH_REQUIRED", "message": "Authenticated viewer principal required", "retryable": False})
     if isinstance(principal, Mapping):
         actor = principal.get("id") or principal.get("subject")
