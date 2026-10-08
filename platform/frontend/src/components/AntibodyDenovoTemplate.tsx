@@ -597,6 +597,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const frameworkPdbObjectUrlRef = useRef<string | null>(null);
     const frameworkLoadControllerRef = useRef(createLatestAsyncResourceController());
     const targetLoadControllerRef = useRef(createLatestAsyncResourceController());
+    const targetParseControllerRef = useRef(createLatestAsyncResourceController());
     const replacePdbBlobUrl = useCallback((nextUrl: string | null) => {
         if (pdbBlobUrlRef.current) URL.revokeObjectURL(pdbBlobUrlRef.current);
         pdbBlobUrlRef.current = nextUrl;
@@ -614,6 +615,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         frameworkPdbObjectUrlRef.current = null;
         frameworkLoadControllerRef.current.dispose();
         targetLoadControllerRef.current.dispose();
+        targetParseControllerRef.current.dispose();
     }, []);
     const [show3DViewer, setShow3DViewer] = useState(false);  // 3D viewer toggle, off by default
     const [boltzgenUseFrameworkTemplate, setBoltzgenUseFrameworkTemplate] = useState(
@@ -1442,6 +1444,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
     // Parse the uploaded/selected target structure, preserving all available models.
     useEffect(() => {
+        const generation = targetParseControllerRef.current.begin();
         if (!targetPdb) {
             setParsedTargetStructure(null);
             setParsedChains([]);
@@ -1457,6 +1460,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
         parsePDBFile(targetPdb)
             .then((result) => {
+                if (!targetParseControllerRef.current.isCurrent(generation)) return;
                 setParsedTargetStructure(result);
                 const queuedModel = restoringSelectionRef.current?.modelNumber ?? null;
                 const preferredModel =
@@ -1472,11 +1476,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 );
             })
             .catch((err) => {
+                if (!targetParseControllerRef.current.isCurrent(generation)) return;
                 console.error('[ANTIBODY_DENOVO] Failed to parse PDB:', err);
                 setParsedTargetStructure(null);
                 setParsedChains([]);
             })
-            .finally(() => setIsParsing(false));
+            .finally(() => {
+                if (targetParseControllerRef.current.isCurrent(generation)) setIsParsing(false);
+            });
     }, [getSavedTargetModelNumber, initialValues, selectedTargetModel, targetPdb, uploadedPath]);
 
     // Keep the active target chains/viewer content aligned to the currently selected model.

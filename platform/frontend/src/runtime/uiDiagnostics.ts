@@ -20,6 +20,8 @@ export type UiDiagnosticsInput = {
   viteMode: string;
   viteBaseUrl: string;
   apiHealth: string;
+  frontendBuildRevision?: string;
+  apiBuildRevision?: string;
   shellContext?: UiShellContext | null;
   userAgent?: string;
 };
@@ -40,6 +42,14 @@ function printable(value: unknown): string {
 
 function addField(fields: Record<string, string>, label: string, value: unknown): void {
   fields[label] = printable(value);
+}
+
+function knownRevision(value: unknown): string | null {
+  const normalized = printable(value).trim();
+  if (!normalized || normalized.toLowerCase() === UNKNOWN_VALUE) {
+    return null;
+  }
+  return normalized;
 }
 
 export function resolveUiSurfaceLabel(surface: UiSurfaceProbe): string {
@@ -65,6 +75,18 @@ export function buildUiDiagnosticsPayload(input: UiDiagnosticsInput): UiDiagnost
   addField(fields, 'Vite mode', input.viteMode);
   addField(fields, 'Vite base URL', input.viteBaseUrl);
   addField(fields, 'API health', input.apiHealth);
+
+  const frontendRevision = knownRevision(input.frontendBuildRevision);
+  const apiRevision = knownRevision(input.apiBuildRevision);
+  addField(fields, 'Frontend build revision', frontendRevision);
+  addField(fields, 'API build revision', apiRevision);
+  addField(
+    fields,
+    'Revision skew',
+    frontendRevision && apiRevision
+      ? (frontendRevision === apiRevision ? 'none detected' : 'detected')
+      : 'indeterminate',
+  );
 
   if (input.shellContext) {
     addField(fields, 'Shell runtime', input.shellContext.runtimeMode);

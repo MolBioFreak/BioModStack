@@ -737,20 +737,21 @@ Each phase is implemented test-first in the isolated worktree. Each boundary req
 - `platform/api/routers/workflow_adapter.py`
 - new `platform/api/services/md/feature_gate.py`
 - `platform/api/services/result_contracts.py`
-- `workflows/molecular_dynamics.nf`
-- `modules/molecular_dynamics.nf`
+- `workflows/experimental/molecular_dynamics/orchestrator.nf`
+- `workflows/experimental/molecular_dynamics/replica.nf`
+- `modules/experimental/molecular_dynamics/`
 
 **Work**
 
 1. Retain benchmark, CLI, schema, restart, and artifact tests as evidence.
 2. Record current feature truth explicitly:
-   - `workflows/molecular_dynamics.nf` creates a replica list and `modules/molecular_dynamics.nf::MD_RUN_REPLICA` launches each item inside one scheduler job, so the current replica work is not independently visible to BMS scheduling;
-   - `platform/api/config/models/molecular_dynamics.yaml` promises one scheduler-owned GPU per replica although the current scheduler sees only the enclosing job;
-   - `scripts/bms_md/gromacs_pipeline.py::run_gromacs_job` rejects `engine != gromacs`; schema/enumeration acceptance of `openmm` is not an implementation;
-   - `platform/api/services/result_contracts.py` already declares `molecular_dynamics_v1`, MD analyzers, and `trajectory_viewer`, but `platform/api/services/analysis_registry.py` does not register those analyzers and the frontend has no implemented first-class MD run/replica/result surface; the declaration is premature/unbacked, not absent.
+   - `workflows/experimental/molecular_dynamics/orchestrator.nf` coordinates bounded CPU-side preparation/finalization while each replica is launched through `workflows/experimental/molecular_dynamics/replica.nf` as an independently visible one-GPU BMS child;
+   - `platform/api/config/models/molecular_dynamics.yaml` binds the parent/child scheduler contract to exactly one visible accelerator per replica attempt;
+   - GROMACS and OpenMM use separate exact adapters with no fallback: GROMACS owns automatic structure preparation, while OpenMM accepts only a recursively closed, externally prepared coordinate/topology bundle;
+   - the dedicated launcher and durable artifact contracts are implemented, while interactive trajectory/result viewing remains deliberately deferred until lifecycle and scientific-validation gates are complete.
 3. Add the default-off install/runtime flag `BMS_FEATURE_MOLECULAR_DYNAMICS`. Remove every disabled submission path, not only UI visibility: model listing/detail/categories, `POST /api/jobs`, and direct workflow-adapter launch all reject or hide MD with `MD_FEATURE_DISABLED` before command construction, database mutation, directory creation, background-task registration, or process launch. Trusted internal prepare/replica/finalize dispatch is a separate typed coordinator call, not a client-supplied bypass token. Regression tests prove zero durable or process side effects while disabled.
 4. Remove `molecular_dynamics_v1` analyzer/viewer declarations that are not backed by registered analyzer and viewer implementations.
-5. Label the current all-replica Nextflow workflow infrastructure-only and do not route production submissions through it. Fix or explicitly retire the current malformed Nextflow CLI/input formatting and require CLI lint plus parse tests before retaining it as evidence.
+5. Keep the retired root-level all-replica workflow absent. Production submissions route only through the CPU-side experimental orchestrator and scheduler-visible singleton replica entrypoint; CLI lint and parse tests constrain both entrypoints.
 6. Reconcile the earlier `a1bcc49a…` / 533,733,376-byte SIF record with the live `97c117ea…` / 533,737,472-byte file, identify the exact bytes used for the retained benchmark, and choose or rebuild one canonical image. If byte identity cannot be proven, rerun the benchmark against the canonical image before retaining the workload observation.
 7. Regenerate integration evidence so the retained result uses only relative paths and current schemas.
 
@@ -758,7 +759,7 @@ Each phase is implemented test-first in the isolated worktree. Each boundary req
 
 - No UI/API path claims production MD availability; direct `POST /api/jobs` returns `MD_FEATURE_DISABLED` with zero durable launch side effects.
 - No specialized capability is declared without implementation.
-- Current Nextflow evidence passes CLI-format lint and parse tests or is explicitly retired.
+- The experimental orchestrator and singleton replica entrypoints pass CLI-format lint and parse tests; the obsolete root-level all-replica workflow remains retired.
 - Existing focused tests remain green.
 - Current working evidence is retained and checksummed.
 - The canonical GROMACS SIF checksum matches the live file, and the retained benchmark names that same checksum or has been rerun against it.

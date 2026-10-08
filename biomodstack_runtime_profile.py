@@ -558,6 +558,7 @@ def export_install_profile(profile: Mapping[str, object] | None = None, project_
     core_runtime_env_path = get_core_runtime_env_path()
     core_runtime_env_path.parent.mkdir(parents=True, exist_ok=True)
     core_runtime_env_path.write_text("\n".join(_core_runtime_env_lines(resolved)), encoding="utf-8")
+    core_runtime_env_path.chmod(0o600)
 
     return {
         "compat_env_path": str(compat_env_path),

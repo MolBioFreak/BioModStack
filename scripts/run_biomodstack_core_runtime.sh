@@ -81,7 +81,7 @@ run_compose() {
 }
 
 case "$ACTION" in
-    supervise|preflight|status|up|stop|down)
+    supervise|preflight|status|up|stop|down|ownership-check|ownership-repair)
         exec python3 "$CONTROLLER" "$ACTION" "$@"
         ;;
     rebuild|build)
@@ -105,7 +105,7 @@ case "$ACTION" in
         run_compose pull "$@"
         ;;
     *)
-        echo "Usage: $0 {supervise|preflight|status|up|rebuild|build|stop|down|restart|logs|ps|config|pull} [args...]" >&2
+        echo "Usage: $0 {supervise|preflight|status|up|rebuild|build|stop|down|ownership-check|ownership-repair|restart|logs|ps|config|pull} [args...]" >&2
         exit 2
         ;;
 esac

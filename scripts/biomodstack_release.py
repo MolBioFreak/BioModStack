@@ -82,6 +82,7 @@ class BuildIdentity:
 class ReleaseBackend(Protocol):
     def snapshot_known_good(self) -> Mapping[str, Any]: ...
     def build_images(self, identity: BuildIdentity) -> None: ...
+    def verify_generated_ownership(self) -> None: ...
     def verify_image_provenance(self, identity: BuildIdentity) -> None: ...
     def install_units(self) -> None: ...
     def restart_runtime(self) -> None: ...
@@ -94,6 +95,7 @@ def release_plan() -> tuple[str, ...]:
     return (
         "snapshot-known-good",
         "build-images-explicitly",
+        "verify-generated-ownership",
         "verify-image-provenance",
         "render-install-units",
         "restart-container-runtime",
@@ -120,6 +122,7 @@ def execute_release(backend: ReleaseBackend, identity: BuildIdentity) -> None:
     snapshot = backend.snapshot_known_good()
     try:
         backend.build_images(identity)
+        backend.verify_generated_ownership()
         backend.verify_image_provenance(identity)
         backend.install_units()
         backend.restart_runtime()
@@ -259,6 +262,15 @@ class ProductionReleaseBackend:
             *BUILD_SERVICES,
             env=identity.as_environment(),
             capture_output=False,
+        )
+
+    def verify_generated_ownership(self) -> None:
+        self._run(
+            [
+                sys.executable,
+                str(self.repo_root / "scripts" / "normalize_generated_ownership.py"),
+                "--check",
+            ]
         )
 
     def verify_image_provenance(self, identity: BuildIdentity) -> None:
