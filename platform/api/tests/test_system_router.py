@@ -199,6 +199,79 @@ def test_install_profile_put_persists_and_returns_snapshot(monkeypatch) -> None:
     assert response.json() == snapshot
 
 
+def test_install_profile_put_accepts_feature_flags(monkeypatch) -> None:
+    saved_payloads: list[dict[str, object]] = []
+
+    def fake_save_install_profile(payload: dict[str, object]) -> dict[str, object]:
+        saved_payloads.append(payload)
+        return {"features": {"bioxp": False, "stats_tools": True, "assay_db": False}}
+
+    snapshot = {
+        "profile": {"features": {"bioxp": False, "stats_tools": True, "assay_db": False}},
+        "resolved": {"features": {"bioxp": False, "stats_tools": True, "assay_db": False}},
+    }
+    monkeypatch.setattr(system, "save_install_profile", fake_save_install_profile, raising=False)
+    monkeypatch.setattr(system, "install_profile_snapshot", lambda profile=None: snapshot, raising=False)
+
+    with build_client() as client:
+        response = client.put(
+            "/api/system/install-profile",
+            json={"features": {"bioxp": False, "stats_tools": True, "assay_db": False}},
+        )
+
+    assert response.status_code == 200
+    assert saved_payloads == [{"features": {"bioxp": False, "stats_tools": True, "assay_db": False}}]
+    assert response.json()["resolved"]["features"]["bioxp"] is False
+
+
+def test_system_features_endpoint_returns_resolved_addon_flags(monkeypatch) -> None:
+    snapshot = {
+        "profile": {"features": {"bioxp": False}},
+        "resolved": {"features": {"bioxp": False, "stats_tools": True, "assay_db": False}},
+    }
+    monkeypatch.setattr(system, "install_profile_snapshot", lambda profile=None: snapshot, raising=False)
+
+    with build_client() as client:
+        response = client.get("/api/system/features")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "features": {"bioxp": False, "stats_tools": True, "assay_db": False},
+    }
+
+
+def test_system_features_put_merges_feature_flags_into_install_profile(monkeypatch) -> None:
+    saved_payloads: list[dict[str, object]] = []
+
+    current_snapshot = {
+        "profile": {"data_root": "/srv/biomodstack", "features": {"bioxp": True, "stats_tools": True, "assay_db": True}},
+        "resolved": {"features": {"bioxp": True, "stats_tools": True, "assay_db": True}},
+    }
+    updated_snapshot = {
+        "profile": {"data_root": "/srv/biomodstack", "features": {"bioxp": False, "stats_tools": True, "assay_db": True}},
+        "resolved": {"features": {"bioxp": False, "stats_tools": True, "assay_db": True}},
+    }
+
+    def fake_save_install_profile(payload: dict[str, object]) -> dict[str, object]:
+        saved_payloads.append(payload)
+        return payload
+
+    def fake_install_profile_snapshot(profile=None):
+        return updated_snapshot if profile is not None else current_snapshot
+
+    monkeypatch.setattr(system, "save_install_profile", fake_save_install_profile, raising=False)
+    monkeypatch.setattr(system, "install_profile_snapshot", fake_install_profile_snapshot, raising=False)
+
+    with build_client() as client:
+        response = client.put("/api/system/features", json={"features": {"bioxp": False}})
+
+    assert response.status_code == 200
+    assert saved_payloads == [
+        {"data_root": "/srv/biomodstack", "features": {"bioxp": False, "stats_tools": True, "assay_db": True}},
+    ]
+    assert response.json() == {"features": {"bioxp": False, "stats_tools": True, "assay_db": True}}
+
+
 def test_runtime_ports_endpoint_persists_dev_and_prod_ports(monkeypatch) -> None:
     saved: list[tuple[int | None, int | None]] = []
 
@@ -533,7 +606,8 @@ def test_db_service_status_endpoint_invokes_service_layer(monkeypatch) -> None:
         "runtime_available": True,
         "optional_at_boot": True,
         "control_mode": "docker-direct-transitional",
-        "service_name": "bms-analytical-postgres",
+        "service_name": "bms-db",
+        "implementation_service_name": "bms-analytical-postgres",
         "container_name": "biomodstack-analytical-postgres",
         "host_agent_available": False,
         "offline_message": "db_service_offline — use BMS DB service → Start",
