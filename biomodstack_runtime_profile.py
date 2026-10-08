@@ -617,6 +617,7 @@ def resolve_runtime_paths(
         "dev_inputs_dir": str(dev_data_root / "inputs"),
         "dev_db_path": str(dev_data_root / "biomodstack.db"),
         "dev_work_dir": str(dev_data_root / "work"),
+        "dev_analysis_cache_dir": str(dev_data_root / "analysis_cache"),
         "dev_weights_root": str(dev_data_root / "weights"),
         "dev_colabfold_db": str(dev_data_root / "colabfold_db"),
         "dev_msa_cache_dir": str(dev_data_root / "msa_cache"),
