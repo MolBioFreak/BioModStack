@@ -5,14 +5,22 @@ import { useNavigate } from 'react-router-dom';
 import {
     cmApiError,
     cmSourceContentUrl,
+    CANONICAL_CM_ANALYSIS_POLICY,
     compileCmRuntimePolicy,
     listCmSources,
-    registerCmRcsbMmcif,
+    listCmReusableRuns,
+    registerCmRcsbSelection,
+    registerCmRunArtifact,
+    searchCmRcsb,
     registerCmSource,
     submitCmRequest,
-    type CmAnalysisPolicy,
+    type CmBackendCoordinates,
     type CmBackend,
     type CmFeaturePolicy,
+    type CmRcsbEntry,
+    type CmRcsbSearchResponse,
+    type CmRcsbSelection,
+    type CmReusableRun,
     type CmSource,
     type CmSourceKind,
     type CmSubmitRequest,
@@ -27,6 +35,10 @@ interface Props {
     initialValues?: Record<string, unknown>;
     services?: {
         listSources?: typeof listCmSources;
+        listReusableRuns?: typeof listCmReusableRuns;
+        registerRunArtifact?: typeof registerCmRunArtifact;
+        searchRcsb?: typeof searchCmRcsb;
+        registerRcsb?: typeof registerCmRcsbSelection;
         registerSource?: typeof registerCmSource;
         submitRequest?: typeof submitCmRequest;
     };
@@ -65,21 +77,20 @@ interface LauncherState {
     computeConfidence: boolean;
     saveFullConfidence: boolean;
     computeEvaluation: boolean;
+    stateComparisonMode: 'off' | 'pairwise' | 'reference';
     stateComparisonTargetId: string;
-    analysis: CmAnalysisPolicy;
+    referenceBackend: CmBackend;
+    referenceOrderedSeed: number;
+    referenceSampleIndex: number;
+    referenceTask: CmTask;
+    referenceId: string;
+    referenceRunIndex: number;
+    referenceSavedStep: number;
+    referenceConfornetIndex: number;
+    referenceStagedIndex: number;
+    referenceSourceContentSha256: string;
+    referenceStagedReceiptSha256: string;
 }
-
-const DEFAULT_ANALYSIS: CmAnalysisPolicy = {
-    sign_zero_epsilon: 0.000001,
-    clash_detector_id: 'bms_clash',
-    clash_detector_version: '1',
-    outer_support_minimum: 0.8,
-    inner_support_minimum: 0.6,
-    sign_consistency_minimum: 0.8,
-    clash_free_minimum: 0.9,
-    rank_stability_minimum: 0.6,
-    minimum_common_ranked_universe_size: 3,
-};
 
 const DEFAULT_STATE: LauncherState = {
     name: 'Conformational mapping', notes: '', backend: 'protenix_v2_ensemble', snapshotId: '',
@@ -91,8 +102,10 @@ const DEFAULT_STATE: LauncherState = {
     runs: 2, networks: 2, savedSteps: '5,10,15,20', maxSteps: 20,
     numRecycles: 0, numDiffusionSteps: 200, learningRate: 0.001, gradientClip: 10,
     skipMsa: false, computeConfidence: true, saveFullConfidence: false, computeEvaluation: true,
-    stateComparisonTargetId: '',
-    analysis: DEFAULT_ANALYSIS,
+    stateComparisonMode: 'off', stateComparisonTargetId: '', referenceBackend: 'protenix_v2_ensemble',
+    referenceOrderedSeed: 101, referenceSampleIndex: 0, referenceTask: 'diversity', referenceId: '',
+    referenceRunIndex: 0, referenceSavedStep: 0, referenceConfornetIndex: 0, referenceStagedIndex: 0,
+    referenceSourceContentSha256: '', referenceStagedReceiptSha256: '',
 };
 
 const STATE_KEY = 'bms.conformational-mapping.launcher.v1';
@@ -124,9 +137,14 @@ const hydrateState = (values?: Record<string, unknown>): LauncherState => {
     // Session state wins over card defaults so every control survives launcher
     // navigation. Explicit clone/template loads clear this key before mounting.
     const merged = { ...(values || {}), ...stored };
+    const editableState = Object.fromEntries(
+        Object.entries(merged).filter(([key]) => key !== 'analysis' && key !== 'analysis_policy'),
+    );
     const confornets = asObject(merged.confornets) || {};
     const feature = asObject(merged.feature_policy) || {};
     const runtime = asObject(merged.runtime_policy) || {};
+    const comparison = asObject(merged.state_landscape_comparison) || {};
+    const reference = asObject(comparison.reference_backend_coordinates) || {};
     const orderedSeeds = Array.isArray(merged.ordered_seeds) ? merged.ordered_seeds.join(',') : merged.seeds;
     const savedSteps = Array.isArray(confornets.saved_steps) ? confornets.saved_steps.join(',') : merged.savedSteps;
     const backend = ['protenix_v2_ensemble', 'confornets', 'external_import'].includes(String(merged.backend))
@@ -134,9 +152,14 @@ const hydrateState = (values?: Record<string, unknown>): LauncherState => {
         : DEFAULT_STATE.backend;
     const hydratedSeeds = typeof orderedSeeds === 'string' ? orderedSeeds : DEFAULT_STATE.seeds;
     const firstSeed = hydratedSeeds.split(',')[0].trim();
+    const comparisonMode = comparison.mode === 'pairwise' || comparison.mode === 'reference'
+        ? comparison.mode : (merged.stateComparisonMode === 'pairwise' || merged.stateComparisonMode === 'reference'
+            ? merged.stateComparisonMode : DEFAULT_STATE.stateComparisonMode);
+    const referenceBackend = ['protenix_v2_ensemble', 'confornets', 'external_import'].includes(String(reference.backend))
+        ? reference.backend as CmBackend : DEFAULT_STATE.referenceBackend;
     return {
         ...DEFAULT_STATE,
-        ...merged,
+        ...editableState,
         name: typeof merged.name === 'string' ? merged.name : DEFAULT_STATE.name,
         notes: typeof merged.notes === 'string' ? merged.notes : DEFAULT_STATE.notes,
         backend,
@@ -146,7 +169,9 @@ const hydrateState = (values?: Record<string, unknown>): LauncherState => {
         configId: String(merged.registered_config_id || merged.configId || ''),
         transferId: String(merged.registered_transfer_id || merged.transferId || ''),
         referenceIds: asStringArray(merged.registered_reference_ids || merged.referenceIds),
-        importIds: asStringArray(merged.registered_artifact_ids || merged.importIds),
+        importIds: typeof merged.registered_artifact_id === 'string'
+            ? [merged.registered_artifact_id]
+            : asStringArray(merged.importIds),
 
         seeds: backend === 'confornets' && /^-?\d+$/.test(firstSeed) ? firstSeed : hydratedSeeds,
         samples: finite(merged.samples_per_seed ?? merged.samples, DEFAULT_STATE.samples),
@@ -171,8 +196,19 @@ const hydrateState = (values?: Record<string, unknown>): LauncherState => {
         computeConfidence: Boolean(confornets.compute_confidence ?? merged.computeConfidence ?? DEFAULT_STATE.computeConfidence),
         saveFullConfidence: Boolean(confornets.save_full_confidence ?? merged.saveFullConfidence ?? DEFAULT_STATE.saveFullConfidence),
         computeEvaluation: Boolean(confornets.compute_evaluation ?? merged.computeEvaluation ?? DEFAULT_STATE.computeEvaluation),
-        stateComparisonTargetId: String(asObject(merged.state_landscape_comparison)?.target_id || merged.stateComparisonTargetId || ''),
-        analysis: DEFAULT_ANALYSIS,
+        stateComparisonMode: comparisonMode,
+        stateComparisonTargetId: String(comparison.target_id || merged.stateComparisonTargetId || ''),
+        referenceBackend,
+        referenceOrderedSeed: finite(reference.ordered_seed ?? merged.referenceOrderedSeed, DEFAULT_STATE.referenceOrderedSeed),
+        referenceSampleIndex: finite(reference.sample_index ?? merged.referenceSampleIndex, DEFAULT_STATE.referenceSampleIndex),
+        referenceTask: (reference.task || merged.referenceTask || DEFAULT_STATE.referenceTask) as CmTask,
+        referenceId: String(reference.reference_id || merged.referenceId || ''),
+        referenceRunIndex: finite(reference.run_index ?? merged.referenceRunIndex, DEFAULT_STATE.referenceRunIndex),
+        referenceSavedStep: finite(reference.saved_step ?? merged.referenceSavedStep, DEFAULT_STATE.referenceSavedStep),
+        referenceConfornetIndex: finite(reference.confornet_index ?? merged.referenceConfornetIndex, DEFAULT_STATE.referenceConfornetIndex),
+        referenceStagedIndex: finite(reference.staged_index ?? merged.referenceStagedIndex, DEFAULT_STATE.referenceStagedIndex),
+        referenceSourceContentSha256: String(reference.source_content_sha256 || merged.referenceSourceContentSha256 || ''),
+        referenceStagedReceiptSha256: String(reference.staged_receipt_sha256 || merged.referenceStagedReceiptSha256 || ''),
     };
 };
 
@@ -182,10 +218,43 @@ const sourceLabel = (source: CmSource): string => {
     return `${String(metadataLabel || source.source_id)} · ${(source.bytes / 1024).toFixed(1)} KiB · ${source.sha256.slice(0, 12)}`;
 };
 
+const metadataText = (value: unknown): string => Array.isArray(value)
+    ? value.map((item) => String(item)).join(', ')
+    : value == null || value === '' ? '—' : String(value);
+
 const integerList = (value: string): number[] | null => {
     const parts = value.split(',').map((item) => item.trim());
     if (!parts.length || parts.some((item) => !/^-?\d+$/.test(item))) return null;
     return parts.map(Number);
+};
+
+const cmCoordinateCardinality = (input: {
+    backend: CmBackend;
+    task: CmTask;
+    targetCount: number;
+    seedCount: number;
+    samples: number;
+    referenceCount: number;
+    runs: number;
+    savedStepCount: number;
+    networkCount: number;
+    importCount: number;
+}): number => {
+    if (input.backend === 'protenix_v2_ensemble') {
+        return input.targetCount * input.seedCount * input.samples;
+    }
+    if (input.backend === 'external_import') {
+        return input.importCount;
+    }
+
+    // Keep this expansion aligned with the backend request builder. MSE uses
+    // one coordinate per selected reference; diversity expands saved steps
+    // and networks; transfer is one run, one step, and one network.
+    const references = input.task === 'mse' ? Math.max(input.referenceCount, 0) : 1;
+    const runs = input.task === 'transfer' ? 1 : input.runs;
+    const savedSteps = input.task === 'diversity' ? input.savedStepCount : 1;
+    const networks = input.task === 'diversity' ? input.networkCount : 1;
+    return references * runs * savedSteps * networks * input.samples;
 };
 
 const inputClass = 'w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-orange-400 disabled:cursor-not-allowed disabled:opacity-50';
@@ -206,11 +275,18 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
     const [sourceTestCases, setSourceTestCases] = useState('');
     const [snapshotEditor, setSnapshotEditor] = useState('');
     const [pastedSequence, setPastedSequence] = useState('');
-    const [rcsbPdbId, setRcsbPdbId] = useState('');
+    const [rcsbQuery, setRcsbQuery] = useState('');
+    const [rcsbSearchResults, setRcsbSearchResults] = useState<CmRcsbSearchResponse | null>(null);
+    const [selectedRcsbEntry, setSelectedRcsbEntry] = useState<CmRcsbEntry | null>(null);
+    const [rcsbModelId, setRcsbModelId] = useState('');
+    const [rcsbSampleId, setRcsbSampleId] = useState('');
+    const [rcsbChainId, setRcsbChainId] = useState('');
+    const [rcsbEntityId, setRcsbEntityId] = useState('');
+    const [registeredSources, setRegisteredSources] = useState<CmSource[]>([]);
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
-        if (form.backend !== 'external_import' || !sourceFile || !['structure_upload', 'structure_artifact'].includes(sourceKind)) {
+        if (form.backend !== 'external_import' || !sourceFile || sourceKind !== 'structure_upload') {
             setLocalPreviewUrl(null);
             return;
         }
@@ -230,16 +306,26 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
     }, [form.featureMode, form.proteinMsa, form.rnaMsa, form.templates]);
 
     const sources = useQuery({ queryKey: ['cm-sources'], queryFn: services?.listSources || listCmSources });
-    const byKind = (kind: CmSourceKind) => (sources.data || []).filter((source) => source.source_kind === kind);
+    const sourceRegistry = useMemo(() => {
+        const mergedSources = [...(sources.data || []), ...registeredSources];
+        return Array.from(new Map(mergedSources.map((source) => [source.source_id, source])).values());
+    }, [registeredSources, sources.data]);
+    const byKind = (kind: CmSourceKind) => sourceRegistry.filter((source) => source.source_kind === kind);
+    const reusableRuns = useQuery({
+        queryKey: ['cm-reusable-runs'],
+        queryFn: services?.listReusableRuns || listCmReusableRuns,
+        enabled: activeSourceTab === 'runs',
+        retry: false,
+    });
     const structureSources = useMemo(
-        () => (sources.data || []).filter((source) => (
+        () => sourceRegistry.filter((source) => (
             ['structure_upload', 'structure_artifact'].includes(source.source_kind)
             && source.format === 'mmcif'
         )),
-        [sources.data],
+        [sourceRegistry],
     );
     useEffect(() => {
-        if (!sources.data) return;
+        if (!sources.data && !registeredSources.length) return;
         const admissible = new Set(structureSources.map((source) => source.source_id));
         setForm((current) => {
             if (current.backend !== 'external_import') return current;
@@ -248,10 +334,10 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
                 && next.every((id, index) => id === current.importIds[index])) return current;
             return { ...current, importIds: next };
         });
-    }, [sources.data, structureSources]);
+    }, [registeredSources.length, sources.data, structureSources]);
     useEffect(() => {
-        if (!sources.data) return;
-        const checkpoints = sources.data.filter((source) =>
+        if (!sources.data && !registeredSources.length) return;
+        const checkpoints = sourceRegistry.filter((source) =>
             source.source_kind === 'confornets_checkpoint' && source.managed_checkpoint === true);
         const admissible = new Set(checkpoints.map((source) => source.source_id));
         setForm((current) => {
@@ -259,10 +345,10 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
             const checkpointId = checkpoints.length === 1 ? checkpoints[0].source_id : '';
             return checkpointId === current.checkpointId ? current : { ...current, checkpointId };
         });
-    }, [sources.data]);
+    }, [registeredSources.length, sourceRegistry, sources.data]);
     useEffect(() => {
-        if (!sources.data) return;
-        const kindById = new Map(sources.data.map((source) => [source.source_id, source.source_kind]));
+        if (!sources.data && !registeredSources.length) return;
+        const kindById = new Map(sourceRegistry.map((source) => [source.source_id, source.source_kind]));
         setForm((current) => {
             const snapshotId = kindById.get(current.snapshotId) === 'complex_snapshot' ? current.snapshotId : '';
             const sequenceId = kindById.get(current.sequenceId) === 'protein_sequence' ? current.sequenceId : '';
@@ -275,10 +361,10 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
                 && referenceIds.length === current.referenceIds.length) return current;
             return { ...current, snapshotId, sequenceId, configId, transferId, referenceIds };
         });
-    }, [sources.data]);
-    const selectedSnapshot = (sources.data || []).find((source) =>
+    }, [registeredSources.length, sourceRegistry, sources.data]);
+    const selectedSnapshot = sourceRegistry.find((source) =>
         source.source_id === form.snapshotId && source.source_kind === 'complex_snapshot');
-    const selectedSource = (sources.data || []).find((source) => source.source_id === (
+    const selectedSource = sourceRegistry.find((source) => source.source_id === (
         form.backend === 'protenix_v2_ensemble'
             ? form.snapshotId
             : form.backend === 'confornets'
@@ -289,16 +375,16 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
         || (form.backend === 'confornets' && source.source_kind === 'protein_sequence')
         || (form.backend === 'external_import' && ['structure_upload', 'structure_artifact'].includes(source.source_kind))
     ));
-    const selectedCheckpoint = (sources.data || []).find((source) =>
+    const selectedCheckpoint = sourceRegistry.find((source) =>
         source.source_id === form.checkpointId
         && source.source_kind === 'confornets_checkpoint'
         && source.managed_checkpoint === true);
-    const selectedConfig = (sources.data || []).find((source) =>
+    const selectedConfig = sourceRegistry.find((source) =>
         source.source_id === form.configId && source.source_kind === 'confornets_config');
-    const selectedTransfer = (sources.data || []).find((source) =>
+    const selectedTransfer = sourceRegistry.find((source) =>
         source.source_id === form.transferId && source.source_kind === 'confornets_state');
     const referenceSources = form.referenceIds.flatMap((id) => {
-        const source = (sources.data || []).find((candidate) => candidate.source_id === id);
+        const source = sourceRegistry.find((candidate) => candidate.source_id === id);
         return source && ['structure_upload', 'structure_artifact'].includes(source.source_kind) ? [source] : [];
     });
     const availableChainIds = useMemo(() => {
@@ -315,11 +401,11 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
             : [];
     }, [form.backend, selectedSource]);
 
-    const compatibleSources = useMemo(() => (sources.data || []).filter((source) => {
+    const compatibleSources = useMemo(() => sourceRegistry.filter((source) => {
         if (form.backend === 'protenix_v2_ensemble') return source.source_kind === 'complex_snapshot';
         if (form.backend === 'confornets') return source.source_kind === 'protein_sequence';
         return ['structure_upload', 'structure_artifact'].includes(source.source_kind) && source.format === 'mmcif';
-    }), [form.backend, sources.data]);
+    }), [form.backend, sourceRegistry]);
     const tabSources = useMemo(() => compatibleSources.filter((source) => {
         if (activeSourceTab === 'runs') return source.source_kind === 'structure_artifact';
         if (activeSourceTab === 'rcsb') {
@@ -345,15 +431,20 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
     const stepValues = useMemo(() => integerList(form.savedSteps), [form.savedSteps]);
     const snapshotTargetIds = Array.isArray(selectedSnapshot?.metadata.target_ids)
         ? selectedSnapshot.metadata.target_ids.filter((item): item is string => typeof item === 'string') : [];
-    const referenceFactor = form.task === 'mse' ? form.referenceIds.length : 1;
-    const expectedCount = form.backend === 'confornets'
-        ? referenceFactor * form.runs * (form.task === 'transfer' || form.task === 'mse' ? 1 : (stepValues?.length || 0))
-            * (form.task === 'diversity' ? form.networks : 1) * form.samples
-        : form.backend === 'external_import'
-            ? form.importIds.length
-            : Math.max(snapshotTargetIds.length, selectedSnapshot ? 1 : 0) * (seedValues?.length || 0) * form.samples;
+    const expectedCount = cmCoordinateCardinality({
+        backend: form.backend,
+        task: form.task,
+        targetCount: Math.max(snapshotTargetIds.length, selectedSnapshot ? 1 : 0),
+        seedCount: seedValues?.length || 0,
+        samples: form.samples,
+        referenceCount: form.referenceIds.length,
+        runs: form.runs,
+        savedStepCount: stepValues?.length || 0,
+        networkCount: form.networks,
+        importCount: form.importIds.length,
+    });
     const selectedInputBytes = form.backend === 'external_import'
-        ? form.importIds.reduce((total, id) => total + (sources.data?.find((source) => source.source_id === id)?.bytes || 0), 0)
+        ? form.importIds.reduce((total, id) => total + (sourceRegistry.find((source) => source.source_id === id)?.bytes || 0), 0)
         : selectedSnapshot?.bytes || 0;
     const planningMiBPerCandidate = form.backend === 'protenix_v2_ensemble' ? 80 : form.backend === 'confornets' ? 45 : 24;
     const estimatedStorageGiB = (selectedInputBytes + expectedCount * planningMiBPerCandidate * 1024 * 1024) / (1024 ** 3);
@@ -413,22 +504,23 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
             if (form.learningRate <= 0 || form.gradientClip <= 0) errors.push('Learning rate and gradient clip must be positive.');
             if (!seedValues || seedValues.length !== 1) errors.push('ConforNets requires exactly one explicit seed.');
         }
-        const fractionThresholds = [
-            form.analysis.outer_support_minimum,
-            form.analysis.inner_support_minimum,
-            form.analysis.sign_consistency_minimum,
-            form.analysis.clash_free_minimum,
-        ];
-        if (form.analysis.sign_zero_epsilon <= 0 || fractionThresholds.some((value) => value < 0 || value > 1)) {
-            errors.push('Analysis epsilon and support thresholds are outside their admitted ranges.');
-        }
-        if (form.analysis.clash_detector_id !== 'bms_clash' || form.analysis.clash_detector_version !== '1') {
-            errors.push('Requested clash detector is not installed.');
-        }
-        if (form.analysis.rank_stability_minimum < -1 || form.analysis.rank_stability_minimum > 1
-            || !Number.isInteger(form.analysis.minimum_common_ranked_universe_size)
-            || form.analysis.minimum_common_ranked_universe_size < 3) {
-            errors.push('Rank stability or minimum common ranked universe is invalid.');
+        if (form.stateComparisonMode !== 'off') {
+            if (form.backend === 'external_import') {
+                errors.push('State-landscape comparison requires at least two planned coordinates.');
+            } else if (!form.stateComparisonTargetId.trim()) {
+                errors.push('State-landscape comparison target is required.');
+            } else if (form.stateComparisonMode === 'reference') {
+                if (form.referenceBackend !== form.backend) errors.push('Reference coordinates must use the selected backend.');
+                if (form.backend === 'protenix_v2_ensemble'
+                    && (!Number.isInteger(form.referenceOrderedSeed) || !Number.isInteger(form.referenceSampleIndex))) {
+                    errors.push('Reference seed and sample must be integers.');
+                }
+                if (form.backend === 'confornets'
+                    && (![form.referenceRunIndex, form.referenceSavedStep, form.referenceConfornetIndex, form.referenceSampleIndex].every(Number.isInteger)
+                        || (form.referenceTask === 'mse' && !form.referenceId))) {
+                    errors.push('Reference ConforNets coordinates are incomplete.');
+                }
+            }
         }
         if (expectedCount < 1) errors.push('The current controls produce no candidate coordinates.');
         return errors;
@@ -444,6 +536,7 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
         }),
         onSuccess: async (source) => {
             setError(null); setSourceFile(null);
+            setRegisteredSources((current) => [...current.filter((item) => item.source_id !== source.source_id), source]);
             if (source.source_kind === 'complex_snapshot') update('snapshotId', source.source_id);
             if (source.source_kind === 'protein_sequence') update('sequenceId', source.source_id);
             await queryClient.invalidateQueries({ queryKey: ['cm-sources'] });
@@ -451,16 +544,104 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
         onError: (value) => setError(cmApiError(value, 'Source registration failed.')),
     });
 
-    const registerRcsb = useMutation({
-        mutationFn: () => registerCmRcsbMmcif(rcsbPdbId),
+    const registerRunArtifactMutation = useMutation({
+        mutationFn: async ({ run, artifact }: { run: CmReusableRun; artifact: CmReusableRun['artifacts'][number] }) => {
+            const runId = run.request_id || run.run_id;
+            if (!runId) throw new Error('The reusable run has no request identity.');
+            const source = await (services?.registerRunArtifact || registerCmRunArtifact)(runId, artifact.artifact_id);
+            const sourceWithContext: CmSource = {
+                ...source,
+                source_kind: 'structure_artifact',
+                format: source.format || 'mmcif',
+                metadata: {
+                    ...source.metadata,
+                    name: source.metadata.name || `${run.name || run.run_name || runId} / ${artifact.name || artifact.candidate_id || artifact.artifact_id}`,
+                    run_id: runId,
+                    job_id: run.job_id,
+                    artifact_id: artifact.artifact_id,
+                    candidate_id: artifact.candidate_id || null,
+                    model_id: artifact.model_id || null,
+                    sample_id: artifact.sample_id || null,
+                    chain_ids: artifact.chain_ids || [],
+                    entity_ids: artifact.entity_ids || [],
+                },
+            };
+            return sourceWithContext;
+        },
         onSuccess: async (source) => {
             setError(null);
-            setRcsbPdbId('');
-            update('importIds', [source.source_id]);
+            setRegisteredSources((current) => [...current.filter((item) => item.source_id !== source.source_id), source]);
+            if (form.backend === 'external_import') update('importIds', [source.source_id]);
+            if (form.backend === 'confornets' && form.task === 'mse') {
+                update('referenceIds', [source.source_id]);
+            }
+            await queryClient.invalidateQueries({ queryKey: ['cm-sources'] });
+        },
+        onError: (value) => setError(cmApiError(value, 'Run artifact registration failed.')),
+    });
+
+    const searchRcsbMutation = useMutation({
+        mutationFn: () => {
+            const query = rcsbQuery.trim();
+            if (query.length < 2) throw new Error('Enter at least two characters for an RCSB search.');
+            return (services?.searchRcsb || searchCmRcsb)(query);
+        },
+        onSuccess: (response) => {
+            setRcsbSearchResults(response);
+            setSelectedRcsbEntry(null);
+            setError(null);
+        },
+        onError: (value) => setError(cmApiError(value, 'RCSB search failed.')),
+    });
+
+    const registerRcsbSelectionMutation = useMutation({
+        mutationFn: () => {
+            if (!selectedRcsbEntry) throw new Error('Select an RCSB entry before registration.');
+            const selection: CmRcsbSelection = {
+                accession: selectedRcsbEntry.accession,
+                ...(rcsbModelId ? { model_id: rcsbModelId } : {}),
+                ...(rcsbSampleId ? { sample_id: rcsbSampleId } : {}),
+                ...(rcsbChainId ? { chain_ids: [rcsbChainId] } : {}),
+                ...(rcsbEntityId ? { entity_ids: [rcsbEntityId] } : {}),
+            };
+            return (services?.registerRcsb || registerCmRcsbSelection)(selection);
+        },
+        onSuccess: async (source) => {
+            setError(null);
+            const entry = selectedRcsbEntry;
+            const contextSource: CmSource = {
+                ...source,
+                source_kind: 'structure_upload',
+                format: source.format || 'mmcif',
+                metadata: {
+                    ...source.metadata,
+                    name: source.metadata.name || `RCSB ${entry?.accession || ''}`.trim(),
+                    provider: 'RCSB',
+                    accession: entry?.accession,
+                    model_id: rcsbModelId || null,
+                    sample_id: rcsbSampleId || null,
+                    chain_ids: rcsbChainId ? [rcsbChainId] : [],
+                    entity_ids: rcsbEntityId ? [rcsbEntityId] : [],
+                },
+            };
+            setRegisteredSources((current) => [...current.filter((item) => item.source_id !== contextSource.source_id), contextSource]);
+            if (form.backend === 'external_import') update('importIds', [contextSource.source_id]);
+            if (form.backend === 'confornets' && form.task === 'mse') {
+                update('referenceIds', [contextSource.source_id]);
+            }
             await queryClient.invalidateQueries({ queryKey: ['cm-sources'] });
         },
         onError: (value) => setError(cmApiError(value, 'RCSB mmCIF registration failed.')),
     });
+
+    const selectRcsbEntry = (entry: CmRcsbEntry) => {
+        setSelectedRcsbEntry(entry);
+        setRcsbModelId(entry.models[0]?.model_id || '');
+        setRcsbSampleId(entry.samples[0]?.sample_id || '');
+        setRcsbChainId(entry.chains[0]?.chain_id || '');
+        setRcsbEntityId(entry.entities[0]?.entity_id || entry.chains[0]?.entity_id || '');
+        setError(null);
+    };
 
     const registerSnapshotEditor = () => {
         try {
@@ -493,18 +674,33 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
             samples_per_seed: form.backend === 'external_import' ? 1 : form.samples,
             feature_policy: featurePolicy,
             runtime_policy: compileCmRuntimePolicy(form.backend, form.defaultRuntime, form.nCycle, form.nStep),
-            analysis_policy: form.analysis,
+            // Analysis policy is server-owned. Keep the typed field for the backend
+            // contract, but never accept it from editable/session/clone state.
+            analysis_policy: CANONICAL_CM_ANALYSIS_POLICY,
         };
         if (form.backend === 'protenix_v2_ensemble') {
             payload.registered_snapshot_id = form.snapshotId;
-            if (form.stateComparisonTargetId.trim()) {
-                payload.state_landscape_comparison = {
-                    mode: 'pairwise', target_id: form.stateComparisonTargetId.trim(), scope: 'all_within_target',
-                };
+            if (form.stateComparisonMode !== 'off' && form.stateComparisonTargetId.trim()) {
+                if (form.stateComparisonMode === 'reference') {
+                    const referenceCoordinates: CmBackendCoordinates = {
+                        backend: 'protenix_v2_ensemble',
+                        target_id: form.stateComparisonTargetId.trim(),
+                        ordered_seed: form.referenceOrderedSeed,
+                        sample_index: form.referenceSampleIndex,
+                    };
+                    payload.state_landscape_comparison = {
+                        mode: 'reference', target_id: form.stateComparisonTargetId.trim(),
+                        scope: 'all_other_within_target', reference_backend_coordinates: referenceCoordinates,
+                    };
+                } else if (form.stateComparisonMode === 'pairwise') {
+                    payload.state_landscape_comparison = {
+                        mode: 'pairwise', target_id: form.stateComparisonTargetId.trim(), scope: 'all_within_target',
+                    };
+                }
             }
         }
         if (form.backend === 'external_import') {
-            payload.registered_artifact_ids = form.importIds;
+            payload.registered_artifact_id = form.importIds[0];
         }
         if (form.backend === 'confornets') {
             payload.registered_sequence_id = form.sequenceId;
@@ -522,6 +718,25 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
                 skip_msa: form.skipMsa, compute_confidence: form.computeConfidence,
                 save_full_confidence: form.saveFullConfidence, compute_evaluation: form.computeEvaluation,
             };
+            if (form.stateComparisonMode !== 'off' && form.stateComparisonTargetId.trim()) {
+                const targetId = form.stateComparisonTargetId.trim();
+                if (form.stateComparisonMode === 'pairwise') {
+                    payload.state_landscape_comparison = {
+                        mode: 'pairwise', target_id: targetId, scope: 'all_within_target',
+                    };
+                } else {
+                    const referenceCoordinates: CmBackendCoordinates = {
+                        backend: 'confornets', target_id: targetId, task: form.referenceTask,
+                        test_case_id: 'bms-canonical-monomer', reference_id: form.referenceTask === 'mse' ? (form.referenceId || null) : null,
+                        run_index: form.referenceRunIndex, saved_step: form.referenceSavedStep,
+                        confornet_index: form.referenceConfornetIndex, sample_index: form.referenceSampleIndex,
+                    };
+                    payload.state_landscape_comparison = {
+                        mode: 'reference', target_id: targetId, scope: 'all_other_within_target',
+                        reference_backend_coordinates: referenceCoordinates,
+                    };
+                }
+            }
         }
         return payload;
     };
@@ -553,7 +768,7 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
                     return source ? `${source.source_id}@${source.sha256}` : `${sourceId}@unresolved`;
                 }).join(', ') || 'none';
                 const transfer = effectivePayload.registered_transfer_id
-                    ? `${effectivePayload.registered_transfer_id}@${(sources.data || []).find((source) => source.source_id === effectivePayload.registered_transfer_id)?.sha256 || 'unresolved'}`
+                    ? `${effectivePayload.registered_transfer_id}@${sourceRegistry.find((source) => source.source_id === effectivePayload.registered_transfer_id)?.sha256 || 'unresolved'}`
                     : 'none';
                 return `${String(settings?.task || 'task unresolved')} · seed ${effectivePayload.ordered_seeds[0]} · ${effectivePayload.samples_per_seed} samples/coordinate · ${String(settings?.runs ?? 'unresolved')} runs · ${String(settings?.confornet_count ?? 'unresolved')} networks · steps ${Array.isArray(settings?.saved_steps) ? settings.saved_steps.join(', ') : 'unresolved'} · checkpoint ${selectedCheckpoint ? `${selectedCheckpoint.source_id}@${selectedCheckpoint.sha256}` : 'unresolved'} · config ${selectedConfig ? `${selectedConfig.source_id}@${selectedConfig.sha256}` : 'installed defaults'} · chain ${policy?.chain_id || 'unresolved'} · test ${policy?.test_case_id || 'unresolved'} · benchmark ${policy?.benchmark_name || 'unresolved'} · references ${references} · transfer ${transfer} · ${String(settings?.num_recycles ?? 'unresolved')} recycles · ${String(settings?.num_diffusion_steps ?? 'unresolved')} diffusion steps · LR ${String(settings?.learning_rate ?? 'unresolved')} · clip ${String(settings?.gradient_clip ?? 'unresolved')} · MSA ${settings?.skip_msa ? 'skipped' : 'enabled'} · confidence ${settings?.compute_confidence ? 'on' : 'off'} · full confidence ${settings?.save_full_confidence ? 'on' : 'off'} · evaluation ${settings?.compute_evaluation ? 'on' : 'off'} · ${analysisPolicySummary}`;
             }
@@ -587,10 +802,12 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
     const uploadSourceKinds = useMemo(() => SOURCE_KINDS.filter((item) => {
         if (form.backend === 'protenix_v2_ensemble') return item.value === 'complex_snapshot';
         if (form.backend === 'external_import') {
-            return item.value === 'structure_upload' || item.value === 'structure_artifact';
+            // Prior-run authority is issued only by the typed Your Runs
+            // registration flow. A caller cannot upload and self-declare it.
+            return item.value === 'structure_upload';
         }
         return item.value === 'protein_sequence'
-            || (form.task === 'mse' && (item.value === 'structure_upload' || item.value === 'structure_artifact'))
+            || (form.task === 'mse' && item.value === 'structure_upload')
             || (form.task === 'transfer' && item.value === 'confornets_state');
     }), [form.backend, form.task]);
     const checkpointSources = byKind('confornets_checkpoint').filter((source) =>
@@ -616,6 +833,7 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
         setForm((current) => ({
             ...current,
             backend,
+            referenceBackend: backend,
             seeds: backend === 'confornets' ? String(integerList(current.seeds)?.[0] ?? 101) : current.seeds,
         }));
         setSourceKind(backend === 'protenix_v2_ensemble'
@@ -635,6 +853,39 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
         selectSourceTab(nextTab);
         requestAnimationFrame(() => document.getElementById(`cm-source-tab-${nextTab}`)?.focus());
     };
+    const rcsbSelectionReady = Boolean(selectedRcsbEntry)
+        && selectedRcsbEntry!.required_selection.every((requirement) => (
+            requirement === 'model_id' ? Boolean(rcsbModelId)
+                : requirement === 'sample_id' ? Boolean(rcsbSampleId)
+                    : requirement === 'chain_ids' ? Boolean(rcsbChainId)
+                        : Boolean(rcsbEntityId)
+        ));
+    const rcsbSelectionSummary = selectedRcsbEntry
+        ? `${selectedRcsbEntry.accession} · model ${rcsbModelId || 'unresolved'} · sample ${rcsbSampleId || 'unresolved'} · chain ${rcsbChainId || 'unresolved'} · entity ${rcsbEntityId || 'unresolved'}`
+        : null;
+    const runIdentity = (run: CmReusableRun): string => run.request_id || run.run_id || run.job_id;
+    const runLabel = (run: CmReusableRun): string => run.name || run.run_name || runIdentity(run);
+    const artifactLabel = (artifact: CmReusableRun['artifacts'][number]): string => artifact.name || artifact.candidate_id || artifact.artifact_id;
+    const selectedInputContext = selectedSource ? [
+        `provider ${metadataText(selectedSource.metadata.provider)}`,
+        `accession ${metadataText(selectedSource.metadata.accession)}`,
+        `model ${metadataText(selectedSource.metadata.model_id)}`,
+        `sample ${metadataText(selectedSource.metadata.sample_id)}`,
+        `chain ${metadataText(selectedSource.metadata.chain_ids)}`,
+        `entity ${metadataText(selectedSource.metadata.entity_ids)}`,
+    ].filter((item) => !item.endsWith('—')).join(' · ') : 'No model/sample/chain/entity context is selected.';
+    const comparisonControls = form.backend === 'external_import' ? (
+        <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/30 p-3 text-xs text-slate-500">State-landscape comparison is unavailable for a single imported coordinate. Register one immutable structure and compare it in the canonical results viewer.</div>
+    ) : (
+        <div className="mt-4 space-y-3 rounded-xl border border-slate-800 bg-slate-950/30 p-3">
+            <label className="block space-y-1 text-sm">State-landscape comparison<select aria-label="State-landscape comparison mode" value={form.stateComparisonMode} onChange={(event) => update('stateComparisonMode', event.target.value as LauncherState['stateComparisonMode'])} className={inputClass}><option value="off">Off</option><option value="pairwise">Pairwise within target</option><option value="reference">Compare against explicit reference coordinate</option></select></label>
+            {form.stateComparisonMode !== 'off' && <>
+                <label className="block space-y-1 text-sm">Comparison target ID<input value={form.stateComparisonTargetId} onChange={(event) => update('stateComparisonTargetId', event.target.value)} placeholder="Target identifier" className={inputClass} /></label>
+                {form.stateComparisonMode === 'reference' && form.backend === 'protenix_v2_ensemble' && <div className="grid gap-3 sm:grid-cols-2"><label className="space-y-1 text-sm">Reference ordered seed<input aria-label="Reference ordered seed" type="number" value={form.referenceOrderedSeed} onChange={(event) => update('referenceOrderedSeed', Number(event.target.value))} className={inputClass} /></label><label className="space-y-1 text-sm">Reference sample index<input aria-label="Reference sample index" type="number" min={0} value={form.referenceSampleIndex} onChange={(event) => update('referenceSampleIndex', Number(event.target.value))} className={inputClass} /></label><p className="sm:col-span-2 text-xs text-slate-500">Reference backend: Protenix v2 ensemble. The server resolves the registered snapshot and candidate authority.</p></div>}
+                {form.stateComparisonMode === 'reference' && form.backend === 'confornets' && <div className="grid gap-3 sm:grid-cols-2"><label className="space-y-1 text-sm">Reference task<select aria-label="Reference ConforNets task" value={form.referenceTask} onChange={(event) => update('referenceTask', event.target.value as CmTask)} className={inputClass}><option value="diversity">Diversity</option><option value="mse">Reference-guided MSE</option><option value="transfer">Transfer state</option></select></label>{form.referenceTask === 'mse' && <label className="space-y-1 text-sm">Reference structure ID<input aria-label="Reference structure ID" value={form.referenceId} onChange={(event) => update('referenceId', event.target.value)} className={inputClass} /></label>}<label className="space-y-1 text-sm">Reference run index<input aria-label="Reference run index" type="number" min={0} value={form.referenceRunIndex} onChange={(event) => update('referenceRunIndex', Number(event.target.value))} className={inputClass} /></label><label className="space-y-1 text-sm">Reference saved step<input aria-label="Reference saved step" type="number" min={0} value={form.referenceSavedStep} onChange={(event) => update('referenceSavedStep', Number(event.target.value))} className={inputClass} /></label><label className="space-y-1 text-sm">Reference ConforNet index<input aria-label="Reference ConforNet index" type="number" min={0} value={form.referenceConfornetIndex} onChange={(event) => update('referenceConfornetIndex', Number(event.target.value))} className={inputClass} /></label><label className="space-y-1 text-sm">Reference sample index<input aria-label="Reference sample index" type="number" min={0} value={form.referenceSampleIndex} onChange={(event) => update('referenceSampleIndex', Number(event.target.value))} className={inputClass} /></label><p className="sm:col-span-2 text-xs text-slate-500">Reference backend: canonical ConforNets. Chain, test case, and benchmark identity remain server-owned.</p></div>}
+            </>}
+        </div>
+    );
 
     return (
         <div className="w-full space-y-5 text-slate-200" data-bms-cm-launcher="canonical">
@@ -689,13 +940,14 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
                     {form.backend === 'protenix_v2_ensemble' && <div className="mt-4 space-y-4">
                         <div className="grid gap-4 md:grid-cols-2"><label className="space-y-1 text-sm">Ordered seeds<input value={form.seeds} onChange={(event) => update('seeds', event.target.value)} className={inputClass} inputMode="numeric" /></label><label className="space-y-1 text-sm">Samples per seed<span className="flex items-center gap-3"><input type="range" min={1} max={100} value={form.samples} onChange={(event) => update('samples', Number(event.target.value))} className="w-full accent-orange-500" /><output className="w-10 text-right text-white">{form.samples}</output></span></label><label className="space-y-1 text-sm md:col-span-2">Feature policy<select value={form.featureMode} onChange={(event) => update('featureMode', event.target.value as CmFeaturePolicy['mode'])} className={inputClass}><option value="regenerate_mutated_protein_v1">Regenerate changed protein</option><option value="paired_regenerate_changed_protein_v1">Regenerate matched WT and mutant</option><option value="features_disabled_control_v1">Feature-disabled control</option></select></label></div>
                         <div className="grid gap-2 sm:grid-cols-3">{([['proteinMsa', 'Protein MSA'], ['templates', 'Templates'], ['rnaMsa', 'RNA MSA']] as const).map(([key, label]) => <label key={key} className="flex items-center gap-2 rounded-lg border border-slate-800 p-3 text-sm"><input type="checkbox" checked={form[key]} disabled={form.featureMode === 'features_disabled_control_v1'} onChange={(event) => update(key, event.target.checked)} className={checkClass} />{label}</label>)}</div>
-                        <label className="block space-y-1 text-sm">State-conditioned FrustraMPNN comparison target<input value={form.stateComparisonTargetId} onChange={(event) => update('stateComparisonTargetId', event.target.value)} placeholder="Optional selected target ID" className={inputClass} /></label>
+                        {comparisonControls}
                     </div>}
                     {form.backend === 'confornets' && <div className="mt-4 space-y-4">
                         <div className="grid gap-4 md:grid-cols-2"><label className="space-y-1 text-sm">Task<select value={form.task} onChange={(event) => taskChanged(event.target.value as CmTask)} className={inputClass}><option value="diversity">Diversity</option><option value="mse">Reference-guided MSE</option><option value="transfer">Transfer state</option></select></label><label className="space-y-1 text-sm">Explicit seed<input type="number" value={form.seeds} onChange={(event) => update('seeds', event.target.value)} className={inputClass} /></label><label className="space-y-1 text-sm md:col-span-2">Samples per coordinate<span className="flex items-center gap-3"><input type="range" min={1} max={100} value={form.samples} onChange={(event) => update('samples', Number(event.target.value))} className="w-full accent-orange-500" /><output className="w-10 text-right text-white">{form.samples}</output></span></label></div>
                         {(form.task === 'diversity' || form.task === 'mse') && <div className="grid gap-4 md:grid-cols-2"><label className="space-y-1 text-sm">Runs<input type="number" min={1} value={form.runs} onChange={(event) => update('runs', Number(event.target.value))} className={inputClass} /></label>{form.task === 'diversity' && <label className="space-y-1 text-sm">Networks<input type="number" min={2} value={form.networks} onChange={(event) => update('networks', Number(event.target.value))} className={inputClass} /></label>}{form.task === 'diversity' && <label className="space-y-1 text-sm">Saved steps<input value={form.savedSteps} onChange={(event) => update('savedSteps', event.target.value)} className={inputClass} /></label>}<label className="space-y-1 text-sm">Maximum steps<input type="number" min={1} value={form.maxSteps} onChange={(event) => update('maxSteps', Number(event.target.value))} className={inputClass} /></label></div>}
                         {form.task === 'mse' && <label className="block space-y-1 text-sm">One or two registered references<select multiple value={form.referenceIds} onChange={(event) => update('referenceIds', Array.from(event.target.selectedOptions, (option) => option.value).slice(0, 2))} className={`${inputClass} min-h-24`}>{structureSources.map((source) => <option key={source.source_id} value={source.source_id}>{sourceLabel(source)}</option>)}</select></label>}
                         {form.task === 'transfer' && <label className="block space-y-1 text-sm">Registered transfer state<select value={form.transferId} onChange={(event) => update('transferId', event.target.value)} className={inputClass}><option value="">Select…</option>{byKind('confornets_state').map((source) => <option key={source.source_id} value={source.source_id}>{sourceLabel(source)}</option>)}</select></label>}
+                        {comparisonControls}
                     </div>}
                     {form.backend === 'external_import' && <div className="mt-4 rounded-xl border border-sky-500/20 bg-sky-500/5 p-3 text-sm text-sky-100"><strong>External import accepts registered mmCIF handles only.</strong><p className="mt-1 text-xs leading-5 text-slate-400">Snapshot and residue identity are derived server-side from immutable staged bytes. Ambiguous structures fail closed.</p></div>}
                     {form.backend !== 'external_import' && <details className="mt-4 rounded-xl border border-slate-800 p-3">
@@ -712,17 +964,35 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
                 </section>
 
                 <section className={`${cardClass} order-2 xl:order-3`} aria-labelledby="cm-source-browser-heading">
-                    <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-orange-300">3</p><h3 id="cm-source-browser-heading" className="mt-1 font-semibold text-white">Source browser</h3><p className="mt-1 text-xs text-slate-500">Choose an immutable input</p></div><span className="text-xs text-slate-500">{sources.data?.length || 0} registered</span></div>
+                    <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-orange-300">3</p><h3 id="cm-source-browser-heading" className="mt-1 font-semibold text-white">Source browser</h3><p className="mt-1 text-xs text-slate-500">Choose an immutable input</p></div><span className="text-xs text-slate-500">{sourceRegistry.length} registered</span></div>
                     <div className="mt-4 flex flex-wrap gap-2" role="tablist" aria-label="CM input sources">{SOURCE_TABS.map((tab, index) => <button key={tab.value} id={`cm-source-tab-${tab.value}`} aria-controls={`cm-source-panel-${tab.value}`} type="button" role="tab" aria-selected={activeSourceTab === tab.value} tabIndex={activeSourceTab === tab.value ? 0 : -1} onClick={() => selectSourceTab(tab.value)} onKeyDown={(event) => handleSourceTabKeyDown(event, index)} className={`rounded-lg border px-3 py-2 text-xs font-medium ${activeSourceTab === tab.value ? 'border-orange-400/60 bg-orange-500/10 text-orange-100' : 'border-slate-800 text-slate-400'}`}>{tab.label}</button>)}</div>
                     {activeSourceTab === 'upload' && <div id="cm-source-panel-upload" role="tabpanel" aria-labelledby="cm-source-tab-upload" className="mt-4 space-y-4">
-                        <div className="grid gap-3 sm:grid-cols-2"><label className="space-y-1 text-xs text-slate-400">Source type<select value={sourceKind} onChange={(event) => setSourceKind(event.target.value as CmSourceKind)} className={inputClass}>{uploadSourceKinds.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label className="space-y-1 text-xs text-slate-400">Local file<input type="file" accept={sourceAccept} onChange={(event) => { const file = event.target.files?.[0] || null; setSourceFile(file); if (file && form.backend === 'external_import' && ['structure_upload', 'structure_artifact'].includes(sourceKind)) update('importIds', []); }} className={inputClass} /></label><label className="space-y-1 text-xs text-slate-400">{sourceKind === 'protein_sequence' ? 'Target ID' : 'Optional source label'}<input value={sourceTargetId} onChange={(event) => setSourceTargetId(event.target.value)} className={inputClass} /></label><button type="button" disabled={!sourceFile || register.isPending} onClick={() => sourceFile && register.mutate({ file: sourceFile, kind: sourceKind })} className="self-end rounded-lg bg-orange-500 px-4 py-2 text-sm font-semibold text-slate-950 disabled:opacity-40">Register</button></div>
-                        {(sourceKind === 'structure_upload' || sourceKind === 'structure_artifact') && <label className="block max-w-sm space-y-1 text-xs text-slate-400">Reference state label<input value={sourceState} onChange={(event) => setSourceState(event.target.value)} className={inputClass} /></label>}
+                        <div className="grid gap-3 sm:grid-cols-2"><label className="space-y-1 text-xs text-slate-400">Source type<select value={sourceKind} onChange={(event) => setSourceKind(event.target.value as CmSourceKind)} className={inputClass}>{uploadSourceKinds.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label className="space-y-1 text-xs text-slate-400">Local file<input type="file" accept={sourceAccept} onChange={(event) => { const file = event.target.files?.[0] || null; setSourceFile(file); if (file && form.backend === 'external_import' && sourceKind === 'structure_upload') update('importIds', []); }} className={inputClass} /></label><label className="space-y-1 text-xs text-slate-400">{sourceKind === 'protein_sequence' ? 'Target ID' : 'Optional source label'}<input value={sourceTargetId} onChange={(event) => setSourceTargetId(event.target.value)} className={inputClass} /></label><button type="button" disabled={!sourceFile || register.isPending} onClick={() => sourceFile && register.mutate({ file: sourceFile, kind: sourceKind })} className="self-end rounded-lg bg-orange-500 px-4 py-2 text-sm font-semibold text-slate-950 disabled:opacity-40">Register</button></div>
+                        {sourceKind === 'structure_upload' && <label className="block max-w-sm space-y-1 text-xs text-slate-400">Reference state label<input value={sourceState} onChange={(event) => setSourceState(event.target.value)} className={inputClass} /></label>}
                         {sourceKind === 'confornets_state' && <div className="grid max-w-2xl gap-3 sm:grid-cols-2"><label className="space-y-1 text-xs text-slate-400">Transfer-state kind<select value={transferKind} onChange={(event) => setTransferKind(event.target.value as typeof transferKind)} className={inputClass}><option value="confornet_state">ConforNet state</option><option value="mse_state">MSE state</option></select></label><label className="space-y-1 text-xs text-slate-400">Source test cases<input value={sourceTestCases} onChange={(event) => setSourceTestCases(event.target.value)} className={inputClass} /></label></div>}
                         {sourceKind === 'protein_sequence' && <section className="rounded-xl border border-sky-500/25 bg-sky-500/5 p-3" aria-label="Paste protein sequence"><div className="flex items-center justify-between gap-2"><h4 className="text-sm font-medium text-sky-100">Paste protein sequence</h4><span className="text-xs text-slate-500">{pastedSequence.replace(/\s+/g, '').length.toLocaleString()} residues</span></div><textarea value={pastedSequence} onChange={(event) => setPastedSequence(event.target.value)} rows={5} spellCheck={false} className={`${inputClass} mt-3 font-mono text-xs`} placeholder="MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG" /><button type="button" disabled={!pastedSequence.trim() || register.isPending} onClick={registerPastedSequence} className="mt-3 rounded-lg border border-sky-400/40 px-3 py-2 text-sm text-sky-100 disabled:opacity-40">Register and select sequence</button></section>}
                         {sourceKind === 'complex_snapshot' && <details className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><summary className="cursor-pointer text-sm font-medium text-slate-300">Complete-complex snapshot editor</summary><textarea value={snapshotEditor} onChange={(event) => setSnapshotEditor(event.target.value)} rows={8} spellCheck={false} className={`${inputClass} mt-3 font-mono text-xs`} placeholder='{"schema_name":"cm_complex_snapshot",...}' /><button type="button" disabled={!snapshotEditor.trim() || register.isPending} onClick={registerSnapshotEditor} className="mt-3 rounded-lg border border-orange-400/40 px-3 py-2 text-sm text-orange-200 disabled:opacity-40">Validate and register snapshot</button></details>}
                     </div>}
-                    {activeSourceTab === 'rcsb' && <div id="cm-source-panel-rcsb" role="tabpanel" aria-labelledby="cm-source-tab-rcsb" className="mt-4 rounded-xl border border-violet-500/25 bg-violet-500/5 p-3"><h4 className="text-sm font-medium text-violet-100">RCSB PDB tie-in</h4><p className="mt-1 text-xs text-slate-400">Register raw RCSB mmCIF as an immutable CM source.</p><div className="mt-3 flex max-w-xl gap-2"><input value={rcsbPdbId} onChange={(event) => setRcsbPdbId(event.target.value.toUpperCase())} maxLength={4} placeholder="1UBQ" className={inputClass} /><button type="button" disabled={!/^[A-Z0-9]{4}$/.test(rcsbPdbId) || registerRcsb.isPending} onClick={() => registerRcsb.mutate()} className="shrink-0 rounded-lg border border-violet-400/40 px-3 py-2 text-sm text-violet-100 disabled:opacity-40">Register raw mmCIF</button></div><div className="mt-3 space-y-2">{tabSources.length ? tabSources.map((source) => <button key={source.source_id} type="button" onClick={() => selectSource(source)} aria-pressed={selectedSourceId === source.source_id} className={`w-full rounded-xl border p-3 text-left ${selectedSourceId === source.source_id ? 'border-orange-400/60 bg-orange-500/10' : 'border-slate-800 bg-slate-950/30'}`}><span className="block text-sm font-medium text-white">{String(source.metadata.name || source.source_id)}</span><span className="mt-1 block truncate font-mono text-[11px] text-slate-500">{source.sha256}</span></button>) : <div className="rounded-lg border border-dashed border-violet-500/20 p-3 text-xs text-slate-500">No registered RCSB sources are available.</div>}</div></div>}
-                    {activeSourceTab !== 'upload' && activeSourceTab !== 'rcsb' && <div id={`cm-source-panel-${activeSourceTab}`} role="tabpanel" aria-labelledby={`cm-source-tab-${activeSourceTab}`} className="mt-4 space-y-2">{tabSources.length ? tabSources.map((source) => <button key={source.source_id} type="button" onClick={() => selectSource(source)} aria-pressed={selectedSourceId === source.source_id} className={`w-full rounded-xl border p-3 text-left ${selectedSourceId === source.source_id ? 'border-orange-400/60 bg-orange-500/10' : 'border-slate-800 bg-slate-950/30'}`}><span className="block text-sm font-medium text-white">{String(source.metadata.name || source.metadata.target_id || source.source_id)}</span><span className="mt-1 block truncate font-mono text-[11px] text-slate-500">{source.source_kind} · {source.sha256} · {source.bytes.toLocaleString()} bytes</span></button>) : <div className="rounded-xl border border-dashed border-slate-800 p-6 text-center text-sm text-slate-500">No compatible sources are available in this view.</div>}</div>}
+                    {activeSourceTab === 'runs' && <div id="cm-source-panel-runs" role="tabpanel" aria-labelledby="cm-source-tab-runs" className="mt-4 space-y-3">
+                        <div className="rounded-xl border border-sky-500/20 bg-sky-500/5 p-3 text-xs leading-5 text-sky-100">Completed artifacts remain discoverable here, but they become CM input authority only after you explicitly register one artifact.</div>
+                        <label className="block max-w-sm space-y-1 text-xs text-slate-400">Upload source type<select aria-label="CM upload source type" value={sourceKind} onChange={(event) => setSourceKind(event.target.value as CmSourceKind)} className={inputClass}>{uploadSourceKinds.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+                        {reusableRuns.isLoading && <p className="text-sm text-slate-500">Loading your completed runs…</p>}
+                        {reusableRuns.isError && <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">{cmApiError(reusableRuns.error, 'Unable to load your completed runs.')}</div>}
+                        {!reusableRuns.isLoading && !reusableRuns.isError && !reusableRuns.data?.length && <div className="rounded-xl border border-dashed border-slate-800 p-6 text-center text-sm text-slate-500">No completed reusable runs are available.</div>}
+                        {reusableRuns.data?.map((run) => <article key={runIdentity(run)} className="rounded-xl border border-slate-800 bg-slate-950/30 p-3">
+                            <div className="flex flex-wrap items-start justify-between gap-2"><div><h4 className="text-sm font-medium text-white">{runLabel(run)}</h4><p className="mt-1 text-xs text-slate-500">{run.workflow} · {run.status}{run.completed_at ? ` · completed ${run.completed_at}` : ''}</p></div><span className="font-mono text-[11px] text-slate-600">{runIdentity(run)}</span></div>
+                            <div className="mt-3 space-y-2">{run.artifacts.map((artifact) => <div key={artifact.artifact_id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-800 p-3"><div className="min-w-0"><div className="truncate text-sm text-slate-200">{artifactLabel(artifact)}</div><div className="mt-1 text-[11px] leading-5 text-slate-500">{artifact.format} · {artifact.sha256} · model {artifact.model_id || '—'} · sample {artifact.sample_id || '—'} · chain {(artifact.chain_ids || []).join(', ') || '—'} · entity {(artifact.entity_ids || []).join(', ') || '—'}</div></div><button type="button" disabled={registerRunArtifactMutation.isPending || artifact.available === false} onClick={() => registerRunArtifactMutation.mutate({ run, artifact })} className="shrink-0 rounded-lg border border-sky-400/40 px-3 py-2 text-xs text-sky-100 disabled:opacity-40">Use {artifactLabel(artifact)}</button></div>)}</div>
+                        </article>)}
+                    </div>}
+                    {activeSourceTab === 'rcsb' && <div id="cm-source-panel-rcsb" role="tabpanel" aria-labelledby="cm-source-tab-rcsb" className="mt-4 rounded-xl border border-violet-500/25 bg-violet-500/5 p-3">
+                        <h4 className="text-sm font-medium text-violet-100">RCSB PDB tie-in</h4>
+                        <p className="mt-1 text-xs text-slate-400">Search the RCSB catalogue, inspect entry metadata, select the exact model/sample/chain/entity context, then register the immutable mmCIF.</p>
+                        <div className="mt-3 flex max-w-xl gap-2"><input aria-label="RCSB accession or keyword" value={rcsbQuery} onChange={(event) => setRcsbQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') searchRcsbMutation.mutate(); }} placeholder="4HHB or deoxyhaemoglobin" className={inputClass} /><button type="button" disabled={searchRcsbMutation.isPending || rcsbQuery.trim().length < 2} onClick={() => searchRcsbMutation.mutate()} className="shrink-0 rounded-lg border border-violet-400/40 px-3 py-2 text-sm text-violet-100 disabled:opacity-40">{searchRcsbMutation.isPending ? 'Searching…' : 'Search RCSB'}</button></div>
+                        {rcsbSearchResults && <div className="mt-4 space-y-2" aria-label="RCSB search results">{rcsbSearchResults.results.length ? rcsbSearchResults.results.map((entry) => <article key={entry.accession} className="rounded-xl border border-slate-800 bg-slate-950/30 p-3"><div className="flex flex-wrap items-start justify-between gap-3"><div><h5 className="text-sm font-medium text-white">{entry.title}</h5><p className="mt-1 text-xs text-slate-400">{entry.accession} · {entry.method || 'method unavailable'} · resolution {entry.resolution ?? '—'} Å · {entry.organism || 'organism unavailable'} · released {entry.release_date || '—'}</p></div><button type="button" onClick={() => selectRcsbEntry(entry)} className="shrink-0 rounded-lg border border-violet-400/40 px-3 py-2 text-xs text-violet-100">Select {entry.accession}</button></div></article>) : <p className="text-sm text-slate-500">No RCSB entries matched this search.</p>}</div>}
+                        {selectedRcsbEntry && <div className="mt-4 rounded-xl border border-violet-400/30 bg-violet-500/5 p-3"><div className="text-xs font-semibold text-violet-100">Selected entry: {selectedRcsbEntry.accession}</div><div className="mt-1 text-xs text-slate-400">{selectedRcsbEntry.title} · {selectedRcsbEntry.method || 'method unavailable'} · {selectedRcsbEntry.organism || 'organism unavailable'}</div><div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="space-y-1 text-xs text-slate-400">Model<select aria-label="RCSB model" value={rcsbModelId} onChange={(event) => setRcsbModelId(event.target.value)} className={inputClass}>{selectedRcsbEntry.models.map((model) => <option key={model.model_id} value={model.model_id}>{model.label || `Model ${model.model_id}`}</option>)}</select></label><label className="space-y-1 text-xs text-slate-400">Sample<select aria-label="RCSB sample" value={rcsbSampleId} onChange={(event) => setRcsbSampleId(event.target.value)} className={inputClass}>{selectedRcsbEntry.samples.map((sample) => <option key={sample.sample_id} value={sample.sample_id}>{sample.label || sample.sample_id}</option>)}</select></label><label className="space-y-1 text-xs text-slate-400">Chain<select aria-label="RCSB chain" value={rcsbChainId} onChange={(event) => { setRcsbChainId(event.target.value); const chain = selectedRcsbEntry.chains.find((item) => item.chain_id === event.target.value); if (chain) setRcsbEntityId(chain.entity_id); }} className={inputClass}><option value="">Select chain…</option>{selectedRcsbEntry.chains.map((chain) => <option key={chain.chain_id} value={chain.chain_id}>{chain.label || chain.chain_id} · entity {chain.entity_id}</option>)}</select></label><label className="space-y-1 text-xs text-slate-400">Entity<select aria-label="RCSB entity" value={rcsbEntityId} onChange={(event) => setRcsbEntityId(event.target.value)} className={inputClass}><option value="">Select entity…</option>{selectedRcsbEntry.entities.map((entity) => <option key={entity.entity_id} value={entity.entity_id}>{entity.label || entity.entity_id} · {entity.entity_type}</option>)}</select></label></div><div className="mt-3 flex flex-wrap items-center justify-between gap-3"><span className="text-xs text-slate-400">{rcsbSelectionSummary}</span><button type="button" disabled={!rcsbSelectionReady || registerRcsbSelectionMutation.isPending} onClick={() => registerRcsbSelectionMutation.mutate()} className="rounded-lg border border-violet-400/40 px-3 py-2 text-sm text-violet-100 disabled:opacity-40">{registerRcsbSelectionMutation.isPending ? 'Registering…' : 'Register selected RCSB mmCIF'}</button></div></div>}
+                        <div className="mt-4 space-y-2">{tabSources.length ? tabSources.map((source) => <button key={source.source_id} type="button" onClick={() => selectSource(source)} aria-pressed={selectedSourceId === source.source_id} className={`w-full rounded-xl border p-3 text-left ${selectedSourceId === source.source_id ? 'border-orange-400/60 bg-orange-500/10' : 'border-slate-800 bg-slate-950/30'}`}><span className="block text-sm font-medium text-white">{String(source.metadata.name || source.source_id)}</span><span className="mt-1 block truncate font-mono text-[11px] text-slate-500">{source.sha256}</span></button>) : <div className="rounded-lg border border-dashed border-violet-500/20 p-3 text-xs text-slate-500">No registered RCSB sources are available.</div>}</div>
+                    </div>}
+                    {activeSourceTab === 'cached' && <div id="cm-source-panel-cached" role="tabpanel" aria-labelledby="cm-source-tab-cached" className="mt-4 space-y-2">{tabSources.length ? tabSources.map((source) => <button key={source.source_id} type="button" onClick={() => selectSource(source)} aria-pressed={selectedSourceId === source.source_id} className={`w-full rounded-xl border p-3 text-left ${selectedSourceId === source.source_id ? 'border-orange-400/60 bg-orange-500/10' : 'border-slate-800 bg-slate-950/30'}`}><span className="block text-sm font-medium text-white">{String(source.metadata.name || source.metadata.target_id || source.source_id)}</span><span className="mt-1 block truncate font-mono text-[11px] text-slate-500">{source.source_kind} · {source.sha256} · {source.bytes.toLocaleString()} bytes</span></button>) : <div className="rounded-xl border border-dashed border-slate-800 p-6 text-center text-sm text-slate-500">No compatible sources are available in this view.</div>}</div>}
                     {sources.isError && <div role="alert" className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">{cmApiError(sources.error, 'Unable to load the authenticated source registry.')}</div>}
                 </section>
 
@@ -737,7 +1007,7 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
 
             <section className={`${cardClass} ${planningWarning ? 'border-amber-500/40' : ''}`} aria-labelledby="cm-summary-heading">
                 <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-orange-300">5</p><h3 id="cm-summary-heading" className="mt-1 font-semibold text-white">Pre-submit summary</h3><p className="mt-1 text-xs text-slate-500">Effective request</p></div><span className={`rounded-full px-3 py-1 text-xs font-medium ${validationErrors.length ? 'bg-red-500/10 text-red-200' : 'bg-emerald-500/10 text-emerald-200'}`}>{validationErrors.length ? `${validationErrors.length} blocking issue${validationErrors.length === 1 ? '' : 's'}` : 'Ready for typed admission'}</span></div>
-                <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-6"><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Run</span><div className="mt-1 text-white">{effectivePayload?.name || form.name || 'Unnamed'}</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Workflow</span><div className="mt-1 text-white">{backendLabel}</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Input authority</span><div className="mt-1 truncate text-white">{selectedSource ? String(selectedSource.metadata.name || selectedSource.metadata.target_id || selectedSource.source_id) : 'Not selected'}</div><div className="mt-1 truncate font-mono text-[11px] text-slate-400">{selectedSourceId || 'Source unresolved'}</div><div className="mt-1 truncate font-mono text-[11px] text-slate-500">{selectedSource ? `${selectedSource.source_kind} · ${selectedSource.sha256}` : 'Source unresolved'}</div><div className="mt-1 text-[11px] text-slate-500">{[form.backend === 'confornets' && selectedSource?.submission_policy && `server-canonical chain ${selectedSource.submission_policy.chain_id}`, form.backend !== 'confornets' && availableChainIds.length > 0 && `retained chains ${availableChainIds.join(', ')}`].filter(Boolean).join(' · ') || 'Model, sample, and chain context resolve at server normalization'}</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Candidate coordinates</span><div className="mt-1 text-white">{expectedCount.toLocaleString()}</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Planning storage</span><div className="mt-1 text-white">~{estimatedStorageGiB.toFixed(2)} GiB</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Notes</span><div className="mt-1 text-white">{effectivePayload?.notes ? 'Included in immutable run record' : 'None'}</div></div></div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-7"><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Run</span><div className="mt-1 text-white">{effectivePayload?.name || form.name || 'Unnamed'}</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Workflow</span><div className="mt-1 text-white">{backendLabel}</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Input authority</span><div className="mt-1 truncate text-white">{selectedSource ? String(selectedSource.metadata.name || selectedSource.metadata.target_id || selectedSource.source_id) : 'Not selected'}</div><div className="mt-1 truncate font-mono text-[11px] text-slate-400">{selectedSourceId || 'Source unresolved'}</div><div className="mt-1 truncate font-mono text-[11px] text-slate-500">{selectedSource ? `${selectedSource.source_kind} · ${selectedSource.sha256}` : 'Source unresolved'}</div><div className="mt-1 text-[11px] text-slate-500">{[form.backend === 'confornets' && selectedSource?.submission_policy && `server-canonical chain ${selectedSource.submission_policy.chain_id}`, form.backend !== 'confornets' && availableChainIds.length > 0 && `retained chains ${availableChainIds.join(', ')}`].filter(Boolean).join(' · ') || 'Model, sample, and chain context resolve at server normalization'}</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs" aria-label="Selected input context"><span className="text-slate-500">Selected input context</span><div className="mt-1 break-words leading-5 text-slate-200">{selectedInputContext}</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Candidate coordinates</span><div className="mt-1 text-white">{expectedCount.toLocaleString()}</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Planning storage</span><div className="mt-1 text-white">~{estimatedStorageGiB.toFixed(2)} GiB</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Notes</span><div className="mt-1 text-white">{effectivePayload?.notes ? 'Included in immutable run record' : 'None'}</div></div></div>
                 <div className="mt-3 grid gap-3 lg:grid-cols-2"><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Effective scientific settings</span><div className="mt-1 leading-5 text-slate-200">{scientificSummary}</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Expected outputs</span><div className="mt-1 leading-5 text-slate-200">{expectedOutputsSummary}</div></div></div>
                 {validationErrors.length > 0 && <ul className="mt-4 grid gap-2 text-sm text-red-200 sm:grid-cols-2">{validationErrors.map((message) => <li key={message} className="rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2">{message}</li>)}</ul>}
                 {planningWarning && <p className="mt-4 text-xs font-medium text-amber-200">Large request: confirm GPU queue capacity and durable result storage before submission.</p>}
