@@ -385,3 +385,151 @@ async def golden_gate(
     await session.commit()
     await session.refresh(seq_obj)
     return MolbioOperationResponse(sequence=seq_obj, message="Golden Gate assembly complete")
+
+
+# ============================================================================
+# Auto-Annotation using pLannotate
+# ============================================================================
+
+class AutoAnnotateRequest(BaseModel):
+    """Request for automatic feature detection using pLannotate."""
+    sequence: str = Field(..., description="DNA sequence to annotate")
+    is_linear: bool = Field(False, description="Whether the sequence is linear (default: circular)")
+    detailed: bool = Field(False, description="Use detailed search mode (more hits, more false positives)")
+    min_identity: float = Field(50.0, description="Minimum percent identity threshold for features")
+
+
+class DetectedFeature(BaseModel):
+    """A feature detected by pLannotate."""
+    name: str
+    type: str
+    start: int
+    end: int
+    strand: int  # 1 or -1
+    identity_pct: float
+    match_length_pct: float
+    is_fragment: bool
+    database: str
+    description: str
+
+
+class AutoAnnotateResponse(BaseModel):
+    """Response from auto-annotation."""
+    features: List[DetectedFeature]
+    message: str
+
+
+@router.post("/auto-annotate", response_model=AutoAnnotateResponse)
+async def auto_annotate(request: AutoAnnotateRequest):
+    """
+    Auto-detect plasmid features using pLannotate.
+    
+    Uses BLAST-based detection to identify common plasmid components like:
+    - Origins of replication (ori, ColE1, etc.)
+    - Antibiotic resistance genes (KanR, AmpR, CmR, etc.)
+    - Promoters and terminators
+    - Common tags and reporters
+    
+    Requires pLannotate to be installed via micromamba.
+    """
+    import subprocess
+    import tempfile
+    import csv
+    import os
+    
+    # Validate sequence
+    sequence = request.sequence.upper().replace(" ", "").replace("\n", "")
+    if not sequence:
+        raise HTTPException(status_code=400, detail="Empty sequence provided")
+    
+    if not all(c in "ATGCNRYSWKMBDHV" for c in sequence):
+        raise HTTPException(status_code=400, detail="Invalid DNA sequence characters")
+    
+    # Create temporary files for input/output
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_file = os.path.join(tmpdir, "input.fasta")
+        output_dir = tmpdir
+        
+        # Write input FASTA
+        with open(input_file, "w") as f:
+            f.write(">input_sequence\n")
+            # Write sequence in 60-char lines
+            for i in range(0, len(sequence), 60):
+                f.write(sequence[i:i+60] + "\n")
+        
+        # Build plannotate command
+        cmd = [
+            "/home/dalab/bin/micromamba",
+            "run", "-n", "plannotate", "--root-prefix", "/home/dalab/micromamba",
+            "plannotate", "batch",
+            "-i", input_file,
+            "-o", output_dir,
+            "--csv"
+        ]
+        
+        if request.is_linear:
+            cmd.append("-l")  # --linear flag
+        
+        if request.detailed:
+            cmd.append("-d")  # --detailed flag
+        
+        # Run pLannotate
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120  # 2 minute timeout
+            )
+        except subprocess.TimeoutExpired:
+            raise HTTPException(status_code=504, detail="pLannotate timed out")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"pLannotate execution failed: {str(e)}")
+        
+        # Find and parse CSV output
+        csv_files = [f for f in os.listdir(output_dir) if f.endswith("_pLann.csv")]
+        if not csv_files:
+            # pLannotate ran but found no features
+            return AutoAnnotateResponse(features=[], message="No features detected")
+        
+        csv_path = os.path.join(output_dir, csv_files[0])
+        features = []
+        
+        try:
+            with open(csv_path, "r") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    identity = float(row.get("percent identity", 0))
+                    
+                    # Skip features below identity threshold
+                    if identity < request.min_identity:
+                        continue
+                    
+                    strand_str = row.get("strand", "+")
+                    strand = 1 if strand_str == "1" or strand_str == "+" else -1
+                    
+                    is_fragment = row.get("fragment", "False").lower() == "true"
+                    
+                    features.append(DetectedFeature(
+                        name=row.get("Feature", "Unknown"),
+                        type=row.get("Type", "misc_feature"),
+                        start=int(row.get("start location", 0)),
+                        end=int(row.get("end location", 0)),
+                        strand=strand,
+                        identity_pct=identity,
+                        match_length_pct=float(row.get("percent match length", 0)),
+                        is_fragment=is_fragment,
+                        database=row.get("database", "unknown"),
+                        description=row.get("Description", "")[:500]  # Truncate long descriptions
+                    ))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to parse pLannotate output: {str(e)}")
+        
+        # Sort by start position
+        features.sort(key=lambda f: f.start)
+        
+        return AutoAnnotateResponse(
+            features=features,
+            message=f"Detected {len(features)} features"
+        )
+

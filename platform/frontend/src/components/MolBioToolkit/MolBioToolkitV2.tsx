@@ -436,6 +436,83 @@ export function MolBioToolkitV2() {
         });
     }, [sequenceData, setSequenceData]);
 
+    // Auto-annotation state
+    const [isAnnotating, setIsAnnotating] = useState(false);
+
+    // Auto-annotate handler - calls pLannotate API to detect features
+    const handleAutoAnnotate = useCallback(async () => {
+        if (!sequenceData.sequence) return;
+
+        // Warn if already has features
+        if (sequenceData.features.length > 0) {
+            if (!confirm('Sequence already has features. Add detected features?')) {
+                return;
+            }
+        }
+
+        setIsAnnotating(true);
+        try {
+            const response = await fetch('/api/molbio/auto-annotate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sequence: sequenceData.sequence,
+                    is_linear: !sequenceData.circular,
+                    detailed: false,
+                    min_identity: 50.0
+                })
+            });
+
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+                throw new Error(error.detail || `HTTP ${response.status}`);
+            }
+
+            const { features, message } = await response.json();
+
+            if (features.length === 0) {
+                alert('No common features detected.');
+                return;
+            }
+
+            // Color palette for different feature types
+            const typeColors: Record<string, string> = {
+                'CDS': '#22c55e',
+                'gene': '#16a34a',
+                'promoter': '#8b5cf6',
+                'terminator': '#ef4444',
+                'rep_origin': '#ec4899',
+                'misc_feature': '#3b82f6',
+                'primer_bind': '#f59e0b'
+            };
+
+            // Convert detected features to our Feature format
+            const newFeatures: Feature[] = features.map((f: any, i: number) => ({
+                id: `auto_${Date.now()}_${i}`,
+                name: f.name,
+                type: f.type,
+                start: f.start,
+                end: f.end,
+                strand: f.strand,
+                color: typeColors[f.type] || '#6b7280',
+                notes: `Detected by pLannotate (${f.identity_pct.toFixed(1)}% identity)${f.is_fragment ? ' [fragment]' : ''}`
+            }));
+
+            // Merge with existing features
+            setSequenceData({
+                ...sequenceData,
+                features: [...sequenceData.features, ...newFeatures]
+            });
+
+            alert(`Detected ${features.length} features! ${message}`);
+        } catch (error) {
+            console.error('Auto-annotation failed:', error);
+            alert(`Auto-annotation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        } finally {
+            setIsAnnotating(false);
+        }
+    }, [sequenceData, setSequenceData]);
+
     // Track dirty state
     useEffect(() => {
         if (canUndo) setIsDirty(true);

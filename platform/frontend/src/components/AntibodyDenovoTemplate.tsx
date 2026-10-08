@@ -906,8 +906,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                             const cdrResidues = new Set<string>();
                                             if (detectedCDRs) {
                                                 // Add all residues in detected CDR ranges
-                                                // Framework structures use chain 'H' for heavy chain
-                                                const chainId = 'H';
+                                                // Use actual chain ID from framework, not hardcoded 'H'
+                                                const chainId = sabdabFramework?.hChain || 'H';
                                                 if (detectedCDRs.cdr_h1_range) {
                                                     for (let i = detectedCDRs.cdr_h1_range[0]; i <= detectedCDRs.cdr_h1_range[1]; i++) {
                                                         cdrResidues.add(`${chainId}${i}`);
