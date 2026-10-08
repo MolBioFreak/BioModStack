@@ -176,8 +176,11 @@ class NativeInvocation:
             'model_id': self.model_id, 'mode': self.mode,
             'command': list(self.command),
             'requested': json.loads(self.requested_json),
+            'requested_sha256': hashlib.sha256(self.requested_json).hexdigest(),
             'effective': json.loads(self.effective_json),
+            'effective_sha256': hashlib.sha256(self.effective_json).hexdigest(),
             'native_parameters': self.native_parameters,
+            'native_parameters_sha256': hashlib.sha256(self.native_parameters_json).hexdigest(),
             'generated_inputs': [item.reference for item in self.generated_inputs],
         }
 

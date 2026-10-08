@@ -83,6 +83,13 @@ class RuntimeDependencyRef(BaseModel):
     kind: str = Field(pattern=r"^(image|weights)$")
     relative_path: str = Field(pattern=r"^[A-Za-z0-9_.-]+$")
 
+    @field_validator('relative_path')
+    @classmethod
+    def validate_managed_leaf(cls, value):
+        if value in {'.', '..'}:
+            raise ValueError('runtime dependency must name an asset, not a storage directory')
+        return value
+
 
 def independent_runtime_model_ids() -> tuple[str, ...]:
     """Discover declared closures from the existing public model registry."""

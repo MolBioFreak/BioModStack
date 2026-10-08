@@ -3350,12 +3350,30 @@ def uses_native_parent_components(command: list[str]) -> bool:
 
 
 def build_job_nextflow_command(job, params, output_dir, *, compiled_parameters=None, materialize_inputs=True):
-    """All launch/rebuild paths join request origin from their owning persisted Job."""
+    """Execution projection of the complete, persisted-Job native invocation."""
+    invocation = compile_job_nextflow_invocation(job, params, output_dir)
+    if materialize_inputs:
+        invocation.materialize_inputs(Path(output_dir))
+    if compiled_parameters is not None:
+        compiled_parameters.clear()
+        compiled_parameters.update(invocation.native_parameters)
+    return list(invocation.command)
+
+
+def compile_job_nextflow_invocation(job, params, output_dir):
+    """Bind Job-owned runtime/input additions before sealing compiler identity.
+
+    Local launch, remote launch, rebuild and prewarm share this projection.
+    Compilation does not materialize biological inputs.
+    """
+    from dataclasses import replace
+    from component_runtime import canonical_bytes
     from services.core_protein_scientific_contract import workflow_params
     requested = (job.provenance or {}).get('core_protein_requested_params')
-    command = build_nextflow_command(job.model_id, job.mode, workflow_params(job, params),
-        output_dir, job_id=job.id, requested_params=requested,
-        compiled_parameters=compiled_parameters, materialize_inputs=materialize_inputs)
+    invocation = compile_nextflow_invocation(job.model_id, job.mode, workflow_params(job, params),
+        output_dir, job_id=job.id, requested_params=requested)
+    command = list(invocation.command)
+    native_parameters = invocation.native_parameters
     if uses_native_parent_components(command) and params.get('run_frustrampnn') is True:
         from paths import get_container_dir
         from services.remote_execution.images import resolve_image
@@ -3366,14 +3384,13 @@ def build_job_nextflow_command(job, params, output_dir, *, compiled_parameters=N
             raise ValueError('Native FrustraMPNN requires exactly one declared inference image')
         image = resolve_image(images[0].relative_path, get_container_dir())
         command.extend(['--frustrampnn_container_path', str(image)])
-        if compiled_parameters is not None:
-            compiled_parameters['frustrampnn_container_path'] = str(image)
+        native_parameters['frustrampnn_container_path'] = str(image)
     for key in ('protenix_prepared_msa_dir', 'protenix_prepared_msa_sha256'):
         if params.get(key):
             command.extend(['--' + key, str(params[key])])
-            if compiled_parameters is not None:
-                compiled_parameters[key] = params[key]
-    return command
+            native_parameters[key] = params[key]
+    return replace(invocation, command=tuple(command),
+                   native_parameters_json=canonical_bytes(native_parameters))
 
 
 def build_nextflow_command(
