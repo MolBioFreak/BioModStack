@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -120,12 +121,40 @@ def test_explicit_electron_surface_launches_shell_when_installed(monkeypatch) ->
     assert launched == [descriptor]
 
 
+def test_resolve_pnpm_executable_falls_back_to_nvm_when_not_on_path(tmp_path) -> None:
+    module = load_module()
+    home_dir = tmp_path / "home"
+    pnpm_bin_dir = home_dir / ".nvm" / "versions" / "node" / "v20.19.4" / "bin"
+    pnpm_bin_dir.mkdir(parents=True)
+    pnpm_path = pnpm_bin_dir / "pnpm"
+    pnpm_path.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+
+    resolved_pnpm, resolved_env = module.resolve_pnpm_executable(
+        env={"PATH": "/usr/bin:/bin"},
+        home=home_dir,
+    )
+
+    assert resolved_pnpm == str(pnpm_path)
+    assert resolved_env["PATH"].split(os.pathsep)[0] == str(pnpm_bin_dir)
+
+
+
 def test_launch_electron_shell_exports_runtime_context_to_the_shell(monkeypatch, tmp_path) -> None:
     module = load_module()
     shell_dir = tmp_path / "desktop-electron"
     shell_dir.mkdir(parents=True)
     monkeypatch.setattr(module, "ELECTRON_SHELL_DIR", shell_dir)
     monkeypatch.setattr(module, "electron_shell_installed", lambda: True)
+
+    resolved_env = {"PATH": "/tmp/node-bin:/usr/bin"}
+    monkeypatch.setattr(
+        module,
+        "resolve_pnpm_executable",
+        lambda env=None, home=None: (
+            "/tmp/node-bin/pnpm",
+            {**(env or {}), **resolved_env},
+        ),
+    )
 
     captured: dict[str, object] = {}
 
@@ -147,9 +176,10 @@ def test_launch_electron_shell_exports_runtime_context_to_the_shell(monkeypatch,
     )
 
     env = captured["env"]
-    assert captured["command"] == ["pnpm", "start"]
+    assert captured["command"] == ["/tmp/node-bin/pnpm", "start"]
     assert captured["cwd"] == shell_dir
     assert captured["start_new_session"] is True
+    assert env["PATH"] == resolved_env["PATH"]
     assert env["BMS_HOME"] == str(module.REPO_ROOT)
     assert env["BMS_RUNTIME_MODE"] == "container"
     assert env["BMS_FRONTEND_ORIGIN"] == "http://127.0.0.1:5173"

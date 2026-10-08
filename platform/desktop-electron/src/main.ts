@@ -4,10 +4,12 @@ import path from 'node:path';
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell, Tray } from 'electron';
 
 import { buildApplicationMenu } from './menu.js';
+import { applyShellGraphicsWorkarounds } from './graphicsWorkarounds.js';
 import { resolveShellPaths } from './shellPaths.js';
 import { createServiceControl } from './serviceControl.js';
 import { createAppTray } from './tray.js';
 import { attachCloseToTrayBehavior } from './windowLifecycle.js';
+import { attachWindowDiagnostics } from './windowDiagnostics.js';
 import {
   buildBrowserWindowOptions,
   GET_SHELL_CONTEXT_CHANNEL,
@@ -25,6 +27,13 @@ import {
 let mainWindow: BrowserWindow | null = null;
 let appTray: Tray | null = null;
 let isQuitting = false;
+
+const gpuAccelerationDisabled = applyShellGraphicsWorkarounds(app);
+if (gpuAccelerationDisabled) {
+  console.warn(
+    '[BioModStack Shell] Disabled GPU acceleration on Linux/X11 to avoid Electron renderer blank-screen crashes. Set BMS_ELECTRON_DISABLE_GPU=0 to opt out.',
+  );
+}
 
 function showMainWindow(): void {
   if (!mainWindow) {
@@ -113,6 +122,12 @@ function attachExternalLinkHandler(window: BrowserWindow): void {
   });
 }
 
+function reportFatalShellError(scope: string, error: unknown): void {
+  const details = error instanceof Error ? error.stack ?? error.message : String(error);
+  console.error(`[BioModStack Shell] ${scope}: ${details}`);
+  dialog.showErrorBox('BioModStack Shell diagnostics', `${scope}\n\n${details}`);
+}
+
 export function createMainWindow(context: ShellContext): BrowserWindow {
   const preloadPath = path.join(__dirname, 'preload.js');
   const shellPaths = resolveShellPaths();
@@ -127,6 +142,11 @@ export function createMainWindow(context: ShellContext): BrowserWindow {
 
   attachExternalLinkHandler(window);
   attachCloseToTrayBehavior(window, () => isQuitting);
+  attachWindowDiagnostics(window, context, {
+    showErrorBox: (title, content) => {
+      dialog.showErrorBox(title, content);
+    },
+  });
   void window.loadURL(context.windowUrl);
 
   return window;
@@ -166,7 +186,10 @@ app.on('before-quit', () => {
 });
 
 app.whenReady().then(() => {
-  void bootstrap();
+  return bootstrap();
+}).catch((error: unknown) => {
+  reportFatalShellError('Failed to bootstrap the shell', error);
+  app.quit();
 });
 
 app.on('window-all-closed', () => {

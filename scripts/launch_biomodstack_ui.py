@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 import webbrowser
@@ -24,6 +25,15 @@ from biomodstack_services import (  # noqa: E402
 )
 
 ELECTRON_SHELL_DIR = REPO_ROOT / "platform" / "desktop-electron"
+
+
+def missing_electron_shell_message() -> str:
+    shell_hint = REPO_ROOT / "start_ui_electron.sh"
+    install_hint = "pnpm --dir platform/desktop-electron install"
+    return (
+        "Electron launch surface requested, but the Electron shell runtime is not installed. "
+        f"Run '{install_hint}' from the repo root, then retry '{shell_hint} --runtime container'."
+    )
 
 
 def resolve_surface_choice(explicit_surface: str | None, launch_preferences: dict[str, object]) -> str:
@@ -53,19 +63,64 @@ def electron_shell_installed() -> bool:
     return (electron_dist / binary_name).exists()
 
 
+
+def iter_pnpm_bin_dirs(home: Path | None = None) -> list[Path]:
+    base_home = (home or Path.home()).expanduser().resolve()
+    nvm_versions_dir = base_home / ".nvm" / "versions" / "node"
+    candidates = sorted(nvm_versions_dir.glob("*/bin"), reverse=True)
+    candidates.extend(
+        [
+            base_home / ".local" / "share" / "pnpm",
+            base_home / ".local" / "bin",
+        ]
+    )
+    unique_candidates: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_candidates.append(candidate)
+    return unique_candidates
+
+
+
+def resolve_pnpm_executable(
+    env: dict[str, str] | None = None,
+    home: Path | None = None,
+) -> tuple[str, dict[str, str]]:
+    resolved_env = (env or os.environ).copy()
+    current_path = resolved_env.get("PATH", "")
+    pnpm_path = shutil.which("pnpm", path=current_path or None)
+    if pnpm_path:
+        return pnpm_path, resolved_env
+
+    for bin_dir in iter_pnpm_bin_dirs(home):
+        candidate = bin_dir / ("pnpm.cmd" if sys.platform == "win32" else "pnpm")
+        if not candidate.exists():
+            continue
+        path_parts = [str(bin_dir)]
+        if current_path:
+            path_parts.append(current_path)
+        resolved_env["PATH"] = os.pathsep.join(path_parts)
+        return str(candidate), resolved_env
+
+    raise FileNotFoundError("pnpm")
+
+
+
 def launch_electron_shell(descriptor: dict[str, object]) -> None:
     if not electron_shell_installed():
-        raise ServiceManagerError(
-            "Electron launch surface requested, but no Electron shell is installed yet. Implement Phase 2 before enabling this path."
-        )
+        raise ServiceManagerError(missing_electron_shell_message())
 
     env = os.environ.copy()
     env["BMS_HOME"] = str(REPO_ROOT)
     env["BMS_RUNTIME_MODE"] = str(descriptor.get("runtime_mode") or "container")
     env["BMS_FRONTEND_ORIGIN"] = str(descriptor.get("frontend_origin") or "http://127.0.0.1:5173")
     env["BMS_ROUTER_BASENAME"] = str(descriptor.get("router_basename") or "/bms/")
-    subprocess.Popen(["pnpm", "start"], cwd=ELECTRON_SHELL_DIR, env=env, start_new_session=True)
-
+    pnpm_executable, env = resolve_pnpm_executable(env=env)
+    subprocess.Popen([pnpm_executable, "start"], cwd=ELECTRON_SHELL_DIR, env=env, start_new_session=True)
 
 def launch_ui(runtime_mode: str | None = None, surface: str | None = None) -> dict[str, object]:
     prefs = load_launch_preferences()
@@ -73,9 +128,7 @@ def launch_ui(runtime_mode: str | None = None, surface: str | None = None) -> di
 
     if chosen_surface == ELECTRON_LAUNCH_SURFACE and not electron_shell_installed():
         if surface == ELECTRON_LAUNCH_SURFACE:
-            raise ServiceManagerError(
-                "Electron launch surface requested, but no Electron shell is installed yet. Implement Phase 2 before enabling this path."
-            )
+            raise ServiceManagerError(missing_electron_shell_message())
         chosen_surface = BROWSER_LAUNCH_SURFACE
 
     start_all(runtime_mode=runtime_mode)

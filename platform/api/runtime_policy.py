@@ -48,15 +48,19 @@ def core_runtime_mode_enabled() -> bool:
 
 
 def workflow_launches_allowed() -> bool:
+    from services.workflow_adapter import workflow_adapter_enabled
+
+    if workflow_adapter_enabled():
+        return True
     return not core_runtime_mode_enabled()
 
 
 def workflow_launch_block_detail(action: str = "launch workflows") -> str:
     normalized_action = str(action or "launch workflows").strip()
     return (
-        f"Cannot {normalized_action} while BioModStack is running in core-runtime container mode. "
-        "This first-wave container runtime does not yet own Nextflow/workflow execution truth; "
-        "use the host-native BioModStack runtime for workflow launches, resumes, and resubmits."
+        f"Cannot {normalized_action} while BioModStack is running in core-runtime container mode without a configured "
+        "host-native workflow adapter. This container runtime only owns the web/control-plane surface; configure "
+        "BMS_WORKFLOW_ADAPTER_URL or use the host-native BioModStack runtime for workflow launches, resumes, and resubmits."
     )
 
 

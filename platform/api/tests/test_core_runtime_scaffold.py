@@ -17,6 +17,7 @@ def test_core_runtime_scaffold_files_exist() -> None:
         "docker/web.Dockerfile",
         "docker/web/nginx.conf",
         "scripts/run_biomodstack_core_runtime.sh",
+        "scripts/run_biomodstack_workflow_adapter.sh",
     ]
 
     missing = [path for path in expected_paths if not (REPO_ROOT / path).exists()]
@@ -35,7 +36,7 @@ def test_compose_core_runtime_contract() -> None:
     assert api["extra_hosts"] == ["host.docker.internal:host-gateway"]
     assert api["environment"]["BMS_HOME"] == "/app"
     assert api["environment"]["BMS_CORE_RUNTIME_MODE"] == "${BMS_CORE_RUNTIME_MODE:-1}"
-    assert api["environment"]["BMS_WORKFLOW_ADAPTER_URL"] == "${BMS_WORKFLOW_ADAPTER_URL:-}"
+    assert api["environment"]["BMS_WORKFLOW_ADAPTER_URL"] == "${BMS_WORKFLOW_ADAPTER_URL:-http://host.docker.internal:8001}"
     assert "BIOXP_SERVER_URL" in api["environment"]
 
     web = compose["services"]["bms-web"]
@@ -92,7 +93,7 @@ def test_core_runtime_env_example_documents_transition_knobs() -> None:
         "BMS_API_HOST_PORT=8000",
         "BMS_WEB_HOST_PORT=5173",
         "BMS_CORE_RUNTIME_MODE=1",
-        "BMS_WORKFLOW_ADAPTER_URL=",
+        "BMS_WORKFLOW_ADAPTER_URL=http://host.docker.internal:8001",
         "BIOXP_SERVER_URL=",
     ]:
         assert required in env_example
@@ -104,3 +105,27 @@ def test_core_runtime_script_loads_repo_local_env_overrides() -> None:
     assert ".env.core-runtime.local" in runtime_script
     assert "BMS_CORE_RUNTIME_ENV_FILE" in runtime_script
     assert "--env-file" in runtime_script
+
+
+def test_api_dockerfile_uses_prebuilt_venv_at_runtime() -> None:
+    dockerfile = (REPO_ROOT / "docker" / "api.Dockerfile").read_text(encoding="utf-8")
+
+    assert "RUN uv sync --frozen --no-dev" in dockerfile
+    assert 'CMD ["/app/platform/api/.venv/bin/uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]' in dockerfile
+    assert 'CMD ["uv", "run", "uvicorn"' not in dockerfile
+
+
+def test_httpx_is_a_runtime_dependency_for_container_api_startup() -> None:
+    pyproject = (REPO_ROOT / "platform" / "api" / "pyproject.toml").read_text(encoding="utf-8")
+
+    assert '    "httpx>=0.27.0",' in pyproject
+    assert 'dev = [\n    "pytest>=8.0.0",\n    "pytest-asyncio>=0.23.0",\n]' in pyproject
+
+
+def test_workflow_adapter_script_runs_host_native_adapter_without_recursive_routing() -> None:
+    adapter_script = (REPO_ROOT / "scripts" / "run_biomodstack_workflow_adapter.sh").read_text(encoding="utf-8")
+
+    assert "unset BMS_WORKFLOW_ADAPTER_URL" in adapter_script
+    assert "export BMS_CORE_RUNTIME_MODE=0" in adapter_script
+    assert 'BMS_WORKFLOW_ADAPTER_BIND_HOST="${BMS_WORKFLOW_ADAPTER_BIND_HOST:-0.0.0.0}"' in adapter_script
+    assert 'uv run uvicorn workflow_adapter_app:app --port 8001 --host "$BMS_WORKFLOW_ADAPTER_BIND_HOST"' in adapter_script

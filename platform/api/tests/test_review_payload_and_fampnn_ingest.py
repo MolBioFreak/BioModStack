@@ -297,6 +297,40 @@ def test_repair_job_for_response_marks_ok_history_job_completed_without_gate(tmp
     assert job.completed_at is not None
 
 
+def test_repair_job_for_response_marks_err_history_job_failed_without_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("routers.jobs.nextflow_history_status", lambda job: "ERR")
+    monkeypatch.setattr("routers.jobs.load_review_gate_snapshot", lambda *_args, **_kwargs: (None, {}))
+    monkeypatch.setattr("routers.jobs.has_stage_gate", lambda job: False)
+
+    job = SimpleNamespace(
+        output_dir=str(tmp_path),
+        awaiting_stage=None,
+        awaiting_payload={},
+        awaiting_input=False,
+        error_message=(
+            "Reconciled as failed: no active process and no terminal .nextflow/history status "
+            "(expected OK/ERR)"
+        ),
+        status="running",
+        queue_status="running",
+        current_stage="boltz2",
+        stage_progress="1/1",
+        completed_at=None,
+        parent_job_id=None,
+        child_stage=None,
+    )
+
+    changed = _repair_job_for_response(job)
+
+    assert changed is True
+    assert job.status == "failed"
+    assert job.queue_status == "failed"
+    assert job.current_stage == "boltz2"
+    assert job.stage_progress == "1/1"
+    assert job.error_message == "Reconciled as failed: terminal .nextflow/history status ERR"
+    assert job.completed_at is not None
+
+
 def test_looks_like_antibody_job_accepts_boltzgen_nanobody_runs() -> None:
     job = SimpleNamespace(
         model_id="boltzgen",
