@@ -1,12 +1,12 @@
 import { useMemo, useState, type UIEvent } from 'react';
 import { canonicalResidueRefKey, type ResidueRef } from '../../contracts/structureIdentity.js';
-import type { MetricSelection, ResidueScalarValue } from '../../metrics/metricContracts.js';
+import type { MetricMissingness, MetricSelection } from '../../metrics/metricContracts.js';
 
 export interface SequenceTrackPoint {
     readonly residue: ResidueRef;
     readonly label: string;
     readonly value?: number | null;
-    readonly missingness?: ResidueScalarValue['missingness'];
+    readonly missingness?: MetricMissingness;
 }
 
 export interface SequenceTrackExtensionProps {

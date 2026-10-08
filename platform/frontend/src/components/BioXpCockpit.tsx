@@ -10,7 +10,7 @@ import {
     useCompileBioXpProtocol,
     useSubmitBioXpProtocol,
 } from '../lib/bioxpClient';
-import { deriveBioXpStatus } from './bioxpInterlinkStatus';
+import { deriveBioXpStatus, isBioXpCommandAvailable } from './bioxpInterlinkStatus';
 
 function EvidenceValue({ value }: { value: boolean | null }) {
     if (value === null) return <span className="text-amber-300">UNKNOWN</span>;
@@ -147,10 +147,10 @@ export function BioXpCockpit() {
                 )}
                 <div className="mt-4 grid gap-3 lg:grid-cols-2">
                     {COMMISSIONING_COMMANDS.map(({ command, label, detail, tone }) => {
-                        const available = Boolean(derived?.ready && status?.available_commands.includes(command));
+                        const available = isBioXpCommandAvailable(status?.available_commands, command, derived?.label);
                         const ackReady = command !== 'run_initial_check' || initialCheckAck === 'INITIALIZE';
                         const blockedReason = status?.unavailable_commands[command]
-                            ?? (!derived?.ready ? derived?.detail : 'Command is not admitted by the server.');
+                            ?? (statusQuery.isError ? 'Status is unavailable.' : 'Command is not admitted by the server.');
                         return (
                             <article key={command} className={`rounded border p-4 ${tone === 'query' ? 'border-cyan-700/60 bg-cyan-950/20' : 'border-amber-700/60 bg-amber-950/20'}`}>
                                 <h3 className="font-semibold">{label}</h3>

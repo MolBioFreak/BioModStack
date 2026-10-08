@@ -541,8 +541,8 @@ test('StructureViewerPane wires first-class ConforNets slider, step, and overlay
     assert.match(molstarSource, /new StructureSceneController/);
     assert.match(molstarSource, /controller\.loadScene\(sceneResult\.value\)/);
     assert.match(molstarSource, /kind:\s*'independent_hypotheses'/);
-    assert.match(molstarSource, /\[adapterEpoch, documents\]/);
+    assert.match(molstarSource, /\[adapterEpoch, documents, measurements, molecularDynamics, scenePresentation\]/);
     assert.match(molstarSource, /alphafoldView:\s*options\.effectiveAlphafoldView/);
-    assert.match(molstarSource, /&& !residueColors\?\.size/);
+    assert.match(molstarSource, /&& !\(scenePresentation\?\.colorQueries\?\.length\)/);
     assert.doesNotMatch(molstarSource, /viewerInstance/);
 });

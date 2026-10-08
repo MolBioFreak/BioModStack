@@ -40,7 +40,6 @@ import {
     resolveConforNetsOverlayIds,
     resolveEffectiveStructureViewerColorMode,
     resolveStructureViewerConfidenceSemantics,
-    type StructureViewerColorMode,
     type StructureViewerOverlayView,
     type StructureViewerQuickViewSpec,
     type StructureViewerSectionId,
@@ -239,6 +238,7 @@ function frustrationColor(value: number): { r: number; g: number; b: number } {
 }
 
 const CHAIN_ACCENT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
+const LEGACY_ANALYTICS_ENABLED = false;
 
 const residueColorKey = (chainId: string, residueNumber: number): string => `${chainId}:${residueNumber}`;
 
@@ -318,6 +318,7 @@ export default function StructureViewerPane({
         typeof window === 'undefined' ? 720 : window.innerHeight
     ));
     const [analyticsPanelOpen, setAnalyticsPanelOpen] = useState(true);
+    const [metricWorkbenchOpen, setMetricWorkbenchOpen] = useState(true);
     const [overlayView, setOverlayView] = useState<OverlayView>('metrics');
     const [conforNetsOverlayIds, setConforNetsOverlayIds] = useState<string[]>([]);
     const [focusedMetricSection, setFocusedMetricSection] = useState<StructureViewerSectionId>('summary');
@@ -741,34 +742,7 @@ export default function StructureViewerPane({
             setFocusedMetricSection('confidence');
         }
     }, [effectiveColorMode]);
-    const handleColorModeChange = useCallback((nextColorMode: StructureViewerColorMode) => {
-        setColorMode(nextColorMode);
-        if (nextColorMode === 'plddt') {
-            setOverlayView('plddt');
-            setFocusedMetricSection('confidence');
-            return;
-        }
-        if (nextColorMode === 'fampnn_psce') {
-            if (hasFampnnPsceProfile) {
-                setOverlayView('psce');
-            }
-            setFocusedMetricSection('designability');
-            return;
-        }
-        if (nextColorMode === 'frustration') {
-            setOverlayView('metrics');
-            setFocusedMetricSection('designability');
-            return;
-        }
-        if (nextColorMode === 'cdr') {
-            setOverlayView('metrics');
-            setFocusedMetricSection('confidence');
-            return;
-        }
-        if (overlayView === 'metrics') {
-            setFocusedMetricSection('summary');
-        }
-    }, [hasFampnnPsceProfile, overlayView, setColorMode]);
+
     const isQuickViewActive = useCallback((quickView: StructureViewerQuickViewSpec) => (
         focusedMetricSection === quickView.sectionId
         && overlayView === quickView.overlayView
@@ -1193,6 +1167,55 @@ export default function StructureViewerPane({
         return layers;
     }, [chainMetrics, contactMap, paeData, paeMatrix]);
 
+    const structureScalarMetricLayers = useMemo<readonly MetricLayer[]>(() => {
+        const candidates: Array<{
+            id: string;
+            label: string;
+            value: unknown;
+            units: string | null;
+            direction: 'higher_is_better' | 'lower_is_better' | 'neutral';
+            range?: readonly [number, number];
+            description: string;
+        }> = [
+            { id: 'ptm', label: 'pTM', value: selectedDesign?.ptm, units: 'score', direction: 'higher_is_better', range: [0, 1], description: 'Predicted TM-score for the complete structure.' },
+            { id: 'complex-iplddt', label: 'Complex ipLDDT', value: selectedDesign?.complex_iplddt, units: 'score', direction: 'higher_is_better', range: [0, 1], description: 'Complex-level interface confidence reported by the structure producer.' },
+            { id: 'complex-ipde', label: 'Complex ipDE', value: selectedDesign?.complex_ipde, units: 'Å', direction: 'lower_is_better', description: 'Complex-level predicted interface distance error.' },
+            { id: 'gyration-radius', label: 'Radius of gyration', value: structureAnalysis?.gyration_radius, units: 'Å', direction: 'neutral', description: 'Radius of gyration computed by persisted structure analysis.' },
+            { id: 'residue-count', label: 'Residue count', value: structureAnalysis?.residue_count, units: 'residues', direction: 'neutral', description: 'Total residues in the persisted structure analysis.' },
+            { id: 'helix-percent', label: 'Helix content', value: structureAnalysis?.secondary_structure?.helix, units: '%', direction: 'neutral', range: [0, 100], description: 'Percentage of residues assigned as helix.' },
+            { id: 'sheet-percent', label: 'Sheet content', value: structureAnalysis?.secondary_structure?.sheet, units: '%', direction: 'neutral', range: [0, 100], description: 'Percentage of residues assigned as sheet.' },
+            { id: 'coil-percent', label: 'Coil content', value: structureAnalysis?.secondary_structure?.coil, units: '%', direction: 'neutral', range: [0, 100], description: 'Percentage of residues assigned as coil.' },
+        ];
+        return candidates.flatMap((candidate): MetricLayer[] => {
+            if (typeof candidate.value !== 'number' || !Number.isFinite(candidate.value)) return [];
+            return [{
+                descriptor: {
+                    id: candidate.id,
+                    label: candidate.label,
+                    dimension: 'structure-scalar',
+                    units: candidate.units,
+                    direction: candidate.direction,
+                    description: candidate.description,
+                    projectionPolicy: 'none',
+                    normalization: 'none',
+                    ...(candidate.range ? { valueRange: candidate.range } : {}),
+                    provenance: {
+                        source: candidate.id.startsWith('complex-') || candidate.id === 'ptm'
+                            ? 'Persisted structure prediction result'
+                            : 'BioModStack structure_summary analysis',
+                        jobId: activeJob?.id,
+                        artifactId: selectedDesign?.id,
+                    },
+                },
+                values: [{ identity: { documentId: 'primary' }, value: candidate.value }],
+            }];
+        });
+    }, [activeJob?.id, selectedDesign, structureAnalysis]);
+    const allMetricLayers = useMemo<readonly MetricLayer[]>(
+        () => [...structureScalarMetricLayers, ...pairMetricLayers],
+        [pairMetricLayers, structureScalarMetricLayers],
+    );
+
     const topFrustratedResidues = (() => {
         if (!selectedDesign?.frustration_residues?.length) return [];
         return [...selectedDesign.frustration_residues]
@@ -1332,7 +1355,9 @@ export default function StructureViewerPane({
     // Listen to fullscreen changes
     useEffect(() => {
         const handleFullscreenChange = () => {
-            setIsFullscreen(!!document.fullscreenElement);
+            const fullscreen = !!document.fullscreenElement;
+            setIsFullscreen(fullscreen);
+            if (!fullscreen) setMetricWorkbenchOpen(true);
         };
         document.addEventListener('fullscreenchange', handleFullscreenChange);
         return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
@@ -1435,29 +1460,6 @@ export default function StructureViewerPane({
             })}
         </div>
     ), [applyQuickView, isQuickViewActive, quickViewById, viewerSections]);
-    const renderQuickViewBar = useCallback((compact = false) => (
-        <div className={`flex flex-wrap items-center gap-1 ${compact ? '' : 'ml-1'}`}>
-            {viewerQuickViews.map((quickView) => {
-                const active = isQuickViewActive(quickView);
-                return (
-                    <button
-                        key={quickView.id}
-                        type="button"
-                        onClick={() => applyQuickView(quickView)}
-                        className={`rounded-lg border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${active
-                            ? 'border-blue-400/60 bg-blue-500/20 text-blue-100'
-                            : compact
-                                ? 'border-slate-700/70 bg-slate-900/75 text-slate-300 hover:border-slate-500 hover:text-white'
-                                : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-slate-500 hover:text-white'
-                            }`}
-                        title={`Focus ${quickView.label.toLowerCase()} signals`}
-                    >
-                        {quickView.label}
-                    </button>
-                );
-            })}
-        </div>
-    ), [applyQuickView, isQuickViewActive, viewerQuickViews]);
 
     // Toggleable Analytics Panel for fullscreen
     const renderFullscreenOverlay = () => (
@@ -1484,12 +1486,12 @@ export default function StructureViewerPane({
                 </div>
                 <button
                     type="button"
-                    aria-label="Close analytics panel"
+                    aria-label="Minimize analytics panel"
                     onClick={() => setAnalyticsPanelOpen(false)}
                     className="border-l border-slate-700/50 px-3 py-2 text-xs font-semibold text-slate-300 transition-colors hover:bg-slate-800/70 hover:text-white"
-                    title="Close analytics panel"
+                    title="Minimize analytics panel"
                 >
-                    ✕
+                    —
                 </button>
             </div>
 
@@ -2687,66 +2689,6 @@ export default function StructureViewerPane({
                 </div>
             )}
 
-            {/* Color Mode */}
-            <select
-                value={effectiveColorMode}
-                onChange={(e) => handleColorModeChange(e.target.value as StructureViewerColorMode)}
-                className={`appearance-none border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white cursor-pointer hover:bg-slate-700 ${isCompact ? 'bg-slate-800/90 backdrop-blur-sm' : 'bg-slate-800'}`}
-            >
-                <option value="default">Chain Colors</option>
-                <option value="plddt" disabled={!hasResidueConfidence}>{bfactorLabel}</option>
-                <option value="fampnn_psce" disabled={!hasFampnnPsceProfile}>FA-MPNN PSCE</option>
-                <option value="frustration" disabled={!selectedDesign?.frustration_residues?.length}>
-                    Frustration
-                </option>
-                <option value="cdr" disabled={!antibodySelections?.length}>
-                    CDR Regions
-                </option>
-            </select>
-
-            {renderQuickViewBar(isCompact)}
-
-            <button
-                type="button"
-                onClick={() => setAnalyticsPanelOpen((open) => !open)}
-                className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${isCompact
-                    ? (analyticsPanelOpen
-                        ? 'bg-slate-800/90 text-slate-100 backdrop-blur-sm hover:bg-slate-700/90'
-                        : 'bg-blue-500/80 text-white backdrop-blur-sm hover:bg-blue-500')
-                    : (analyticsPanelOpen
-                        ? 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-                        : 'bg-blue-500/10 text-blue-300 border border-blue-500/40 hover:bg-blue-500/20')}`}
-                title={analyticsPanelOpen ? 'Hide the analytics panel' : 'Show the analytics panel'}
-            >
-                {analyticsPanelOpen ? 'Hide Analytics' : 'Show Analytics'}
-            </button>
-
-            {/* Color Legend */}
-            {effectiveColorMode === 'plddt' && !isCompact && (
-                <div className="flex items-center gap-1 text-xs text-slate-400">
-                    <span className="text-blue-400">■</span>≥90
-                    <span className="text-cyan-400 ml-1">■</span>≥70
-                    <span className="text-yellow-400 ml-1">■</span>≥50
-                    <span className="text-orange-400 ml-1">■</span>&lt;50
-                </div>
-            )}
-            {effectiveColorMode === 'fampnn_psce' && !isCompact && (
-                <div className="flex items-center gap-1 text-xs text-slate-400">
-                    <span className="text-emerald-400">■</span>≤0.9
-                    <span className="text-cyan-400 ml-1">■</span>≤1.2
-                    <span className="text-amber-400 ml-1">■</span>≤1.6
-                    <span className="text-rose-400 ml-1">■</span>&gt;1.6
-                    <span className="ml-2 text-slate-500">Lower is better</span>
-                </div>
-            )}
-            {effectiveColorMode === 'frustration' && !isCompact && (
-                <div className="flex items-center gap-1 text-xs text-slate-400">
-                    <span className="text-red-400">■</span>high
-                    <span className="text-slate-400 ml-1">■</span>neutral
-                    <span className="text-green-400 ml-1">■</span>minimal
-                </div>
-            )}
-
             {/* Fullscreen Toggle */}
             <button
                 onClick={() => {
@@ -2833,8 +2775,11 @@ export default function StructureViewerPane({
                             selections={effectiveColorMode === 'cdr' ? antibodySelections : undefined}
                             overlayStructures={conforNetsOverlayStructures}
                             residueMetricLayer={residueMetricLayer}
-                            metricLayers={pairMetricLayers}
+                            metricLayers={allMetricLayers}
                             activeMetricId={overlayView === 'pae' ? 'pae' : residueMetricLayer?.descriptor.id}
+                            showMetricWorkbench={metricWorkbenchOpen}
+                            onMetricWorkbenchVisibilityChange={setMetricWorkbenchOpen}
+                            showSequenceTrack
                             height="100%"
                             backgroundColor={themeColors.bgPrimary}
                         />
@@ -2915,11 +2860,11 @@ export default function StructureViewerPane({
                 </div>
 
                 {/* Right Column: Analytics Sidebar - hidden in fullscreen */}
-                {!isFullscreen && analyticsPanelOpen && renderAnalyticsSidebar()}
+                {LEGACY_ANALYTICS_ENABLED && !isFullscreen && analyticsPanelOpen && renderAnalyticsSidebar()}
             </div>
 
             {/* Fullscreen overlay panel - only in fullscreen mode */}
-            {isFullscreen && analyticsPanelOpen && (
+            {LEGACY_ANALYTICS_ENABLED && isFullscreen && analyticsPanelOpen && (
                 <div className={fullscreenAnalyticsLayout.frameClassName}>
                     {renderFullscreenOverlay()}
                 </div>

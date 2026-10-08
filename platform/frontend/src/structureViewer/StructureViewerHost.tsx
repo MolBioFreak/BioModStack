@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import MolstarViewerImpl from '../components/MolstarViewerImpl';
 import type { MolstarViewerProps } from '../components/MolstarViewerImpl';
@@ -18,6 +18,8 @@ export interface StructureViewerHostProps extends MolstarViewerProps {
     readonly metricLayers?: readonly MetricLayer[];
     readonly activeMetricId?: string;
     readonly showMetricWorkbench?: boolean;
+    readonly onMetricWorkbenchVisibilityChange?: (visible: boolean) => void;
+    readonly showSequenceTrack?: boolean;
     readonly filters?: StructureFilterState;
     readonly onFiltersChange?: (filters: StructureFilterState) => void;
     readonly onMetricSelection?: (selection: MetricSelection) => void;
@@ -71,6 +73,8 @@ export default function StructureViewerHost({
     metricLayers = EMPTY_METRIC_LAYERS,
     activeMetricId,
     showMetricWorkbench = true,
+    onMetricWorkbenchVisibilityChange,
+    showSequenceTrack,
     filters: controlledFilters,
     onFiltersChange,
     onMetricSelection,
@@ -82,19 +86,19 @@ export default function StructureViewerHost({
     onResidueClick: callerResidueClick,
     ...viewerProps
 }: StructureViewerHostProps) {
-    const resourceOwnerRef = useRef<ViewerResourceOwner | null>(null);
-    if (!resourceOwnerRef.current) resourceOwnerRef.current = new ViewerResourceOwner();
     const [ownedStructureUrl, setOwnedStructureUrl] = useState<string | undefined>(undefined);
     useEffect(() => {
-        const owner = resourceOwnerRef.current!;
+        const owner = new ViewerResourceOwner();
         const generation = owner.beginGeneration();
-        if (!structureData) { setOwnedStructureUrl(undefined); return undefined; }
+        if (!structureData) {
+            setOwnedStructureUrl(undefined);
+            return () => { void owner.dispose(); };
+        }
         const url = URL.createObjectURL(new Blob([structureData], { type: 'chemical/x-pdb' }));
         owner.own(`structure-blob:${generation}`, () => URL.revokeObjectURL(url), generation);
         setOwnedStructureUrl(url);
-        return () => { void owner.disposeGeneration(generation); };
+        return () => { void owner.dispose(); };
     }, [structureData]);
-    useEffect(() => () => { void resourceOwnerRef.current?.dispose(); }, []);
     const [localFilters, setLocalFilters] = useState<StructureFilterState>({ includeMissing: false });
     const [selection, setSelection] = useState<MetricSelection | null>(null);
     const [selectedMetricId, setSelectedMetricId] = useState(activeMetricId);
@@ -148,9 +152,20 @@ export default function StructureViewerHost({
         return { registry: next, issues };
     }, [effectiveMetricLayers]);
     const registry = registryState.registry;
-    const activeLayer = (selectedMetricId ? registry.get(selectedMetricId) : undefined) ?? registry.list()[0];
+    const showLinkedSequence = showSequenceTrack ?? showMetricWorkbench;
+    const visualMetricLayers = registry.list().filter((layer) => (
+        layer.descriptor.dimension === 'residue-scalar'
+        || layer.descriptor.dimension === 'residue-pair-matrix'
+    ));
+    const structureSummaryLayers = registry.list().filter((layer) => layer.descriptor.dimension === 'structure-scalar');
+    const requestedLayer = selectedMetricId ? registry.get(selectedMetricId) : undefined;
+    const activeLayer = requestedLayer && visualMetricLayers.some((layer) => layer.descriptor.id === requestedLayer.descriptor.id)
+        ? requestedLayer
+        : visualMetricLayers[0];
     const filteredLayer = activeLayer ? filterMetricLayer(activeLayer, filters) : undefined;
-    const projected = filteredLayer && layerVisible ? projectResidueMetricLayer(filteredLayer) : undefined;
+    const projected = filteredLayer?.descriptor.dimension === 'residue-scalar' && layerVisible
+        ? projectResidueMetricLayer(filteredLayer)
+        : undefined;
     const residueMetricLayer = projected?.status === 'ok'
         ? projected.value
         : (!activeLayer ? compatibilityLayer : undefined);
@@ -210,6 +225,13 @@ export default function StructureViewerHost({
         })) ?? [];
     }, [layerVisible, residueMetricLayer]);
     const commitSelection = (next: MetricSelection) => { setSelection(next); onMetricSelection?.(next); };
+    const changeMetricLayer = (metricId: string) => {
+        setSelection(null);
+        setSelectedMetricId(metricId);
+        setLayerVisible(true);
+        setLayerOpacity(1);
+        setFilters(DEFAULT_FILTERS);
+    };
     const handleResidueClick: NonNullable<MolstarViewerProps['onResidueClick']> = (residue) => {
         const identity: ResidueRef = {
             documentId: residue.documentId,
@@ -254,18 +276,55 @@ export default function StructureViewerHost({
     return (
         <div className="relative h-full w-full" data-bms-structure-viewer-host="direct-4.5.0">
             <MolstarViewerImpl {...viewerProps} structureUrl={ownedStructureUrl ?? viewerProps.structureUrl} selections={selections} residueMetricLayer={residueMetricLayer} scenePresentation={scenePresentation} onResidueClick={handleResidueClick} />
-            {showMetricWorkbench && activeLayer && (
-                <aside className="absolute bottom-2 right-2 z-30 max-h-[55%] w-[min(28rem,calc(100%-1rem))] space-y-2 overflow-auto rounded bg-slate-950/90 p-2 shadow-xl" aria-label="Structure metric workbench">
-                    <label className="block text-xs text-slate-300">Metric layer
-                        <select className="mt-1 w-full rounded bg-slate-800 p-1" value={activeLayer.descriptor.id} onChange={(event) => setSelectedMetricId(event.target.value)}>
-                            {registry.list().map((layer) => <option key={layer.descriptor.id} value={layer.descriptor.id}>{layer.descriptor.label}</option>)}
+            {!showMetricWorkbench && (activeLayer || structureSummaryLayers.length > 0) && onMetricWorkbenchVisibilityChange && (
+                <button
+                    type="button"
+                    onClick={() => onMetricWorkbenchVisibilityChange(true)}
+                    className="absolute right-2 top-2 z-40 rounded border border-blue-500/50 bg-slate-950/90 px-3 py-1.5 text-xs font-semibold text-blue-200 shadow-lg hover:bg-slate-800"
+                >
+                    Show metrics
+                </button>
+            )}
+            {(showMetricWorkbench || showLinkedSequence) && (activeLayer || structureSummaryLayers.length > 0) && (
+                <aside className="absolute bottom-2 right-2 z-30 max-h-[55%] w-[min(28rem,calc(100%-1rem))] space-y-2 overflow-auto rounded bg-slate-950/90 p-2 shadow-xl" aria-label={showMetricWorkbench ? 'Structure metric workbench' : 'Linked sequence overlay'}>
+                    {showMetricWorkbench && (
+                        <div className="flex items-center justify-between border-b border-slate-700/70 pb-2 text-xs font-semibold text-slate-200">
+                            <span>Metrics</span>
+                            {onMetricWorkbenchVisibilityChange && (
+                                <button
+                                    type="button"
+                                    aria-label="Minimize metric workbench"
+                                    title="Minimize metric workbench"
+                                    onClick={() => onMetricWorkbenchVisibilityChange(false)}
+                                    className="rounded border border-slate-600 px-2 py-0.5 text-slate-300 hover:bg-slate-800 hover:text-white"
+                                >
+                                    —
+                                </button>
+                            )}
+                        </div>
+                    )}
+                    {showMetricWorkbench && activeLayer && <label className="block text-xs text-slate-300">Visual layer
+                        <select className="mt-1 w-full rounded bg-slate-800 p-1" value={activeLayer.descriptor.id} onChange={(event) => changeMetricLayer(event.target.value)}>
+                            {visualMetricLayers.map((layer) => <option key={layer.descriptor.id} value={layer.descriptor.id}>{layer.descriptor.label}</option>)}
                         </select>
-                    </label>
-                    <MetricLegendPanel layer={activeLayer} visible={layerVisible} opacity={layerOpacity} onVisibilityChange={setLayerVisible} onOpacityChange={setLayerOpacity} onReset={() => { setLayerVisible(true); setLayerOpacity(1); setFilters(DEFAULT_FILTERS); }} />
-                    <FilterPanel value={filters} availableChains={chains} metricRange={activeLayer.descriptor.valueRange} onChange={setFilters} />
-                    {residueLayer && <SequenceTrackExtension metricId={residueLayer.descriptor.id} points={residueValues.map((entry) => ({ residue: entry.identity, label: residueLabel(entry.identity), value: typeof entry.value === 'number' ? entry.value : null }))} selectedKeys={selectedResidueKeys} onSelection={commitSelection} />}
-                    {pairLayer && <PairMatrixExtension layer={pairLayer} onSelection={commitSelection} />}
-                    {(registryState.issues.length > 0 || (projected && projected.status !== 'ok')) && <div role="alert" className="rounded bg-red-950/80 p-2 text-xs text-red-200">{[...registryState.issues, ...(projected && projected.status !== 'ok' ? [projected.status === 'error' ? projected.error.message : projected.reason] : [])].join(' · ')}</div>}
+                    </label>}
+                    {showMetricWorkbench && structureSummaryLayers.length > 0 && (
+                        <details className="rounded border border-slate-700 bg-slate-900/95 p-2 text-xs text-slate-200">
+                            <summary className="cursor-pointer font-semibold">Structure summary ({structureSummaryLayers.length})</summary>
+                            <div className="mt-1 text-[10px] text-slate-400">Non-spatial values; these do not color or focus the 3D structure.</div>
+                            <dl className="mt-2 grid grid-cols-[1fr_auto] gap-x-3 gap-y-1">
+                                {structureSummaryLayers.map((layer) => {
+                                    const value = layer.values[0]?.value;
+                                    return <div key={layer.descriptor.id} className="contents"><dt className="text-slate-400">{layer.descriptor.label}</dt><dd className="font-mono text-slate-100">{typeof value === 'number' ? value.toLocaleString(undefined, { maximumFractionDigits: 4 }) : String(value ?? '—')}{layer.descriptor.units ? ` ${layer.descriptor.units}` : ''}</dd></div>;
+                                })}
+                            </dl>
+                        </details>
+                    )}
+                    {showMetricWorkbench && activeLayer && <MetricLegendPanel layer={activeLayer} visible={layerVisible} opacity={layerOpacity} onVisibilityChange={setLayerVisible} onOpacityChange={setLayerOpacity} onReset={() => { setLayerVisible(true); setLayerOpacity(1); setFilters(DEFAULT_FILTERS); }} />}
+                    {showMetricWorkbench && activeLayer && (activeLayer.descriptor.dimension === 'residue-scalar' || activeLayer.descriptor.dimension === 'residue-pair-matrix') && <FilterPanel value={filters} availableChains={chains} metricRange={activeLayer.descriptor.valueRange} onChange={setFilters} />}
+                    {showLinkedSequence && residueLayer && <SequenceTrackExtension metricId={residueLayer.descriptor.id} points={residueValues.map((entry) => ({ residue: entry.identity, label: residueLabel(entry.identity), value: typeof entry.value === 'number' ? entry.value : null }))} selectedKeys={selectedResidueKeys} onSelection={commitSelection} />}
+                    {showMetricWorkbench && pairLayer && <PairMatrixExtension layer={pairLayer} onSelection={commitSelection} />}
+                    {showMetricWorkbench && (registryState.issues.length > 0 || (projected && projected.status !== 'ok')) && <div role="alert" className="rounded bg-red-950/80 p-2 text-xs text-red-200">{[...registryState.issues, ...(projected && projected.status !== 'ok' ? [projected.status === 'error' ? projected.error.message : projected.reason] : [])].join(' · ')}</div>}
                 </aside>
             )}
         </div>

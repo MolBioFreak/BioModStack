@@ -7,8 +7,9 @@ const read = (relativePath: string) => readFileSync(path.resolve(process.cwd(), 
 
 test('epitope viewer uses the direct owned runtime rather than PDBe globals', () => {
     const source = read('src/components/EpitopeMolstarViewerImpl.tsx');
-    assert.match(source, /from ['"]\.\/MolstarViewer['"]/u);
-    assert.match(source, /<MolstarViewer/u);
+    assert.match(source, /from ['"]\.\.\/structureViewer\/StructureWorkbench['"]/u);
+    assert.match(source, /<StructureWorkbench/u);
+    assert.match(source, /structureData=\{pdbData\}/u);
     assert.match(source, /onResidueClick=/u);
     assert.doesNotMatch(source, /ensureMolstarLoaded|pdbe-molstar|viewerInstance|PDB\.molstar\.click/u);
 });

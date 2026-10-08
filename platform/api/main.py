@@ -14,10 +14,11 @@ from database import init_db, async_session
 from molbio_database import init_molbio_db, molbio_health
 from build_identity import current_build_identity
 from readiness import collect_runtime_readiness
-from routers import analyses, analytics, boltzgen, designs, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ops, msa, ngs_alignment_sessions, nucleotide_sequences, ont_devices, ont_runs, queue, rcsb, ribocentre, rna_structure, sequence_qc, smiles_converter, system, templates, user_sequences, user_templates
+from routers import analyses, analytics, boltzgen, designs, external_imports, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ops, msa, ngs_alignment_sessions, nucleotide_sequences, ont_devices, ont_runs, queue, rcsb, ribocentre, rna_structure, sequence_qc, smiles_converter, system, templates, user_sequences, user_templates
 from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
 from biomodstack_runtime_profile import install_feature_enabled
 from services.analysis_worker import AnalysisWorker
+from services.external_imports.worker import ExternalImportWorker
 from services.gpu_orchestrator import GPUOrchestrator
 from routers.gpu import get_gpu_stats
 
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 # Global orchestrator instance
 _orchestrator: GPUOrchestrator = None
 _analysis_worker: AnalysisWorker = None
+_external_import_worker: ExternalImportWorker | None = None
 
 
 @asynccontextmanager
@@ -35,6 +37,7 @@ async def lifespan(app: FastAPI):
     """Initialize database and GPU orchestrator on startup."""
     global _orchestrator
     global _analysis_worker
+    global _external_import_worker
     bioxp_runtime = None
     
     # Initialize independently owned core and MolBio persistence stores.
@@ -85,6 +88,10 @@ async def lifespan(app: FastAPI):
     await _analysis_worker.start()
     logger.info("[STARTUP] Analysis worker started")
 
+    _external_import_worker = ExternalImportWorker(async_session, poll_interval=2.0)
+    await _external_import_worker.start()
+    logger.info("[STARTUP] External result import worker started")
+
     if install_feature_enabled("bioxp"):
         from services.bioxp.runtime import create_bioxp_runtime
 
@@ -104,6 +111,9 @@ async def lifespan(app: FastAPI):
     if _analysis_worker:
         await _analysis_worker.stop()
         logger.info("[SHUTDOWN] Analysis worker stopped")
+    if _external_import_worker:
+        await _external_import_worker.stop()
+        logger.info("[SHUTDOWN] External result import worker stopped")
 
 
 app = FastAPI(
@@ -151,6 +161,7 @@ app.include_router(molecular_dynamics.router)
 app.include_router(templates.router, prefix="/api/templates", tags=["templates"])
 app.include_router(inputs.router, prefix="/api/inputs", tags=["inputs"])
 app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
+app.include_router(external_imports.router, prefix="/api/jobs/imports/external", tags=["external-result-imports"])
 app.include_router(md_results.router, prefix="/api/jobs", tags=["molecular-dynamics-results"])
 app.include_router(designs.router, prefix="/api/designs", tags=["designs"])
 app.include_router(analyses.router, prefix="/api", tags=["analyses"])

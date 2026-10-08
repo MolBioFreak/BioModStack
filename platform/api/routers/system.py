@@ -106,7 +106,7 @@ class InstallFeaturesPayload(BaseModel):
 
 
 DEV_INSTALL_FEATURES: dict[str, bool] = {
-    "bioxp": True,
+    "bioxp": False,
 }
 
 

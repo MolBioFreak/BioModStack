@@ -32,7 +32,9 @@ test('Data Viewer landing preserves preview-first ingestion and post-import cach
         assert.ok(landing.includes(contract), `missing ingestion contract: ${contract}`);
     }
 
-    assert.ok(landing.includes("disabled={importMutation.isPending || !preview?.importable || !selectedFile}"));
+    assert.ok(landing.includes("requestedFormat === 'boltz_api_run'"));
+    assert.ok(landing.includes("? !boltzPreview?.importable"));
+    assert.ok(landing.includes(": !preview?.importable || !selectedFile"));
     assert.ok(landing.includes('Preview before import'));
     assert.ok(landing.includes('Existing job pipeline'));
 });

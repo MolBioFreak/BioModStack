@@ -4,7 +4,7 @@ Database models and initialization for BioModStack Control Platform.
 Uses SQLAlchemy with async SQLite.
 """
 
-from sqlalchemy import Column, String, Text, Integer, Float, Boolean, DateTime, JSON, ForeignKey, text, event
+from sqlalchemy import Column, String, Text, Integer, Float, Boolean, DateTime, JSON, ForeignKey, UniqueConstraint, text, event
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.types import TypeDecorator
@@ -148,6 +148,41 @@ class Job(Base):
     
     # Relationship to designs
     designs = relationship("Design", back_populates="job", cascade="all, delete-orphan")
+
+
+class ExternalResultImport(Base):
+    """Durable state for importing one immutable external-provider result."""
+
+    __tablename__ = "external_result_imports"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider_id",
+            "resource_type",
+            "provider_job_id",
+            name="uq_external_result_import_identity",
+        ),
+    )
+
+    id = Column(String(36), primary_key=True)
+    provider_id = Column(String(64), nullable=False, index=True)
+    resource_type = Column(String(128), nullable=False, index=True)
+    provider_job_id = Column(String(128), nullable=False, index=True)
+    state = Column(String(32), nullable=False, default="discovered", index=True)
+    source_path = Column(String(1000), nullable=False)
+    source_fingerprint = Column(String(64), nullable=False)
+    run_metadata_sha256 = Column(String(64), nullable=False)
+    archive_sha256 = Column(String(64), nullable=True)
+    normalized_manifest_path = Column(String(1000), nullable=True)
+    bms_job_id = Column(String(36), ForeignKey("jobs.id"), nullable=True, index=True)
+    dataset_name = Column(String(255), nullable=False)
+    job_name = Column(String(255), nullable=True)
+    failure_code = Column(String(64), nullable=True)
+    failure_message = Column(Text, nullable=True)
+    provider_metadata = Column(JSON, nullable=False, default=dict)
+    schema_version = Column(Integer, nullable=False, default=1)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    imported_at = Column(DateTime, nullable=True)
 
 
 class Design(Base):

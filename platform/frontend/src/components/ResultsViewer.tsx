@@ -5328,8 +5328,8 @@ export function ResultsViewer() {
                             ))}
                         </div>
 
-                        {/* Global Pagination Bar - visible on all tabs */}
-                        {totalDesigns > 0 && (
+                        {/* Global Pagination Bar - table/chart working sets only */}
+                        {totalDesigns > 0 && activeTab !== 'structure' && (
                             <div className="flex items-center justify-between px-4 py-2 mb-2 bg-gradient-to-r from-slate-800/60 to-slate-900/60 rounded-lg border border-slate-700/50">
                                 <div className="flex items-center gap-3">
                                     <span className="text-xs text-slate-400">
@@ -6840,129 +6840,6 @@ export function ResultsViewer() {
                                     {/* STRUCTURE TAB - Fullscreen-Aware with Overlays */}
                                     {activeTab === 'structure' && selectedDesignSupportsStructureViewer && (
                                         <div className="p-4 space-y-3">
-                                            <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-3">
-                                                <div className="flex flex-wrap items-center gap-3">
-                                                    <label className="flex items-center gap-2 text-xs text-slate-400">
-                                                        <span>Sort by</span>
-                                                        <select
-                                                            value={filterDraft.sortField}
-                                                            onChange={(e) => {
-                                                                const field = e.target.value;
-                                                                setFilterDraft((current) => ({
-                                                                    ...current,
-                                                                    sortField: field,
-                                                                    sortDir: getDefaultSortDirection(field),
-                                                                }));
-                                                            }}
-                                                            className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
-                                                        >
-                                                            {availableSortOptions.map((option) => (
-                                                                <option key={option.value} value={option.value}>{option.label}</option>
-                                                            ))}
-                                                        </select>
-                                                    </label>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => updateFilterDraft('sortDir', filterDraft.sortDir === 'asc' ? 'desc' : 'asc')}
-                                                        className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-200"
-                                                    >
-                                                        {filterDraft.sortDir === 'asc' ? 'Asc ↑' : 'Desc ↓'}
-                                                    </button>
-                                                    <label className="flex items-center gap-2 text-xs text-slate-400">
-                                                        <span>Epi Cts ≥</span>
-                                                        <input
-                                                            type="number"
-                                                            min="0"
-                                                            value={filterDraft.contactsMin}
-                                                            onChange={(e) => updateFilterDraft('contactsMin', Number(e.target.value || 0))}
-                                                            onKeyDown={handleDraftFilterKeyDown}
-                                                            className="w-14 rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-white"
-                                                        />
-                                                    </label>
-                                                    <label className="flex items-center gap-2 text-xs text-slate-400">
-                                                        <span>Any Tgt Cts ≥</span>
-                                                        <input
-                                                            type="number"
-                                                            min="0"
-                                                            value={filterDraft.targetContactsMin}
-                                                            onChange={(e) => updateFilterDraft('targetContactsMin', Number(e.target.value || 0))}
-                                                            onKeyDown={handleDraftFilterKeyDown}
-                                                            className="w-14 rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-white"
-                                                        />
-                                                    </label>
-                                                    <label className="flex items-center gap-2 text-xs text-slate-400">
-                                                        <span>Epi Dist ≤</span>
-                                                        <input
-                                                            type="number"
-                                                            min="0"
-                                                            step="0.5"
-                                                            value={filterDraft.epitopeMaxDist}
-                                                            onChange={(e) => updateFilterDraft('epitopeMaxDist', e.target.value)}
-                                                            onKeyDown={handleDraftFilterKeyDown}
-                                                            className="w-16 rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-white"
-                                                        />
-                                                    </label>
-                                                    <label className="flex items-center gap-2 text-xs text-slate-400">
-                                                        <span>Any-Tgt Dist ≤</span>
-                                                        <input
-                                                            type="number"
-                                                            min="0"
-                                                            step="0.5"
-                                                            value={filterDraft.targetMaxDist}
-                                                            onChange={(e) => updateFilterDraft('targetMaxDist', e.target.value)}
-                                                            onKeyDown={handleDraftFilterKeyDown}
-                                                            className="w-16 rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-white"
-                                                        />
-                                                    </label>
-                                                    <label className="flex items-center gap-2 text-xs text-slate-400">
-                                                        <span>H3</span>
-                                                        <input
-                                                            type="number"
-                                                            min="0"
-                                                            value={filterDraft.cdrH3Min}
-                                                            onChange={(e) => updateFilterDraft('cdrH3Min', e.target.value)}
-                                                            onKeyDown={handleDraftFilterKeyDown}
-                                                            placeholder="min"
-                                                            className="w-14 rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-white"
-                                                        />
-                                                        <span>–</span>
-                                                        <input
-                                                            type="number"
-                                                            min="0"
-                                                            value={filterDraft.cdrH3Max}
-                                                            onChange={(e) => updateFilterDraft('cdrH3Max', e.target.value)}
-                                                            onKeyDown={handleDraftFilterKeyDown}
-                                                            placeholder="max"
-                                                            className="w-14 rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-white"
-                                                        />
-                                                    </label>
-                                                    <button
-                                                        type="button"
-                                                        onClick={applyDraftFilters}
-                                                        disabled={!filterDraftDirty}
-                                                        className={`rounded border px-2 py-1 text-xs transition-colors ${filterDraftDirty ? 'border-blue-500/50 bg-blue-500/10 text-blue-200 hover:bg-blue-500/20' : 'border-slate-700 bg-slate-900 text-slate-500'}`}
-                                                    >
-                                                        Apply Filters
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        onClick={clearRfaFilters}
-                                                        className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-300"
-                                                    >
-                                                        Clear
-                                                    </button>
-                                                    <span className="ml-auto text-[11px] text-slate-500">
-                                                        {pageSize === 0
-                                                            ? `${tableDesigns.length} structures in current structure set`
-                                                            : `${tableDesigns.length} loaded on this page • ${totalDesigns.toLocaleString()} total`}
-                                                    </span>
-                                                </div>
-                                                <div className="mt-2 text-[11px] text-slate-500">
-                                                    {isPostRFantibodyReview
-                                                        ? `RF lens: ${rfMetricLabels.short}. Toggle loop/whole-antibody in review.`
-                                                        : 'Any-Target: whole target. Epitope: selected residues.'}
-                                                </div>
-                                            </div>
                                             <StructureViewerPane
                                                 selectedDesignId={selectedDesignId}
                                                 setSelectedDesignId={setSelectedDesignId}

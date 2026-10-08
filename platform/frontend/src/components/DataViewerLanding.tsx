@@ -1,10 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
-import { importProteinBaseBundle, uploadFile } from '../lib/api';
-import type { Job } from '../lib/api';
+import {
+    createExternalImport,
+    fetchExternalImport,
+    fetchJobById,
+    importProteinBaseBundle,
+    previewExternalImport,
+    uploadFile,
+} from '../lib/api';
+import type { ExternalImportPreview, Job } from '../lib/api';
 
-type RequestedFormat = 'auto' | 'proteinbase_jsonl' | 'tabular_csv' | 'jsonl_records';
+type RequestedFormat = 'auto' | 'proteinbase_jsonl' | 'tabular_csv' | 'jsonl_records' | 'boltz_api_run';
 type ResolvedFormat = 'proteinbase_jsonl' | 'tabular_csv' | 'jsonl_records' | 'unknown';
 
 type PreviewFieldMap = {
@@ -407,6 +414,8 @@ export function DataViewerLanding({
     const queryClient = useQueryClient();
     const [requestedFormat, setRequestedFormat] = useState<RequestedFormat>('auto');
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
+    const [boltzSourcePath, setBoltzSourcePath] = useState('');
+    const [boltzPreview, setBoltzPreview] = useState<ExternalImportPreview | null>(null);
     const [datasetName, setDatasetName] = useState('');
     const [jobName, setJobName] = useState('');
     const [datasetNameTouched, setDatasetNameTouched] = useState(false);
@@ -425,7 +434,7 @@ export function DataViewerLanding({
     useEffect(() => {
         let cancelled = false;
 
-        if (!selectedFile) {
+        if (requestedFormat === 'boltz_api_run' || !selectedFile) {
             setPreview(null);
             setPreviewBusy(false);
             return () => {
@@ -477,17 +486,77 @@ export function DataViewerLanding({
         };
     }, [datasetNameTouched, jobNameTouched, requestedFormat, selectedFile]);
 
+    const boltzPreviewMutation = useMutation({
+        mutationFn: async () => {
+            const sourcePath = boltzSourcePath.trim();
+            if (!sourcePath) {
+                throw new Error('Enter the downloaded Boltz API run directory.');
+            }
+            return (await previewExternalImport(sourcePath)).data;
+        },
+        onMutate: () => {
+            setFeedback(null);
+            setBoltzPreview(null);
+        },
+        onSuccess: (result) => {
+            setBoltzPreview(result);
+            if (!datasetNameTouched) {
+                setDatasetName(`Boltz API ${result.provider_job_id}`);
+            }
+            if (!jobNameTouched) {
+                setJobName(`Imported ${result.provider_job_id}`);
+            }
+            if (!result.importable) {
+                setFeedback({
+                    kind: 'error',
+                    text: `${result.error_code ?? 'RESOURCE_UNSUPPORTED'}: ${result.errors.join('; ')}`,
+                });
+            }
+        },
+        onError: (error) => {
+            setFeedback({
+                kind: 'error',
+                text: error instanceof Error ? error.message : 'Boltz API run preview failed.',
+            });
+        },
+    });
+
     const importMutation = useMutation({
         mutationFn: async () => {
+            const trimmedDatasetName = datasetName.trim();
+            if (!trimmedDatasetName) {
+                throw new Error('Dataset name is required.');
+            }
+
+            if (requestedFormat === 'boltz_api_run') {
+                if (!boltzPreview?.importable) {
+                    throw new Error(`${boltzPreview?.error_code ?? 'RESOURCE_UNSUPPORTED'}: Preview an importable Boltz API run first.`);
+                }
+                const queued = await createExternalImport({
+                    source_path: boltzSourcePath.trim(),
+                    provider: 'boltz_api',
+                    preview_fingerprint: boltzPreview.source_fingerprint,
+                    dataset_name: trimmedDatasetName,
+                    job_name: jobName.trim() || undefined,
+                });
+                for (let attempt = 0; attempt < 180; attempt += 1) {
+                    const current = (await fetchExternalImport(queued.data.id)).data;
+                    if (current.state === 'failed') {
+                        throw new Error(`${current.failure_code ?? 'IMPORT_FAILED'}: ${current.failure_message ?? 'Boltz API import failed.'}`);
+                    }
+                    if (current.state === 'completed' && current.bms_job_id) {
+                        return (await fetchJobById(current.bms_job_id)).data;
+                    }
+                    await new Promise((resolve) => window.setTimeout(resolve, 1000));
+                }
+                throw new Error('Boltz API import is still running after three minutes. It remains durable and can be reopened from recent jobs.');
+            }
+
             if (!selectedFile) {
                 throw new Error('Choose a dataset file first.');
             }
             if (!preview?.importable) {
-                throw new Error('Only ProteinBase JSONL imports today.');
-            }
-            const trimmedDatasetName = datasetName.trim();
-            if (!trimmedDatasetName) {
-                throw new Error('Dataset name is required.');
+                throw new Error('Only ProteinBase JSONL and validated Boltz API runs import today.');
             }
 
             const uploadTarget = `inputs/data_imports/${Date.now()}_${slugify(selectedFile.name)}`;
@@ -571,26 +640,55 @@ export function DataViewerLanding({
                                     className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:border-cyan-500"
                                 >
                                     <option value="auto">Auto-detect</option>
+                                    <option value="boltz_api_run">Boltz API downloaded run</option>
                                     <option value="proteinbase_jsonl">ProteinBase JSONL bundle</option>
                                     <option value="tabular_csv">Generic CSV / TSV table</option>
                                     <option value="jsonl_records">Generic JSONL records</option>
                                 </select>
                             </label>
 
-                            <label className="space-y-2 text-sm text-slate-200">
-                                <span className="block font-medium text-slate-100">Dataset file</span>
-                                <input
-                                    type="file"
-                                    accept=".jsonl,.ndjson,.json,.csv,.tsv,.txt"
-                                    onChange={(event) => {
-                                        setFeedback(null);
-                                        setDatasetNameTouched(false);
-                                        setJobNameTouched(false);
-                                        setSelectedFile(event.target.files?.[0] ?? null);
-                                    }}
-                                    className="block w-full cursor-pointer rounded-xl border border-dashed border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-300 file:mr-4 file:cursor-pointer file:rounded-lg file:border-0 file:bg-cyan-500/20 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-cyan-200"
-                                />
-                            </label>
+                            {requestedFormat === 'boltz_api_run' ? (
+                                <div className="space-y-2 text-sm text-slate-200">
+                                    <span className="block font-medium text-slate-100">Downloaded run directory</span>
+                                    <div className="flex gap-2">
+                                        <input
+                                            type="text"
+                                            value={boltzSourcePath}
+                                            onChange={(event) => {
+                                                setFeedback(null);
+                                                setBoltzPreview(null);
+                                                setBoltzSourcePath(event.target.value);
+                                            }}
+                                            placeholder="data/boltz_results/api_runs/sab_pred_..."
+                                            className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none placeholder:text-slate-500 focus:border-cyan-500"
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => boltzPreviewMutation.mutate()}
+                                            disabled={boltzPreviewMutation.isPending || !boltzSourcePath.trim()}
+                                            className="rounded-xl border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-sm font-medium text-cyan-100 hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            {boltzPreviewMutation.isPending ? 'Inspecting…' : 'Preview run'}
+                                        </button>
+                                    </div>
+                                    <p className="text-xs text-slate-500">Use an allowed server path such as data/boltz_results/…. Absolute and escaping paths are rejected.</p>
+                                </div>
+                            ) : (
+                                <label className="space-y-2 text-sm text-slate-200">
+                                    <span className="block font-medium text-slate-100">Dataset file</span>
+                                    <input
+                                        type="file"
+                                        accept=".jsonl,.ndjson,.json,.csv,.tsv,.txt"
+                                        onChange={(event) => {
+                                            setFeedback(null);
+                                            setDatasetNameTouched(false);
+                                            setJobNameTouched(false);
+                                            setSelectedFile(event.target.files?.[0] ?? null);
+                                        }}
+                                        className="block w-full cursor-pointer rounded-xl border border-dashed border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-300 file:mr-4 file:cursor-pointer file:rounded-lg file:border-0 file:bg-cyan-500/20 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-cyan-200"
+                                    />
+                                </label>
+                            )}
                         </div>
 
                         <div className="grid gap-4 md:grid-cols-2">
@@ -639,15 +737,73 @@ export function DataViewerLanding({
                                         {preview.label}
                                     </span>
                                 )}
+                                {boltzPreview && requestedFormat === 'boltz_api_run' && (
+                                    <span className={`rounded-full border px-2 py-0.5 text-[11px] ${boltzPreview.importable
+                                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                                        : 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+                                        }`}>
+                                        {boltzPreview.importable ? 'Server validated' : boltzPreview.error_code ?? 'Not importable'}
+                                    </span>
+                                )}
                             </div>
 
-                            {!selectedFile && (
+                            {requestedFormat === 'boltz_api_run' && !boltzPreview && (
+                                <p className="mt-3 text-sm text-slate-400">
+                                    Enter an allowed downloaded-run directory and preview it. The server validates run metadata, archive safety, samples, structures, PAE, and provenance before enabling import.
+                                </p>
+                            )}
+
+                            {requestedFormat === 'boltz_api_run' && boltzPreview && (
+                                <div className="mt-4 space-y-4">
+                                    <div className="grid gap-3 md:grid-cols-4">
+                                        <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3">
+                                            <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Remote job</div>
+                                            <div className="mt-1 truncate text-sm font-medium text-white">{boltzPreview.provider_job_id}</div>
+                                        </div>
+                                        <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3">
+                                            <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Resource</div>
+                                            <div className="mt-1 text-sm font-medium text-slate-100">{boltzPreview.resource_type}</div>
+                                        </div>
+                                        <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3">
+                                            <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Model</div>
+                                            <div className="mt-1 text-sm font-medium text-slate-100">{boltzPreview.model ?? 'not reported'}</div>
+                                        </div>
+                                        <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3">
+                                            <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Samples</div>
+                                            <div className="mt-1 text-lg font-semibold text-white">{boltzPreview.sample_count}</div>
+                                        </div>
+                                    </div>
+                                    <div className="rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-2 text-xs text-slate-300">
+                                        <span className="font-semibold text-slate-100">Immutable fingerprint:</span>{' '}
+                                        <span className="font-mono">{boltzPreview.source_fingerprint.slice(0, 16)}…</span>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                        {boltzPreview.entities.flatMap((entity, entityIndex) => {
+                                            const chains = Array.isArray(entity.chain_ids) ? entity.chain_ids.join(', ') : 'unknown';
+                                            return [
+                                                <span key={`${entityIndex}-${chains}`} className="rounded-full border border-slate-700 bg-slate-950 px-2.5 py-1 text-xs text-slate-300">
+                                                    {String(entity.molecule_type ?? 'entity')} · chain {chains}
+                                                </span>,
+                                            ];
+                                        })}
+                                    </div>
+                                    {boltzPreview.errors.length > 0 && (
+                                        <ul className="space-y-2 text-sm text-rose-200">
+                                            {boltzPreview.errors.map((message) => (
+                                                <li key={message} className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2">{message}</li>
+                                            ))}
+                                        </ul>
+                                    )}
+                                </div>
+                            )}
+
+                            {requestedFormat !== 'boltz_api_run' && !selectedFile && (
                                 <p className="mt-3 text-sm text-slate-400">
                                     Drop a dataset file to auto-detect ProteinBase, JSONL, or CSV/TSV.
                                 </p>
                             )}
 
-                            {selectedFile && preview && (
+                            {requestedFormat !== 'boltz_api_run' && selectedFile && preview && (
                                 <div className="mt-4 space-y-4">
                                     <div className="grid gap-3 md:grid-cols-4">
                                         <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3">
@@ -744,7 +900,9 @@ export function DataViewerLanding({
                             <button
                                 type="button"
                                 onClick={() => importMutation.mutate()}
-                                disabled={importMutation.isPending || !preview?.importable || !selectedFile}
+                                disabled={importMutation.isPending || (requestedFormat === 'boltz_api_run'
+                                    ? !boltzPreview?.importable
+                                    : !preview?.importable || !selectedFile)}
                                 className="rounded-xl bg-cyan-500 px-4 py-2.5 text-sm font-semibold text-slate-950 transition-colors hover:bg-cyan-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
                             >
                                 {importMutation.isPending ? 'Importing dataset...' : 'Import into Results Viewer'}

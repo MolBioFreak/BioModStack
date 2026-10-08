@@ -55,6 +55,31 @@ test('rotated annotation transfer splits an origin-spanning feature deterministi
     assert.equal(transformed.strand, 1);
 });
 
+test('single-base parser point features become bounded one-base half-open spans', () => {
+    const exact = transformFeatureForAlignment({
+        id: 'point',
+        name: 'conflict',
+        type: 'misc_difference',
+        start: 425,
+        end: 425,
+        strand: 1 as const,
+    }, { length: 4361, mode: 'exact', reverseComplement: false, rotation: 0 });
+    assert.deepEqual(exact.segments, [{ start: 425, end: 426 }]);
+    assert.equal(exact.start, 425);
+    assert.equal(exact.end, 426);
+
+    const rotated = transformFeatureForAlignment({
+        id: 'point-at-origin',
+        name: 'point',
+        type: 'misc_feature',
+        start: 0,
+        end: 0,
+        strand: 1 as const,
+        segments: [{ start: 0, end: 0 }],
+    }, { length: 12, mode: 'rotated', reverseComplement: false, rotation: 4 });
+    assert.deepEqual(rotated.segments, [{ start: 8, end: 9 }]);
+});
+
 test('reverse-complement annotation transfer mirrors coordinates and strand', () => {
     const alignment = resolveAnnotationSequenceAlignment('AAAACCCG', 'CGGGTTTT', false);
     const transformed = transformFeatureForAlignment({

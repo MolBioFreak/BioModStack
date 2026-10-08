@@ -215,14 +215,14 @@ export default function MolstarViewer({
             if (event.type !== 'selection-changed' || event.origin !== 'canvas' || !onResidueClick) return;
             const click = event.payload as EngineResidueClick;
             const residue = click.residue;
-            if (!residue.labelAsymId || !residue.authAsymId || residue.labelSeqId === undefined || residue.authSeqId === undefined) return;
+            if (!residue.documentId || !residue.labelAsymId || !residue.authAsymId || residue.labelSeqId === undefined || residue.authSeqId === undefined) return;
             onResidueClick({
                 documentId: residue.documentId,
                 labelAsymId: residue.labelAsymId,
                 authAsymId: residue.authAsymId,
                 labelSeqId: residue.labelSeqId,
                 authSeqId: residue.authSeqId,
-                insertionCode: residue.insertionCode,
+                insertionCode: residue.insertionCode ?? '',
                 sceneGeneration: click.engineGeneration,
             });
         });
