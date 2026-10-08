@@ -43,6 +43,9 @@ export const MODE_DISPLAY_NAMES: Record<string, string> = {
 
     // DNA Polymerase
     'dna_polymerase': 'DNA Polymerase Design',
+
+    // Oligo Designer
+    'oligo_design': 'Oligo Designer',
 };
 
 // Model display names (job.model_id -> human readable)
@@ -64,6 +67,9 @@ export const MODEL_DISPLAY_NAMES: Record<string, string> = {
     'iggm': 'IgGM',
     'antibody_denovo': 'Antibody Pipeline',
     'antibody_child': 'Antibody Validation',
+    'rfdpoly': 'RFDpoly',
+    'nampnn': 'NA-MPNN',
+    'oligo_design': 'Oligo Designer',
 };
 
 // Pipeline stage display names
@@ -79,6 +85,9 @@ export const STAGE_DISPLAY_NAMES: Record<string, string> = {
     'iggm': 'IgGM',
     'rfdiffusion': 'RFdiffusion',
     'msa': 'MSA Generation',
+    'rfdpoly': 'RFDpoly',
+    'nampnn': 'NA-MPNN',
+    'pyrosetta_rebuild': 'PyRosetta Rebuild',
 };
 
 /**
