@@ -1,7 +1,123 @@
 {
-  "revision": "bms.msa-search-policy.v1",
+  "revision": "bms.msa-search-policy.v2",
   "enabled_search_backend": "colabfold_api",
-  "label": "ColabFold API — external service",
-  "local_disabled": "Local MSA search is disabled by the BMS 1.0 interim policy. Explicitly select ColabFold API — external service and re-preview the job; supplied/verified alignments and model-supported no-MSA modes remain supported.",
-  "disclosure": "Sequences are disclosed to a third party; availability and rate limits apply. No local or alternate-provider fallback. Fleet submission requires a separately qualified single submission/egress authority."
+  "enabled_search_backends": [
+    "colabfold_api",
+    "neurosnap_api"
+  ],
+  "label": "ColabFold API \u2014 external service",
+  "local_disabled": "Local MSA search is disabled by the BMS 1.0 interim policy. Explicitly select ColabFold API or Neurosnap API and re-preview the job; supplied/verified alignments and model-supported no-MSA modes remain supported.",
+  "disclosure": "Sequences are disclosed to a third party; availability, rate limits and potential Neurosnap credits apply. No local or alternate-provider fallback. Submission uses the controller and provider/settings-bound cache.",
+  "colabfold_settings": {
+    "colabfold_use_env": {
+      "native_name": "use_env",
+      "type": "boolean",
+      "default": true,
+      "description": "Include environmental sequence databases",
+      "provider": "colabfold_api",
+      "affects_reproducibility": true,
+      "control": "checkbox"
+    },
+    "colabfold_use_filter": {
+      "native_name": "use_filter",
+      "type": "boolean",
+      "default": true,
+      "description": "Filter alignments; unfiltered paired search unsupported",
+      "provider": "colabfold_api",
+      "affects_reproducibility": true,
+      "control": "checkbox"
+    },
+    "colabfold_use_templates": {
+      "native_name": "use_templates",
+      "type": "boolean",
+      "default": false,
+      "description": "Retrieve templates; unsupported by the current MSA artifact contract",
+      "provider": "colabfold_api",
+      "affects_reproducibility": true,
+      "control": "checkbox"
+    },
+    "colabfold_pairing_mode": {
+      "native_name": "pairing_mode",
+      "type": "string",
+      "default": "unpaired",
+      "description": "Unpaired, paired, or both alignment roles; paired requires distinct chains",
+      "provider": "colabfold_api",
+      "affects_reproducibility": true,
+      "control": "select",
+      "enum": [
+        "unpaired",
+        "paired",
+        "unpaired_paired"
+      ]
+    },
+    "colabfold_pairing_strategy": {
+      "native_name": "pairing_strategy",
+      "type": "string",
+      "default": "greedy",
+      "description": "ColabFold species pairing strategy",
+      "provider": "colabfold_api",
+      "affects_reproducibility": true,
+      "control": "select",
+      "enum": [
+        "greedy",
+        "complete"
+      ]
+    }
+  },
+  "neurosnap_settings": {
+    "msa_neurosnap_coverage_percent": {
+      "native_name": "Coverage",
+      "type": "number",
+      "default": 35,
+      "description": "Minimum query coverage (%)",
+      "provider": "neurosnap_api",
+      "affects_reproducibility": true,
+      "control": "number",
+      "minimum": 10,
+      "maximum": 90,
+      "ui_step": 5
+    },
+    "msa_neurosnap_identity_percent": {
+      "native_name": "Identity threshold",
+      "type": "number",
+      "default": 50,
+      "description": "Provider minimum identity to query (%); not local redundancy filtering",
+      "provider": "neurosnap_api",
+      "affects_reproducibility": true,
+      "control": "number",
+      "minimum": 25,
+      "maximum": 100,
+      "ui_step": 5
+    },
+    "msa_neurosnap_max_sequences": {
+      "native_name": "Max Sequences",
+      "type": "integer",
+      "default": 1000000,
+      "description": "Final MSA depth limit",
+      "provider": "neurosnap_api",
+      "affects_reproducibility": true,
+      "control": "number",
+      "minimum": 10,
+      "maximum": 1000000,
+      "ui_step": 10
+    },
+    "msa_neurosnap_force_uppercase": {
+      "native_name": "Force Uppercase",
+      "type": "boolean",
+      "default": false,
+      "description": "Uppercase residues including A3M insertions; consumer compatibility required",
+      "provider": "neurosnap_api",
+      "affects_reproducibility": true,
+      "control": "checkbox"
+    },
+    "msa_neurosnap_pad_sequences": {
+      "native_name": "Pad Sequences",
+      "type": "boolean",
+      "default": false,
+      "description": "C-terminal gap padding to longest row; consumer compatibility required",
+      "provider": "neurosnap_api",
+      "affects_reproducibility": true,
+      "control": "checkbox"
+    }
+  }
 }

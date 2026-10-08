@@ -1,4 +1,4 @@
-import { resolveMsaSearchBackend } from '../lib/msaPolicy';
+import { hydrateColabfoldMsaSettings, type ColabfoldMsaSettings, resolveMsaSearchBackend, hydrateNeurosnapMsaSettings, type NeurosnapMsaSettings, type SavedMsaProvider } from '../lib/msaPolicy';
 import {
     buildFrustraMpnnLaunchParams,
     type FrustraMpnnRequestedSettings,
@@ -12,7 +12,7 @@ export type StructurePredictorSelection = StructurePredictorFamily | 'boltz_api'
 export type StructurePredictorRequest = StructurePredictorSelection | LegacyStructurePredictorSelection;
 export type BoltzQualityPresetId = 'quick' | 'balanced' | 'max' | 'custom';
 export type StructureLaunchVariant = 'default' | 'boltz_cp_experimental';
-export type StructureMsaProvider = 'local' | 'colabfold_api';
+export type StructureMsaProvider = SavedMsaProvider;
 export type StructureMsaPreset = 'maximum' | 'balanced' | 'fast';
 export type StructureMsaTargetShardMode = 'auto' | 'required' | 'off';
 
@@ -98,6 +98,8 @@ export interface BoltzCpSubmitParamsInput {
 
 export interface StructureMsaSubmitParamsInput {
     provider: StructureMsaProvider;
+    neurosnap?: Partial<NeurosnapMsaSettings>;
+    colabfold?: Partial<ColabfoldMsaSettings>;
     preset: StructureMsaPreset;
     targetShardMode?: StructureMsaTargetShardMode | string | null;
     targetShards?: number | string | null;
@@ -349,11 +351,15 @@ export const buildStructureFrustraMpnnSubmitParams = (
 export const buildStructureMsaSubmitParams = ({
     provider,
     preset,
+    neurosnap,
+    colabfold,
 }: StructureMsaSubmitParamsInput): StructureMsaSubmitParams => {
     const normalizedProvider = resolveMsaSearchBackend(provider);
     const params: StructureMsaSubmitParams = {
-        msa_provider: normalizedProvider,
-        msa_preset: preset === 'maximum' || preset === 'balanced' ? preset : 'fast',
+        msa_provider: provider,
+        ...(normalizedProvider === 'neurosnap_api' || neurosnap ? hydrateNeurosnapMsaSettings(neurosnap ?? {}) : {}),
+        ...(colabfold ? hydrateColabfoldMsaSettings(colabfold) : {}),
+        ...(normalizedProvider === 'colabfold_api' ? { msa_preset: preset } : {}),
     };
 
     return params;

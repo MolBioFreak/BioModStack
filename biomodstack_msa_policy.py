@@ -1,8 +1,8 @@
-"""BMS 1.0 interim MSA selection policy (no provider or network operations).
+"""Versioned MSA provider selection and scientific validation, without IO.
 
-Reuse the existing global msa_provider/protenix_msa_backend keys. This is
-system-owned admission policy, not a second scientific parameter schema.
-Artifact verification and model-specific no-MSA validation remain authoritative.
+The shared JSON inventory supplies browser controls and model-registry parity.
+Requested values remain separate from this copied, default-expanded effective
+request. Artifact verification and consumer capability checks remain mandatory.
 """
 from typing import Any, Mapping
 
@@ -21,8 +21,10 @@ def resolve_search_backend(value: Any) -> str:
     backend = str(value or "auto").strip().lower()
     if backend == "local":
         reject_local_search()
-    if backend in {"auto", "colabfold_api"}:
+    if backend == "auto":
         return "colabfold_api"
+    if backend in POLICY["enabled_search_backends"]:
+        return backend
     raise ValueError(f"Unsupported MSA search backend {value!r}. {LOCAL_DISABLED}")
 
 
@@ -36,7 +38,7 @@ def requires_msa_search(model_id: str, params: Mapping[str, Any]) -> bool:
     # Cache-only is an explicit fail-on-miss operation, not permission to search.
     if params.get("msa_cache_only") in (True, "true", "1", 1):
         return False
-    return params.get("msa_provider") == "colabfold_api"
+    return params.get("msa_provider", params.get("protenix_msa_backend")) in {"auto", *POLICY["enabled_search_backends"]}
 
 
 def apply_msa_policy(model_id: str, params: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -60,5 +62,39 @@ def apply_msa_policy(model_id: str, params: Mapping[str, Any] | None) -> dict[st
     if model_id in {"boltz2", "rf3", "protenix", "boltz_cp_experimental"}:
         effective.setdefault("msa_provider", "colabfold_api")
     if model_id == "protenix":
-        effective.setdefault("protenix_msa_backend", "colabfold_api")
+        if "msa_provider" not in (params or {}) and effective.get("protenix_msa_backend") in POLICY["enabled_search_backends"]:
+            effective["msa_provider"] = effective["protenix_msa_backend"]
+        effective.setdefault("protenix_msa_backend", effective["msa_provider"])
+        if effective["protenix_msa_backend"] in POLICY["enabled_search_backends"] and effective["msa_provider"] != effective["protenix_msa_backend"]:
+            raise ValueError("Conflicting msa_provider and protenix_msa_backend selections; explicitly select the same provider and re-preview.")
+    for key in effective:
+        if key.startswith("colabfold_") and not key.startswith("colabfold_api_") and key not in POLICY["colabfold_settings"]:
+            raise ValueError(f"Unknown ColabFold MSA setting: {key}")
+        if key.startswith("msa_neurosnap_") and key not in POLICY["neurosnap_settings"]:
+            raise ValueError(f"Unknown Neurosnap MSA setting: {key}")
+    if "msa_use_env" in effective and effective.get("msa_provider") == "colabfold_api":
+        if "colabfold_use_env" in effective and effective["colabfold_use_env"] != effective["msa_use_env"]:
+            raise ValueError("Conflicting msa_use_env and colabfold_use_env values")
+        effective.setdefault("colabfold_use_env", effective["msa_use_env"])
+    scientific_fields = {**POLICY["neurosnap_settings"], **POLICY["colabfold_settings"]}
+    for key, field in scientific_fields.items():
+        if effective.get("msa_provider") == field["provider"]:
+            effective.setdefault(key, field["default"])
+        if key not in effective:
+            continue
+        value = effective[key]
+        if field["type"] == "boolean":
+            valid = type(value) is bool
+        elif field["type"] == "string":
+            valid = type(value) is str and value in field["enum"]
+        else:
+            valid = type(value) in (int, float) and field["minimum"] <= value <= field["maximum"]
+            if field["type"] == "integer":
+                valid = valid and type(value) is int
+        if not valid:
+            raise ValueError(f"Invalid {key}: expected {field['type']} with documented bounds; values are never coerced.")
+    if model_id == "protenix" and effective.get("msa_provider") == "neurosnap_api" and requires_msa_search(model_id, effective):
+        for key in ("msa_neurosnap_force_uppercase", "msa_neurosnap_pad_sequences"):
+            if effective[key]:
+                raise ValueError(f"{key}=true is unsupported for Protenix A3M consumption; saved intent is not reset.")
     return effective

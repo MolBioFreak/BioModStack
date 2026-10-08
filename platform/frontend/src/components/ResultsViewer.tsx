@@ -6349,12 +6349,13 @@ export function ResultsViewer() {
                                                     value={cdrIndelConfig.msa_provider}
                                                     onChange={(e) => setCdrIndelConfig((current) => ({
                                                         ...current,
-                                                        msa_provider: e.target.value === 'colabfold_api' ? 'colabfold_api' : 'local',
+                                                        msa_provider: e.target.value as 'local' | 'colabfold_api' | 'neurosnap_api',
                                                     }))}
                                                     className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-fuchsia-500 outline-none"
                                                 >
                                                     <option value="local" disabled>Local search disabled — re-preview with API</option>
                                                     <option value="colabfold_api">{MSA_POLICY.label}</option>
+                                                <option value="neurosnap_api">Neurosnap API — external keyed service</option>
                                                 </select>
                                             </label>
                                         </div>
@@ -6526,12 +6527,13 @@ export function ResultsViewer() {
                                                     value={manualMutagenesisConfig.msa_provider}
                                                     onChange={(e) => setManualMutagenesisConfig((current) => ({
                                                         ...current,
-                                                        msa_provider: e.target.value === 'colabfold_api' ? 'colabfold_api' : 'local',
+                                                        msa_provider: e.target.value as 'local' | 'colabfold_api' | 'neurosnap_api',
                                                     }))}
                                                     className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none"
                                                 >
                                                     <option value="local" disabled>Local search disabled — re-preview with API</option>
                                                     <option value="colabfold_api">{MSA_POLICY.label}</option>
+                                                <option value="neurosnap_api">Neurosnap API — external keyed service</option>
                                                 </select>
                                             </label>
                                         </div>

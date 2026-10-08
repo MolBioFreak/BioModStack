@@ -1,3 +1,4 @@
+import { hydrateColabfoldMsaSettings, type ColabfoldMsaSettings, hydrateMsaProvider, hydrateNeurosnapMsaSettings, type NeurosnapMsaSettings, type SavedMsaProvider } from '../../lib/msaPolicy';
 import type { Job } from '../../lib/api.js';
 import {
     buildBoltzCpSubmitParams,
@@ -15,7 +16,7 @@ import {
 } from '../structurePredictionUiState.js';
 
 export type StructurePredictor = StructurePredictorFamily;
-export type StructureMsaProvider = 'local' | 'colabfold_api';
+export type StructureMsaProvider = SavedMsaProvider;
 export type StructureMsaPreset = 'maximum' | 'balanced' | 'fast';
 export type StructureBoltzCpOutputFormat = 'mmcif' | 'pdb';
 
@@ -33,6 +34,8 @@ export const canChangeStructureExecutionTarget = (job: Job): boolean => (
 export interface StructureReorchestrateSettings {
     predictors: StructurePredictor[];
     msaProvider: StructureMsaProvider;
+    neurosnapMsa: NeurosnapMsaSettings;
+    colabfoldMsa: ColabfoldMsaSettings;
     msaPreset: StructureMsaPreset;
     msaTargetShardMode: StructureMsaTargetShardMode;
     msaTargetShards: number;
@@ -70,6 +73,8 @@ export interface StructureReorchestrateSettings {
 const DEFAULTS: StructureReorchestrateSettings = {
     predictors: ['boltz'],
     msaProvider: 'colabfold_api',
+    neurosnapMsa: hydrateNeurosnapMsaSettings({}),
+    colabfoldMsa: hydrateColabfoldMsaSettings({}),
     msaPreset: 'fast',
     msaTargetShardMode: 'auto',
     msaTargetShards: 4,
@@ -122,9 +127,7 @@ const toInteger = (value: unknown, fallback: number, min = 1): number => {
     return Number.isFinite(parsed) ? Math.max(min, parsed) : fallback;
 };
 
-const normalizeMsaProvider = (value: unknown): StructureMsaProvider => (
-    value === 'local' ? 'local' : 'colabfold_api'
-);
+const normalizeMsaProvider = hydrateMsaProvider;
 
 const normalizeMsaPreset = (value: unknown): StructureMsaPreset => {
     if (value === 'maximum' || value === 'balanced' || value === 'fast') return value;
@@ -259,7 +262,9 @@ export const deriveStructureReorchestrateSettings = (job: StructureRetryJob): St
 
     const settings: StructureReorchestrateSettings = {
         predictors: predictors.length > 0 ? predictors : DEFAULTS.predictors,
-        msaProvider: normalizeMsaProvider(params.msa_provider),
+        msaProvider: normalizeMsaProvider(params.msa_provider ?? (['none', 'esm'].includes(String(params.protenix_msa_backend)) ? undefined : params.protenix_msa_backend)),
+        neurosnapMsa: hydrateNeurosnapMsaSettings(params),
+        colabfoldMsa: hydrateColabfoldMsaSettings(params),
         msaPreset: normalizeMsaPreset(params.msa_preset),
         msaTargetShardMode: normalizeMsaTargetShardMode(params.msa_target_shard_mode),
         msaTargetShards: normalizeMsaTargetShards(params.msa_target_shards),
@@ -324,6 +329,16 @@ export const buildStructureReorchestrateOverrides = (
     // This value comes from an explicit visible control. Always submit it so a
     // summary-row modal cannot silently inherit the source job's provider.
     overrides.msa_provider = next.msaProvider;
+    if (next.msaProvider === 'neurosnap_api') Object.assign(overrides, next.neurosnapMsa);
+    if (next.msaProvider === 'colabfold_api' || next.msaProvider === 'auto') {
+        for (const [name, value] of Object.entries(next.colabfoldMsa)) {
+            if (name in (job.params ?? {}) || value !== previous.colabfoldMsa[name as keyof ColabfoldMsaSettings] || next.msaProvider !== previous.msaProvider) overrides[name] = value;
+        }
+        if ('msa_use_env' in (job.params ?? {})) overrides.msa_use_env = next.colabfoldMsa.colabfold_use_env;
+    }
+    if (next.predictors.includes('protenix') && next.msaProvider !== previous.msaProvider) {
+        overrides.protenix_msa_backend = next.msaProvider;
+    }
     maybeSet('msa_preset', next.msaPreset, previous.msaPreset);
     maybeSet('msa_target_shard_mode', next.msaTargetShardMode, previous.msaTargetShardMode);
     maybeSet('msa_target_shards', next.msaTargetShards, previous.msaTargetShards);

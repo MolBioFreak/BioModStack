@@ -1,3 +1,6 @@
+import { MsaProviderReadiness } from '../MsaProviderReadiness';
+import { ColabfoldMsaControls } from '../ColabfoldMsaControls';
+import { NeurosnapMsaControls } from '../NeurosnapMsaControls';
 import { useMemo } from 'react';
 import type { GpuCatalogEntry } from '../gpuCatalog';
 import { deriveBoltzCpGpuLaunchSettings } from '../structurePredictionUiState.js';
@@ -87,14 +90,15 @@ export function StructureReorchestratePanel({
                             <button
                                 type="button"
                                 onClick={() => update({ msaProvider: 'local' })}
+                                aria-disabled={true}
                                 className={`rounded-md px-3 py-2 text-sm transition-colors ${
                                     settings.msaProvider === 'local'
                                         ? 'bg-emerald-500/20 text-emerald-200'
                                         : 'text-slate-300 hover:text-slate-100'
                                 }`}
-                                disabled={disabled}
+                                disabled
                             >
-                                Local MMseqs2
+                                Local search disabled
                             </button>
                             <button
                                 type="button"
@@ -108,9 +112,10 @@ export function StructureReorchestratePanel({
                             >
                                 ColabFold API
                             </button>
+                            <button type="button" disabled={disabled} aria-pressed={settings.msaProvider === 'neurosnap_api'} onClick={() => update({ msaProvider: 'neurosnap_api' })}>Neurosnap API</button>
                         </div>
                         <p className="mt-2 text-xs text-slate-500">
-                            Toggle between the local stack and ColabFold before re-launching the exact predictors from this run.
+                            Choose ColabFold or Neurosnap before re-launching. Local search is disabled. Sequences leave BMS; Neurosnap may consume credits.
                         </p>
                     </div>
 
@@ -129,6 +134,9 @@ export function StructureReorchestratePanel({
                     </label>
                 </div>
 
+                <MsaProviderReadiness provider={settings.msaProvider} />
+                {(settings.msaProvider === 'colabfold_api' || settings.msaProvider === 'auto') && <ColabfoldMsaControls value={settings.colabfoldMsa} onChange={colabfoldMsa => update({ colabfoldMsa })} disabled={disabled} />}
+                {settings.msaProvider === 'neurosnap_api' && <NeurosnapMsaControls value={settings.neurosnapMsa} onChange={neurosnapMsa => update({ neurosnapMsa })} disabled={disabled} />}
                 <label className="mt-4 inline-flex items-center gap-2 text-sm text-slate-300">
                     <input
                         type="checkbox"
