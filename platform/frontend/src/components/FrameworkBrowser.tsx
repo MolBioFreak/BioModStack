@@ -81,6 +81,7 @@ export interface SelectedFramework {
     cdrH3Length?: number;
     // Chain info for frameworks with antigens (from SAbDab)
     hChain?: string;      // Antibody heavy chain ID
+    lChain?: string | null;      // Antibody light chain ID (null for VHH)
     antigenChain?: string;  // Antigen chain ID (set if user chose to include)
 }
 
@@ -222,7 +223,9 @@ export function FrameworkBrowser({
                     name: `SAbDab: ${data.pdb_code}`,
                     pdbCode: data.pdb_code,
                     filePath: data.file_path || undefined,
-                    cdrH3Length: data.cdrH3Length ?? undefined
+                    cdrH3Length: data.cdrH3Length ?? undefined,
+                    hChain: data.h_chain || undefined,
+                    lChain: data.l_chain ?? null
                 });
             }
         },
@@ -244,7 +247,8 @@ export function FrameworkBrowser({
             filePath: data.file_path || undefined,
             cdrH3Length: cdrH3Length ?? undefined,
             // Pass chain info for downstream processing
-            hChain: data.h_chain,
+            hChain: data.h_chain || undefined,
+            lChain: data.l_chain ?? null,
             antigenChain: useFullComplex ? data.antigen_chain : undefined
         });
 
