@@ -50,6 +50,7 @@ from services.global_experiments.launch_contexts import (
 from services.global_experiments.read_models import build_project_manager_read_model
 from services.global_experiments.receipts import attach_verified_entity
 from services.global_experiments.result_surfaces import result_surface_for_receipt
+from services.rfd3_local_redesign import project_local_redesign_scheduler_params
 from schemas import LaunchContextCreateRequest, LaunchContextResponse
 from routers.experiment_workspaces import _require_mutation_owner
 
@@ -92,14 +93,18 @@ async def _project_bound_job(session: AsyncSession, context: ExperimentLaunchCon
     revision_id = context.workflow_revision_id or _bound_id("revision", context.launch_context_id)
     adapter_id = f"bms.core-job.{job.model_id}.adapter.v1"
     if context.workflow_id is None:
-        projected_params = {**(job.params or {}), "workflow_adapter": adapter_id}
+        projected_params = (
+            project_local_redesign_scheduler_params(job.params or {})
+            if job.model_id == "protein_local_redesign"
+            else {**(job.params or {}), "workflow_adapter": adapter_id}
+        )
         scheduler: dict[str, object] = {
             "name": job.name,
             "model_id": job.model_id,
             "mode": job.mode,
             "params": projected_params,
         }
-        if job.pinned_gpu is not None:
+        if job.model_id == "protein_local_redesign" and job.pinned_gpu is not None:
             scheduler["resources"] = {"pinned_gpu": job.pinned_gpu}
         payload = {"schema": "bms.workflow.generic.v1", "workflow_family": "typed_core_job", "contract_version": "1", "adapter_id": adapter_id, "nodes": [{"id": "bound-job", "kind": "bound_core_job", "required": True}], "edges": [], "parameters": {"canonical_job_id": job.id, "params_sha256": hashlib.sha256(json.dumps(projected_params, sort_keys=True, separators=(",", ":")).encode()).hexdigest()}, "scheduler": scheduler}
         canonical_payload = json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -122,7 +127,16 @@ async def _project_bound_job(session: AsyncSession, context: ExperimentLaunchCon
     await session.flush()
     status_value = str(job.status).lower()
     run_state = "completed" if status_value in {"completed", "succeeded"} else "failed" if status_value == "failed" else "cancelled" if status_value in {"cancelled", "canceled"} else "running" if status_value == "running" else "dispatched"
-    request_payload = {"canonical_job_id": job.id, "model_id": job.model_id, "mode": job.mode, "pinned_gpu": job.pinned_gpu, "params_sha256": hashlib.sha256(json.dumps(job.params or {}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()}
+    request_payload = {
+        "canonical_job_id": job.id,
+        "model_id": job.model_id,
+        "mode": job.mode,
+        "params_sha256": hashlib.sha256(
+            json.dumps(job.params or {}, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+    }
+    if job.model_id == "protein_local_redesign":
+        request_payload["pinned_gpu"] = job.pinned_gpu
     request_json = json.dumps(request_payload, sort_keys=True, separators=(",", ":"))
     session.add_all([
         ExperimentWorkflowPreparation(resource_id=preparation_id, workspace_id=context.project_id, workflow_revision_id=revision_id, normalized_request_json=request_json, normalized_request_sha256=hashlib.sha256(request_json.encode()).hexdigest(), scheduler_payload_json=request_json, validation_status="valid", validation_receipt_json=json.dumps({"schema": "bms.bound-job-preparation.v1", "verified": True}), expected_cardinality=1, created_at=timestamp, prepared_at=timestamp),
@@ -134,8 +148,15 @@ async def _project_bound_job(session: AsyncSession, context: ExperimentLaunchCon
         ExperimentWorkflowRun(resource_id=run_id, workspace_id=context.project_id, run_group_id=run_group_id, preparation_id=preparation_id, node_id="bound-job", requiredness="required", state=run_state, generation=1, created_at=timestamp),
     ])
     await session.flush()
+    runtime_identity = {
+        "canonical_job_id": job.id,
+        "model_id": job.model_id,
+        "mode": job.mode,
+    }
+    if job.model_id == "protein_local_redesign":
+        runtime_identity["pinned_gpu"] = job.pinned_gpu
     session.add_all([
-        ExperimentRunAttempt(resource_id=attempt_id, workspace_id=context.project_id, workflow_run_id=run_id, attempt_number=1, scheduler_job_id=job.id, state=run_state, external_binding_receipt_json=json.dumps(binding, sort_keys=True, separators=(",", ":")), runtime_identity_json=json.dumps({"canonical_job_id": job.id, "model_id": job.model_id, "mode": job.mode, "pinned_gpu": job.pinned_gpu}), created_at=timestamp),
+        ExperimentRunAttempt(resource_id=attempt_id, workspace_id=context.project_id, workflow_run_id=run_id, attempt_number=1, scheduler_job_id=job.id, state=run_state, external_binding_receipt_json=json.dumps(binding, sort_keys=True, separators=(",", ":")), runtime_identity_json=json.dumps(runtime_identity, sort_keys=True, separators=(",", ":")), created_at=timestamp),
         ExperimentLineageEdge(id=_bound_id("launched", context.launch_context_id), workspace_id=context.project_id, source_resource_id=workflow_id, target_resource_id=run_id, edge_mode="produces", edge_key=f"produces:{workflow_id}:{run_id}", metadata_json=json.dumps({"canonical_job_id": job.id}), created_at=timestamp),
         ExperimentAuditEvent(id=_bound_id("audit", context.launch_context_id), workspace_id=context.project_id, resource_id=run_id, event_type="launch_context_job_bound", generation=1, payload_json=json.dumps({"canonical_job_id": job.id, "launch_context_id": context.launch_context_id}), created_at=timestamp),
     ])

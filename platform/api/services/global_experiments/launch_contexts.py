@@ -16,6 +16,10 @@ from experiment_models import (
     ExperimentLaunchContext,
     ExperimentRevision,
 )
+from services.rfd3_local_redesign import (
+    local_redesign_requests_semantically_equal,
+    prepare_local_redesign_scheduler_params,
+)
 
 
 LAUNCH_CONTEXT_SCHEMA = "bms.launch-context.v1"
@@ -286,6 +290,108 @@ async def workflow_pinned_gpu(
     return pinned_gpu
 
 
+async def validate_bound_job_request(
+    session: AsyncSession,
+    context: ExperimentLaunchContext,
+    *,
+    job_name: str,
+    model_id: str,
+    mode: str,
+    params: dict[str, Any],
+    pinned_gpu: int | None,
+) -> dict[str, Any]:
+    """Validate immutable Workflow Revision authority before any Job transaction."""
+    domain = await session.get(ExperimentAggregateHead, context.domain_experiment_id)
+    if domain is None or domain.current_revision_id is None:
+        raise LaunchContextError(
+            "launch_context_domain_unavailable",
+            "Domain Experiment authority is unavailable.",
+            status_code=409,
+        )
+    domain_revision = await session.get(ExperimentRevision, domain.current_revision_id)
+    decoded_domain_payload = json.loads(domain_revision.canonical_payload) if domain_revision is not None else {}
+    domain_payload = decoded_domain_payload if isinstance(decoded_domain_payload, dict) else {}
+    domain_kind = str(domain_payload.get("domain_kind") or "")
+    if model_id not in DOMAIN_JOB_MODELS.get(domain_kind, set()):
+        raise LaunchContextError(
+            "launch_context_model_mismatch",
+            "Job model is outside the bound Domain capability.",
+            status_code=409,
+        )
+    if context.workflow_revision_id is None:
+        if model_id == "protein_local_redesign" and "workflow_adapter" in params:
+            raise LaunchContextError(
+                "launch_context_workflow_mismatch",
+                "Native RFD3 workflow_adapter is server-owned.",
+                status_code=409,
+            )
+        return dict(params)
+
+    revision = await session.get(ExperimentRevision, context.workflow_revision_id)
+    decoded_payload = json.loads(revision.canonical_payload) if revision is not None else {}
+    payload = decoded_payload if isinstance(decoded_payload, dict) else {}
+    raw_scheduler = payload.get("scheduler")
+    scheduler: dict[str, Any] = raw_scheduler if isinstance(raw_scheduler, dict) else {}
+    expected_adapter = str(payload.get("adapter_id") or "")
+    raw_expected_params = scheduler.get("params")
+    expected_params: dict[str, Any] = raw_expected_params if isinstance(raw_expected_params, dict) else {}
+    if scheduler.get("model_id") != model_id or scheduler.get("mode") != mode:
+        raise LaunchContextError(
+            "launch_context_workflow_mismatch",
+            "Job model or mode does not match the bound Workflow Revision.",
+            status_code=409,
+        )
+    prepared_params = dict(params)
+    params_match = _canonical_json(params) == _canonical_json(expected_params)
+    if model_id == "protein_local_redesign":
+        supplied_adapter = params.get("workflow_adapter")
+        if supplied_adapter not in (None, expected_adapter):
+            raise LaunchContextError(
+                "launch_context_workflow_mismatch",
+                "Native RFD3 workflow_adapter does not match the bound Workflow Revision.",
+                status_code=409,
+            )
+        try:
+            actual_params = prepare_local_redesign_scheduler_params(
+                {**params, "workflow_adapter": expected_adapter},
+                job_name=job_name,
+                expected_adapter_id=expected_adapter,
+            )
+            expected_native_params = prepare_local_redesign_scheduler_params(
+                expected_params,
+                job_name=str(scheduler.get("name") or ""),
+                expected_adapter_id=expected_adapter,
+            )
+        except Exception as exc:
+            raise LaunchContextError(
+                "launch_context_workflow_mismatch",
+                "Job request does not satisfy the bound native RFD3 Workflow Revision.",
+                status_code=409,
+            ) from exc
+        actual_request = actual_params.get("rfd3_request")
+        expected_request = expected_native_params.get("rfd3_request")
+        params_match = (
+            isinstance(actual_request, dict)
+            and isinstance(expected_request, dict)
+            and local_redesign_requests_semantically_equal(actual_request, expected_request)
+        )
+        prepared_params = {**params, "workflow_adapter": expected_adapter}
+    resources = scheduler.get("resources")
+    expected_pinned_gpu = resources.get("pinned_gpu") if isinstance(resources, dict) else None
+    if (
+        scheduler.get("model_id") != model_id
+        or scheduler.get("mode") != mode
+        or not params_match
+        or (model_id == "protein_local_redesign" and expected_pinned_gpu != pinned_gpu)
+    ):
+        raise LaunchContextError(
+            "launch_context_workflow_mismatch",
+            "Job request does not match the bound Workflow Revision.",
+            status_code=409,
+        )
+    return prepared_params
+
+
 def context_document(context: ExperimentLaunchContext) -> dict[str, Any]:
     """Return the closed public launch-context-v1 document."""
     return {
@@ -504,9 +610,24 @@ async def validate_bound_job(
         raw_resources = scheduler.get("resources")
         resources: dict[str, Any] = raw_resources if isinstance(raw_resources, dict) else {}
         expected_pinned_gpu = resources.get("pinned_gpu")
-        params_match = json.dumps(job_params, sort_keys=True, separators=(",", ":")) == json.dumps(
-            expected_job_params, sort_keys=True, separators=(",", ":")
-        )
+        params_match = _canonical_json(job_params) == _canonical_json(expected_job_params)
+        if job.model_id == "protein_local_redesign":
+            try:
+                expected_native_params = prepare_local_redesign_scheduler_params(
+                    expected_job_params,
+                    job_name=str(scheduler.get("name") or ""),
+                    expected_adapter_id=str(expected_adapter or ""),
+                )
+            except Exception:
+                expected_native_params = {}
+            expected_request = expected_native_params.get("rfd3_request")
+            observed_request = job_params.get("rfd3_request")
+            params_match = (
+                job_adapter == expected_adapter
+                and isinstance(expected_request, dict)
+                and isinstance(observed_request, dict)
+                and local_redesign_requests_semantically_equal(observed_request, expected_request)
+            )
         if (
             scheduler.get("model_id") != job.model_id
             or scheduler.get("mode") != job.mode
@@ -657,5 +778,6 @@ __all__ = [
     "resolve_launch_context",
     "resolve_launch_context_for_display",
     "validate_bound_job",
+    "validate_bound_job_request",
     "workflow_pinned_gpu",
 ]

@@ -6,13 +6,18 @@ import hashlib
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from model_registry import get_registry
+from scripts.rfd3_local_redesign.contract import ContractError
+from services.rfd3_local_redesign import (
+    local_redesign_requests_semantically_equal,
+    prepare_local_redesign_scheduler_params,
+)
 
 from experiment_models import (
     ExperimentAggregateHead,
@@ -134,6 +139,11 @@ def new_id(_prefix: str) -> str:
     return str(uuid.uuid4())
 
 
+def scheduler_job_id_for_attempt(attempt_id: str) -> str:
+    """Return the deterministic UUIDv5 identity accepted by canonical Job creation."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"bms:global-experiment:core-job:{attempt_id}"))
+
+
 TYPED_CORE_JOB_MODELS = {
     "boltz2",
     "boltz_cp_experimental",
@@ -157,6 +167,13 @@ TYPED_CORE_JOB_ADAPTERS = {
     f"bms.core-job.{model_id}.adapter.v1": model_id
     for model_id in sorted(TYPED_CORE_JOB_MODELS)
 }
+
+
+def scheduler_job_identity(attempt_id: str, scheduler: Mapping[str, Any]) -> str:
+    """Keep CM attempt identity while giving typed core Jobs deterministic UUIDv5 identity."""
+    params = scheduler.get("params")
+    adapter_id = str(params.get("workflow_adapter") or "") if isinstance(params, dict) else ""
+    return scheduler_job_id_for_attempt(attempt_id) if adapter_id in TYPED_CORE_JOB_ADAPTERS else attempt_id
 
 
 WORKFLOW_ADAPTER_REGISTRY: dict[str, set[str]] = {
@@ -1534,6 +1551,17 @@ async def prepare_workflow(
             mode = scheduler_payload.get("mode")
             params = scheduler_payload.get("params")
             if isinstance(model_id, str) and isinstance(mode, str) and isinstance(params, dict):
+                if model_id == "protein_local_redesign":
+                    try:
+                        params = prepare_local_redesign_scheduler_params(
+                            params,
+                            job_name=str(scheduler_payload.get("name") or ""),
+                            expected_adapter_id=str(payload.get("adapter_id") or ""),
+                        )
+                    except ContractError as exc:
+                        reasons.append(str(exc))
+                    else:
+                        scheduler_payload["params"] = params
                 reasons.extend(get_registry().validate_job_params(model_id, mode, params))
         elif payload.get("workflow_family") == "conformational_mapping":
             scheduler_payload["params"]["cm_source_receipt_ids"] = list(
@@ -1645,6 +1673,21 @@ async def _validate_preparation_authority(
     if not isinstance(raw_expected_scheduler, dict):
         raise ValidationFailure("preparation scheduler authority is unavailable")
     expected_scheduler = copy.deepcopy(raw_expected_scheduler)
+    if (
+        normalized_workflow.get("workflow_family") == "typed_core_job"
+        and expected_scheduler.get("model_id") == "protein_local_redesign"
+    ):
+        expected_params = expected_scheduler.get("params")
+        if not isinstance(expected_params, dict):
+            raise ValidationFailure("native RFD3 preparation scheduler parameters are malformed")
+        try:
+            expected_scheduler["params"] = prepare_local_redesign_scheduler_params(
+                expected_params,
+                job_name=str(expected_scheduler.get("name") or ""),
+                expected_adapter_id=str(normalized_workflow.get("adapter_id") or ""),
+            )
+        except ContractError as exc:
+            raise ValidationFailure(str(exc)) from exc
     if normalized_workflow.get("workflow_family") == "conformational_mapping":
         expected_params = expected_scheduler.get("params")
         if not isinstance(expected_params, dict):
@@ -1757,18 +1800,18 @@ async def create_run_group(
             workspace_id=workspace_id,
             lifecycle_owner_id=workflow_run.resource_id,
         )
+        scheduler_payload = json.loads(preparation.scheduler_payload_json)
         attempt = ExperimentRunAttempt(
             resource_id=attempt_resource.id,
             workspace_id=workspace_id,
             workflow_run_id=workflow_run.resource_id,
             attempt_number=1,
-            scheduler_job_id=attempt_resource.id,
+            scheduler_job_id=scheduler_job_identity(attempt_resource.id, scheduler_payload),
             state="pending",
             created_at=now(),
         )
         session.add(attempt)
         await session.flush()
-        scheduler_payload = json.loads(preparation.scheduler_payload_json)
         outbox_payload = {
             "schema": "bms.experiment.dispatch.v1",
             "run_group_id": group.resource_id,
@@ -2153,12 +2196,13 @@ async def retry_failed_run_group(
             workspace_id=workspace_id,
             lifecycle_owner_id=run.resource_id,
         )
+        scheduler_payload = json.loads(preparation.scheduler_payload_json)
         attempt = ExperimentRunAttempt(
             resource_id=attempt_resource.id,
             workspace_id=workspace_id,
             workflow_run_id=run.resource_id,
             attempt_number=previous.attempt_number + 1,
-            scheduler_job_id=attempt_resource.id,
+            scheduler_job_id=scheduler_job_identity(attempt_resource.id, scheduler_payload),
             state="pending",
             created_at=now(),
         )
@@ -2182,7 +2226,6 @@ async def retry_failed_run_group(
                 created_at=now(),
             )
         )
-        scheduler_payload = json.loads(preparation.scheduler_payload_json)
         outbox_payload = {
             "schema": "bms.experiment.dispatch.v1",
             "run_group_id": run_group_id,
@@ -2353,6 +2396,9 @@ class ExistingJobMaterializer:
         if adapter_id in TYPED_CORE_JOB_ADAPTERS:
             from database import Job
 
+            scheduler_job_id = str(payload.get("scheduler_job_id") or "")
+            if scheduler_job_id != scheduler_job_id_for_attempt(attempt_id):
+                raise DispatchFailure("typed core scheduler job identity disagrees with its run attempt")
             expected_model_id = TYPED_CORE_JOB_ADAPTERS[adapter_id]
             expected_mode = str(scheduler.get("mode") or "run")
             if scheduler.get("model_id") != expected_model_id:
@@ -2368,12 +2414,23 @@ class ExistingJobMaterializer:
                 ):
                     raise DispatchFailure("native RFD3 dispatch has no authoritative pinned GPU")
                 pinned_gpu = raw_pinned_gpu
-            existing_job = await self.core_session.get(Job, attempt_id)
+            existing_job = await self.core_session.get(Job, scheduler_job_id)
             if existing_job is not None:
+                params_match = dict(existing_job.params or {}) == params
+                if expected_model_id == "protein_local_redesign":
+                    expected_request = params.get("rfd3_request")
+                    existing_params = dict(existing_job.params or {})
+                    existing_request = existing_params.get("rfd3_request")
+                    params_match = (
+                        existing_params.get("workflow_adapter") == adapter_id
+                        and isinstance(expected_request, dict)
+                        and isinstance(existing_request, dict)
+                        and local_redesign_requests_semantically_equal(existing_request, expected_request)
+                    )
                 if (
                     existing_job.model_id != expected_model_id
                     or existing_job.mode != expected_mode
-                    or dict(existing_job.params or {}) != params
+                    or not params_match
                     or (
                         expected_model_id == "protein_local_redesign"
                         and existing_job.pinned_gpu != pinned_gpu
@@ -2397,11 +2454,13 @@ class ExistingJobMaterializer:
                     request,
                     BackgroundTasks(),
                     self.core_session,
-                    attempt_id,
+                    scheduler_job_id,
                     True,
-                    False,
+                    None,
+                    None,
+                    True,
                 )
-                job = await self.core_session.get(Job, attempt_id)
+                job = await self.core_session.get(Job, scheduler_job_id)
                 if job is None:
                     raise DispatchFailure("canonical typed Job creation did not persist the preallocated Job")
             return {
@@ -2415,7 +2474,11 @@ class ExistingJobMaterializer:
                     "external_model_id": job.model_id,
                     "external_mode": job.mode,
                     "external_state": job.status,
-                    "pinned_gpu": job.pinned_gpu,
+                    **(
+                        {"pinned_gpu": job.pinned_gpu}
+                        if expected_model_id == "protein_local_redesign"
+                        else {}
+                    ),
                 },
             }
         if adapter_id not in self._CM_MATERIALIZERS:
