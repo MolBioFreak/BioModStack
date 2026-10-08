@@ -4,20 +4,21 @@
  * Clean rewrite replacing OVE with modern component architecture.
  */
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, type MouseEvent as ReactMouseEvent } from 'react';
 import { anyToJson } from '@teselagen/bio-parsers';
 import { SequenceViewer, DEFAULT_VISIBILITY, type ColorPaletteName } from './SequenceViewer';
 import { SequenceHeader } from './SequenceHeader';
 import { VisibilityPanel } from './VisibilityPanel';
 import { useSequenceHistory } from './hooks/useSequenceHistory';
 import { useSequenceOperations } from './hooks/useSequenceOperations';
-import { DigestPanel, PCRPanel, PrimerPanel, RnaStructurePanel, FeaturePanel, EditPanel, SearchPanel } from './panels';
+import { AlignmentPanel, DigestPanel, PCRPanel, PrimerPanel, RnaStructurePanel, FeaturePanel, EditPanel, SearchPanel } from './panels';
 import { AutoAnnotatePanel, type AutoAnnotateSettings } from './AutoAnnotatePanel';
 import { GCContentTrack } from './GCContentTrack';
 import { MolecularInputModal } from './MolecularInputModal';
 import { RnaStructureViewer, type RnaStructureDisplayMode } from './RnaStructureViewer';
 import { DEMO_PLASMIDS } from './demoConstructs';
 import {
+    calculatePrimerTm,
     fetchPrimerTmOptions,
     type SequenceAnalysisTrack,
     type PrimerTmOptionsResponse,
@@ -37,9 +38,12 @@ import type {
 } from './types';
 import { EMPTY_SEQUENCE } from './types';
 import {
+    calculateGcPercent,
     inferSequenceTypeFromSequence,
+    reverseComplementSequence,
     sequenceUnitLabel,
 } from './utils/nucleotides';
+import { dedupeFeatures } from './utils/features';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SEQUENCE LIBRARY SIDEBAR WITH IMPORT
@@ -71,7 +75,7 @@ function SequenceLibrary({
             <div className="flex items-center justify-between p-3 border-b border-slate-700">
                 <div>
                     <h3 className="font-semibold text-slate-200">Construct Shelf</h3>
-                    <p className="text-xs text-slate-500">Recent constructs and clearly labeled synthetic demos</p>
+                    <p className="text-xs text-slate-500">Recent constructs and public demo plasmids</p>
                 </div>
                 <button
                     onClick={onRefresh}
@@ -103,7 +107,7 @@ function SequenceLibrary({
                         onClick={() => setShowDemos(!showDemos)}
                         className="w-full flex items-center justify-between p-2 text-xs text-slate-400 hover:bg-slate-800"
                     >
-                        <span>Synthetic Demo Constructs ({DEMO_PLASMIDS.length})</span>
+                        <span>Demo Plasmids ({DEMO_PLASMIDS.length})</span>
                         <svg className={`w-3 h-3 transition-transform ${showDemos ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                         </svg>
@@ -172,6 +176,7 @@ interface PanelTabsProps {
 const BASE_PANELS: { id: ActivePanel; label: string }[] = [
     { id: 'view', label: 'View' },
     { id: 'search', label: 'Find' },
+    { id: 'align', label: 'Align' },
     { id: 'edit', label: 'Edit' },
     { id: 'digest', label: 'Digest' },
     { id: 'pcr', label: 'PCR' },
@@ -234,6 +239,10 @@ function getFeatureColor(type: string): string {
     return colors[type] || colors.misc_feature;
 }
 
+function normalizeFeatureList(features: Feature[]): Feature[] {
+    return dedupeFeatures(features);
+}
+
 function trackFromApi(track: SequenceAnalysisTrack): AnalysisTrack {
     return {
         id: track.id,
@@ -268,6 +277,62 @@ function trackToApi(track: AnalysisTrack): SequenceAnalysisTrack {
         max_value: track.maxValue,
         created_at: track.createdAt,
     };
+}
+
+interface SelectionRange {
+    start: number;
+    end: number;
+}
+
+interface QuickAddMenuState {
+    x: number;
+    y: number;
+}
+
+function getSelectionRanges(
+    selection: SelectionInfo | null,
+    sequenceLength: number,
+    circular: boolean,
+): SelectionRange[] {
+    if (!selection || sequenceLength <= 0) {
+        return [];
+    }
+
+    const rawStart = Math.max(0, Math.min(selection.start, sequenceLength));
+    const rawEnd = Math.max(0, Math.min(selection.end, sequenceLength));
+    if (rawStart === rawEnd) {
+        return [];
+    }
+
+    if (!circular) {
+        return [{ start: Math.min(rawStart, rawEnd), end: Math.max(rawStart, rawEnd) }];
+    }
+
+    if (selection.clockwise && rawStart > rawEnd) {
+        return [
+            { start: rawStart, end: sequenceLength },
+            { start: 0, end: rawEnd },
+        ];
+    }
+
+    if (rawStart > rawEnd) {
+        return [
+            { start: rawStart, end: sequenceLength },
+            { start: 0, end: rawEnd },
+        ];
+    }
+
+    return [{ start: rawStart, end: rawEnd }];
+}
+
+function formatSelectionLabel(ranges: SelectionRange[], circular: boolean): string {
+    if (ranges.length === 0) {
+        return 'No selection';
+    }
+    if (ranges.length === 1) {
+        return `${ranges[0].start + 1} - ${ranges[0].end}${circular ? ' (circular)' : ''}`;
+    }
+    return `${ranges[0].start + 1} - ${ranges[0].end} + ${ranges[1].start + 1} - ${ranges[1].end}`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -350,6 +415,8 @@ export function MolBioToolkitV2() {
     const [visibility, setVisibility] = useState<VisibilityState>(DEFAULT_VISIBILITY);
     const [activePanel, setActivePanel] = useState<ActivePanel>('view');
     const [selection, setSelection] = useState<SelectionInfo | null>(null);
+    const [quickAddMenu, setQuickAddMenu] = useState<QuickAddMenuState | null>(null);
+    const [quickAddBusy, setQuickAddBusy] = useState<'forward_primer' | 'reverse_primer' | 'feature' | null>(null);
     const [highlightedRegions, setHighlightedRegions] = useState<HighlightedRegion[]>([]);
     const [isDirty, setIsDirty] = useState(false);
     const [colorPalette, setColorPalette] = useState<ColorPaletteName>('classic');
@@ -447,7 +514,7 @@ export function MolBioToolkitV2() {
                 sequence: seq.sequence,
                 circular: seq.is_circular,
                 sequenceType: seq.sequence_type,
-                features: (seq.features || []).map((f: Feature) => ({
+                features: normalizeFeatureList((seq.features || []).map((f: Feature) => ({
                     id: f.id || String(Math.random()),
                     name: f.name,
                     type: f.type || 'misc_feature',
@@ -457,7 +524,7 @@ export function MolBioToolkitV2() {
                     color: f.color,
                     description: f.description,
                     notes: f.notes
-                })),
+                }))),
                 primers: (seq.primers || []).map((p: Primer) => ({
                     ...p,
                     sequenceType: p.sequenceType ?? (p as Primer & { sequence_type?: 'dna' | 'rna' }).sequence_type ?? inferSequenceTypeFromSequence(p.sequence),
@@ -480,6 +547,7 @@ export function MolBioToolkitV2() {
     const loadDemo = useCallback((demo: SequenceData) => {
         resetHistory({
             ...demo,
+            features: normalizeFeatureList(demo.features || []),
             analysisTracks: demo.analysisTracks || [],
         });
         setSelectedSequenceId(null); // Not a saved sequence
@@ -566,7 +634,7 @@ export function MolBioToolkitV2() {
                 sequence: normalizedSequence,
                 circular: parsed.circular ?? false,
                 sequenceType: inferredType,
-                features: (parsed.features || []).map((f: any, i: number) => ({
+                features: normalizeFeatureList((parsed.features || []).map((f: any, i: number) => ({
                     id: f.id || `f_${i}`,
                     name: f.name || f.type || 'feature',
                     type: f.type || 'misc_feature',
@@ -576,7 +644,7 @@ export function MolBioToolkitV2() {
                     color: f.color || getFeatureColor(f.type || 'misc_feature'),
                     description: f.description,
                     notes: f.notes
-                })),
+                }))),
                 primers: (parsed.primers || []).map((p: any, i: number) => ({
                     id: p.id || `p_${i}`,
                     name: p.name || `Primer ${i + 1}`,
@@ -619,7 +687,7 @@ export function MolBioToolkitV2() {
             sequence: sequenceData.sequence,
             is_circular: sequenceData.circular,
             sequence_type: normalizedType,
-            features: sequenceData.features,
+            features: normalizeFeatureList(sequenceData.features),
             primers: sequenceData.primers?.map((primer) => ({
                 ...primer,
                 sequence_type: primer.sequenceType || inferSequenceTypeFromSequence(primer.sequence),
@@ -655,11 +723,25 @@ export function MolBioToolkitV2() {
         setSelection(sel);
     }, []);
 
+    const closeQuickAddMenu = useCallback(() => {
+        setQuickAddMenu(null);
+        setQuickAddBusy(null);
+    }, []);
+
+    const handleViewerContextMenu = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setQuickAddMenu({
+            x: event.clientX,
+            y: event.clientY,
+        });
+    }, []);
+
     // Add feature handler
     const handleAddFeature = useCallback((feature: Feature) => {
         setSequenceData({
             ...sequenceData,
-            features: [...sequenceData.features, feature]
+            features: normalizeFeatureList([...sequenceData.features, feature])
         });
         setIsDirty(true);
     }, [sequenceData, setSequenceData]);
@@ -677,9 +759,18 @@ export function MolBioToolkitV2() {
     const handleUpdateFeature = useCallback((updatedFeature: Feature) => {
         setSequenceData({
             ...sequenceData,
-            features: sequenceData.features.map(f =>
+            features: normalizeFeatureList(sequenceData.features.map(f =>
                 f.id === updatedFeature.id ? updatedFeature : f
-            )
+            ))
+        });
+        setIsDirty(true);
+    }, [sequenceData, setSequenceData]);
+
+    const handleAddFeatures = useCallback((newFeatures: Feature[]) => {
+        if (newFeatures.length === 0) return;
+        setSequenceData({
+            ...sequenceData,
+            features: normalizeFeatureList([...sequenceData.features, ...newFeatures]),
         });
         setIsDirty(true);
     }, [sequenceData, setSequenceData]);
@@ -870,7 +961,7 @@ export function MolBioToolkitV2() {
             const skippedCount = newFeatures.length - uniqueNewFeatures.length;
 
             // Merge with existing features
-            const mergedFeatures = [...sequenceData.features, ...uniqueNewFeatures].sort((a, b) =>
+            const mergedFeatures = normalizeFeatureList([...sequenceData.features, ...uniqueNewFeatures]).sort((a, b) =>
                 a.start - b.start || a.end - b.end || a.name.localeCompare(b.name)
             );
             setSequenceData({
@@ -915,6 +1006,21 @@ export function MolBioToolkitV2() {
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [undo, redo, saveSequence]);
 
+    useEffect(() => {
+        if (!quickAddMenu) {
+            return;
+        }
+
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                closeQuickAddMenu();
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [closeQuickAddMenu, quickAddMenu]);
+
     const selectedRnaEvidenceTrack = useMemo(
         () => viewerSequenceData.analysisTracks?.find((track) => track.id === selectedRnaTrackId) || null,
         [selectedRnaTrackId, viewerSequenceData.analysisTracks],
@@ -925,6 +1031,140 @@ export function MolBioToolkitV2() {
         activePanel === 'rna' &&
         rnaStructureResult,
     );
+
+    const selectionRanges = useMemo(
+        () => getSelectionRanges(selection, sequenceData.sequence.length, sequenceData.circular),
+        [selection, sequenceData.circular, sequenceData.sequence.length],
+    );
+    const selectionLength = useMemo(
+        () => selectionRanges.reduce((total, range) => total + Math.max(0, range.end - range.start), 0),
+        [selectionRanges],
+    );
+    const hasRangeSelection = Boolean(selection && selectionLength > 0);
+    const selectedSequenceFragment = useMemo(
+        () => selectionRanges.map((range) => sequenceData.sequence.slice(range.start, range.end)).join(''),
+        [selectionRanges, sequenceData.sequence],
+    );
+    const selectionCoordinateLabel = useMemo(
+        () => formatSelectionLabel(selectionRanges, sequenceData.circular),
+        [selectionRanges, sequenceData.circular],
+    );
+    const selectionCoordinateKey = useMemo(() => {
+        if (selectionRanges.length === 0) {
+            return 'selection';
+        }
+        return selectionRanges.map((range) => `${range.start + 1}_${range.end}`).join('_wrap_');
+    }, [selectionRanges]);
+    const selectionPlacement = useMemo(() => {
+        if (!selection || selectionRanges.length === 0) {
+            return null;
+        }
+        if (sequenceData.circular && selectionRanges.length > 1) {
+            return {
+                start: selection.start,
+                end: selection.end,
+                wrapsOrigin: true,
+            };
+        }
+        return {
+            start: selectionRanges[0].start,
+            end: selectionRanges[selectionRanges.length - 1].end,
+            wrapsOrigin: false,
+        };
+    }, [selection, selectionRanges, sequenceData.circular]);
+
+    const toolPanelWidthClass = activePanel === 'primers'
+        ? 'w-[30rem]'
+        : activePanel === 'align' || activePanel === 'rna'
+            ? 'w-[26rem]'
+            : 'w-72';
+
+    const handleQuickAddPrimer = useCallback(async (strand: 1 | -1) => {
+        if (!selectionPlacement || !selectedSequenceFragment) {
+            return;
+        }
+
+        const operation = strand === 1 ? 'forward_primer' : 'reverse_primer';
+        setQuickAddBusy(operation);
+
+        try {
+            const primerSequence = strand === 1
+                ? selectedSequenceFragment
+                : reverseComplementSequence(selectedSequenceFragment, sequenceData.sequenceType === 'rna' ? 'rna' : 'dna');
+            const sequenceType = inferSequenceTypeFromSequence(primerSequence);
+            const tmResponse = await calculatePrimerTm({
+                primers: [{
+                    sequence: primerSequence,
+                    sequence_type: sequenceType,
+                }],
+                settings: primerTmSettings,
+            });
+            const tmResult = tmResponse.data[0] ?? null;
+
+            const primer: Primer = {
+                id: `primer_${Date.now().toString(36)}_${strand === 1 ? 'f' : 'r'}`,
+                name: `${strand === 1 ? 'Fwd' : 'Rev'}_${selectionCoordinateKey}`,
+                sequence: primerSequence,
+                sequenceType,
+                start: selectionPlacement.start,
+                end: selectionPlacement.end,
+                strand,
+                tm: tmResult?.tm ?? undefined,
+                gc_percent: tmResult?.gc_percent ?? calculateGcPercent(primerSequence),
+                tm_algorithm: tmResult?.algorithm,
+                tm_salt_correction: tmResult?.salt_correction,
+                tm_settings: primerTmSettings,
+            };
+
+            handleAddPrimer(primer);
+            setHighlightedRegions([{
+                start: primer.start,
+                end: primer.end,
+                color: strand === 1 ? '#22c55e' : '#ef4444',
+                label: primer.name,
+            }]);
+            closeQuickAddMenu();
+        } catch (error) {
+            console.error('Failed to add primer from selection:', error);
+            alert(`Failed to add primer: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            setQuickAddBusy(null);
+        }
+    }, [
+        closeQuickAddMenu,
+        handleAddPrimer,
+        primerTmSettings,
+        selectedSequenceFragment,
+        selectionCoordinateKey,
+        selectionPlacement,
+        sequenceData.sequenceType,
+    ]);
+
+    const handleQuickAddFeature = useCallback(() => {
+        if (!selectionPlacement) {
+            return;
+        }
+
+        setQuickAddBusy('feature');
+        const feature: Feature = {
+            id: `feature_${Date.now().toString(36)}`,
+            name: `Feature_${selectionCoordinateKey}`,
+            type: 'misc_feature',
+            start: selectionPlacement.start,
+            end: selectionPlacement.end,
+            strand: 1,
+            color: getFeatureColor('misc_feature'),
+            notes: selectionPlacement.wrapsOrigin ? { wraps_origin: true } : undefined,
+        };
+
+        handleAddFeature(feature);
+        setHighlightedRegions([{
+            start: feature.start,
+            end: feature.end,
+            color: feature.color || '#6b7280',
+            label: feature.name,
+        }]);
+        closeQuickAddMenu();
+    }, [closeQuickAddMenu, handleAddFeature, selectionCoordinateKey, selectionPlacement]);
 
     return (
         <>
@@ -985,7 +1225,9 @@ export function MolBioToolkitV2() {
                                                 sequenceData={viewerSequenceData}
                                                 visibility={visibility}
                                                 selectedEnzymes={selectedEnzymes}
+                                                selection={selection}
                                                 onSelection={handleSelection}
+                                                onContextMenu={handleViewerContextMenu}
                                                 highlightedRegions={highlightedRegions}
                                                 viewMode={viewMode}
                                                 colorPalette={colorPalette}
@@ -1008,7 +1250,9 @@ export function MolBioToolkitV2() {
                                             sequenceData={viewerSequenceData}
                                             visibility={visibility}
                                             selectedEnzymes={selectedEnzymes}
+                                            selection={selection}
                                             onSelection={handleSelection}
+                                            onContextMenu={handleViewerContextMenu}
                                             highlightedRegions={highlightedRegions}
                                             viewMode={viewMode}
                                             colorPalette={colorPalette}
@@ -1032,16 +1276,61 @@ export function MolBioToolkitV2() {
 
                     {/* Selection info bar */}
                     {selection && (
-                        <div className="px-4 py-1 bg-slate-800 border-t border-slate-700 text-sm text-slate-400 flex-shrink-0">
-                            {Math.abs(selection.end - selection.start) === 0
-                                ? `Cursor: ${selection.start + 1}`
-                                : `Selected: ${Math.min(selection.start, selection.end) + 1} - ${Math.max(selection.start, selection.end)} (${Math.abs(selection.end - selection.start)} ${sequenceUnitLabel(sequenceData.sequenceType === 'rna' ? 'rna' : 'dna')})`}
+                        <div className="border-t border-slate-700 bg-slate-800 px-4 py-2 text-sm text-slate-300 flex-shrink-0">
+                            <div className="flex items-center justify-between gap-3">
+                                <div className="min-w-0">
+                                    {selectionLength === 0
+                                        ? `Cursor: ${selection.start + 1}`
+                                        : `Selected: ${selectionCoordinateLabel} (${selectionLength} ${sequenceUnitLabel(sequenceData.sequenceType === 'rna' ? 'rna' : 'dna')})`}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    {hasRangeSelection && (
+                                        <>
+                                            <button
+                                                onClick={() => setActivePanel('primers')}
+                                                className="rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-emerald-500"
+                                                title="Open primer tools for the selected span"
+                                            >
+                                                Primer
+                                            </button>
+                                            <button
+                                                onClick={() => setActivePanel('features')}
+                                                className="rounded-md bg-violet-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-violet-500"
+                                                title="Open feature tools for the selected span"
+                                            >
+                                                Marker
+                                            </button>
+                                            <button
+                                                onClick={() => setActivePanel('edit')}
+                                                className="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-amber-500"
+                                                title="Edit the selected span"
+                                            >
+                                                Edit
+                                            </button>
+                                            <button
+                                                onClick={() => setActivePanel('pcr')}
+                                                className="rounded-md bg-cyan-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-cyan-500"
+                                                title="Use the selected span in PCR tools"
+                                            >
+                                                PCR
+                                            </button>
+                                        </>
+                                    )}
+                                    <button
+                                        onClick={() => setSelection(null)}
+                                        className="rounded-md border border-slate-600 px-2.5 py-1 text-xs text-slate-300 transition-colors hover:bg-slate-700"
+                                        title="Clear current selection"
+                                    >
+                                        Clear
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     )}
                 </div>
 
                 {/* Right: Tool Panels */}
-                <div className="w-72 flex-shrink-0 border-l border-slate-700 bg-slate-800 flex flex-col overflow-hidden">
+                <div className={`${toolPanelWidthClass} flex-shrink-0 border-l border-slate-700 bg-slate-800 flex flex-col overflow-hidden transition-[width] duration-200`}>
                     <PanelTabs active={activePanel} onChange={setActivePanel} sequenceType={sequenceData.sequenceType} />
 
                     <div className="flex-1 overflow-y-auto">
@@ -1062,12 +1351,23 @@ export function MolBioToolkitV2() {
                                 onOrfsFound={setDerivedTranslations}
                             />
                         )}
+                        {activePanel === 'align' && (
+                            <AlignmentPanel
+                                sequenceData={sequenceData}
+                                selection={selection}
+                                onHighlight={setHighlightedRegions}
+                                onAddFeatures={handleAddFeatures}
+                            />
+                        )}
                         {activePanel === 'edit' && (
                             <EditPanel
                                 sequenceData={sequenceData}
                                 selection={selection}
                                 onSequenceChange={(newData) => {
-                                    setSequenceData(newData);
+                                    setSequenceData({
+                                        ...newData,
+                                        features: normalizeFeatureList(newData.features || []),
+                                    });
                                     setIsDirty(true);
                                 }}
                             />
@@ -1136,6 +1436,95 @@ export function MolBioToolkitV2() {
                     )}
                 </div>
             </div>
+
+            {quickAddMenu && (
+                <>
+                    <button
+                        type="button"
+                        aria-label="Close quick add menu"
+                        className="fixed inset-0 z-40 cursor-default bg-transparent"
+                        onClick={closeQuickAddMenu}
+                    />
+                    <div
+                        className="fixed z-50 w-64 rounded-xl border border-slate-700 bg-slate-900/95 p-2 shadow-2xl backdrop-blur"
+                        style={{
+                            left: Math.max(12, Math.min(quickAddMenu.x, window.innerWidth - 280)),
+                            top: Math.max(12, Math.min(quickAddMenu.y, window.innerHeight - 280)),
+                        }}
+                    >
+                        <div className="border-b border-slate-700 px-2 pb-2">
+                            <div className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
+                                Quick Add
+                            </div>
+                            <div className="mt-1 text-sm text-slate-200">
+                                {hasRangeSelection ? selectionCoordinateLabel : 'No range selected'}
+                            </div>
+                            <div className="mt-1 text-[11px] text-slate-500">
+                                {hasRangeSelection
+                                    ? `${selectionLength} ${sequenceUnitLabel(sequenceData.sequenceType === 'rna' ? 'rna' : 'dna')} selected`
+                                    : 'Drag a span in the viewer, then right-click to add primers or features.'}
+                            </div>
+                        </div>
+
+                        <div className="space-y-1 px-1 py-2">
+                            <button
+                                onClick={() => void handleQuickAddPrimer(1)}
+                                disabled={!hasRangeSelection || quickAddBusy !== null}
+                                className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                                <span>Add Forward Primer</span>
+                                {quickAddBusy === 'forward_primer' && <span className="text-xs text-slate-400">Working…</span>}
+                            </button>
+                            <button
+                                onClick={() => void handleQuickAddPrimer(-1)}
+                                disabled={!hasRangeSelection || quickAddBusy !== null}
+                                className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                                <span>Add Reverse Primer</span>
+                                {quickAddBusy === 'reverse_primer' && <span className="text-xs text-slate-400">Working…</span>}
+                            </button>
+                            <button
+                                onClick={handleQuickAddFeature}
+                                disabled={!hasRangeSelection || quickAddBusy !== null}
+                                className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                                <span>Add Marker / Feature</span>
+                                {quickAddBusy === 'feature' && <span className="text-xs text-slate-400">Working…</span>}
+                            </button>
+                        </div>
+
+                        <div className="border-t border-slate-700 px-1 pt-2">
+                            <button
+                                onClick={() => {
+                                    setActivePanel('primers');
+                                    closeQuickAddMenu();
+                                }}
+                                className="w-full rounded-lg px-3 py-2 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800"
+                            >
+                                Open Primer Workspace
+                            </button>
+                            <button
+                                onClick={() => {
+                                    setActivePanel('features');
+                                    closeQuickAddMenu();
+                                }}
+                                className="w-full rounded-lg px-3 py-2 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800"
+                            >
+                                Open Feature Workspace
+                            </button>
+                            <button
+                                onClick={() => {
+                                    setSelection(null);
+                                    closeQuickAddMenu();
+                                }}
+                                className="w-full rounded-lg px-3 py-2 text-left text-sm text-slate-400 transition-colors hover:bg-slate-800"
+                            >
+                                Clear Selection
+                            </button>
+                        </div>
+                    </div>
+                </>
+            )}
 
             {/* Auto-Annotate Settings Panel */}
             <AutoAnnotatePanel

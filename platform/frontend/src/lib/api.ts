@@ -1510,6 +1510,11 @@ export interface RnaStructureSettings {
     gamma: number;
     probability_cutoff: number;
     max_pairs: number;
+    shape_method?: string | null;
+    shape_slope?: number;
+    shape_intercept?: number;
+    shape_reactivities?: Array<number | null> | null;
+    hard_constraints?: string | null;
 }
 
 export interface RnaStructurePrediction {
@@ -1567,6 +1572,7 @@ export interface RnaStructureOptionsResponse {
         max_bounded_fold_length: number;
         max_bp_span: number;
     };
+    shape_methods: string[];
 }
 
 export interface RnaStructureRequest {
@@ -1577,6 +1583,126 @@ export interface RnaStructureRequest {
     settings?: Partial<RnaStructureSettings>;
 }
 
+export interface SequenceAlignmentSettings {
+    mode: 'global' | 'local' | 'placement' | 'fragment';
+    strand?: 'auto' | 'forward' | 'reverse';
+    reference_is_circular?: boolean;
+    match_score: number;
+    mismatch_score: number;
+    gap_open_score: number;
+    gap_extend_score: number;
+}
+
+export interface SequenceAlignmentVariant {
+    type: 'substitution' | 'insertion' | 'deletion' | string;
+    start: number;
+    end: number;
+    reference_wraps_origin?: boolean;
+    query_start: number;
+    query_end: number;
+    reference: string;
+    query: string;
+    label: string;
+    length: number;
+}
+
+export interface SequenceAlignmentResult {
+    reference_name?: string | null;
+    query_name?: string | null;
+    reference_sequence: string;
+    query_sequence: string;
+    reference_aligned: string;
+    query_aligned: string;
+    midline: string;
+    score: number;
+    mode: 'global' | 'local' | 'placement' | 'fragment' | string;
+    strand?: 'forward' | 'reverse' | string;
+    reference_start: number;
+    reference_end: number;
+    reference_wraps_origin?: boolean;
+    query_start: number;
+    query_end: number;
+    query_soft_clip_left?: number;
+    query_soft_clip_right?: number;
+    reference_flank_left?: number;
+    reference_flank_right?: number;
+    alignment_length: number;
+    matches: number;
+    mismatches: number;
+    gap_columns: number;
+    aligned_columns?: number;
+    reference_aligned_bases?: number;
+    query_aligned_bases?: number;
+    identity_pct?: number;
+    ungapped_identity: number;
+    reference_coverage: number;
+    query_coverage: number;
+    variants: SequenceAlignmentVariant[];
+}
+
+export interface PrimerDesignRequest {
+    sequence_id?: string;
+    name?: string;
+    sequence?: string;
+    sequence_type?: 'dna' | 'rna';
+    is_circular?: boolean;
+    target_start: number;
+    target_end?: number;
+    primer_min_length?: number;
+    primer_max_length?: number;
+    product_min_length?: number;
+    product_max_length?: number;
+    flank_search_span?: number;
+    gc_min_percent?: number;
+    gc_max_percent?: number;
+    tm_target_c?: number;
+    tm_max_delta_c?: number;
+    gc_clamp_min?: number;
+    max_poly_x?: number;
+    max_pairs?: number;
+    overhang_forward?: string;
+    overhang_reverse?: string;
+    tm_settings?: PrimerTmSettings;
+}
+
+export interface PrimerDesignCandidate {
+    sequence: string;
+    anneal_sequence: string;
+    start: number;
+    end: number;
+    strand: 1 | -1;
+    length: number;
+    anneal_length: number;
+    overhang_length: number;
+    tm: number;
+    gc_percent: number;
+    gc_clamp: number;
+    max_homopolymer: number;
+    warnings: string[];
+}
+
+export interface PrimerDesignPair {
+    rank: number;
+    penalty: number;
+    tm_delta: number;
+    product_start: number;
+    product_end: number;
+    product_length: number;
+    forward: PrimerDesignCandidate;
+    reverse: PrimerDesignCandidate;
+}
+
+export interface PrimerDesignResponse {
+    sequence_name?: string | null;
+    sequence_type: 'dna' | 'rna';
+    target_start: number;
+    target_end: number;
+    target_length: number;
+    pair_count: number;
+    pairs: PrimerDesignPair[];
+    warnings: string[];
+}
+
 export const fetchRnaStructureOptions = () =>
     api.get<RnaStructureOptionsResponse>('/api/molbio/rna-structure/options');
 
@@ -1585,6 +1711,14 @@ export const foldRnaStructure = (data: RnaStructureRequest & { include_partition
 
 export const partitionRnaStructure = (data: RnaStructureRequest) =>
     api.post<RnaStructureResult>('/api/molbio/rna-structure/partition', data);
+
+export const alignMolBioSequences = (data: {
+    reference_name?: string;
+    reference_sequence: string;
+    query_name?: string;
+    query_sequence: string;
+    settings?: Partial<SequenceAlignmentSettings>;
+}) => api.post<SequenceAlignmentResult>('/api/molbio/alignment', data);
 
 // Antibody API
 export interface AntibodyOverlaySelection {
@@ -2085,6 +2219,9 @@ export const calculatePrimerTm = (data: {
     primers: PrimerTmInput[];
     settings?: PrimerTmSettings;
 }) => api.post<PrimerTmResult[]>('/api/molbio/primer-tm/calculate', data);
+
+export const designPrimers = (data: PrimerDesignRequest) =>
+    api.post<PrimerDesignResponse>('/api/molbio/primer-design', data);
 
 export const fetchPrimers = (params?: {
     search?: string;

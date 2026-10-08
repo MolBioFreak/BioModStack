@@ -1,19 +1,12 @@
 /**
- * FeaturePanel - Comprehensive feature/annotation management
- * 
- * Features:
- * - Search/filter by name or type
- * - Sort by position, name, type, or length
- * - Edit existing features (inline)
- * - Bulk selection and delete
- * - Custom color picker
- * - Description/notes field
- * - Jump to feature on click
- * - Expanded feature type list
+ * FeaturePanel - Feature and qualifier management.
+ *
+ * Adds a structured qualifier editor so imported GenBank/SnapGene metadata can
+ * be inspected and edited instead of collapsing everything into name/type/color.
  */
 
-import { useState, useMemo, useCallback } from 'react';
-import type { SequenceData, Feature, SelectionInfo, HighlightedRegion } from '../types';
+import { useCallback, useMemo, useState } from 'react';
+import type { Feature, HighlightedRegion, SelectionInfo, SequenceData } from '../types';
 
 interface FeaturePanelProps {
     sequenceData: SequenceData;
@@ -25,63 +18,209 @@ interface FeaturePanelProps {
     onJumpToPosition?: (position: number) => void;
 }
 
-// Comprehensive feature types with colors matching common conventions
+type SortOption = 'position' | 'name' | 'type' | 'length';
+
+interface QualifierRow {
+    id: string;
+    key: string;
+    value: string;
+}
+
+interface FeatureDraft {
+    name: string;
+    type: string;
+    start: number | '';
+    end: number | '';
+    strand: 1 | -1;
+    color: string;
+    description: string;
+    qualifiers: QualifierRow[];
+}
+
 const FEATURE_TYPES = [
-    // Coding/Structural
-    { value: 'CDS', label: 'CDS (Coding Sequence)', color: '#22c55e', category: 'Coding' },
+    { value: 'CDS', label: 'CDS', color: '#22c55e', category: 'Coding' },
     { value: 'gene', label: 'Gene', color: '#3b82f6', category: 'Coding' },
     { value: 'exon', label: 'Exon', color: '#10b981', category: 'Coding' },
-    { value: 'intron', label: 'Intron', color: '#6b7280', category: 'Coding' },
-    { value: 'mRNA', label: 'mRNA', color: '#14b8a6', category: 'Coding' },
-
-    // Regulatory
     { value: 'promoter', label: 'Promoter', color: '#8b5cf6', category: 'Regulatory' },
-    { value: 'terminator', label: 'Terminator', color: '#ef4444', category: 'Regulatory' },
-    { value: 'RBS', label: 'Ribosome Binding Site', color: '#14b8a6', category: 'Regulatory' },
-    { value: 'operator', label: 'Operator', color: '#f97316', category: 'Regulatory' },
     { value: 'enhancer', label: 'Enhancer', color: '#a855f7', category: 'Regulatory' },
+    { value: 'terminator', label: 'Terminator', color: '#ef4444', category: 'Regulatory' },
     { value: '5UTR', label: "5' UTR", color: '#06b6d4', category: 'Regulatory' },
     { value: '3UTR', label: "3' UTR", color: '#0891b2', category: 'Regulatory' },
-    { value: 'polyA_signal', label: 'Poly-A Signal', color: '#e11d48', category: 'Regulatory' },
-
-    // Replication/Origin
     { value: 'rep_origin', label: 'Origin of Replication', color: '#ec4899', category: 'Replication' },
-    { value: 'oriT', label: 'oriT (Transfer Origin)', color: '#db2777', category: 'Replication' },
-
-    // Selection Markers
-    { value: 'resistance', label: 'Antibiotic Resistance', color: '#dc2626', category: 'Marker' },
-    { value: 'reporter', label: 'Reporter Gene', color: '#65a30d', category: 'Marker' },
-    { value: 'tag', label: 'Protein Tag', color: '#f59e0b', category: 'Marker' },
-
-    // Binding/Interaction
+    { value: 'oriT', label: 'oriT', color: '#db2777', category: 'Replication' },
+    { value: 'resistance', label: 'Resistance Marker', color: '#dc2626', category: 'Marker' },
+    { value: 'reporter', label: 'Reporter', color: '#65a30d', category: 'Marker' },
+    { value: 'tag', label: 'Tag', color: '#f59e0b', category: 'Marker' },
     { value: 'primer_bind', label: 'Primer Binding Site', color: '#f59e0b', category: 'Binding' },
     { value: 'protein_bind', label: 'Protein Binding Site', color: '#0ea5e9', category: 'Binding' },
-    { value: 'misc_binding', label: 'Misc Binding Site', color: '#64748b', category: 'Binding' },
-
-    // Recombination
-    { value: 'attB', label: 'attB (Gateway)', color: '#7c3aed', category: 'Recombination' },
-    { value: 'attP', label: 'attP (Gateway)', color: '#6d28d9', category: 'Recombination' },
-    { value: 'attL', label: 'attL (Gateway)', color: '#5b21b6', category: 'Recombination' },
-    { value: 'attR', label: 'attR (Gateway)', color: '#4c1d95', category: 'Recombination' },
-    { value: 'loxP', label: 'loxP (Cre)', color: '#be185d', category: 'Recombination' },
-    { value: 'FRT', label: 'FRT (Flp)', color: '#9d174d', category: 'Recombination' },
-
-    // Misc
     { value: 'misc_feature', label: 'Misc Feature', color: '#6b7280', category: 'Other' },
-    { value: 'misc_difference', label: 'Variation/Mutation', color: '#fbbf24', category: 'Other' },
-    { value: 'misc_recomb', label: 'Recombination Site', color: '#a78bfa', category: 'Other' },
+    { value: 'misc_difference', label: 'Difference / Variant', color: '#fbbf24', category: 'Other' },
     { value: 'source', label: 'Source', color: '#94a3b8', category: 'Other' },
 ];
 
-type SortOption = 'position' | 'name' | 'type' | 'length';
-
-// Color palette for custom colors
 const COLOR_PALETTE = [
     '#ef4444', '#f97316', '#f59e0b', '#eab308', '#84cc16',
     '#22c55e', '#10b981', '#14b8a6', '#06b6d4', '#0ea5e9',
     '#3b82f6', '#6366f1', '#8b5cf6', '#a855f7', '#d946ef',
-    '#ec4899', '#f43f5e', '#78716c', '#64748b', '#475569'
+    '#ec4899', '#f43f5e', '#64748b', '#475569', '#ffffff',
 ];
+
+const COMMON_QUALIFIERS = [
+    'gene',
+    'product',
+    'note',
+    'label',
+    'locus_tag',
+    'gene_synonym',
+    'db_xref',
+    'experiment',
+    'function',
+    'translation',
+];
+
+function createEmptyDraft(): FeatureDraft {
+    return {
+        name: '',
+        type: 'misc_feature',
+        start: '',
+        end: '',
+        strand: 1,
+        color: '#6b7280',
+        description: '',
+        qualifiers: [],
+    };
+}
+
+function nextQualifierId(): string {
+    return `qual_${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function notesToRows(notes?: Record<string, unknown>): QualifierRow[] {
+    if (!notes) return [];
+    return Object.entries(notes).flatMap(([key, rawValue]) => {
+        if (rawValue == null) return [];
+        if (Array.isArray(rawValue)) {
+            return rawValue
+                .map((value) => String(value).trim())
+                .filter(Boolean)
+                .map((value) => ({ id: nextQualifierId(), key, value }));
+        }
+        const value = String(rawValue).trim();
+        return value ? [{ id: nextQualifierId(), key, value }] : [];
+    });
+}
+
+function rowsToNotes(rows: QualifierRow[]): Record<string, unknown> | undefined {
+    const grouped = rows.reduce<Record<string, string[]>>((acc, row) => {
+        const key = row.key.trim();
+        const value = row.value.trim();
+        if (!key || !value) return acc;
+        if (!acc[key]) acc[key] = [];
+        acc[key].push(value);
+        return acc;
+    }, {});
+
+    const notes = Object.fromEntries(
+        Object.entries(grouped).map(([key, values]) => [key, values.length === 1 ? values[0] : values]),
+    );
+    return Object.keys(notes).length > 0 ? notes : undefined;
+}
+
+function qualifierPreview(notes?: Record<string, unknown>): string[] {
+    if (!notes) return [];
+    return Object.entries(notes)
+        .slice(0, 3)
+        .map(([key, value]) => {
+            const display = Array.isArray(value) ? value.join(' | ') : String(value);
+            return `${key}: ${display}`;
+        });
+}
+
+function typeColor(type: string): string {
+    return FEATURE_TYPES.find((entry) => entry.value === type)?.color || '#6b7280';
+}
+
+function QualifierEditor({
+    rows,
+    onChange,
+    label = 'Qualifiers',
+}: {
+    rows: QualifierRow[];
+    onChange: (rows: QualifierRow[]) => void;
+    label?: string;
+}) {
+    const addRow = (key = '') => {
+        onChange([...rows, { id: nextQualifierId(), key, value: '' }]);
+    };
+
+    const updateRow = (id: string, patch: Partial<QualifierRow>) => {
+        onChange(rows.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+    };
+
+    const removeRow = (id: string) => {
+        onChange(rows.filter((row) => row.id !== id));
+    };
+
+    return (
+        <div className="space-y-2">
+            <div className="flex items-center justify-between">
+                <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">{label}</div>
+                <button
+                    onClick={() => addRow()}
+                    className="rounded px-2 py-0.5 text-[11px] text-cyan-300 transition-colors hover:bg-cyan-500/10"
+                    type="button"
+                >
+                    + Add
+                </button>
+            </div>
+
+            <div className="flex flex-wrap gap-1">
+                {COMMON_QUALIFIERS.map((key) => (
+                    <button
+                        key={key}
+                        onClick={() => addRow(key)}
+                        className="rounded-full border border-slate-700 bg-slate-800 px-2 py-0.5 text-[10px] text-slate-400 transition-colors hover:border-slate-500 hover:text-slate-200"
+                        type="button"
+                    >
+                        {key}
+                    </button>
+                ))}
+            </div>
+
+            {rows.length === 0 ? (
+                <div className="rounded border border-dashed border-slate-700 bg-slate-900/40 px-3 py-2 text-xs text-slate-500">
+                    No qualifiers set.
+                </div>
+            ) : (
+                <div className="space-y-2">
+                    {rows.map((row) => (
+                        <div key={row.id} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.2fr)_auto] gap-2">
+                            <input
+                                value={row.key}
+                                onChange={(event) => updateRow(row.id, { key: event.target.value })}
+                                placeholder="Qualifier key"
+                                className="rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-xs"
+                            />
+                            <input
+                                value={row.value}
+                                onChange={(event) => updateRow(row.id, { value: event.target.value })}
+                                placeholder="Qualifier value"
+                                className="rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-xs"
+                            />
+                            <button
+                                onClick={() => removeRow(row.id)}
+                                className="rounded px-2 py-1 text-xs text-red-300 transition-colors hover:bg-red-500/10"
+                                type="button"
+                            >
+                                Remove
+                            </button>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
 
 export function FeaturePanel({
     sequenceData,
@@ -90,149 +229,139 @@ export function FeaturePanel({
     onAddFeature,
     onRemoveFeature,
     onUpdateFeature,
-    onJumpToPosition
+    onJumpToPosition,
 }: FeaturePanelProps) {
-    // Form state
-    const [newFeatureName, setNewFeatureName] = useState('');
-    const [newFeatureType, setNewFeatureType] = useState('misc_feature');
-    const [newFeatureStart, setNewFeatureStart] = useState<number | ''>('');
-    const [newFeatureEnd, setNewFeatureEnd] = useState<number | ''>('');
-    const [newFeatureStrand, setNewFeatureStrand] = useState<1 | -1>(1);
-    const [newFeatureColor, setNewFeatureColor] = useState('#6b7280');
-    const [newFeatureDescription, setNewFeatureDescription] = useState('');
-    const [showColorPicker, setShowColorPicker] = useState(false);
-
-    // List state
+    const [addDraft, setAddDraft] = useState<FeatureDraft>(createEmptyDraft);
     const [searchQuery, setSearchQuery] = useState('');
     const [filterType, setFilterType] = useState<string>('all');
     const [sortBy, setSortBy] = useState<SortOption>('position');
     const [sortAsc, setSortAsc] = useState(true);
     const [selectedFeatures, setSelectedFeatures] = useState<Set<string>>(new Set());
-    const [editingFeature, setEditingFeature] = useState<string | null>(null);
-
-    // Edit form state
-    const [editName, setEditName] = useState('');
-    const [editStart, setEditStart] = useState<number>(0);
-    const [editEnd, setEditEnd] = useState<number>(0);
-    const [editStrand, setEditStrand] = useState<1 | -1>(1);
-    const [editColor, setEditColor] = useState('#6b7280');
+    const [editingFeatureId, setEditingFeatureId] = useState<string | null>(null);
+    const [editDraft, setEditDraft] = useState<FeatureDraft>(createEmptyDraft);
 
     const features = sequenceData.features || [];
 
-    // Update color when type changes
-    const handleTypeChange = (type: string) => {
-        setNewFeatureType(type);
-        const typeInfo = FEATURE_TYPES.find(t => t.value === type);
-        if (typeInfo) {
-            setNewFeatureColor(typeInfo.color);
-        }
-    };
-
-    // Filter and sort features
-    const processedFeatures = useMemo(() => {
-        let result = [...features];
-
-        // Search filter
-        if (searchQuery) {
-            const query = searchQuery.toLowerCase();
-            result = result.filter(f =>
-                f.name.toLowerCase().includes(query) ||
-                f.type.toLowerCase().includes(query)
-            );
-        }
-
-        // Type filter
-        if (filterType !== 'all') {
-            result = result.filter(f => f.type === filterType);
-        }
-
-        // Sort
-        result.sort((a, b) => {
-            let cmp = 0;
-            switch (sortBy) {
-                case 'position':
-                    cmp = a.start - b.start;
-                    break;
-                case 'name':
-                    cmp = a.name.localeCompare(b.name);
-                    break;
-                case 'type':
-                    cmp = a.type.localeCompare(b.type);
-                    break;
-                case 'length':
-                    cmp = (a.end - a.start) - (b.end - b.start);
-                    break;
-            }
-            return sortAsc ? cmp : -cmp;
-        });
-
-        return result;
-    }, [features, searchQuery, filterType, sortBy, sortAsc]);
-
-    // Get unique types
-    const usedTypes = useMemo(() =>
-        [...new Set(features.map(f => f.type))].sort(),
-        [features]
+    const usedTypes = useMemo(
+        () => [...new Set(features.map((feature) => feature.type))].sort(),
+        [features],
     );
 
-    // Use selection to populate range
+    const stats = useMemo(() => {
+        const totalBp = features.reduce((sum, feature) => sum + (feature.end - feature.start), 0);
+        const coverage = sequenceData.sequence.length > 0
+            ? ((totalBp / sequenceData.sequence.length) * 100).toFixed(1)
+            : '0.0';
+        return { count: features.length, coverage };
+    }, [features, sequenceData.sequence.length]);
+
+    const processedFeatures = useMemo(() => {
+        const query = searchQuery.trim().toLowerCase();
+        const filtered = features.filter((feature) => {
+            if (filterType !== 'all' && feature.type !== filterType) return false;
+            if (!query) return true;
+            const preview = qualifierPreview(feature.notes).join(' ').toLowerCase();
+            return [
+                feature.name,
+                feature.type,
+                feature.description || '',
+                preview,
+            ].some((value) => value.toLowerCase().includes(query));
+        });
+
+        filtered.sort((left, right) => {
+            let compare = 0;
+            switch (sortBy) {
+                case 'name':
+                    compare = left.name.localeCompare(right.name);
+                    break;
+                case 'type':
+                    compare = left.type.localeCompare(right.type);
+                    break;
+                case 'length':
+                    compare = (left.end - left.start) - (right.end - right.start);
+                    break;
+                default:
+                    compare = left.start - right.start;
+                    break;
+            }
+            return sortAsc ? compare : -compare;
+        });
+
+        return filtered;
+    }, [features, filterType, searchQuery, sortAsc, sortBy]);
+
+    const updateDraftType = (draft: FeatureDraft, type: string): FeatureDraft => ({
+        ...draft,
+        type,
+        color: typeColor(type),
+    });
+
     const useSelection = () => {
-        if (!selection) return;
-        setNewFeatureStart(selection.start + 1);
-        setNewFeatureEnd(selection.end);
+        if (!selection || selection.start === selection.end) return;
+        setAddDraft((current) => ({
+            ...current,
+            start: Math.min(selection.start, selection.end) + 1,
+            end: Math.max(selection.start, selection.end),
+        }));
     };
 
-    // Add feature
-    const addFeature = () => {
-        if (!newFeatureName || !newFeatureStart || !newFeatureEnd) return;
-
-        const feature: Feature = {
-            id: `feature_${Date.now()}`,
-            name: newFeatureName,
-            type: newFeatureType,
-            start: Number(newFeatureStart) - 1,
-            end: Number(newFeatureEnd),
-            strand: newFeatureStrand,
-            color: newFeatureColor,
-            description: newFeatureDescription || undefined
-        };
-
-        onAddFeature(feature);
-        setNewFeatureName('');
-        setNewFeatureStart('');
-        setNewFeatureEnd('');
-        setNewFeatureDescription('');
+    const resetAddDraft = () => {
+        setAddDraft(createEmptyDraft());
     };
 
-    // Start editing
-    const startEdit = (feature: Feature) => {
-        setEditingFeature(feature.id);
-        setEditName(feature.name);
-        setEditStart(feature.start + 1);
-        setEditEnd(feature.end);
-        setEditStrand(feature.strand);
-        setEditColor(feature.color || '#6b7280');
-    };
-
-    // Save edit
-    const saveEdit = (feature: Feature) => {
-        if (onUpdateFeature) {
-            onUpdateFeature({
-                ...feature,
-                name: editName,
-                start: editStart - 1,
-                end: editEnd,
-                strand: editStrand,
-                color: editColor
-            });
+    const buildFeature = (draft: FeatureDraft, existingId?: string): Feature | null => {
+        const start = Number(draft.start);
+        const end = Number(draft.end);
+        if (!draft.name.trim() || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+            return null;
         }
-        setEditingFeature(null);
+
+        return {
+            id: existingId || `feature_${Date.now().toString(36)}`,
+            name: draft.name.trim(),
+            type: draft.type,
+            start: start - 1,
+            end,
+            strand: draft.strand,
+            color: draft.color,
+            description: draft.description.trim() || undefined,
+            notes: rowsToNotes(draft.qualifiers),
+        };
     };
 
-    // Toggle selection
+    const addFeature = () => {
+        const feature = buildFeature(addDraft);
+        if (!feature) return;
+        onAddFeature(feature);
+        resetAddDraft();
+    };
+
+    const startEdit = (feature: Feature) => {
+        setEditingFeatureId(feature.id);
+        setEditDraft({
+            name: feature.name,
+            type: feature.type,
+            start: feature.start + 1,
+            end: feature.end,
+            strand: feature.strand,
+            color: feature.color || typeColor(feature.type),
+            description: feature.description || '',
+            qualifiers: notesToRows(feature.notes),
+        });
+    };
+
+    const saveEdit = (feature: Feature) => {
+        if (!onUpdateFeature) return;
+        const updated = buildFeature(editDraft, feature.id);
+        if (!updated) return;
+        onUpdateFeature(updated);
+        setEditingFeatureId(null);
+    };
+
     const toggleSelection = (id: string) => {
-        setSelectedFeatures(prev => {
-            const next = new Set(prev);
+        setSelectedFeatures((current) => {
+            const next = new Set(current);
             if (next.has(id)) {
                 next.delete(id);
             } else {
@@ -242,415 +371,406 @@ export function FeaturePanel({
         });
     };
 
-    // Select all visible
-    const selectAll = () => {
-        setSelectedFeatures(new Set(processedFeatures.map(f => f.id)));
-    };
+    const clearSelection = () => setSelectedFeatures(new Set());
 
-    // Clear selection
-    const clearSelection = () => {
-        setSelectedFeatures(new Set());
-    };
-
-    // Delete selected
     const deleteSelected = () => {
-        selectedFeatures.forEach(id => onRemoveFeature(id));
-        setSelectedFeatures(new Set());
+        selectedFeatures.forEach((id) => onRemoveFeature(id));
+        clearSelection();
     };
 
-    // Highlight feature
     const highlightFeature = useCallback((feature: Feature | null) => {
         if (!feature) {
             onHighlight([]);
-        } else {
-            onHighlight([{
-                start: feature.start,
-                end: feature.end,
-                color: feature.color || '#3b82f6',
-                label: feature.name
-            }]);
+            return;
         }
+        onHighlight([{
+            start: feature.start,
+            end: feature.end,
+            color: feature.color || typeColor(feature.type),
+            label: feature.name,
+        }]);
     }, [onHighlight]);
 
-    // Jump to feature
     const jumpToFeature = (feature: Feature) => {
         highlightFeature(feature);
-        if (onJumpToPosition) {
-            onJumpToPosition(feature.start);
-        }
+        onJumpToPosition?.(feature.start);
     };
 
-    // Feature statistics
-    const stats = useMemo(() => {
-        const totalBp = features.reduce((sum, f) => sum + (f.end - f.start), 0);
-        const coverage = sequenceData.sequence.length > 0
-            ? (totalBp / sequenceData.sequence.length * 100).toFixed(1)
-            : '0';
-        return { count: features.length, totalBp, coverage };
-    }, [features, sequenceData.sequence.length]);
-
     return (
-        <div className="feature-panel p-3 space-y-3 text-sm">
+        <div className="feature-panel space-y-3 p-3 text-sm">
             <div className="flex items-center justify-between">
-                <h4 className="font-semibold text-slate-200">Features & Annotations</h4>
-                <span className="text-xs text-slate-500">
-                    {stats.count} features • {stats.coverage}% coverage
-                </span>
+                <div>
+                    <h4 className="font-semibold text-slate-200">Features & Qualifiers</h4>
+                    <p className="mt-1 text-xs text-slate-500">
+                        {stats.count} features • {stats.coverage}% annotated coverage
+                    </p>
+                </div>
+                {selectedFeatures.size > 0 && (
+                    <button
+                        onClick={deleteSelected}
+                        className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-1 text-xs text-red-300 transition-colors hover:bg-red-500/20"
+                    >
+                        Delete {selectedFeatures.size}
+                    </button>
+                )}
             </div>
 
-            {/* Selection helper */}
             {selection && selection.start !== selection.end && (
-                <div className="p-2 bg-blue-900/30 border border-blue-700/50 rounded flex items-center justify-between">
-                    <span className="text-xs text-blue-300">
-                        Selected: {selection.start + 1}–{selection.end} ({selection.end - selection.start} bp)
+                <div className="flex items-center justify-between rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-xs text-cyan-200">
+                    <span>
+                        Selection {Math.min(selection.start, selection.end) + 1}–{Math.max(selection.start, selection.end)}
                     </span>
                     <button
                         onClick={useSelection}
-                        className="px-2 py-0.5 bg-blue-600 hover:bg-blue-500 rounded text-xs transition-colors"
+                        className="rounded bg-cyan-600 px-2 py-1 font-medium text-white transition-colors hover:bg-cyan-500"
                     >
                         Use Range
                     </button>
                 </div>
             )}
 
-            {/* Add feature form */}
-            <details className="group" open>
-                <summary className="cursor-pointer text-xs font-medium text-slate-400 hover:text-slate-300 flex items-center gap-1">
-                    <span className="group-open:rotate-90 transition-transform">▶</span>
-                    Add New Feature
-                </summary>
-                <div className="mt-2 space-y-2 p-2 bg-slate-800/50 rounded border border-slate-700">
+            <details open className="rounded-xl border border-slate-700 bg-slate-900/50 p-3">
+                <summary className="cursor-pointer text-sm font-medium text-slate-200">Add Feature</summary>
+                <div className="mt-3 space-y-3">
                     <input
-                        type="text"
-                        value={newFeatureName}
-                        onChange={(e) => setNewFeatureName(e.target.value)}
+                        value={addDraft.name}
+                        onChange={(event) => setAddDraft((current) => ({ ...current, name: event.target.value }))}
                         placeholder="Feature name"
-                        className="w-full px-2 py-1 bg-slate-700 border border-slate-600 rounded text-xs focus:border-blue-500 focus:outline-none"
+                        className="w-full rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
                     />
 
-                    <div className="flex gap-2">
+                    <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
                         <select
-                            value={newFeatureType}
-                            onChange={(e) => handleTypeChange(e.target.value)}
-                            className="flex-1 px-2 py-1 bg-slate-700 border border-slate-600 rounded text-xs focus:border-blue-500 focus:outline-none"
+                            value={addDraft.type}
+                            onChange={(event) => setAddDraft((current) => updateDraftType(current, event.target.value))}
+                            className="rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
                         >
                             {Object.entries(
-                                FEATURE_TYPES.reduce((acc, t) => {
-                                    if (!acc[t.category]) acc[t.category] = [];
-                                    acc[t.category].push(t);
+                                FEATURE_TYPES.reduce<Record<string, typeof FEATURE_TYPES>>((acc, entry) => {
+                                    if (!acc[entry.category]) acc[entry.category] = [];
+                                    acc[entry.category].push(entry);
                                     return acc;
-                                }, {} as Record<string, typeof FEATURE_TYPES>)
-                            ).map(([category, types]) => (
+                                }, {}),
+                            ).map(([category, entries]) => (
                                 <optgroup key={category} label={category}>
-                                    {types.map(type => (
-                                        <option key={type.value} value={type.value}>{type.label}</option>
+                                    {entries.map((entry) => (
+                                        <option key={entry.value} value={entry.value}>{entry.label}</option>
                                     ))}
                                 </optgroup>
                             ))}
                         </select>
-
-                        {/* Color picker */}
-                        <div className="relative">
-                            <button
-                                onClick={() => setShowColorPicker(!showColorPicker)}
-                                className="w-8 h-8 rounded border border-slate-600"
-                                style={{ backgroundColor: newFeatureColor }}
-                                title="Pick color"
-                            />
-                            {showColorPicker && (
-                                <div className="absolute right-0 top-full mt-1 p-2 bg-slate-800 border border-slate-600 rounded shadow-lg z-10 grid grid-cols-5 gap-1">
-                                    {COLOR_PALETTE.map(color => (
-                                        <button
-                                            key={color}
-                                            onClick={() => {
-                                                setNewFeatureColor(color);
-                                                setShowColorPicker(false);
-                                            }}
-                                            className="w-5 h-5 rounded border border-slate-600 hover:scale-110 transition-transform"
-                                            style={{ backgroundColor: color }}
-                                        />
-                                    ))}
-                                </div>
-                            )}
+                        <div className="flex items-center gap-1 rounded border border-slate-700 bg-slate-800 px-2">
+                            {COLOR_PALETTE.slice(0, 8).map((color) => (
+                                <button
+                                    key={color}
+                                    onClick={() => setAddDraft((current) => ({ ...current, color }))}
+                                    type="button"
+                                    className={`h-5 w-5 rounded-full border ${addDraft.color === color ? 'border-white' : 'border-slate-700'}`}
+                                    style={{ backgroundColor: color }}
+                                />
+                            ))}
                         </div>
                     </div>
 
-                    <div className="flex gap-2">
+                    <div className="grid grid-cols-2 gap-2">
                         <input
                             type="number"
-                            value={newFeatureStart}
-                            onChange={(e) => setNewFeatureStart(e.target.value ? Number(e.target.value) : '')}
+                            value={addDraft.start}
+                            onChange={(event) => setAddDraft((current) => ({ ...current, start: event.target.value ? Number(event.target.value) : '' }))}
                             placeholder="Start"
                             min={1}
                             max={sequenceData.sequence.length}
-                            className="flex-1 px-2 py-1 bg-slate-700 border border-slate-600 rounded text-xs focus:border-blue-500 focus:outline-none"
+                            className="rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
                         />
                         <input
                             type="number"
-                            value={newFeatureEnd}
-                            onChange={(e) => setNewFeatureEnd(e.target.value ? Number(e.target.value) : '')}
+                            value={addDraft.end}
+                            onChange={(event) => setAddDraft((current) => ({ ...current, end: event.target.value ? Number(event.target.value) : '' }))}
                             placeholder="End"
                             min={1}
                             max={sequenceData.sequence.length}
-                            className="flex-1 px-2 py-1 bg-slate-700 border border-slate-600 rounded text-xs focus:border-blue-500 focus:outline-none"
+                            className="rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
                         />
                     </div>
 
-                    <div className="flex items-center gap-4 text-xs">
-                        <label className="flex items-center gap-1 text-slate-400 cursor-pointer">
+                    <div className="flex items-center gap-4 text-xs text-slate-400">
+                        <label className="flex items-center gap-2">
                             <input
                                 type="radio"
-                                checked={newFeatureStrand === 1}
-                                onChange={() => setNewFeatureStrand(1)}
-                                className="w-3 h-3"
+                                checked={addDraft.strand === 1}
+                                onChange={() => setAddDraft((current) => ({ ...current, strand: 1 }))}
                             />
-                            Forward (+)
+                            Forward
                         </label>
-                        <label className="flex items-center gap-1 text-slate-400 cursor-pointer">
+                        <label className="flex items-center gap-2">
                             <input
                                 type="radio"
-                                checked={newFeatureStrand === -1}
-                                onChange={() => setNewFeatureStrand(-1)}
-                                className="w-3 h-3"
+                                checked={addDraft.strand === -1}
+                                onChange={() => setAddDraft((current) => ({ ...current, strand: -1 }))}
                             />
-                            Reverse (-)
+                            Reverse
                         </label>
                     </div>
 
                     <textarea
-                        value={newFeatureDescription}
-                        onChange={(e) => setNewFeatureDescription(e.target.value)}
-                        placeholder="Description (optional)"
+                        value={addDraft.description}
+                        onChange={(event) => setAddDraft((current) => ({ ...current, description: event.target.value }))}
                         rows={2}
-                        className="w-full px-2 py-1 bg-slate-700 border border-slate-600 rounded text-xs focus:border-blue-500 focus:outline-none resize-none"
+                        placeholder="Description"
+                        className="w-full rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
                     />
 
-                    <button
-                        onClick={addFeature}
-                        disabled={!newFeatureName || !newFeatureStart || !newFeatureEnd}
-                        className="w-full py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-600 disabled:cursor-not-allowed rounded text-xs font-medium transition-colors"
-                    >
-                        Add Feature
-                    </button>
+                    <QualifierEditor
+                        rows={addDraft.qualifiers}
+                        onChange={(qualifiers) => setAddDraft((current) => ({ ...current, qualifiers }))}
+                    />
+
+                    <div className="flex gap-2">
+                        <button
+                            onClick={addFeature}
+                            disabled={!addDraft.name || !addDraft.start || !addDraft.end}
+                            className="flex-1 rounded-lg bg-blue-600 px-3 py-2 font-medium text-white transition-colors hover:bg-blue-500 disabled:opacity-50"
+                        >
+                            Add Feature
+                        </button>
+                        <button
+                            onClick={resetAddDraft}
+                            type="button"
+                            className="rounded-lg border border-slate-600 px-3 py-2 text-slate-300 transition-colors hover:bg-slate-800"
+                        >
+                            Reset
+                        </button>
+                    </div>
                 </div>
             </details>
 
-            {/* Search and filters */}
-            <div className="space-y-2">
-                <div className="flex gap-2">
+            <div className="space-y-2 rounded-xl border border-slate-700 bg-slate-900/50 p-3">
+                <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
                     <input
-                        type="text"
                         value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="Search features..."
-                        className="flex-1 px-2 py-1 bg-slate-700 border border-slate-600 rounded text-xs focus:border-blue-500 focus:outline-none"
+                        onChange={(event) => setSearchQuery(event.target.value)}
+                        placeholder="Search by name, type, description, or qualifier"
+                        className="rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
                     />
                     <select
                         value={filterType}
-                        onChange={(e) => setFilterType(e.target.value)}
-                        className="px-2 py-1 bg-slate-700 border border-slate-600 rounded text-xs focus:border-blue-500 focus:outline-none"
+                        onChange={(event) => setFilterType(event.target.value)}
+                        className="rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
                     >
                         <option value="all">All types</option>
-                        {usedTypes.map(type => (
+                        {usedTypes.map((type) => (
                             <option key={type} value={type}>{type}</option>
                         ))}
                     </select>
                 </div>
 
-                <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-xs text-slate-400">
-                        <span>Sort:</span>
-                        {(['position', 'name', 'type', 'length'] as SortOption[]).map(opt => (
-                            <button
-                                key={opt}
-                                onClick={() => {
-                                    if (sortBy === opt) {
-                                        setSortAsc(!sortAsc);
-                                    } else {
-                                        setSortBy(opt);
-                                        setSortAsc(true);
-                                    }
-                                }}
-                                className={`px-1.5 py-0.5 rounded transition-colors ${sortBy === opt
-                                        ? 'bg-blue-600 text-white'
-                                        : 'hover:bg-slate-600'
-                                    }`}
-                            >
-                                {opt.charAt(0).toUpperCase() + opt.slice(1)}
-                                {sortBy === opt && (sortAsc ? ' ↑' : ' ↓')}
-                            </button>
-                        ))}
-                    </div>
+                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                    <span>Sort</span>
+                    {(['position', 'name', 'type', 'length'] as SortOption[]).map((option) => (
+                        <button
+                            key={option}
+                            onClick={() => {
+                                if (sortBy === option) {
+                                    setSortAsc((current) => !current);
+                                } else {
+                                    setSortBy(option);
+                                    setSortAsc(true);
+                                }
+                            }}
+                            className={`rounded px-2 py-1 transition-colors ${sortBy === option ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+                        >
+                            {option}
+                            {sortBy === option ? (sortAsc ? ' ↑' : ' ↓') : ''}
+                        </button>
+                    ))}
+                    {processedFeatures.length > 0 && (
+                        <button
+                            onClick={() => setSelectedFeatures(new Set(processedFeatures.map((feature) => feature.id)))}
+                            className="ml-auto rounded px-2 py-1 text-slate-300 transition-colors hover:bg-slate-800"
+                        >
+                            Select all shown
+                        </button>
+                    )}
                 </div>
             </div>
 
-            {/* Bulk actions */}
-            {selectedFeatures.size > 0 && (
-                <div className="flex items-center justify-between p-2 bg-amber-900/30 border border-amber-700/50 rounded">
-                    <span className="text-xs text-amber-300">
-                        {selectedFeatures.size} selected
-                    </span>
-                    <div className="flex gap-2">
-                        <button
-                            onClick={clearSelection}
-                            className="px-2 py-0.5 bg-slate-600 hover:bg-slate-500 rounded text-xs"
-                        >
-                            Clear
-                        </button>
-                        <button
-                            onClick={deleteSelected}
-                            className="px-2 py-0.5 bg-red-600 hover:bg-red-500 rounded text-xs"
-                        >
-                            Delete Selected
-                        </button>
-                    </div>
-                </div>
-            )}
-
-            {/* Feature list header */}
-            {processedFeatures.length > 0 && (
-                <div className="flex items-center justify-between text-xs text-slate-500">
-                    <span>{processedFeatures.length} feature{processedFeatures.length !== 1 ? 's' : ''}</span>
-                    <button
-                        onClick={selectedFeatures.size === processedFeatures.length ? clearSelection : selectAll}
-                        className="hover:text-slate-300"
-                    >
-                        {selectedFeatures.size === processedFeatures.length ? 'Deselect All' : 'Select All'}
-                    </button>
-                </div>
-            )}
-
-            {/* Feature list */}
             {processedFeatures.length === 0 ? (
-                <div className="text-center text-slate-500 text-xs py-6">
-                    {features.length === 0 ? 'No features yet' : 'No matches'}
+                <div className="rounded-xl border border-dashed border-slate-700 bg-slate-900/30 px-3 py-8 text-center text-sm text-slate-500">
+                    {features.length === 0 ? 'No features yet.' : 'No features match the current filters.'}
                 </div>
             ) : (
-                <div className="space-y-1 max-h-64 overflow-y-auto">
-                    {processedFeatures.map(feature => (
-                        <div
-                            key={feature.id}
-                            className={`group relative rounded transition-colors ${selectedFeatures.has(feature.id)
-                                    ? 'bg-blue-900/40 border border-blue-600/50'
-                                    : 'bg-slate-700/30 border border-transparent hover:bg-slate-700/60'
-                                }`}
-                        >
-                            {editingFeature === feature.id ? (
-                                // Edit mode
-                                <div className="p-2 space-y-2">
-                                    <input
-                                        type="text"
-                                        value={editName}
-                                        onChange={(e) => setEditName(e.target.value)}
-                                        className="w-full px-2 py-1 bg-slate-800 border border-slate-600 rounded text-xs"
-                                    />
-                                    <div className="flex gap-2">
-                                        <input
-                                            type="number"
-                                            value={editStart}
-                                            onChange={(e) => setEditStart(Number(e.target.value))}
-                                            className="flex-1 px-2 py-1 bg-slate-800 border border-slate-600 rounded text-xs"
-                                        />
-                                        <input
-                                            type="number"
-                                            value={editEnd}
-                                            onChange={(e) => setEditEnd(Number(e.target.value))}
-                                            className="flex-1 px-2 py-1 bg-slate-800 border border-slate-600 rounded text-xs"
-                                        />
-                                        <select
-                                            value={editStrand}
-                                            onChange={(e) => setEditStrand(Number(e.target.value) as 1 | -1)}
-                                            className="px-2 py-1 bg-slate-800 border border-slate-600 rounded text-xs"
-                                        >
-                                            <option value={1}>+</option>
-                                            <option value={-1}>-</option>
-                                        </select>
-                                    </div>
-                                    <div className="flex gap-1">
-                                        {COLOR_PALETTE.slice(0, 10).map(c => (
-                                            <button
-                                                key={c}
-                                                onClick={() => setEditColor(c)}
-                                                className={`w-4 h-4 rounded ${editColor === c ? 'ring-2 ring-white' : ''}`}
-                                                style={{ backgroundColor: c }}
+                <div className="space-y-2 max-h-[34rem] overflow-y-auto pr-1">
+                    {processedFeatures.map((feature) => {
+                        const isEditing = editingFeatureId === feature.id;
+                        const previews = qualifierPreview(feature.notes);
+                        return (
+                            <div
+                                key={feature.id}
+                                className={`rounded-xl border p-3 transition-colors ${selectedFeatures.has(feature.id)
+                                    ? 'border-blue-500/40 bg-blue-500/5'
+                                    : 'border-slate-700 bg-slate-900/40 hover:border-slate-600'
+                                    }`}
+                            >
+                                {isEditing ? (
+                                    <div className="space-y-3">
+                                        <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+                                            <input
+                                                value={editDraft.name}
+                                                onChange={(event) => setEditDraft((current) => ({ ...current, name: event.target.value }))}
+                                                className="rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
                                             />
-                                        ))}
-                                    </div>
-                                    <div className="flex gap-2">
-                                        <button
-                                            onClick={() => saveEdit(feature)}
-                                            className="flex-1 py-1 bg-green-600 hover:bg-green-500 rounded text-xs"
-                                        >
-                                            Save
-                                        </button>
-                                        <button
-                                            onClick={() => setEditingFeature(null)}
-                                            className="flex-1 py-1 bg-slate-600 hover:bg-slate-500 rounded text-xs"
-                                        >
-                                            Cancel
-                                        </button>
-                                    </div>
-                                </div>
-                            ) : (
-                                // Display mode
-                                <div
-                                    className="flex items-center p-2 cursor-pointer"
-                                    onClick={() => jumpToFeature(feature)}
-                                >
-                                    <input
-                                        type="checkbox"
-                                        checked={selectedFeatures.has(feature.id)}
-                                        onChange={(e) => {
-                                            e.stopPropagation();
-                                            toggleSelection(feature.id);
-                                        }}
-                                        className="w-3 h-3 mr-2"
-                                    />
-                                    <span
-                                        className="w-3 h-3 rounded-sm flex-shrink-0 mr-2"
-                                        style={{ backgroundColor: feature.color || '#6b7280' }}
-                                    />
-                                    <div className="flex-1 min-w-0">
-                                        <div className="flex items-center gap-1">
-                                            <span className="text-xs text-slate-200 truncate font-medium">
-                                                {feature.name}
-                                            </span>
-                                            <span className="text-[10px] text-slate-500">
-                                                {feature.strand === 1 ? '→' : '←'}
-                                            </span>
-                                        </div>
-                                        <div className="text-[10px] text-slate-500">
-                                            {feature.type} • {feature.start + 1}–{feature.end} ({feature.end - feature.start} bp)
-                                        </div>
-                                    </div>
-                                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                        {onUpdateFeature && (
-                                            <button
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    startEdit(feature);
-                                                }}
-                                                className="p-1 hover:bg-slate-600 rounded text-slate-400"
-                                                title="Edit"
+                                            <select
+                                                value={editDraft.type}
+                                                onChange={(event) => setEditDraft((current) => updateDraftType(current, event.target.value))}
+                                                className="rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
                                             >
-                                                ✏️
+                                                {FEATURE_TYPES.map((entry) => (
+                                                    <option key={entry.value} value={entry.value}>{entry.label}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <input
+                                                type="number"
+                                                value={editDraft.start}
+                                                onChange={(event) => setEditDraft((current) => ({ ...current, start: event.target.value ? Number(event.target.value) : '' }))}
+                                                className="rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
+                                            />
+                                            <input
+                                                type="number"
+                                                value={editDraft.end}
+                                                onChange={(event) => setEditDraft((current) => ({ ...current, end: event.target.value ? Number(event.target.value) : '' }))}
+                                                className="rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
+                                            />
+                                        </div>
+
+                                        <div className="flex items-center gap-4 text-xs text-slate-400">
+                                            <label className="flex items-center gap-2">
+                                                <input
+                                                    type="radio"
+                                                    checked={editDraft.strand === 1}
+                                                    onChange={() => setEditDraft((current) => ({ ...current, strand: 1 }))}
+                                                />
+                                                Forward
+                                            </label>
+                                            <label className="flex items-center gap-2">
+                                                <input
+                                                    type="radio"
+                                                    checked={editDraft.strand === -1}
+                                                    onChange={() => setEditDraft((current) => ({ ...current, strand: -1 }))}
+                                                />
+                                                Reverse
+                                            </label>
+                                            <div className="ml-auto flex items-center gap-1">
+                                                {COLOR_PALETTE.slice(0, 8).map((color) => (
+                                                    <button
+                                                        key={color}
+                                                        onClick={() => setEditDraft((current) => ({ ...current, color }))}
+                                                        type="button"
+                                                        className={`h-5 w-5 rounded-full border ${editDraft.color === color ? 'border-white' : 'border-slate-700'}`}
+                                                        style={{ backgroundColor: color }}
+                                                    />
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        <textarea
+                                            value={editDraft.description}
+                                            onChange={(event) => setEditDraft((current) => ({ ...current, description: event.target.value }))}
+                                            rows={2}
+                                            className="w-full rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
+                                        />
+
+                                        <QualifierEditor
+                                            rows={editDraft.qualifiers}
+                                            onChange={(qualifiers) => setEditDraft((current) => ({ ...current, qualifiers }))}
+                                        />
+
+                                        <div className="flex items-center gap-2">
+                                            <button
+                                                onClick={() => saveEdit(feature)}
+                                                className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-500"
+                                            >
+                                                Save
                                             </button>
-                                        )}
-                                        <button
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                onRemoveFeature(feature.id);
-                                            }}
-                                            className="p-1 hover:bg-red-600/50 rounded text-slate-400"
-                                            title="Delete"
-                                        >
-                                            🗑️
-                                        </button>
+                                            <button
+                                                onClick={() => setEditingFeatureId(null)}
+                                                className="rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-800"
+                                            >
+                                                Cancel
+                                            </button>
+                                        </div>
                                     </div>
-                                </div>
-                            )}
-                        </div>
-                    ))}
+                                ) : (
+                                    <div className="space-y-2">
+                                        <div className="flex items-start gap-3">
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedFeatures.has(feature.id)}
+                                                onChange={() => toggleSelection(feature.id)}
+                                                className="mt-1"
+                                            />
+                                            <button
+                                                onClick={() => jumpToFeature(feature)}
+                                                onMouseEnter={() => highlightFeature(feature)}
+                                                onMouseLeave={() => highlightFeature(null)}
+                                                className="flex-1 text-left"
+                                            >
+                                                <div className="flex items-center gap-2">
+                                                    <span
+                                                        className="inline-block h-3 w-3 rounded-sm"
+                                                        style={{ backgroundColor: feature.color || typeColor(feature.type) }}
+                                                    />
+                                                    <span className="font-medium text-slate-100">{feature.name}</span>
+                                                    <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[11px] uppercase text-slate-400">
+                                                        {feature.type}
+                                                    </span>
+                                                    <span className="text-xs text-slate-500">{feature.strand === 1 ? '→' : '←'}</span>
+                                                </div>
+                                                <div className="mt-1 text-xs text-slate-400">
+                                                    {feature.start + 1}–{feature.end} • {feature.end - feature.start} bp
+                                                </div>
+                                                {feature.description && (
+                                                    <div className="mt-2 text-xs text-slate-300">{feature.description}</div>
+                                                )}
+                                                {previews.length > 0 && (
+                                                    <div className="mt-2 flex flex-wrap gap-1">
+                                                        {previews.map((preview) => (
+                                                            <span
+                                                                key={preview}
+                                                                className="rounded-full border border-slate-700 bg-slate-800 px-2 py-0.5 text-[10px] text-slate-400"
+                                                            >
+                                                                {preview}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </button>
+                                            <div className="flex gap-1">
+                                                {onUpdateFeature && (
+                                                    <button
+                                                        onClick={() => startEdit(feature)}
+                                                        className="rounded p-1.5 text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-200"
+                                                        title="Edit feature"
+                                                    >
+                                                        ✎
+                                                    </button>
+                                                )}
+                                                <button
+                                                    onClick={() => onRemoveFeature(feature.id)}
+                                                    className="rounded p-1.5 text-red-300 transition-colors hover:bg-red-500/10"
+                                                    title="Delete feature"
+                                                >
+                                                    🗑
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
                 </div>
             )}
         </div>

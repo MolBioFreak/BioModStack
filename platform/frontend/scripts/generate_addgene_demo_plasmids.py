@@ -153,6 +153,88 @@ def map_feature(plasmid_id: str, feature: dict[str, Any]) -> dict[str, Any]:
     return mapped
 
 
+def normalize_feature_label(value: str | None) -> str:
+    return re.sub(r"\s+", " ", (value or "").strip()).lower()
+
+
+def normalize_note_values(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        merged: list[str] = []
+        for item in value:
+            merged.extend(normalize_note_values(item))
+        return merged
+    normalized = str(value).strip()
+    return [normalized] if normalized else []
+
+
+def merge_note_values(existing: Any, incoming: Any) -> Any:
+    merged = dedupe_preserve_order([
+        *normalize_note_values(existing),
+        *normalize_note_values(incoming),
+    ])
+    if not merged:
+        return None
+    if len(merged) == 1:
+        return merged[0]
+    return merged
+
+
+def merge_feature_notes(
+    existing_notes: dict[str, Any] | None,
+    incoming_notes: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    merged: dict[str, Any] = {}
+    for key, value in (existing_notes or {}).items():
+        next_value = merge_note_values(None, value)
+        if next_value is not None:
+            merged[key] = next_value
+    for key, value in (incoming_notes or {}).items():
+        next_value = merge_note_values(merged.get(key), value)
+        if next_value is not None:
+            merged[key] = next_value
+    return merged or None
+
+
+def feature_identity_key(feature: dict[str, Any]) -> tuple[str, str, int, int, int]:
+    return (
+        normalize_feature_label(feature.get("name")),
+        normalize_feature_label(feature.get("type")),
+        int(feature.get("start", 0)),
+        int(feature.get("end", 0)),
+        int(feature.get("strand", 1)),
+    )
+
+
+def merge_feature_records(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    existing_description = (existing.get("description") or "").strip()
+    incoming_description = (incoming.get("description") or "").strip()
+    return {
+        **existing,
+        "id": existing.get("id") or incoming.get("id"),
+        "name": existing.get("name") or incoming.get("name"),
+        "type": existing.get("type") or incoming.get("type"),
+        "color": existing.get("color") or incoming.get("color"),
+        "description": incoming_description
+        if len(incoming_description) > len(existing_description)
+        else (existing_description or None),
+        "notes": merge_feature_notes(existing.get("notes"), incoming.get("notes")),
+    }
+
+
+def dedupe_features(features: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged_by_key: OrderedDict[tuple[str, str, int, int, int], dict[str, Any]] = OrderedDict()
+    for feature in features:
+        key = feature_identity_key(feature)
+        existing = merged_by_key.get(key)
+        if existing is None:
+            merged_by_key[key] = feature
+            continue
+        merged_by_key[key] = merge_feature_records(existing, feature)
+    return list(merged_by_key.values())
+
+
 def parse_percent_gc(raw_percent: str | None) -> float | None:
     if not raw_percent:
         return None
@@ -207,7 +289,9 @@ def browse_sequence_payload(plasmid_id: str, sequence_id: str, label: str) -> di
     features_payload = fetch_json(urls["features"])
     primers_payload = fetch_json(urls["primers"])
 
-    mapped_features = [map_feature(plasmid_id, feature) for feature in features_payload.get("features") or []]
+    mapped_features = dedupe_features([
+        map_feature(plasmid_id, feature) for feature in features_payload.get("features") or []
+    ])
     mapped_primers = map_primers(plasmid_id, primers_payload)
 
     return {

@@ -561,10 +561,38 @@ That split is sound. It should be made more deliberate, not collapsed.
 
 ### Required alignment modes
 
+- `Query Placement`
 - `Read Pileup`
 - `Construct Compare`
 - `Multiple Alignment`
 - `Dotplot / Synteny` as optional or preview
+
+### Pairwise alignment contract
+
+The pairwise alignment surface inside the molbio toolkit must expose explicit semantics, not a generic `align` button.
+
+Required pairwise modes:
+
+- `Query Placement`: map a fragment, amplicon, primer, or pasted comparator onto a construct without turning unclipped flanks into fake deletions
+- `Local Span`: best local internal match for motif-sized or partial-homology queries
+- `Global Full-Length`: true end-to-end construct comparison only
+
+Required pairwise controls:
+
+- strand mode: `auto`, `forward`, `reverse-complement`
+- circular-reference mode for plasmid placement
+- visible query and reference span reporting
+- explicit query coverage and reference span coverage
+- rejection of invalid query characters instead of silent cleanup at run time
+
+Required pairwise outputs:
+
+- aligned reference span
+- aligned query span
+- strand used
+- origin-wrap flag for circular placements
+- difference events that do not treat terminal soft clips as real deletions
+- rendered alignment blocks with absolute construct coordinates
 
 ### Mode 1: Read Pileup
 
@@ -639,6 +667,8 @@ Required handling:
 - allow jumping from read evidence to a sequence location and back
 - keep alignment review separate from direct editing mode
 - persist alignment result provenance and source files
+- make selected sequence spans actionable from the workspace with direct `Primer`, `Feature`, `Edit`, and `PCR` shortcuts
+- add a dedicated drag-selection reliability pass for the linear viewer instead of relying only on third-party default hit-testing
 
 ### Acceptance criteria
 

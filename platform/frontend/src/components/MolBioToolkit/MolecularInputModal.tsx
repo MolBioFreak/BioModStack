@@ -198,7 +198,7 @@ export function MolecularInputModal({
         { id: 'import', label: 'Import' },
         { id: 'paste', label: 'Paste / Build' },
         { id: 'primers', label: 'Primers / Oligos' },
-        { id: 'demos', label: 'Synthetic Demos' },
+        { id: 'demos', label: 'Demo Plasmids' },
     ];
 
     const handleImportSelectedFile = async () => {
@@ -608,7 +608,7 @@ export function MolecularInputModal({
                     {activeTab === 'demos' && (
                         <div className="space-y-3">
                             <div className="rounded-2xl border border-amber-500/30 bg-amber-500/8 p-3 text-sm text-amber-100">
-                                These are synthetic test constructs for UI and workflow validation. They are not reference plasmids and should not be treated as biological truth.
+                                These demos are imported from public Addgene browse-sequence pages for fast testing inside the toolkit. Treat them as external reference records and verify provenance before any real build decision.
                             </div>
                             <div className="grid gap-3 lg:grid-cols-2">
                             {demos.map((demo) => (

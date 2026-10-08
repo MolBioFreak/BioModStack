@@ -30,6 +30,11 @@ class RnaStructureSettingsSchema(BaseModel):
     gamma: float = Field(default=1.0, gt=0.0, le=10.0)
     probability_cutoff: float = Field(default=0.02, gt=0.0, lt=1.0)
     max_pairs: int = Field(default=800, ge=10, le=5000)
+    shape_method: Optional[str] = Field(default=None, description="Optional SHAPE guidance mode. Currently: deigan")
+    shape_slope: float = Field(default=1.8, ge=-20.0, le=20.0)
+    shape_intercept: float = Field(default=-0.6, ge=-50.0, le=50.0)
+    shape_reactivities: Optional[list[Optional[float]]] = None
+    hard_constraints: Optional[str] = None
 
 
 class RnaStructureRequest(BaseModel):
@@ -94,6 +99,7 @@ class RnaStructureResponse(BaseModel):
 class RnaStructureOptionsResponse(BaseModel):
     defaults: RnaStructureSettingsSchema
     limits: dict[str, int]
+    shape_methods: list[str] = Field(default_factory=lambda: ["deigan"])
 
 
 def _schema_to_settings(schema: RnaStructureSettingsSchema, circular: bool) -> RnaStructureSettings:
@@ -106,6 +112,11 @@ def _schema_to_settings(schema: RnaStructureSettingsSchema, circular: bool) -> R
         gamma=schema.gamma,
         probability_cutoff=schema.probability_cutoff,
         max_pairs=schema.max_pairs,
+        shape_method=schema.shape_method,
+        shape_slope=schema.shape_slope,
+        shape_intercept=schema.shape_intercept,
+        shape_reactivities=schema.shape_reactivities,
+        hard_constraints=schema.hard_constraints,
     )
 
 
@@ -165,8 +176,14 @@ async def get_rna_structure_options():
             gamma=defaults.gamma,
             probability_cutoff=defaults.probability_cutoff,
             max_pairs=defaults.max_pairs,
+            shape_method=defaults.shape_method,
+            shape_slope=defaults.shape_slope,
+            shape_intercept=defaults.shape_intercept,
+            shape_reactivities=defaults.shape_reactivities,
+            hard_constraints=defaults.hard_constraints,
         ),
         limits=structure_limits(),
+        shape_methods=["deigan"],
     )
 
 
