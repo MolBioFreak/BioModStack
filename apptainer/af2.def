@@ -37,9 +37,8 @@ From: nvcr.io/nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
     pip install -q --no-cache-dir "numpy<2.0"
 
     # Install JAX with CUDA 12 support (RTX 5090 requires compute capability 12.0)
-    # Using JAX 0.4.20 as specified by nrbennet/dl_binder_design for CUDA 12
-    # Use cuda12_local to leverage host CUDA libraries via --nv mount
-    pip install -q --no-cache-dir "jax[cuda12_local]==0.4.20" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+    # Using JAX 0.4.26 for robust CUDA 12 support
+    pip install -q --no-cache-dir "jax[cuda12_local]==0.4.26" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 
     # Install JAX ecosystem dependencies (REQUIRED for AlphaFold2 Initial-Guess)
     pip install -q --no-cache-dir \
@@ -49,6 +48,15 @@ From: nvcr.io/nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
         ml-collections \
         ml_dtypes \
         mock
+
+    # CRITICAL PATCH: Fix Haiku compatibility with JAX 0.4.26+
+    # The 'jax.extend.core' module is missing attributes like 'JaxprEqn' and 'Var' in JAX 0.4.26.
+    # We redirect the entire module alias 'jax_core' to 'jax.core' which has these attributes.
+    sed -i 's/from jax.extend import core as jax_core/from jax import core as jax_core/g' /usr/local/lib/python3.11/dist-packages/haiku/_src/jaxpr_info.py
+    
+    # CRITICAL: Remove stale bytecode to ensure patch takes effect
+    find /usr/local/lib/python3.11/dist-packages/haiku -name "*.pyc" -delete
+    find /usr/local/lib/python3.11/dist-packages/haiku -name "__pycache__" -type d -exec rm -rf {} +
 
     # Note: TensorFlow removed - testing if AF2 actually needs it
     # If AF2 fails with import errors, uncomment the line below:
