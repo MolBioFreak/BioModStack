@@ -473,7 +473,8 @@ export function Layout({ children }: LayoutProps) {
     const [showDevFeatures, setShowDevFeatures] = useState<boolean>(() => readShowDevFeatures());
     const showBioXpDevFeature = isBmsFeatureVisible(bmsFeatureState, 'bioxp', showDevFeatures, bmsFeatureState.known);
 
-    const isActive = (path: string) => location.pathname === path;
+    const isActive = (path: string) => location.pathname === path
+        || (path === '/bioxp' && location.pathname.startsWith('/bioxp/'));
     const isProjectManagerActive = location.pathname === '/projects' || location.pathname.startsWith('/projects/');
     const showSystemMenus = location.pathname !== '/ngs';
 

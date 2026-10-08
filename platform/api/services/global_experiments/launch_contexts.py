@@ -209,6 +209,7 @@ async def _validate_return_selection(
         selected_node_key=selected_node_key,
         run_limit=1,
         map_limit=1,
+        collection_families=[],
     )
     if summary["selection"]["node_key"] != selected_node_key:
         raise LaunchContextError(

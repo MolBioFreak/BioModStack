@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query';
 
 import { api } from './api.js';
 import { bioXpProviderFailure } from './bioxpEvidencePresentation';
@@ -176,6 +176,9 @@ export interface BioXpOperatorDashboardAxis {
     axis: string;
     reference: string;
     position_steps: number | null;
+    position_reply_valid?: boolean | null;
+    position_source?: string | null;
+    position_observed_at?: number | null;
     speed_steps_s: number | null;
     run_current: number | null;
     standby_current: number | null;
@@ -331,7 +334,7 @@ export interface BioXpOperatorDashboard {
     } | null;
     temperatures: Array<{ sensor: string; label: string; unit: '°C'; temperature_c: number | null; available: boolean }>;
     pipettes: BioXpPipettes | null;
-    snapshot: { snapshot_id: string | null; freshness: { state?: string; age_s?: number | null; fresh_for_s?: number | null }; collection_triggered: false };
+    snapshot: { snapshot_id: string | null; freshness: { state?: string; age_s?: number | null; fresh_for_s?: number | null }; collection_triggered: false; observed_at?: number | null; domain_observed_at?: Record<string, number | null>; clock_skew_detected?: boolean };
     successive_move_queue: Record<string, BioXpOperatorSuccessiveMoveQueueAxis>;
 }
 
@@ -476,17 +479,21 @@ export interface BioXpYAxisV2 {
     lifecycle_state: 'unbound' | 'unprepared' | 'prepared_unreferenced' | 'referenced_ready' | 'generation_stale' | 'reconciliation_required' | 'faulted';
     reference_state: 'unreferenced' | 'referenced' | 'generation_stale' | 'reconciliation_required';
     position_steps: number | null;
-    position_reply_valid: boolean;
+    position_reply_valid?: boolean | null;
+    position_source?: string | null;
+    position_observed_at?: number | null;
+    origin_position_steps?: number | null;
+    requested_position_steps?: number | null;
     position_status_code: number | null;
     speed_steps_s: number | null;
-    speed_reply_valid: boolean;
+    speed_reply_valid?: boolean | null;
     speed_status_code: number | null;
     left_switch_raw: number | null;
-    left_switch_reply_valid: boolean;
+    left_switch_reply_valid?: boolean | null;
     left_switch_status_code: number | null;
     home_effective: boolean | null;
     profile_fingerprint: string | null;
-    profile_readback_valid: boolean;
+    profile_readback_valid?: boolean | null;
     profile_mismatches: string[];
     active_command: BioXpOperatorReceiptV2 | null;
     interrupt_epoch: number;
@@ -530,6 +537,14 @@ export interface BioXpOperatorActionHistory {
     limit: number;
 }
 
+export interface BioXpDeckHeadAlignment {
+    tip_location: number | null;
+    semantic_state_revision: number;
+    producer_operation: string | null;
+    producer_command_id: string | null;
+    ownership_generation: number | null;
+}
+
 export interface BioXpOperatorDashboardV2 {
     schema_version: 'bioxp.operator_dashboard.v2';
     generated_at: number;
@@ -541,6 +556,7 @@ export interface BioXpOperatorDashboardV2 {
     latest_receipts: BioXpOperatorReceiptV2[];
     telemetry: BioXpOperatorDashboard | null;
     deck?: {
+        head_alignment?: BioXpDeckHeadAlignment | null;
         current_location: string | null;
         current_well: number | null;
         position_table_revision: string | null;
@@ -584,56 +600,6 @@ export interface BioXpOperatorControlCatalogV2 {
 export type BioXpOperatorDashboardWire = BioXpOperatorDashboard | BioXpOperatorDashboardV2;
 export type BioXpOperatorControlCatalogWire = BioXpOperatorControlCatalog | BioXpOperatorControlCatalogV2;
 
-export type BioXpOperatorMethodV1Status =
-    | 'queued'
-    | 'active'
-    | 'pause_requested'
-    | 'paused'
-    | 'cancel_requested'
-    | 'stopping'
-    | 'aborting'
-    | 'completed'
-    | 'completed_partial'
-    | 'failed'
-    | 'cleared'
-    | 'interrupted'
-    | 'ambiguous';
-
-export interface BioXpOperatorMethodV1 {
-    schema_version: 'bioxp.operator_method.v1';
-    method_id: string;
-    action_id: 'oem.xy.move_absolute' | 'oem.xy.home';
-    status: BioXpOperatorMethodV1Status;
-    state_version: number;
-    child_receipts: BioXpOperatorReceiptV2[];
-    accepted_at: number;
-    finished_at: number | null;
-}
-
-interface BioXpOperatorMethodV1Envelope {
-    expected_connection_generation: number;
-    schema_version: 'bioxp.operator_method_request.v1';
-    idempotency_key: string;
-    expected_ownership_generation: number;
-    expected_board_epoch_by_board: Record<string, number>;
-}
-
-export type BioXpOperatorMethodV1Request =
-    | (BioXpOperatorMethodV1Envelope & { method_action_id: 'oem.xy.move_absolute'; inputs: { x_steps: number; y_steps: number } })
-    | (BioXpOperatorMethodV1Envelope & { method_action_id: 'oem.xy.home'; inputs: Record<string, never> });
-
-export function assertBioXpOperatorMethodV1Request(request: BioXpOperatorMethodV1Request): void {
-    assertCanonicalBoardEpochMap(request.expected_board_epoch_by_board);
-    if (request.method_action_id === 'oem.xy.move_absolute'
-        && (!Number.isSafeInteger(request.inputs.x_steps)
-            || !Number.isSafeInteger(request.inputs.y_steps)
-            || request.inputs.x_steps < BIOXP_Y_ABSOLUTE_MIN_STEPS
-            || request.inputs.x_steps > BIOXP_Y_ABSOLUTE_MAX_STEPS
-            || request.inputs.y_steps < BIOXP_Y_ABSOLUTE_MIN_STEPS
-            || request.inputs.y_steps > BIOXP_Y_ABSOLUTE_MAX_STEPS)) {
-        throw new Error('XY method positions must fit signed int32');
-    }
-}
 export interface BioXpPipetteHardwareEvidence {
     ok: boolean;
     hardware_truth_level?: 'hardware_query' | 'unparsed_hardware_reply' | 'no_readback' | null;
@@ -1124,6 +1090,7 @@ export interface BioXpWorkflowSourceModel {
 export interface BioXpWorkflowJob {
     job_id: string;
     status: string;
+    protocol?: { document?: Record<string, unknown> | null } | null;
     command?: BioXpWorkflowCommand | null;
     operator?: { manual_review_required: boolean; pending_review: { stage_id: string | null; action_id: string | null; reason: string | null } | null };
     execution?: {
@@ -1137,6 +1104,27 @@ export interface BioXpWorkflowJob {
             action_results?: Record<string, unknown>[];
         };
     };
+}
+export interface BioXpWorkflowJobObservation {
+    schema_version: 'bioxp.protocol_job_observation.v1';
+    job_id: string;
+    status: string;
+    command: Omit<BioXpWorkflowCommand, 'idempotency_key' | 'status_path'>;
+    execution: { dry_run: boolean; runtime_state: { workflow?: BioXpWorkflowState | null } };
+    operator: { pending_review?: { stage_id: string | null; action_id: string | null; reason: string | null } | null };
+}
+// Discovery is intentionally not selected-job detail. Older robots may still
+// return full rows; consumers select by identity and fetch detail separately.
+export interface BioXpWorkflowJobSummary {
+    job_id: string;
+    status: string;
+    dry_run: boolean;
+    protocol_id: string;
+    source_type: 'native' | 'oem_xml';
+    created_at: string;
+    updated_at: string;
+    pending_review: { stage_id: string | null; action_id: string | null; reason: string | null } | null;
+    command?: BioXpWorkflowCommand | null;
 }
 export interface BioXpWorkflowInput {
     source_type: 'native' | 'oem_xml';
@@ -1491,28 +1479,148 @@ export const useBioXpStatus = (enabled = true) => useQuery({
 });
 
 
+type CatalogMetadata = {
+    catalog_view: 'metadata'; metadata_revision: string;
+    actions: Array<Record<string, unknown>>;
+    canonical: Omit<CatalogMetadata, 'canonical'>;
+};
+type CatalogAssessment = Omit<BioXpOperatorControlCatalog, 'actions' | 'canonical'> & {
+    catalog_view: 'assessment'; metadata_revision: string;
+    action_states: Array<Record<string, unknown>>; action_state_indices: number[];
+    canonical: Omit<BioXpOperatorControlCatalogV2, 'actions'> & {
+        catalog_view: 'assessment'; metadata_revision: string;
+        action_states: Array<Record<string, unknown>>; action_state_indices: number[];
+    };
+};
+
+type CatalogUpdate = {
+    catalog_view: 'assessment'; assessment_revision: string;
+    assessment_base?: Record<string, unknown>;
+    assessment_source_revision?: string;
+    assessment_overlay?: CatalogUpdate['assessment_changes'];
+    assessment_changes: Array<[(string | number)[], unknown?, (string | number)[]?]>;
+};
+type CatalogBase = { revision: string; body: Record<string, unknown> };
+type CatalogObservation = BioXpOperatorControlCatalog & {
+    assessmentBases?: { legacy: CatalogBase; canonical: CatalogBase };
+};
+
+export function applyBioXpCatalogUpdate(update: CatalogUpdate, previous?: CatalogBase) {
+    if (!update.assessment_revision || !Array.isArray(update.assessment_changes)) {
+        throw new Error('Robot catalog update release required');
+    }
+    const base = update.assessment_base !== undefined
+        ? { revision: update.assessment_revision, body: update.assessment_base } : previous;
+    if (!base || base.revision !== (update.assessment_source_revision ?? update.assessment_revision)) throw new Error('Robot catalog update baseline missing');
+    const snapshot = applyCatalogChanges(base.body, update.assessment_changes);
+    // Old immutable-baseline peers remain readable. Advancing peers explicitly
+    // separate the immutable result snapshot from request/display-only fields.
+    if (update.assessment_overlay === undefined) return { base, body: snapshot };
+    return { base: { revision: update.assessment_revision, body: snapshot },
+        body: applyCatalogChanges(snapshot, update.assessment_overlay) };
+}
+
+function applyCatalogChanges(sourceBody: Record<string, unknown>, changes: CatalogUpdate['assessment_changes']) {
+    const body = structuredClone(sourceBody);
+    for (const change of changes) {
+        const path = change[0];
+        if (!Array.isArray(path) || path.length === 0) throw new Error('Invalid robot catalog update path');
+        let target: Record<string | number, unknown> = body;
+        for (const key of path.slice(0, -1)) {
+            if (!Object.hasOwn(target, key) || target[key] === null || typeof target[key] !== 'object') throw new Error('Invalid robot catalog update path');
+            target = target[key] as Record<string | number, unknown>;
+        }
+        const key = path[path.length - 1];
+        // Define own properties rather than invoking __proto__ setters.
+        if (change.length === 1) {
+            if (Array.isArray(target)) target.splice(Number(key), 1);
+            else delete target[key];
+        } else {
+            let value = change[1];
+            if (change.length === 3) {
+                value = sourceBody;
+                for (const source of change[2]!) {
+                    if (value === null || typeof value !== 'object' || !Object.hasOwn(value, source)) throw new Error('Invalid robot catalog update source');
+                    value = (value as Record<string | number, unknown>)[source];
+                }
+            }
+            Object.defineProperty(target, key, { value: structuredClone(value), enumerable: true, configurable: true, writable: true });
+        }
+    }
+    return body;
+}
+
+export function composeBioXpCatalog(metadata: CatalogMetadata, assessment: CatalogAssessment): BioXpOperatorControlCatalog {
+    const compose = (definitions: Omit<CatalogMetadata, 'canonical'>, current: Pick<CatalogAssessment, 'metadata_revision' | 'action_states' | 'action_state_indices'>) => {
+        if (definitions.metadata_revision !== current.metadata_revision || definitions.actions.length !== current.action_state_indices.length) {
+            throw new Error('Robot catalog definitions changed during read');
+        }
+        return definitions.actions.map((definition, index) => {
+            const stateIndex = current.action_state_indices[index];
+            if (!Number.isInteger(stateIndex) || stateIndex < 0 || stateIndex >= current.action_states.length) throw new Error('Invalid robot catalog assessment index');
+            return { ...definition, ...current.action_states[stateIndex] };
+        });
+    };
+    return { ...assessment, actions: compose(metadata, assessment),
+        canonical: { ...assessment.canonical, actions: compose(metadata.canonical, assessment.canonical) },
+    } as unknown as BioXpOperatorControlCatalog;
+}
+
 export const useBioXpOperatorControlCatalog = (
     connectionGeneration: number,
     enabled = true,
     lifecycleState?: string | null,
     zTargetSteps?: number,
-) => useQuery<BioXpOperatorControlCatalog>({
-    queryKey: [...operatorCatalogKey, connectionGeneration, enabled, lifecycleState ?? null, zTargetSteps],
-    placeholderData: (previous, previousQuery) => previousQuery?.queryKey[operatorCatalogKey.length] === connectionGeneration ? previous : undefined,
-    // This catalog also owns live gripper/door availability, not just labels.
-    // An expired cached response triggers a refresh on the robot; read again
-    // rather than leaving every remaining manual control disabled indefinitely.
-    queryFn: async ({ signal }) => (
-        await api.get<BioXpOperatorControlCatalog>('/api/bioxp/operator-controls/catalog', { signal, timeout: 12_000, params: Number.isInteger(zTargetSteps) ? { z_target_steps: zTargetSteps } : undefined })
-    ).data,
-    enabled: enabled && connectionGeneration > 0,
-    gcTime: 0,
-    retry: false,
-    refetchInterval: (query) => enabled && connectionGeneration > 0
-        ? query.state.data?.actions.some(action => action.disabled_reason === 'cached_projection_stale') ? 1_000 : 5_000
-        : false,
-    refetchIntervalInBackground: false,
-});
+) => {
+    const queryClient = useQueryClient();
+    const queryKey = [...operatorCatalogKey, connectionGeneration, enabled, lifecycleState ?? null, zTargetSteps];
+    // One generation-scoped baseline entry in the existing QueryClient survives
+    // draft-key disposal. Not a per-draft history or an independent poll owner.
+    const baselineKey = [...operatorCatalogKey, connectionGeneration, 'assessment-base'];
+    return useQuery<CatalogObservation>({
+        queryKey,
+        placeholderData: (previous, previousQuery) => previousQuery?.queryKey[operatorCatalogKey.length] === connectionGeneration ? previous : undefined,
+        queryFn: async ({ signal }) => {
+            const previous = queryClient.getQueryData<CatalogObservation['assessmentBases']>(baselineKey)
+                ?? queryClient.getQueryData<CatalogObservation>(queryKey)?.assessmentBases;
+            const update = (await api.get<CatalogUpdate & { canonical: CatalogUpdate }>('/api/bioxp/operator-controls/catalog', {
+                signal, timeout: 12_000,
+                params: { view: 'assessment', assessment_base: previous?.legacy.revision ?? '',
+                    canonical_assessment_base: previous?.canonical.revision ?? '',
+                    ...(Number.isInteger(zTargetSteps) ? { z_target_steps: zTargetSteps } : {}) },
+            })).data;
+            if (update.catalog_view !== 'assessment' || update.canonical?.catalog_view !== 'assessment') throw new Error('Robot catalog split-view release required');
+            const legacy = applyBioXpCatalogUpdate(update, previous?.legacy);
+            const canonical = applyBioXpCatalogUpdate(update.canonical, previous?.canonical);
+            const assessment = { ...legacy.body, canonical: canonical.body } as CatalogAssessment;
+            const metadata = await queryClient.fetchQuery<CatalogMetadata>({
+                queryKey: ['bioxp', 'operator-definitions', connectionGeneration, assessment.metadata_revision, assessment.canonical.metadata_revision],
+                staleTime: Infinity, gcTime: Infinity, retry: false,
+                queryFn: async () => (await api.get<CatalogMetadata>('/api/bioxp/operator-controls/catalog', {
+                    signal, timeout: 12_000, params: { view: 'metadata' },
+                })).data,
+            });
+            const composed = composeBioXpCatalog(metadata, assessment);
+            const assessmentBases = { legacy: legacy.base, canonical: canonical.base };
+            queryClient.setQueryData(baselineKey, assessmentBases);
+            return { ...composed, assessmentBases };
+        },
+        enabled: enabled && connectionGeneration > 0,
+        gcTime: 0,
+        retry: false,
+        // Unsupported peers may ignore view=assessment and send the old bulk.
+        // Surface that protocol error once, rather than repeat megabyte reads.
+        // This affects observation scheduling only, never mutation admission.
+        refetchInterval: (query) => {
+            const error = query.state.error as { message?: string; response?: { status?: number } } | null;
+            if (error?.response?.status === 426 || error?.message === 'Robot catalog split-view release required' || error?.message === 'Robot catalog update release required') return false;
+            return enabled && connectionGeneration > 0
+                ? query.state.data?.actions.some(action => action.disabled_reason === 'cached_projection_stale') ? 1_000 : 5_000
+                : false;
+        },
+        refetchIntervalInBackground: false,
+    });
+};
 
 export const BIOXP_Y_RELATIVE_MIN_STEPS = -(2 ** 31);
 export const BIOXP_Y_RELATIVE_MAX_STEPS = 2 ** 31 - 1;
@@ -1529,6 +1637,15 @@ function assertCanonicalBoardEpochMap(value: Record<string, number>): void {
 
 export function assertBioXpOperatorActionV2Request(request: BioXpOperatorActionV2Request): void {
     assertCanonicalBoardEpochMap(request.expected_board_epoch_by_board);
+    if (request.action_id === 'oem.deck.move_to_well') {
+        if (Object.keys(request.inputs).sort().join(',') !== 'location_id,position_flag,well'
+            || !Number.isSafeInteger(request.inputs.location_id)
+            || !(typeof request.inputs.well === 'string' || Number.isSafeInteger(request.inputs.well))
+            || !Number.isSafeInteger(request.inputs.position_flag)
+            || ![0, 1, 2].includes(request.inputs.position_flag)) {
+            throw new Error('Well movement inputs must contain explicit location_id, well and position_flag only');
+        }
+    }
     if (request.action_id === 'oem.deck.move_to_location') {
         const keys = Object.keys(request.inputs).sort().join(',');
         if (keys !== 'camera_offset,target'
@@ -1581,12 +1698,13 @@ export type BioXpOperatorActionV2Request =
     | (BioXpOperatorActionV2Envelope & { action_id: 'meta.activate_motion' | 'meta.recover_motion_non_homing'; inputs: Record<string, never> })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.move_steps' | 'oem.z.move_steps'; inputs: { steps: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.move_absolute' | 'oem.z.move_absolute'; inputs: { position_steps: number } })
-    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.manual_panel_home' | 'oem.z.manual_home' | 'oem.z.clear' | 'oem.xy.home' | 'oem.deck.collect_authority'; inputs: Record<string, never> })
+    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.manual_panel_home' | 'oem.z.manual_home' | 'oem.z.diagnostic_home_axis' | 'oem.z.clear' | 'oem.xy.home' | 'oem.deck.collect_authority'; inputs: Record<string, never> })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.xy.move_absolute'; inputs: { x: number; y: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.move_steps'; inputs: { steps: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.move_absolute'; inputs: { target_steps: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.manual_panel_home'; inputs: Record<string, never> })
-    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.deck.move_to_location'; inputs: { target: string; camera_offset: boolean } });
+    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.deck.move_to_location'; inputs: { target: string; camera_offset: boolean } })
+    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.deck.move_to_well'; inputs: { location_id: number; well: string | number; position_flag: 0 | 1 | 2 } });
 
 export interface BioXpOperatorInterruptV1Request {
     expected_connection_generation: number;
@@ -1646,7 +1764,7 @@ const useInvokeBioXpOperatorActionV2Mutation = () => {
             assertBioXpOperatorActionV2Request(request);
             const { action_id: actionId, ...body } = request;
             const path = `/api/bioxp/operator-controls/v2/actions/${encodeURIComponent(actionId)}`;
-            return (await (actionId === 'oem.deck.move_to_location'
+            return (await ((actionId === 'oem.deck.move_to_location' || actionId === 'oem.deck.move_to_well')
                 ? api.post<BioXpOperatorReceiptV2>(path, body, { timeout: 12000 })
                 : api.post<BioXpOperatorReceiptV2>(path, body))).data;
         },
@@ -1661,7 +1779,7 @@ const useInvokeBioXpOperatorActionV2Mutation = () => {
 export const useInvokeBioXpOperatorActionV2 = () => useInvokeBioXpOperatorActionV2Mutation();
 
 export interface BioXpDeckSubmission {
-    request: Extract<BioXpOperatorActionV2Request, { action_id: 'oem.deck.move_to_location' }>;
+    request: Extract<BioXpOperatorActionV2Request, { action_id: 'oem.deck.move_to_location' | 'oem.deck.move_to_well' }>;
     state: 'submitting' | 'accepted' | 'uncertain' | 'rejected' | 'not_sent';
     commandId?: string;
     receipt?: BioXpOperatorReceiptV2;
@@ -1680,6 +1798,7 @@ export const useInvokeBioXpDeckActionV2 = (generation = 0, active = false) => {
     const pending = submissions.find(item => item.request.expected_connection_generation === generation
         && item.state === 'submitting') ?? submissions.find(item => item.request.expected_connection_generation === generation
         && item.state === 'uncertain');
+    useBioXpOperatorUpdates(generation, active && pending?.state === 'uncertain');
     const lookup = useQuery({
         queryKey: ['bioxp', 'operator-controls', 'v2', 'request', generation, pending?.request.idempotency_key],
         enabled: active && pending?.state === 'uncertain',
@@ -1693,8 +1812,8 @@ export const useInvokeBioXpDeckActionV2 = (generation = 0, active = false) => {
                 throw new Error('Command request identity mismatch; admission remains uncertain');
             return receipt;
         },
-        // Including 404: the original admission may still be in flight.
-        refetchInterval: 2000,
+        // A committed update wakes identity lookup; never repeat a POST.
+        staleTime: Infinity,
         gcTime: 0,
     });
     const update = (key: string, changes: Partial<BioXpDeckSubmission>) =>
@@ -1745,23 +1864,28 @@ export const useInvokeBioXpDeckActionV2 = (generation = 0, active = false) => {
         ...mutation,
         submissions,
         retire: (key: string, receipt: BioXpOperatorReceiptV2) => {
-            if (!receipt.terminal || receipt.status === 'ambiguous' || receipt.completion_class === 'recovery_required') return;
+            if (!receipt.terminal) return;
             setSubmissions(items => {
                 const settled = items.find(item => item.request.idempotency_key === key
                     && item.state === 'accepted' && item.receipt?.command_id === receipt.command_id);
-                // Exact terminal GET transfers presentation custody to canonical history.
-                return settled ? items.filter(item => item !== settled) : items;
+                if (!settled || settled.receipt === receipt) return items;
+                // Success transfers to canonical history. Keep failure/ambiguity visible,
+                // but retire its submission observer; selecting it still observes recovery.
+                return receipt.status === 'completed'
+                    ? items.filter(item => item !== settled)
+                    : items.map(item => item === settled ? { ...item, receipt } : item);
             });
         },
         submit: (request: BioXpOperatorActionV2Request) => {
-            if (!active || request.expected_connection_generation !== generation || request.action_id !== 'oem.deck.move_to_location') return;
-            if (reserved.current !== null || sending.current !== null) return;
+            if (!active || request.expected_connection_generation !== generation
+                || (request.action_id !== 'oem.deck.move_to_location' && request.action_id !== 'oem.deck.move_to_well')) return false;
+            if (reserved.current !== null || sending.current !== null) return false;
             assertBioXpOperatorActionV2Request(request);
             reserved.current = request.idempotency_key;
             // Capture values, not the mutable picker; no admission batch gate.
-            const captured = { ...request, inputs: { ...request.inputs },
-                expected_board_epoch_by_board: { ...request.expected_board_epoch_by_board } };
+            const captured = structuredClone(request);
             setSubmissions(items => [...items, { request: captured, state: 'submitting' }]);
+            return true;
         },
     };
 };
@@ -1829,7 +1953,7 @@ export const bioXpDeckRecoveryResolution = (receipt: (BioXpOperatorReceiptV2 & P
         || !Number.isSafeInteger(value.transition_sequence) || value.transition_sequence < 1
         || value.command_id !== receipt?.command_id || receipt.terminal !== true
         || !['failed', 'ambiguous', 'interrupted', 'stopped', 'aborted', 'cancelled'].includes(receipt.status)
-        || !['oem.deck.move_to_location', 'oem.deck._mov_execution', 'oem.deck._finite_operation'].includes(receipt.action_id)) {
+        || !['oem.deck.move_to_location', 'oem.deck.move_to_well', 'oem.deck._mov_execution', 'oem.deck._finite_operation'].includes(receipt.action_id)) {
         throw new Error('Invalid deck recovery resolution');
     }
     return value;
@@ -1841,49 +1965,142 @@ export const decodeBioXpReceiptDetailV2 = (receipt: BioXpOperatorReceiptDetailV2
     return receipt;
 };
 
-// Deduplicate across mounted consumers; bounded per QueryClient.
-const terminalObservations = new WeakMap<QueryClient, Set<string>>();
+export interface BioXpOperatorUpdates {
+    schema_version: 'bioxp.operator_updates.v1';
+    source_instance_id: string;
+    ownership_generation: number;
+    next_after_sequence: number;
+    pose_sequence: number;
+    changed_command_ids: string[];
+    active_command_ids: string[];
+    has_more: boolean;
+    reset: boolean;
+    pose: null | { ownership_generation: number; axes: Array<{
+        axis: 'x' | 'y' | 'z'; position_steps: number; observed_at: number;
+    }> };
+}
+export const bioXpOperatorUpdatesKey = (generation: number) => ['bioxp', 'operator-controls', 'updates', generation] as const;
+
+// One cancellable long wait per QueryClient/connection, not one timer per observer.
+// The cache owns the cursor; absence of demand stops transport, not retained history.
+type OperatorFeed = { users: number; stop: () => void };
+const operatorFeeds = new WeakMap<QueryClient, Map<number, OperatorFeed>>();
+function subscribeOperatorUpdates(client: QueryClient, generation: number) {
+    let feeds = operatorFeeds.get(client);
+    if (!feeds) { feeds = new Map(); operatorFeeds.set(client, feeds); }
+    let feed = feeds.get(generation);
+    if (!feed) {
+        const key = bioXpOperatorUpdatesKey(generation);
+        let controller: AbortController | null = null;
+        let retryTimer: ReturnType<typeof setTimeout> | undefined;
+        let stopped = false;
+        const finishingReads = new Set<object>();
+        const run = async () => {
+            if (stopped || document.visibilityState === 'hidden' || controller) return;
+            const current = new AbortController();
+            controller = current;
+            let reconcile = client.getQueryData(key) !== undefined;
+            try {
+                while (!current.signal.aborted) {
+                    const previous = client.getQueryData<BioXpOperatorUpdates>(key);
+                    const next = (await api.get<BioXpOperatorUpdates>('/api/bioxp/operator-controls/updates', {
+                        signal: current.signal, timeout: 30_000, params: {
+                            expected_connection_generation: generation, wait_s: previous?.has_more ? 0 : 25,
+                            ...(previous ? { after_sequence: previous.next_after_sequence, after_pose_sequence: previous.pose_sequence } : {}),
+                        },
+                    })).data;
+                    if (current.signal.aborted) break;
+                    if (next.schema_version !== 'bioxp.operator_updates.v1') throw new Error('Robot updates release required');
+                    const replaced = !!previous && (previous.source_instance_id !== next.source_instance_id
+                        || previous.ownership_generation !== next.ownership_generation);
+                    const changed = !previous || replaced || next.reset || previous.next_after_sequence !== next.next_after_sequence;
+                    client.setQueryData(key, next);
+                    const ids = new Set(changed ? next.changed_command_ids : []);
+                    // Reconnect/reset reconcile original identities by GET; never replay submissions.
+                    const resync = reconcile || replaced || next.reset;
+                    reconcile = false;
+                    const affected = client.getQueryCache().findAll({ predicate: query => {
+                        const q = query.queryKey;
+                        if (q[0] !== 'bioxp' || q[1] !== 'operator-controls') return false;
+                        if (q[2] === 'history') return q[3] === generation && (resync || ids.size > 0);
+                        if (q[2] !== 'v2') return false;
+                        if (q[3] === 'request') return q[4] === generation && (resync || ids.size > 0);
+                        return (q[3] === 'receipt' || q[3] === 'receipt-detail') && q[5] === generation
+                            && (ids.has(String(q[4])) || (resync && (query.state.data !== undefined || query.state.error !== null || query.state.fetchStatus === 'fetching')));
+                    } });
+                    for (const query of affected) {
+                        const filter = { queryKey: query.queryKey, exact: true };
+                        // React Query coalesces an initial (no data) GET even with
+                        // cancelRefetch. Don't lose a commit arriving during that read.
+                        if (query.state.data === undefined && query.state.fetchStatus === 'fetching' && query.promise && !finishingReads.has(query)) {
+                            finishingReads.add(query);
+                            void query.promise.catch(() => undefined).then(() => {
+                                finishingReads.delete(query);
+                                if (!current.signal.aborted) void client.invalidateQueries(filter);
+                            });
+                        }
+                        void client.invalidateQueries(filter);
+                    }
+                }
+            } catch (error) {
+                if (!current.signal.aborted) {
+                    client.getQueryCache().find({ queryKey: key })?.setState({ error: error as Error, status: 'error' });
+                    retryTimer = setTimeout(() => { retryTimer = undefined; void run(); }, 2000);
+                }
+            } finally { if (controller === current) controller = null; }
+        };
+        const visibility = () => {
+            if (document.visibilityState === 'hidden') {
+                controller?.abort(); controller = null; finishingReads.clear();
+                clearTimeout(retryTimer); retryTimer = undefined;
+            } else void run();
+        };
+        feed = { users: 0, stop: () => {
+            stopped = true; controller?.abort(); clearTimeout(retryTimer);
+            document.removeEventListener('visibilitychange', visibility);
+        } };
+        feeds.set(generation, feed);
+        document.addEventListener('visibilitychange', visibility);
+        void run();
+    }
+    feed.users++;
+    return () => { if (--feed.users === 0) { feed.stop(); feeds.delete(generation); } };
+}
+export function useBioXpOperatorUpdates(generation: number, enabled = true) {
+    const client = useQueryClient();
+    const observation = useQuery<BioXpOperatorUpdates>({
+        queryKey: bioXpOperatorUpdatesKey(generation), queryFn: skipToken, enabled: false, staleTime: Infinity,
+    });
+    useEffect(() => {
+        if (enabled && generation > 0) return subscribeOperatorUpdates(client, generation);
+    }, [client, generation, enabled]);
+    return observation;
+}
 
 export const useBioXpOperatorReceiptV2 = (
     commandId: string | null,
     connectionGeneration: number,
     enabled = true,
 ) => {
-    const queryClient = useQueryClient();
+    useBioXpOperatorUpdates(connectionGeneration, enabled && Boolean(commandId));
     return useQuery({
         queryKey: ['bioxp', 'operator-controls', 'v2', 'receipt', commandId, connectionGeneration],
         queryFn: async ({ signal }) => {
             const receipt = (
             await api.get<BioXpOperatorReceiptV2>(
                 `/api/bioxp/operator-controls/v2/receipts/${encodeURIComponent(commandId ?? '')}`,
-                { signal, timeout: 12000, params: { detail: false } },
+                { signal, timeout: 12000, params: { detail: false, expected_connection_generation: connectionGeneration } },
             )
             ).data;
             if (receipt.command_id !== commandId) throw new Error('Receipt command identity mismatch');
-            const identity = `${connectionGeneration}:${commandId}`;
-            const observed = terminalObservations.get(queryClient) ?? new Set<string>();
-            terminalObservations.set(queryClient, observed);
-            if (receipt.terminal === true && !observed.has(identity)) {
-                observed.add(identity);
-                if (observed.size > 128) observed.delete(observed.values().next().value!);
-                for (const key of [statusKey, operatorCatalogKey]) {
-                    void queryClient.invalidateQueries({ queryKey: key });
-                }
-            }
             return receipt;
         },
         enabled: enabled && Boolean(commandId) && connectionGeneration > 0,
         gcTime: 0,
         retry: false,
-        refetchInterval: (query) => {
-            // A failed read is not a terminal command outcome. Keep reconciling
-            // this identity at a slower cadence; never resubmit the action.
-            if (query.state.error) return 2_000;
-            if (!query.state.data) return 500;
-            if (query.state.data.status === 'ambiguous' || query.state.data.completion_class === 'recovery_required') return 2_000;
-            return bioXpReceiptV2IsNonTerminal(query.state.data) ? 500 : false;
-        },
-        refetchIntervalInBackground: false,
+        staleTime: Infinity,
+        refetchOnWindowFocus: false,
+        refetchOnReconnect: false,
     });
 };
 
@@ -1892,20 +2109,17 @@ export const useBioXpOperatorReceiptV2 = (
  * Compact status owns the cadence; unchanged observations never reread bulk evidence.
  */
 export const useBioXpOperatorReceiptDetailV2 = (
-    commandId: string | null, connectionGeneration: number, enabled = true, observe = true,
+    commandId: string | null, connectionGeneration: number, enabled = true, observe = true, detailOpen = true,
 ) => {
     const status = useBioXpOperatorReceiptV2(commandId, connectionGeneration, enabled && observe);
     const receipt = status.data;
     const detail = useQuery({
-        queryKey: ['bioxp', 'operator-controls', 'v2', 'receipt-detail', commandId, connectionGeneration,
-            receipt?.state_version, receipt?.status, receipt?.terminal_receipt_id,
-            // Recovery decisions can be appended without changing historical outcome.
-            receipt?.status === 'ambiguous' || receipt?.completion_class === 'recovery_required' ? status.dataUpdatedAt : null],
+        queryKey: ['bioxp', 'operator-controls', 'v2', 'receipt-detail', commandId, connectionGeneration],
         queryFn: async ({ signal }) => decodeBioXpReceiptDetailV2((await api.get<BioXpOperatorReceiptDetailV2>(
             `/api/bioxp/operator-controls/v2/receipts/${encodeURIComponent(commandId ?? '')}`,
-            { signal, timeout: 12000, params: { detail: true } },
+            { signal, timeout: 12000, params: { detail: true, expected_connection_generation: connectionGeneration } },
         )).data, commandId ?? ''),
-        enabled: enabled && Boolean(commandId) && connectionGeneration > 0 && (!observe || receipt != null),
+        enabled: enabled && detailOpen && Boolean(commandId) && connectionGeneration > 0 && (!observe || receipt != null),
         gcTime: 0,
         staleTime: observe ? Infinity : 0,
         retry: false,
@@ -1913,19 +2127,11 @@ export const useBioXpOperatorReceiptDetailV2 = (
     // Never hide current lifecycle/denials while retained evidence is loading.
     // No invented empty evidence or proof defaults stand in for an absent detail.
     const data: (BioXpOperatorReceiptV2 & Partial<BioXpOperatorReceiptDetailV2>) | undefined =
-        detail.data ?? receipt;
+        detailOpen && detail.data ? { ...detail.data, ...receipt } : receipt;
     return { ...detail, data, error: (observe && status.error) || detail.error,
         isError: (observe && status.isError) || detail.isError };
 };
 
-const BIOXP_METHOD_V1_TERMINAL = new Set<BioXpOperatorMethodV1Status>([
-    'completed', 'completed_partial', 'failed', 'cleared', 'interrupted', 'ambiguous',
-]);
-
-export const bioXpMethodV1IsTerminal = (
-    method: Pick<BioXpOperatorMethodV1, 'status'> | { status?: unknown } | null | undefined,
-): boolean => typeof method?.status !== 'string'
-    || BIOXP_METHOD_V1_TERMINAL.has(method.status as BioXpOperatorMethodV1Status);
 
 
 type BioXpDirectLiquidKind = 'readback' | 'application_plan';
@@ -2244,7 +2450,9 @@ export const useBioXpOperatorActionHistory = (
     enabled = true,
     limit = 100,
     cursor: string | null = null,
-) => useQuery({
+) => {
+    useBioXpOperatorUpdates(connectionGeneration, enabled);
+    return useQuery({
     queryKey: [...operatorHistoryKey, connectionGeneration, limit, cursor],
     queryFn: async ({ signal }) => (
         await api.get<BioXpOperatorActionHistory>(`/api/bioxp/operator-controls/history?limit=${limit}`, {
@@ -2254,9 +2462,11 @@ export const useBioXpOperatorActionHistory = (
     enabled: enabled && connectionGeneration > 0,
     gcTime: 0,
     retry: false,
-    refetchInterval: (query) => query.state.data?.items.some(bioXpReceiptV2IsNonTerminal) ? 1000 : false,
-    refetchIntervalInBackground: false,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
 });
+};
 
 export const useBioXpOperatorReportSummary = (
     connectionGeneration: number,
@@ -2452,6 +2662,7 @@ export async function getBioXpCameraStatus(connectionGeneration: number) {
 export const useBioXpCameraStatus = (
     connectionGeneration: number | null,
     enabled = true,
+    interval: number | false = 2_000,
 ) => useQuery({
     queryKey: ['bioxp', 'camera', 'status', connectionGeneration],
     queryFn: async () => {
@@ -2460,7 +2671,7 @@ export const useBioXpCameraStatus = (
     },
     enabled: enabled && connectionGeneration !== null,
     retry: false,
-    refetchInterval: enabled ? 2_000 : false,
+    refetchInterval: enabled ? interval : false,
 });
 
 export const useBioXpCameraStreamState = (
@@ -2476,7 +2687,8 @@ export const useBioXpCameraStreamState = (
     },
     enabled: enabled && connectionGeneration !== null,
     retry: false,
-    refetchInterval: enabled ? 2_000 : false,
+    // Visible idle panes discover another client's stream without 2s idle polling.
+    refetchInterval: query => enabled ? (query.state.data?.active ? 2_000 : 15_000) : false,
 });
 
 export async function startBioXpCameraStream(connectionGeneration: number): Promise<BioXpCameraStream> {
@@ -2550,7 +2762,7 @@ export const useDisconnectBioXp = () => useRefreshMutation(
 const workflowJobsKey = ['bioxp', 'protocols', 'jobs'] as const;
 export const useBioXpWorkflowJobs = (generation: number, enabled: boolean) => useQuery({
     queryKey: [...workflowJobsKey, generation],
-    queryFn: async () => (await api.get<{ rows: BioXpWorkflowJob[] }>('/api/bioxp/protocols/jobs', {
+    queryFn: async () => (await api.get<{ rows: (BioXpWorkflowJob | BioXpWorkflowJobSummary)[] }>('/api/bioxp/protocols/jobs', {
         params: { expected_connection_generation: generation },
     })).data.rows,
     enabled: enabled && generation > 0,
@@ -2572,7 +2784,29 @@ export const useBioXpWorkflowJob = (jobId: string | null, generation: number, en
         const command = job?.command;
         const workflow = job?.execution?.runtime_state.workflow;
         const settled = command?.command_id === jobId && command.terminal
-            && command.status !== 'ambiguous' && workflow?.command_id === jobId && workflow.phase === 'terminal';
+            && workflow?.command_id === jobId && workflow.phase === 'terminal';
+        return settled ? false : 2_000;
+    },
+    refetchIntervalInBackground: false,
+});
+// The monitor consumes control/review truth, never source trays or retained
+// action evidence. Explicit detail/clone and their query keys remain full.
+export const useBioXpWorkflowJobObservation = (jobId: string | null, generation: number, enabled: boolean, facade = false) => useQuery({
+    queryKey: [...workflowJobsKey, generation, jobId, 'observation'],
+    queryFn: async () => (await api.get<BioXpWorkflowJobObservation | BioXpWorkflowJob>(`${facade ? '/api/bioxp/methods/runs' : '/api/bioxp/protocols/jobs'}/${encodeURIComponent(jobId!)}`, {
+        params: { expected_connection_generation: generation, observation: true },
+    })).data,
+    enabled: enabled && generation > 0 && jobId !== null,
+    retry: false,
+    refetchInterval: (query) => {
+        if (!enabled) return false;
+        const job = query.state.data;
+        // Older peers can ignore the projection selector. Preserve their
+        // original outcome cadence; compactness never decides settlement.
+        const command = job?.command;
+        const workflow = job?.execution?.runtime_state.workflow;
+        const settled = command?.command_id === jobId && command.terminal
+            && workflow?.command_id === jobId && workflow.phase === 'terminal';
         return settled ? false : 2_000;
     },
     refetchIntervalInBackground: false,
@@ -2583,15 +2817,15 @@ export const useSubmitBioXpProtocol = () => useMutation({
     ).data,
     retry: false,
 });
-export const useControlBioXpWorkflow = () => useMutation({
+export const useControlBioXpWorkflow = (facade = false) => useMutation({
     mutationFn: async ({ jobId, request }: { jobId: string; request: BioXpWorkflowControlRequest }) => (
-        await api.post<BioXpWorkflowControlResponse>(`/api/bioxp/protocols/jobs/${encodeURIComponent(jobId)}/control`, request)
+        await api.post<BioXpWorkflowControlResponse>(`${facade ? '/api/bioxp/methods/runs' : '/api/bioxp/protocols/jobs'}/${encodeURIComponent(jobId)}/control`, request)
     ).data,
     retry: false,
 });
-export const useReviewBioXpWorkflow = () => useMutation({
+export const useReviewBioXpWorkflow = (facade = false) => useMutation({
     mutationFn: async ({ jobId, request }: { jobId: string; request: BioXpWorkflowReviewRequest }) => (
-        await api.post<BioXpWorkflowJob>(`/api/bioxp/protocols/jobs/${encodeURIComponent(jobId)}/review`, request)
+        await api.post<BioXpWorkflowJob>(`${facade ? '/api/bioxp/methods/runs' : '/api/bioxp/protocols/jobs'}/${encodeURIComponent(jobId)}/review`, request)
     ).data,
     retry: false,
 });

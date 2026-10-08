@@ -1,0 +1,1722 @@
+{
+  "transport_fixture_only": true,
+  "requests": [
+    {
+      "url": "/api/bioxp/methods/library",
+      "method": "get",
+      "params": {
+        "search": "",
+        "offset": 0,
+        "limit": 25
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/presets",
+      "method": "get",
+      "params": {
+        "limit": 100
+      }
+    },
+    {
+      "method": "get",
+      "url": "/api/bioxp/methods/runs/protocol-live-5318ec71820c7c21223e2bc212d461f47058da6e8940bad86d9b55e10edc5df6",
+      "params": {
+        "expected_connection_generation": 9,
+        "observation": true
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/catalog",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/schema",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/examples",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library",
+      "method": "get",
+      "params": {
+        "search": "",
+        "offset": 0,
+        "limit": 25
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/presets",
+      "method": "get",
+      "params": {
+        "limit": 100
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/catalog",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/schema",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/examples",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library",
+      "method": "get",
+      "params": {
+        "search": "",
+        "offset": 0,
+        "limit": 25
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/presets",
+      "method": "get",
+      "params": {
+        "limit": 100
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1/revisions",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/check",
+      "method": "post",
+      "body": {
+        "method": {
+          "schema": "bms.bioxp-method.v1",
+          "name": "PCR author draft",
+          "parameters": [
+            {
+              "id": "volume",
+              "type": "number",
+              "unit": "uL"
+            }
+          ],
+          "procedures": [],
+          "steps": [
+            {
+              "step_id": "move-original",
+              "type": "action",
+              "action": "move",
+              "inputs": {
+                "location_id": 2,
+                "well": "a1",
+                "height_steps": "01.20",
+                "future": null
+              }
+            }
+          ],
+          "unknown": {
+            "empty": "",
+            "explicit": null,
+            "flag": false
+          }
+        },
+        "bindings": {},
+        "dependencies": {},
+        "initial_state": {}
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1",
+      "method": "put",
+      "body": {
+        "method": {
+          "schema": "bms.bioxp-method.v1",
+          "name": "PCR author draft",
+          "parameters": [
+            {
+              "id": "volume",
+              "type": "number",
+              "unit": "uL"
+            }
+          ],
+          "procedures": [],
+          "steps": [
+            {
+              "step_id": "move-original",
+              "type": "action",
+              "action": "move",
+              "inputs": {
+                "location_id": 2,
+                "well": "a1",
+                "height_steps": "002.3400",
+                "future": null
+              }
+            }
+          ],
+          "unknown": {
+            "empty": "",
+            "explicit": null,
+            "flag": false
+          }
+        },
+        "name": "PCR author draft",
+        "expected_base_revision": 1
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1/revisions/2",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library",
+      "method": "get",
+      "params": {
+        "search": "",
+        "offset": 0,
+        "limit": 25
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/check",
+      "method": "post",
+      "body": {
+        "method": {
+          "schema": "bms.bioxp-method.v1",
+          "name": "PCR author draft",
+          "parameters": [
+            {
+              "id": "volume",
+              "type": "number",
+              "unit": "uL"
+            }
+          ],
+          "procedures": [],
+          "steps": [
+            {
+              "step_id": "move-original",
+              "type": "action",
+              "action": "move",
+              "inputs": {
+                "location_id": 2,
+                "well": "a1",
+                "height_steps": "002.3400",
+                "future": null
+              }
+            }
+          ],
+          "unknown": {
+            "empty": "",
+            "explicit": null,
+            "flag": false
+          }
+        },
+        "bindings": {},
+        "dependencies": {},
+        "initial_state": {}
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/catalog",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/schema",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/examples",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library",
+      "method": "get",
+      "params": {
+        "search": "",
+        "offset": 0,
+        "limit": 25
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/presets",
+      "method": "get",
+      "params": {
+        "limit": 100
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1/revisions",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/check",
+      "method": "post",
+      "body": {
+        "method": {
+          "schema": "bms.bioxp-method.v1",
+          "name": "PCR author draft",
+          "parameters": [
+            {
+              "id": "volume",
+              "type": "number",
+              "unit": "uL"
+            }
+          ],
+          "procedures": [],
+          "steps": [
+            {
+              "step_id": "move-original",
+              "type": "action",
+              "action": "move",
+              "inputs": {
+                "location_id": 2,
+                "well": "a1",
+                "height_steps": "01.20",
+                "future": null
+              }
+            }
+          ],
+          "unknown": {
+            "empty": "",
+            "explicit": null,
+            "flag": false
+          }
+        },
+        "bindings": {},
+        "dependencies": {},
+        "initial_state": {}
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1",
+      "method": "put",
+      "body": {
+        "method": {
+          "schema": "bms.bioxp-method.v1",
+          "name": "PCR author draft",
+          "parameters": [
+            {
+              "id": "volume",
+              "type": "number",
+              "unit": "uL"
+            }
+          ],
+          "procedures": [],
+          "steps": [
+            {
+              "step_id": "move-original",
+              "type": "action",
+              "action": "move",
+              "inputs": {
+                "location_id": 2,
+                "well": "a1",
+                "height_steps": {
+                  "expr": {
+                    "version": 1,
+                    "op": "param",
+                    "value": "01.20",
+                    "id": "volume"
+                  }
+                },
+                "future": null
+              }
+            },
+            {
+              "step_id": "6124b21e-008f-41f8-91f0-40194847f6e9",
+              "type": "action",
+              "action": "move",
+              "inputs": {
+                "location_id": 2,
+                "well": "a1",
+                "height_steps": {
+                  "expr": {
+                    "version": 1,
+                    "op": "param",
+                    "value": "01.20",
+                    "id": "volume"
+                  }
+                },
+                "future": null
+              }
+            }
+          ],
+          "unknown": {
+            "empty": "",
+            "explicit": null,
+            "flag": false
+          }
+        },
+        "name": "PCR author draft",
+        "expected_base_revision": 1
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1/revisions/2",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library",
+      "method": "get",
+      "params": {
+        "search": "",
+        "offset": 0,
+        "limit": 25
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/check",
+      "method": "post",
+      "body": {
+        "method": {
+          "schema": "bms.bioxp-method.v1",
+          "name": "PCR author draft",
+          "parameters": [
+            {
+              "id": "volume",
+              "type": "number",
+              "unit": "uL"
+            }
+          ],
+          "procedures": [],
+          "steps": [
+            {
+              "step_id": "move-original",
+              "type": "action",
+              "action": "move",
+              "inputs": {
+                "location_id": 2,
+                "well": "a1",
+                "height_steps": {
+                  "expr": {
+                    "version": 1,
+                    "op": "param",
+                    "value": "01.20",
+                    "id": "volume"
+                  }
+                },
+                "future": null
+              }
+            },
+            {
+              "step_id": "6124b21e-008f-41f8-91f0-40194847f6e9",
+              "type": "action",
+              "action": "move",
+              "inputs": {
+                "location_id": 2,
+                "well": "a1",
+                "height_steps": {
+                  "expr": {
+                    "version": 1,
+                    "op": "param",
+                    "value": "01.20",
+                    "id": "volume"
+                  }
+                },
+                "future": null
+              }
+            }
+          ],
+          "unknown": {
+            "empty": "",
+            "explicit": null,
+            "flag": false
+          }
+        },
+        "bindings": {},
+        "dependencies": {},
+        "initial_state": {}
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/catalog",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/schema",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/examples",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library",
+      "method": "get",
+      "params": {
+        "search": "",
+        "offset": 0,
+        "limit": 25
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/presets",
+      "method": "get",
+      "params": {
+        "limit": 100
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1/revisions",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/check",
+      "method": "post",
+      "body": {
+        "method": {
+          "schema": "bms.bioxp-method.v1",
+          "name": "PCR author draft",
+          "parameters": [
+            {
+              "id": "volume",
+              "type": "number",
+              "unit": "uL"
+            }
+          ],
+          "procedures": [],
+          "steps": [
+            {
+              "step_id": "move-original",
+              "type": "action",
+              "action": "move",
+              "inputs": {
+                "location_id": 2,
+                "well": "a1",
+                "height_steps": "01.20",
+                "future": null
+              }
+            }
+          ],
+          "unknown": {
+            "empty": "",
+            "explicit": null,
+            "flag": false
+          }
+        },
+        "bindings": {},
+        "dependencies": {},
+        "initial_state": {}
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1/runs",
+      "method": "post",
+      "body": {
+        "revision": 1,
+        "bindings": {},
+        "dependencies": {},
+        "initial_state": {},
+        "idempotency_key": "bf252103-768d-4425-b7ee-960b9e172819",
+        "expected_generation": 9,
+        "acknowledge_live": true
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/runs/protocol-live-6a1a9490144aeabbab918186586f97c27e526ee0af3d2231aa6771ad8e1bb7ca",
+      "method": "get",
+      "params": {
+        "expected_connection_generation": 9,
+        "observation": true
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/liquid-classes",
+      "method": "get",
+      "params": {
+        "search": "",
+        "offset": 0,
+        "limit": 25
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/liquid-classes/m1/revisions",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/liquid-classes/starters",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/runs/protocol-live-6a1a9490144aeabbab918186586f97c27e526ee0af3d2231aa6771ad8e1bb7ca",
+      "method": "get",
+      "params": {
+        "expected_connection_generation": 9,
+        "observation": true
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library",
+      "method": "get",
+      "params": {
+        "search": "",
+        "offset": 0,
+        "limit": 25
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/catalog",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/schema",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/examples",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library",
+      "method": "get",
+      "params": {
+        "search": "",
+        "offset": 0,
+        "limit": 25
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/presets",
+      "method": "get",
+      "params": {
+        "limit": 100
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/check",
+      "method": "post",
+      "body": {
+        "method": {
+          "schema": "bms.bioxp-method.v1",
+          "name": "",
+          "parameters": [],
+          "procedures": [],
+          "steps": []
+        },
+        "bindings": {},
+        "dependencies": {},
+        "initial_state": {}
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/check",
+      "method": "post",
+      "body": {
+        "method": {
+          "schema": "bms.bioxp-method.v1",
+          "name": "Unsaved quick",
+          "parameters": [],
+          "procedures": [],
+          "steps": []
+        },
+        "bindings": {},
+        "dependencies": {},
+        "initial_state": {}
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/quick-runs",
+      "method": "post",
+      "body": {
+        "method": {
+          "schema": "bms.bioxp-method.v1",
+          "name": "Unsaved quick",
+          "parameters": [],
+          "procedures": [],
+          "steps": []
+        },
+        "bindings": {},
+        "dependencies": {},
+        "initial_state": {},
+        "idempotency_key": "55a9493f-a26b-4705-8bc2-cacd8f912706",
+        "expected_generation": 9,
+        "acknowledge_live": true
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/runs/protocol-live-1f29e99b5bcc411b2ec7fa7518605e166de308649950a4270d9b65fe3ba51ae9",
+      "method": "get",
+      "params": {
+        "expected_connection_generation": 9,
+        "observation": true
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/runs/protocol-live-1f29e99b5bcc411b2ec7fa7518605e166de308649950a4270d9b65fe3ba51ae9",
+      "method": "get",
+      "params": {
+        "expected_connection_generation": 10,
+        "observation": true
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/catalog",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/schema",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/examples",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library",
+      "method": "get",
+      "params": {
+        "search": "",
+        "offset": 0,
+        "limit": 25
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/presets",
+      "method": "get",
+      "params": {
+        "limit": 100
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/catalog",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/schema",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/examples",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library",
+      "method": "get",
+      "params": {
+        "search": "",
+        "offset": 0,
+        "limit": 25
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/presets",
+      "method": "get",
+      "params": {
+        "limit": 100
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1/revisions",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/check",
+      "method": "post",
+      "body": {
+        "method": {
+          "schema": "bms.bioxp-method.v1",
+          "name": "PCR author draft",
+          "parameters": [
+            {
+              "id": "volume",
+              "type": "number",
+              "unit": "uL"
+            }
+          ],
+          "procedures": [],
+          "steps": [
+            {
+              "step_id": "move-original",
+              "type": "action",
+              "action": "move",
+              "inputs": {
+                "location_id": 2,
+                "well": "a1",
+                "height_steps": "01.20",
+                "future": null
+              }
+            }
+          ],
+          "unknown": {
+            "empty": "",
+            "explicit": null,
+            "flag": false
+          }
+        },
+        "bindings": {},
+        "dependencies": {},
+        "initial_state": {}
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1/runs",
+      "method": "post",
+      "body": {
+        "revision": 1,
+        "bindings": {},
+        "dependencies": {},
+        "initial_state": {},
+        "idempotency_key": "76c81a54-5c5a-40a7-8545-9ec38988c32b",
+        "expected_generation": 9,
+        "acknowledge_live": true
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/catalog",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/schema",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/examples",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library",
+      "method": "get",
+      "params": {
+        "search": "",
+        "offset": 0,
+        "limit": 25
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/presets",
+      "method": "get",
+      "params": {
+        "limit": 100
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1/revisions",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/check",
+      "method": "post",
+      "body": {
+        "method": {
+          "schema": "bms.bioxp-method.v1",
+          "name": "PCR author draft",
+          "parameters": [
+            {
+              "id": "volume",
+              "type": "number",
+              "unit": "uL"
+            }
+          ],
+          "procedures": [],
+          "steps": [
+            {
+              "step_id": "move-original",
+              "type": "action",
+              "action": "move",
+              "inputs": {
+                "location_id": 2,
+                "well": "a1",
+                "height_steps": "01.20",
+                "future": null
+              }
+            }
+          ],
+          "unknown": {
+            "empty": "",
+            "explicit": null,
+            "flag": false
+          }
+        },
+        "bindings": {},
+        "dependencies": {},
+        "initial_state": {}
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1/runs",
+      "method": "post",
+      "body": {
+        "revision": 1,
+        "bindings": {},
+        "dependencies": {},
+        "initial_state": {},
+        "idempotency_key": "ef8f524c-25b0-4999-9add-b7afddedfbfb",
+        "expected_generation": 9,
+        "acknowledge_live": true
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/runs/protocol-live-ec1060fc0ef12356b2f9162a7e69e7e0f112f6827b5c7420252d57032dc65a54",
+      "method": "get",
+      "params": {
+        "expected_connection_generation": 9,
+        "observation": true
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/catalog",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/schema",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/examples",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library",
+      "method": "get",
+      "params": {
+        "search": "",
+        "offset": 0,
+        "limit": 25
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/presets",
+      "method": "get",
+      "params": {
+        "limit": 100
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1/revisions",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/check",
+      "method": "post",
+      "body": {
+        "method": {
+          "schema": "bms.bioxp-method.v1",
+          "name": "PCR author draft",
+          "parameters": [
+            {
+              "id": "volume",
+              "type": "number",
+              "unit": "uL"
+            }
+          ],
+          "procedures": [],
+          "steps": [
+            {
+              "step_id": "move-original",
+              "type": "action",
+              "action": "move",
+              "inputs": {
+                "location_id": 2,
+                "well": "a1",
+                "height_steps": "01.20",
+                "future": null
+              }
+            }
+          ],
+          "unknown": {
+            "empty": "",
+            "explicit": null,
+            "flag": false
+          }
+        },
+        "bindings": {},
+        "dependencies": {},
+        "initial_state": {}
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1/runs",
+      "method": "post",
+      "body": {
+        "revision": 1,
+        "bindings": {},
+        "dependencies": {},
+        "initial_state": {},
+        "idempotency_key": "583b0dee-5141-448d-ad78-b87d6a8b6cd8",
+        "expected_generation": 9,
+        "acknowledge_live": true
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/runs/protocol-live-b478b5218e0386bf74e89ca971d3ae146b988f9a92b41cf369be45c40f45ec17",
+      "method": "get",
+      "params": {
+        "expected_connection_generation": 9,
+        "observation": true
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/catalog",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/schema",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/examples",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library",
+      "method": "get",
+      "params": {
+        "search": "",
+        "offset": 0,
+        "limit": 25
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/presets",
+      "method": "get",
+      "params": {
+        "limit": 100
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/liquid-classes",
+      "method": "get",
+      "params": {
+        "search": "",
+        "offset": 0,
+        "limit": 25
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/liquid-classes/starters",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/liquid-classes",
+      "method": "post",
+      "body": {
+        "method": {
+          "schema": "bms.bioxp-liquid-class.v1",
+          "name": "Authored test class",
+          "settings": {
+            "aspirate_speed_ul_s": "050.000",
+            "dispense_segments": [
+              {
+                "volume_ul": "010.2500"
+              }
+            ],
+            "aspiration_delay_ms": null
+          }
+        },
+        "name": "Authored test class"
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/liquid-classes/m2/revisions/1",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/liquid-classes",
+      "method": "get",
+      "params": {
+        "search": "",
+        "offset": 0,
+        "limit": 25
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/catalog",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/schema",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/examples",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library",
+      "method": "get",
+      "params": {
+        "search": "",
+        "offset": 0,
+        "limit": 25
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/presets",
+      "method": "get",
+      "params": {
+        "limit": 100
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1/revisions",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/check",
+      "method": "post",
+      "body": {
+        "method": {
+          "schema": "bms.bioxp-method.v1",
+          "name": "PCR author draft",
+          "parameters": [
+            {
+              "id": "volume",
+              "type": "number",
+              "unit": "uL"
+            }
+          ],
+          "procedures": [],
+          "steps": [
+            {
+              "step_id": "move-original",
+              "type": "action",
+              "action": "move",
+              "inputs": {
+                "location_id": 2,
+                "well": "a1",
+                "height_steps": "01.20",
+                "future": null
+              }
+            }
+          ],
+          "unknown": {
+            "empty": "",
+            "explicit": null,
+            "flag": false
+          }
+        },
+        "bindings": {},
+        "dependencies": {},
+        "initial_state": {}
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1/runs",
+      "method": "post",
+      "body": {
+        "revision": 1,
+        "bindings": {},
+        "dependencies": {},
+        "initial_state": {},
+        "idempotency_key": "3075aa81-8ca9-4b8b-b273-cf1879b54c78",
+        "expected_generation": 9,
+        "acknowledge_live": true
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/runs/protocol-live-51aa96c603134a294785a8ff4d51bbb21a964eb531c6d566e1bc7aca23ceb4a2",
+      "method": "get",
+      "params": {
+        "expected_connection_generation": 9,
+        "observation": true
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/runs/protocol-live-51aa96c603134a294785a8ff4d51bbb21a964eb531c6d566e1bc7aca23ceb4a2/clone",
+      "method": "post",
+      "body": {},
+      "params": {
+        "expected_connection_generation": 9
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/catalog",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/schema",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/examples",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library",
+      "method": "get",
+      "params": {
+        "search": "",
+        "offset": 0,
+        "limit": 25
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/presets",
+      "method": "get",
+      "params": {
+        "limit": 100
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library",
+      "method": "post",
+      "body": {
+        "method": {
+          "schema": "bms.bioxp-method.v1",
+          "name": "Incomplete",
+          "parameters": [],
+          "procedures": [],
+          "steps": []
+        },
+        "name": "Incomplete"
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library/m2/revisions/1",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library/m2",
+      "method": "put",
+      "body": {
+        "method": {
+          "schema": "bms.bioxp-method.v1",
+          "name": "Incomplete",
+          "parameters": [],
+          "procedures": [],
+          "steps": []
+        },
+        "name": "Incomplete",
+        "expected_base_revision": 1
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library/m2/revisions/2",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library",
+      "method": "get",
+      "params": {
+        "search": "",
+        "offset": 0,
+        "limit": 25
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/check",
+      "method": "post",
+      "body": {
+        "method": {
+          "schema": "bms.bioxp-method.v1",
+          "name": "Incomplete",
+          "parameters": [],
+          "procedures": [],
+          "steps": []
+        },
+        "bindings": {},
+        "dependencies": {},
+        "initial_state": {}
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/catalog",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/schema",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/examples",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library",
+      "method": "get",
+      "params": {
+        "search": "",
+        "offset": 0,
+        "limit": 25
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/presets",
+      "method": "get",
+      "params": {
+        "limit": 100
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library",
+      "method": "post",
+      "body": {
+        "method": {
+          "schema": "bms.bioxp-method.v1",
+          "name": "Original save",
+          "parameters": [],
+          "procedures": [],
+          "steps": []
+        },
+        "name": "Original save"
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library/m2/revisions/1",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library",
+      "method": "get",
+      "params": {
+        "search": "",
+        "offset": 0,
+        "limit": 25
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/check",
+      "method": "post",
+      "body": {
+        "method": {
+          "schema": "bms.bioxp-method.v1",
+          "name": "Original save",
+          "parameters": [],
+          "procedures": [],
+          "steps": []
+        },
+        "bindings": {},
+        "dependencies": {},
+        "initial_state": {}
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library/m2/runs",
+      "method": "post",
+      "body": {
+        "revision": 1,
+        "bindings": {},
+        "dependencies": {},
+        "initial_state": {},
+        "idempotency_key": "f071ef65-4d61-4d99-b089-0d772c4cb50c",
+        "expected_generation": 9,
+        "acknowledge_live": true
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/runs/protocol-live-52a9bc50096f8cb6e3b87c1273615b9fecb78a88adbc7dfd3266f03e6669965d",
+      "method": "get",
+      "params": {
+        "expected_connection_generation": 9,
+        "observation": true
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/catalog",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/schema",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/examples",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library",
+      "method": "get",
+      "params": {
+        "search": "",
+        "offset": 0,
+        "limit": 25
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/presets",
+      "method": "get",
+      "params": {
+        "limit": 100
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1/revisions",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/check",
+      "method": "post",
+      "body": {
+        "method": {
+          "schema": "bms.bioxp-method.v1",
+          "name": "PCR author draft",
+          "parameters": [
+            {
+              "id": "volume",
+              "type": "number",
+              "unit": "uL"
+            }
+          ],
+          "procedures": [],
+          "steps": [
+            {
+              "step_id": "move-original",
+              "type": "action",
+              "action": "move",
+              "inputs": {
+                "location_id": 2,
+                "well": "a1",
+                "height_steps": "01.20",
+                "future": null
+              }
+            }
+          ],
+          "unknown": {
+            "empty": "",
+            "explicit": null,
+            "flag": false
+          }
+        },
+        "bindings": {},
+        "dependencies": {},
+        "initial_state": {}
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1/runs",
+      "method": "post",
+      "body": {
+        "revision": 1,
+        "bindings": {},
+        "dependencies": {},
+        "initial_state": {},
+        "idempotency_key": "e76de67d-586f-470f-85ab-0c97e42a1379",
+        "expected_generation": 9,
+        "acknowledge_live": true
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/runs/protocol-live-ab85cd6fc6165b7451eacaf35e6eaae1df1268a26257184c7b74c61724b94c07",
+      "method": "get",
+      "params": {
+        "expected_connection_generation": 9,
+        "observation": true
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/runs/protocol-live-ab85cd6fc6165b7451eacaf35e6eaae1df1268a26257184c7b74c61724b94c07/control",
+      "method": "post",
+      "body": {
+        "action": "pause",
+        "mode": "ordinary",
+        "command_id": "protocol-live-ab85cd6fc6165b7451eacaf35e6eaae1df1268a26257184c7b74c61724b94c07",
+        "expected_ownership_generation": 7,
+        "expected_connection_generation": 9,
+        "idempotency_key": "2603ca43-1265-45aa-af57-e29a17054827"
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/runs/protocol-live-ab85cd6fc6165b7451eacaf35e6eaae1df1268a26257184c7b74c61724b94c07",
+      "method": "get",
+      "params": {
+        "expected_connection_generation": 9,
+        "observation": true
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/runs/protocol-live-ab85cd6fc6165b7451eacaf35e6eaae1df1268a26257184c7b74c61724b94c07/report",
+      "method": "get",
+      "params": {
+        "expected_connection_generation": 9
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/runs/protocol-live-ab85cd6fc6165b7451eacaf35e6eaae1df1268a26257184c7b74c61724b94c07/recovery-draft",
+      "method": "post",
+      "body": {
+        "occurrence": {
+          "occurrence_id": "loop/0/move-original",
+          "step_id": "move-original",
+          "path": "/steps/0",
+          "call_path": [
+            "procedure:aliquot"
+          ],
+          "loop_path": [
+            {
+              "index": 0
+            }
+          ],
+          "native_action_ids": [
+            "a1"
+          ]
+        },
+        "initial_state": {}
+      },
+      "params": {
+        "expected_connection_generation": 9
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/catalog",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/schema",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/examples",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library",
+      "method": "get",
+      "params": {
+        "search": "",
+        "offset": 0,
+        "limit": 25
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/presets",
+      "method": "get",
+      "params": {
+        "limit": 100
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1/revisions",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/check",
+      "method": "post",
+      "body": {
+        "method": {
+          "schema": "bms.bioxp-method.v1",
+          "name": "PCR author draft",
+          "parameters": [
+            {
+              "id": "volume",
+              "type": "number",
+              "unit": "uL"
+            }
+          ],
+          "procedures": [],
+          "steps": [
+            {
+              "step_id": "move-original",
+              "type": "action",
+              "action": "move",
+              "inputs": {
+                "location_id": 2,
+                "well": "a1",
+                "height_steps": "01.20",
+                "future": null
+              }
+            }
+          ],
+          "unknown": {
+            "empty": "",
+            "explicit": null,
+            "flag": false
+          }
+        },
+        "bindings": {},
+        "dependencies": {},
+        "initial_state": {}
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/compile",
+      "method": "post",
+      "body": {
+        "method": {
+          "schema": "bms.bioxp-method.v1",
+          "name": "PCR author draft",
+          "parameters": [
+            {
+              "id": "volume",
+              "type": "number",
+              "unit": "uL"
+            }
+          ],
+          "procedures": [],
+          "steps": [
+            {
+              "step_id": "move-original",
+              "type": "action",
+              "action": "move",
+              "inputs": {
+                "location_id": 2,
+                "well": "a1",
+                "height_steps": "01.20",
+                "future": null
+              }
+            }
+          ],
+          "unknown": {
+            "empty": "",
+            "explicit": null,
+            "flag": false
+          }
+        },
+        "bindings": {},
+        "dependencies": {},
+        "initial_state": {}
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/catalog",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/schema",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/examples",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library",
+      "method": "get",
+      "params": {
+        "search": "",
+        "offset": 0,
+        "limit": 25
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/presets",
+      "method": "get",
+      "params": {
+        "limit": 100
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1/revisions",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1",
+      "method": "get"
+    },
+    {
+      "url": "/api/bioxp/methods/check",
+      "method": "post",
+      "body": {
+        "method": {
+          "schema": "bms.bioxp-method.v1",
+          "name": "PCR author draft",
+          "parameters": [
+            {
+              "id": "volume",
+              "type": "number",
+              "unit": "uL"
+            }
+          ],
+          "procedures": [],
+          "steps": [
+            {
+              "step_id": "move-original",
+              "type": "action",
+              "action": "move",
+              "inputs": {
+                "location_id": 2,
+                "well": "a1",
+                "height_steps": "01.20",
+                "future": null
+              }
+            }
+          ],
+          "unknown": {
+            "empty": "",
+            "explicit": null,
+            "flag": false
+          }
+        },
+        "bindings": {},
+        "dependencies": {},
+        "initial_state": {}
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library/m1/runs",
+      "method": "post",
+      "body": {
+        "revision": 1,
+        "bindings": {},
+        "dependencies": {},
+        "initial_state": {},
+        "idempotency_key": "e1f00329-3bec-4647-8bad-efca892767a1",
+        "expected_generation": 9,
+        "acknowledge_live": true
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/runs/protocol-live-31838e73155adfc48b88c2d9b4ff3eb7ef454269b258ac60067bd6627d9f6ca8",
+      "method": "get",
+      "params": {
+        "expected_connection_generation": 9,
+        "observation": true
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/runs/protocol-live-31838e73155adfc48b88c2d9b4ff3eb7ef454269b258ac60067bd6627d9f6ca8",
+      "method": "get",
+      "params": {
+        "expected_connection_generation": 9,
+        "observation": true
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/runs/protocol-live-31838e73155adfc48b88c2d9b4ff3eb7ef454269b258ac60067bd6627d9f6ca8",
+      "method": "get",
+      "params": {
+        "expected_connection_generation": 9,
+        "observation": true
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/runs/protocol-live-31838e73155adfc48b88c2d9b4ff3eb7ef454269b258ac60067bd6627d9f6ca8",
+      "method": "get",
+      "params": {
+        "expected_connection_generation": 9,
+        "observation": true
+      }
+    },
+    {
+      "url": "/api/bioxp/methods/library",
+      "method": "get",
+      "params": {
+        "search": "",
+        "offset": 0,
+        "limit": 25
+      }
+    }
+  ]
+}

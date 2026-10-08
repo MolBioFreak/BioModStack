@@ -82,9 +82,9 @@ test('mounted shared tree/map switches families, traverses notes, and retains of
         expect(container.querySelector('aside[aria-label="Project tree"]')).not.toBeNull();
     }
     await click('notes');
-    await click('Load more notes');
+    await click('Next notes page');
     expect(reads.at(-1)).toMatchObject({ demand: 'notes', cursor: 'notes:next' });
-    expect(container.textContent).toContain('First note');
+    expect(container.textContent).not.toContain('First note');
     expect(container.textContent).toContain('Second note');
     const record = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.includes('Second note'))!;
     await act(async () => record.click()); await settle();
@@ -93,11 +93,11 @@ test('mounted shared tree/map switches families, traverses notes, and retains of
     expect(container.textContent).toContain('Retained second note');
     expect(container.querySelector('aside[aria-label="Project tree"]')).not.toBeNull();
     await click('notes');
-    // Existing selection navigation restarts its cursor; retained loaded rows
-    // must not be erased by the intervening shared-only selection response.
+    // Navigation restarts the bounded page; direct-ID inspection above retains
+    // off-page selection without retaining every previously displayed row.
     expect(reads.at(-1)).toMatchObject({ demand: 'notes', cursor: undefined });
     expect(container.textContent).toContain('First note');
-    expect(container.textContent).toContain('Second note');
+    expect(container.textContent).not.toContain('Second note');
 });
 
 test('mounted Protein sections discover comparison/evidence/history demand while overview keeps shared context', async () => {

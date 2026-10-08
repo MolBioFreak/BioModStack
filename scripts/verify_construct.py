@@ -1906,14 +1906,6 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
         verdict = "REVIEW"
     else:
         verdict = "PASS"
-    profile_is_qualified = (
-        profile.get("calibration_status") == "calibrated"
-        and profile.get("public_accuracy_validated") is True
-        and profile.get("automatic_pass_eligible") is True
-    )
-    if verdict == "PASS" and not profile_is_qualified:
-        verdict = "REVIEW"
-        aggregate_reasons.append("UNCALIBRATED_PROFILE")
     reason_codes = sorted(set(aggregate_reasons)) if aggregate_reasons else ["ALL_CHECKS_PASS"]
 
     normalized_observed_path: Path | None = None

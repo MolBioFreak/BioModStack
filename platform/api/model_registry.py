@@ -112,7 +112,9 @@ class RuntimeDependencyRef(BaseModel):
 INDEPENDENT_RUNTIME_MODELS = frozenset({
     "protenix", "esmfold2", "esmfold2_experimental", "fampnn", "frustrampnn",
     "boltz2", "af2", "proteinmpnn", "unidock", "protein_modification_experimental",
-    "caliby_binder", "caliby_experimental", "ligandmpnn", "bindcraft2",
+    "caliby_binder", "caliby_experimental", "ligandmpnn", "bindcraft2", "protonpottsmpnn",
+    # Fold-CP uses its own image with the native BoltzCP shared Boltz tree.
+    "boltz_cp_experimental",
 })
 
 
@@ -120,7 +122,7 @@ INDEPENDENT_RUNTIME_MODELS = frozenset({
 # These public launcher entries already bind the named image in native plans.
 INDEPENDENT_RUNTIME_IMAGES = INDEPENDENT_RUNTIME_MODELS | frozenset({
     'boltzgen', 'protein_local_redesign', 'molecular_dynamics',
-    'boltz_cp_experimental', 'confornets_experimental',
+    'confornets_experimental',
 })
 
 
@@ -167,7 +169,7 @@ def model_runtime_dependencies(model_id: str, *, internal: bool = False) -> tupl
         refs.extend(RuntimeDependencyRef(kind=item.kind, relative_path=item.relative_path)
                     for item in selected)
     weights = {"protenix": "protenix", "esmfold2": "esmfold2", "esmfold2_experimental": "esmfold2",
-               "boltz2": "boltz", "af2": "alphafold"}
+               "boltz2": "boltz", "af2": "alphafold", "boltz_cp_experimental": "boltz"}
     if model_id in weights:
         refs.append(RuntimeDependencyRef(kind="weights", relative_path=weights[model_id]))
     # Native preparation/filter stages are part of these models, not optional
@@ -681,6 +683,15 @@ class ModelRegistry:
                     data = yaml.safe_load(f)
                     if data:
                         model = ModelDefinition(**data)
+                        if model.id == "nanopore":
+                            from services.ont_ngs_contract import samtools_consensus_setting
+                            setting = samtools_consensus_setting()
+                            for field in model.params:
+                                if field.name == "samtools_consensus_config":
+                                    field.enum = [value for value in setting["enum"] if value is not None]
+                                    field.accepted_types = setting["type"]
+                                    field.default = setting["default"]
+                                    field.description = setting["description"]
                         self._validate_integration(model)
                         loaded_models[model.id] = model
             except Exception as e:
@@ -817,6 +828,13 @@ class ModelRegistry:
             errors.append(f"Unknown mode '{mode_id}' for model '{model_id}'")
             return errors
         
+        if model_id == 'protonpottsmpnn':
+            from services.protonpottsmpnn_design import normalize_design_params
+            try:
+                normalize_design_params(mode_id, params)
+            except (TypeError, ValueError) as exc:
+                errors.append(str(exc))
+            return errors
         if model_id == 'ligandmpnn':
             from services.ligandmpnn_design import MODES, science_params
             if mode_id in MODES:
@@ -1322,6 +1340,10 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
     if native_generation is not None:
         result_payload = native_generation
         retrieval_authority = native_generation['native_contract_authority']
+    elif reviewed and model_id == 'protonpottsmpnn' and workflow == 'protonpottsmpnn_design':
+        from services.protonpottsmpnn_design import result_contract
+        result_payload = result_contract(mode)
+        retrieval_authority = result_payload['native_contract_authority']
     elif reviewed and model_id == 'ligandmpnn' and workflow == 'ligandmpnn_design':
         from services.ligandmpnn_design import result_contract
         result_payload = result_contract(mode)

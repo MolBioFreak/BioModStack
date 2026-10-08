@@ -1,56 +1,47 @@
 Bootstrap: docker
-From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+From: ubuntu@sha256:5ec03bb3441e8b0bf3b4f9cd4629a1ae763010dc3035bb8da3ae6cf026486401
+
+# Build from the repository root:
+# apptainer build iggm.sif apptainer/iggm.def
+# CUDA 12.8 user-space libraries are supplied by the complete hash-locked
+# torch wheel closure, not an inherited CUDA 12.4 system installation.
+# Scientific source is the exact clean revision found in the installed image.
+# Native external checkpoint lookup/defaults are unchanged; the installed image
+# contained no embedded model checkpoints. No runtime admission checks are added.
 
 %labels
     Author BioModStack
-    Description IgGM - Generative Foundation Model for Antibody Design (Tencent AI4S)
-    Version 1.0.0
+    Description IgGM - preserved native science with pinned CUDA 12.8 accelerator packaging
+    NativeRevision 6b1bd91abdf6785d9bbf59c51d6e0c8880aceb8a
+    TorchVersion 2.7.1+cu128
+    AcceleratorCUDA 12.8
+
+%files
+    apptainer/iggm-requirements.in /opt/iggm-requirements.in
+    apptainer/iggm-requirements.lock /opt/iggm-requirements.lock
+    apptainer/iggm-source-identity.json /opt/iggm-source-identity.json
 
 %post
-    apt-get update && apt-get install -y \
-        wget \
-        git \
-        curl \
-        python3 \
-        python3-pip \
-        python3-venv \
-        && apt-get clean \
-        && rm -rf /var/lib/apt/lists/*
-
-    # Install UV package manager (10-100x faster than pip)
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="/root/.local/bin:$PATH"
-
-    # Create virtual environment
-    uv venv /opt/venv
-    export VIRTUAL_ENV=/opt/venv
-    export PATH="/opt/venv/bin:$PATH"
-
-    # Install PyTorch with CUDA 12.4 support (matching other containers)
-    uv pip install --compile torch==2.4.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
-
-    # Clone IgGM repository
-    git clone https://github.com/TencentAI4S/IgGM.git /opt/IgGM
-    cd /opt/IgGM
-
-    # Install PyTorch Geometric dependencies
-    uv pip install --compile pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv \
-        -f https://data.pyg.org/whl/torch-2.4.0+cu124.html
-
-    # Install IgGM dependencies
-    uv pip install --compile hydra-core omegaconf biopython scipy pandas numpy einops
-    uv pip install --compile fair-esm  # For ESM embeddings
-    
-    # Install additional requirements if present
-    if [ -f requirements.txt ]; then
-        uv pip install --compile -r requirements.txt || true
-    fi
-
-    # Cleanup
-    rm -rf /root/.cache/uv
-
-    # Generate lockfile for reproducibility
-    uv pip freeze > /opt/venv/requirements.lock 2>/dev/null || true
+    set -eu
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends ca-certificates curl git python3 python3-pip python3-venv
+    /usr/bin/python3 -m pip install --no-cache-dir uv==0.11.26
+    uv venv --clear --python /usr/bin/python3 /opt/venv
+    uv pip sync --python /opt/venv/bin/python --require-hashes \
+        --index-url https://pypi.org/simple \
+        --extra-index-url https://download.pytorch.org/whl/cu128 \
+        --find-links https://data.pyg.org/whl/torch-2.7.0+cu128.html \
+        --index-strategy unsafe-best-match /opt/iggm-requirements.lock
+    uv pip check --python /opt/venv/bin/python
+    mkdir -p /opt/IgGM
+    curl -fL https://github.com/TencentAI4S/IgGM/archive/6b1bd91abdf6785d9bbf59c51d6e0c8880aceb8a.tar.gz -o /opt/iggm-source.tar.gz
+    printf '%s  %s\n' dc0011b2a35749a4bd8ffb3a1af96e5e66e2489be1ce48183b70b9f1af8d72af /opt/iggm-source.tar.gz | sha256sum -c -
+    tar -xzf /opt/iggm-source.tar.gz --strip-components=1 -C /opt/IgGM
+    rm /opt/iggm-source.tar.gz
+    uv pip freeze --python /opt/venv/bin/python > /opt/venv/requirements.lock
+    apt-get clean
+    rm -rf /var/lib/apt/lists/* /root/.cache/uv /root/.cache/pip
 
 %environment
     export PYTHONPATH="/opt/IgGM:$PYTHONPATH"
@@ -59,4 +50,4 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
 %runscript
     cd /opt/IgGM
-    python3 "$@"
+    exec /opt/venv/bin/python "$@"

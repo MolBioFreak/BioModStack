@@ -252,14 +252,30 @@ def test_unusable_and_invalid_design_requests_are_actionable() -> None:
         )
 
 
-def test_design_route_serializes_engine_primers_fragments_and_checksum() -> None:
+@pytest.fixture
+def design_app(tmp_path: Path):
+    engine = create_molbio_engine(f"sqlite+aiosqlite:///{tmp_path / 'design.db'}")
+    asyncio.run(init_molbio_db(engine=engine))
+    sessions = make_molbio_session_factory(engine)
+
+    async def override_session():
+        async with sessions() as session:
+            yield session
+
     app = FastAPI()
     app.include_router(molbio_router)
+    app.dependency_overrides[get_molbio_session] = override_session
+    try:
+        yield app
+    finally:
+        asyncio.run(engine.dispose())
 
-    with TestClient(app) as client:
+
+def test_design_route_serializes_engine_primers_fragments_and_checksum(design_app) -> None:
+    with TestClient(design_app) as client:
         response = client.post(
             "/api/molbio/assembly/gibson/design",
-            json=_design_payload(),
+            json=_design_payload(inline=True),
         )
 
     assert response.status_code == 200
@@ -333,7 +349,10 @@ def test_design_save_rejects_stale_source_revision(tmp_path: Path) -> None:
     app.dependency_overrides[get_molbio_session] = override_session
     asyncio.run(seed_sources())
     payload = _design_payload()
-    payload["fragments"][0]["source_revision"] = 999  # type: ignore[index]
+    fragments = payload["fragments"]
+    assert isinstance(fragments, list)
+    for fragment in fragments:
+        fragment["source_revision"] = 1
 
     try:
         with TestClient(app) as client:
@@ -342,6 +361,10 @@ def test_design_save_rejects_stale_source_revision(tmp_path: Path) -> None:
                 json=payload,
             )
             assert design_response.status_code == 200
+            fragments[0]["source_revision"] = 999
+            stale_design = client.post("/api/molbio/assembly/gibson/design", json=payload)
+            assert stale_design.status_code == 409
+            assert "immutable revision is unavailable" in stale_design.json()["detail"]
             stale_response = client.post(
                 "/api/molbio/assembly/gibson/design/save",
                 json={
@@ -349,11 +372,12 @@ def test_design_save_rejects_stale_source_revision(tmp_path: Path) -> None:
                     "selected_candidate_checksum": design_response.json()[
                         "selected_candidate_checksum"
                     ],
+                    "computation_id": design_response.json()["computation_id"],
                     "new_name": "Stale source revision",
                 },
             )
-        assert stale_response.status_code == 409
-        assert "source revision 999" in stale_response.json()["detail"]
+        assert stale_response.status_code == 400
+        assert "different inputs or settings" in stale_response.json()["detail"]
     finally:
         asyncio.run(engine.dispose())
 

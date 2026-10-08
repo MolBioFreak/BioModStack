@@ -640,12 +640,25 @@ def _validate_canonical_environment_root(root: Path, environment: str) -> str:
     branch = "test" if normalized == "development" else "main"
     resolved = root.resolve()
     revision = _git_revision(resolved)
-    actual_branch = _run(
-        ["git", "-C", str(resolved), "symbolic-ref", "--quiet", "--short", "HEAD"]
-    ).stdout.strip()
-    if actual_branch != branch:
+    # The managed Development sync owns a detached checkout of origin/test (the
+    # local test branch belongs to another worktree), so a detached HEAD is the
+    # deployed shape. Only an attached HEAD on a different branch is wrong; the
+    # exact origin/<branch> revision match below applies either way.
+    symbolic = subprocess.run(
+        ["git", "-C", str(resolved), "symbolic-ref", "--quiet", "--short", "HEAD"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60.0,
+    )
+    if symbolic.returncode not in (0, 1):
+        detail = symbolic.stderr.strip() or f"exit {symbolic.returncode}"
+        raise TailnetEnvironmentError(f"could not read canonical {normalized} HEAD: {detail}")
+    actual_branch = symbolic.stdout.strip() if symbolic.returncode == 0 else ""
+    if actual_branch and actual_branch != branch:
         raise TailnetEnvironmentError(
-            f"canonical {normalized} source must be branch {branch}, found {actual_branch or 'detached'}"
+            f"canonical {normalized} source must be branch {branch} or detached at origin/{branch}, "
+            f"found {actual_branch}"
         )
     remote_revision = _run(
         ["git", "-C", str(resolved), "rev-parse", f"origin/{branch}"]
@@ -887,9 +900,7 @@ def _install_operator_development_frontend(root: Path, mutation_ledger: set[str]
         "[Service]\n"
         f"Environment={systemd_value('BMS_HOME=' + str(root))}\n"
         f"Environment=BMS_DEV_API_PROXY_TARGET={dev_api_target}\n"
-        f"Environment=VITE_BMS_BUILD_SHA={revision}\n"
-        f"Environment=VITE_BMS_BUILD_ID={build_id}\n"
-        f"Environment=VITE_BMS_BUILD_TIME={build_time}\n"
+        # Build identity stays with the generated base unit across later syncs.
         f"WorkingDirectory={systemd_value(root / 'platform/frontend')}\n"
         "ExecStartPre=\n"
         f"ExecStartPre=/usr/bin/sh -c 'test \"$BMS_DEV_API_PROXY_TARGET\" = \"{dev_api_target}\"'\n"

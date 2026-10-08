@@ -15,6 +15,7 @@ import actualY5History from '../fixtures/bioxp_xy_y5_history.json';
 import actualY5Detail from '../fixtures/bioxp_xy_y5_detail.json';
 import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query';
 import { api } from '../../src/lib/api';
+import { catalogWireFixture } from '../fixtures/bioxpCatalogWire';
 vi.mock('../../src/lib/api', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
 const nativeMetadataMode = vi.hoisted(() => ({ enabled: false, receipts: false, mutations: false, protocols: false }));
 import retainedHistory from '../fixtures/bioxp_retained_history.json';
@@ -104,12 +105,8 @@ const completeDeckReceiptFixture = {
 
 const state = vi.hoisted(() => ({
     stableReset: vi.fn(),
-    quickDashboardProps: undefined as Record<string, unknown> | undefined,
     admissionCalls: 0,
     catalogArgs: [] as unknown[][],
-    methodReceipt: { data: undefined as Record<string, unknown> | undefined, error: null as unknown },
-    methodHookArgs: [] as unknown[][],
-    methodCallbacks: null as null | { onSuccess?: (receipt: Record<string, unknown>) => void },
     historyEnabled: false,
     pipetteProps: null as Record<string, unknown> | null,
     v1DashboardEnabled: null as boolean | null,
@@ -137,6 +134,8 @@ const state = vi.hoisted(() => ({
     },
     dashboard: {
         data: {
+            axes: [], enclosure: { door_closed: null, latch_closed: null },
+            snapshot: { freshness: null }, temperatures: [],
             motion: { enabled: true, reason: null },
             x_axis: {
                 axis: 'x',
@@ -221,7 +220,6 @@ const state = vi.hoisted(() => ({
     yInvokeCalls: [] as Array<Record<string, unknown>>,
     deckInvokeCalls: [] as Array<Record<string, unknown>>,
     yInterruptCalls: [] as Array<Record<string, unknown>>,
-    methodCalls: [] as Array<Record<string, unknown>>,
     yInvokeError: null as unknown,
     lifecycleInvokeError: null as unknown,
     lifecycleInvokeData: undefined as Record<string, unknown> | undefined,
@@ -424,6 +422,7 @@ vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
     const real = await importOriginal<typeof import('../../src/lib/bioxpClient')>();
     return ({
     bioXpDeckRecoveryResolution: real.bioXpDeckRecoveryResolution,
+    useBioXpOperatorUpdates: () => ({ data: undefined, isLoading: false, isError: false }),
     useBioXpWorkflowJobs: () => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() }),
     useBioXpWorkflowJob: () => ({ data: undefined, isError: false }),
     useSubmitBioXpProtocol: () => nativeMetadataMode.protocols ? real.useSubmitBioXpProtocol() : ({ isPending: false, mutateAsync: vi.fn() }),
@@ -453,8 +452,6 @@ vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
         isError: state.statusError,
         };
     },
-    useBioXpOperatorMethodV1: (...args: unknown[]) => { state.methodHookArgs.push(args); return state.methodReceipt; },
-    bioXpMethodV1IsTerminal: (method: { status?: string } | undefined) => !method?.status || ['completed', 'failed', 'interrupted', 'ambiguous', 'completed_partial', 'cleared'].includes(method.status),
     useBioXpOperatorReceiptV2: (commandId: string | null, generation: number, enabled: boolean) => {
         state.receiptHookCalls.push({ commandId, generation, enabled });
         if (nativeMetadataMode.receipts) return real.useBioXpOperatorReceiptV2(commandId, generation, enabled);
@@ -584,6 +581,7 @@ vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
             data: undefined, error: state.deckInvokeError, isPending: state.deckInvokePending,
             submissions, retire: () => {},
             submit: (request: Record<string, unknown>) => {
+                if (state.deckInvokePending) return false;
                 state.deckInvokeCalls.push({ request });
                 const item = { request, state: 'submitting' };
                 setSubmissions(items => [...items, item]);
@@ -597,6 +595,7 @@ vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
                 else if (!state.deckDeferred) state.deckCallbacks.onSuccess?.({
                     command_id: 'deck-command-mounted-1', action_id: 'oem.deck.move_to_location', status: 'queued', terminal: false,
                 });
+                return true;
             },
             reset: state.stableReset,
         };
@@ -612,13 +611,6 @@ vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
         error: state.yInterruptError,
         isPending: (++state.interruptSlot === 4 && state.softwarePending) || state.interruptPending,
         mutate: (payload: Record<string, unknown>) => state.yInterruptCalls.push(payload),
-        reset: state.stableReset,
-    }),
-    useSubmitBioXpOperatorMethodV1: () => ({
-        data: undefined,
-        error: null,
-        isPending: false,
-        mutate: (payload: Record<string, unknown>, callbacks?: { onSuccess?: (receipt: Record<string, unknown>) => void }) => { state.methodCalls.push(payload); state.methodCallbacks = callbacks ?? null; },
         reset: state.stableReset,
     }),
     useConnectBioXp: () => ({ data: undefined, error: null, isPending: false, mutate: vi.fn() }),
@@ -640,7 +632,6 @@ vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
 vi.mock('../../src/components/BioXpCameraPanel', () => ({ BioXpCameraPanel: (props: Record<string, unknown>) => <output data-testid="camera-session">{JSON.stringify(props)}</output> }));
 vi.mock('../../src/components/BioXpOperatorControlTabs', () => ({ BioXpOperatorControlTabs: () => null }));
 vi.mock('../../src/components/BioXpPipetteControlPanel', () => ({ BioXpPipetteControlPanel: (props: Record<string, unknown>) => { state.pipetteProps = props; return null; } }));
-vi.mock('../../src/components/BioXpQuickDashboard', () => ({ BioXpQuickDashboard: (props: Record<string, unknown>) => { state.quickDashboardProps = props; return null; } }));
 vi.mock('../../src/components/BioXpOperatorReports', () => ({ BioXpOperatorReports: () => null }));
 
 import { BioXpCockpit } from '../../src/components/BioXpCockpit';
@@ -654,14 +645,14 @@ describe('critical evidence presentation', () => {
         (state.v2Catalog.data!.dashboard as Record<string, unknown>).generated_at = Date.now() / 1000;
     });
     it('shows the empty ledger only after a successful empty history read', async () => {
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         expect(container.textContent).toContain('No robot action receipts recorded.');
     });
     it('shows aged observations without hiding known controller enablement', async () => {
         (state.v2Catalog.data!.dashboard as Record<string, unknown>).telemetry = state.dashboard.data;
         (state.v2Catalog.data!.dashboard as Record<string, unknown>).generated_at = Date.now() / 1000 - 16;
-        await act(async () => root.render(<BioXpCockpit />));
-        expect(container.textContent).toContain('showing last-known robot state');
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
+        expect(container.querySelector('.bx-report')?.classList.contains('bx-warning')).toBe(true);
         expect(container.textContent).not.toContain('Updating');
     });
     it.each(['local', 'upstream'])('ages the %s observation display without expiring admission', async (clock) => {
@@ -681,24 +672,22 @@ describe('critical evidence presentation', () => {
         dashboard.generated_at = started / 1000;
         dashboard.telemetry = state.dashboard.data;
         try {
-            await act(async () => root.render(<BioXpCockpit />));
-            expect(container.textContent).toContain('Hardware observation: unknown');
+            await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
+            expect(container.querySelector('.bx-report')?.textContent).toContain('hardware not fresh');
             const move = [...container.querySelectorAll('button')].find(button => button.textContent === 'Move X + Y together')!;
             expect(move).toBeDefined();
             expect(move.disabled).toBe(false);
             await act(async () => { await vi.advanceTimersByTimeAsync(14_000); });
-            expect(container.textContent).toContain('Hardware observation: unknown');
+            expect(container.querySelector('.bx-report')?.textContent).toContain('hardware not fresh');
             expect(move.disabled).toBe(false);
             // Keep the opposite clock fresh; each budget must independently expire.
             if (clock === 'upstream') Object.assign(state.v2Catalog, { dataUpdatedAt: Date.now() });
             else dashboard.generated_at = Date.now() / 1000;
             await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
-            expect(container.textContent).toContain('showing last-known robot state');
-            expect(container.textContent).toContain('Controllers enabled');
+            expect(container.querySelector('.bx-report')?.classList.contains('bx-warning')).toBe(true);
+            expect(container.querySelector('[aria-label="Controller preparation and recovery"]')?.textContent).toContain('Enabled');
             expect(move.isConnected).toBe(true);
             expect(move.disabled).toBe(false);
-            expect(state.quickDashboardProps?.data).toBe(state.dashboard.data);
-            expect(state.quickDashboardProps?.stale).toBe(true);
             expect(state.v2Catalog).toMatchObject({ isFetching: true, error: null, isStale: false });
             expect(Date.now() - (clock === 'local'
                 ? (state.v2Catalog as typeof state.v2Catalog & { dataUpdatedAt: number }).dataUpdatedAt
@@ -719,20 +708,20 @@ describe('critical evidence presentation', () => {
     it('does not claim no receipts when history failed', async () => {
         state.history.isError = true;
         state.history.error = new Error('invalid operator-control contract');
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         expect(container.textContent).toContain('Robot action history unavailable');
         expect(container.textContent).not.toContain('No robot action receipts recorded.');
     });
     it('does not claim no receipts while history is loading', async () => {
         state.history.isLoading = true;
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         expect(container.textContent).toContain('Loading robot action receipts');
         expect(container.textContent).not.toContain('No robot action receipts recorded.');
     });
     it('explains null telemetry instead of indefinite Updating', async () => {
         (state.v2Catalog.data!.dashboard as Record<string, unknown>).telemetry = null;
-        await act(async () => root.render(<BioXpCockpit />));
-        expect(container.textContent).toContain('Robot did not report telemetry');
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
+        expect(container.querySelector('.bx-status')?.textContent).toContain('not reported');
         expect(container.textContent).not.toContain('Updating');
     });
     it('puts the bounded failure summary above on-demand evidence', async () => {
@@ -741,7 +730,7 @@ describe('critical evidence presentation', () => {
             finished_at: null, stage_receipts: [], error: 'Controller position wait timed out; inspect retained board/axis/position evidence.',
             response: { http_status: 200, body: { ok: false, failure: 'RuntimeError: Reach GZ position time out! board=4; axis=0; position=10000' } },
         })];
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         const article = [...container.querySelectorAll('article')].find(node => node.textContent?.includes('failed-y') || node.textContent?.includes('oem.y.home'))!;
         expect([...article.querySelectorAll('p')].some(p => p.textContent?.includes('Controller position wait timed out'))).toBe(true);
         expect(article.textContent).toContain('Physical effect unverified');
@@ -749,19 +738,24 @@ describe('critical evidence presentation', () => {
 });
 
 describe('primary cockpit query ownership', () => {
-    it('fetches the primary catalog and history without opening Advanced', async () => {
-        await act(async () => { root.render(<BioXpCockpit />); });
+    it('fetches the primary catalog while history waits for its own open panel, independent of Advanced', async () => {
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>); });
         expect(state.v1CatalogEnabled).toBe(true);
+        expect(state.historyEnabled).toBe(false);
+        const history = [...container.querySelectorAll('details')].find(node => node.querySelector('summary')?.textContent?.startsWith('History '))!;
+        await act(async () => { history.open = true; history.dispatchEvent(new Event('toggle')); });
         expect(state.historyEnabled).toBe(true);
+        await act(async () => { history.open = false; history.dispatchEvent(new Event('toggle')); });
+        expect(state.historyEnabled).toBe(false);
         const x = [...container.querySelectorAll('article')].find(node => node.textContent?.includes('X Axis'))!;
-        expect([...x.querySelectorAll('button')].find(node => node.textContent === 'Move +')?.disabled).toBe(false);
+        expect([...x.querySelectorAll('button')].find(node => (node.getAttribute('aria-label') ?? node.textContent) === 'Move +')?.disabled).toBe(false);
     });
     it('preserves published emergency and pipette admission with Advanced closed', async () => {
         const emergency = { ...xHomeAction(), action_id: 'meta.emergency_stop', enabled: true };
         const pipette = { ...xHomeAction(), action_id: 'pipette.connect', enabled: false, disabled_reason: 'Robot refused' };
         state.catalog.data.actions.push(emergency, pipette);
-        await act(async () => { root.render(<BioXpCockpit />); });
-        const emergencyButton = () => [...container.querySelectorAll('button')].find(node => node.textContent === 'Software Abort (cancel waiters)')!;
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>); });
+        const emergencyButton = () => [...container.querySelectorAll('button')].find(node => (node.getAttribute('aria-label') ?? node.textContent) === 'Software Abort (cancel waiters)')!;
         expect(emergencyButton().disabled).toBe(false);
         const disclosure = container.querySelector('#control-tab-pipettes') as HTMLButtonElement;
         await act(async () => disclosure.click());
@@ -769,11 +763,11 @@ describe('primary cockpit query ownership', () => {
         expect(state.pipetteProps?.actions).toContain(pipette);
         expect(pipette.enabled).toBe(false);
         emergency.enabled = false;
-        await act(async () => { root.render(<BioXpCockpit />); });
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>); });
         // Aggregate interrupt admission is independent of the V1 catalog.
         expect(emergencyButton().disabled).toBe(false);
         state.interruptPending = true;
-        await act(async () => { root.render(<BioXpCockpit />); });
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>); });
         expect(emergencyButton().disabled).toBe(true);
         expect([...container.querySelectorAll('details')].find(node => node.querySelector('summary')?.textContent === 'Advanced Full Command Catalog')?.open).toBe(false);
     });
@@ -782,11 +776,11 @@ describe('primary cockpit query ownership', () => {
         if (pending === 'lifecycle') state.lifecycleInvokePending = true;
         if (pending === 'axis') state.axisInvokePending = true;
         if (pending === 'deck') state.deckInvokePending = true;
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         for (const axis of ['X', 'Y', 'Z']) {
             const panel = [...container.querySelectorAll('article')].find(node => node.querySelector('h3')?.textContent === `${axis} Axis`)!;
             for (const label of ['Move +', 'Move −', 'Go absolute', 'Home']) {
-                const control = [...panel.querySelectorAll('button')].find(node => node.textContent === label)!;
+                const control = [...panel.querySelectorAll('button')].find(node => (node.getAttribute('aria-label') ?? node.textContent) === label)!;
                 expect(control, `${axis} ${label}`).toBeDefined();
                 expect(control.disabled, `${axis} ${label}`).toBe(true);
                 await act(async () => control.click());
@@ -798,10 +792,10 @@ describe('primary cockpit query ownership', () => {
     });
 
     it.each(['X', 'Y', 'Z'])('labels a rejected %s request by its submitted axis without retrying', async axis => {
-        const render = () => act(async () => root.render(<BioXpCockpit />));
+        const render = () => act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         await render();
         const panel = [...container.querySelectorAll('article')].find(node => node.querySelector('h3')?.textContent === `${axis} Axis`)!;
-        const move = [...panel.querySelectorAll('button')].find(node => node.textContent === 'Go absolute')!;
+        const move = [...panel.querySelectorAll('button')].find(node => (node.getAttribute('aria-label') ?? node.textContent) === 'Go absolute')!;
         expect(move.disabled).toBe(false);
         await act(async () => move.click());
         expect(state.yInvokeCalls).toHaveLength(1);
@@ -823,11 +817,11 @@ describe('primary cockpit query ownership', () => {
         // a synthetic input here, not a physical Home acceptance claim.
         const control = (panelName: string, label: string) => {
             const panel = [...container.querySelectorAll('article')].find(node => node.querySelector('h3')?.textContent === panelName)!;
-            return [...panel.querySelectorAll('button')].find(button => button.textContent === label)!;
+            return [...panel.querySelectorAll('button')].find(button => (button.getAttribute('aria-label') ?? button.textContent) === label)!;
         };
         for (const phase of ['unarmed', 'armed', 'referenced', 'armed', 'referenced'] as const) {
             state.catalog.data.actions = structuredClone(manualCatalogProducer[phase]);
-            await act(async () => root.render(<BioXpCockpit />));
+            await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
             for (const label of ['Open', 'Close']) {
                 expect(control('Gripper', label).disabled, `${phase} G ${label}`).toBe(phase === 'unarmed');
                 expect(control('Thermal Door', label).disabled, `${phase} D ${label}`).toBe(phase !== 'referenced');
@@ -839,7 +833,7 @@ describe('primary cockpit query ownership', () => {
 
     it.each(stopSourceProducer)('renders real acknowledged Z Stop as completed without claiming physical stopping (armed=$armed, first=$first_ack)', async (producer) => {
         state.yInterruptData = producer.mutation;
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         const outcome = Array.from(container.querySelectorAll('[role="status"]'))
             .find((node) => node.textContent?.startsWith('Z STOP · completed'));
         expect(outcome).toBeDefined();
@@ -857,10 +851,10 @@ describe('primary cockpit query ownership', () => {
             { ...xMoveAction(), action_id: 'gripper-open', informational_path: '/motion/gripper/open', safety_class: 'motion', enabled: true },
             { ...xMoveAction(), action_id: 'component-stop', informational_path: '/motion/diagnostics/stop', safety_class: 'stop', enabled: true },
         );
-        const render = async () => act(async () => root.render(<BioXpCockpit />));
+        const render = async () => act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         await render();
         const panel = [...container.querySelectorAll('article')].find(node => node.querySelector('h3')?.textContent === 'Gripper')!;
-        const control = (label: string) => [...panel.querySelectorAll('button')].find(button => button.textContent === label)!;
+        const control = (label: string) => [...panel.querySelectorAll('button')].find(button => (button.getAttribute('aria-label') ?? button.textContent) === label)!;
         await act(async () => control('Open').click());
         expect(state.invokeCalls).toHaveLength(1);
         state.invokePending = true;
@@ -887,50 +881,50 @@ describe('primary cockpit query ownership', () => {
         state.invokePending = true;
         state.invokeVariables = { actionId: 'read-only-fixture' };
         state.catalog.data.actions.push({ action_id: 'read-only-fixture', safety_class: 'read_only' });
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         for (const axis of ['X', 'Y', 'Z']) {
             const panel = [...container.querySelectorAll('article')].find(node => node.querySelector('h3')?.textContent === `${axis} Axis`)!;
-            expect([...panel.querySelectorAll('button')].find(node => node.textContent === 'Move +')!.disabled).toBe(false);
+            expect([...panel.querySelectorAll('button')].find(node => (node.getAttribute('aria-label') ?? node.textContent) === 'Move +')!.disabled).toBe(false);
         }
     });
 
     it('rejects a late XY submission callback after generation replacement', async () => {
-        await act(async () => { root.render(<BioXpCockpit />); });
-        await act(async () => { (container.querySelector('[data-testid="serial206-xy-oem-panel"] button') as HTMLButtonElement).click(); });
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>); });
+        await act(async () => { (container.querySelector('[data-testid="serial206-xy-oem-panel"] .bx-xy-controls button') as HTMLButtonElement).click(); });
         const callback = state.xyCallbacks;
         expect(callback).not.toBeNull();
         state.connectionGeneration = 2;
-        await act(async () => { root.render(<BioXpCockpit />); });
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>); });
         await act(async () => { callback?.onSuccess?.({ command_id: 'xy-old-generation', status: 'dispatched', terminal: false }); });
         expect(state.receiptHookCalls[4]).toEqual({ commandId: null, generation: 2, enabled: true });
         expect(container.textContent).not.toContain('old-generation');
     });
     it('keeps catalog identity and normal controls stable during observation aging', async () => {
-        await act(async () => { root.render(<BioXpCockpit />); });
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>); });
         const original = state.catalogArgs.at(-1);
         state.v2Catalog.data!.dashboard.generated_at = Date.now() / 1000 - 20;
-        await act(async () => { root.render(<BioXpCockpit />); });
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>); });
         expect(state.catalogArgs.at(-1)).toEqual(original);
-        expect((container.querySelector('[data-testid="serial206-xy-oem-panel"] button') as HTMLButtonElement).disabled).toBe(false);
+        expect((container.querySelector('[data-testid="serial206-xy-oem-panel"] .bx-xy-controls button') as HTMLButtonElement).disabled).toBe(false);
     });
     it.each(['status-error', 'unreachable'])('retains XY reconciliation identity during %s without an observation lock', async (fault) => {
-        await act(async () => { root.render(<BioXpCockpit />); });
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>); });
         const panel = () => container.querySelector('[data-testid="serial206-xy-oem-panel"]')!;
-        const button = () => panel().querySelector('button') as HTMLButtonElement;
+        const button = () => panel().querySelector('.bx-xy-controls button') as HTMLButtonElement;
         await act(async () => { button().click(); state.xyCallbacks?.onSuccess?.({ command_id: 'xy-retained', status: 'dispatched', terminal: false }); });
         if (fault === 'status-error') state.statusError = true;
         else state.connectionReachable = false;
-        await act(async () => { root.render(<BioXpCockpit />); });
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>); });
         expect(state.receiptHookCalls).toContainEqual({ commandId: 'xy-retained', generation: 1, enabled: true });
         expect(panel().textContent).toContain('XY command pending');
         expect(button().disabled).toBe(false);
         state.xyReceipt = { data: { command_id: 'xy-retained', status: 'failed', terminal: true }, error: null, isError: false };
-        await act(async () => { root.render(<BioXpCockpit />); });
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>); });
         expect(panel().textContent).toContain('XY command failed');
         expect(button().disabled).toBe(false);
         state.statusError = false;
         state.connectionReachable = true;
-        await act(async () => { root.render(<BioXpCockpit />); });
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>); });
         expect(panel().textContent).toContain('XY command failed');
         expect(state.xyCalls).toHaveLength(1);
     });
@@ -943,10 +937,10 @@ describe('primary cockpit query ownership', () => {
         const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
         vi.mocked(api.get).mockReset();
         vi.mocked(api.post).mockReset();
-        vi.mocked(api.get).mockImplementation(async (url) => {
+        vi.mocked(api.get).mockImplementation(async (url, config) => {
             if (url === '/api/bioxp/calibration-settings') throw new Error('offline calibration fixture unavailable');
             expect(url).toBe('/api/bioxp/operator-controls/catalog');
-            return { data: { ...state.catalog.data, canonical: structuredClone(bmsMetadata.catalog) } };
+            return { data: catalogWireFixture({ ...state.catalog.data, canonical: structuredClone(bmsMetadata.catalog) }, config?.params?.view) };
         });
         const render = () => act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
         const advance = async (ms: number) => {
@@ -954,7 +948,7 @@ describe('primary cockpit query ownership', () => {
             await act(async () => { await vi.advanceTimersByTimeAsync(1); });
         };
         const panel = () => container.querySelector('[data-testid="serial206-xy-oem-panel"]')!;
-        const button = () => panel().querySelector('button') as HTMLButtonElement;
+        const button = () => panel().querySelector('.bx-xy-controls button') as HTMLButtonElement;
         try {
             await render(); await advance(1);
             expect(button().disabled).toBe(false);
@@ -972,7 +966,8 @@ describe('primary cockpit query ownership', () => {
                 expect(button().disabled).toBe(false);
                 expect(state.xyReceipt.data).toEqual(bmsMetadata.compact);
             }
-            expect(vi.mocked(api.get).mock.calls.filter(([url]) => url === '/api/bioxp/operator-controls/catalog')).toHaveLength(3);
+            expect(vi.mocked(api.get).mock.calls.filter(([url, config]) => url === '/api/bioxp/operator-controls/catalog' && config?.params?.view === 'assessment')).toHaveLength(3);
+            expect(vi.mocked(api.get).mock.calls.filter(([, config]) => config?.params?.view === 'metadata')).toHaveLength(1);
             // Pipette settings are lazy until the Pipettes tab is first opened.
             expect(vi.mocked(api.get).mock.calls.filter(([url]) => url === '/api/bioxp/calibration-settings')).toHaveLength(0);
             await advance(6000);
@@ -992,9 +987,9 @@ describe('primary cockpit query ownership', () => {
     it.each(['eligible', 'unknown', 'interrupted'] as const)('keeps failed XY truthful and follows fresh producer %s authority without retry', async (authority) => {
         vi.useFakeTimers();
         try {
-            const render = () => act(async () => root.render(<BioXpCockpit />));
+            const render = () => act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
             const panel = () => container.querySelector('[data-testid="serial206-xy-oem-panel"]')!;
-            const button = () => panel().querySelector('button') as HTMLButtonElement;
+            const button = () => panel().querySelector('.bx-xy-controls button') as HTMLButtonElement;
             await render();
             const commandId = coherentFailureProducer.compact.command_id;
             await act(async () => { button().click(); state.xyCallbacks?.onSuccess?.({ command_id: commandId, status: 'dispatched', terminal: false }); });
@@ -1033,7 +1028,7 @@ describe('primary cockpit query ownership', () => {
         const row = structuredClone(actualY5History.items.find(row => row.command_id === actualY5.command_id)!);
         expect(row.xy_failure).toBeNull();
         state.history.data.items = [row];
-        const render = () => act(async () => root.render(<BioXpCockpit />));
+        const render = () => act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         const card = () => [...container.querySelectorAll('article')].find(node => node.querySelector('strong')?.textContent === actualY5.action_id)!;
         await render();
         expect(card().textContent).toContain('Robot route reported an HTTP conflict.');
@@ -1062,9 +1057,9 @@ describe('primary cockpit query ownership', () => {
     it.each(['eligible', 'unknown', 'interrupted'] as const)('plain actual saved Y5 reporting stays historical through fresh/stale/%s/generation changes', async (authority) => {
         vi.useFakeTimers();
         try {
-            const render = () => act(async () => root.render(<BioXpCockpit />));
+            const render = () => act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
             const panel = () => container.querySelector('[data-testid="serial206-xy-oem-panel"]')!;
-            const button = () => panel().querySelector('button') as HTMLButtonElement;
+            const button = () => panel().querySelector('.bx-xy-controls button') as HTMLButtonElement;
             const visible = () => [...panel().querySelectorAll('p')].map(node => node.textContent).join(' ');
             const explanation = 'Move timeout reported. Recorded stopped position: X85000, Y5 (requested X85000, Y0). Past receipt only; not current position or readiness. Source result remains failed.';
             await render();
@@ -1110,9 +1105,9 @@ describe('primary cockpit query ownership', () => {
     it('renders the actual manual API report without a false success or retry across polling', async () => {
         vi.useFakeTimers();
         try {
-            const render = () => act(async () => root.render(<BioXpCockpit />));
+            const render = () => act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
             const panel = () => container.querySelector('[data-testid="serial206-xy-oem-panel"]')!;
-            const button = () => panel().querySelector('button') as HTMLButtonElement;
+            const button = () => panel().querySelector('.bx-xy-controls button') as HTMLButtonElement;
             const visible = () => [...panel().querySelectorAll('p')].map(node => node.textContent).join(' ');
             await render();
             await act(async () => { button().click(); state.xyCallbacks?.onSuccess?.({command_id:manualReport.command_id,status:'dispatched',terminal:false}); });
@@ -1138,33 +1133,33 @@ describe('primary cockpit query ownership', () => {
     });
 
     it.each(['completed', 'failed', 'interrupted', 'stopped', 'ambiguous'])('follows XY to %s and ignores other identities', async (status) => {
-        await act(async () => { root.render(<BioXpCockpit />); });
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>); });
         const panel = () => container.querySelector('[data-testid="serial206-xy-oem-panel"]')!;
-        const button = () => panel().querySelector('button') as HTMLButtonElement;
+        const button = () => panel().querySelector('.bx-xy-controls button') as HTMLButtonElement;
         await act(async () => { button().click(); state.xyCallbacks?.onSuccess?.({ command_id: 'xy-one', status: 'queued', terminal: false }); });
         expect(state.xyCalls).toHaveLength(1);
         const assertAxesAvailable = () => {
             for (const axis of ['X', 'Y', 'Z']) {
                 const axisPanel = [...container.querySelectorAll('article')].find(node => node.querySelector('h3')?.textContent === `${axis} Axis`)!;
-                expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Go absolute')!.disabled).toBe(false);
+                expect([...axisPanel.querySelectorAll('button')].find(node => (node.getAttribute('aria-label') ?? node.textContent) === 'Go absolute')!.disabled).toBe(false);
                 expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Home')!.disabled).toBe(false);
                 expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Stop')!.disabled).toBe(false);
-                if (axis === 'Z') expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Z Clear (automatic position)')!.disabled).toBe(false);
+                if (axis === 'Z') expect([...axisPanel.querySelectorAll('button')].find(node => (node.getAttribute('aria-label') ?? node.textContent) === 'Z Clear (automatic position)')!.disabled).toBe(false);
             }
         };
         assertAxesAvailable();
         expect(state.receiptHookCalls).toContainEqual({ commandId: 'xy-one', generation: 1, enabled: true });
         expect(button().disabled).toBe(false);
         state.xyReceipt.data = { command_id: 'xy-other', status: 'completed', terminal: true };
-        await act(async () => { root.render(<BioXpCockpit />); });
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>); });
         expect(button().disabled).toBe(false);
         state.xyReceipt.error = new Error('status unavailable');
         state.xyReceipt.isError = true;
-        await act(async () => { root.render(<BioXpCockpit />); });
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>); });
         expect(panel().textContent).toContain('Do not retry');
         assertAxesAvailable();
         state.xyReceipt = { data: { command_id: 'xy-one', status, terminal: true }, error: null, isError: false };
-        await act(async () => { root.render(<BioXpCockpit />); });
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>); });
         expect(panel().textContent).toContain(status === 'ambiguous' ? 'XY command pending · ambiguous' : `XY command ${status}`);
         expect(button().disabled).toBe(false);
         if (status === 'ambiguous') {
@@ -1174,7 +1169,7 @@ describe('primary cockpit query ownership', () => {
             expect(state.xyCalls).toHaveLength(2);
         }
         state.connectionGeneration = 2;
-        await act(async () => { root.render(<BioXpCockpit />); });
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>); });
         expect(panel().textContent).not.toContain('xy-one');
         expect(state.receiptHookCalls[4]).toEqual({ commandId: null, generation: 2, enabled: true });
     });
@@ -1182,6 +1177,10 @@ describe('primary cockpit query ownership', () => {
 
 let container: HTMLDivElement;
 let root: Root;
+let geometryClient: QueryClient;
+const destinationSelect = (panel: Element) => [...panel.querySelectorAll('label')]
+    .find(label => label.textContent?.startsWith('Robot destination'))!.querySelector('select')!;
+const emptyCalibration = { saved_positions: [], active_positions: [], saved_motion_positions: [], active_motion_positions: [], saved_loader_adjustments: [], active_loader_adjustments: [] };
 
 const setXAbsolute = async (value: string) => {
     const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
@@ -1242,14 +1241,16 @@ const xReceipt = (status: string, index = 0) => ({
 });
 
 beforeEach(() => {
+    geometryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    vi.mocked(api.get).mockImplementation(async url => {
+        if (url === '/api/bioxp/calibration-settings') return { data: emptyCalibration };
+        throw new Error(`Unexpected GET ${url}`);
+    });
     state.history.error = null;
     state.history.isError = false;
     state.history.isLoading = false;
     state.admissionCalls = 0;
     state.catalogArgs = [];
-    state.methodHookArgs = [];
-    state.methodReceipt = { data: undefined, error: null };
-    state.methodCallbacks = null;
     state.v1DashboardEnabled = null;
     state.v1CatalogEnabled = null;
     state.connectionGeneration = 1;
@@ -1266,7 +1267,6 @@ beforeEach(() => {
     state.yInvokeCalls = [];
     state.deckInvokeCalls = [];
     state.yInterruptCalls = [];
-    state.methodCalls = [];
     state.yInvokeError = null;
     state.lifecycleInvokeError = null;
     state.lifecycleInvokeData = undefined;
@@ -1475,6 +1475,7 @@ beforeEach(() => {
 
 afterEach(async () => {
     await act(async () => root.unmount());
+    geometryClient.clear();
     document.body.replaceChildren();
 });
 
@@ -1484,7 +1485,7 @@ describe('L3 rapid submission and receipt reconciliation', () => {
     const moveFor = (axis: string) => [...container.querySelectorAll('article')]
         .find(node => node.querySelector('h3')?.textContent === `${axis.toUpperCase()} Axis`)!
         .querySelectorAll<HTMLButtonElement>('button');
-    const positive = (axis: string) => [...moveFor(axis)].find(button => button.textContent === 'Move +')!;
+    const positive = (axis: string) => [...moveFor(axis)].find(button => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +')!;
 
     it.each(['x', 'y', 'z'])('L3 reserves %s synchronously, drops rapid cross-axis clicks and preserves a real 409 without retry', async axis => {
         nativeMetadataMode.mutations = true;
@@ -1615,17 +1616,15 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         );
 
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
-        const panel = [...container.querySelectorAll('section')].find(
-            (node) => node.textContent?.includes('Controller Activation & Recovery'),
-        ) as HTMLElement;
+        const panel = container; // Shared strip controls and immediately adjacent lifecycle outcomes.
         const activate = [...panel.querySelectorAll('button')].find(
-            (button) => button.textContent === 'Enable controllers',
+            (button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Enable controllers',
         ) as HTMLButtonElement;
         const recover = [...panel.querySelectorAll('button')].find(
-            (button) => button.textContent === 'Non-homing Recovery',
+            (button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Recover controllers (no homing)',
         ) as HTMLButtonElement;
         expect(activate.disabled).toBe(false);
         expect(recover.disabled).toBe(false);
@@ -1677,17 +1676,15 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             error: null,
         };
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
-        const panel = [...container.querySelectorAll('section')].find(
-            (node) => node.textContent?.includes('Controller Activation & Recovery'),
-        ) as HTMLElement;
+        const panel = container; // Shared strip controls and immediately adjacent lifecycle outcomes.
         const activate = [...panel.querySelectorAll('button')].find(
-            (button) => button.textContent === 'Enable controllers',
+            (button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Enable controllers',
         ) as HTMLButtonElement;
         const recover = [...panel.querySelectorAll('button')].find(
-            (button) => button.textContent === 'Non-homing Recovery',
+            (button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Recover controllers (no homing)',
         ) as HTMLButtonElement;
         await act(async () => {
             activate.click();
@@ -1703,7 +1700,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
                 },
             };
             state.lifecycleCallbacks?.onError?.(state.lifecycleInvokeError);
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
 
@@ -1725,7 +1722,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             },
         };
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
 
@@ -1736,10 +1733,10 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             [...(container.firstElementChild?.children ?? [])]
                 .filter((element) => element.getAttribute('role') === 'alert'),
         ).toHaveLength(0);
-        expect(panel.textContent).not.toContain('stale-activation-receipt');
+        expect(container.querySelector('.bx-outcomes')?.textContent).not.toContain('stale-activation-receipt');
         for (const axis of ['X', 'Y', 'Z']) {
             const axisPanel = [...container.querySelectorAll('article')].find(node => node.querySelector('h3')?.textContent === `${axis} Axis`)!;
-            expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Go absolute')!.disabled).toBe(false);
+            expect([...axisPanel.querySelectorAll('button')].find(node => (node.getAttribute('aria-label') ?? node.textContent) === 'Go absolute')!.disabled).toBe(false);
             expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Home')!.disabled).toBe(false);
             expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Stop')!.disabled).toBe(false);
         }
@@ -1758,7 +1755,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             error: null,
         }];
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
 
@@ -1779,7 +1776,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             error: null,
         }];
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
 
@@ -1822,7 +1819,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             },
         ];
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
 
@@ -1844,14 +1841,12 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             disabled_reason: null,
         });
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
-        const panel = [...container.querySelectorAll('section')].find(
-            (node) => node.textContent?.includes('Controller Activation & Recovery'),
-        ) as HTMLElement;
+        const panel = container; // Shared strip controls and immediately adjacent lifecycle outcomes.
         const recover = [...panel.querySelectorAll('button')].find(
-            (button) => button.textContent === 'Non-homing Recovery',
+            (button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Recover controllers (no homing)',
         ) as HTMLButtonElement;
         await act(async () => {
             recover.click();
@@ -1885,7 +1880,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             },
         };
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
 
@@ -1907,7 +1902,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             terminal: false,
         };
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
         const zArticle = [...container.querySelectorAll('article')].find(
@@ -1948,7 +1943,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             },
         };
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
 
@@ -1971,14 +1966,12 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             disabled_reason: null,
         });
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
-        const panel = [...container.querySelectorAll('section')].find(
-            (node) => node.textContent?.includes('Controller Activation & Recovery'),
-        ) as HTMLElement;
+        const panel = container; // Shared strip controls and immediately adjacent lifecycle outcomes.
         const recover = [...panel.querySelectorAll('button')].find(
-            (button) => button.textContent === 'Non-homing Recovery',
+            (button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Recover controllers (no homing)',
         ) as HTMLButtonElement;
         await act(async () => {
             recover.click();
@@ -1988,7 +1981,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
         state.connectionGeneration = 2;
         act(() => {
-            flushSync(() => root.render(<BioXpCockpit />));
+            flushSync(() => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
             expect(panel.textContent).not.toContain('lifecycle-command-1');
             expect(panel.textContent).not.toContain('meta.recover_motion_non_homing');
         });
@@ -2011,15 +2004,16 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         vi.useFakeTimers();
         const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
         vi.mocked(api.get).mockReset(); vi.mocked(api.post).mockReset();
-        vi.mocked(api.get).mockImplementation(async (url) => {
+        vi.mocked(api.get).mockImplementation(async (url, config) => {
+            if (url === "/api/bioxp/calibration-settings") return { data: emptyCalibration };
             expect(url).toBe('/api/bioxp/operator-controls/catalog');
             if (fail) throw new Error('temporary catalog failure');
-            return { data: { ...state.catalog.data, canonical: structuredClone(response) } };
+            return { data: catalogWireFixture({ ...state.catalog.data, canonical: structuredClone(response) }, config?.params?.view) };
         });
-        const render = () => act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
+        const render = () => act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
         const advance = async (ms = 5001) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
         const panel = () => container.querySelector('[data-testid="oem-deck-movement"]')!;
-        const select = () => panel().querySelector('select') as HTMLSelectElement;
+        const select = () => destinationSelect(panel()) as HTMLSelectElement;
         const move = () => [...panel().querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!;
         const choose = async (target: string) => act(async () => { select().value = target; select().dispatchEvent(new Event('change', { bubbles: true })); });
         try {
@@ -2046,7 +2040,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             (response.dashboard as Record<string, unknown>).generated_at = Date.now() / 1000;
             await advance();
             expect(select().value).toBe('LOC_OC'); expect(camera().checked).toBe(true);
-            expect(api.get.mock.calls.length).toBeGreaterThanOrEqual(5);
+            expect(api.get.mock.calls.filter(([url]) => url === '/api/bioxp/operator-controls/catalog').length).toBeGreaterThanOrEqual(5);
             // Model currently requires the complete roster. This UI-only
             // replacement control also proves future removal cannot substitute.
             response = structuredClone(response);
@@ -2066,14 +2060,14 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
     it.each(['LOC_OC', 'LOC_PARK', 'LOC_TC_BARCODE'])('deck harmonization camera draft submits only compatible boolean for %s', async (target) => {
         const action = (state.v2Catalog.data!.actions as Array<Record<string, unknown>>).find(a => a.action_id === 'oem.deck.move_to_location')!;
-        (action.destination_options as unknown[]).push({ target: 'LOC_PARK', label: 'Park', camera_offset_option: false, enabled: true }, { target: 'LOC_TC_BARCODE', label: 'TC barcode', camera_offset_option: false, enabled: true });
-        await act(async () => root.render(<BioXpCockpit />));
+        (action.destination_options as unknown[]).push({ target: 'LOC_PARK', label: 'Park', aliases: [], camera_offset_option: false, enabled: true }, { target: 'LOC_TC_BARCODE', label: 'TC barcode', aliases: [], camera_offset_option: false, enabled: true });
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
         const panel = container.querySelector('[data-testid="oem-deck-movement"]')!;
-        const select = panel.querySelector('select')!;
+        const select = destinationSelect(panel)!;
         const camera = panel.querySelector('input[type="checkbox"]') as HTMLInputElement;
         await act(async () => camera.click());
         expect(camera.checked).toBe(true);
-        for (let poll = 0; poll < 3; poll++) await act(async () => root.render(<BioXpCockpit />));
+        for (let poll = 0; poll < 3; poll++) await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
         await act(async () => { select.value = target; select.dispatchEvent(new Event('change', { bubbles: true })); });
         expect(camera.checked).toBe(target === 'LOC_OC');
         expect(camera.disabled).toBe(target !== 'LOC_OC');
@@ -2089,14 +2083,21 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
         let calls = 0;
         let terminal = false;
+        let sequence = 0;
         vi.mocked(api.get).mockReset(); vi.mocked(api.post).mockReset();
         vi.mocked(api.get).mockImplementation(async (url) => {
+            if (url === "/api/bioxp/calibration-settings") return { data: emptyCalibration };
+            if (url === '/api/bioxp/operator-controls/updates') {
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                return { data: { schema_version: 'bioxp.operator_updates.v1', source_instance_id: 'mounted-feed', ownership_generation: 1,
+                    next_after_sequence: ++sequence, pose_sequence: 0, changed_command_ids: ['deck-command-mounted-1'], active_command_ids: terminal ? [] : ['deck-command-mounted-1'], has_more: false, reset: false, pose: null } };
+            }
             expect(url).toContain('/api/bioxp/operator-controls/v2/receipts/deck-command-mounted-1');
             calls++;
             if (calls === 2) throw new Error('temporary receipt failure');
             return { data: { ...completeDeckReceiptFixture, command_id: 'deck-command-mounted-1', status: terminal ? 'completed' : 'dispatched', terminal } };
         });
-        const render = () => act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
+        const render = () => act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
         const advance = async () => act(async () => { await vi.advanceTimersByTimeAsync(5001); });
         try {
             await render();
@@ -2129,7 +2130,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         if (mode === 'pending-query') Object.assign(query, { status: 'dispatched', terminal: false });
         catalogDashboard().latest_receipts = receipts;
         catalogDashboard().active_commands = mode === 'pending-query' ? [query] : [];
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
         const panel = container.querySelector('[data-testid="oem-deck-movement"]')!;
         const move = [...panel.querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!;
         expect(move.disabled).toBe(false);
@@ -2138,7 +2139,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         // Fresh catalog admission, not the query receipt, determines movement.
         const action = (state.v2Catalog.data!.actions as Array<Record<string, unknown>>).find(a => a.action_id === 'oem.deck.move_to_location')!;
         action.enabled = false; action.disabled_reason = 'canonical_deck_authority_unavailable:deck_authority_unobserved';
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
         expect(move.disabled).toBe(true);
         expect(state.deckInvokeCalls).toHaveLength(0);
         expect(state.yInvokeCalls).toHaveLength(0);
@@ -2161,12 +2162,13 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         action.enabled = false; action.disabled_reason = 'canonical_deck_authority_unavailable:deck_authority_unobserved';
         let finish!: (value: { data: typeof actualParkReceipt }) => void;
         vi.mocked(api.get).mockImplementation(async (url, options) => {
+            if (url === "/api/bioxp/calibration-settings") return { data: emptyCalibration };
             expect(url).toBe(`/api/bioxp/operator-controls/v2/receipts/${actualParkReceipt.command_id}`);
             if (options?.params?.detail) return { data: structuredClone(actualParkReceipt) };
             return new Promise(resolve => { finish = resolve; });
         });
         try {
-            await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
+            await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
             const panel = container.querySelector('[data-testid="oem-deck-movement"]')!;
             const move = [...panel.querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!;
             expect(move.disabled).toBe(true);
@@ -2182,7 +2184,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             catalogDashboard().active_commands = [];
             catalogDashboard().latest_receipts = [structuredClone(actualParkReceipt)];
             action.enabled = true; action.disabled_reason = null;
-            await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
+            await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
             expect(move.disabled).toBe(false);
             expect(state.deckInvokeCalls).toHaveLength(0);
             expect(state.yInvokeCalls).toHaveLength(0);
@@ -2200,7 +2202,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         catalogDashboard().latest_receipts = [failed];
         vi.mocked(api.get).mockRejectedValue(new Error('receipt GET unavailable'));
         try {
-            await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
+            await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
             await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
             const panel = container.querySelector('[data-testid="oem-deck-movement"]')!;
             const move = [...panel.querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!;
@@ -2220,7 +2222,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         // identity. Sparse terminal failure alone must not invent that gate.
         failed.completion_class = 'recovery_required';
         catalogDashboard().latest_receipts = receipts;
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
         const panel = container.querySelector('[data-testid="oem-deck-movement"]')!;
         const move = [...panel.querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!;
         expect(panel.textContent).not.toContain('Existing deck command requires reconciliation');
@@ -2237,9 +2239,9 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             request_schema_version: 'bioxp.operator_action_request.v2', response_schema_version: 'bioxp.operator_action_receipt.v2' });
         (state.v2Catalog.data!.dashboard as Record<string, unknown>).generated_at = Date.now() / 1000 - 60;
         state.statusError = true; state.connectionReachable = false;
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
         const panel = container.querySelector('[data-testid="oem-deck-movement"]')!;
-        const select = panel.querySelector('select')!;
+        const select = destinationSelect(panel)!;
         const move = [...panel.querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!;
         const refresh = [...panel.querySelectorAll('button')].find(b => b.textContent === 'Refresh deck readiness (no motion)')!;
         expect(select.options).toHaveLength(2); expect(select.disabled).toBe(false);
@@ -2251,17 +2253,17 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(move.disabled).toBe(false); expect(state.deckInvokeCalls).toHaveLength(0);
         const action = actions.find(a => a.action_id === 'oem.deck.collect_authority')!;
         action.enabled = false; action.disabled_reason = 'query owner unavailable';
-        await act(async () => root.render(<BioXpCockpit />)); expect(refresh.disabled).toBe(true);
-        state.connected = false; await act(async () => root.render(<BioXpCockpit />)); expect(refresh.disabled).toBe(true);
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>)); expect(refresh.disabled).toBe(true);
+        state.connected = false; await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>)); expect(refresh.disabled).toBe(true);
     });
 
     it('deck harmonization target-specific ordinary readiness does not authorize Park', async () => {
         const action = (state.v2Catalog.data!.actions as Array<Record<string, unknown>>).find(a => a.action_id === 'oem.deck.move_to_location')!;
-        (action.destination_options as unknown[]).push({ target: 'LOC_PARK', label: 'Park', camera_offset_option: false, enabled: false, disabled_reason: 'canonical_deck_authority_unavailable:deck_semantic_state_not_authoritative:location_revision' });
+        (action.destination_options as unknown[]).push({ target: 'LOC_PARK', label: 'Park', aliases: [], camera_offset_option: false, enabled: false, disabled_reason: 'canonical_deck_authority_unavailable:deck_semantic_state_not_authoritative:location_revision' });
         Object.assign(catalogDashboard().deck as object, { current_location: null, current_well: null, semantic_state_revision: 1 });
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
         const panel = container.querySelector('[data-testid="oem-deck-movement"]')!;
-        const select = panel.querySelector('select')!;
+        const select = destinationSelect(panel)!;
         const move = [...panel.querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!;
         expect(move.disabled).toBe(false);
         await act(async () => { select.value = 'LOC_PARK'; select.dispatchEvent(new Event('change', { bubbles: true })); });
@@ -2282,11 +2284,11 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
     ])('deck harmonization renders finite prerequisite %s without exception prose', async (suffix, expected) => {
         const action = (state.v2Catalog.data!.actions as Array<Record<string, unknown>>).find(a => a.action_id === 'oem.deck.move_to_location')!;
         action.enabled = false; action.disabled_reason = `canonical_deck_authority_unavailable:${suffix}`;
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
         const panel = container.querySelector('[data-testid="oem-deck-movement"]')!;
         expect(panel.textContent).toContain(expected);
         expect(panel.textContent).not.toContain('password=');
-        expect((panel.querySelector('select') as HTMLSelectElement).disabled).toBe(false);
+        expect((destinationSelect(panel) as HTMLSelectElement).disabled).toBe(false);
         expect(state.deckInvokeCalls).toHaveLength(0);
     });
 
@@ -2298,15 +2300,16 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
         vi.mocked(api.get).mockReset();
         vi.mocked(api.get).mockImplementation(async (url) => {
+            if (url === "/api/bioxp/calibration-settings") return { data: emptyCalibration };
             expect(url).toBe(`/api/bioxp/operator-controls/v2/receipts/${detail.command_id}`);
             return { data: structuredClone(detail) };
         });
         const action = (state.v2Catalog.data!.actions as Array<Record<string, unknown>>).find(a => a.action_id === 'oem.deck.move_to_location')!;
-        (action.destination_options as unknown[]).push({ target: 'LOC_PARK', label: 'Park', camera_offset_option: false, enabled: true });
+        (action.destination_options as unknown[]).push({ target: 'LOC_PARK', label: 'Park', aliases: [], camera_offset_option: false, enabled: true });
         try {
-            await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
+            await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
             const panel = container.querySelector('[data-testid="oem-deck-movement"]')!;
-            const select = panel.querySelector('select')!;
+            const select = destinationSelect(panel)!;
             await act(async () => { select.value = 'LOC_PARK'; select.dispatchEvent(new Event('change', { bubbles: true })); });
             await act(async () => [...panel.querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!.click());
             await act(async () => { state.deckCallbacks?.onSuccess?.(detail); });
@@ -2324,23 +2327,23 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
     it('renders finite deck movement and submits exactly one semantic enqueue', async () => {
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>);
             await Promise.resolve();
         });
-        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('Deck Movement')) as HTMLElement;
+        const panel = container.querySelector('[data-testid="oem-deck-movement"]') as HTMLElement;
         expect(panel).toBeTruthy();
         expect(panel.textContent).toContain('LOC_TC');
         expect(panel.textContent).toContain('2');
         expect(panel.textContent).not.toContain('a'.repeat(64));
         expect(panel.textContent).not.toContain('b'.repeat(64));
-        expect(panel.textContent).toContain('Current location');
-        expect(panel.textContent).toContain('Current well');
+        expect(panel.textContent).toContain('Recorded location');
+        expect(panel.textContent).toContain('LOC_TC · well ID 2');
         for (const clutter of ['PositionTable revision', 'Catalog revision', 'Canonical key', 'Operator label']) {
             expect(panel.textContent).not.toContain(clutter);
         }
         expect(container.textContent).not.toContain('Connection generation');
         expect(container.textContent).not.toContain('Board lifecycle generation');
-        const selector = panel.querySelector('select') as HTMLSelectElement;
+        const selector = destinationSelect(panel) as HTMLSelectElement;
         const destinations = (state.v2Catalog.data!.actions as Array<Record<string, unknown>>)
             .find(action => action.action_id === 'oem.deck.move_to_location')!.destination_options as Array<{ target: string; label: string }>;
         expect([...selector.options].map(option => ({ target: option.value, label: option.textContent }))).toEqual(destinations.map(({ target, label }) => ({ target, label })));
@@ -2368,8 +2371,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
     });
 
     it('retains selected local receipt while showing newer canonical queue work', async () => {
-        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
-        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('Deck Movement')) as HTMLElement;
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>); await Promise.resolve(); });
+        const panel = container.querySelector('[data-testid="oem-deck-movement"]') as HTMLElement;
         const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
         await act(async () => move.click());
         state.deckReceipt.data = {
@@ -2381,7 +2384,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             command_id: 'deck-command-dashboard-2', action_id: 'oem.deck.move_to_location',
             status: 'dispatched', terminal: false, sequence: 11, completion_class: null, error: null,
         }];
-        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>); await Promise.resolve(); });
 
         expect(panel.textContent).toContain('deck-command-mounted-1');
         expect(panel.textContent).toContain('Lifecyclecompleted');
@@ -2400,8 +2403,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         catalogDashboard().active_commands = terminal ? [] : [internalReceipt];
         catalogDashboard().latest_receipts = terminal ? [internalReceipt] : [];
 
-        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
-        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('Deck Movement')) as HTMLElement;
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>); await Promise.resolve(); });
+        const panel = container.querySelector('[data-testid="oem-deck-movement"]') as HTMLElement;
         const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
         expect(move.disabled).toBe(false);
         expect(panel.textContent).not.toContain('Existing deck command requires reconciliation; do not resubmit.');
@@ -2413,7 +2416,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             ...internalReceipt,
             status: 'completed', terminal: true, completion_class: 'completed',
         }];
-        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>); await Promise.resolve(); });
 
         expect(move.disabled).toBe(false);
         expect(panel.textContent).not.toContain(actionId);
@@ -2437,13 +2440,20 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         let payload = unresolved;
         let fail = false;
         let calls = 0;
+        let sequence = 0;
         vi.mocked(api.get).mockReset(); vi.mocked(api.post).mockReset();
         vi.mocked(api.get).mockImplementation(async url => {
+            if (url === "/api/bioxp/calibration-settings") return { data: emptyCalibration };
+            if (url === '/api/bioxp/operator-controls/updates') {
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                return { data: { schema_version: 'bioxp.operator_updates.v1', source_instance_id: 'mounted-feed', ownership_generation: 1,
+                    next_after_sequence: ++sequence, pose_sequence: 0, changed_command_ids: [resolved.command_id], active_command_ids: [], has_more: false, reset: false, pose: null } };
+            }
             expect(url).toContain(encodeURIComponent(resolved.command_id)); calls++;
             if (fail) throw new Error('receipt unavailable');
             return { data: structuredClone(payload) };
         });
-        const render = () => act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
+        const render = () => act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
         const advance = () => act(async () => { await vi.advanceTimersByTimeAsync(2100); });
         const refreshAuthority = () => { catalogDashboard().generated_at = Date.now() / 1000; };
         try {
@@ -2502,9 +2512,9 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const receipt = { ...completeDeckReceiptFixture, status: 'ambiguous', completion_class: 'recovery_required',
             deck_movement: { ...completeDeckReceiptFixture.deck_movement, ambiguity_state: 'recovery_required', recovery_resolution: null as unknown } };
         catalogDashboard().latest_receipts = [receipt];
-        const render = async () => { await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); }); };
+        const render = async () => { await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>); await Promise.resolve(); }); };
         await render();
-        const panel = [...container.querySelectorAll('section')].find(node => node.textContent?.includes('Deck Movement'))!;
+        const panel = container.querySelector('[data-testid="oem-deck-movement"]')!;
         const move = [...panel.querySelectorAll('button')].find(button => button.textContent === 'Move to destination')!;
         expect(move.disabled).toBe(false); // unresolved history never gates new movement
         const resolution = { command_id: receipt.command_id, decision_id: 'home-decision', semantic_state_revision: 18, transition_sequence: 2 };
@@ -2554,10 +2564,10 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             },
         };
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>);
             await Promise.resolve();
         });
-        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('Deck Movement')) as HTMLElement;
+        const panel = container.querySelector('[data-testid="oem-deck-movement"]') as HTMLElement;
         const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
         await act(async () => move.click());
 
@@ -2570,10 +2580,10 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
     it('retains deck admission when same-generation observations age', async () => {
         state.v2Catalog.data!.dashboard.generated_at = Date.now() / 1000 - 20;
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>);
             await Promise.resolve();
         });
-        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('Deck Movement')) as HTMLElement;
+        const panel = container.querySelector('[data-testid="oem-deck-movement"]') as HTMLElement;
         const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
         expect(move.disabled).toBe(false);
         expect(panel.textContent).not.toContain('Fresh v2 catalog or dashboard authority is unavailable.');
@@ -2585,8 +2595,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         ['destination catalog', () => { catalogDashboard().deck!.destination_catalog_revision = 'd'.repeat(64); }],
     ])('uses embedded %s authority without trusting a separately fetched dashboard', async (_label, mutate) => {
         mutate();
-        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
-        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('Deck Movement')) as HTMLElement;
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>); await Promise.resolve(); });
+        const panel = container.querySelector('[data-testid="oem-deck-movement"]') as HTMLElement;
         const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
         if (_label === 'ownership') {
             // Connection identity and a retired dashboard do not override the
@@ -2610,8 +2620,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             .find(action => action.action_id === 'oem.deck.move_to_location')!, {
             enabled: false, disabled_reason: 'Robot denied stale ownership generation.',
         });
-        await act(async () => root.render(<BioXpCockpit />));
-        const panel = [...container.querySelectorAll('section')].find(node => node.textContent?.includes('Deck Movement'))!;
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
+        const panel = container.querySelector('[data-testid="oem-deck-movement"]')!;
         const move = [...panel.querySelectorAll('button')].find(button => button.textContent === 'Move to destination')!;
         expect(move.disabled).toBe(true);
         expect(panel.textContent).toContain('Robot denied stale ownership generation.');
@@ -2621,8 +2631,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
     it('renders receipt unavailable and outcome uncertain instead of inventing queued state', async () => {
         state.deckReceipt.error = new Error('detail parse failed');
-        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
-        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('Deck Movement')) as HTMLElement;
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>); await Promise.resolve(); });
+        const panel = container.querySelector('[data-testid="oem-deck-movement"]') as HTMLElement;
         const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
         await act(async () => move.click());
         expect(panel.textContent).toContain('receipt unavailable / outcome uncertain');
@@ -2632,8 +2642,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
     it('keeps a recovered wrong-action receipt uncertain instead of confirming deck completion', async () => {
         state.deckDeferred = true;
-        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
-        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('Deck Movement')) as HTMLElement;
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>); await Promise.resolve(); });
+        const panel = container.querySelector('[data-testid="oem-deck-movement"]') as HTMLElement;
         const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
         await act(async () => move.click());
         await act(async () => state.deckCallbacks?.onError?.({
@@ -2659,7 +2669,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             physical_effect_verified: true,
             error: null,
         };
-        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>); await Promise.resolve(); });
 
         expect(panel.textContent).toContain('receipt unavailable / outcome uncertain');
         expect(panel.textContent).toContain('Do not resubmit');
@@ -2671,13 +2681,13 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
     it('ignores a deferred deck enqueue completion after connection generation changes', async () => {
         state.deckDeferred = true;
-        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
-        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('Deck Movement')) as HTMLElement;
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>); await Promise.resolve(); });
+        const panel = container.querySelector('[data-testid="oem-deck-movement"]') as HTMLElement;
         const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
         await act(async () => move.click());
         const oldCallbacks = state.deckCallbacks;
         state.connectionGeneration = 2;
-        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>); await Promise.resolve(); });
         await act(async () => oldCallbacks?.onSuccess?.({ command_id: 'deck-old-generation', status: 'queued', terminal: false }));
         expect(container.textContent).toContain('deck-old-generation');
         expect(container.textContent).toContain('earlier connection');
@@ -2686,12 +2696,14 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
     it('keeps Y and deck errors on their independent control surfaces', async () => {
         state.yInvokeError = { response: { status: 409, data: { detail: { error: 'y_conflict' } } } };
         state.deckInvokeError = { response: { status: 502, data: { detail: { error: 'deck_uncertain' } } } };
-        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
-        const deck = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('Deck Movement')) as HTMLElement;
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>); await Promise.resolve(); });
+        const deck = container.querySelector('[data-testid="oem-deck-movement"]') as HTMLElement;
         const y = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
         const deckMove = [...deck.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
-        const yMove = [...y.querySelectorAll('button')].find((button) => button.textContent === 'Move +') as HTMLButtonElement;
-        await act(async () => { deckMove.click(); yMove.click(); await Promise.resolve(); });
+        const yMove = [...y.querySelectorAll('button')].find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
+        await act(async () => { deckMove.click(); await Promise.resolve(); });
+        await act(async () => (container.querySelector('#control-tab-robot') as HTMLButtonElement).click());
+        await act(async () => { yMove.click(); await Promise.resolve(); });
         expect(deck.textContent).toContain('Deck enqueue failed');
         expect(deck.textContent).toContain('deck_uncertain');
         expect(deck.textContent).not.toContain('y_conflict');
@@ -2702,7 +2714,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
     it('derives X enablement from catalog and dashboard with zero always-on admission calls', async () => {
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
 
@@ -2713,9 +2725,9 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
         const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
         const buttons = [...article.querySelectorAll('button')] as HTMLButtonElement[];
-        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const movePositive = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
         const home = buttons.find((button) => button.textContent === 'Home') as HTMLButtonElement;
-        const goAbsolute = buttons.find((button) => button.textContent === 'Go absolute') as HTMLButtonElement;
+        const goAbsolute = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Go absolute') as HTMLButtonElement;
 
         expect(movePositive.disabled).toBe(false);
         expect(home.disabled).toBe(false);
@@ -2760,15 +2772,15 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         };
 
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
 
         const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
         const buttons = [...article.querySelectorAll('button')] as HTMLButtonElement[];
-        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const movePositive = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
         const home = buttons.find((button) => button.textContent === 'Home') as HTMLButtonElement;
-        const goAbsolute = buttons.find((button) => button.textContent === 'Go absolute') as HTMLButtonElement;
+        const goAbsolute = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Go absolute') as HTMLButtonElement;
 
         expect(movePositive.disabled).toBe(false);
         expect(goAbsolute.disabled).toBe(false);
@@ -2792,7 +2804,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         xAbsolute.inputs = [{ name: 'position_steps', type: 'integer', required: true, minimum: -5000, maximum: 120000 }];
 
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
         await setXAbsolute('100000');
@@ -2801,12 +2813,12 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
         const xArticle = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
         const xButtons = [...xArticle.querySelectorAll('button')] as HTMLButtonElement[];
-        const xMovePositive = xButtons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
-        const xGoAbsolute = xButtons.find((button) => button.textContent === 'Go absolute') as HTMLButtonElement;
+        const xMovePositive = xButtons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
+        const xGoAbsolute = xButtons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Go absolute') as HTMLButtonElement;
         const zArticle = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('Z Axis')) as HTMLElement;
         const zButtons = [...zArticle.querySelectorAll('button')] as HTMLButtonElement[];
-        const zMovePositive = zButtons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
-        const zGoAbsolute = zButtons.find((button) => button.textContent === 'Go absolute') as HTMLButtonElement;
+        const zMovePositive = zButtons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
+        const zGoAbsolute = zButtons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Go absolute') as HTMLButtonElement;
 
         expect(xMovePositive.disabled).toBe(false);
         expect(xGoAbsolute.disabled).toBe(false);
@@ -2828,20 +2840,20 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
     });
 
     it.each(['0', '90000', '0.5', '', '9e4'])('preserves Z absolute draft %s across catalog polling and dispatches only exact integers', async (value) => {
-        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>); await Promise.resolve(); });
         await setZInput(1, value);
         const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('Z Axis')) as HTMLElement;
         const input = article.querySelectorAll('input[type="number"]')[1] as HTMLInputElement;
-        expect(article.textContent).toContain('Home reaches the upper limit (0)');
-        expect(article.textContent).toContain('Current minimum:');
+        expect(article.textContent).toContain('establishes controller coordinate 0');
+        expect(article.querySelector('[data-testid="z-target-context"]')?.textContent).toContain('min ');
         const expected = value === '' ? NaN : Number(value);
         for (let poll = 0; poll < 3; poll++) {
             state.catalog.data = { ...state.catalog.data, actions: [...state.catalog.data.actions] };
-            await act(async () => root.render(<BioXpCockpit />));
+            await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
             expect(input.valueAsNumber).toBe(expected);
         }
         expect(state.yInvokeCalls).toHaveLength(0);
-        const go = [...article.querySelectorAll('button')].find((button) => button.textContent === 'Go absolute') as HTMLButtonElement;
+        const go = [...article.querySelectorAll('button')].find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Go absolute') as HTMLButtonElement;
         expect(go.disabled).toBe(!Number.isInteger(expected));
         await act(async () => go.click());
         expect(state.yInvokeCalls.map((call) => {
@@ -2853,7 +2865,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
     it.each(['X Axis', 'Z Axis', 'Gripper'].flatMap(label => [0, 1].flatMap(index =>
         ['0', '0.5', '', '9e4'].map(value => ({ label, index, value })),
     )))('preserves shared numeric draft $label/$index/$value without coercion or motion', async ({ label, index, value }) => {
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         const article = [...container.querySelectorAll('article')].find(n => n.querySelector('h3')?.textContent === label)!;
         const input = article.querySelectorAll('input[type="number"]')[index] as HTMLInputElement;
         await act(async () => {
@@ -2862,11 +2874,11 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         });
         for (let poll = 0; poll < 3; poll++) {
             state.catalog.data = { ...state.catalog.data };
-            await act(async () => root.render(<BioXpCockpit />));
+            await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
             expect(input.valueAsNumber).toBe(value === '' ? NaN : Number(value));
         }
         if (value === '' || value === '0.5') {
-            const action = [...article.querySelectorAll('button')].find(button => button.textContent === (index ? 'Go absolute' : 'Move +'))!;
+            const action = [...article.querySelectorAll('button')].find(button => (button.getAttribute('aria-label') ?? button.textContent) === (index ? 'Go absolute' : 'Move +'))!;
             expect(action.disabled).toBe(true);
         }
         expect(state.yInvokeCalls).toHaveLength(0);
@@ -2874,7 +2886,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
     });
 
     it('renders source-owned Z targets and receipts across minimum, draft and generation changes', async () => {
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         const original = structuredClone(state.catalog.data.dashboard);
         for (const fixture of zTargetProducer) {
             await setZInput(1, String(fixture.requested));
@@ -2887,24 +2899,25 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
                 action_id: 'oem.z.move_absolute' } as never), z_move: fixture.z_move }];
             for (let poll = 0; poll < 3; poll++) {
                 state.catalog.data = { ...state.catalog.data };
-                await act(async () => root.render(<BioXpCockpit />));
+                await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
                 const text = container.querySelector('[data-testid="z-target-context"]')?.textContent ?? container.textContent;
-                expect(text).toContain(`Selected target: ${fixture.provider.target_preview.effective_position_steps} steps`);
-                expect(text).toContain(`Current minimum: ${fixture.minimum} steps`);
+                if (fixture.provider.target_preview.effective_position_steps !== fixture.requested) expect(text).toContain(`→ ${fixture.provider.target_preview.effective_position_steps}`);
+                else expect(text).not.toContain('→');
+                expect(text).toContain(`min ${fixture.minimum}`);
                 expect(container.textContent).toContain(`Z requested: ${fixture.requested} · Applied target: ${fixture.z_move.effective_position_steps}`);
                 expect(container.textContent).toContain(`Before: ${fixture.start} · After: unknown`);
             }
         }
-        const go = () => [...[...container.querySelectorAll('article')].find(n => n.querySelector('h3')?.textContent === 'Z Axis')!.querySelectorAll('button')].find(button => button.textContent === 'Go absolute')!;
+        const go = () => [...[...container.querySelectorAll('article')].find(n => n.querySelector('h3')?.textContent === 'Z Axis')!.querySelectorAll('button')].find(button => (button.getAttribute('aria-label') ?? button.textContent) === 'Go absolute')!;
         // A late preview for a different draft must not be called selected.
         await setZInput(1, '0');
-        expect(container.querySelector('[data-testid="z-target-context"]')!.textContent).toContain('Selected target: unavailable');
+        expect(container.querySelector('[data-testid="z-target-context"]')!.textContent).not.toContain('→');
         Object.assign(state.catalog.data.dashboard, { ownership_generation: 99 });
-        await act(async () => root.render(<BioXpCockpit />));
-        expect(container.querySelector('[data-testid="z-target-context"]')!.textContent).toContain('Current minimum: unavailable');
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
+        expect(container.querySelector('[data-testid="z-target-context"]')!.textContent).toContain('min unavailable');
         state.catalog.data.dashboard = original;
-        await act(async () => root.render(<BioXpCockpit />));
-        expect(container.querySelector('[data-testid="z-target-context"]')!.textContent).toContain('Selected target: unavailable');
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
+        expect(container.querySelector('[data-testid="z-target-context"]')!.textContent).not.toContain('→');
         expect(go().disabled).toBe(false); // missing preview never adds an admission gate
         expect(state.yInvokeCalls).toHaveLength(0);
         expect(state.invokeCalls).toHaveLength(0);
@@ -2924,7 +2937,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         });
 
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
 
@@ -2937,19 +2950,19 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
     it('does not turn a pending unrelated mutation into a Z Clear lockout', async () => {
         state.invokePending = true;
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
 
         const zArticle = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('Z Axis')) as HTMLElement;
-        const zClear = [...zArticle.querySelectorAll('button')].find((button) => button.textContent === 'Z Clear (automatic position)') as HTMLButtonElement;
+        const zClear = [...zArticle.querySelectorAll('button')].find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Z Clear (automatic position)') as HTMLButtonElement;
         // The original fixture had no action identity: R3 does not permit a
         // blanket pending exemption. Establish actual read-only authority
         // before calling this request unrelated to normal motion submission.
         expect(zClear.disabled).toBe(true);
         state.invokeVariables = { actionId: 'clear-read-only-fixture' };
         state.catalog.data.actions.push({ action_id: 'clear-read-only-fixture', safety_class: 'read_only' });
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         expect(zClear.disabled).toBe(false);
     });
 
@@ -2960,11 +2973,11 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         ['59', false], ['60', true], ['90263', true], ['90264', false],
         ['60.5', false], ['90263.5', false],
     ])('preserves exact X absolute input %s and rejects invalid targets without dispatch', async (value, admitted) => {
-        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
+        await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>); await Promise.resolve(); });
         await setXAbsolute(value);
         const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
         const input = article.querySelectorAll('input[type="number"]')[1] as HTMLInputElement;
-        const go = [...article.querySelectorAll('button')].find((button) => button.textContent === 'Go absolute') as HTMLButtonElement;
+        const go = [...article.querySelectorAll('button')].find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Go absolute') as HTMLButtonElement;
         expect(input.min).toBe('60');
         expect(input.max).toBe('90263');
         expect(input.value).toBe(value);
@@ -2976,14 +2989,14 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
     it('applies the robot catalog X input schema to absolute targets', async () => {
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
 
         await setXAbsolute('999999');
 
         const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
-        const goAbsolute = [...article.querySelectorAll('button')].find((button) => button.textContent === 'Go absolute') as HTMLButtonElement;
+        const goAbsolute = [...article.querySelectorAll('button')].find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Go absolute') as HTMLButtonElement;
         expect(goAbsolute.disabled).toBe(true);
         expect(goAbsolute.title).toContain('Requested X target must be an integer from 60 through 90263.');
         expect(state.admissionCalls).toBe(0);
@@ -2996,13 +3009,13 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         };
 
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
 
         const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
         const buttons = [...article.querySelectorAll('button')] as HTMLButtonElement[];
-        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const movePositive = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
         const home = buttons.find((button) => button.textContent === 'Home') as HTMLButtonElement;
 
         expect(movePositive.disabled).toBe(false);
@@ -3012,6 +3025,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
         const queueStrip = article.querySelector('[data-testid="successive-move-queue"]') as HTMLElement;
         expect(queueStrip).toBeNull(); // legacy telemetry queue is not canonical command custody
+        await act(async () => (container.querySelector('#control-tab-live-deck') as HTMLButtonElement).click());
         expect(container.querySelector('[data-testid="canonical-command-queue"]')).not.toBeNull();
         expect(state.admissionCalls).toBe(0);
     });
@@ -3023,13 +3037,13 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         };
 
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
 
         const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
         const buttons = [...article.querySelectorAll('button')] as HTMLButtonElement[];
-        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const movePositive = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
 
         expect(movePositive.disabled).toBe(false);
         expect(state.admissionCalls).toBe(0);
@@ -3039,13 +3053,13 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         state.invokePending = true;
 
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
 
         const xArticle = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
         const xButtons = [...xArticle.querySelectorAll('button')] as HTMLButtonElement[];
-        const xMovePositive = xButtons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const xMovePositive = xButtons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
         const xHome = xButtons.find((button) => button.textContent === 'Home') as HTMLButtonElement;
         const zArticle = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('Z Axis')) as HTMLElement;
         const zButtons = [...zArticle.querySelectorAll('button')] as HTMLButtonElement[];
@@ -3061,9 +3075,9 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         state.invokePending = true;
         const action = (state.v2Catalog.data!.actions as Array<Record<string, unknown>>)
             .find(row => row.action_id === `oem.${axis}.move_steps`)!;
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         const panel = [...container.querySelectorAll('article')].find(node => node.querySelector('h3')?.textContent === `${axis.toUpperCase()} Axis`)!;
-        const move = [...panel.querySelectorAll('button')].find(button => button.textContent === 'Move +')!;
+        const move = [...panel.querySelectorAll('button')].find(button => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +')!;
         // CCI::moveSteps waits inline for X/Y/Z (installed IL 37194–37499).
         // A pre-submit enabled snapshot cannot reserve another waiting HTTP request.
         expect(move.disabled).toBe(true);
@@ -3072,20 +3086,20 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         state.invokePending = false;
     state.axisInvokePending = false;
     state.invokeVariables = undefined;
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         expect(move.disabled).toBe(false);
         await act(async () => move.click());
         expect(state.yInvokeCalls).toHaveLength(1);
         expect(state.yInvokeCalls[0]).toMatchObject({ request: { action_id: `oem.${axis}.move_steps` } });
         Object.assign(action, { enabled: false, disabled_reason: 'Robot denied: recovery required.' });
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         expect(move.disabled).toBe(true);
         expect(move.title).toContain('Robot denied: recovery required.');
         await act(async () => move.click());
         expect(state.yInvokeCalls).toHaveLength(1);
         Object.assign(action, { enabled: true, disabled_reason: null });
         state.v2Catalog.data!.dashboard.generated_at = Date.now() / 1000 - 20;
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         expect(move.disabled).toBe(false);
         await act(async () => move.click());
         expect(state.yInvokeCalls).toHaveLength(2);
@@ -3100,13 +3114,13 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         state.invokePending = true;
 
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
 
         const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
         const buttons = [...article.querySelectorAll('button')] as HTMLButtonElement[];
-        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const movePositive = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
 
         await act(async () => {
             movePositive.click();
@@ -3117,7 +3131,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         state.invokePending = false;
     state.axisInvokePending = false;
     state.invokeVariables = undefined;
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         await act(async () => movePositive.click());
         expect(state.yInvokeCalls).toHaveLength(1);
         expect(state.yInvokeCalls[0]).toMatchObject({ request: { action_id: 'oem.x.move_steps' } });
@@ -3132,13 +3146,13 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         };
 
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
 
         const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
         const buttons = [...article.querySelectorAll('button')] as HTMLButtonElement[];
-        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const movePositive = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
         const home = buttons.find((button) => button.textContent === 'Home') as HTMLButtonElement;
 
         expect(movePositive.disabled).toBe(false);
@@ -3149,17 +3163,17 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
     it('renders retained live history with numeric timestamps and absent nested stage receipts', async () => {
         state.history.data.items = retainedHistory.receipts.map(historyItem);
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
         const section = [...container.querySelectorAll('details')]
-            .find((node) => node.querySelector('summary')?.textContent === 'Recent Robot Actions') as HTMLElement;
+            .find((node) => node.querySelector('summary')?.textContent?.startsWith('History ')) as HTMLElement;
         expect(section.querySelectorAll('article')).toHaveLength(retainedHistory.receipts.length);
         expect(section.textContent).toContain('Terminal proof unverified');
         expect(section.textContent).toContain('Retained legacy record — not current control authority.');
         state.history.isError = true;
         state.history.error = new Error('refresh failed');
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         expect(section.querySelectorAll('article')).toHaveLength(retainedHistory.receipts.length);
         expect(container.textContent).toContain('Robot action history unavailable');
         expect(container.textContent).not.toContain('No robot action receipts recorded.');
@@ -3170,7 +3184,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         state.history.data.items = Array.from({ length: 30 }, (_, i) => historyItem(xReceipt('completed', i)));
 
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
 
@@ -3188,7 +3202,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
         expect(state.historyCalls.at(-1)).toBe(50);
         const historySection = [...container.querySelectorAll('details')]
-            .find((node) => node.querySelector('summary')?.textContent === 'Recent Robot Actions') as HTMLElement;
+            .find((node) => node.querySelector('summary')?.textContent?.startsWith('History ')) as HTMLElement;
         const receiptArticles = [...historySection.querySelectorAll('article')]
             .filter((node) => node.textContent?.includes('oem.x.move_steps'));
         expect(receiptArticles.length).toBe(30);
@@ -3200,13 +3214,13 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         state.history.data.items = [];
 
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
 
         const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
         const buttons = [...article.querySelectorAll('button')] as HTMLButtonElement[];
-        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const movePositive = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
         const home = buttons.find((button) => button.textContent === 'Home') as HTMLButtonElement;
         expect(movePositive.disabled).toBe(false);
         expect(home.disabled).toBe(false);
@@ -3215,13 +3229,13 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
     it('mounts operational strict Y controls with exact bounds and payloads while generic Y remains absent', async () => {
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
         const section = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
         expect(section).toBeTruthy();
         const manualControls = section.closest('section') as HTMLElement;
-        expect(manualControls.querySelector('h2')?.textContent).toBe('Manual Controls');
+        expect(manualControls.getAttribute('aria-label')).toBe('Axis controls');
         expect(manualControls.textContent).toContain('X Axis');
         expect(manualControls.textContent).toContain('Z Axis');
         expect(manualControls.textContent).toContain('Gripper');
@@ -3231,7 +3245,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(inputs[1]?.min).toBe('-2147483648');
         expect(inputs[1]?.max).toBe('2147483647');
         const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
-        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const movePositive = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
         const stop = buttons.find((button) => button.textContent === 'Stop') as HTMLButtonElement;
         expect(movePositive.disabled).toBe(false);
         expect(stop.disabled).toBe(false);
@@ -3272,13 +3286,13 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         });
 
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
 
         const section = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
         const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
-        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const movePositive = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
         const stop = buttons.find((button) => button.textContent === 'Stop') as HTMLButtonElement;
         expect(movePositive.disabled).toBe(true);
         expect(movePositive.title).toBe('Robot denied Y movement.');
@@ -3287,7 +3301,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
     it('rejects a negative Y step magnitude before directional transformation can overflow signed int32', async () => {
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
 
@@ -3299,7 +3313,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         await act(async () => { await Promise.resolve(); });
 
         const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
-        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const movePositive = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
         expect(movePositive.disabled).toBe(true);
         expect(movePositive.title).toContain('Step magnitude must be an integer from 0 through 2147483647.');
         expect(state.yInvokeCalls).toHaveLength(0);
@@ -3320,7 +3334,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         });
 
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
 
@@ -3337,12 +3351,12 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
     it('treats ownership-generation mismatch as observational while keeping normal Y and STOP reachable', async () => {
         catalogDashboard().ownership_generation = 2;
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
         const section = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
         const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
-        expect((buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement).disabled).toBe(false);
+        expect((buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement).disabled).toBe(false);
         expect((buttons.find((button) => button.textContent === 'Stop') as HTMLButtonElement).disabled).toBe(false);
         expect(section.textContent).not.toContain('matching v2 catalog and dashboard authority is unavailable');
     });
@@ -3351,11 +3365,11 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         state.yInvokeError = { response: { status: 409, data: { detail: { error: 'board_epoch_conflict', expected: { '4': 2 }, actual: { '4': 3 } } } } };
         state.yInterruptError = { response: { status: 504, data: { detail: { error: 'bioxp_robot_timeout', dispatch_state: 'outcome_ambiguous' } } } };
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
         const section = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
-        const movePositive = [...section.querySelectorAll('button')].find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const movePositive = [...section.querySelectorAll('button')].find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
         await act(async () => { movePositive.click(); await Promise.resolve(); });
         expect(section.textContent).toContain('Y enqueue failed · HTTP 409 · board_epoch_conflict');
         expect(section.textContent).toContain('Y STOP failed · HTTP 504 · bioxp_robot_timeout');
@@ -3367,18 +3381,18 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
 
     it.each(['interruptPending', 'lifecycleInvokePending', 'deckInvokePending'] as const)('holds Z Clear visibly during %s and restores it after submission', async (pending) => {
-        await act(async () => root.render(<BioXpCockpit />));
-        const clear = () => [...container.querySelectorAll('button')].find((button) => button.textContent === 'Z Clear (automatic position)')!;
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
+        const clear = () => [...container.querySelectorAll('button')].find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Z Clear (automatic position)')!;
         expect(clear().disabled).toBe(false);
         state[pending] = true;
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         expect(clear().disabled).toBe(true);
         expect(clear().title).toBe('A command submission is in flight; wait for its response.');
         const before = state.yInvokeCalls.length;
         await act(async () => clear().click());
         expect(state.yInvokeCalls).toHaveLength(before);
         state[pending] = false;
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         expect(clear().disabled).toBe(false);
         await act(async () => clear().click());
         expect(state.yInvokeCalls).toHaveLength(before + 1);
@@ -3386,14 +3400,14 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
     });
 
     it('keeps robot-enabled Z controls and Stop available through catalog read failure', async () => {
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         const panel = () => [...container.querySelectorAll('article')].find((element) => element.querySelector('h3')?.textContent === 'Z Axis')!;
-        const normal = () => [...panel().querySelectorAll('button')].filter((button) => ['Move −', 'Move +', 'Home', 'Go absolute'].includes(button.textContent ?? ''));
+        const normal = () => [...panel().querySelectorAll('button')].filter((button) => ['Move −', 'Move +', 'Home', 'Go absolute'].includes(button.getAttribute('aria-label') ?? button.textContent ?? ''));
         expect(normal()).toHaveLength(4);
         for (const button of normal()) expect(button.disabled).toBe(false);
         state.v2Catalog.error = new Error('catalog query failed');
         state.v2Catalog.data!.dashboard.generated_at = Date.now() / 1000 - 20;
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         for (const button of normal()) {
             expect(button.disabled).toBe(false);
             expect(button.title).not.toBe('Current robot control state is unavailable.');
@@ -3407,12 +3421,12 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         state.v2Catalog.error = new Error('catalog query failed');
         state.v2Catalog.data!.dashboard.generated_at = Date.now() / 1000 - 20;
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
         const section = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
         const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
-        expect((buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement).disabled).toBe(false);
+        expect((buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement).disabled).toBe(false);
         expect((buttons.find((button) => button.textContent === 'Stop') as HTMLButtonElement).disabled).toBe(false);
         expect(section.textContent).not.toContain('Fresh v2 catalog or dashboard authority is unavailable');
     });
@@ -3428,14 +3442,14 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         state.v2Catalog.error = new Error('catalog query failed');
         state.v2Catalog.data!.dashboard.generated_at = Date.now() / 1000 - 20;
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
         const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('Z Axis')) as HTMLElement;
         const buttons = [...article.querySelectorAll('button')] as HTMLButtonElement[];
-        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const movePositive = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
         const home = buttons.find((button) => button.textContent === 'Home') as HTMLButtonElement;
-        const absolute = buttons.find((button) => button.textContent === 'Go absolute') as HTMLButtonElement;
+        const absolute = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Go absolute') as HTMLButtonElement;
         expect(movePositive.disabled).toBe(false);
         expect(home.disabled).toBe(false);
         expect(absolute.disabled).toBe(false);
@@ -3482,7 +3496,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             },
         };
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
         const section = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
@@ -3498,12 +3512,12 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
     });
 
     it.each(['status-error', 'unreachable-observation'])('retains the passive camera session during %s without a status-observation lock', async (failure) => {
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
         const camera = () => JSON.parse(container.querySelector('[data-testid="camera-session"]')!.textContent!);
         expect(camera()).toMatchObject({ connected: true, connectionGeneration: 1, mutationEnabled: true });
         if (failure === 'status-error') state.statusError = true;
         else state.connectionReachable = false;
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
         expect(camera()).toMatchObject({ connected: true, connectionGeneration: 1, mutationEnabled: true });
         const xy = container.querySelector('[data-testid="serial206-xy-oem-panel"]')!;
         expect([...xy.querySelectorAll('button')].every(button => button.disabled)).toBe(false);
@@ -3512,26 +3526,26 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(state.invokeCalls).toHaveLength(0);
         state.statusError = false;
         state.connectionReachable = null;
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
         expect(camera()).toMatchObject({ connected: true, connectionGeneration: 1, mutationEnabled: true });
     });
 
     it('fences the passive camera on real disconnect and binds its new connection generation', async () => {
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
         const camera = () => JSON.parse(container.querySelector('[data-testid="camera-session"]')!.textContent!);
         state.connected = false;
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
         expect(camera()).toMatchObject({ connected: false, connectionGeneration: null, mutationEnabled: false });
         state.connected = true;
         state.connectionGeneration = 2;
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
         expect(camera()).toMatchObject({ connected: true, connectionGeneration: 2 });
         expect(state.xyCalls).toHaveLength(0);
         expect(state.invokeCalls).toHaveLength(0);
     });
 
     it('edits both combined targets directly, retains drafts across polls, and submits one exact XY request', async () => {
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         const panel = container.querySelector('[data-testid="serial206-xy-oem-panel"]') as HTMLElement;
         const x = panel.querySelector('[aria-label="Combined X target (steps)"]') as HTMLInputElement;
         const y = panel.querySelector('[aria-label="Combined Y target (steps)"]') as HTMLInputElement;
@@ -3543,10 +3557,10 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             .map(node => `${node.textContent} ${node.getAttribute('title') ?? ''}`).join(' ');
         expect(operatorLabels).not.toMatch(/\bOEM\b/);
         const stop = [...container.querySelectorAll('button')].find(button => button.textContent === 'Stop X')!;
-        const abort = [...container.querySelectorAll('button')].find(button => button.textContent === 'Software Abort (cancel waiters)')!;
+        const abort = [...container.querySelectorAll('button')].find(button => (button.getAttribute('aria-label') ?? button.textContent) === 'Software Abort (cancel waiters)')!;
         expect(stop.title).toContain('Immediate X stop');
         expect(abort.title).toContain('cancels waiters only; motors may continue');
-        expect(container.textContent).toContain('This is not a physical emergency stop; physical stopping remains unverified.');
+        expect(container.querySelector('[aria-label="Stop controls"]')?.getAttribute('title')).toContain('This is not a physical emergency stop');
         const move = [...panel.querySelectorAll('button')].find(button => button.textContent === 'Move X + Y together')!;
         const home = [...panel.querySelectorAll('button')].find(button => button.textContent === 'Home X + Y')!;
         const edit = async (input: HTMLInputElement, value: string) => act(async () => {
@@ -3564,7 +3578,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         await edit(y, '23456');
         state.v2Catalog.data = { ...state.v2Catalog.data };
         Object.assign(state.v2Catalog, { dataUpdatedAt: Date.now() });
-        await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         expect(x.value).toBe('12345');
         expect(y.value).toBe('23456');
         expect(state.xyCalls).toHaveLength(0);
@@ -3578,12 +3592,11 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         } });
         expect(state.yInvokeCalls).toHaveLength(0);
         expect(state.invokeCalls).toHaveLength(0);
-        expect(state.methodCalls).toHaveLength(0);
     });
 
     it.each([['X', ''], ['Y', ''], ['X', '1.5'], ['Y', '1.5'], ['X', '2147483648'], ['Y', '2147483648']])(
         'does not coerce or submit invalid combined %s target %j', async (axis, value) => {
-            await act(async () => root.render(<BioXpCockpit />));
+            await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
             const panel = container.querySelector('[data-testid="serial206-xy-oem-panel"]') as HTMLElement;
             const input = panel.querySelector(`[aria-label="Combined ${axis} target (steps)"]`) as HTMLInputElement;
             expect(input).not.toBeNull();
@@ -3601,13 +3614,12 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
     it('submits recovered OEM moveXY and HomeXY through the canonical V2 action route', async () => {
         await act(async () => {
-            root.render(<BioXpCockpit />);
+            root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
         const panel = container.querySelector('[data-testid="serial206-xy-oem-panel"]') as HTMLElement;
         expect(panel).not.toBeNull();
-        expect(panel.textContent).toContain('Combined XY Capability');
-        expect(panel.textContent).toContain('one combined command, not two independent axis commands');
+        expect(panel.textContent).toContain('X + Y together');
         const buttons = [...panel.querySelectorAll('button')] as HTMLButtonElement[];
         const move = buttons.find((button) => button.textContent === 'Move X + Y together') as HTMLButtonElement;
         const home = buttons.find((button) => button.textContent === 'Home X + Y') as HTMLButtonElement;
@@ -3619,7 +3631,6 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             status: 'completed', terminal: true,
         }));
         await act(async () => home.click());
-        expect(state.methodCalls).toHaveLength(0);
         expect(state.xyCalls).toHaveLength(2);
         expect(state.xyCalls[0]).toMatchObject({ request: {
             action_id: 'oem.xy.move_absolute',
@@ -3648,18 +3659,20 @@ describe('Well pipetting cockpit integration', () => {
         const tab = (name: string) => container.querySelector(`#control-tab-${name}`) as HTMLButtonElement;
         const panel = (name: string) => container.querySelector(`#control-panel-${name}`) as HTMLElement;
         const click = async (name: string) => act(async () => tab(name).click());
-        const field = (name: string) => container.querySelector(`[aria-label="${name}"]`) as HTMLInputElement;
+        const field = (name: string) => panel('pipettes').querySelector(`[aria-label="${name}"]`) as HTMLInputElement;
         const set = async (name: string, value: string) => act(async () => {
             const input = field(name);
             Object.getOwnPropertyDescriptor(input.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype, 'value')!.set!.call(input, value);
             input.dispatchEvent(new Event(input.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true }));
         });
-        const button = (text: string) => [...panel('pipettes').querySelectorAll('button')].find(b => b.textContent === text)!;
+        const button = (text: string) => [...panel('pipettes').querySelectorAll('button')].find(b => (b.getAttribute('aria-label') ?? b.textContent) === text)!;
         try {
             await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
             expect(panel('robot').hidden).toBe(false);
             expect(panel('pipettes').hidden).toBe(true);
             expect(container.querySelector('[aria-label="Well pipetting"]')).toBeNull();
+            expect(container.querySelector('[data-testid="oem-deck-movement"]')).toBeNull();
+            await click('live-deck');
             expect(tab('pipettes').compareDocumentPosition(container.querySelector('[data-testid="oem-deck-movement"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
             await click('pipettes');
             const original = field('Volume (µL)');
@@ -3687,18 +3700,18 @@ describe('Well pipetting cockpit integration', () => {
             expect(path).toBe('/api/bioxp/protocols/submit');
             expect(request).toMatchObject({ source_type: 'native', dry_run: false, expected_connection_generation: 1, live_execution: { live_execution_ack: true } });
             expect(request.document.stages[0].actions[0]).toMatchObject({ kind: 'pipette_dispense', params: { channels: [1], volume_ul: 12.5, speed: 65 } });
-            await click('robot'); await click('pipettes');
+            await click('robot'); await click('live-deck'); await click('pipettes');
             expect(button('Run ordered steps').disabled).toBe(true);
             const stops = container.querySelector('[aria-label="Stop controls"]')!;
             expect(stops.closest('[hidden]')).toBeNull();
             for (const text of ['Stop X', 'Stop Y', 'Stop Z', 'Software Abort (cancel waiters)']) {
-                const control = [...stops.querySelectorAll('button')].find(b => b.textContent === text)!;
+                const control = [...stops.querySelectorAll('button')].find(b => (b.getAttribute('aria-label') ?? b.textContent) === text)!;
                 expect(control.disabled).toBe(false);
                 await act(async () => control.click());
             }
             expect(state.yInterruptCalls.map(call => call.actionId)).toEqual(['oem.x.stop', 'oem.y.stop', 'oem.z.stop', 'oem.abort_all']);
             await act(async () => reject(new Error('fixture response lost')));
-            await click('robot'); await click('pipettes');
+            await click('robot'); await click('live-deck'); await click('pipettes');
             expect(panel('pipettes').textContent).toContain('fixture response lost');
             expect(button('Run ordered steps').disabled).toBe(false);
             expect(field('Volume (µL)')).toBe(original);
@@ -3718,6 +3731,14 @@ describe('Well pipetting cockpit integration', () => {
             expect(tab('robot').getAttribute('aria-selected')).toBe('true');
             expect(document.activeElement).toBe(tab('robot'));
             await act(async () => tab('robot').dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })));
+            expect(tab('live-deck').getAttribute('aria-selected')).toBe('true');
+            expect(document.activeElement).toBe(tab('live-deck'));
+            await act(async () => tab('live-deck').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true })));
+            expect(tab('workflows').getAttribute('aria-selected')).toBe('true');
+            expect(document.activeElement).toBe(tab('workflows'));
+            expect(panel('workflows').querySelector('[aria-label="Saved workflow"]')).not.toBeNull();
+            expect(stops.closest('[hidden]')).toBeNull();
+            await click('pipettes');
             expect(panel('pipettes').textContent).toContain('Robot job: completed');
             expect(panel('pipettes').textContent).toContain('Physical effect verifiedfalse');
             expect(field('Volume (µL)')).toBe(original);
@@ -3738,7 +3759,7 @@ describe('Well pipetting cockpit integration', () => {
             await act(async () => (container.querySelector('#control-tab-pipettes') as HTMLButtonElement).click());
             const panel = container.querySelector('[aria-label="Well pipetting"]')!;
             expect(panel).not.toBeNull();
-            for (const [name, value] of [['Block', '4'], ['Move Z position', '1']]) {
+            for (const [name, value] of [['Station', '4'], ['Move Z position', '1']]) {
                 await act(async () => {
                     const select = panel.querySelector(`[aria-label="${name}"]`) as HTMLSelectElement;
                     select.value = value; select.dispatchEvent(new Event('change', { bubbles: true }));
@@ -3762,8 +3783,8 @@ describe('Well pipetting cockpit integration', () => {
 });
 
 describe('OEM software Abort distinct from addressed Stops', () => {
-    const render = () => act(async () => root.render(<BioXpCockpit />));
-    const abort = () => [...container.querySelectorAll('button')].find(b => b.textContent === 'Software Abort (cancel waiters)')!;
+    const render = () => act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
+    const abort = () => [...container.querySelectorAll('button')].find(b => (b.getAttribute('aria-label') ?? b.textContent) === 'Software Abort (cancel waiters)')!;
     const stops = () => ['X Axis', 'Y Axis', 'Z Axis', 'Gripper'].map(label => {
         const panel = [...container.querySelectorAll('article')].find(p => p.querySelector('h3')?.textContent === label)!;
         return [...panel.querySelectorAll('button')].find(b => b.textContent === 'Stop')!;
@@ -3777,6 +3798,7 @@ describe('OEM software Abort distinct from addressed Stops', () => {
         vi.mocked(api.post).mockReset().mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
         try {
             await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
+            await act(async () => (container.querySelector('#control-tab-live-deck') as HTMLButtonElement).click());
             const transfer = container.querySelector('[aria-label="Plate and cover transfer"]')!;
             const move = [...transfer.querySelectorAll('button')].find(b => b.textContent === 'Pick up and move')!;
             expect(move.disabled).toBe(false);
@@ -3803,7 +3825,7 @@ describe('OEM software Abort distinct from addressed Stops', () => {
         state.catalog.data.actions.push({ ...xMoveAction(), action_id: 'component-stop', informational_path: '/motion/diagnostics/stop', safety_class: 'stop', enabled: true });
         await render();
         expect(container.textContent).not.toContain('Emergency Stop');
-        expect(container.textContent).toContain('Motors may continue');
+        expect(container.querySelector('[aria-label="Stop controls"]')?.getAttribute('title')).toContain('Motors may continue');
         await act(async () => abort().click());
         expect(state.yInterruptCalls).toEqual([expect.objectContaining({ actionId: 'oem.abort_all', request: expect.objectContaining({ expected_connection_generation: 1, reason: 'BMS operator requested OEM software Abort: cancel waiters only; motors may continue' }) })]);
         expect(state.invokeCalls).toHaveLength(0);

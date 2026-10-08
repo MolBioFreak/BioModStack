@@ -98,12 +98,14 @@ def test_build_nextflow_command_threads_fold_cp_frustrampnn_authority(tmp_path: 
     assert transported["schema_version"] == 2
 
 
-def test_build_nextflow_command_maps_boltz_cp_experimental_params() -> None:
+def test_build_nextflow_command_maps_boltz_cp_experimental_params(tmp_path: Path) -> None:
+    input_path = tmp_path / 'complex_input.yaml'
+    input_path.write_text('version: 1\nsequences: []\n')
     cmd = build_nextflow_command(
         "boltz_cp_experimental",
         "design",
         {
-            "input_path": "/tmp/complex_input.yaml",
+            "input_path": str(input_path),
             "gpu_ids": "0,1,2,3",
             "size_cp": 4,
             "input_format": "config_files",
@@ -114,7 +116,7 @@ def test_build_nextflow_command_maps_boltz_cp_experimental_params() -> None:
             "diffusion_samples": 2,
             "seed": 17,
         },
-        "/tmp/out",
+        str(tmp_path / 'out'),
         job_id="job-bcp-1",
     )
 
@@ -123,7 +125,7 @@ def test_build_nextflow_command_maps_boltz_cp_experimental_params() -> None:
     assert Path(cmd[0]).name == "nextflow"
     assert cmd[1:4] == ["run", "workflows/boltz_cp_experimental.nf", "-profile"]
     assert "boltz_cp_experimental,workstation_ryzen7960x" in cmd
-    assert "--bcp_input_path /tmp/complex_input.yaml" in joined
+    assert _flag_value(cmd, '--bcp_input_path') == str(input_path)
     assert "--bcp_gpu_ids 0,1,2,3" in joined
     assert "--bcp_size_cp 4" in joined
     assert "--bcp_input_format config_files" in joined
@@ -134,7 +136,7 @@ def test_build_nextflow_command_maps_boltz_cp_experimental_params() -> None:
     assert "--bcp_diffusion_samples 2" in joined
     assert "--bcp_seed 17" in joined
     assert "--rfd_mode boltz_cp_experimental" in joined
-    assert "--input_path /tmp/complex_input.yaml" not in joined
+    assert '--input_path' not in cmd
     assert "--gpu_ids 0,1,2,3" not in joined
 
 

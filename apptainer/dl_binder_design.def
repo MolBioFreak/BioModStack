@@ -1,43 +1,34 @@
 Bootstrap: docker
-From: mambaorg/micromamba:1.5.8
+From: mambaorg/micromamba@sha256:69197a394b85ad1e7ce2398cdaffa75c12e5cd9dcc8529651342818e7b239e59
+
+# Build from repository root. Licensed PyRosetta acquisition uses its upstream
+# authorization; do not put credentials in this recipe or its locks.
+%files
+    apptainer/dl_binder_design-mpnn.conda.lock /opt/bms-mpnn/dl_binder_design-mpnn.conda.lock
+    apptainer/dl_binder_design-cu128.requirements.lock /opt/bms-mpnn/dl_binder_design-cu128.requirements.lock
 
 %post -c /bin/bash
+    set -euo pipefail
     apt-get -q update
-    apt-get install --no-install-recommends -y \
-        wget unzip git build-essential cmake procps coreutils grep sed \
-        python3.10 \
-        pip
-
-    apt-get autoremove -y
+    apt-get install --no-install-recommends -y wget unzip git build-essential cmake procps coreutils grep sed ca-certificates
     apt-get clean
-
     git clone https://github.com/PapenfussLab/dl_binder_design.git /dl_binder_design
-    cd /dl_binder_design/include
-
-    echo "creating micromamba environments with RTX 5090 support"
-    micromamba create -n mpnn -f proteinmpnn_fastrelax.yml -y
-
-    # Upgrade to PyTorch nightly with CUDA 12.8 for RTX 5090 (sm_120) support
-    # CUDA 12.8 nightly builds include sm_120 support for Blackwell architecture
-    eval "$(micromamba shell hook --shell bash)"
-    micromamba activate mpnn
-    
-    # Install UV package manager within conda env (10-100x faster than pip)
-    pip install --compile uv
-    uv pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
-    micromamba deactivate
-
-    cd ../mpnn_fr
-    git clone https://github.com/dauparas/ProteinMPNN.git
-
+    git -C /dl_binder_design checkout --detach 1c336346332172658097c32de04040732728341e
+    micromamba create -n mpnn -f /opt/bms-mpnn/dl_binder_design-mpnn.conda.lock -y
+    git clone https://github.com/dauparas/ProteinMPNN.git /dl_binder_design/mpnn_fr/ProteinMPNN
+    git -C /dl_binder_design/mpnn_fr/ProteinMPNN checkout --detach 8907e6671bfbfc92303b5f79c4b5e6ce47cdef57
+    set -euo pipefail
+    PYTHON=/opt/conda/envs/mpnn/bin/python
+    "$PYTHON" -m pip install --no-cache-dir --disable-pip-version-check --require-hashes --only-binary=:all: --index-url https://download.pytorch.org/whl/cu128 --extra-index-url https://pypi.org/simple -r /opt/bms-mpnn/dl_binder_design-cu128.requirements.lock
+    "$PYTHON" -m pip check
+    "$PYTHON" -c 'import torch; assert torch.__version__ == "2.7.1+cu128"; assert torch.version.cuda == "12.8"; assert "sm_120" in torch._C._cuda_getArchFlags().split()'
+    echo 'c9cb4a671d79604111231f8dbfc7c590e06f1197453b7a6854ac6661a642f5bd  /dl_binder_design/mpnn_fr/ProteinMPNN/vanilla_model_weights/v_48_020.pt' | sha256sum -c -
     micromamba clean --all --yes
 
-
-
 %environment
-    # so we can just run it out of the box without having to set the prefix
+    # Native RunMPNN activates mpnn; retain the existing default PATH behavior.
     export PATH=/opt/conda/envs/pyrosetta/bin:$PATH
+    export PYTHONNOUSERSITE=1
 
-# Entry point for the container when run.
 %runscript
     exec "$@"

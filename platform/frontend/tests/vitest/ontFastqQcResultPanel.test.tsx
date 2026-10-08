@@ -39,6 +39,17 @@ afterEach(async () => {
 });
 
 describe('ONT FASTQ-QC decision report', () => {
+    it('separates configured-check PASS from unchanged experimental calibration metadata', async () => {
+        const result = resultFixture();
+        result.verification.verdict = 'PASS';
+        result.verification.reason_codes = ['ALL_CHECKS_PASS'];
+        for (const check of Object.values(result.verification.checks)) { check.status = 'pass'; check.reason_codes = []; }
+        await act(async () => root.render(<OntFastqQcResultPanel result={result} loading={false} error={null} />));
+        expect(container.textContent).toContain('Passes configured checks; not automatic release approval.');
+        expect(container.textContent).toContain('Profile uncalibrated; biological accuracy is not validated.');
+        expect(result.verification.threshold_profile.public_accuracy_validated).toBe(false);
+        expect(result.verification.threshold_profile.values.automatic_pass_eligible).toBe(false);
+    });
     it('renders decision evidence, distinct depth semantics, downloads, and affected-base viewer action', async () => {
         const onOpenViewer = vi.fn();
         const Panel = OntFastqQcResultPanel as React.ComponentType<Record<string, unknown>>;
@@ -168,7 +179,7 @@ describe('ONT FASTQ-QC decision report', () => {
         await act(async () => root.render(
             <OntFastqQcResultPanel result={result} loading={false} error={null} onOpenViewer={onOpenViewer} />,
         ));
-        expect(container.textContent).toContain('Scientific verdict: FAIL');
+        expect(container.textContent).toContain('Configured-check verdict: FAIL');
         expect(container.textContent).toContain('CONSENSUS_UNAVAILABLE');
         expect(container.textContent).toContain('Consensus identity—observed consensus versus bound reference');
         expect(container.textContent).not.toContain('Consensus identity0.0000%');

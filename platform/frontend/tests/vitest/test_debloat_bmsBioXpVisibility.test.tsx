@@ -1,0 +1,227 @@
+import React, { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { BioXpCockpit } from '../../src/components/BioXpCockpit';
+import { api } from '../../src/lib/api';
+import { catalogWireFixture } from '../fixtures/bioxpCatalogWire';
+import parkReceipt from '../fixtures/bioxp_park_completed_receipt.json';
+
+// Actual cockpit, child components, query owners and Axios serialization. Only
+// transport is inert. Bytes are serialized fixture body bytes, not live traffic.
+const originalAdapter = api.defaults.adapter;
+let host: HTMLDivElement, root: Root, client: QueryClient;
+let requests: { url: string; method: string; bytes: number; detail?: boolean }[];
+let mutationAttempts = 0;
+let cameraActive = false;
+let recoveryVisible = false;
+let recoveryRevision = 0;
+let rows: any[] = [];
+let liveJob: any = null;
+const recoveryReceipt = { ...parkReceipt, status: 'ambiguous', completion_class: 'recovery_required' };
+const catalog = { actions: [], ownership_generation: 7, machine_serial: '206',
+    dashboard: { pipettes: { channels: [] }, snapshot: { freshness: null } },
+    canonical: { actions: [], ownership_generation: 7, dashboard: { generated_at: 1, active_commands: [], latest_receipts: [] } } };
+async function advance(ms = 60_000) {
+    for (let elapsed = 0; elapsed < ms; elapsed += 100) await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+}
+async function click(selector: string) { await act(async () => (host.querySelector(selector) as HTMLElement).click()); await advance(100); }
+function count(fragment: string) { return requests.filter(r => r.url.includes(fragment)).length; }
+beforeEach(() => {
+    vi.useFakeTimers(); recoveryRevision = 0; mutationAttempts = 0; cameraActive = false; recoveryVisible = false; rows = []; liveJob = null; requests = [];
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+    client = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });
+    api.defaults.adapter = async config => {
+        const url = config.url ?? '';
+        let data: unknown = { dependency_blockers: [], operations: [], channels: [] };
+        if (url.endsWith('/updates')) {
+            const wire = { schema_version: 'bioxp.operator_updates.v1', source_instance_id: 'visibility-fixture', ownership_generation: 7,
+                next_after_sequence: 0, pose_sequence: 0, changed_command_ids: [], active_command_ids: [], has_more: false, reset: false, pose: null };
+            if (config.params?.after_sequence !== undefined) await new Promise<void>((resolve, reject) => {
+                const timer = setTimeout(resolve, 25000);
+                config.signal?.addEventListener?.('abort', () => { clearTimeout(timer); reject(new Error('cancelled')); }, { once: true });
+            });
+            data = { ...wire, next_after_sequence: recoveryRevision, changed_command_ids: recoveryRevision ? [recoveryReceipt.command_id] : [] };
+        }
+        else if (url === '/api/bioxp/status') data = { connection: { active: true, configured: true, generation: 1, reachable: true }, mutation_access: { enabled: true } };
+        else if (url.includes('/operator-controls/catalog')) data = catalogWireFixture({ ...catalog, canonical: { ...catalog.canonical, dashboard: { ...catalog.canonical.dashboard, latest_receipts: recoveryVisible ? [recoveryReceipt] : [] } } }, config.params?.view);
+        else if (url.includes('/receipts/')) data = recoveryReceipt;
+        else if (url.includes('/protocols/jobs/')) data = config.params?.observation && liveJob ? {
+            schema_version: 'bioxp.protocol_job_observation.v1', job_id: liveJob.job_id, status: liveJob.status,
+            command: liveJob.command, execution: { dry_run: liveJob.execution?.dry_run,
+                runtime_state: { workflow: liveJob.execution?.runtime_state?.workflow } },
+            operator: { pending_review: liveJob.operator?.pending_review },
+        } : liveJob;
+        else if (url.endsWith('/protocols/jobs')) data = { rows };
+        else if (url.includes('/history')) data = { items: [], next_cursor: null };
+        else if (url.endsWith('/camera/stream/state')) data = { active: cameraActive, connection_generation: 1, state: cameraActive ? 'live' : 'off', stream_id: 'other-client' };
+        else if (url.endsWith('/camera/status')) data = { available: true, state: 'off', connection_generation: 1, frame_sequence: null, frame_age_seconds: null, freshness_budget_seconds: 5 };
+        else if (url.includes('/user-templates')) data = [];
+        else if (url === '/api/bioxp/calibration-settings') data = { active_positions: [], saved_positions: [], active_motion_positions: [], saved_motion_positions: [] };
+        requests.push({ url, method: config.method ?? '', detail: config.params?.detail, bytes: new TextEncoder().encode(JSON.stringify(data)).length });
+        if (config.method !== 'get') { mutationAttempts += 1; throw new Error('No mutation authorized by this test'); }
+        return { data, status: 200, statusText: 'OK', headers: {}, config };
+    };
+});
+afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove(); api.defaults.adapter = originalAdapter; vi.useRealTimers(); expect(mutationAttempts).toBe(0); });
+async function mount() {
+    await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
+    await advance(500);
+}
+it('deletes irrelevant observations for a full Build minute after visiting operational tabs, retaining mounted drafts', async () => {
+    await mount();
+    await click('#control-tab-pipettes');
+    const manual = host.querySelector('#control-panel-pipettes input') as HTMLInputElement;
+    await click('#control-tab-live-deck');
+    expect(host.querySelectorAll('section[aria-label="Camera"]')).toHaveLength(1);
+    await click('#control-tab-workflows');
+    const editor = host.querySelector('[aria-label="Saved workflow"]');
+    const name = host.querySelector('[aria-label="Workflow name"]') as HTMLInputElement;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, 'Unsubmitted retained draft'); name.dispatchEvent(new Event('input', { bubbles: true })); });
+    await click('#control-tab-robot');
+    await click('#control-tab-workflows');
+    expect(host.querySelector('[aria-label="Saved workflow"]')).toBe(editor);
+    expect((host.querySelector('[aria-label="Workflow name"]') as HTMLInputElement).value).toBe('Unsubmitted retained draft');
+    expect(host.querySelector('#control-panel-pipettes input')).toBe(manual);
+    requests = []; await advance();
+    const irrelevant = requests.filter(r => r.url !== '/api/bioxp/status' && !r.url.endsWith('/updates'));
+    expect(irrelevant).toEqual([]);
+    expect(irrelevant.reduce((n, r) => n + r.bytes, 0)).toBe(0);
+    expect(requests.every(r => r.method === 'get')).toBe(true);
+    console.info('Build 60s', JSON.stringify({ requests: requests.length, bytes: requests.reduce((n, r) => n + r.bytes, 0), irrelevantRequests: irrelevant.length, irrelevantBytes: 0 }));
+});
+it('disables all idle transport for a full hidden-document minute and resumes visible demand', async () => {
+    await mount(); await click('#control-tab-live-deck');
+    await act(async () => { Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' }); document.dispatchEvent(new Event('visibilitychange')); });
+    await advance(100); requests = []; await advance();
+    expect(requests).toEqual([]);
+    await act(async () => { Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' }); document.dispatchEvent(new Event('visibilitychange')); });
+    await advance(500); expect(requests.length).toBeGreaterThan(0);
+});
+it('retains one default-open Live deck camera node through collapse and every tab, with no hidden polling or automatic POST', async () => {
+    await mount();
+    expect(host.querySelector('[data-testid="live-deck-camera"]')).toBeNull();
+    expect(count('/camera/')).toBe(0);
+    await click('#control-tab-pipettes');
+    expect(count('/camera/')).toBe(0);
+    await click('#control-tab-live-deck');
+    const disclosure = host.querySelector<HTMLDetailsElement>('[data-testid="live-deck-camera"]')!;
+    expect(disclosure.open).toBe(true); expect(disclosure.querySelector('summary')?.textContent).toBe('Camera');
+    const camera = disclosure.querySelector('section[aria-label="Camera"]');
+    expect(camera).not.toBeNull();
+    expect(host.querySelectorAll('[data-testid="live-deck-camera"]')).toHaveLength(1);
+    expect(host.querySelectorAll('section[aria-label="Camera"]')).toHaveLength(1);
+    for (const tab of ['robot', 'pipettes', 'workflows']) {
+        await click(`#control-tab-${tab}`);
+        expect(disclosure.contains(camera)).toBe(true);
+        expect(host.querySelector('#control-panel-live-deck')?.contains(disclosure)).toBe(true);
+        expect(host.querySelector(`#control-panel-${tab}`)?.contains(camera)).toBe(false);
+        requests = []; await advance(); expect(count('/camera/')).toBe(0);
+        await click('#control-tab-live-deck');
+        expect(host.querySelector('[data-testid="live-deck-camera"]')).toBe(disclosure);
+        expect(disclosure.querySelector('section[aria-label="Camera"]')).toBe(camera);
+        expect(disclosure.open).toBe(true);
+    }
+    await act(async () => { disclosure.open = false; disclosure.dispatchEvent(new Event('toggle')); }); await advance(100);
+    requests = []; await advance(); expect(count('/camera/')).toBe(0);
+    await click('#control-tab-robot'); await click('#control-tab-live-deck');
+    expect(disclosure.open).toBe(false); expect(disclosure.contains(camera)).toBe(true);
+    await act(async () => { disclosure.open = true; disclosure.dispatchEvent(new Event('toggle')); }); await advance(500);
+    expect(disclosure.querySelector('section[aria-label="Camera"]')).toBe(camera);
+    requests = []; await advance(); expect(count('/camera/stream')).toBeGreaterThan(0);
+    expect(requests.every(r => r.method === 'get')).toBe(true);
+});
+it('uses idle camera discovery rather than 2s status polling and discovers another visible client stream', async () => {
+    await mount(); await click('#control-tab-live-deck'); requests = []; await advance();
+    expect(count('/camera/status')).toBe(0);
+    expect(count('/camera/stream')).toBeGreaterThanOrEqual(3);
+    expect(count('/camera/stream')).toBeLessThanOrEqual(4);
+    cameraActive = true; await advance(18_000);
+    expect(host.querySelector('img[alt="BioXP live camera"]')).not.toBeNull();
+    expect(count('/camera/status')).toBeGreaterThan(0);
+    const camera = [...host.querySelectorAll('details')].find(d => d.querySelector('summary')?.textContent === 'Camera')!;
+    await act(async () => { camera.open = false; camera.dispatchEvent(new Event('toggle')); });
+    await advance(100); requests = []; await advance();
+    expect(count('/camera/')).toBe(0);
+});
+it('refreshes selected recovery on committed updates, with no periodic or hidden receipt reads', async () => {
+    recoveryVisible = true; await mount(); await click('#control-tab-live-deck'); requests = []; await advance();
+    expect(count('/receipts/')).toBe(0);
+    recoveryRevision = 1; await advance(26000);
+    expect(requests.filter(r => r.url.includes('/receipts/') && r.detail === false)).toHaveLength(1);
+    expect(requests.filter(r => r.url.includes('/receipts/') && r.detail === true)).toHaveLength(0);
+    const details = [...host.querySelectorAll('details')].find(d => d.querySelector(':scope > summary')?.textContent === 'Command details')!;
+    await act(async () => { details.open = true; details.dispatchEvent(new Event('toggle')); }); await advance(100);
+    expect(requests.filter(r => r.url.includes('/receipts/') && r.detail === true)).toHaveLength(1);
+    await click('#control-tab-workflows'); requests = []; await advance();
+    expect(requests.filter(r => r.url.includes('/receipts/'))).toEqual([]);
+    await click('#control-tab-robot'); requests = []; await advance(3_000);
+    expect(count('/receipts/')).toBe(0);
+});
+
+it('observes relocated transfers only under the open Live deck disclosure, retaining the active owner and drafts', async () => {
+    await mount(); await click('#control-tab-live-deck');
+    const camera = host.querySelector<HTMLDetailsElement>('[data-testid="live-deck-camera"]')!;
+    expect(camera.open).toBe(true);
+    await act(async () => { camera.open = false; camera.dispatchEvent(new Event('toggle')); });
+    await advance(100);
+    expect(count('/calibration-settings')).toBe(1);
+    const transfer = host.querySelector('[aria-label="Plate and cover transfer"]')!;
+    const disclosure = transfer.closest('details')!;
+    requests = []; await advance();
+    expect(count('/protocols/jobs')).toBe(0);
+    expect(count('/camera/')).toBe(0);
+    await act(async () => { disclosure.open = true; disclosure.dispatchEvent(new Event('toggle')); });
+    await advance(100); requests = []; await advance();
+    expect(requests.filter(r => r.url.endsWith('/protocols/jobs')).length).toBeGreaterThan(0);
+    liveJob = { job_id: 'transfer-original', status: 'dispatched', command: { command_id: 'transfer-original', idempotency_key: 'transfer-key', ownership_generation: 7, state_version: 1, status: 'dispatched', terminal: false },
+        execution: { dry_run: false, runtime_state: { workflow: { command_id: 'transfer-original', phase: 'executing', child_command_ids: [] } } } };
+    rows = [liveJob]; await advance(11_000);
+    expect(transfer.textContent).toContain('transfer-original');
+    await act(async () => { disclosure.open = false; disclosure.dispatchEvent(new Event('toggle')); });
+    await advance(100); requests = []; await advance();
+    expect(requests.filter(r => r.url.endsWith('/protocols/jobs'))).toEqual([]);
+    expect(count('/protocols/jobs/transfer-original')).toBeGreaterThan(0);
+    await click('#control-tab-robot'); requests = []; await advance();
+    expect(host.querySelector('[aria-label="Plate and cover transfer"]')).toBe(transfer);
+    expect(requests.filter(r => r.url.endsWith('/protocols/jobs'))).toEqual([]);
+    expect(count('/protocols/jobs/transfer-original')).toBeGreaterThan(0);
+    liveJob = { ...liveJob, command: { ...liveJob.command, terminal: true, status: 'completed' } };
+    await advance(3_000); requests = []; await advance();
+    expect(count('/protocols/jobs')).toBe(0);
+    await click('#control-tab-live-deck');
+    await act(async () => { disclosure.open = true; disclosure.dispatchEvent(new Event('toggle')); });
+    await advance(100);
+    await act(async () => { Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' }); document.dispatchEvent(new Event('visibilitychange')); });
+    await advance(100); requests = [];
+    await act(async () => { await client.invalidateQueries({ queryKey: ['bioxp-live-deck-geometry'] }); });
+    await advance();
+    expect(requests).toEqual([]);
+    await act(async () => { Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' }); document.dispatchEvent(new Event('visibilitychange')); });
+    await advance(11_000);
+    expect(count('/calibration-settings')).toBe(1);
+    expect(requests.filter(r => r.url.endsWith('/protocols/jobs')).length).toBeGreaterThan(0);
+    expect(requests.every(r => r.method === 'get')).toBe(true);
+});
+
+it('discovers cross-client prepared jobs only in Workflows and retains the original active outcome owner across navigation', async () => {
+    await mount();
+    await click('#control-tab-workflows');
+    const prepared = [...host.querySelectorAll('details')].find(d => d.querySelector('summary')?.textContent === 'Prepared request files')!;
+    await act(async () => { prepared.open = true; prepared.dispatchEvent(new Event('toggle')); });
+    await advance(100);
+    liveJob = { job_id: 'job-original', status: 'dispatched', command: { command_id: 'job-original', idempotency_key: 'original-key', ownership_generation: 7, state_version: 1, status: 'dispatched', terminal: false },
+        execution: { dry_run: false, runtime_state: { workflow: { command_id: 'job-original', phase: 'executing', child_command_ids: [] } } } };
+    rows = [liveJob]; await advance(11_000);
+    expect(host.textContent).toContain('job-original');
+    await click('#control-tab-robot'); requests = []; await advance();
+    expect(requests.filter(r => r.url.endsWith('/protocols/jobs'))).toEqual([]);
+    expect(count('/protocols/jobs/job-original')).toBeGreaterThan(0);
+    expect(requests.every(r => r.method === 'get')).toBe(true);
+    liveJob = { ...liveJob, status: 'completed', command: { ...liveJob.command, terminal: true, status: 'completed' } };
+    await advance(3_000); requests = []; await advance();
+    expect(count('/protocols/jobs')).toBe(0);
+    await click('#control-tab-robot');
+    expect(host.textContent).toContain('job-original');
+});

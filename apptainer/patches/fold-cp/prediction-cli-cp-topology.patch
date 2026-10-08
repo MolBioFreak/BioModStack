@@ -1,0 +1,37 @@
+diff --git a/src/boltz/distributed/main.py b/src/boltz/distributed/main.py
+index 378b562..edae95f 100644
+--- a/src/boltz/distributed/main.py
++++ b/src/boltz/distributed/main.py
+@@ -79,9 +79,15 @@ def cli() -> None:
+ @click.option(
+     "--size_cp",
+     type=int,
+-    help="Total number of context-parallel ranks (must be a perfect square). Default is 1.",
++    help="Total number of context-parallel ranks (perfect square for 2d topology). Default is 1.",
+     default=1,
+ )
++@click.option(
++    "--cp_topology",
++    type=click.Choice(["2d", "1d"]),
++    help="Context-parallel mesh topology. Default is 2d.",
++    default="2d",
++)
+ @click.option(
+     "--accelerator",
+     type=click.Choice(["gpu", "cpu"]),
+@@ -257,6 +263,7 @@ def predict(
+     mol_dir: Optional[str],
+     size_dp: int,
+     size_cp: int,
++    cp_topology: str,
+     accelerator: str,
+     recycling_steps: int,
+     sampling_steps: int,
+@@ -310,6 +317,7 @@ def predict(
+         checkpoint=checkpoint,
+         size_dp=size_dp,
+         size_cp=size_cp,
++        cp_topology=cp_topology,
+         accelerator=accelerator,
+         recycling_steps=recycling_steps,
+         sampling_steps=sampling_steps,

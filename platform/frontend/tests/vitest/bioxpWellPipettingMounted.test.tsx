@@ -34,7 +34,7 @@ async function change(label: string, value: string) {
 async function check(channel: number) { await act(async () => (host.querySelector(`[aria-label="Plunger ${channel}"]`) as HTMLInputElement).click()); }
 async function well(value: string) { await act(async () => (host.querySelector(`[aria-label="Reference well ${value}"]`) as HTMLButtonElement).click()); }
 async function fields() {
-    await change('Block', '4'); await well('C3'); await change('Move Z position', '1');
+    await change('Station', '4'); await well('C3'); await change('Move Z position', '1');
     await change('Lift target', 'high'); await change('Volume (µL)', '12.5');
     await change('Aspirate speed', '80'); await change('Dispense speed', '65'); await change('Mix cycles', '2'); await check(2);
 }
@@ -66,6 +66,85 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove(); api.defaults.adapter = originalAdapter; vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 afterAll(() => { if (process.env.BIOXP_MANUAL_UI_EXPORT) writeFileSync(process.env.BIOXP_MANUAL_UI_EXPORT, JSON.stringify({ fixture_only: true, physical_acceptance: false, requests: exports }, null, 2)); });
+
+it.each([
+    { label: 'Eject all tips', channels: [0, 1, 2, 3] },
+    { label: 'Eject selected tips', channels: [0, 2] },
+])('ordinary $label emits only native eject, without changing diagnostic or liquid settings', async ({ label, channels }) => {
+    await mount();
+    const section = host.querySelector('[aria-label="Tip ejection"]')!;
+    expect(section.closest('details')).toBeNull();
+    expect(button('Eject all tips').disabled).toBe(false);
+    expect(button('Eject selected tips').disabled).toBe(true);
+    await toggle('Eject pipette 1'); await check(3);
+    expect((host.querySelector('[aria-label="Plunger 1"]') as HTMLInputElement).checked).toBe(true);
+    expect((host.querySelector('[aria-label="Eject pipette 3"]') as HTMLInputElement).checked).toBe(true);
+    expect(requests).toEqual([]);
+    const diagnosticBefore = (host.querySelector('[aria-label="Diagnostic action"]') as HTMLSelectElement).value;
+    await click(label);
+    expect(requests).toHaveLength(1);
+    const request = requests[0].request;
+    const step: BioXpManualStep = { operation: 'diagnostic_pipette', diagnostic: { action: 'eject', channels } };
+    expect(request.document).toEqual(manualPipettingDocument({ protocol_id: 'bms-manual-pipetting', steps: [step] }));
+    expect(requests[0].url).toBe('/api/bioxp/protocols/submit');
+    expect(request).toMatchObject({ dry_run: false, expected_connection_generation: 77, live_execution: { live_execution_ack: true } });
+    expect((host.querySelector('[aria-label="Diagnostic action"]') as HTMLSelectElement).value).toBe(diagnosticBefore);
+    expect((host.querySelector('[aria-label="Plunger 1"]') as HTMLInputElement).checked).toBe(true);
+    expect((host.querySelector('[aria-label="Plunger 2"]') as HTMLInputElement).checked).toBe(false);
+    expect((host.querySelector('[aria-label="Volume (µL)"]') as HTMLInputElement).value).toBe('');
+    expect(request.document.stages[0].actions).toHaveLength(1);
+    for (const forbidden of ['initialize', 'pipette_position', 'location_id', 'volume_ul', 'check_missing_tip', 'Park']) expect(JSON.stringify(request.document)).not.toContain(forbidden);
+    expect(host.textContent).toContain('these buttons do not move the head');
+    exports.push({ name: label, authoring: { protocol_id: 'bms-manual-pipetting', steps: [step] }, request });
+});
+
+it('eject uses the existing submission reservation and reports robot denial without retry', async () => {
+    await mount(); let release!: () => void;
+    delay = () => new Promise<void>(resolve => { release = resolve; });
+    denial = true;
+    await click('Eject all tips');
+    expect(requests).toHaveLength(1);
+    expect(button('Eject all tips').disabled).toBe(true);
+    await click('Eject all tips');
+    expect(requests).toHaveLength(1);
+    await act(async () => release()); await tick();
+    expect(host.textContent).toContain('OEM door interlock denied');
+    expect(button('Eject all tips').disabled).toBe(false);
+    expect(requests).toHaveLength(1);
+});
+
+it.each(['completed', 'failed', 'denied'])('ordinary eject crosses the actual BMS route unchanged (%s)', async status => {
+    const python = process.env.BMS_TEST_PYTHON ?? '../api/.venv/bin/python';
+    let bridged: any;
+    api.defaults.adapter = async config => {
+        if (config.method === 'get') throw new Error('passive observation unavailable');
+        const request = JSON.parse(config.data);
+        const result = spawnSync(python, ['tests/bioxp_manual_route_bridge.py'], { cwd: '../api', encoding: 'utf8',
+            env: { ...process.env, PYTHONPATH: '.:tests' },
+            input: JSON.stringify({ request, status: status === 'denied' ? 'dispatched' : status, error_status: status === 'denied' ? 409 : null }) });
+        expect(result.status, result.stderr).toBe(0);
+        bridged = JSON.parse(result.stdout.trim().split('\n').at(-1)!);
+        requests.push({ url: config.url, request });
+        if (bridged.status >= 400) throw { response: { status: bridged.status, data: bridged.data } };
+        return { data: bridged.data, status: bridged.status, statusText: 'fixture', headers: {}, config };
+    };
+    await mount(); await click('Eject all tips');
+    expect(requests).toHaveLength(1);
+    expect(bridged.robot_requests).toHaveLength(1);
+    expect(bridged.robot_requests[0].path).toBe('/protocol/execute');
+    expect(bridged.robot_requests[0].body.document).toEqual(requests[0].request.document);
+    expect(bridged.robot_requests[0].body.document.stages[0].actions[0].params).toEqual({ operation: 'diagnostic_pipette', diagnostic: { action: 'eject', channels: [0, 1, 2, 3] } });
+    expect(host.textContent).toContain(status === 'denied' ? 'OEM door interlock denied' : `Robot job: ${status}`);
+    expect(button('Eject all tips').disabled).toBe(false);
+    exports.push({ name: `eject-bms-route-${status}`, request: requests[0].request, relay: bridged });
+}, 30000);
+
+it('workflow authoring never offers the immediate eject buttons', async () => {
+    await act(async () => root.render(<QueryClientProvider client={client}><BioXpWellPipettingPanel workflowAuthoring generation={0} connected={false} /></QueryClientProvider>));
+    expect(host.querySelector('[aria-label="Tip ejection"]')).toBeNull();
+    expect([...host.querySelectorAll('button')].some(el => ['Eject all tips', 'Eject selected tips'].includes(el.textContent ?? ''))).toBe(false);
+    expect(requests).toEqual([]);
+});
 
 it.each(['move', 'lower', 'lift', 'aspirate', 'dispense', 'mix'] as const)('mounted %s sends only its native action through the actual submit hook and Axios', async op => {
     await mount(); await fields(); await click(`${op[0].toUpperCase()}${op.slice(1)} now`);
@@ -222,7 +301,7 @@ it.each(['completed', 'failed'] as const)('renders compact %s calibration replie
 it('authors an ordered source/destination transfer with immutable per-step wells and no hidden lifecycle', async () => {
     await mount(); await fields();
     for (const op of ['move', 'lower', 'aspirate', 'lift']) await append(op);
-    await change('Block', '2'); await well('H12'); await change('Move Z position', '2');
+    await change('Station', '2'); await well('H12'); await change('Move Z position', '2');
     await change('Lift target', 'height'); await change('Lift height (steps)', '0');
     for (const op of ['move', 'lower', 'dispense', 'lift']) await append(op);
     expect(requests).toHaveLength(0); expect(host.querySelectorAll('[data-manual-step]')).toHaveLength(8);
@@ -296,7 +375,7 @@ it.each(['completed', 'failed', 'denied'])('mounted submission traverses real BM
         return { data: bridged.data, status: bridged.status, statusText: 'fixture', headers: {}, config };
     };
     await mount(); await fields(); await append('move'); await append('lower'); await append('aspirate'); await append('lift');
-    await change('Block', '2'); await well('B7');
+    await change('Station', '2'); await well('B7');
     await append('move'); await append('lower'); await append('dispense'); await append('lift');
     await change('Tip tray', '5'); await change('Tip well', 'B12');
     await advanced();
@@ -324,7 +403,7 @@ it.each([-1, 0, 1, 2, 3])('source-selected pipette %s authors explicit ordered t
     if (pipette === -1) for (const c of [1,2,3,4]) await check(c); else await check(pipette + 1);
     await change('Pipettes to load', String(pipette)); await change('Tip size', '200'); await toggle('Force new tip');
     await append('source_load_tips'); await append('move'); await append('lower'); await append('aspirate'); await append('lift');
-    await change('Block', '2'); await well('G8'); await append('move'); await append('lower'); await append('dispense'); await append('lift');
+    await change('Station', '2'); await well('G8'); await append('move'); await append('lower'); await append('dispense'); await append('lift');
     await act(async () => (host.querySelector('[aria-label="Copy step 1 to editor"]') as HTMLButtonElement).click());
     expect((host.querySelector('[aria-label="Pipettes to load"]') as HTMLSelectElement).value).toBe(String(pipette));
     await click('Run ordered steps');

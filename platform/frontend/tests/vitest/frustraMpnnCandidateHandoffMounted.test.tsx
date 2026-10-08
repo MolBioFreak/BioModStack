@@ -264,7 +264,7 @@ const render = async (jobId = 'job-1', invocation = 'invoke-1') => {
     const job = { id: jobId, model_id: 'structure_prediction', status: 'completed', created_at: '2026-08-09T00:00:00Z', params: { run_frustrampnn: true } } as Job;
     await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter><Viewer job={job} preferredInvocationId={invocation} onBack={() => {}} onOpenJob={open} /></MemoryRouter></QueryClientProvider>));
     // Global Workbench lazy-loads the actual viewer; wait for that consumer, not a fixed import delay.
-    for (let i = 0; i < 80 && !container.textContent?.includes('External candidate reanalysis requires') && !panel(); i++) await settle(25);
+    for (let i = 0; i < 80 && !container.textContent?.includes('Select an available result to analyze another structure.') && !panel(); i++) await settle(25);
     await settle(); await settle();
 };
 const fill = async () => {
@@ -272,7 +272,7 @@ const fill = async () => {
     const file = new File(['ATOM'], 'candidate.pdb', { type: 'chemical/x-pdb' });
     await act(async () => {
         setInput(panel()!.querySelector('input[placeholder="variant-1"]')!, ' variant-2 ');
-        setInput(panel()!.querySelector('input[placeholder="external-redesign"]')!, ' producer-1 ');
+        setInput(panel()!.querySelector('input[placeholder="structure-source"]')!, ' producer-1 ');
         const input = panel()!.querySelector<HTMLInputElement>('input[type="file"]')!;
         Object.defineProperty(input, 'files', { configurable: true, value: [file] });
         input.dispatchEvent(new Event('change', { bubbles: true }));
@@ -280,7 +280,7 @@ const fill = async () => {
     await settle(250);
     return file;
 };
-const submit = async () => { await act(async () => button('Queue FrustraMPNN reanalysis').click()); await settle(); };
+const submit = async () => { await act(async () => button('Run FrustraMPNN analysis').click()); await settle(); };
 const refresh = async () => {
     await act(async () => { await client.invalidateQueries({ queryKey: ['frustrampnn-result'] }); });
     await settle();
@@ -413,7 +413,7 @@ describe('global result viewer external candidate join', () => {
         if (kind === 'missing') detail = null;
         await render(); expect(panel()).toBeNull();
         expect(container.querySelector('h1')?.textContent).toBe('FrustraMPNN results');
-        expect(container.textContent).toContain('External candidate reanalysis requires');
+        expect(container.textContent).toContain('Select an available result to analyze another structure.');
         expect(post).not.toHaveBeenCalled();
     });
     it('removes cached handoff authority after detail readback fails without blanking base results', async () => {
@@ -454,7 +454,7 @@ describe('global result viewer external candidate join', () => {
         expect(container.textContent).not.toContain('Analysis queued');
         if (panel()) {
             expect(panel()!.querySelector<HTMLInputElement>('input[placeholder="variant-1"]')!.value).toBe('');
-            expect(button('Queue FrustraMPNN reanalysis').disabled).toBe(true);
+            expect(button('Run FrustraMPNN analysis').disabled).toBe(true);
         }
     });
     it.each(['validation', 'handoff'])('shows %s failure and retains base result', async stage => {
@@ -498,7 +498,7 @@ describe('global result viewer external candidate join', () => {
         expect((activeCall[2] as { signal: AbortSignal }).signal.aborted).toBe(true);
         await act(async () => resolve({ data: stage === 'validation' ? validationPreview : handoffReceipt })); await settle();
         expect(panel()!.textContent).not.toContain('Analysis queued');
-        expect(button('Queue FrustraMPNN reanalysis').disabled).toBe(true);
+        expect(button('Run FrustraMPNN analysis').disabled).toBe(true);
         expect(container.textContent).toContain('Native-slot classes');
         if (stage === 'validation') expect(post.mock.calls.filter(c => String(c[0]).endsWith('/candidates/handoff'))).toHaveLength(0);
     });

@@ -174,15 +174,15 @@ export function SequenceQcManifestPanel({ status, manifest, message, onNavigateL
                                 <div className={`rounded border p-3 ${verificationVerdictClass(manifest.verdict || 'REVIEW')}`}>
                                     <div className="flex items-center justify-between gap-2">
                                         <span className="text-xs uppercase tracking-wide">Construct verification</span>
-                                        <strong className="text-xl font-mono">{manifest.verdict || 'REVIEW'}</strong>
+                                        <strong className="text-xl font-mono">{manifest.verdict === 'PASS' ? 'PASS · passes configured checks' : manifest.verdict || 'REVIEW'}</strong>
                                     </div>
                                     <div className="mt-2 flex flex-wrap gap-3 text-[10px]">
                                         <span>Execution: <strong>{manifest.execution?.status || 'UNKNOWN'}</strong></span>
                                         <span>Calibration: <strong>{manifest.threshold_profile?.calibration_status || 'unreported'}</strong></span>
                                         <span>Public accuracy validated: <strong>{manifest.threshold_profile?.public_accuracy_validated ? 'yes' : 'no'}</strong></span>
                                     </div>
-                                    {!manifest.threshold_profile?.public_accuracy_validated && (
-                                        <p className="mt-2 text-[10px]">Experimental thresholds: verdict is not a public-data biological-accuracy claim.</p>
+                                    {manifest.threshold_profile?.calibration_status !== 'calibrated' && (
+                                        <p className="mt-2 text-[10px]">Profile uncalibrated: configured-check results are not a biological-accuracy claim or automatic release approval.</p>
                                     )}
                                     <div className="mt-2 flex flex-wrap gap-1">
                                         {(manifest.reason_codes || ['MALFORMED_VERIFICATION_MANIFEST']).map((code) => (

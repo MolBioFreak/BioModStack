@@ -1,0 +1,14 @@
+{
+  "producer_commit": "83a9676a343b1c62b3ef6ddc1d322ccf818f43a4",
+  "source": "/home/dalab/.hermes/profiles/fresh/robot-audit/bioxp-traffic-95-20261002/job-observation-native-latest.json",
+  "sha256": "1cae2954caa8698483dd080d5f458c66304c4af744a3999ef0c64dc9816b3639",
+  "capture": {
+    "bytes": 19537,
+    "sha256": "04bf13761fbbe062300ec209d79cbaf1d52b835aa52127738579784ebdb7ebf8"
+  },
+  "qualification": "Actual native SQLite observation projection exports from captured job; changing frames are deliberately changed offline capture replays, NOT physical outcomes. Copied unchanged from original job-evidence-manifest.json-bound export.",
+  "windows": {
+    "idle": 30,
+    "changing": 30
+  }
+}

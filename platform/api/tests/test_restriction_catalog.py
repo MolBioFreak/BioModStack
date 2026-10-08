@@ -441,6 +441,8 @@ def test_registered_v2_schema_has_exact_digest_save_request_accept_reject_parity
     }
     accepted = [
         valid,
+        {key: value for key, value in valid.items() if key != "simulation_sha256"},
+        {**valid, "simulation_sha256": None},
         {**valid, "fragment_name_prefix": None},
         {**valid, "persistence_mode": "operation_and_fragments", "fragment_name_prefix": "EcoRI fragment"},
         {**valid, "source": {**valid["source"], "topology": "linear"}},

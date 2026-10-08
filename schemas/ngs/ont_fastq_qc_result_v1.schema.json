@@ -2290,7 +2290,7 @@
     "stage states and output counts are reported as observed, not compared with historical fixed counts",
     "threshold_profile.sha256 equals SHA-256 over UTF-8 canonical JSON of threshold_profile.values using sorted keys, separators comma and colon, allow_nan false; outer version, calibration_status, and public_accuracy_validated equal values",
     "verification verdict and reasons are preserved from the producer, including FAIL for failed scientific checks",
-    "verification verdict PASS requires every check pass, empty aggregate and row reason codes, automatic_pass_eligible true, public_accuracy_validated true, and all profile thresholds satisfied",
+    "verification verdict PASS means configured checks pass and profile thresholds are satisfied; calibration and automatic release eligibility remain separate threshold_profile metadata",
     "decision metrics are optional and additive; unavailable observations remain null, never fabricated success-only values",
     "present artifact URL final segment equals artifact_id and artifact_id differs from file sha256",
     "source_reads_fastq alone has owner_scope managed_input_snapshot; every other descriptor has owner_scope result_root",

@@ -3,10 +3,30 @@ import { api, submitJob, type Job } from './api';
 import type { FrustraMpnnRequestedSettings } from '../components/frustrampnn/frustraMpnnSettingsState';
 import type { CandidateDocuments } from './binderDiagnosticSelection';
 
-export type BinderOperation = 'refine' | 'caliby' | 'frustrampnn' | 'fampnn' | 'proteinmpnn' | 'predict_boltz2' | 'predict_protenix';
+import type { NativeGenerationDocument } from './nativeBinderResults';
+
+/** The document is display metadata only; requests contain registered identities. */
+export interface NativeCandidateSource {
+    job_id: string;
+    artifact_id: string;
+    document?: NativeGenerationDocument;
+    // No native key is a Design ID; only registered artifact identities are submitted.
+}
+export function readBinderNativeSources(jobId: string): NativeCandidateSource[] {
+    try {
+        const value: unknown = JSON.parse(sessionStorage.getItem(`bms:selected-designs:${jobId}:native`) ?? '[]');
+        return Array.isArray(value) ? value.filter((item): item is NativeCandidateSource => item && typeof item.job_id === 'string' && typeof item.artifact_id === 'string' && !!item.artifact_id) : [];
+    } catch { return []; }
+}
+export function writeBinderNativeSources(jobId: string, sources: NativeCandidateSource[]) {
+    try { sessionStorage.setItem(`bms:selected-designs:${jobId}:native`, JSON.stringify(sources)); } catch { /* storage unavailable */ }
+}
+
+export type BinderOperation = 'refine' | 'caliby' | 'frustrampnn' | 'fampnn' | 'proteinmpnn' | 'protonpottsmpnn' | 'predict_boltz2' | 'predict_protenix';
 export interface BinderSelectedRequest {
     source_job_id: string;
     design_ids: string[];
+    native_sources?: Array<Pick<NativeCandidateSource, 'job_id' | 'artifact_id'>>;
     operation: BinderOperation;
     params?: Record<string, unknown>;
     frustrampnn_settings?: FrustraMpnnRequestedSettings;
@@ -22,8 +42,13 @@ export interface BinderSelectedResponse {
     launched_jobs: Job[];
 }
 export async function submitBinderSelected(request: BinderSelectedRequest): Promise<BinderSelectedResponse> {
+    return submitPreparedSelectedMutation(() => api.post<BinderSelectedResponse>('/api/binder-continuation/selected', request).then(response => response.data));
+}
+
+/** One remote prepared-review owner for selected model operations. */
+export async function submitPreparedSelectedMutation<T extends { launched_jobs: Job[] }>(mutation: () => Promise<T>): Promise<T> {
     try {
-        return (await api.post<BinderSelectedResponse>('/api/binder-continuation/selected', request)).data;
+        return await mutation();
     } catch (error) {
         if (!isAxiosError(error) || error.response?.status !== 409) throw error;
         const detail = error.response.data?.detail;

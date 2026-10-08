@@ -27,6 +27,7 @@ dependencies = [
     "biopython>=1.87,<2",
     "pydna==5.5.16",
     "dnaweaver==0.3.10",
+    "dnachisel==3.2.16",  # Explicit domestication; core closure only
     "aiohttp>=3.13.3",
     "httpx>=0.27.0",
     "huggingface-hub==1.24.0",

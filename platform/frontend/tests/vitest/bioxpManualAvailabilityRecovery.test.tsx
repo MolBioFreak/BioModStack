@@ -6,7 +6,13 @@ import { api } from '../../src/lib/api';
 import zTargetProducer from '../fixtures/bioxp_z_target_producer.json';
 import { useBioXpOperatorControlCatalog } from '../../src/lib/bioxpClient';
 
-vi.mock('../../src/lib/api', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
+import { catalogWireFixture } from '../fixtures/bioxpCatalogWire';
+const fixtureRead = vi.hoisted(() => vi.fn());
+vi.mock('../../src/lib/api', () => ({ api: { get: vi.fn(async (url, options) => {
+    if (options?.params?.view === 'metadata') return { data: catalogWireFixture(catalog(false), 'metadata') };
+    const response = await fixtureRead(url, options);
+    return { ...response, data: catalogWireFixture(response.data, options?.params?.view) };
+}), post: vi.fn() } }));
 let client: QueryClient;
 let root: Root;
 let container: HTMLDivElement;
@@ -33,7 +39,7 @@ const advance = async (ms: number) => {
 };
 const button = (label: string) => [...container.querySelectorAll('button')].find(b => b.textContent === label)!;
 beforeEach(() => {
-    vi.useFakeTimers(); vi.resetAllMocks();
+    vi.useFakeTimers(); fixtureRead.mockReset(); fixtureRead.mockClear(); vi.mocked(api.post).mockClear();
     client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
     container = document.createElement('div'); root = createRoot(container);
 });
@@ -41,7 +47,7 @@ afterEach(async () => {
     await act(async () => root.unmount()); client.clear(); vi.useRealTimers();
 });
 it('recovers cached gripper and door Home availability without overriding an unhomed-door restriction', async () => {
-    vi.mocked(api.get).mockResolvedValueOnce({ data: catalog(true) }).mockResolvedValue({ data: catalog(false) });
+    fixtureRead.mockResolvedValueOnce({ data: catalog(true) }).mockResolvedValue({ data: catalog(false) });
     await render(); await advance(1);
     expect(button('gripper-open').disabled).toBe(true);
     expect(button('door-home').disabled).toBe(true);
@@ -50,13 +56,13 @@ it('recovers cached gripper and door Home availability without overriding an unh
     expect(button('gripper-open').disabled).toBe(false);
     expect(button('door-home').disabled).toBe(false);
     expect(button('door-open').disabled).toBe(true);
-    expect(api.get).toHaveBeenCalledTimes(2);
+    expect(fixtureRead).toHaveBeenCalledTimes(2);
     await advance(5000);
-    expect(api.get).toHaveBeenCalledTimes(3);
+    expect(fixtureRead).toHaveBeenCalledTimes(3);
     expect(api.post).not.toHaveBeenCalled();
 });
 it('recovers from a transient catalog error through a later read, not a command retry', async () => {
-    vi.mocked(api.get).mockRejectedValueOnce(new Error('temporary read failure')).mockResolvedValue({ data: catalog(false) });
+    fixtureRead.mockRejectedValueOnce(new Error('temporary read failure')).mockResolvedValue({ data: catalog(false) });
     await render(); await advance(1);
     expect(container.querySelector('output')?.textContent).toBe('error');
     await advance(5000);
@@ -65,25 +71,25 @@ it('recovers from a transient catalog error through a later read, not a command 
     expect(api.post).not.toHaveBeenCalled();
 });
 it('bounds a held read and never starts duplicate reads while it is pending', async () => {
-    vi.mocked(api.get).mockImplementation((_url, options) => new Promise((_resolve, reject) => {
+    fixtureRead.mockImplementation((_url, options) => new Promise((_resolve, reject) => {
         if (options?.timeout) setTimeout(() => reject(new Error('read timed out')), options.timeout);
     }));
     await render(); await advance(10000);
-    expect(api.get).toHaveBeenCalledTimes(1);
-    expect(api.get).toHaveBeenCalledWith('/api/bioxp/operator-controls/catalog', { signal: expect.any(AbortSignal), timeout: 12000, params: undefined });
+    expect(fixtureRead).toHaveBeenCalledTimes(1);
+    expect(fixtureRead).toHaveBeenCalledWith('/api/bioxp/operator-controls/catalog', { signal: expect.any(AbortSignal), timeout: 12000, params: { view: 'assessment', assessment_base: '', canonical_assessment_base: '' } });
     await advance(2000);
     expect(container.querySelector('output')?.textContent).toBe('error');
     expect(api.post).not.toHaveBeenCalled();
 });
 it('stops polling on disconnect and shares one read between mounted consumers', async () => {
-    vi.mocked(api.get).mockResolvedValue({ data: catalog(false) });
+    fixtureRead.mockResolvedValue({ data: catalog(false) });
     await render(true, 2); await advance(1);
-    expect(api.get).toHaveBeenCalledTimes(1);
+    expect(fixtureRead).toHaveBeenCalledTimes(1);
     await advance(5000);
-    expect(api.get).toHaveBeenCalledTimes(2);
+    expect(fixtureRead).toHaveBeenCalledTimes(2);
     await render(false, 2);
     await advance(20000);
-    expect(api.get).toHaveBeenCalledTimes(2);
+    expect(fixtureRead).toHaveBeenCalledTimes(2);
     expect(api.post).not.toHaveBeenCalled();
 });
 
@@ -94,19 +100,19 @@ it('sends exact draft queries and preserves manual availability while a new prev
     const mount = async (target: number, generation = 7) => act(async () => root.render(
         <QueryClientProvider client={client}><Controls target={target} generation={generation} /></QueryClientProvider>,
     ));
-    vi.mocked(api.get).mockResolvedValue({ data: fixture(500, 0) });
+    fixtureRead.mockResolvedValue({ data: fixture(500, 0) });
     await mount(0); await advance(1);
-    expect(api.get).toHaveBeenLastCalledWith('/api/bioxp/operator-controls/catalog', expect.objectContaining({ params: { z_target_steps: 0 } }));
+    expect(fixtureRead).toHaveBeenLastCalledWith('/api/bioxp/operator-controls/catalog', expect.objectContaining({ params: expect.objectContaining({ view: 'assessment', z_target_steps: 0 }) }));
     expect(container.querySelector('[data-testid="preview"]')?.textContent).toBe('500');
-    vi.mocked(api.get).mockResolvedValue({ data: fixture(65000, 0) });
+    fixtureRead.mockResolvedValue({ data: fixture(65000, 0) });
     for (let poll = 0; poll < 3; poll++) {
         await advance(5000);
         expect(container.querySelector('[data-testid="preview"]')?.textContent).toBe('65000');
     }
     let resolve: ((value: unknown) => void) | undefined;
-    vi.mocked(api.get).mockImplementation(() => new Promise(done => { resolve = done; }));
+    fixtureRead.mockImplementation(() => new Promise(done => { resolve = done; }));
     await mount(90000); await advance(1);
-    expect(api.get).toHaveBeenLastCalledWith('/api/bioxp/operator-controls/catalog', expect.objectContaining({ params: { z_target_steps: 90000 } }));
+    expect(fixtureRead).toHaveBeenLastCalledWith('/api/bioxp/operator-controls/catalog', expect.objectContaining({ params: expect.objectContaining({ view: 'assessment', z_target_steps: 90000 }) }));
     expect(button('gripper-home').disabled).toBe(false); // draft changes are not admission gates
     await act(async () => { resolve?.({ data: fixture(65000, 90000) }); });
     await advance(1);

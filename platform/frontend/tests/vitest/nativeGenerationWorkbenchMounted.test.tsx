@@ -71,7 +71,7 @@ it('supports local inspection for historical records and documents without callb
     expect(tree.root.findAllByType('a').filter(node => String(node.props.href).startsWith('/designs/'))).toHaveLength(0);
 });
 it('plots native zeros, omits missing numeric pairs, and selects the actual row from the chart', async () => {
-    await mount(); await act(async () => button('Analytics').props.onClick());
+    await mount(); await act(async () => button('Plotly Lab').props.onClick());
     const chart = tree.root.findAllByType(Plot).find(node => node.props.data[0].type === 'scatter')!;
     expect(chart.props.data[0]).toMatchObject({ x: [80, 90], y: [0, 12], customdata: ['first', 'second'] });
     expect(text(tree.root)).toContain('2 plotted · 1 omitted');
@@ -100,7 +100,7 @@ it('keeps the shared viewer mounted across chart and tool-panel changes', async 
     await act(async () => button('Measurements and exports').props.onClick());
     expect(tree.root.findByType(StructureWorkbench)).toBe(viewer);
     expect(viewer.props.workbenchCollapsed).toBe(false);
-    await act(async () => button('Analytics').props.onClick());
+    await act(async () => button('Plotly Lab').props.onClick());
     expect(tree.root.findByType(StructureWorkbench)).toBe(viewer);
     await act(async () => button('Structure').props.onClick());
     expect(tree.root.findByType(StructureWorkbench)).toBe(viewer);

@@ -1,3 +1,4 @@
+import { useBioXpDocumentVisible } from './BioXpObservationVisibility';
 import { useEffect, useState } from 'react';
 import { BioXpReceiptEvidence } from './BioXpReceiptEvidence';
 import {
@@ -12,8 +13,9 @@ import { bioXpReceiptFailureText, bioXpReceiptIsMoveTimeoutReport, bioXpReceiptS
 export function BioXpHistoryReceiptCard({ receipt, generation, connected }: {
     receipt: BioXpOperatorHistoryReceipt; generation: number; connected: boolean;
 }) {
+    const documentVisible = useBioXpDocumentVisible();
     const [expanded, setExpanded] = useState(false);
-    const detail = useBioXpOperatorReceiptDetailV2(receipt.command_id, generation, connected && expanded, false);
+    const detail = useBioXpOperatorReceiptDetailV2(receipt.command_id, generation, connected && expanded && documentVisible, false);
     const evidence = receipt.history;
     const displayedReceipt = detail.data?.command_id === receipt.command_id ? detail.data : receipt;
     const report = bioXpReceiptIsMoveTimeoutReport(displayedReceipt);

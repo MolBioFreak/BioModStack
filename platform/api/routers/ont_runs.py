@@ -70,7 +70,8 @@ from services.ont_pooled_reference_assignment import (
 from services.ont_ngs_contract import (
     get_ont_workflow_spec,
     normalize_ont_launch_params,
-    normalized_fasta_sequence_sha256,
+    normalized_fasta_sequence_identity,
+    resolve_expected_plasmid_size,
     resolve_ont_workflow_alias,
 )
 
@@ -603,7 +604,10 @@ def _job_create_for_ont_submit(
     if reference_raw:
         reference_path = Path(reference_raw).expanduser()
         if reference_path.is_file():
-            params["reference_sequence_sha256"] = normalized_fasta_sequence_sha256(reference_path)
+            digest, reference_length = normalized_fasta_sequence_identity(reference_path)
+            params["reference_sequence_sha256"] = digest
+            if "expected_plasmid_size" in params:
+                resolve_expected_plasmid_size(params, reference_length)
     model_mode = _mode_for_ont_workflow(canonical_id)
     params["ont_request_workflow_id"] = workflow_id
     params["ont_workflow_id"] = canonical_id
@@ -624,7 +628,7 @@ def _job_create_for_ont_submit(
         params=params,
         pinned_gpu=request.pinned_gpu,
         execution_target_id=request.execution_target_id,
-        execution_policy=request.execution_policy,
+        execution_policy=request.execution_policy if request.execution_policy is not None else ExecutionPolicy(),
     )
 
 
@@ -1202,11 +1206,14 @@ async def ont_get_pooled_assignment_manifest(
 async def ont_get_pooled_assignment_targets(
     assignment_job_id: str,
     session: AsyncSession = Depends(get_session),
+    read_limit: int = Query(0, ge=0, le=1000, description="Explicit per-read inspection; zero keeps target polling unchanged."),
+    read_offset: int = Query(0, ge=0),
 ) -> dict[str, Any]:
-    """Read persisted pooled target identities and immutable revision bindings."""
+    """Read target identities, optionally with one page of numerical observations."""
     try:
         return await get_pooled_assignment_targets(
-            session, assignment_job_id=assignment_job_id
+            session, assignment_job_id=assignment_job_id,
+            read_limit=read_limit, read_offset=read_offset,
         )
     except PooledAssignmentError as exc:
         raise HTTPException(

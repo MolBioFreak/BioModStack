@@ -1,4 +1,5 @@
 import React, { act } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
@@ -24,7 +25,7 @@ vi.mock('../../src/components/experiments/GlobalExperimentContext', () => ({
 }));
 vi.mock('../../src/components/MolBioToolkit/PrimerTmSettingsPanel', () => ({ PrimerTmSettingsPanel: () => null }));
 vi.mock('../../src/components/MolBioToolkit/panels/GibsonDesignWorkspace', () => ({ GibsonDesignWorkspace: () => null }));
-let root: Root, host: HTMLDivElement;
+let root: Root, host: HTMLDivElement, client: QueryClient;
 const seq = { name: 'editable', sequence: 'ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT', circular: false, sequenceType: 'dna' as const, features: [], primers: [] };
 const settings = { algorithm: 'wallace', salt_correction: 'none' } as any;
 const noop = () => {};
@@ -33,7 +34,7 @@ const alignment = { query_name: 'OBSOLETE', reference_aligned: 'ACGTACGT', query
 const assembly = { sequence: 'ACGT', length: 4, circular: false, mode: 'ligation', fragments: [], golden_gate_authority: null, validation_notes: [], warnings: [], junctions: [] };
 const metric = (tm: number) => ({ tm, gc_percent: 50, algorithm: 'wallace', salt_correction: 'none', warnings: [] });
 function deferred<T = any>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
-async function render(node: React.ReactNode) { await act(async () => root.render(node)); }
+async function render(node: React.ReactNode) { await act(async () => root.render(<QueryClientProvider client={client}>{node}</QueryClientProvider>)); }
 async function click(label: string) { const b = [...host.querySelectorAll('button')].find(b => b.textContent?.trim() === label); expect(b, label).toBeDefined(); await act(async () => b!.click()); }
 async function input(el: HTMLInputElement | HTMLTextAreaElement, value: string) {
  const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -41,6 +42,7 @@ async function input(el: HTMLInputElement | HTMLTextAreaElement, value: string) 
 }
 async function tick() { await act(async () => { await vi.advanceTimersByTimeAsync(250); }); }
 beforeEach(() => {
+ client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
  vi.useFakeTimers(); vi.clearAllMocks(); host = document.createElement('div'); document.body.append(host); root = createRoot(host);
  vi.mocked(api.calculatePrimerTm).mockResolvedValue({ data: [metric(40)] } as any);
  vi.mocked(api.calculatePrimerQc).mockResolvedValue({ data: { primers: [], pairwise: [] } } as any);
@@ -48,7 +50,7 @@ beforeEach(() => {
  vi.mocked(api.fetchSavedGibsonWorkups).mockResolvedValue({ data: [] } as any);
  vi.mocked(api.fetchGoldenGateAssemblyOptions).mockResolvedValue({ data: { enzymes: [] } } as any);
 });
-afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); });
+afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 it('input ownership rejects changed, ABA and unmounted completions', async () => {
  let owner: ReturnType<typeof useInputOwnership>;
@@ -146,6 +148,24 @@ it('completed selection alignment cannot annotate after moving the selection', a
  expect(props.onAddFeatures).toHaveBeenCalledTimes(1); expect(props.onAddFeatures.mock.calls[0][0][0].start).toBe(0);
  await render(<AlignmentPanel {...props} selection={{ start: 16, end: 24 }} />);
  expect(host.textContent).not.toContain('Annotate Variants'); expect(props.onAddFeatures).toHaveBeenCalledTimes(1);
+});
+it('assembly physical notation survives saved hydration, editing and resubmission', async () => {
+ const fragments = [{ id: 'physical', name: 'physical', sequence: 'AATGCCCCC', orientation: 'reverse',
+  left_end: { type: 'sticky_5', overhang: 'AATG', protruding_strand: 'top' },
+  right_end: { type: 'sticky_5', overhang: 'CTCC', protruding_strand: 'bottom' } }];
+ const operationParams = { mode: 'ligation', assembly_request: { fragments, circular: false } };
+ vi.mocked(api.simulateLigationAssembly).mockResolvedValue({ data: { product: assembly } } as any);
+ vi.mocked(api.saveLigationAssembly).mockResolvedValue({ data: { product: assembly } } as any);
+ await render(<AssemblyPanel sequenceData={{ ...seq, operationParams }} selection={null} selectedSequenceId="saved" onLoadProduct={noop} onLoadSavedWorkup={noop} />);
+ const notation = [...host.querySelectorAll('select[aria-label$="notation"]')] as HTMLSelectElement[];
+ expect(notation.map(s => s.value)).toEqual(['top', 'bottom']);
+ await click('Simulate');
+ expect(vi.mocked(api.simulateLigationAssembly).mock.calls[0][0].fragments).toEqual(fragments);
+ await click('Validate + Save');
+ expect(vi.mocked(api.saveLigationAssembly).mock.calls[0][0].fragments).toEqual(fragments);
+ await act(async () => { notation[0].value = ''; notation[0].dispatchEvent(new Event('change', { bubbles: true })); });
+ await click('Simulate');
+ expect(vi.mocked(api.simulateLigationAssembly).mock.calls.at(-1)![0].fragments[0].left_end?.protruding_strand).toBeNull();
 });
 it('completed assembly cannot load after editing fragment orientation', async () => {
  vi.mocked(api.simulateLigationAssembly).mockResolvedValue({ data: { product: assembly } } as any);

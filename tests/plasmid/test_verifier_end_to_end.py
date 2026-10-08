@@ -102,10 +102,11 @@ def test_clean_input_passes_test_only_qualified_profile(tmp_path,monkeypatch):
     assert all(c['status']=='pass' for c in result['checks'].values())
 
 
-def test_clean_input_remains_review_under_real_experimental_profile(tmp_path,monkeypatch):
+def test_clean_input_passes_checks_under_real_experimental_profile(tmp_path,monkeypatch):
     result=run_case(tmp_path,monkeypatch,qualified=False)
-    assert result['verdict']=='REVIEW'
-    assert result['reason_codes']==['UNCALIBRATED_PROFILE']
+    assert result['verdict']=='PASS'
+    assert result['reason_codes']==['ALL_CHECKS_PASS']
+    assert result['threshold_profile']['calibration_status']=='experimental'
 
 
 def test_one_uncovered_base_cannot_pass_even_old_coverage_tolerance(tmp_path,monkeypatch):

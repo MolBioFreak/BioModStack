@@ -2,7 +2,7 @@
  * PCRPanel - PCR amplification tool
  */
 
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useInputOwnership } from './useInputOwnership';
 import { useLocation } from 'react-router-dom';
 import type { SequenceData, HighlightedRegion } from '../types';
@@ -210,6 +210,9 @@ export function PCRPanel(props: PCRPanelProps) {
         });
     }, [updateQueryParams]);
 
+    const previewController = useRef<AbortController | null>(null);
+    useEffect(() => () => previewController.current?.abort(), [pcrOwner.token]);
+
     const fwdBindings = useMemo(() => resolvePrimerBindings(sequenceData.sequence, forwardPrimer, {
         reverse: false,
         sequenceType,
@@ -250,6 +253,7 @@ export function PCRPanel(props: PCRPanelProps) {
         }
 
         let cancelled = false;
+        const controller = new AbortController();
         setTmResults({ forward: null, reverse: null });
         setTmLoading(true);
         const timer = window.setTimeout(async () => {
@@ -260,7 +264,7 @@ export function PCRPanel(props: PCRPanelProps) {
                         ...(reverseAnnealSequence ? [{ id: 'reverse', sequence: reverseAnnealSequence, sequence_type: sequenceType }] : []),
                     ],
                     settings: tmSettings,
-                });
+                }, controller.signal);
                 if (cancelled) {
                     return;
                 }
@@ -268,7 +272,7 @@ export function PCRPanel(props: PCRPanelProps) {
                 const reverseResult = response.data.find((entry) => entry.id === 'reverse') ?? null;
                 setTmResults({ forward: forwardResult, reverse: reverseResult });
             } catch (tmError) {
-                console.error('Failed to calculate PCR primer Tm:', tmError);
+                if (!controller.signal.aborted) console.error('Failed to calculate PCR primer Tm:', tmError);
                 if (!cancelled) {
                     setTmResults({ forward: null, reverse: null });
                 }
@@ -281,6 +285,7 @@ export function PCRPanel(props: PCRPanelProps) {
 
         return () => {
             cancelled = true;
+            controller.abort();
             window.clearTimeout(timer);
         };
     }, [forwardAnnealSequence, forwardPrimer, reverseAnnealSequence, reversePrimer, sequenceType, tmSettings]);
@@ -364,9 +369,12 @@ export function PCRPanel(props: PCRPanelProps) {
         setError(null);
         setPersistedResult(null);
 
+        const shouldPersist = Boolean(sequenceId) && persistImmutableRevision;
+        previewController.current?.abort();
+        const controller = shouldPersist ? null : new AbortController();
+        previewController.current = controller;
         try {
-            const shouldPersist = Boolean(sequenceId) && persistImmutableRevision;
-            const data = await runPcrOperation({
+            const payload = {
                 primer_fwd: forwardPrimer,
                 primer_rev: reversePrimer,
                 is_circular: sequenceData.circular,
@@ -378,9 +386,12 @@ export function PCRPanel(props: PCRPanelProps) {
                 sequence: sequenceData.sequence,
                 name: sequenceData.name,
                 sequence_type: sequenceType,
-            });
+            };
+            const data = controller
+                ? await runPcrOperation(payload, controller.signal)
+                : await runPcrOperation(payload);
 
-            if (!pcrOwner.isCurrent()) return;
+            if (!pcrOwner.isCurrent() || controller?.signal.aborted) return;
             const responseProduct = data.product;
             const persistedSequence = data.sequence;
             const product = responseProduct
@@ -454,9 +465,9 @@ export function PCRPanel(props: PCRPanelProps) {
                 });
             }
         } catch (runError) {
-            if (pcrOwner.isCurrent()) setError(runError instanceof Error ? runError.message : 'Unknown error');
+            if (pcrOwner.isCurrent() && !controller?.signal.aborted) setError(runError instanceof Error ? runError.message : 'Unknown error');
         } finally {
-            if (pcrOwner.isCurrent()) setLoading(false);
+            if (pcrOwner.isCurrent() && !controller?.signal.aborted) setLoading(false);
         }
     };
 

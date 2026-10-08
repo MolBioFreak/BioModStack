@@ -1,0 +1,60 @@
+{
+  "commit": "1e60ad0c98533292bc7a86af19104bf7b71f8193",
+  "extraction": "Exact unchanged JSON value byte slice of producer wrapper result/held; no reserialization",
+  "exports": [
+    {
+      "file": "cavro-None-stop-result.json",
+      "sha256": "9f743d7b1fa2bb8962721eafc46bb43a9a4a15f44e2458d26ee88891e967c7b0",
+      "producer_wrapper": "cavro-None-stop.json",
+      "producer_sha256": "07c0be88e25773104c8d3cdd23047eee3571e6b74f148ece95ae46fc2cb92ece",
+      "member": "result",
+      "status": "completed",
+      "snapshot": false
+    },
+    {
+      "file": "cavro-device-stop-result.json",
+      "sha256": "a7087c7e3257d67ebd08c2ed3457ce10d729874702590c03681a863e3473015c",
+      "producer_wrapper": "cavro-device-stop.json",
+      "producer_sha256": "1f5c25e01f5612919d9afc2066cb3e420c38b9591200f132d53e22c957bcea48",
+      "member": "result",
+      "status": "ambiguous",
+      "snapshot": false
+    },
+    {
+      "file": "cavro-missing-stop-result.json",
+      "sha256": "d4d06d9c058d81a1e89a0af895017b747fa4f3769a2ed48e688662b1f91bd9fb",
+      "producer_wrapper": "cavro-missing-stop.json",
+      "producer_sha256": "917bdc0eb5ba141ac190430c885f904adceafd591210b694aa6cffdda42f379b",
+      "member": "result",
+      "status": "ambiguous",
+      "snapshot": false
+    },
+    {
+      "file": "cavro-missing-stop-held.json",
+      "sha256": "36589825a13eb49932b204b6e34696cf8c25ab77d2c7503ad1303ef52387d774",
+      "producer_wrapper": "cavro-missing-stop.json",
+      "producer_sha256": "917bdc0eb5ba141ac190430c885f904adceafd591210b694aa6cffdda42f379b",
+      "member": "held",
+      "status": "dispatched",
+      "snapshot": false
+    },
+    {
+      "file": "cavro-device-pause_for_operator-result.json",
+      "sha256": "9dda2b837ebd6ab6def192f75befc6b88f1c72c3f509323ce8f1ad271c0d8d18",
+      "producer_wrapper": "cavro-device-pause_for_operator.json",
+      "producer_sha256": "2d90b3de668d7b879cc1a7b60eb87a309fe56d6b65a4dcbc2a2bd9d2945d4e98",
+      "member": "result",
+      "status": "ambiguous",
+      "snapshot": false
+    },
+    {
+      "file": "cavro-device-pause_for_operator-held.json",
+      "sha256": "451095a98a7b4c3f1413e06c4e5caf213970558ae94f065a4209422514ed3536",
+      "producer_wrapper": "cavro-device-pause_for_operator.json",
+      "producer_sha256": "2d90b3de668d7b879cc1a7b60eb87a309fe56d6b65a4dcbc2a2bd9d2945d4e98",
+      "member": "held",
+      "status": "dispatched",
+      "snapshot": false
+    }
+  ]
+}

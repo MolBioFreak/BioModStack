@@ -105,6 +105,24 @@ function App() {
             <Route path="/stats" element={<StatsToolkitLauncher />} />
             {/* Historical analytics route now resolves to Dashboard telemetry. */}
             <Route path="/infra" element={<Navigate replace to="/" />} />
+            {/* Saved workflows live inside the BioXP Handler workspace. */}
+            <Route
+              path="/bioxp/workflows"
+              element={!bmsFeaturesResolved
+                ? <RouteLoadingFallback />
+                : bmsFeatures.bioxp || !bmsFeaturesKnown
+                  ? <BioXpCockpit initialTab="workflows" />
+                  : <Navigate replace to="/" />}
+            />
+            {/* Live travel stays within the same robot workspace. */}
+            <Route
+              path="/bioxp/live-deck"
+              element={!bmsFeaturesResolved
+                ? <RouteLoadingFallback />
+                : bmsFeatures.bioxp || !bmsFeaturesKnown
+                  ? <BioXpCockpit initialTab="live-deck" />
+                  : <Navigate replace to="/" />}
+            />
             {/* BioXP Handler Controls */}
             <Route
               path="/bioxp"

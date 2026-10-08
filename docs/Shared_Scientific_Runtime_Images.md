@@ -92,6 +92,16 @@ source/alias, qualify a worker/GPU, or authorize inference. Image leases,
 worker canonical publication and semantic `containers/fold-cp.sif` transport
 remain with the existing shared owners.
 
+### Fold-CP composed model closure
+
+`boltz_cp_experimental` supports independent model preparation of its selected
+`fold-cp.sif` image and the shared `weights/boltz` tree. These match the current
+native `BoltzCP` label and Structure Prediction pack; Boltz-2 uses the same
+weight tree, not a duplicate asset set. The image-only selection is unchanged.
+This declaration enumerates managed assets for preparation; it adds no launch,
+weight-readiness or scientific-acceptance check. Configured workflow preparation
+continues to resolve the selected request through its existing owners.
+
 ### FrustraMPNN canonical reader
 
 `BMS_FRUSTRAMPNN_SIF` is an installation-owned path selector. Set it to the existing shared store's `objects/sha256/c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da/runtime.sif`, with `BMS_RUNTIME_IMAGE_STORE` identifying that store (default `${BMS_CONTAINER_DIR}/.image-store`). The selector is snapshotted into the existing runtime identity at process startup; restart through the normal managed release process after changing it. It does not select a new model digest, executable or checkpoint. No public request parameter or digest override is added.

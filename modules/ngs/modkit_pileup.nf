@@ -84,6 +84,7 @@ process ModkitPileup {
         filterThreshold = "--filter-threshold ${threshold.toPlainString()}"
     }
     """
+    set -o pipefail
     modkit pileup \\
         "${bam}" \\
         methylation.bed \\

@@ -79,7 +79,7 @@ def _return_artifacts(job, root):
     return result
 
 
-def verify_publication(job, design, root, *, confidence=True):
+def verify_publication(job, design, root, *, confidence=True, scalar_only=False):
     """No DB mutation, inference or retrospective publication of discovered files."""
     if (job.model_id != 'protenix' or revision_for_job(job) != 1
             or design.job_id != job.id or design.source_stage is not None):
@@ -139,6 +139,8 @@ def verify_publication(job, design, root, *, confidence=True):
     descriptors = binding.get('confidence')
     returned = None if descriptors is not None else _return_artifacts(job, root)
     for kind, name in names.items():
+        if scalar_only and kind != 'metrics':
+            continue
         key = str(Path(binding['published_relative_path']).parent / name)
         artifact, raw = _snapshot(root, key)
         if descriptors is not None:
@@ -154,6 +156,8 @@ def verify_publication(job, design, root, *, confidence=True):
             raise ValueError('foreign native summary pairing')
         selected['artifacts'][kind] = artifact
         selected['snapshots'][kind] = raw
+    if scalar_only:
+        return selected
     selected['native'] = derive_native_identity(snapshots['structure'], selected['snapshots']['pae'],
                                                snapshots['metrics'], selected['block'])
     return selected
@@ -357,7 +361,7 @@ def project_round_roles(selected, job):
     return roles, dict(source='binder_round_step.input_components', input_to_output_chain=mapping)
 
 
-async def verified_native_design(design, session, *, structure_only=False):
+async def verified_native_design(design, session, *, structure_only=False, scalar_only=False):
     from paths import get_data_root, resolve_runtime_data_path
     with session.no_autoflush:
         job = await session.scalar(select(Job).where(Job.id == design.job_id))
@@ -366,7 +370,49 @@ async def verified_native_design(design, session, *, structure_only=False):
             raise ValueError('missing native publication owner')
         root = Path(job.output_dir)
         root = resolve_runtime_data_path(root) if root.is_absolute() else get_data_root() / root
-        return verify_publication(job, row, root, confidence=not structure_only)
+        return verify_publication(job, row, root, confidence=not structure_only, scalar_only=scalar_only)
+
+
+# Pinned protenix/model/sample_confidence.py:112-125,164-168. Native
+# summary pLDDT is the atom mean on 0–100, NOT chain_plddt's fraction.
+# gPDE is contact-probability-weighted token-pair distance error, NOT PAE.
+# Ranking includes the native clash penalty and must not be clamped to 0–1.
+SCALAR_DESCRIPTORS = tuple(dict(metric_key=key, unit=unit, scope=scope,
+    direction=direction, producer_version=PINNED_PRODUCER,
+    derivation_version='protenix-native-summary-v1') for key, unit, scope, direction in (
+        ('plddt', 'percent', 'model_atom_mean', 'higher_is_better'),
+        ('ptm', 'dimensionless', 'model_tokens', 'higher_is_better'),
+        ('iptm', 'dimensionless', 'inter_chain_tokens', 'higher_is_better'),
+        ('gpde', 'angstrom', 'contact_weighted_token_pairs', 'lower_is_better'),
+        ('ranking_score', 'dimensionless', 'native_complex_ranking', 'higher_is_better'),
+    ))
+
+
+async def verified_scalar_metrics(design, session):
+    """Read only bound summary scalars; spatial full_data is not required."""
+    selected = await verified_native_design(design, session, scalar_only=True)
+    summary = _json(selected['snapshots']['metrics'])
+    if not isinstance(summary, dict):
+        raise ValueError('invalid native summary')
+    source = dict(selected['block'], artifact_sha256=selected['artifacts']['metrics']['sha256'])
+    records = []
+    for descriptor in SCALAR_DESCRIPTORS:
+        key = descriptor['metric_key']
+        value = summary.get(key)
+        state, reason = 'ok', None
+        if key not in summary:
+            state, reason = 'unavailable', 'not_reported'
+        elif value is None:
+            state, reason = 'unavailable', 'native_null'
+        elif type(value) not in (int, float) or not math.isfinite(value):
+            state, reason = 'invalid', 'not_finite_real'
+        elif ((key == 'plddt' and not 0 <= value <= 100)
+              or (key in ('ptm', 'iptm') and not 0 <= value <= 1)
+              or (key == 'gpde' and value < 0)):
+            state, reason = 'invalid', 'out_of_range'
+        records.append(dict(descriptor, state=state, value=value if state == 'ok' else None,
+                            reason_code=reason, source=source))
+    return records
 
 
 async def scientific_document(design, session):

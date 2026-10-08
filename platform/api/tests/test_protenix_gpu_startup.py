@@ -30,13 +30,14 @@ class cuda:
     def get_device_capability(index):
         assert index == 0
         if mode == 'capability': raise RuntimeError('fixture capability failure')
-        return (8, 0)
+        return (8, 9) if mode == 'ada' else (8, 0)
     @staticmethod
     def get_arch_list():
         return {'supported': ['sm_80', 'sm_75', 'sm_80'],
                 'unsupported': ['sm_90', 'sm_75'], 'empty': [],
                 'malformed': ['compute_80', 'sm_bad', 'garbage'],
-                'mixed': ['sm_bad', 'sm_80suffix'], 'nonstring': [None]
+                'mixed': ['sm_bad', 'sm_80suffix'], 'nonstring': [None],
+                'ada': ['sm_86']
                 }.get(mode, ['sm_80'])
 ''')
     for package in ['runner', 'configs']:
@@ -67,35 +68,38 @@ def preprocess_input(filename, **kw):
     return tmp_path, inputs, env
 
 
-@pytest.mark.parametrize('case,code,message', [
-    ('supported', 0, "supported=['sm_75', 'sm_80']"),
-    ('unsupported', 88, "ERROR: GPU architecture sm_80 is unsupported by this torch build: ['sm_75', 'sm_90']"),
-    ('empty', 0, 'supported=[]'),
-    ('malformed', 0, 'supported=[]'),
-    ('mixed', 0, "supported=['sm_80']"),
-    ('cpu', 0, 'WARNING: torch.cuda.is_available() is false; continuing'),
-    ('import', 87, 'ERROR: Could not import torch: fixture import failure'),
-    ('capability', 1, 'fixture capability failure'),
-    ('nonstring', 1, 'TypeError'),
+@pytest.mark.parametrize('case', [
+    'supported', 'unsupported', 'empty', 'malformed', 'mixed', 'cpu',
+    'capability', 'nonstring', 'ada',
 ])
-def test_native_cli_gpu_branches_and_control_order(native, case, code, message):
+def test_native_cli_does_not_invent_an_architecture_admission_gate(native, case):
     root, inputs, env = native
     result = subprocess.run([sys.executable, str(WRAPPER), '--input', str(inputs),
         '--out_dir', str(root / 'out')], env=dict(env, TORCH_CASE=case),
         cwd=root, capture_output=True, text=True, timeout=20)
     output = result.stdout + result.stderr
-    assert result.returncode == code, output
-    assert message in output
+    assert result.returncode == 0, output
     assert output.count('TORCH_IMPORT') == 1
-    if code:
-        assert 'CONFIG_IMPORT' not in output and 'CONSTRUCT' not in output
-    else:
-        assert output.count('CUDA_CHECK') == 1
-        assert output.index(message) < output.index('CONFIG_IMPORT') < output.index('RUNNER_IMPORT') < output.index('CONSTRUCT') < output.index('DUMPER') < output.index('PREPROCESS') < output.index('PREDICT')
-        assert output.count('PREDICT') == 2  # one check per invocation, not per input
-        options = json.loads(next(line.removeprefix('CONSTRUCT ') for line in output.splitlines() if line.startswith('CONSTRUCT ')))
-        assert options['model_name'] == 'protenix-v2'
-        assert options['n_cycle'] == 10 and options['n_step'] == 200
+    assert 'CUDA_CHECK' not in output
+    assert 'GPU architecture' not in output
+    assert output.index('CONFIG_IMPORT') < output.index('RUNNER_IMPORT') < output.index('CONSTRUCT') < output.index('DUMPER') < output.index('PREPROCESS') < output.index('PREDICT')
+    assert output.count('PREDICT') == 2
+    options = json.loads(next(line.removeprefix('CONSTRUCT ') for line in output.splitlines() if line.startswith('CONSTRUCT ')))
+    assert options['model_name'] == 'protenix-v2'
+    assert options['n_cycle'] == 10 and options['n_step'] == 200
+    assert options['dtype'] == 'bf16'
+    assert options['trimul_kernel'] == options['triatt_kernel'] == 'cuequivariance'
+    assert options['enable_cache'] and options['enable_fusion'] and options['enable_tf32']
+
+
+def test_native_import_failure_remains_a_native_failure(native):
+    root, inputs, env = native
+    result = subprocess.run([sys.executable, str(WRAPPER), '--input', str(inputs),
+        '--out_dir', str(root / 'out')], env=dict(env, TORCH_CASE='import'),
+        cwd=root, capture_output=True, text=True, timeout=20)
+    assert result.returncode == 1
+    assert 'fixture import failure' in result.stderr
+    assert 'CONSTRUCT' not in result.stdout
 
 
 @pytest.mark.parametrize('args,code', [(['--help'], 0), ([], 2)])
@@ -108,7 +112,7 @@ def test_cli_parser_does_not_load_scientific_runtime(native, args, code):
 
 
 @pytest.mark.parametrize('process', ['ProtenixPredict', 'ProtenixFromComplex'])
-@pytest.mark.parametrize('case,code', [('supported', 0), ('unsupported', 88), ('cpu', 0)])
+@pytest.mark.parametrize('case,code', [('supported', 0), ('unsupported', 0), ('cpu', 0), ('ada', 0)])
 def test_actual_module_prediction_command_consumes_wrapper(native, process, case, code):
     root, inputs, env = native
     source = (ROOT / 'modules/protenix.nf').read_text()
@@ -131,7 +135,7 @@ def test_actual_module_prediction_command_consumes_wrapper(native, process, case
         capture_output=True, text=True, timeout=20)
     assert result.returncode == code, result.stdout + result.stderr
     assert result.stdout.count('TORCH_IMPORT') == 1
-    assert result.stdout.count('CUDA_CHECK') == 1
+    assert 'CUDA_CHECK' not in result.stdout
     if code == 0:
         options = json.loads(next(line.removeprefix('CONSTRUCT ') for line in result.stdout.splitlines() if line.startswith('CONSTRUCT ')))
         assert options['seeds'] == [7, 9] and options['n_sample'] == 2

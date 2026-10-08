@@ -19,6 +19,10 @@ def test_build_identity_reports_valid_full_revision(monkeypatch) -> None:
     monkeypatch.setenv("BMS_BUILD_TIME", "2026-07-18T03:30:00Z")
 
     build_identity = importlib.import_module("build_identity")
+    def no_git(*args, **kwargs):
+        raise AssertionError("deployed scalar revision must not scan Git or source files")
+    monkeypatch.setattr(build_identity.subprocess, "run", no_git)
+    assert build_identity.source_build_revision() == "0123456789abcdef0123456789abcdef01234567"
     assert build_identity.current_build_identity() == {
         "revision": "0123456789abcdef0123456789abcdef01234567",
         "build_id": "release-20260718.1",
@@ -99,3 +103,73 @@ def test_api_final_scratch_stage_retains_build_identity() -> None:
     assert "org.opencontainers.image.revision=$BMS_BUILD_SHA" in final_stage
     assert "org.opencontainers.image.created=$BMS_BUILD_TIME" in final_stage
     assert "org.opencontainers.image.version=$BMS_BUILD_ID" in final_stage
+
+
+def test_source_metadata_observes_dirty_checkout_and_deployed_revision(monkeypatch, tmp_path):
+    import subprocess
+    import pytest
+    import build_identity as owner
+    from component_runtime import SourceIdentity
+    from services.remote_execution.bundle import current_source_identity, RemoteBundleError
+    def git(*args):
+        return subprocess.check_output(["git", *args], cwd=tmp_path, text=True).strip()
+    git("init", "-q")
+    git("config", "user.email", "test@example.invalid")
+    git("config", "user.name", "Test")
+    tracked = tmp_path / "source.py"
+    tracked.write_text("first")
+    git("add", ".")
+    git("commit", "-qm", "first")
+    first = SourceIdentity.from_checkout(tmp_path)
+    tracked.write_text("second")
+    git("commit", "-qam", "second")
+    second = SourceIdentity.from_checkout(tmp_path)
+    tracked.write_text("dirty")
+    monkeypatch.setattr(owner, "get_code_root", lambda: tmp_path)
+    monkeypatch.delenv("BMS_BUILD_SHA", raising=False)
+    assert owner.deployed_source_identity() == (second.revision, second.tree)
+    with pytest.raises(RemoteBundleError, match="clean tracked"):
+        current_source_identity(tmp_path)
+    monkeypatch.setenv("BMS_BUILD_SHA", first.revision)
+    assert owner.deployed_source_identity() == (first.revision, first.tree)
+
+
+def test_gitless_source_metadata_reaches_actual_consumers(monkeypatch, tmp_path):
+    import build_identity as owner
+    from build_identity import source_build_revision
+    from services.ngs_molbio_n5 import _runtime_source_authority
+    from services.ngs_alignment_sessions import _creation_authority
+    from services.resource_usage_evidence import build_resource_admission_handoff, validate_resource_admission_handoff
+    monkeypatch.setattr(owner, "get_code_root", lambda: tmp_path)
+    for revision in ("a" * 40, "unknown"):
+        monkeypatch.setenv("BMS_BUILD_SHA", revision)
+        assert owner.deployed_source_identity() == (revision, "unknown")
+        assert source_build_revision() == revision
+        assert _creation_authority() == (revision, None)
+        source, tree = _runtime_source_authority()
+        handoff = build_resource_admission_handoff(admission_id="a", run_attempt_id="r", canonical_job_id="j",
+            preparation_id="p", cpu_threads=2, dram_bytes=1024**3, gpu_index=None, gpu_uuid=None,
+            policy_source="project-scheduler", policy_version="bms.resource-admission-policy.v1", owner="test",
+            lease_token="lease", source_revision=source, source_tree=tree)
+        validate_resource_admission_handoff(handoff)
+        assert (handoff["source_revision"], handoff["source_tree"]) == (revision, "unknown")
+
+
+
+def test_source_identity_endpoint_is_metadata_not_a_runtime_record(monkeypatch, tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routers.ngs_molbio_n5 import router
+    monkeypatch.setattr("build_identity.get_code_root", lambda: tmp_path)
+    monkeypatch.setenv("BMS_BUILD_SHA", "a" * 40)
+    app = FastAPI()
+    app.include_router(router)
+    @app.middleware("http")
+    async def operator(request, call_next):
+        request.state.authenticated_principal = {"id": "test", "roles": ["operator"]}
+        return await call_next(request)
+    with TestClient(app) as client:
+        response = client.get("/api/operations/ngs-molbio/source-identity")
+        assert response.status_code == 200
+        assert response.json() == {"source_revision": "a" * 40, "source_tree": "unknown"}
+        assert client.get("/api/operations/ngs-molbio/runtime-implementation").status_code == 404

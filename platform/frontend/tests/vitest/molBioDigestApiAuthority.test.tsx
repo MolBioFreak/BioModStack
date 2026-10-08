@@ -23,7 +23,58 @@ const simulation = { fragments: [
     { fragment_index: 1, reference_span_bp: 7, source_segments: [[3, 10]], left_end: end('left', 'blunt'), right_end: end('right', 'blunt') },
 ] } as unknown as RestrictionDigestSimulation;
 
+const ack = (operation_id: string) => ({ schema: 'bms.molbio.restriction-digest-saved-ack.v1', operation_id, source_revision_id: 'revision', catalog_id: 'catalog-v1', catalog_sha256: 'a'.repeat(64), request_sha256: 'b'.repeat(64), result_sha256: 'c'.repeat(64), outputs: [] });
+
 describe('DigestPanel backend authority', () => {
+    it.each([false, true])('keeps the current saved result when a previous save finishes late (failure=%s)', async (lateFailure) => {
+        const preview = { ...simulation, source: { kind: 'molecular_revision', sequence_id: 'source', revision_id: 'revision', content_sha256: 'a'.repeat(64), topology: 'linear' }, catalog, selected_enzyme_ids: ['EcoRI'], simulation_sha256: null } as RestrictionDigestSimulation;
+        const next = { ...preview, source: { ...preview.source, revision_id: 'next-revision' } };
+        let finishFirst!: (response: Response) => void;
+        let finishSecond!: (response: Response) => void;
+        vi.stubGlobal('fetch', vi.fn()
+            .mockImplementationOnce(() => new Promise<Response>(resolve => { finishFirst = resolve; }))
+            .mockImplementationOnce(() => new Promise<Response>(resolve => { finishSecond = resolve; })));
+        try {
+            container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
+            const render = (value: RestrictionDigestSimulation) => root?.render(<DigestPanel sequenceData={sequence} sequenceId="source" onHighlight={vi.fn()} catalog={catalog} catalogRecords={[record]} analysis={analysis} authorityLoading={false} authorityError={null} digestSimulation={value} digestLoading={false} digestError={null} onDigestSelectionChange={vi.fn()} onSimulateDigest={vi.fn()} />);
+            const save = () => [...container!.querySelectorAll('button')].find(row => row.textContent === 'Save digest & fragments')!;
+            await act(async () => render(preview));
+            await act(async () => save().click());
+            await act(async () => render(next));
+            await act(async () => save().click());
+            await act(async () => finishSecond(new Response(JSON.stringify(ack('second')))));
+            expect(container.querySelector('a')?.getAttribute('href')).toBe('/api/molbio/restriction/digests/second');
+            await act(async () => finishFirst(lateFailure
+                ? new Response(JSON.stringify({ detail: { code: 'analysis_busy' } }), { status: 503 })
+                : new Response(JSON.stringify(ack('first')))));
+            expect(container.querySelector('a')?.getAttribute('href')).toBe('/api/molbio/restriction/digests/second');
+            expect(save().disabled).toBe(true);
+        } finally { vi.unstubAllGlobals(); }
+    });
+
+    it('saves a hash-free preview from the mounted control and retains retry identity', async () => {
+        const preview = { ...simulation, source: { kind: 'molecular_revision', sequence_id: 'source', revision_id: 'revision', content_sha256: 'a'.repeat(64), topology: 'linear' }, catalog, selected_enzyme_ids: ['EcoRI'], simulation_sha256: null } as RestrictionDigestSimulation;
+        const transport = vi.fn()
+            .mockResolvedValueOnce(new Response(JSON.stringify({ detail: { code: 'analysis_busy' } }), { status: 503 }))
+            .mockResolvedValueOnce(new Response(JSON.stringify(ack('saved-operation'))));
+        vi.stubGlobal('fetch', transport);
+        try {
+            container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
+            await act(async () => root?.render(<DigestPanel sequenceData={sequence} sequenceId="source" onHighlight={vi.fn()} catalog={catalog} catalogRecords={[record]} analysis={analysis} authorityLoading={false} authorityError={null} digestSimulation={preview} digestLoading={false} digestError={null} onDigestSelectionChange={vi.fn()} onSimulateDigest={vi.fn()} />));
+            const button = [...container.querySelectorAll('button')].find(row => row.textContent === 'Save digest & fragments')!;
+            await act(async () => button.click());
+            expect(container.querySelector('[role="alert"]')).not.toBeNull();
+            await act(async () => button.click());
+            const first = JSON.parse(transport.mock.calls[0][1].body);
+            const second = JSON.parse(transport.mock.calls[1][1].body);
+            expect(second).toEqual(first);
+            expect(second).toMatchObject({ simulation_sha256: null, enzyme_ids: ['EcoRI'], persistence_mode: 'operation_and_fragments', source: { expected_content_sha256: 'a'.repeat(64), revision_id: 'revision' }, catalog: { expected_catalog_sha256: catalog.catalog_sha256 } });
+            expect(second.idempotency_key).toBeTruthy();
+            expect(button.disabled).toBe(true);
+            expect(container.querySelector('a')?.getAttribute('href')).toBe('/api/molbio/restriction/digests/saved-operation');
+        } finally { vi.unstubAllGlobals(); }
+    });
+
     let root: Root | undefined;
     let container: HTMLDivElement | undefined;
     afterEach(async () => { if (root) await act(async () => root?.unmount()); container?.remove(); });
@@ -78,14 +129,14 @@ describe('DigestPanel backend authority', () => {
         expect(container.querySelector('[data-fragment-index="0"]')).toBeTruthy();
     });
 
-    it('renders complete catalog discovery and exact ordered chunk hashes', async () => {
+    it('renders complete catalog discovery without transient hash receipts', async () => {
         container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
         await act(async () => root?.render(<DigestPanel sequenceData={sequence} sequenceId={null} onHighlight={vi.fn()} selectedEnzymes={[]} onEnzymesChange={vi.fn()} catalog={catalog} productEvidence={products} catalogRecords={[record, recognitionOnly]} analysis={analysis} authorityLoading={false} authorityError={null} digestSimulation={null} digestLoading={false} digestError={null} onDigestSelectionChange={vi.fn()} onSimulateDigest={vi.fn()} />));
         const all = [...container.querySelectorAll('button')].find((button) => button.textContent === 'All');
         await act(async () => all?.click());
         expect(container.textContent).toContain('MysteryI');
         expect(container.textContent).toContain('geometry unavailable');
-        expect(container.querySelector(`[data-restriction-chunk-result-sha256="${'b'.repeat(64)}"]`)).toBeTruthy();
+        expect(container.querySelector("[data-restriction-chunk-result-sha256]")).toBeNull();
     });
 
     it('clears fragment highlights when digest authority disappears and on unmount', async () => {

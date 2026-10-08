@@ -57,6 +57,7 @@ export interface StructureReorchestrateSettings {
         pinnedGpus: number[];
         lockGpus: boolean;
         sizeCp: number;
+        cpTopology?: '2d' | '1d';
         outputFormat: StructureBoltzCpOutputFormat;
         writeFullPae: boolean;
         seed: string;
@@ -288,6 +289,7 @@ export const deriveStructureReorchestrateSettings = (job: StructureRetryJob): St
             pinnedGpus: boltzCpPinnedGpus,
             lockGpus: boltzCpPinnedGpus.length > 0 && toBoolean(params.lock_gpus, DEFAULTS.boltzCp.lockGpus),
             sizeCp: normalizeBoltzCpSizeCp(params),
+            cpTopology: (params.bcp_cp_topology ?? params.cp_topology) as '2d' | '1d' | undefined,
             outputFormat: normalizeBoltzCpOutputFormat(params.bcp_output_format ?? params.output_format),
             writeFullPae: toBoolean(params.bcp_write_full_pae ?? params.write_full_pae, DEFAULTS.boltzCp.writeFullPae),
             seed: normalizeBoltzCpSeed(params.bcp_seed ?? params.seed),
@@ -364,11 +366,13 @@ export const buildStructureReorchestrateOverrides = (
         const previousLaunch = deriveBoltzCpGpuLaunchSettings({
             pinnedGpus: previous.boltzCp.pinnedGpus,
             requestedSizeCp: previous.boltzCp.sizeCp,
+            cpTopology: previous.boltzCp.cpTopology,
             fallbackGpuIds,
         });
         const nextLaunch = deriveBoltzCpGpuLaunchSettings({
             pinnedGpus: next.boltzCp.pinnedGpus,
             requestedSizeCp: next.boltzCp.sizeCp,
+            cpTopology: next.boltzCp.cpTopology,
             fallbackGpuIds: targetFallbackGpuIds ?? fallbackGpuIds,
         });
         const previousParams = buildBoltzCpSubmitParams({
@@ -377,6 +381,7 @@ export const buildStructureReorchestrateOverrides = (
             seed: previous.boltzCp.seed,
             gpuIds: previousLaunch.gpuIds,
             sizeCp: previousLaunch.sizeCp,
+            cpTopology: previous.boltzCp.cpTopology,
         });
         const nextParams = buildBoltzCpSubmitParams({
             outputFormat: next.boltzCp.outputFormat,
@@ -384,6 +389,7 @@ export const buildStructureReorchestrateOverrides = (
             seed: next.boltzCp.seed,
             gpuIds: nextLaunch.gpuIds,
             sizeCp: nextLaunch.sizeCp,
+            cpTopology: next.boltzCp.cpTopology,
         });
 
         maybeSet(
@@ -404,6 +410,7 @@ export const buildStructureReorchestrateOverrides = (
             maybeSet('bcp_size_cp', nextParams.bcp_size_cp, previousParams.bcp_size_cp);
             maybeSet('bcp_gpu_ids', nextParams.bcp_gpu_ids ?? null, previousParams.bcp_gpu_ids ?? null);
         }
+        if (next.boltzCp.cpTopology !== undefined) overrides.bcp_cp_topology = next.boltzCp.cpTopology;
         maybeSet('bcp_output_format', nextParams.bcp_output_format, previousParams.bcp_output_format);
         maybeSet('bcp_write_full_pae', nextParams.bcp_write_full_pae, previousParams.bcp_write_full_pae);
         maybeSet('bcp_seed', nextParams.bcp_seed ?? null, previousParams.bcp_seed ?? null);

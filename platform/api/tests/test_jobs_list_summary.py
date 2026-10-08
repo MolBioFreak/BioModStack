@@ -108,7 +108,8 @@ async def test_jobs_list_summary_omits_heavy_fields_but_keeps_rows_selectable(tm
     summary_without_policy = summary_job_query.replace(policy_projection, "remote_result_policy")
     # Only the retained stage inventories/receipts are projected, never the
     # complete provenance or heavyweight scientific params.
-    for alias in ('stage_plan_components', 'stage_assigned_components', 'stage_terminal_states'):
+    for alias in ('stage_plan_components', 'stage_assigned_components', 'stage_terminal_states',
+                  'remote_received_manifest_sha256', 'remote_result_manifest_sha256'):
         projection = f"json_quote(json_extract(jobs.provenance, ?)) as {alias}"
         assert summary_without_policy.count(projection) == 1
         summary_without_policy = summary_without_policy.replace(projection, alias)
@@ -129,6 +130,69 @@ async def test_jobs_list_summary_omits_heavy_fields_but_keeps_rows_selectable(tm
     assert len(full_job["provenance"]["selected_design_ids"]) == 1000
     assert len(full_job["stage_outputs"]["fampnn"]) == 250
 
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_remote_results_receipt_projection_and_etag(tmp_path: Path) -> None:
+    """Compact list rows retain the receipt fact without loading full provenance."""
+    from schemas import JobResponse
+
+    cases = {
+        'received': ({'received_manifest_sha256': 'a' * 64, 'result_manifest_sha256': 'a' * 64}, True),
+        'not-received': ({'result_manifest_sha256': 'a' * 64}, False),
+        'mismatch': ({'received_manifest_sha256': 'b' * 64, 'result_manifest_sha256': 'a' * 64}, False),
+        'empty': ({'received_manifest_sha256': '', 'result_manifest_sha256': ''}, False),
+        'null': ({'received_manifest_sha256': None, 'result_manifest_sha256': None}, False),
+        'numeric': ({'received_manifest_sha256': 123, 'result_manifest_sha256': 123}, False),
+        'missing': ({}, False),
+    }
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'remote-summary.db'}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as session:
+        for name, (receipt, _) in cases.items():
+            session.add(Job(id=name, name=name, status='awaiting_input',
+                queue_status='completed', model_id='boltz_cp_experimental', mode='design',
+                params={}, execution_target_id='fixture-target', remote_state='result_pull_failed',
+                awaiting_input=True, awaiting_stage='remote_results',
+                provenance={'remote_execution_receipt': receipt, 'large_unrelated': 'x' * 10000}))
+        await session.commit()
+
+    async def override():
+        async with factory() as session:
+            yield session
+    app = FastAPI()
+    app.dependency_overrides[jobs_router.get_session] = override
+    app.include_router(jobs_router.router, prefix='/api/jobs')
+    with TestClient(app) as client:
+        response = client.get('/api/jobs', params={'summary': True})
+        assert response.status_code == 200
+        body = response.json()
+        assert body['total'] == len(cases)
+        assert {row['id']: row['remote_results_received'] for row in body['jobs']} == {
+            key: expected for key, (_, expected) in cases.items()}
+        assert all('provenance' not in row and 'remote_received_manifest_sha256' not in row
+                   and 'remote_result_manifest_sha256' not in row for row in body['jobs'])
+        assert b'large_unrelated' not in response.content
+        etag = response.headers['etag']
+        assert client.get('/api/jobs', params={'summary': True},
+                          headers={'If-None-Match': etag}).status_code == 304
+        async with factory() as session:
+            received = await session.get(Job, 'received')
+            # A full/detail response must not override its retained receipt with false.
+            detail = JobResponse.model_validate(received).model_dump()
+            assert detail['remote_results_received'] is None
+            assert detail['provenance']['remote_execution_receipt'] == cases['received'][0]
+            missing = await session.get(Job, 'not-received')
+            missing.provenance = {'remote_execution_receipt': cases['received'][0]}
+            await session.commit()
+        changed = client.get('/api/jobs', params={'summary': True},
+                             headers={'If-None-Match': etag})
+        assert changed.status_code == 200
+        assert changed.headers['etag'] != etag
+        assert next(row for row in changed.json()['jobs'] if row['id'] == 'not-received')['remote_results_received'] is True
     await engine.dispose()
 
 

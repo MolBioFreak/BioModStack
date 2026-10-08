@@ -1,0 +1,90 @@
+"""Final model documents through the actual immutable run-snapshot producer."""
+import json
+import os
+from pathlib import Path
+import pytest
+from test_bioxp_methods_api import store, BASE
+from test_bioxp_methods_integrated import submit_body
+from bioxp_method_native import EXPORT, CONTRACTS
+from bioxp_method_model import method_catalog
+
+
+def test_committed_native_pin_and_registration():
+    assert EXPORT['source_commit'] == '610e396dcbdedd6ba31ccd8fd3d697096dcedec2'
+    assert not any('classifier' in k for k in EXPORT['capabilities'])
+    for name, schema in EXPORT['method_contract']['action_params'].items():
+        assert all(CONTRACTS[name][key] == value for key, value in schema.items())
+    from bioxp_method_native import native_action
+    with pytest.raises(ValueError):
+        native_action('pipette_pierce', {'pattern': 'h', 'plate': 99, 'well': 'A1'})
+    entries = {a['action']: a for a in method_catalog()['actions']}
+    for name in ('park', 'led', 'status_light', 'seal_separate', 'cavro_application', 'liquid_recipe', 'fluid_search', 'pipette_settings', 'pressure_stream'):
+        assert entries[name]['status']['registered'] is True
+        assert entries[name]['source_revision'] == EXPORT['source_commit']
+    assert 'classifier' not in entries
+
+
+
+def test_liquid_errors_list_every_step():
+    from bioxp_method_compiler import compile_method
+    steps = [{'step_id': sid, 'type': 'action', 'action': 'transfer', 'inputs': {'liquid': {}, 'channels': [0], 'volume_ul': 5}}
+             for sid in ('first', 'second')]
+    result = compile_method({'method': {'schema': 'bms.bioxp-method.v1', 'steps': steps}})
+    assert result['document'] is None
+    assert [(i['step_id'], i['path']) for i in result['issues']] == [('first', '/method/steps/0'), ('second', '/method/steps/1')]
+
+@pytest.mark.asyncio
+async def test_export_final_immutable_snapshots(store, tmp_path):
+    import gzip
+    client, transport, _, _ = store
+    source = Path(os.environ.get('BIOXP_FINAL_DOCUMENTS', str(tmp_path / 'documents.json')))
+    fixture = Path(__file__).parent / 'fixtures/bioxp_methods/final-model-documents.json.gz'
+    documents = json.loads(source.read_text()) if 'BIOXP_FINAL_DOCUMENTS' in os.environ else json.loads(gzip.decompress(fixture.read_bytes()))
+    captures = []
+    for doc in documents:
+        metadata = doc['metadata']['bms_method']
+        body = submit_body(**{k: metadata[k] for k in ('method', 'bindings', 'dependencies', 'initial_state')})
+        response = await client.post(BASE + '/quick-runs', json=body)
+        assert response.status_code == 202, response.text
+        sent = transport.calls[-1][1]['json_data']['document']
+        assert sent['metadata']['bms_method_run'] == response.json()['method_snapshot']
+        assert sent['metadata']['bms_method_run']['compilation']['document'] == doc
+        captures.append(sent)
+    assert len(captures) == 87
+    source.with_name('run-documents.json').write_text(json.dumps(captures, indent=2) + '\n')
+    # Explicit offline recovery scenarios, compiled by the same real producer.
+    from copy import deepcopy
+    pickup = next(d['metadata']['bms_method'] for d in documents
+                  if len([a for s in d['stages'] for a in s['actions']]) >= 2
+                  and d['stages'][0]['actions'][0]['params'].get('operation') == 'load_tip')
+    recovery = []
+    for policy in ('stop', 'pause_for_operator'):
+        request = deepcopy({k: pickup[k] for k in ('method', 'bindings', 'dependencies', 'initial_state')})
+        for step in request['method']['steps']:
+            step['on_error'] = policy
+        reply = await client.post(BASE + '/quick-runs', json=submit_body(**request))
+        assert reply.status_code == 202, reply.text
+        recovery.append(transport.calls[-1][1]['json_data']['document'])
+    request = {'method': {'schema': 'bms.bioxp-method.v1', 'name': 'Offline control clock', 'steps': [
+        {'step_id': 'clock', 'type': 'action', 'action': 'wait', 'inputs': {'seconds': 60}},
+        {'step_id': 'after', 'type': 'action', 'action': 'note', 'inputs': {'message': 'after clock'}}]}}
+    reply = await client.post(BASE + '/quick-runs', json=submit_body(**request))
+    assert reply.status_code == 202, reply.text
+    recovery.append(transport.calls[-1][1]['json_data']['document'])
+    request['method']['steps'][0]['inputs']['seconds'] = 0.3
+    reply = await client.post(BASE + '/quick-runs', json=submit_body(**request))
+    assert reply.status_code == 202, reply.text
+    recovery.append(transport.calls[-1][1]['json_data']['document'])
+    source.with_name('recovery-documents.json').write_text(json.dumps(recovery, indent=2) + '\n')
+
+
+def test_backlash_setting_reaches_native_application():
+    from bioxp_method_compiler import compile_method
+    step = {'step_id': 'k', 'type': 'action', 'action': 'pipette_settings',
+            'inputs': {'channels': [0], 'timeout_ms': 1000, 'values': {'backlash_increments': 12}}}
+    result = compile_method({'method': {'schema': 'bms.bioxp-method.v1', 'steps': [step]}})
+    assert result['issues'] == [] or all(i['category'] == 'advisory' for i in result['issues'])
+    action = result['document']['stages'][0]['actions'][0]
+    assert action['params']['application']['operations'][0]['values'] == {'backlash_increments': 12}
+    step['inputs']['values']['backlash_increments'] = 501
+    assert compile_method({'method': {'schema': 'bms.bioxp-method.v1', 'steps': [step]}})['document'] is None

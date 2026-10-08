@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
     assertBioXpOperatorActionV2Request,
-    assertBioXpOperatorMethodV1Request,
     bioXpPostDispatchCommandIdentity,
     bioXpOperatorGenerationPayload,
     bioXpReceiptV2IsNonTerminal,
@@ -21,24 +20,6 @@ describe('BioXP operator generation payload', () => {
     it('rejects absent or non-positive generation identities', () => {
         expect(() => bioXpOperatorGenerationPayload(0, 2)).toThrow('connection generation');
         expect(() => bioXpOperatorGenerationPayload(7, 0)).toThrow('ownership generation');
-    });
-});
-
-describe('BioXP OEM XY method input bounds', () => {
-    const request = (x_steps: number, y_steps: number) => ({
-        expected_connection_generation: 1,
-        schema_version: 'bioxp.operator_method_request.v1' as const,
-        idempotency_key: 'xy-method-bounds',
-        method_action_id: 'oem.xy.move_absolute' as const,
-        expected_ownership_generation: 1,
-        expected_board_epoch_by_board: {},
-        inputs: { x_steps, y_steps },
-    });
-
-    it('requires signed-int32 integer X and Y inputs', () => {
-        expect(() => assertBioXpOperatorMethodV1Request(request(10, 2 ** 31))).toThrow('signed int32');
-        expect(() => assertBioXpOperatorMethodV1Request(request(1.5, 10))).toThrow('signed int32');
-        expect(() => assertBioXpOperatorMethodV1Request(request(-(2 ** 31), 2 ** 31 - 1))).not.toThrow();
     });
 });
 
@@ -111,8 +92,8 @@ describe('BioXP interrupt identity and reachability', () => {
         expect(source).not.toContain("operatorActionById('oem.abort_all')");
         expect(source).not.toContain("axis === 'y' ? '/motion/diagnostics/stop'");
         // Catalog owns the embedded authority snapshot; unrelated dashboard aging
-        // cannot change its query identity. Both 15s mounted authority gates remain.
-        expect(source).toMatch(/useBioXpOperatorControlCatalog\(\s*generation,\s*linkConnected,/);
+        // cannot change its query identity. Hidden authoring has no catalog demand.
+        expect(source).toMatch(/useBioXpOperatorControlCatalog\(\s*generation,\s*linkConnected && operationalVisible,/);
         // Software cancellation uses published availability; addressed motor Stops do not.
         expect(source).not.toMatch(/disabled=\{[^}\n]*v2InterruptActionById\('oem\.[xyz]\.stop'/);
         expect(source).toContain("v2InterruptActionById('oem.abort_all')?.enabled !== true");

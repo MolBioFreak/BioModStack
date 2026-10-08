@@ -127,6 +127,7 @@ modes:
       - bam_min_mapq
       - run_fastq_qc
       - expected_plasmid_size
+      - samtools_consensus_config
       - min_fastq_read_length
       - fastq_minimap2_preset
       - fastq_minimap2_allow_secondary
@@ -157,6 +158,7 @@ modes:
       - bam_min_mapq
       - run_fastq_qc
       - expected_plasmid_size
+      - samtools_consensus_config
       - min_fastq_read_length
       - fastq_minimap2_preset
       - fastq_minimap2_allow_secondary
@@ -182,6 +184,8 @@ modes:
     params:
       - fastq_path
       - reference_fasta
+      - expected_plasmid_size
+      - samtools_consensus_config
       - run_fastq_qc
       - min_fastq_read_length
       - fastq_minimap2_preset
@@ -231,6 +235,8 @@ modes:
       - bam_path
       - fastq_path
       - reference_fasta
+      - expected_plasmid_size
+      - samtools_consensus_config
       - dorado_model
       - dorado_device
       - min_qscore
@@ -431,9 +437,9 @@ params:
 
   - name: expected_plasmid_size
     type: integer
-    description: Expected plasmid size (bp) used for coarse copy-number/read-length context
+    description: "Expected plasmid length (bp): null selects Auto from the reference; a positive integer overrides it. Read-length ratios are length heuristics, not biological copy number."
     required: false
-    default: 7000
+    default: null
     minimum: 1
 
   - name: min_fastq_read_length
@@ -442,6 +448,12 @@ params:
     required: false
     default: 0
     minimum: 0
+
+  - name: samtools_consensus_config
+    type: string
+    description: Samtools consensus preset; null preserves native Bayesian defaults. Choices are owned by the ONT fastq_qc parameter schema.
+    required: false
+    default: null
 
   - name: fastq_minimap2_preset
     type: string

@@ -946,7 +946,8 @@ def test_three_prime_heterodimer_anchors_both_physical_three_prime_ends() -> Non
         "GGGGTTTTTTTTTTTT",
     )
     assert metrics.heterodimer_complement == 16
-    assert metrics.three_prime_heterodimer == 0
+    # Both physical 3' termini participate in this full antiparallel duplex.
+    assert metrics.three_prime_heterodimer == 16
 
 
 def test_assembly_schemas_and_golden_gate_reject_unsupported_or_ambiguous_ends() -> None:

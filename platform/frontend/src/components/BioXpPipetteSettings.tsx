@@ -4,7 +4,7 @@ import { readCalibrationSettings, type CalibrationSettings } from '../lib/bioxpC
 import { pipetteFlags, readOperationParameters, saveOperationParameters, setManualTipTray,
     type OperationParameters, type PipetteFlag, type TipTray } from '../lib/bioxpPipetteSettings';
 
-export function BioXpPipetteSettings({ generation, connected }: { generation: number; connected: boolean }) {
+export function BioXpPipetteSettings({ generation, connected, visible = true }: { generation: number; connected: boolean; visible?: boolean }) {
     const [tray, setTray] = useState<TipTray>(1);
     const [calibration, setCalibration] = useState<CalibrationSettings | null>(null);
     const [parameters, setParameters] = useState<OperationParameters | null>(null);
@@ -15,15 +15,19 @@ export function BioXpPipetteSettings({ generation, connected }: { generation: nu
     const [message, setMessage] = useState('');
     const epoch = useRef(0);
     const busy = useRef(false);
+    const observedEpoch = useRef<number | null>(null);
     useEffect(() => {
-        const token = ++epoch.current;
+        ++epoch.current;
         setCalibration(null); setParameters(null); setDraft({}); setMeasurement(null); setError(''); setMessage('');
-        if (connected) {
-            void readOperationParameters(generation).then(value => { if (epoch.current === token) setParameters(value); })
-                .catch(cause => { if (epoch.current === token) setError(bioXpErrorText(cause)); });
-        }
         return () => { ++epoch.current; };
     }, [generation, connected]);
+    useEffect(() => {
+        const token = epoch.current;
+        if (!connected || !visible || observedEpoch.current === token) return;
+        observedEpoch.current = token;
+        void readOperationParameters(generation).then(value => { if (epoch.current === token) setParameters(value); })
+            .catch(cause => { if (epoch.current === token) setError(bioXpErrorText(cause)); });
+    }, [generation, connected, visible]);
     async function refresh() {
         const token = epoch.current;
         try {

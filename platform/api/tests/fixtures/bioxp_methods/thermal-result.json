@@ -1,0 +1,966 @@
+{
+  "artifacts": {},
+  "created_at": "2026-10-03T06:54:18+00:00",
+  "execution": {
+    "dry_run": false,
+    "idempotency_binding": {
+      "idempotency_key_digest": "5318ec71820c7c21223e2bc212d461f47058da6e8940bad86d9b55e10edc5df6",
+      "request_fingerprint": "00666ea336356a938a9c85de6b1ff6038b5686b4af3fddd750ad3a6ca96cb64d"
+    },
+    "live_contract": {
+      "action_count": 7,
+      "artifacts": {
+        "refs": [
+          "offline-test-only"
+        ]
+      },
+      "created_at": "2026-10-03T06:54:18+00:00",
+      "deck_manifest": {
+        "fixture": "no-hardware"
+      },
+      "hardware_action_kinds": [
+        "chiller_setpoint",
+        "thermal_setpoint"
+      ],
+      "live_execution_ack": true,
+      "mode": "live",
+      "operator_id": "offline-test",
+      "physical_console_verified": true,
+      "preflight": {
+        "artifact_refs": [
+          "offline-test-only"
+        ]
+      },
+      "protocol_id": "offline-host-integration",
+      "reference_required_action_kinds": [],
+      "schema_version": "bioxp.protocol_live_execution_contract.v1",
+      "source_type": "native"
+    },
+    "runtime_state": {
+      "action_results": [
+        {
+          "action_id": "timer_start",
+          "clock": "monotonic_elapsed",
+          "duration_s": 0,
+          "kind": "timer_start",
+          "metadata": {},
+          "ok": true,
+          "on_error": "stop",
+          "source_occurrence_id": "timer_start",
+          "stage_id": "one",
+          "status": "completed",
+          "timer_id": "incubation",
+          "timer_started": true
+        },
+        {
+          "ack": {
+            "status": 100,
+            "value": 37000
+          },
+          "action_id": "thermal_setpoint",
+          "bank": 0,
+          "kind": "thermal_setpoint",
+          "metadata": {},
+          "ok": true,
+          "on_error": "stop",
+          "reference": {
+            "ack": {
+              "status": 100,
+              "value": 37000
+            },
+            "bank": 0,
+            "ok": true,
+            "param": 22,
+            "scale": 1000.0,
+            "scaled": 37.0,
+            "value": 37000
+          },
+          "setpoint_accepted": true,
+          "source_occurrence_id": "thermal_setpoint",
+          "stage_id": "one",
+          "status": "completed",
+          "target_c": 37.0,
+          "target_raw": 37000,
+          "temperature_reached": null,
+          "verified": true
+        },
+        {
+          "ack": {
+            "status": 100,
+            "value": 10000
+          },
+          "action_id": "chiller_setpoint",
+          "axis": 0,
+          "bank": 0,
+          "kind": "chiller_setpoint",
+          "metadata": {},
+          "ok": true,
+          "on_error": "stop",
+          "reference": {
+            "ack": {
+              "status": 100,
+              "value": 10000
+            },
+            "bank": 0,
+            "ok": true,
+            "param": 22,
+            "scale": 1000.0,
+            "scaled": 10.0,
+            "value": 10000
+          },
+          "setpoint_accepted": true,
+          "source_occurrence_id": "chiller_setpoint",
+          "stage_id": "one",
+          "status": "completed",
+          "target_c": 10.0,
+          "target_raw": 10000,
+          "temperature_reached": null,
+          "verified": true
+        },
+        {
+          "action_id": "thermal_hold",
+          "dwell_complete": true,
+          "identity": "thermal_hold",
+          "kind": "thermal_hold",
+          "last_temperature": {
+            "ack": {
+              "status": 100,
+              "value": 45000
+            },
+            "bank": 1,
+            "ok": true,
+            "temp_c": 45.0
+          },
+          "metadata": {
+            "generated": true,
+            "loop_path": [
+              2
+            ],
+            "step_id": "authored"
+          },
+          "ok": true,
+          "on_error": "stop",
+          "setpoint": {
+            "ack": {
+              "status": 100,
+              "value": 45000
+            },
+            "bank": 1,
+            "ok": true,
+            "reference": {
+              "ack": {
+                "status": 100,
+                "value": 45000
+              },
+              "bank": 1,
+              "ok": true,
+              "param": 22,
+              "scale": 1000.0,
+              "scaled": 45.0,
+              "value": 45000
+            },
+            "target_c": 45.0,
+            "target_raw": 45000,
+            "verified": true
+          },
+          "source_occurrence_id": "thermal_hold",
+          "stage_id": "one",
+          "status": "completed",
+          "temperature_reached": true
+        },
+        {
+          "action_id": "thermal_profile",
+          "children": [
+            {
+              "dwell_complete": true,
+              "identity": "thermal_profile:repeat:0:segment:0",
+              "ok": true,
+              "setpoint": {
+                "ack": {
+                  "status": 100,
+                  "value": 55000
+                },
+                "bank": 0,
+                "ok": true,
+                "reference": {
+                  "ack": {
+                    "status": 100,
+                    "value": 55000
+                  },
+                  "bank": 0,
+                  "ok": true,
+                  "param": 22,
+                  "scale": 1000.0,
+                  "scaled": 55.0,
+                  "value": 55000
+                },
+                "target_c": 55.0,
+                "target_raw": 55000,
+                "verified": true
+              },
+              "temperature_reached": null
+            },
+            {
+              "dwell_complete": true,
+              "identity": "thermal_profile:repeat:0:segment:1",
+              "last_temperature": {
+                "ack": {
+                  "status": 100,
+                  "value": 25000
+                },
+                "bank": 0,
+                "ok": true,
+                "temp_c": 25.0
+              },
+              "ok": true,
+              "setpoint": {
+                "ack": {
+                  "status": 100,
+                  "value": 25000
+                },
+                "bank": 0,
+                "ok": true,
+                "reference": {
+                  "ack": {
+                    "status": 100,
+                    "value": 25000
+                  },
+                  "bank": 0,
+                  "ok": true,
+                  "param": 22,
+                  "scale": 1000.0,
+                  "scaled": 25.0,
+                  "value": 25000
+                },
+                "target_c": 25.0,
+                "target_raw": 25000,
+                "verified": true
+              },
+              "temperature_reached": true
+            },
+            {
+              "dwell_complete": true,
+              "identity": "thermal_profile:repeat:1:segment:0",
+              "ok": true,
+              "setpoint": {
+                "ack": {
+                  "status": 100,
+                  "value": 55000
+                },
+                "bank": 0,
+                "ok": true,
+                "reference": {
+                  "ack": {
+                    "status": 100,
+                    "value": 55000
+                  },
+                  "bank": 0,
+                  "ok": true,
+                  "param": 22,
+                  "scale": 1000.0,
+                  "scaled": 55.0,
+                  "value": 55000
+                },
+                "target_c": 55.0,
+                "target_raw": 55000,
+                "verified": true
+              },
+              "temperature_reached": null
+            },
+            {
+              "dwell_complete": true,
+              "identity": "thermal_profile:repeat:1:segment:1",
+              "last_temperature": {
+                "ack": {
+                  "status": 100,
+                  "value": 25000
+                },
+                "bank": 0,
+                "ok": true,
+                "temp_c": 25.0
+              },
+              "ok": true,
+              "setpoint": {
+                "ack": {
+                  "status": 100,
+                  "value": 25000
+                },
+                "bank": 0,
+                "ok": true,
+                "reference": {
+                  "ack": {
+                    "status": 100,
+                    "value": 25000
+                  },
+                  "bank": 0,
+                  "ok": true,
+                  "param": 22,
+                  "scale": 1000.0,
+                  "scaled": 25.0,
+                  "value": 25000
+                },
+                "target_c": 25.0,
+                "target_raw": 25000,
+                "verified": true
+              },
+              "temperature_reached": true
+            }
+          ],
+          "kind": "thermal_profile",
+          "metadata": {},
+          "ok": true,
+          "on_error": "stop",
+          "profile_complete": true,
+          "source_occurrence_id": "thermal_profile",
+          "stage_id": "one",
+          "status": "completed"
+        },
+        {
+          "action_id": "wait",
+          "elapsed_wait_complete": true,
+          "interrupted": false,
+          "kind": "wait",
+          "metadata": {},
+          "ok": true,
+          "on_error": "stop",
+          "source_occurrence_id": "wait",
+          "stage_id": "one",
+          "status": "completed"
+        },
+        {
+          "action_id": "timer_wait",
+          "interrupted": false,
+          "kind": "timer_wait",
+          "metadata": {},
+          "ok": true,
+          "on_error": "stop",
+          "source_occurrence_id": "timer_wait",
+          "stage_id": "one",
+          "status": "completed",
+          "timer_complete": true,
+          "timer_id": "incubation"
+        }
+      ],
+      "awaiting_review": false,
+      "completed": true,
+      "current_stage_id": null,
+      "dry_run": false,
+      "events": [
+        {
+          "action_id": "thermal_hold",
+          "detail": {
+            "bank": "lid",
+            "identity": "thermal_hold",
+            "producer": "robot-orchestration",
+            "target_temp_c": 45
+          },
+          "event": "setpoint_accepted",
+          "sequence": 1,
+          "stage_id": "one"
+        },
+        {
+          "action_id": "thermal_hold",
+          "detail": {
+            "identity": "thermal_hold",
+            "producer": "robot-orchestration",
+            "reading": {
+              "ack": {
+                "status": 100,
+                "value": 45000
+              },
+              "bank": 1,
+              "ok": true,
+              "temp_c": 45.0
+            }
+          },
+          "event": "temperature_reached",
+          "sequence": 2,
+          "stage_id": "one"
+        },
+        {
+          "action_id": "thermal_hold",
+          "detail": {
+            "duration_s": 0,
+            "identity": "thermal_hold",
+            "producer": "robot-orchestration",
+            "start": "attainment"
+          },
+          "event": "dwell_complete",
+          "sequence": 3,
+          "stage_id": "one"
+        },
+        {
+          "action_id": "thermal_profile",
+          "detail": {
+            "bank": "nest",
+            "identity": "thermal_profile:repeat:0:segment:0",
+            "producer": "robot-orchestration",
+            "target_temp_c": 55
+          },
+          "event": "setpoint_accepted",
+          "sequence": 4,
+          "stage_id": "one"
+        },
+        {
+          "action_id": "thermal_profile",
+          "detail": {
+            "duration_s": 0,
+            "identity": "thermal_profile:repeat:0:segment:0",
+            "producer": "robot-orchestration",
+            "start": "dispatch"
+          },
+          "event": "dwell_complete",
+          "sequence": 5,
+          "stage_id": "one"
+        },
+        {
+          "action_id": "thermal_profile",
+          "detail": {
+            "dwell_complete": true,
+            "identity": "thermal_profile:repeat:0:segment:0",
+            "ok": true,
+            "producer": "robot-orchestration",
+            "setpoint": {
+              "ack": {
+                "status": 100,
+                "value": 55000
+              },
+              "bank": 0,
+              "ok": true,
+              "reference": {
+                "ack": {
+                  "status": 100,
+                  "value": 55000
+                },
+                "bank": 0,
+                "ok": true,
+                "param": 22,
+                "scale": 1000.0,
+                "scaled": 55.0,
+                "value": 55000
+              },
+              "target_c": 55.0,
+              "target_raw": 55000,
+              "verified": true
+            },
+            "temperature_reached": null
+          },
+          "event": "profile_segment_result",
+          "sequence": 6,
+          "stage_id": "one"
+        },
+        {
+          "action_id": "thermal_profile",
+          "detail": {
+            "bank": "nest",
+            "identity": "thermal_profile:repeat:0:segment:1",
+            "producer": "robot-orchestration",
+            "target_temp_c": 25
+          },
+          "event": "setpoint_accepted",
+          "sequence": 7,
+          "stage_id": "one"
+        },
+        {
+          "action_id": "thermal_profile",
+          "detail": {
+            "identity": "thermal_profile:repeat:0:segment:1",
+            "producer": "robot-orchestration",
+            "reading": {
+              "ack": {
+                "status": 100,
+                "value": 25000
+              },
+              "bank": 0,
+              "ok": true,
+              "temp_c": 25.0
+            }
+          },
+          "event": "temperature_reached",
+          "sequence": 8,
+          "stage_id": "one"
+        },
+        {
+          "action_id": "thermal_profile",
+          "detail": {
+            "duration_s": 0,
+            "identity": "thermal_profile:repeat:0:segment:1",
+            "producer": "robot-orchestration",
+            "start": "attainment"
+          },
+          "event": "dwell_complete",
+          "sequence": 9,
+          "stage_id": "one"
+        },
+        {
+          "action_id": "thermal_profile",
+          "detail": {
+            "dwell_complete": true,
+            "identity": "thermal_profile:repeat:0:segment:1",
+            "last_temperature": {
+              "ack": {
+                "status": 100,
+                "value": 25000
+              },
+              "bank": 0,
+              "ok": true,
+              "temp_c": 25.0
+            },
+            "ok": true,
+            "producer": "robot-orchestration",
+            "setpoint": {
+              "ack": {
+                "status": 100,
+                "value": 25000
+              },
+              "bank": 0,
+              "ok": true,
+              "reference": {
+                "ack": {
+                  "status": 100,
+                  "value": 25000
+                },
+                "bank": 0,
+                "ok": true,
+                "param": 22,
+                "scale": 1000.0,
+                "scaled": 25.0,
+                "value": 25000
+              },
+              "target_c": 25.0,
+              "target_raw": 25000,
+              "verified": true
+            },
+            "temperature_reached": true
+          },
+          "event": "profile_segment_result",
+          "sequence": 10,
+          "stage_id": "one"
+        },
+        {
+          "action_id": "thermal_profile",
+          "detail": {
+            "bank": "nest",
+            "identity": "thermal_profile:repeat:1:segment:0",
+            "producer": "robot-orchestration",
+            "target_temp_c": 55
+          },
+          "event": "setpoint_accepted",
+          "sequence": 11,
+          "stage_id": "one"
+        },
+        {
+          "action_id": "thermal_profile",
+          "detail": {
+            "duration_s": 0,
+            "identity": "thermal_profile:repeat:1:segment:0",
+            "producer": "robot-orchestration",
+            "start": "dispatch"
+          },
+          "event": "dwell_complete",
+          "sequence": 12,
+          "stage_id": "one"
+        },
+        {
+          "action_id": "thermal_profile",
+          "detail": {
+            "dwell_complete": true,
+            "identity": "thermal_profile:repeat:1:segment:0",
+            "ok": true,
+            "producer": "robot-orchestration",
+            "setpoint": {
+              "ack": {
+                "status": 100,
+                "value": 55000
+              },
+              "bank": 0,
+              "ok": true,
+              "reference": {
+                "ack": {
+                  "status": 100,
+                  "value": 55000
+                },
+                "bank": 0,
+                "ok": true,
+                "param": 22,
+                "scale": 1000.0,
+                "scaled": 55.0,
+                "value": 55000
+              },
+              "target_c": 55.0,
+              "target_raw": 55000,
+              "verified": true
+            },
+            "temperature_reached": null
+          },
+          "event": "profile_segment_result",
+          "sequence": 13,
+          "stage_id": "one"
+        },
+        {
+          "action_id": "thermal_profile",
+          "detail": {
+            "bank": "nest",
+            "identity": "thermal_profile:repeat:1:segment:1",
+            "producer": "robot-orchestration",
+            "target_temp_c": 25
+          },
+          "event": "setpoint_accepted",
+          "sequence": 14,
+          "stage_id": "one"
+        },
+        {
+          "action_id": "thermal_profile",
+          "detail": {
+            "identity": "thermal_profile:repeat:1:segment:1",
+            "producer": "robot-orchestration",
+            "reading": {
+              "ack": {
+                "status": 100,
+                "value": 25000
+              },
+              "bank": 0,
+              "ok": true,
+              "temp_c": 25.0
+            }
+          },
+          "event": "temperature_reached",
+          "sequence": 15,
+          "stage_id": "one"
+        },
+        {
+          "action_id": "thermal_profile",
+          "detail": {
+            "duration_s": 0,
+            "identity": "thermal_profile:repeat:1:segment:1",
+            "producer": "robot-orchestration",
+            "start": "attainment"
+          },
+          "event": "dwell_complete",
+          "sequence": 16,
+          "stage_id": "one"
+        },
+        {
+          "action_id": "thermal_profile",
+          "detail": {
+            "dwell_complete": true,
+            "identity": "thermal_profile:repeat:1:segment:1",
+            "last_temperature": {
+              "ack": {
+                "status": 100,
+                "value": 25000
+              },
+              "bank": 0,
+              "ok": true,
+              "temp_c": 25.0
+            },
+            "ok": true,
+            "producer": "robot-orchestration",
+            "setpoint": {
+              "ack": {
+                "status": 100,
+                "value": 25000
+              },
+              "bank": 0,
+              "ok": true,
+              "reference": {
+                "ack": {
+                  "status": 100,
+                  "value": 25000
+                },
+                "bank": 0,
+                "ok": true,
+                "param": 22,
+                "scale": 1000.0,
+                "scaled": 25.0,
+                "value": 25000
+              },
+              "target_c": 25.0,
+              "target_raw": 25000,
+              "verified": true
+            },
+            "temperature_reached": true
+          },
+          "event": "profile_segment_result",
+          "sequence": 17,
+          "stage_id": "one"
+        },
+        {
+          "action_id": null,
+          "detail": {
+            "outcome": "completed"
+          },
+          "event": "workflow_settled",
+          "sequence": 18,
+          "stage_id": null
+        }
+      ],
+      "job_id": "protocol-live-5318ec71820c7c21223e2bc212d461f47058da6e8940bad86d9b55e10edc5df6",
+      "pause_reason": null,
+      "paused": false,
+      "protocol_id": "offline-host-integration",
+      "source_model": {
+        "allow_to_stop": null,
+        "carried_plate_present": null,
+        "fluid_name": null,
+        "logical_tip_present": null,
+        "old_tip_well": null,
+        "pressure_baseline": [],
+        "pressure_history": [
+          [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        ],
+        "strips": [],
+        "tip_trays": [],
+        "tip_zone_index": null,
+        "trays": {}
+      },
+      "stage_states": {
+        "one": {
+          "completed_actions": [
+            "timer_start",
+            "thermal_setpoint",
+            "chiller_setpoint",
+            "thermal_hold",
+            "thermal_profile",
+            "wait",
+            "timer_wait"
+          ],
+          "current_action_id": null,
+          "pause_marker_action_id": null,
+          "review_required": false,
+          "stage_id": "one",
+          "status": "completed",
+          "title": null
+        }
+      },
+      "workflow": {
+        "child_command_ids": [],
+        "command_id": "protocol-live-5318ec71820c7c21223e2bc212d461f47058da6e8940bad86d9b55e10edc5df6",
+        "gate": null,
+        "gate_id": null,
+        "held_reason": null,
+        "last_control_id": null,
+        "phase": "terminal",
+        "reached_control_id": null,
+        "requested_control": null,
+        "source_occurrence_id": null
+      }
+    }
+  },
+  "job_id": "protocol-live-5318ec71820c7c21223e2bc212d461f47058da6e8940bad86d9b55e10edc5df6",
+  "operator": {
+    "manual_review_required": false,
+    "pending_review": null,
+    "reviews": []
+  },
+  "protocol": {
+    "coverage": {},
+    "document": {
+      "metadata": {},
+      "protocol_id": "offline-host-integration",
+      "stages": [
+        {
+          "actions": [
+            {
+              "action_id": "timer_start",
+              "description": null,
+              "kind": "timer_start",
+              "metadata": {},
+              "oem_opcode": null,
+              "on_error": "stop",
+              "params": {
+                "seconds": 0,
+                "timer_id": "incubation"
+              },
+              "pause_message": null,
+              "required_capability": null,
+              "review_required": false,
+              "source_key": null,
+              "source_occurrence_id": null,
+              "stage_id": "one"
+            },
+            {
+              "action_id": "thermal_setpoint",
+              "description": null,
+              "kind": "thermal_setpoint",
+              "metadata": {},
+              "oem_opcode": null,
+              "on_error": "stop",
+              "params": {
+                "bank": "nest",
+                "target_temp_c": 37
+              },
+              "pause_message": null,
+              "required_capability": "thermal",
+              "review_required": false,
+              "source_key": null,
+              "source_occurrence_id": null,
+              "stage_id": "one"
+            },
+            {
+              "action_id": "chiller_setpoint",
+              "description": null,
+              "kind": "chiller_setpoint",
+              "metadata": {},
+              "oem_opcode": null,
+              "on_error": "stop",
+              "params": {
+                "bank": "rc",
+                "target_temp_c": 10
+              },
+              "pause_message": null,
+              "required_capability": "chiller",
+              "review_required": false,
+              "source_key": null,
+              "source_occurrence_id": null,
+              "stage_id": "one"
+            },
+            {
+              "action_id": "thermal_hold",
+              "description": null,
+              "kind": "thermal_hold",
+              "metadata": {
+                "generated": true,
+                "loop_path": [
+                  2
+                ],
+                "step_id": "authored"
+              },
+              "oem_opcode": null,
+              "on_error": "stop",
+              "params": {
+                "bank": "lid",
+                "duration_s": 0,
+                "start": "attainment",
+                "target_temp_c": 45,
+                "timeout_s": 1,
+                "tolerance_c": 0.1
+              },
+              "pause_message": null,
+              "required_capability": null,
+              "review_required": false,
+              "source_key": null,
+              "source_occurrence_id": null,
+              "stage_id": "one"
+            },
+            {
+              "action_id": "thermal_profile",
+              "description": null,
+              "kind": "thermal_profile",
+              "metadata": {},
+              "oem_opcode": null,
+              "on_error": "stop",
+              "params": {
+                "repeat": 2,
+                "segments": [
+                  {
+                    "bank": "nest",
+                    "duration_s": 0,
+                    "start": "dispatch",
+                    "target_temp_c": 55
+                  },
+                  {
+                    "bank": "nest",
+                    "duration_s": 0,
+                    "start": "attainment",
+                    "target_temp_c": 25,
+                    "timeout_s": 1,
+                    "tolerance_c": 0
+                  }
+                ]
+              },
+              "pause_message": null,
+              "required_capability": null,
+              "review_required": false,
+              "source_key": null,
+              "source_occurrence_id": null,
+              "stage_id": "one"
+            },
+            {
+              "action_id": "wait",
+              "description": null,
+              "kind": "wait",
+              "metadata": {},
+              "oem_opcode": null,
+              "on_error": "stop",
+              "params": {
+                "seconds": 0
+              },
+              "pause_message": null,
+              "required_capability": null,
+              "review_required": false,
+              "source_key": null,
+              "source_occurrence_id": null,
+              "stage_id": "one"
+            },
+            {
+              "action_id": "timer_wait",
+              "description": null,
+              "kind": "timer_wait",
+              "metadata": {},
+              "oem_opcode": null,
+              "on_error": "stop",
+              "params": {
+                "timer_id": "incubation"
+              },
+              "pause_message": null,
+              "required_capability": null,
+              "review_required": false,
+              "source_key": null,
+              "source_occurrence_id": null,
+              "stage_id": "one"
+            }
+          ],
+          "metadata": {},
+          "review_required": false,
+          "stage_id": "one",
+          "title": null
+        }
+      ],
+      "version": 1
+    },
+    "experiment": {},
+    "inventory": {},
+    "source_path": null,
+    "source_type": "native"
+  },
+  "schema_version": "bioxp.protocol_operator_bundle.v1",
+  "status": "completed",
+  "updated_at": "2026-10-03T06:54:18+00:00",
+  "command": {
+    "command_id": "protocol-live-5318ec71820c7c21223e2bc212d461f47058da6e8940bad86d9b55e10edc5df6",
+    "idempotency_key": "method-native",
+    "ownership_generation": 1,
+    "state_version": 46,
+    "status": "completed",
+    "terminal": true,
+    "status_path": "/protocol/jobs/protocol-live-5318ec71820c7c21223e2bc212d461f47058da6e8940bad86d9b55e10edc5df6"
+  }
+}

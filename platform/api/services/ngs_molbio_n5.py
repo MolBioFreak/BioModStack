@@ -58,10 +58,7 @@ from experiment_services import (
 )
 from services.global_experiments.adapters import AdapterError, registry
 from services.ngs_molbio_capabilities import NgsMolBioCapabilityError, contract_registry
-from services.ngs_molbio_runtime_status import (
-    NgsMolBioRuntimeAuthorityError,
-    runtime_implementation_record,
-)
+from build_identity import deployed_source_identity
 from services.payload_ownership_audit import (
     PayloadOwnershipError,
     validate_retained_payload_ownership_receipt,
@@ -83,31 +80,11 @@ from biomodstack_local_resources import applied_local_policy
 ACTIVE_ADMISSION_STATES = frozenset({"admitted", "queued"})
 
 
-def _runtime_source_authority(requests: list[dict[str, Any]], *, source_identity: SourceIdentity | None = None) -> tuple[str, str]:
+def _runtime_source_authority(*, source_identity: SourceIdentity | None = None) -> tuple[str, str]:
     if source_identity is not None:
-        # Native Protein uses the committed execution source, not an unrelated
-        # frozen NGS implementation audit. Keep the existing receipt fields.
+        # Preserve the execution plan source when one is already bound.
         return source_identity.revision, source_identity.tree
-    try:
-        record = runtime_implementation_record()
-        source_revision = str(record["successor_source_commit"])
-        source_tree = str(record["successor_source_tree"])
-    except (KeyError, ImportError, OSError, NgsMolBioRuntimeAuthorityError) as exc:
-        raise ResourceAdmissionDenied(
-            "resource_source_revision_unavailable",
-            "package-local successor runtime source authority is required for resource evidence",
-            requests,
-        ) from exc
-    if (
-        not re.fullmatch(r"[0-9a-f]{40}", source_revision)
-        or not re.fullmatch(r"[0-9a-f]{40}", source_tree)
-    ):
-        raise ResourceAdmissionDenied(
-            "resource_source_revision_unavailable",
-            "package-local successor runtime commit/tree authority is invalid",
-            requests,
-        )
-    return source_revision, source_tree
+    return deployed_source_identity()
 
 
 # This operational registry is intentionally NGS/MolBio-only. Protein kinds remain absent and disabled.
@@ -644,7 +621,7 @@ async def reserve_run_group(
             and domain_payload.get("domain_kind") == "protein_in_silico"):
         from paths import get_code_root
         source_identity = SourceIdentity.from_checkout(get_code_root())
-    source_revision, source_tree = _runtime_source_authority(requests, source_identity=source_identity)
+    source_revision, source_tree = _runtime_source_authority(source_identity=source_identity)
     for item in requests:
         attempt = item["attempt"]
         row = ExperimentResourceAdmission(

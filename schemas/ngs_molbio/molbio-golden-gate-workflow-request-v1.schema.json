@@ -1,0 +1,2068 @@
+{
+  "$defs": {
+    "AssembleTask": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "bms.golden-gate-design.v1",
+          "default": "bms.golden-gate-design.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "task": {
+          "const": "assemble_parts",
+          "default": "assemble_parts",
+          "title": "Task",
+          "type": "string"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/Source"
+          },
+          "title": "Sources",
+          "type": "array"
+        },
+        "parts": {
+          "items": {
+            "$ref": "#/$defs/Part"
+          },
+          "title": "Parts",
+          "type": "array"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "enzyme": {
+          "$ref": "#/$defs/EnzymeBinding"
+        },
+        "primer_settings": {
+          "$ref": "#/$defs/Thermodynamics"
+        },
+        "fidelity": {
+          "$ref": "#/$defs/FidelitySettings"
+        },
+        "domestication": {
+          "items": {
+            "$ref": "#/$defs/EditRequest"
+          },
+          "title": "Domestication",
+          "type": "array"
+        },
+        "automatic_primers": {
+          "items": {
+            "$ref": "#/$defs/AutomaticPrimerSelection"
+          },
+          "title": "Automatic Primers",
+          "type": "array"
+        },
+        "reaction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReactionRequest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "sources",
+        "parts",
+        "target",
+        "enzyme"
+      ],
+      "title": "AssembleTask",
+      "type": "object"
+    },
+    "AutomaticPrimerSelection": {
+      "additionalProperties": false,
+      "properties": {
+        "part_id": {
+          "title": "Part Id",
+          "type": "string"
+        },
+        "settings": {
+          "$ref": "#/$defs/PrimerSelectionSettings"
+        },
+        "pair_rank": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Pair Rank",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "part_id"
+      ],
+      "title": "AutomaticPrimerSelection",
+      "type": "object"
+    },
+    "CDSConstraint": {
+      "additionalProperties": false,
+      "properties": {
+        "feature_id": {
+          "minLength": 1,
+          "title": "Feature Id",
+          "type": "string"
+        },
+        "region": {
+          "$ref": "#/$defs/EditRegion"
+        },
+        "strand": {
+          "default": 1,
+          "enum": [
+            1,
+            -1
+          ],
+          "title": "Strand",
+          "type": "integer"
+        },
+        "frame": {
+          "default": 0,
+          "description": "Bases skipped at biological 5' end; v1 preserves incomplete 5'/3' boundary codons exactly and translates complete codons only.",
+          "enum": [
+            0,
+            1,
+            2
+          ],
+          "title": "Frame",
+          "type": "integer"
+        },
+        "genetic_code": {
+          "default": 1,
+          "description": "NCBI genetic code table ID.",
+          "title": "Genetic Code",
+          "type": "integer"
+        },
+        "initiation": {
+          "default": "preserve",
+          "description": "ordinary: partial CDS/no initiation; preserve: exact start; allowed: selected start codons, translated as Met.",
+          "enum": [
+            "ordinary",
+            "preserve",
+            "allowed"
+          ],
+          "title": "Initiation",
+          "type": "string"
+        },
+        "allowed_start_codons": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Start Codons",
+          "type": "array"
+        },
+        "stop_policy": {
+          "default": "preserve",
+          "description": "Preserve exact stop codons or permit synonymous stops; stop positions always remain unchanged.",
+          "enum": [
+            "preserve",
+            "synonymous"
+          ],
+          "title": "Stop Policy",
+          "type": "string"
+        }
+      },
+      "required": [
+        "feature_id",
+        "region"
+      ],
+      "title": "CDSConstraint",
+      "type": "object"
+    },
+    "CutWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "minimum": 0,
+          "title": "Start",
+          "type": "integer"
+        },
+        "end": {
+          "minimum": 0,
+          "title": "End",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "title": "CutWindow",
+      "type": "object"
+    },
+    "CyclingBlock": {
+      "additionalProperties": false,
+      "properties": {
+        "repetitions": {
+          "title": "Repetitions",
+          "type": "integer"
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/CyclingStep"
+          },
+          "title": "Steps",
+          "type": "array"
+        }
+      },
+      "required": [
+        "repetitions",
+        "steps"
+      ],
+      "title": "CyclingBlock",
+      "type": "object"
+    },
+    "CyclingProgram": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "provenance": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provenance"
+        },
+        "blocks": {
+          "items": {
+            "$ref": "#/$defs/CyclingBlock"
+          },
+          "title": "Blocks",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "blocks"
+      ],
+      "title": "CyclingProgram",
+      "type": "object"
+    },
+    "CyclingStep": {
+      "additionalProperties": false,
+      "properties": {
+        "temperature_C": {
+          "title": "Temperature C",
+          "type": "number"
+        },
+        "duration_seconds": {
+          "title": "Duration Seconds",
+          "type": "number"
+        }
+      },
+      "required": [
+        "temperature_C",
+        "duration_seconds"
+      ],
+      "title": "CyclingStep",
+      "type": "object"
+    },
+    "DNAAmount": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "title": "Value",
+          "type": "number"
+        },
+        "unit": {
+          "enum": [
+            "ng",
+            "pmol"
+          ],
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "unit"
+      ],
+      "title": "DNAAmount",
+      "type": "object"
+    },
+    "DNAStock": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "title": "Value",
+          "type": "number"
+        },
+        "unit": {
+          "enum": [
+            "ng/uL",
+            "pmol/uL",
+            "nM",
+            "uM"
+          ],
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "unit"
+      ],
+      "title": "DNAStock",
+      "type": "object"
+    },
+    "Dilution": {
+      "additionalProperties": false,
+      "properties": {
+        "factor": {
+          "default": 1,
+          "description": "Final volume / stock volume; 1 means undiluted. Invalid values are worksheet diagnostics.",
+          "title": "Factor",
+          "type": "number"
+        },
+        "preparation_volume_uL": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preparation Volume Ul"
+        }
+      },
+      "title": "Dilution",
+      "type": "object"
+    },
+    "DomesticationSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "golden-gate-domestication/v1",
+          "default": "golden-gate-domestication/v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "editable_regions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EditRegion"
+          },
+          "title": "Editable Regions",
+          "type": "array"
+        },
+        "protected_regions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EditRegion"
+          },
+          "title": "Protected Regions",
+          "type": "array"
+        },
+        "cds": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CDSConstraint"
+          },
+          "title": "Cds",
+          "type": "array"
+        },
+        "unwanted_sites": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/UnwantedSite"
+          },
+          "title": "Unwanted Sites",
+          "type": "array"
+        },
+        "algorithm": {
+          "const": "minimal_substitutions",
+          "default": "minimal_substitutions",
+          "title": "Algorithm",
+          "type": "string"
+        },
+        "candidate_budget": {
+          "default": 100000,
+          "description": "Maximum candidate evaluations; deterministic, no random seed or restart state.",
+          "minimum": 1,
+          "title": "Candidate Budget",
+          "type": "integer"
+        },
+        "max_edits": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional operator-selected substitution limit; null permits every editable base.",
+          "title": "Max Edits"
+        }
+      },
+      "title": "DomesticationSettings",
+      "type": "object"
+    },
+    "DonorPreparation": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "donor",
+          "default": "donor",
+          "title": "Kind",
+          "type": "string"
+        },
+        "retained_fragment_index": {
+          "minimum": 0,
+          "title": "Retained Fragment Index",
+          "type": "integer"
+        },
+        "removed_fragment_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Removed Fragment Indices",
+          "type": "array"
+        }
+      },
+      "required": [
+        "retained_fragment_index",
+        "removed_fragment_indices"
+      ],
+      "title": "DonorPreparation",
+      "type": "object"
+    },
+    "EditRegion": {
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "description": "Forward source start boundary, bp (zero-based).",
+          "minimum": 0,
+          "title": "Start",
+          "type": "integer"
+        },
+        "end": {
+          "description": "Forward source end boundary, bp (exclusive).",
+          "minimum": 0,
+          "title": "End",
+          "type": "integer"
+        },
+        "wraps_origin": {
+          "default": false,
+          "title": "Wraps Origin",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "title": "EditRegion",
+      "type": "object"
+    },
+    "EditRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "settings": {
+          "$ref": "#/$defs/DomesticationSettings"
+        },
+        "accepted_sequence": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Accepted Sequence"
+        }
+      },
+      "required": [
+        "source_id"
+      ],
+      "title": "EditRequest",
+      "type": "object"
+    },
+    "EndInventory": {
+      "additionalProperties": false,
+      "properties": {
+        "instance_id": {
+          "title": "Instance Id",
+          "type": "string"
+        },
+        "sequence": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Sequence"
+        },
+        "role": {
+          "title": "Role",
+          "type": "string"
+        },
+        "intended_junction_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Intended Junction Id"
+        },
+        "polarity": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Polarity"
+        },
+        "removed": {
+          "default": false,
+          "title": "Removed",
+          "type": "boolean"
+        },
+        "phosphorylation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Phosphorylation"
+        }
+      },
+      "required": [
+        "instance_id",
+        "sequence",
+        "role"
+      ],
+      "title": "EndInventory",
+      "type": "object"
+    },
+    "EnzymeBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "enzyme_id": {
+          "title": "Enzyme Id",
+          "type": "string"
+        },
+        "catalog_id": {
+          "title": "Catalog Id",
+          "type": "string"
+        },
+        "catalog_sha256": {
+          "title": "Catalog Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "enzyme_id",
+        "catalog_id",
+        "catalog_sha256"
+      ],
+      "title": "EnzymeBinding",
+      "type": "object"
+    },
+    "EvaluateTask": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "bms.golden-gate-design.v1",
+          "default": "bms.golden-gate-design.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "task": {
+          "const": "evaluate_overhangs",
+          "title": "Task",
+          "type": "string"
+        },
+        "junctions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Junctions",
+          "type": "array"
+        },
+        "fidelity": {
+          "$ref": "#/$defs/FidelitySettings"
+        },
+        "inventory": {
+          "items": {
+            "$ref": "#/$defs/EndInventory"
+          },
+          "title": "Inventory",
+          "type": "array"
+        },
+        "inventory_complete": {
+          "default": false,
+          "title": "Inventory Complete",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "task",
+        "junctions"
+      ],
+      "title": "EvaluateTask",
+      "type": "object"
+    },
+    "Feature": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        },
+        "name": {
+          "default": "",
+          "title": "Name",
+          "type": "string"
+        },
+        "segments": {
+          "items": {
+            "$ref": "#/$defs/Region"
+          },
+          "title": "Segments",
+          "type": "array"
+        },
+        "strand": {
+          "default": 1,
+          "enum": [
+            -1,
+            0,
+            1
+          ],
+          "title": "Strand",
+          "type": "integer"
+        },
+        "qualifiers": {
+          "additionalProperties": true,
+          "title": "Qualifiers",
+          "type": "object"
+        },
+        "codon_start": {
+          "anyOf": [
+            {
+              "enum": [
+                1,
+                2,
+                3
+              ],
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Codon Start"
+        },
+        "status": {
+          "default": "intact",
+          "enum": [
+            "intact",
+            "truncated",
+            "disrupted"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "frame_preserved": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Frame Preserved"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "segments"
+      ],
+      "title": "Feature",
+      "type": "object"
+    },
+    "FidelitySettings": {
+      "additionalProperties": false,
+      "properties": {
+        "dataset_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dataset Id"
+        },
+        "condition_use": {
+          "default": "reference",
+          "enum": [
+            "reference",
+            "explicit_proxy"
+          ],
+          "title": "Condition Use",
+          "type": "string"
+        },
+        "include_pair_observations": {
+          "default": false,
+          "title": "Include Pair Observations",
+          "type": "boolean"
+        }
+      },
+      "title": "FidelitySettings",
+      "type": "object"
+    },
+    "FragmentEnd": {
+      "properties": {
+        "type": {
+          "enum": [
+            "blunt",
+            "sticky_5",
+            "sticky_3"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "overhang": {
+          "default": "",
+          "title": "Overhang",
+          "type": "string"
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Label"
+        },
+        "protruding_strand": {
+          "anyOf": [
+            {
+              "enum": [
+                "top",
+                "bottom"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Protruding Strand"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "FragmentEnd",
+      "type": "object"
+    },
+    "FrameConstraint": {
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "minimum": 0,
+          "title": "Start",
+          "type": "integer"
+        },
+        "end": {
+          "minimum": 0,
+          "title": "End",
+          "type": "integer"
+        },
+        "origin": {
+          "minimum": 0,
+          "title": "Origin",
+          "type": "integer"
+        },
+        "phase": {
+          "enum": [
+            0,
+            1,
+            2
+          ],
+          "title": "Phase",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "origin",
+        "phase"
+      ],
+      "title": "FrameConstraint",
+      "type": "object"
+    },
+    "InlineSource": {
+      "additionalProperties": false,
+      "properties": {
+        "sequence": {
+          "title": "Sequence",
+          "type": "string"
+        },
+        "topology": {
+          "enum": [
+            "linear",
+            "circular"
+          ],
+          "title": "Topology",
+          "type": "string"
+        },
+        "features": {
+          "items": {
+            "$ref": "#/$defs/Feature"
+          },
+          "title": "Features",
+          "type": "array"
+        },
+        "kind": {
+          "const": "inline",
+          "default": "inline",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sequence",
+        "topology"
+      ],
+      "title": "InlineSource",
+      "type": "object"
+    },
+    "OptimizeTask": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "bms.golden-gate-design.v1",
+          "default": "bms.golden-gate-design.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "task": {
+          "const": "optimize_overhangs",
+          "title": "Task",
+          "type": "string"
+        },
+        "candidate_domain": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Candidate Domain",
+          "type": "array"
+        },
+        "junction_count": {
+          "minimum": 1,
+          "title": "Junction Count",
+          "type": "integer"
+        },
+        "end_length": {
+          "enum": [
+            3,
+            4
+          ],
+          "title": "End Length",
+          "type": "integer"
+        },
+        "fixed": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Fixed",
+          "type": "array"
+        },
+        "required": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required",
+          "type": "array"
+        },
+        "excluded": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Excluded",
+          "type": "array"
+        },
+        "fidelity": {
+          "$ref": "#/$defs/FidelitySettings"
+        },
+        "search": {
+          "$ref": "#/$defs/SearchControls"
+        }
+      },
+      "required": [
+        "task",
+        "candidate_domain",
+        "junction_count",
+        "end_length"
+      ],
+      "title": "OptimizeTask",
+      "type": "object"
+    },
+    "PCRPreparation": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "pcr",
+          "default": "pcr",
+          "title": "Kind",
+          "type": "string"
+        },
+        "region": {
+          "$ref": "#/$defs/Region"
+        },
+        "left": {
+          "$ref": "#/$defs/Tail"
+        },
+        "right": {
+          "$ref": "#/$defs/Tail"
+        },
+        "forward_anneal_length": {
+          "minimum": 8,
+          "title": "Forward Anneal Length",
+          "type": "integer"
+        },
+        "reverse_anneal_length": {
+          "minimum": 8,
+          "title": "Reverse Anneal Length",
+          "type": "integer"
+        },
+        "qc_min_binding_anneal_length": {
+          "default": 12,
+          "minimum": 1,
+          "title": "Qc Min Binding Anneal Length",
+          "type": "integer"
+        },
+        "removed_fragment_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Removed Fragment Indices",
+          "type": "array"
+        }
+      },
+      "required": [
+        "region",
+        "left",
+        "right",
+        "forward_anneal_length",
+        "reverse_anneal_length"
+      ],
+      "title": "PCRPreparation",
+      "type": "object"
+    },
+    "Part": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Role"
+        },
+        "slot": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Slot"
+        },
+        "orientation": {
+          "default": "forward",
+          "enum": [
+            "forward",
+            "reverse"
+          ],
+          "title": "Orientation",
+          "type": "string"
+        },
+        "preparation": {
+          "discriminator": {
+            "mapping": {
+              "donor": "#/$defs/DonorPreparation",
+              "pcr": "#/$defs/PCRPreparation",
+              "prepared": "#/$defs/PreparedPreparation",
+              "synthesis": "#/$defs/SynthesisPreparation"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/PCRPreparation"
+            },
+            {
+              "$ref": "#/$defs/SynthesisPreparation"
+            },
+            {
+              "$ref": "#/$defs/DonorPreparation"
+            },
+            {
+              "$ref": "#/$defs/PreparedPreparation"
+            }
+          ],
+          "title": "Preparation"
+        }
+      },
+      "required": [
+        "id",
+        "source_id",
+        "name",
+        "preparation"
+      ],
+      "title": "Part",
+      "type": "object"
+    },
+    "PreparedPreparation": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "prepared",
+          "default": "prepared",
+          "title": "Kind",
+          "type": "string"
+        },
+        "left_end": {
+          "$ref": "#/$defs/FragmentEnd"
+        },
+        "right_end": {
+          "$ref": "#/$defs/FragmentEnd"
+        }
+      },
+      "required": [
+        "left_end",
+        "right_end"
+      ],
+      "title": "PreparedPreparation",
+      "type": "object"
+    },
+    "PrimerSelectionSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "primer_min_length": {
+          "default": 18,
+          "title": "Primer Min Length",
+          "type": "integer"
+        },
+        "primer_max_length": {
+          "default": 28,
+          "title": "Primer Max Length",
+          "type": "integer"
+        },
+        "product_min_length": {
+          "default": 120,
+          "title": "Product Min Length",
+          "type": "integer"
+        },
+        "product_max_length": {
+          "default": 1500,
+          "title": "Product Max Length",
+          "type": "integer"
+        },
+        "flank_search_span": {
+          "default": 80,
+          "title": "Flank Search Span",
+          "type": "integer"
+        },
+        "gc_min_percent": {
+          "default": 35.0,
+          "title": "Gc Min Percent",
+          "type": "number"
+        },
+        "gc_max_percent": {
+          "default": 65.0,
+          "title": "Gc Max Percent",
+          "type": "number"
+        },
+        "tm_target_c": {
+          "default": 62.0,
+          "title": "Tm Target C",
+          "type": "number"
+        },
+        "tm_max_delta_c": {
+          "default": 3.0,
+          "title": "Tm Max Delta C",
+          "type": "number"
+        },
+        "gc_clamp_min": {
+          "default": 1,
+          "title": "Gc Clamp Min",
+          "type": "integer"
+        },
+        "max_poly_x": {
+          "default": 4,
+          "title": "Max Poly X",
+          "type": "integer"
+        },
+        "max_pairs": {
+          "default": 8,
+          "title": "Max Pairs",
+          "type": "integer"
+        }
+      },
+      "title": "PrimerSelectionSettings",
+      "type": "object"
+    },
+    "ReactionPart": {
+      "additionalProperties": false,
+      "properties": {
+        "part_id": {
+          "minLength": 1,
+          "title": "Part Id",
+          "type": "string"
+        },
+        "length_bp": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Length of actual purified/prepared DNA, not its parent donor plasmid.",
+          "title": "Length Bp"
+        },
+        "amount": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DNAAmount"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "ratio_to_reference": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Requested molar ratio to settings.reference_part_id; mutually exclusive with amount.",
+          "title": "Ratio To Reference"
+        },
+        "stock": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DNAStock"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "dilution": {
+          "$ref": "#/$defs/Dilution"
+        },
+        "in_mastermix": {
+          "default": false,
+          "title": "In Mastermix",
+          "type": "boolean"
+        },
+        "phosphorylation": {
+          "default": "unknown",
+          "enum": [
+            "unknown",
+            "phosphorylated",
+            "unphosphorylated"
+          ],
+          "title": "Phosphorylation",
+          "type": "string"
+        },
+        "purification": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Purification"
+        }
+      },
+      "required": [
+        "part_id"
+      ],
+      "title": "ReactionPart",
+      "type": "object"
+    },
+    "ReactionReagent": {
+      "additionalProperties": false,
+      "properties": {
+        "reagent_id": {
+          "minLength": 1,
+          "title": "Reagent Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "restriction_enzyme",
+            "ligase",
+            "buffer",
+            "additive",
+            "other"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "formulation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Formulation"
+        },
+        "volume_uL": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Volume Ul"
+        },
+        "stock_multiple": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional X stock strength for C1V1=C2V2 calculation.",
+          "title": "Stock Multiple"
+        },
+        "final_multiple": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Final Multiple"
+        },
+        "in_mastermix": {
+          "default": true,
+          "title": "In Mastermix",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "reagent_id",
+        "name",
+        "role"
+      ],
+      "title": "ReactionReagent",
+      "type": "object"
+    },
+    "ReactionRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "settings": {
+          "$ref": "#/$defs/ReactionSettings"
+        },
+        "parts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ReactionPart"
+          },
+          "title": "Parts",
+          "type": "array"
+        },
+        "reagents": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ReactionReagent"
+          },
+          "title": "Reagents",
+          "type": "array"
+        }
+      },
+      "title": "ReactionRequest",
+      "type": "object"
+    },
+    "ReactionSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "golden-gate-reaction/v1",
+          "default": "golden-gate-reaction/v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "mass_basis_g_per_mol_bp": {
+          "default": 660,
+          "description": "Displayed approximate dsDNA molecular-weight basis, g/mol/bp; operator editable.",
+          "title": "Mass Basis G Per Mol Bp",
+          "type": "number"
+        },
+        "reference_part_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reference Part Id"
+        },
+        "total_volume_uL": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Total Volume Ul"
+        },
+        "reaction_count": {
+          "default": 1,
+          "title": "Reaction Count",
+          "type": "integer"
+        },
+        "mastermix_overage_percent": {
+          "default": 0,
+          "title": "Mastermix Overage Percent",
+          "type": "number"
+        },
+        "water_in_mastermix": {
+          "default": true,
+          "title": "Water In Mastermix",
+          "type": "boolean"
+        },
+        "rounding_step_uL": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional nearest pipetting increment; ties round half up. No automatic minimum-volume increase.",
+          "title": "Rounding Step Ul"
+        },
+        "minimum_transfer_uL": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Minimum Transfer Ul"
+        },
+        "cycling": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CyclingProgram"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "ReactionSettings",
+      "type": "object"
+    },
+    "Region": {
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "minimum": 0,
+          "title": "Start",
+          "type": "integer"
+        },
+        "end": {
+          "minimum": 0,
+          "title": "End",
+          "type": "integer"
+        },
+        "wraps_origin": {
+          "default": false,
+          "title": "Wraps Origin",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "title": "Region",
+      "type": "object"
+    },
+    "RevisionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "molecular_revision",
+          "default": "molecular_revision",
+          "title": "Kind",
+          "type": "string"
+        },
+        "revision_id": {
+          "minLength": 1,
+          "title": "Revision Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "revision_id"
+      ],
+      "title": "RevisionSource",
+      "type": "object"
+    },
+    "SearchControls": {
+      "additionalProperties": false,
+      "properties": {
+        "seed": {
+          "default": 0,
+          "title": "Seed",
+          "type": "integer"
+        },
+        "evaluation_budget": {
+          "default": 10000,
+          "minimum": 0,
+          "title": "Evaluation Budget",
+          "type": "integer"
+        },
+        "restarts": {
+          "default": 8,
+          "minimum": 1,
+          "title": "Restarts",
+          "type": "integer"
+        },
+        "exact_limit": {
+          "default": 10000,
+          "minimum": 0,
+          "title": "Exact Limit",
+          "type": "integer"
+        },
+        "alternatives": {
+          "default": 5,
+          "minimum": 1,
+          "title": "Alternatives",
+          "type": "integer"
+        },
+        "unique_classes": {
+          "default": true,
+          "title": "Unique Classes",
+          "type": "boolean"
+        },
+        "exclude_palindromes": {
+          "default": true,
+          "title": "Exclude Palindromes",
+          "type": "boolean"
+        },
+        "ranking_mode": {
+          "default": "empirical",
+          "enum": [
+            "empirical",
+            "lexicographic"
+          ],
+          "title": "Ranking Mode",
+          "type": "string"
+        }
+      },
+      "title": "SearchControls",
+      "type": "object"
+    },
+    "Source": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "source": {
+          "discriminator": {
+            "mapping": {
+              "inline": "#/$defs/InlineSource",
+              "molecular_revision": "#/$defs/RevisionSource"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/InlineSource"
+            },
+            {
+              "$ref": "#/$defs/RevisionSource"
+            }
+          ],
+          "title": "Source"
+        }
+      },
+      "required": [
+        "id",
+        "source"
+      ],
+      "title": "Source",
+      "type": "object"
+    },
+    "SplitPreparation": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "default": "synthesis",
+          "enum": [
+            "synthesis",
+            "pcr"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "clamp": {
+          "title": "Clamp",
+          "type": "string"
+        },
+        "spacer": {
+          "title": "Spacer",
+          "type": "string"
+        },
+        "forward_anneal_length": {
+          "default": 20,
+          "minimum": 8,
+          "title": "Forward Anneal Length",
+          "type": "integer"
+        },
+        "reverse_anneal_length": {
+          "default": 20,
+          "minimum": 8,
+          "title": "Reverse Anneal Length",
+          "type": "integer"
+        },
+        "qc_min_binding_anneal_length": {
+          "default": 12,
+          "minimum": 1,
+          "title": "Qc Min Binding Anneal Length",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "clamp",
+        "spacer"
+      ],
+      "title": "SplitPreparation",
+      "type": "object"
+    },
+    "SplitTask": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "bms.golden-gate-design.v1",
+          "default": "bms.golden-gate-design.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "task": {
+          "const": "split_target",
+          "title": "Task",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Source"
+        },
+        "enzyme": {
+          "$ref": "#/$defs/EnzymeBinding"
+        },
+        "windows": {
+          "items": {
+            "$ref": "#/$defs/CutWindow"
+          },
+          "title": "Windows",
+          "type": "array"
+        },
+        "fixed_positions": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Fixed Positions",
+          "type": "array"
+        },
+        "fixed_overhangs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Fixed Overhangs",
+          "type": "array"
+        },
+        "required": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required",
+          "type": "array"
+        },
+        "excluded": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Excluded",
+          "type": "array"
+        },
+        "protected_regions": {
+          "items": {
+            "$ref": "#/$defs/CutWindow"
+          },
+          "title": "Protected Regions",
+          "type": "array"
+        },
+        "frame_constraints": {
+          "items": {
+            "$ref": "#/$defs/FrameConstraint"
+          },
+          "title": "Frame Constraints",
+          "type": "array"
+        },
+        "min_fragment_length": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Min Fragment Length",
+          "type": "integer"
+        },
+        "max_fragment_length": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Fragment Length"
+        },
+        "target_fragment_length": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Fragment Length"
+        },
+        "display_origin": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Display Origin",
+          "type": "integer"
+        },
+        "preparation": {
+          "$ref": "#/$defs/SplitPreparation"
+        },
+        "terminal_right_fusion": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Terminal Right Fusion"
+        },
+        "primer_settings": {
+          "$ref": "#/$defs/Thermodynamics"
+        },
+        "fidelity": {
+          "$ref": "#/$defs/FidelitySettings"
+        },
+        "search": {
+          "$ref": "#/$defs/SearchControls"
+        },
+        "reaction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReactionRequest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "task",
+        "target",
+        "enzyme",
+        "windows",
+        "preparation"
+      ],
+      "title": "SplitTask",
+      "type": "object"
+    },
+    "SynthesisPreparation": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "synthesis",
+          "default": "synthesis",
+          "title": "Kind",
+          "type": "string"
+        },
+        "region": {
+          "$ref": "#/$defs/Region"
+        },
+        "left": {
+          "$ref": "#/$defs/Tail"
+        },
+        "right": {
+          "$ref": "#/$defs/Tail"
+        },
+        "removed_fragment_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Removed Fragment Indices",
+          "type": "array"
+        }
+      },
+      "required": [
+        "region",
+        "left",
+        "right"
+      ],
+      "title": "SynthesisPreparation",
+      "type": "object"
+    },
+    "Tail": {
+      "additionalProperties": false,
+      "properties": {
+        "clamp": {
+          "title": "Clamp",
+          "type": "string"
+        },
+        "spacer": {
+          "title": "Spacer",
+          "type": "string"
+        },
+        "fusion": {
+          "title": "Fusion",
+          "type": "string"
+        }
+      },
+      "required": [
+        "clamp",
+        "spacer",
+        "fusion"
+      ],
+      "title": "Tail",
+      "type": "object"
+    },
+    "Target": {
+      "additionalProperties": false,
+      "properties": {
+        "topology": {
+          "enum": [
+            "linear",
+            "circular"
+          ],
+          "title": "Topology",
+          "type": "string"
+        },
+        "display_origin": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Display Origin",
+          "type": "integer"
+        },
+        "exact_sequence": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exact Sequence"
+        }
+      },
+      "required": [
+        "topology"
+      ],
+      "title": "Target",
+      "type": "object"
+    },
+    "Thermodynamics": {
+      "additionalProperties": false,
+      "description": "Same fields/defaults/ranges as the global Tm contract; reject typos.",
+      "properties": {
+        "algorithm": {
+          "default": "nn_santalucia_hicks_2004",
+          "title": "Algorithm",
+          "type": "string"
+        },
+        "salt_correction": {
+          "default": "owczarzy_2008",
+          "title": "Salt Correction",
+          "type": "string"
+        },
+        "primer_concentration_nM": {
+          "default": 250.0,
+          "exclusiveMinimum": 0,
+          "title": "Primer Concentration Nm",
+          "type": "number"
+        },
+        "template_concentration_nM": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Template Concentration Nm",
+          "type": "number"
+        },
+        "na_mM": {
+          "default": 50.0,
+          "minimum": 0,
+          "title": "Na Mm",
+          "type": "number"
+        },
+        "k_mM": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "K Mm",
+          "type": "number"
+        },
+        "tris_mM": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Tris Mm",
+          "type": "number"
+        },
+        "mg_mM": {
+          "default": 1.5,
+          "minimum": 0,
+          "title": "Mg Mm",
+          "type": "number"
+        },
+        "dntps_mM": {
+          "default": 0.6,
+          "minimum": 0,
+          "title": "Dntps Mm",
+          "type": "number"
+        },
+        "dmso_percent": {
+          "default": 0.0,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Dmso Percent",
+          "type": "number"
+        },
+        "formamide_percent": {
+          "default": 0.0,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Formamide Percent",
+          "type": "number"
+        },
+        "self_complementary": {
+          "default": false,
+          "title": "Self Complementary",
+          "type": "boolean"
+        }
+      },
+      "title": "Thermodynamics",
+      "type": "object"
+    },
+    "UnwantedSite": {
+      "additionalProperties": false,
+      "properties": {
+        "enzyme_id": {
+          "description": "Identity resolved by the existing catalog owner.",
+          "minLength": 1,
+          "title": "Enzyme Id",
+          "type": "string"
+        },
+        "recognition_sequence": {
+          "description": "Catalog-resolved IUPAC recognition motif, not enzyme cleavage geometry.",
+          "pattern": "^[ACGTRYSWKMBDHVN]+$",
+          "title": "Recognition Sequence",
+          "type": "string"
+        },
+        "starts": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Selected forward-strand motif start indices, on either strand; null removes every occurrence. New occurrences elsewhere are never introduced.",
+          "title": "Starts"
+        }
+      },
+      "required": [
+        "enzyme_id",
+        "recognition_sequence"
+      ],
+      "title": "UnwantedSite",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "assemble_parts": "#/$defs/AssembleTask",
+      "evaluate_overhangs": "#/$defs/EvaluateTask",
+      "optimize_overhangs": "#/$defs/OptimizeTask",
+      "split_target": "#/$defs/SplitTask"
+    },
+    "propertyName": "task"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/AssembleTask"
+    },
+    {
+      "$ref": "#/$defs/SplitTask"
+    },
+    {
+      "$ref": "#/$defs/EvaluateTask"
+    },
+    {
+      "$ref": "#/$defs/OptimizeTask"
+    }
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.golden-gate-workflow-request.v1"
+}

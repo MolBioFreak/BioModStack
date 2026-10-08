@@ -96,6 +96,8 @@ _PRODUCT_QUERY_PATTERN = r"^[A-Za-z0-9](?:[A-Za-z0-9._:+ -]{0,126}[A-Za-z0-9._:+
 
 _ALLOWED_QUERY_FIELDS = {
     "query",
+    "response_view",
+    "enzyme_ids",
     "geometry_status",
     "commercial",
     "supplier_code",
@@ -291,6 +293,46 @@ class CatalogPage(StrictResponse):
     next_cursor: str | None
 
 
+class CatalogBrowseItem(StrictResponse):
+    enzyme_id: str
+    canonical_name: str
+    aliases: tuple[str, ...]
+    site_iupac: str
+    site_alternatives_iupac: tuple[str, ...]
+    palindromic: bool
+    cleavage_status: Literal["known_double_strand", "known_single_strand_nick", "unknown"]
+    overhang_kinds: tuple[Literal["blunt", "five_prime", "three_prime"], ...]
+    nick_strand: Literal["top", "bottom"] | None
+    enzyme_kind: Literal["double_strand_endonuclease", "nicking_endonuclease", "restriction_enzyme_geometry_unresolved"]
+    analysis_capability: Literal["digest_simulation", "nicking_analysis", "recognition_only"]
+    golden_gate_compatible: bool
+    exclusion_reason: str | None
+    reported_commercial: bool
+    historical_supplier_codes: tuple[str, ...]
+
+    @classmethod
+    def from_record(cls, record: RestrictionRecord) -> "CatalogBrowseItem":
+        return cls(
+            enzyme_id=record.enzyme_id, canonical_name=record.canonical_name, aliases=record.aliases,
+            site_iupac=record.recognition.site_iupac,
+            site_alternatives_iupac=record.recognition.site_alternatives_iupac,
+            palindromic=record.recognition.palindromic, cleavage_status=record.cleavage.status,
+            overhang_kinds=tuple(dict.fromkeys(event.overhang_kind for event in record.cleavage.events)),
+            nick_strand=record.cleavage.nick.strand if record.cleavage.nick else None,
+            enzyme_kind=record.enzyme_kind, analysis_capability=record.analysis_capability,
+            golden_gate_compatible=record.golden_gate_compatible, exclusion_reason=record.exclusion_reason,
+            reported_commercial=record.supplier_provenance.reported_commercial,
+            historical_supplier_codes=record.supplier_provenance.historical_supplier_codes,
+        )
+
+
+class CatalogBrowsePage(StrictResponse):
+    schema_: Literal["bms.molbio.restriction-catalog-browse-page.v1"] = Field(alias="schema")
+    catalog: CatalogReceipt
+    items: list[CatalogBrowseItem]
+    next_cursor: str | None
+
+
 class CatalogRecordResponse(StrictResponse):
     schema_: Literal["bms.molbio.restriction-catalog-record.v1"] = Field(alias="schema")
     catalog: CatalogReceipt
@@ -483,16 +525,13 @@ class AnalysisSourceReceipt(StrictResponse):
     topology: Literal["linear", "circular"]
 
 
-class UnsignedAnalysisResponse(StrictResponse):
+class AnalysisResponse(StrictResponse):
     schema_: Literal["bms.molbio.restriction-analysis-response.v1"] = Field(alias="schema")
     source: AnalysisSourceReceipt
     catalog: CatalogReceipt
-    request_sha256: str
+    request_sha256: str | None = None
     analysis: AnalysisResult
-
-
-class AnalysisResponse(UnsignedAnalysisResponse):
-    result_sha256: str
+    result_sha256: str | None = None
 
 
 class DigestSimulationRequest(StrictResponse):
@@ -520,7 +559,7 @@ class DigestSaveRequest(StrictResponse):
         min_length=1, max_length=MAX_SELECTED_ENZYMES,
         json_schema_extra={"maxItems": MAX_SELECTED_ENZYMES},
     )
-    simulation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    simulation_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     idempotency_key: str = Field(min_length=1, max_length=255, pattern=r".*\S.*")
     persistence_mode: Literal["operation_only", "operation_and_fragments"]
     fragment_name_prefix: str | None = Field(
@@ -546,16 +585,31 @@ class DigestOutputIdentity(StrictResponse):
     content_length: int
 
 
-class SavedDigestResponse(StrictResponse):
-    schema_: Literal["bms.molbio.restriction-digest-saved-result.v1"] = Field(alias="schema")
+class _SavedDigestIdentity(StrictResponse):
     operation_id: str
     source_revision_id: str
     catalog_id: str
     catalog_sha256: str
     request_sha256: str
     result_sha256: str
-    simulation: DigestSimulation
     outputs: list[DigestOutputIdentity]
+
+
+class SavedDigestAcknowledgement(_SavedDigestIdentity):
+    schema_: Literal["bms.molbio.restriction-digest-saved-ack.v1"] = Field(alias="schema")
+
+
+class SavedDigestResponse(_SavedDigestIdentity):
+    schema_: Literal["bms.molbio.restriction-digest-saved-result.v1"] = Field(alias="schema")
+    simulation: DigestSimulation
+
+
+def _compact_digest_save_response(canonical: bytes) -> Response:
+    # CPU worker projection only; retained bytes and integrity checks stay intact.
+    payload = json.loads(canonical)
+    payload.pop("simulation")
+    payload["schema"] = "bms.molbio.restriction-digest-saved-ack.v1"
+    return JSONResponse(content=payload)
 
 
 _ANALYZE_EXAMPLE = {
@@ -834,9 +888,14 @@ def list_products(
     })
 
 
-@router.get("/catalog", response_model=CatalogPage)
+@router.get("/catalog", response_model=CatalogPage | CatalogBrowsePage)
 def list_catalog(
     request: Request,
+    response_view: Annotated[Literal["full", "compact"], Query(examples=["compact"])] = "full",
+    enzyme_ids: Annotated[
+        list[Annotated[str, Field(min_length=1, max_length=128)]] | None,
+        Query(examples=[["BsaI", "EcoRI"]]),
+    ] = None,
     query: Annotated[
         str | None,
         Query(
@@ -885,11 +944,11 @@ def list_catalog(
         Query(min_length=1, max_length=CURSOR_MAX_LENGTH, pattern=_CURSOR_PATTERN),
     ] = None,
     authority: CatalogAuthority = Depends(get_catalog_authority),
-) -> CatalogPage:
+) -> CatalogPage | CatalogBrowsePage:
     unknown = set(request.query_params) - _ALLOWED_QUERY_FIELDS
     if unknown:
         raise _invalid_query("unknown catalog query parameter")
-    if any(len(request.query_params.getlist(key)) != 1 for key in request.query_params):
+    if any(len(request.query_params.getlist(key)) != 1 for key in request.query_params if key != "enzyme_ids"):
         raise _invalid_query("duplicate catalog query parameter")
     query = query.strip() if query is not None else None
     palindromic_value = _parse_bool(palindromic)
@@ -899,7 +958,9 @@ def list_catalog(
         raise _invalid_query("limit is invalid")
 
     view = _require_view(authority)
+    selected_ids = set(enzyme_ids) if enzyme_ids is not None else None
     filters = {
+        "enzyme_ids": sorted(selected_ids) if selected_ids is not None else None,
         "query": query,
         "geometry_status": geometry_status,
         "commercial": commercial,
@@ -915,6 +976,8 @@ def list_catalog(
     supplier_upper = supplier_code.upper() if supplier_code else None
 
     def matches(record: RestrictionRecord) -> bool:
+        if selected_ids is not None and record.enzyme_id not in selected_ids:
+            return False
         if query_folded is not None:
             searchable = (
                 record.enzyme_id.casefold(),
@@ -940,6 +1003,8 @@ def list_catalog(
         return palindromic_value is None or record.recognition.palindromic is palindromic_value
 
     indexed_groups: list[tuple[RestrictionRecord, ...]] = []
+    if selected_ids is not None:
+        indexed_groups.append(tuple(view.by_id[item] for item in selected_ids if item in view.by_id))
     if geometry_status != "all":
         indexed_groups.append(view.by_geometry_status.get(geometry_status, ()))
     if commercial != "all":
@@ -976,6 +1041,13 @@ def list_catalog(
         if len(selected) > page_limit
         else None
     )
+    if response_view == "compact":
+        return CatalogBrowsePage(
+            schema="bms.molbio.restriction-catalog-browse-page.v1",
+            catalog=_receipt(authority),
+            items=[CatalogBrowseItem.from_record(record) for record in items],
+            next_cursor=next_cursor,
+        )
     return CatalogPage(
         schema="bms.molbio.restriction-catalog-page.v1",
         catalog=_receipt(authority),
@@ -1036,12 +1108,6 @@ class _ResolvedRevisionSource:
     sequence: str
     is_circular: bool | None
     topology: str | None
-
-
-@dataclass(frozen=True, slots=True)
-class _CanonicalAnalysisOutput:
-    response: AnalysisResponse
-    canonical_bytes: bytes
 
 
 @dataclass(frozen=True, slots=True)
@@ -1223,8 +1289,8 @@ def _complete_analysis_pipeline(
     payload: AnalysisRequest,
     authority: CatalogAuthority,
     resolved_revision: _ResolvedRevisionSource | None,
-) -> _CanonicalAnalysisOutput:
-    """Own preprocessing, analysis, model authority, hashing, and final bytes."""
+) -> bytes:
+    """Own source validation, analysis and response serialization in the worker."""
     view = _require_view(authority)
     if payload.catalog.catalog_id != view.catalog_id:
         raise _error(404, "catalog_not_found", "restriction catalog was not found")
@@ -1237,24 +1303,6 @@ def _complete_analysis_pipeline(
         )
     sequence, topology, source_receipt = _analysis_source(payload.source, resolved_revision)
     records = _analysis_records(view, payload.scope)
-    normalized_request = payload.model_dump(mode="json", by_alias=True)
-    normalized_request["source"] = {
-        **normalized_request["source"],
-        **({"dna": sequence, "name": source_receipt.name} if source_receipt.kind == "inline_dna" else {}),
-    }
-    if isinstance(payload.scope, ExplicitAnalysisScope):
-        normalized_request["scope"]["enzyme_ids"] = sorted(payload.scope.enzyme_ids)
-    normalized_request["regions"] = sorted(
-        normalized_request["regions"], key=lambda row: (row["start"], row["end"]),
-    )
-    policy_receipt = resource_policy_receipt()
-    policy_sha256 = resource_policy_sha256(
-        policy_receipt.model_dump(mode="json", by_alias=True)
-    )
-    request_sha256 = hashlib.sha256(rfc8785.dumps({
-        "request": normalized_request,
-        "resource_policy_sha256": policy_sha256,
-    })).hexdigest()
     analysis = _analyze_normalized_sequence(
         sequence=sequence, source_sha=source_receipt.content_sha256,
         topology=topology,
@@ -1262,25 +1310,17 @@ def _complete_analysis_pipeline(
         records=records,
         include_possible_sites=payload.include_possible_sites,
         regions=tuple((region.start, region.end) for region in payload.regions),
+        persisted_identity=False,
     )
     catalog_receipt = _receipt(authority)
-    unsigned_response = UnsignedAnalysisResponse(
+    response = AnalysisResponse(
         schema="bms.molbio.restriction-analysis-response.v1",
-        source=source_receipt,
-        catalog=catalog_receipt,
-        request_sha256=request_sha256,
-        analysis=analysis,
+        source=source_receipt, catalog=catalog_receipt, analysis=analysis,
     )
-    unsigned_document = unsigned_response.model_dump(mode="json", by_alias=True)
-    result_sha256 = hashlib.sha256(rfc8785.dumps(unsigned_document)).hexdigest()
-    response = AnalysisResponse.model_validate({
-        **unsigned_document,
-        "result_sha256": result_sha256,
-    })
-    canonical_bytes = rfc8785.dumps(response.model_dump(mode="json", by_alias=True))
+    canonical_bytes = response.model_dump_json(by_alias=True).encode("utf-8")
     if len(canonical_bytes) > MAX_RESPONSE_BYTES:
         raise AnalysisLimitError("analysis response exceeds byte limit")
-    return _CanonicalAnalysisOutput(response=response, canonical_bytes=canonical_bytes)
+    return canonical_bytes
 
 
 @router.post("/analyze", response_model=AnalysisResponse)
@@ -1327,7 +1367,7 @@ async def analyze_restriction_sites(
         raise _error(504, "analysis_timeout", "restriction analysis exceeded its wait timeout") from exc
     except Exception as exc:
         raise _error(500, "analysis_failed", "restriction analysis failed") from exc
-    return Response(content=output.canonical_bytes, media_type="application/json")
+    return Response(content=output, media_type="application/json")
 
 
 def _digest_records(view: CatalogView, enzyme_ids: list[str]) -> tuple[RestrictionRecord, ...]:
@@ -1340,6 +1380,7 @@ def _digest_records(view: CatalogView, enzyme_ids: list[str]) -> tuple[Restricti
 def _complete_digest_pipeline(
     *, payload: DigestSimulationRequest, authority: CatalogAuthority,
     resolved_revision: _ResolvedRevisionSource | None,
+    persisted_identity: bool = False,
 ) -> _CanonicalSimulationOutput:
     view = _require_view(authority)
     if payload.catalog.catalog_id != view.catalog_id:
@@ -1353,6 +1394,7 @@ def _complete_digest_pipeline(
         selected_enzyme_ids=tuple(payload.enzyme_ids),
         source_receipt=source_receipt.model_dump(mode="json", by_alias=True),
         catalog_receipt=_receipt(authority).model_dump(mode="json", by_alias=True),
+        persisted_identity=persisted_identity,
     )
     return _CanonicalSimulationOutput(simulation=simulation, canonical_bytes=canonical)
 
@@ -1967,14 +2009,13 @@ async def _load_saved_digest_snapshot(session: AsyncSession, operation_id: str) 
         ) from exc
 
 
-@router.post("/digests", response_model=SavedDigestResponse)
+@router.post("/digests", response_model=SavedDigestResponse | SavedDigestAcknowledgement)
 async def save_restriction_digest(
     payload: DigestSaveRequest,
+    response_view: Literal["full", "compact"] = "full",
     authority: CatalogAuthority = Depends(get_catalog_authority),
     molbio_session: AsyncSession = Depends(get_molbio_session),
 ) -> Response:
-    save_receipt = _save_receipt(payload)
-    fingerprint = save_request_fingerprint(save_receipt)
     existing = (
         await molbio_session.execute(
             select(MolecularOperation).where(
@@ -1983,9 +2024,16 @@ async def save_restriction_digest(
         )
     ).scalar_one_or_none()
     if existing is not None:
-        if existing.operation_kind != "restriction_digest" or existing.request_fingerprint != fingerprint:
+        if existing.operation_kind != "restriction_digest":
+            raise _error(409, "idempotency_conflict", "idempotency key is bound to another request")
+        if payload.simulation_sha256 is None:
+            payload = payload.model_copy(update={"simulation_sha256": existing.parameters.get("simulation_sha256")})
+        fingerprint = _save_fingerprint(payload)
+        if existing.request_fingerprint != fingerprint:
             raise _error(409, "idempotency_conflict", "idempotency key is bound to another request")
         canonical = await _load_saved_digest(molbio_session, str(existing.id))
+        if response_view == "compact":
+            return await _run_digest_cpu(_compact_digest_save_response, canonical=canonical)
         return Response(content=canonical, media_type="application/json")
 
     try:
@@ -2004,16 +2052,19 @@ async def save_restriction_digest(
     try:
         simulation_output = await _run_capacity_owned(
             _complete_digest_pipeline, payload=simulation_request, authority=authority,
-            resolved_revision=resolved,
+            resolved_revision=resolved, persisted_identity=True,
         )
     except HTTPException:
         raise
     except Exception as exc:
         raise _digest_http_error(exc) from exc
     simulation = simulation_output.simulation
-    if simulation.simulation_sha256 != payload.simulation_sha256:
+    if payload.simulation_sha256 is not None and simulation.simulation_sha256 != payload.simulation_sha256:
         raise _error(409, "simulation_digest_mismatch", "digest simulation digest does not match")
 
+    payload = payload.model_copy(update={"simulation_sha256": simulation.simulation_sha256})
+    save_receipt = _save_receipt(payload)
+    fingerprint = save_request_fingerprint(save_receipt)
     operation_id = str(uuid.uuid4())
     result_id = str(uuid.uuid4())
     normalized_fragment_name_prefix = (
@@ -2148,6 +2199,8 @@ async def save_restriction_digest(
     except BaseException:
         await molbio_session.rollback()
         raise
+    if response_view == "compact":
+        return await _run_digest_cpu(_compact_digest_save_response, canonical=canonical)
     return Response(content=canonical, media_type="application/json")
 
 

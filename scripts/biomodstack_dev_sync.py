@@ -29,7 +29,6 @@ from typing import Literal
 SYNC_SERVICE = "biomodstack-dev-sync.service"
 SYNC_TIMER = "biomodstack-dev-sync.timer"
 SYNC_INTERVAL_SECONDS = 60
-MAX_RUNTIME_SOURCE_PATHS = 512
 SYNC_QUEUE_FILENAME = "dev-sync-queue.json"
 SYNC_CONTROL_FILENAME = "dev-sync-control.json"
 SYNC_REFRESH_FILENAME = "dev-sync-refresh.json"
@@ -38,12 +37,6 @@ DEFAULT_STATE_DIR = Path.home() / ".local" / "state" / "biomodstack"
 DEFAULT_INSTALLED_SYNC = Path.home() / ".local" / "libexec" / "biomodstack" / "biomodstack_dev_sync.py"
 DEPLOYMENT_ADMISSION_LOCK_ENV = "BMS_DEPLOYMENT_ADMISSION_LOCK"
 DEPLOYMENT_ADMISSION_LOCK_FILENAME = "deployment-admission.lock"
-RUNTIME_DENOMINATOR_PATH = "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
-RUNTIME_IMPLEMENTATION_PATH = "platform/api/config/ngs_molbio_runtime/runtime_implementation_v2.json"
-SOURCE_PIN_PATH = "platform/api/config/ngs_molbio/source_pin_v1.json"
-DENOMINATOR_SCHEMA = "bms.ngs-molbio.runtime-source-denominator.v2"
-RUNTIME_SCHEMA = "bms.ngs-molbio.runtime-implementation.v1"
-SOURCE_PIN_SCHEMA = "bms.ngs-molbio.source-pin.v1"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _GIT_OBJECT_RE = re.compile(r"^[0-9a-f]{40}$")
 SyncDecision = Literal[
@@ -78,6 +71,7 @@ def plan_sync(
     deployed_revision: str | None,
     remote_descends_from_local: bool,
     active_work: bool,
+    allow_active_work: bool = False,
 ) -> SyncDecision:
     if dirty:
         return "blocked-dirty"
@@ -86,7 +80,7 @@ def plan_sync(
     if deployed_revision is None:
         return "blocked-health-unavailable"
     deployment_needed = local_revision != remote_revision or deployed_revision != remote_revision
-    if deployment_needed and active_work:
+    if deployment_needed and active_work and not allow_active_work:
         return "deferred-active-work"
     if local_revision != remote_revision:
         return "fast-forward-deploy"
@@ -182,256 +176,12 @@ def _authority_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return value
 
 
-def _json_blob(root: Path, revision: str, path: str) -> dict[str, object]:
-    try:
-        payload = json.loads(_git_blob(root, revision, path), object_pairs_hook=_authority_pairs)
-    except RuntimeAuthorityError:
-        raise
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise RuntimeAuthorityError(f"candidate authority JSON is invalid: {path}: {exc}") from exc
-    if type(payload) is not dict:
-        raise RuntimeAuthorityError(f"candidate authority JSON must be an object: {path}")
-    return payload
-
-
-def _validate_canonical_domain(value: object) -> None:
-    if value is None or type(value) in {bool, int}:
-        return
-    if type(value) is str:
-        try:
-            value.encode("utf-8")
-        except UnicodeEncodeError as exc:
-            raise RuntimeAuthorityError("candidate authority contains an invalid Unicode scalar") from exc
-        return
-    if type(value) is list:
-        for child in value:
-            _validate_canonical_domain(child)
-        return
-    if type(value) is dict:
-        for key, child in value.items():
-            if type(key) is not str:
-                raise RuntimeAuthorityError("candidate authority contains a non-string object key")
-            _validate_canonical_domain(key)
-            _validate_canonical_domain(child)
-        return
-    raise RuntimeAuthorityError("candidate authority contains a non-canonical JSON value")
-
-
-def _content_sha256(document: dict[str, object]) -> str:
-    value = dict(document)
-    value.pop("content_sha256", None)
-    _validate_canonical_domain(value)
-    raw = json.dumps(
-        value,
-        ensure_ascii=False,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
-
-
-def _require_content_digest(document: dict[str, object], label: str) -> None:
-    digest = document.get("content_sha256")
-    if not _is_sha256(digest) or digest != _content_sha256(document):
-        raise RuntimeAuthorityError(f"candidate {label} authority has an invalid canonical digest")
-
-
 def _is_sha256(value: object) -> bool:
     return type(value) is str and _SHA256_RE.fullmatch(value) is not None
 
 
 def _is_git_object(value: object) -> bool:
     return type(value) is str and _GIT_OBJECT_RE.fullmatch(value) is not None
-
-
-def _candidate_tree_without_record(root: Path, revision: str) -> str:
-    descriptor, index_name = tempfile.mkstemp(prefix="bms-dev-sync-index-")
-    os.close(descriptor)
-    os.unlink(index_name)
-    env = os.environ.copy()
-    env["HOME"] = str(Path.home())
-    env["GIT_INDEX_FILE"] = index_name
-    try:
-        for command in (
-            ("git", "read-tree", revision),
-            ("git", "rm", "--cached", "--quiet", "-f", "--", RUNTIME_IMPLEMENTATION_PATH),
-        ):
-            result = subprocess.run(
-                command,
-                cwd=root,
-                env=env,
-                check=False,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            if result.returncode != 0:
-                raise RuntimeAuthorityError(
-                    f"candidate source-tree authority failed: {' '.join(command)}: {result.stderr.strip()}"
-                )
-        result = subprocess.run(
-            ("git", "write-tree"),
-            cwd=root,
-            env=env,
-            check=False,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        if result.returncode != 0:
-            raise RuntimeAuthorityError(f"candidate source-tree authority failed: {result.stderr.strip()}")
-        return result.stdout.strip()
-    finally:
-        if os.path.exists(index_name):
-            os.unlink(index_name)
-
-
-def validate_candidate_runtime_authority(root: Path, revision: str) -> dict[str, object]:
-    """Explicit NGS source audit, not general Development deployment admission."""
-    denominator = _json_blob(root, revision, RUNTIME_DENOMINATOR_PATH)
-    runtime = _json_blob(root, revision, RUNTIME_IMPLEMENTATION_PATH)
-    source_pin = _json_blob(root, revision, SOURCE_PIN_PATH)
-
-    _require_content_digest(denominator, "denominator")
-    _require_content_digest(runtime, "runtime")
-    _require_content_digest(source_pin, "source-pin")
-
-    paths = denominator.get("paths")
-    if (
-        set(denominator) != {"schema", "paths", "content_sha256"}
-        or denominator.get("schema") != DENOMINATOR_SCHEMA
-        or type(paths) is not list
-        or not paths
-        or len(paths) > MAX_RUNTIME_SOURCE_PATHS
-        or any(type(path) is not str or not path or path.startswith("/") for path in paths)
-        or any(".." in Path(path).parts for path in paths)
-        or len(paths) != len(set(paths))
-        or RUNTIME_DENOMINATOR_PATH not in paths
-    ):
-        raise RuntimeAuthorityError("candidate denominator authority shape is invalid")
-
-    expected_runtime_keys = {
-        "adapter_runtime_count", "baseline_source_commit", "baseline_source_tree",
-        "binding_runtime_state", "capability_exposure_state", "connector_event_runtime_count",
-        "content_sha256", "dataset_exposure_state", "implementation_state",
-        "n0_package_fingerprint", "n0_receipt_content_sha256", "payload_scanner_runtime_state",
-        "phases", "release_acceptance_state", "schema", "source_authorities",
-        "source_denominator", "successor_source_commit", "successor_source_tree",
-        "tests_run", "verification_state",
-    }
-    rows = runtime.get("source_authorities")
-    phases = runtime.get("phases")
-    source_denominator = runtime.get("source_denominator")
-    if (
-        set(runtime) != expected_runtime_keys
-        or runtime.get("schema") != RUNTIME_SCHEMA
-        or runtime.get("implementation_state") != "implemented_unverified"
-        or runtime.get("release_acceptance_state") != "open"
-        or runtime.get("verification_state") != "source_audit_only"
-        or runtime.get("tests_run") != 0
-        or runtime.get("capability_exposure_state") != "fail_closed"
-        or runtime.get("dataset_exposure_state") != "fail_closed"
-        or runtime.get("binding_runtime_state") != "implemented_unverified"
-        or runtime.get("payload_scanner_runtime_state") != "implemented_unverified"
-        or type(runtime.get("adapter_runtime_count")) is not int
-        or type(runtime.get("connector_event_runtime_count")) is not int
-        or type(rows) is not list
-        or not rows
-        or type(phases) is not list
-        or len(phases) != 6
-        or type(source_denominator) is not dict
-        or set(source_denominator) != {"path", "content_sha256"}
-        or any(not _is_git_object(runtime.get(field)) for field in (
-            "baseline_source_commit", "baseline_source_tree", "successor_source_commit", "successor_source_tree"
-        ))
-        or any(not _is_sha256(runtime.get(field)) for field in (
-            "n0_package_fingerprint", "n0_receipt_content_sha256"
-        ))
-    ):
-        raise RuntimeAuthorityError("candidate runtime authority shape is invalid")
-    for number, phase in enumerate(phases, start=1):
-        if (
-            type(phase) is not dict
-            or set(phase) != {"phase_id", "source_state", "acceptance_state", "evidence"}
-            or phase.get("phase_id") != f"N{number}"
-            or phase.get("source_state") != "implemented"
-            or phase.get("acceptance_state") != "unverified"
-            or type(phase.get("evidence")) is not str
-            or not phase["evidence"]
-        ):
-            raise RuntimeAuthorityError("candidate runtime phase authority shape is invalid")
-    if source_denominator.get("path") != RUNTIME_DENOMINATOR_PATH:
-        raise RuntimeAuthorityError("candidate runtime denominator path mismatch")
-    if source_denominator.get("content_sha256") != denominator.get("content_sha256"):
-        raise RuntimeAuthorityError("candidate runtime denominator content digest mismatch")
-
-    pins = source_pin.get("authorities")
-    if (
-        set(source_pin) != {"schema", "baseline_commit", "baseline_tree", "authorities", "content_sha256"}
-        or source_pin.get("schema") != SOURCE_PIN_SCHEMA
-        or not _is_git_object(source_pin.get("baseline_commit"))
-        or not _is_git_object(source_pin.get("baseline_tree"))
-        or type(pins) is not list
-        or not pins
-    ):
-        raise RuntimeAuthorityError("candidate source-pin authority shape is invalid")
-
-    runtime_by_path: dict[str, dict[str, object]] = {}
-    for row in rows:
-        if type(row) is not dict or set(row) != {"path", "sha256", "size_bytes"}:
-            raise RuntimeAuthorityError("candidate runtime source authority row shape is invalid")
-        path = row.get("path")
-        digest = row.get("sha256")
-        size = row.get("size_bytes")
-        if (
-            type(path) is not str or not path or path in runtime_by_path
-            or not _is_sha256(digest)
-            or type(size) is not int or size <= 0
-        ):
-            raise RuntimeAuthorityError("candidate runtime source authority paths are invalid or duplicated")
-        runtime_by_path[path] = row
-    if set(runtime_by_path) != set(paths) or len(runtime_by_path) != len(paths):
-        raise RuntimeAuthorityError("candidate runtime source set does not match the denominator")
-
-    for path, row in runtime_by_path.items():
-        blob = _git_blob(root, revision, path)
-        if row.get("size_bytes") != len(blob):
-            raise RuntimeAuthorityError(f"runtime size mismatch: {path}")
-        if row.get("sha256") != hashlib.sha256(blob).hexdigest():
-            raise RuntimeAuthorityError(f"runtime digest mismatch: {path}")
-
-    overlay_count = 0
-    pin_paths: set[str] = set()
-    for pin in pins:
-        if type(pin) is not dict or set(pin) != {"path", "sha256"}:
-            raise RuntimeAuthorityError("candidate source-pin authority row is invalid")
-        path = pin.get("path")
-        expected_sha = pin.get("sha256")
-        if (
-            type(path) is not str or not path or path in pin_paths
-            or not _is_sha256(expected_sha)
-        ):
-            raise RuntimeAuthorityError("candidate source-pin authority row is invalid")
-        pin_paths.add(path)
-        actual_sha = hashlib.sha256(_git_blob(root, revision, path)).hexdigest()
-        if actual_sha == expected_sha:
-            continue
-        if path not in runtime_by_path:
-            raise RuntimeAuthorityError(f"source pin drift lacks runtime coverage: {path}")
-        overlay_count += 1
-
-    expected_tree = runtime.get("successor_source_tree")
-    actual_tree = _candidate_tree_without_record(root, revision)
-    if expected_tree != actual_tree:
-        raise RuntimeAuthorityError(
-            f"runtime successor tree mismatch: expected {expected_tree or 'unavailable'}, got {actual_tree}"
-        )
-    return {
-        "candidate_revision": revision,
-        "runtime_source_count": len(runtime_by_path),
-        "source_pin_overlay_count": overlay_count,
-    }
 
 
 def _deployed_revision(root: Path) -> str | None:
@@ -932,7 +682,9 @@ def _deploy_candidate(
     }
 
 
-def _sync_once_transaction(root: Path, state_dir: Path) -> SyncDecision:
+def _sync_once_transaction(
+    root: Path, state_dir: Path, *, deploy_now: bool = False, allow_active_work: bool = False,
+) -> SyncDecision:
     root = root.resolve()
     if not (root / ".git").exists() and not (root / ".git").is_file():
         raise RuntimeError(f"canonical Development is not a Git worktree: {root}")
@@ -1014,6 +766,7 @@ def _sync_once_transaction(root: Path, state_dir: Path) -> SyncDecision:
             deployed_revision=deployed,
             remote_descends_from_local=ancestry,
             active_work=active_work,
+            allow_active_work=allow_active_work,
         )
         refresh_revision = (
             refresh_marker.get("target_revision") if refresh_marker is not None else None
@@ -1034,6 +787,8 @@ def _sync_once_transaction(root: Path, state_dir: Path) -> SyncDecision:
             "remote_revision": remote,
             "deployed_revision_before": deployed,
             "active_work_count": active_work_count,
+            "manual_deploy": deploy_now,
+            "allow_active_work": allow_active_work,
             "deployment_paused": deployment_paused,
             "poll_interval_seconds": SYNC_INTERVAL_SECONDS,
             "queue_state": "pending" if queued_revision is not None else "empty",
@@ -1042,7 +797,7 @@ def _sync_once_transaction(root: Path, state_dir: Path) -> SyncDecision:
         if decision.startswith("blocked-"):
             _write_receipt(state_dir, receipt)
             raise RuntimeError(f"Development sync {decision}: canonical={local} origin/test={remote}")
-        if deployment_paused:
+        if deployment_paused and not deploy_now:
             receipt["decision"] = "paused"
             _write_receipt(state_dir, receipt)
             return "paused"
@@ -1075,7 +830,8 @@ def _sync_once_transaction(root: Path, state_dir: Path) -> SyncDecision:
 
         with _deployment_fence(state_dir):
             active_work, active_work_count = _active_development_work(root)
-            if active_work:
+            receipt["active_work_count"] = active_work_count
+            if active_work and not allow_active_work:
                 decision = "deferred-active-work"
                 receipt["decision"] = decision
                 receipt["active_work_count"] = active_work_count
@@ -1117,9 +873,14 @@ def _specific_failure_receipt_matches(state_dir: Path, error: BaseException) -> 
     )
 
 
-def sync_once(root: Path, state_dir: Path) -> SyncDecision:
+def sync_once(
+    root: Path, state_dir: Path, *, deploy_now: bool = False, allow_active_work: bool = False,
+) -> SyncDecision:
+    # Invocation-only overrides: never persist them in the pause control or units.
     try:
-        return _sync_once_transaction(root, state_dir)
+        return _sync_once_transaction(
+            root, state_dir, deploy_now=deploy_now, allow_active_work=allow_active_work,
+        )
     except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
         state_dir.mkdir(parents=True, exist_ok=True)
         if _specific_failure_receipt_matches(state_dir, exc):
@@ -1182,6 +943,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Sync canonical BioModStack Development from origin/test every 60 seconds")
     control_group = parser.add_mutually_exclusive_group(required=True)
     control_group.add_argument("--once", action="store_true", help="run one synchronization transaction")
+    control_group.add_argument(
+        "--deploy-now", action="store_true",
+        help="deploy once even while automatic deployment is paused; leave the pause unchanged",
+    )
+    parser.add_argument(
+        "--allow-active-work", action="store_true",
+        help="with --deploy-now, override active-job deferral for this invocation only; does not cancel jobs",
+    )
     control_group.add_argument("--install", action="store_true", help="install and enable the 60-second user timer")
     control_group.add_argument(
         "--bootstrap-successor",
@@ -1198,6 +967,8 @@ def main() -> int:
     parser.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR)
     parser.add_argument("--systemd-dir", type=Path, default=Path.home() / ".config" / "systemd" / "user")
     args = parser.parse_args()
+    if args.allow_active_work and not args.deploy_now:
+        parser.error("--allow-active-work requires --deploy-now")
     try:
         if args.recover_failed_rollback:
             receipt = recover_failed_rollback(args.root, args.state_dir)
@@ -1220,12 +991,15 @@ def main() -> int:
             _run(args.root, "systemctl", "--user", "start", SYNC_SERVICE)
             print("Resumed automatic Development deployment and started one poll")
             return 0
-        if args.once:
-            decision = sync_once(args.root, args.state_dir)
+        if args.once or args.deploy_now:
+            decision = sync_once(
+                args.root, args.state_dir,
+                deploy_now=args.deploy_now, allow_active_work=args.allow_active_work,
+            )
             print(json.dumps({"decision": decision, "poll_interval_seconds": SYNC_INTERVAL_SECONDS}, sort_keys=True))
             return 0
         parser.error(
-            "one of --once, --install, --bootstrap-successor, --recover-failed-rollback, "
+            "one of --once, --deploy-now, --install, --bootstrap-successor, --recover-failed-rollback, "
             "--pause-deploy, or --resume-deploy is required"
         )
     except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:

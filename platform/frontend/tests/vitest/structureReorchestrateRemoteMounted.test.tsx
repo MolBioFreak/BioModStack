@@ -91,6 +91,26 @@ it('switches GPU choices to the remote, clears old pins, and keeps scientific se
     expect(requests[0].param_overrides).toMatchObject({ pinned_gpus: null, lock_gpus: false, bcp_gpu_ids: '0', boltz_use_msa: false });
     expect(requests[0].param_overrides).not.toHaveProperty('boltz_sampling_steps');
 });
+it.each(['cp_topology', 'bcp_cp_topology'])('reopens retained %s and submits non-square 1D retry unchanged with unrelated settings intact', async key => {
+    jobPatch = { model_id: 'boltz_cp_experimental', mode: 'design' };
+    paramsPatch = { [key]: '1d', bcp_size_cp: 2, bcp_gpu_ids: '0,1,2,3', pinned_gpus: null };
+    await open();
+    expect(container.querySelector<HTMLSelectElement>('[aria-label="Context Parallel Topology"]')!.value).toBe('1d');
+    expect(container.textContent).toContain('confidence values can diverge');
+    await click('Re-orchestrate Job');
+    expect(requests[0].param_overrides).toMatchObject({ bcp_cp_topology: '1d' });
+    expect(requests[0].param_overrides).not.toHaveProperty('boltz_sampling_steps');
+});
+it('explicit retry topology edits serialize the chosen 1D value', async () => {
+    jobPatch = { model_id: 'boltz_cp_experimental', mode: 'design' };
+    paramsPatch = { bcp_size_cp: 2, bcp_gpu_ids: '0,1', pinned_gpus: null };
+    await open();
+    const select = container.querySelector<HTMLSelectElement>('[aria-label="Context Parallel Topology"]')!;
+    expect(select.value).toBe('2d');
+    await act(async () => { select.value = '1d'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+    await click('Re-orchestrate Job');
+    expect(requests[0].param_overrides).toMatchObject({ bcp_cp_topology: '1d' });
+});
 it('explicitly carries automatic Fold-CP allocation between workers with equal GPU ordinals', async () => {
     jobPatch = { model_id: 'boltz_cp_experimental', mode: 'design' };
     paramsPatch = { pinned_gpus: null, lock_gpus: false, bcp_gpu_ids: '0,1,2,3', bcp_size_cp: 4 };

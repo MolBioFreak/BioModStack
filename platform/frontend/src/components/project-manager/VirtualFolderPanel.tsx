@@ -69,7 +69,7 @@ function ActivityEvent({ item }: { item: JsonObject }) {
 }
 
 export function VirtualFolderPanel({ folder, summary, onLoadMore, onSelectRecord, loading = false }: VirtualFolderPanelProps) {
-    if (!folder) return null;
+    if (!folder || folder === 'runs') return null;
 
     let items: JsonObject[] = [];
     let nextCursor: string | null = null;
@@ -96,9 +96,7 @@ export function VirtualFolderPanel({ folder, summary, onLoadMore, onSelectRecord
     } else if (folder === 'datasets') {
         items = summary.pagination.datasets.items;
         nextCursor = summary.pagination.datasets.next_cursor;
-    } else if (folder === 'runs') {
-        items = summary.runs.items.map((run) => ({ id: run.run_id, label: run.target_label, canonical_state: run.canonical_state }));
-        nextCursor = summary.runs.next_cursor;
+
     }
 
     return (
@@ -113,7 +111,7 @@ export function VirtualFolderPanel({ folder, summary, onLoadMore, onSelectRecord
             {folder === 'activity' && items.length ? <ul>{items.map((item) => <ActivityEvent key={text(item, 'id') ?? JSON.stringify(item)} item={item} />)}</ul> : <RecordList items={items} empty={`No ${folder} records are available in this bounded context.`} onSelect={(item) => onSelectRecord(folder, item)} />}
             {nextCursor ? (
                 <button type="button" onClick={() => onLoadMore(folder)} disabled={loading} className="mt-3 rounded-lg border border-accent px-3 py-2 text-xs font-semibold text-accent disabled:opacity-50">
-                    {loading ? 'Loading…' : `Load more ${folder}`}
+                    {loading ? 'Loading…' : `Next ${folder} page`}
                 </button>
             ) : null}
         </section>

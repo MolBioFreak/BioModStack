@@ -30,6 +30,10 @@ from database import (
 from scripts.rfd3_local_redesign.contract import canonical_json as rfd3_canonical_json
 
 
+class NoDesignResults(RuntimeError):
+    """The existing generic positive-design finalizer rejected an empty result."""
+
+
 @dataclass(frozen=True)
 class FinalizationResult:
     completed: bool
@@ -99,6 +103,9 @@ def _sequence_native_publication_owner(job: Job):
         if job.mode in SUPPORTED_MODES:
             from services import caliby_native_publication
             return caliby_native_publication
+    if (job.model_id, job.mode) == ("protonpottsmpnn", "redesign"):
+        from services import protonpottsmpnn_publication
+        return protonpottsmpnn_publication
     if job.model_id == "ligandmpnn":
         from services.ligandmpnn_design import MODES
         if job.mode in MODES:
@@ -659,7 +666,7 @@ async def finalize_successful_job(
                 ))).scalars())
                 validate_persisted_publication(job, rows, output_dir)
             if count == 0:
-                raise RuntimeError("workflow completed but result ingestion produced no designs")
+                raise NoDesignResults("workflow completed but result ingestion produced no designs")
             usable_results = await _existing_designs_are_usable(session, job_id, output_dir)
             if not usable_results:
                 raise RuntimeError("workflow result rows lack usable, contained PDB artifacts")

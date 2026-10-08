@@ -39,6 +39,7 @@ modes:
       - input_path
       - gpu_ids
       - size_cp
+      - cp_topology
       - input_format
       - output_format
       - write_full_pae
@@ -125,11 +126,17 @@ params:
 
   - name: size_cp
     type: integer
-    description: Total number of context-parallel ranks; must be a perfect square and divide the selected GPU count
+    description: Total number of context-parallel ranks; must divide the selected GPU count. The 2d topology additionally requires a perfect square.
     required: true
     default: 4
     minimum: 1
     maximum: 16
+
+  - name: cp_topology
+    type: string
+    description: Native context-parallel topology. 2d requires square ranks; 1d allows any positive rank count dividing the selected GPUs (up to 16).
+    default: 2d
+    enum: [2d, 1d]
 
   - name: input_format
     type: string

@@ -1,8 +1,10 @@
 """Validated Golden Gate assembly resolved through the immutable restriction catalog."""
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 
+from services.molbio_ops import reverse_complement
 from services.restriction_analysis import AnalysisLimitError, InvalidDNAError, analyze_sequence
 from services.restriction_catalog import (
     CatalogUnavailable,
@@ -12,7 +14,7 @@ from services.restriction_catalog import (
 )
 
 from .common import orient_fragment
-from .ligation import simulate_ligation
+from .ligation import _ligate_oriented_fragments
 from .types import (
     AssemblyError,
     AssemblyFragment,
@@ -171,8 +173,26 @@ def simulate_golden_gate(
                     f"{enzyme.name} requires {enzyme.overhang_length} nt overhangs"
                 )
 
-    product = simulate_ligation(fragments, circular=circular, mode="golden_gate")
+    product = _ligate_oriented_fragments(oriented, circular=circular, mode="golden_gate")
     warnings = list(product.warnings)
+    # Advisory classes only: do not reinterpret end metadata or alter ligation.
+    # A sequence and its reverse complement describe the same cohesive-end class.
+    junction_classes = Counter(
+        min(sequence, reverse_complement(sequence))
+        for junction in product.junctions
+        if (sequence := junction.overhang_sequence)
+    )
+    for sequence, count in junction_classes.items():
+        if count > 1:
+            warnings.append(
+                f"Junction overhang class {sequence}/{reverse_complement(sequence)} "
+                f"is reused at {count} junctions; alternative ligations may occur"
+            )
+        if sequence == reverse_complement(sequence):
+            warnings.append(
+                f"Junction overhang {sequence} is palindromic; alternative ligations "
+                "may occur, depending on the other fragment ends"
+            )
     if _site_count(product.sequence, circular=product.circular, enzyme=enzyme):
         warnings.append(
             f"Final product still contains at least one {enzyme.name} recognition site "

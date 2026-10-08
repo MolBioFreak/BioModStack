@@ -43,7 +43,7 @@ export function RemoteResultsPrompt({ job }: { job: RemoteResultsJob }) {
     };
     return (
         <div className="mt-2 rounded border border-emerald-500/30 bg-emerald-500/10 p-3" data-remote-results-job={job.id}>
-            <p className="text-sm font-medium text-emerald-300">{state.received ? 'Results received; native import pending' : 'Results reported ready on worker'}</p>
+            <p className="text-sm font-medium text-emerald-300">{state.terminal ? 'Result import failed' : state.received ? 'Results received; native import pending' : 'Results reported ready on worker'}</p>
             <p role="status" aria-live="polite" className="mt-1 text-xs text-slate-300">
                 {state.received
                     ? busy ? 'Importing received results…' : 'Verified bytes are retained locally. Retry native import without rerunning science or contacting the worker.'

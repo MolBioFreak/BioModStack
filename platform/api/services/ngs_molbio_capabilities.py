@@ -430,7 +430,11 @@ def capability_record(capability_id: str) -> dict[str, Any]:
 
 def capability_parameter_schema(capability_id: str) -> dict[str, Any]:
     record = capability_record(capability_id)
-    return registered_schema(record["parameter_schema_id"])
+    schema = registered_schema(record["parameter_schema_id"])
+    if "samtools_consensus_config" in schema.get("properties", {}):
+        from services.ont_ngs_contract import samtools_consensus_setting
+        schema["properties"]["samtools_consensus_config"] = samtools_consensus_setting()
+    return schema
 
 
 def registered_schema(schema_id: str) -> dict[str, Any]:

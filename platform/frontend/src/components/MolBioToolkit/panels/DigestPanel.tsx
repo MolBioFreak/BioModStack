@@ -1,4 +1,7 @@
+import { digestFragmentsForAssembly } from '../../../lib/digestAssemblyTransfer';
+import type { AssemblyFragmentInput } from '../../../lib/api';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { saveRestrictionDigest, restrictionRecognitionSite } from '../../../lib/restrictionAnalysis';
 import type { HighlightedRegion, SelectionInfo, SequenceData } from '../types';
 import type {
     RestrictionAnalysisBatch,
@@ -7,6 +10,7 @@ import type {
     RestrictionDigestSimulation,
     RestrictionProductReleaseReceipt,
     RestrictionRecord,
+    RestrictionCatalogSummary,
 } from '../../../lib/restrictionAnalysis';
 
 type CutFilter = 'all' | 'zero' | 'unique' | 'double' | 'three_plus' | 'selection';
@@ -14,6 +18,7 @@ type GroupFilter = 'all' | 'digest' | 'nicking' | 'recognition_only';
 export type QuickMapGroup = 'unique' | 'double' | 'three_plus' | 'nicking' | 'type_iis';
 
 interface DigestPanelProps {
+    onUseInAssembly?: (fragments: AssemblyFragmentInput[]) => void;
     mobile?: boolean;
     compactLandscape?: boolean;
     sequenceData: SequenceData;
@@ -25,7 +30,7 @@ interface DigestPanelProps {
     onMapVisibilityRequest?: () => void;
     catalog: RestrictionCatalogReceipt | null;
     productEvidence?: RestrictionProductReleaseReceipt | null;
-    catalogRecords: RestrictionRecord[];
+    catalogRecords: Array<RestrictionRecord | RestrictionCatalogSummary>;
     analysis: RestrictionAnalysisBatch | null;
     authorityLoading: boolean;
     authorityError: string | null;
@@ -35,10 +40,11 @@ interface DigestPanelProps {
     onDigestSelectionChange: (enzymeIds: string[]) => void;
     onSimulateDigest: (enzymeIds: string[]) => void;
     onAnalyzeAll?: () => void;
+    onReadEnzymeDetails?: (enzymeIds: string[]) => Promise<RestrictionRecord[]>;
 }
 
 interface EnzymeCutData {
-    record: RestrictionRecord;
+    record: RestrictionRecord | RestrictionCatalogSummary;
     summary: RestrictionAnalysisBatch['analysis']['enzyme_summaries'][number] | null;
     cuts: number[];
     selectionCuts: number;
@@ -86,8 +92,40 @@ const CUT_FILTERS: Array<[CutFilter, string]> = [['all','All'],['unique','1x'],[
 const GROUP_FILTERS: Array<[GroupFilter, string]> = [['all','All Types'],['digest','Digest-ready'],['nicking','Nicking'],['recognition_only','Recognition only']];
 const QUICK: Array<[QuickMapGroup, string]> = [['unique','Map all 1x'],['double','Map all 2x'],['three_plus','Map all 3x+'],['nicking','Map nicking'],['type_iis','Map Golden Gate']];
 
-export function DigestPanel({ mobile = false, compactLandscape = false, sequenceData, selection, onHighlight, selectedEnzymes = [], onEnzymesChange, onMapVisibilityRequest, catalog, catalogRecords, analysis, authorityLoading, authorityError, digestSimulation, digestLoading, digestError, onDigestSelectionChange, onSimulateDigest, onAnalyzeAll, productEvidence }: DigestPanelProps) {
+export function DigestPanel({ mobile = false, compactLandscape = false, sequenceData, selection, onHighlight, selectedEnzymes = [], onEnzymesChange, onMapVisibilityRequest, catalog, catalogRecords, analysis, authorityLoading, authorityError, digestSimulation, digestLoading, digestError, onDigestSelectionChange, onSimulateDigest, onAnalyzeAll, onReadEnzymeDetails, productEvidence, sequenceId, onUseInAssembly }: DigestPanelProps) {
+    const [assemblySelection, setAssemblySelection] = useState<{simulation: RestrictionDigestSimulation; indices: number[]} | null>(null);
+    const assemblyIndices = assemblySelection?.simulation === digestSimulation ? assemblySelection.indices : [];
     const [digestEnzymes, setDigestEnzymes] = useState<string[]>([]);
+    const detailKey = JSON.stringify([catalog?.catalog_id, catalog?.catalog_sha256, [...new Set([...selectedEnzymes, ...digestEnzymes])].sort()]);
+    const [detailState, setDetailState] = useState<{ key: string; records?: RestrictionRecord[]; error?: string } | null>(null);
+    const detailOwner = useRef(detailKey);
+    detailOwner.current = detailKey;
+    const readDetails = async () => {
+        if (!onReadEnzymeDetails) return;
+        const key = detailKey;
+        setDetailState({ key });
+        try {
+            const records = await onReadEnzymeDetails([...new Set([...selectedEnzymes, ...digestEnzymes])]);
+            if (detailOwner.current === key) setDetailState({ key, records });
+        } catch (error) {
+            if (detailOwner.current === key) setDetailState({ key, error: error instanceof Error ? error.message : 'Enzyme details unavailable.' });
+        }
+    };
+    const visibleDetails = detailState?.key === detailKey ? detailState : null;
+    const [saveState, setSaveState] = useState<{ simulation: RestrictionDigestSimulation; pending?: boolean; operationId?: string; error?: string } | null>(null);
+    const saveRequest = useRef<{ simulation: RestrictionDigestSimulation; key: string } | null>(null);
+    const saveDigest = async () => {
+        if (!digestSimulation) return;
+        if (saveRequest.current?.simulation !== digestSimulation) saveRequest.current = { simulation: digestSimulation, key: crypto.randomUUID() };
+        setSaveState({ simulation: digestSimulation, pending: true });
+        try {
+            const operationId = await saveRestrictionDigest(digestSimulation, saveRequest.current.key);
+            setSaveState(current => current?.simulation === digestSimulation ? { simulation: digestSimulation, operationId } : current);
+        } catch (error) {
+            setSaveState(current => current?.simulation === digestSimulation ? { simulation: digestSimulation, error: error instanceof Error ? error.message : 'Digest save failed.' } : current);
+        }
+    };
+    const currentSave = saveState?.simulation === digestSimulation ? saveState : null;
     const [searchQuery, setSearchQuery] = useState('');
     const [displayPage, setDisplayPage] = useState(0);
     const [cutFilter, setCutFilter] = useState<CutFilter>('all');
@@ -126,7 +164,7 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
 
     const filtered = useMemo(() => enzymeData.filter(({ record, summary, selectionCuts }) => {
         const query = searchQuery.trim().toLowerCase();
-        if (query && ![record.enzyme_id, record.canonical_name, record.recognition.site_iupac, ...record.aliases].some((value) => value.toLowerCase().includes(query))) return false;
+        if (query && ![record.enzyme_id, record.canonical_name, restrictionRecognitionSite(record), ...record.aliases].some((value) => value.toLowerCase().includes(query))) return false;
         if (groupFilter === 'digest' && record.analysis_capability !== 'digest_simulation') return false;
         if (groupFilter === 'nicking' && (summary?.nick_count ?? 0) === 0) return false;
         if (groupFilter === 'recognition_only' && record.analysis_capability !== 'recognition_only') return false;
@@ -199,7 +237,7 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
             <div><strong>{analysis.analysis.counts.nick_count}</strong> nicks</div>
         </div>}
         {analysis && <p className="px-3 text-xs text-slate-500">Each enzyme is counted separately. Shared motifs and context-dependent enzymes may overlap at one sequence position.</p>}
-        {analysis && <details className="mx-3 text-xs text-slate-400"><summary>{analysis.chunks.length} exact analysis authority chunk{analysis.chunks.length === 1 ? '' : 's'}</summary>{analysis.chunks.map((chunk, index) => <code key={chunk.result_sha256} data-restriction-chunk-result-sha256={chunk.result_sha256} className="block break-all">Chunk {index + 1}: sha256:{chunk.result_sha256}</code>)}</details>}
+
         <div data-digest-mobile-sticky-search={mobile ? 'true' : undefined} className="space-y-2 px-3">
             <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search enzyme or recognition site…" data-digest-mobile-touch-target={mobile ? 'true' : undefined} className={`w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 ${mobile ? 'min-h-12 min-w-12' : ''}`} />
             {!compactLandscape && <><div data-digest-mobile-filter-bar={mobile ? 'true' : undefined} className="flex gap-1 overflow-x-auto">{CUT_FILTERS.map(([value,label]) => <button key={value} onClick={() => setCutFilter(value)} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 ${cutFilter === value ? 'bg-cyan-700' : 'bg-slate-800'}`}>{label}</button>)}</div><div data-digest-mobile-filter-bar={mobile ? 'true' : undefined} className="flex gap-1 overflow-x-auto">{GROUP_FILTERS.map(([value,label]) => <button key={value} onClick={() => setGroupFilter(value)} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 ${groupFilter === value ? 'bg-cyan-700' : 'bg-slate-800'}`}>{label}</button>)}</div><div data-digest-bulk-map="true" className="flex gap-1 overflow-x-auto"><button disabled={filteredMapIds.length === 0} onClick={mapFiltered} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border border-cyan-600 bg-cyan-950/50 px-2 disabled:opacity-40`}>Map filtered ({filteredMapIds.length})</button><button disabled={selectedEnzymes.length === 0} onClick={clearMap} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 disabled:opacity-40`}>Clear map ({selectedEnzymes.length})</button></div><div data-digest-quick-map="true" className="flex gap-1 overflow-x-auto">{QUICK.map(([value,label]) => <button key={value} onClick={() => toggleQuick(value)} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2`}>{label}</button>)}</div></>}
@@ -210,11 +248,25 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
             <button type="button" disabled={currentPage + 1 === pageCount} onClick={() => setDisplayPage(currentPage + 1)} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 disabled:opacity-40`}>Next enzymes</button>
         </nav>
         <div data-digest-scroll-region={mobile ? 'enzymes' : undefined} className={mobile ? 'min-h-0 flex-1 space-y-2 overflow-y-auto p-3' : 'max-h-80 space-y-2 overflow-y-auto'}>
-            {displayed.map(({ record, summary }) => { const digestable = record.analysis_capability === 'digest_simulation'; return <div key={record.enzyme_id} data-enzyme-name={record.enzyme_id} className="rounded border border-slate-700 bg-slate-800 p-2"><div className="flex justify-between gap-2"><div><strong>{record.canonical_name}</strong><div className="font-mono text-xs text-slate-400">{record.recognition.site_iupac}</div>{summary ? <div className="text-xs">{summary.recognition_site_count_definite} definite + {summary.recognition_site_count_possible} possible · {summary.double_strand_break_count} DSB · {summary.nick_count} nick</div> : <div className="text-xs text-amber-300">{record.analysis_capability === 'recognition_only' ? 'geometry unavailable' : 'not yet analyzed'}</div>}{!digestable && summary && <span className="text-xs text-amber-300">{record.analysis_capability === 'nicking_analysis' ? 'map-only nickase' : 'geometry unavailable'}</span>}</div><div className="flex gap-1"><button onClick={() => toggleMap(record.enzyme_id)} data-digest-mobile-touch-target={mobile ? 'true' : undefined} className={`${mobile ? 'min-h-12 min-w-20' : ''} rounded border px-2 disabled:opacity-40`}>{selectedEnzymes.includes(record.enzyme_id) ? 'Unmap' : 'Map'}</button><button disabled={!digestable} onClick={() => toggleDigest(record.enzyme_id)} data-digest-mobile-touch-target={mobile ? 'true' : undefined} className={`${mobile ? 'min-h-12 min-w-20' : ''} rounded border px-2 disabled:opacity-40`}>{mobile ? (digestEnzymes.includes(record.enzyme_id) ? 'Remove' : 'Add') : 'Digest'}</button></div></div></div>; })}
+            {displayed.map(({ record, summary }) => { const digestable = record.analysis_capability === 'digest_simulation'; return <div key={record.enzyme_id} data-enzyme-name={record.enzyme_id} className="rounded border border-slate-700 bg-slate-800 p-2"><div className="flex justify-between gap-2"><div><strong>{record.canonical_name}</strong><div className="font-mono text-xs text-slate-400">{restrictionRecognitionSite(record)}</div>{summary ? <div className="text-xs">{summary.recognition_site_count_definite} definite + {summary.recognition_site_count_possible} possible · {summary.double_strand_break_count} DSB · {summary.nick_count} nick</div> : <div className="text-xs text-amber-300">{record.analysis_capability === 'recognition_only' ? 'geometry unavailable' : 'not yet analyzed'}</div>}{!digestable && summary && <span className="text-xs text-amber-300">{record.analysis_capability === 'nicking_analysis' ? 'map-only nickase' : 'geometry unavailable'}</span>}</div><div className="flex gap-1"><button onClick={() => toggleMap(record.enzyme_id)} data-digest-mobile-touch-target={mobile ? 'true' : undefined} className={`${mobile ? 'min-h-12 min-w-20' : ''} rounded border px-2 disabled:opacity-40`}>{selectedEnzymes.includes(record.enzyme_id) ? 'Unmap' : 'Map'}</button><button disabled={!digestable} onClick={() => toggleDigest(record.enzyme_id)} data-digest-mobile-touch-target={mobile ? 'true' : undefined} className={`${mobile ? 'min-h-12 min-w-20' : ''} rounded border px-2 disabled:opacity-40`}>{mobile ? (digestEnzymes.includes(record.enzyme_id) ? 'Remove' : 'Add') : 'Digest'}</button></div></div></div>; })}
         </div>
+        {onReadEnzymeDetails && <div className="px-3">
+            <button type="button" onClick={readDetails} disabled={selectedEnzymes.length + digestEnzymes.length === 0}>Read selected enzyme details</button>
+            {visibleDetails?.error && <p role="alert">{visibleDetails.error}</p>}
+            {visibleDetails?.records?.map(record => <details key={record.enzyme_id} data-enzyme-detail={record.enzyme_id}>
+                <summary>{record.canonical_name} · {record.recognition.site_iupac} · {record.cleavage.status}</summary>
+                <pre className="overflow-x-auto whitespace-pre-wrap text-xs">{JSON.stringify({ cleavage: record.cleavage, relationships: record.relationships, source: record.source, supplier_provenance: record.supplier_provenance }, null, 2)}</pre>
+            </details>)}
+        </div>}
         <div data-digest-mobile-footer={mobile ? 'true' : undefined} data-digest-compact-landscape={mobile && compactLandscape ? 'true' : undefined} className="border-t border-slate-700 bg-slate-950 p-3">
             <div className="mb-2 flex gap-1 overflow-x-auto">{digestEnzymes.map((id) => <button key={id} onClick={() => toggleDigest(id)} className="rounded border border-amber-500 px-2">{id} ×</button>)}</div>
             <button onClick={() => onSimulateDigest(digestEnzymes)} disabled={digestLoading || digestEnzymes.length === 0} data-digest-mobile-run={mobile ? 'true' : undefined} data-digest-mobile-touch-target={mobile ? 'true' : undefined} className={`w-full rounded bg-cyan-600 py-2 disabled:bg-slate-600 ${mobile ? 'min-h-12 min-w-12' : ''}`}>{digestLoading ? 'Digesting…' : `Run Digest (${digestEnzymes.length} enzyme${digestEnzymes.length === 1 ? '' : 's'})`}</button>
+            {digestSimulation?.source?.kind === 'molecular_revision' && <div>
+                <button type="button" onClick={saveDigest} disabled={currentSave?.pending || !!currentSave?.operationId} className="rounded border px-3 py-2 disabled:opacity-40">{currentSave?.pending ? 'Saving…' : 'Save digest & fragments'}</button>
+                {onUseInAssembly && digestSimulation && <div><p>Select physical fragments for Assembly (order can be edited there):</p>{digestSimulation.fragments.map(f => <label key={f.fragment_index}><input type="checkbox" aria-label={`Use digest fragment ${f.fragment_index}`} checked={assemblyIndices.includes(f.fragment_index)} onChange={e => setAssemblySelection({simulation:digestSimulation,indices:e.target.checked ? [...assemblyIndices,f.fragment_index] : assemblyIndices.filter(i => i !== f.fragment_index)})}/>{f.fragment_index}: {f.top_strand_sequence.length} bp</label>)}<button disabled={!assemblyIndices.length} onClick={() => onUseInAssembly(digestFragmentsForAssembly(digestSimulation,assemblyIndices,sequenceId,sequenceData.name))}>Use selected fragments in assembly</button></div>}
+                {currentSave?.operationId && <a className="ml-2 underline" href={`/api/molbio/restriction/digests/${encodeURIComponent(currentSave.operationId)}`} target="_blank" rel="noreferrer">Open saved digest</a>}
+                {currentSave?.error && <p role="alert">{currentSave.error}</p>}
+            </div>}
             {digestSimulation && <div data-digest-mobile-result={mobile ? 'true' : undefined} className="mt-2 space-y-1 rounded border border-cyan-700 p-2"><div>{digestSimulation.fragments.length} exact sequence fragments</div>{digestSimulation.fragments.map((fragment) => <div key={fragment.fragment_index} data-fragment-index={fragment.fragment_index} className="rounded bg-slate-800 p-2 text-xs"><strong>#{fragment.fragment_index + 1} · {fragment.reference_span_bp} bp</strong><div>Left: {endLabel(fragment.left_end)}</div><div>Right: {endLabel(fragment.right_end)}</div></div>)}</div>}
         </div>
     </div>;

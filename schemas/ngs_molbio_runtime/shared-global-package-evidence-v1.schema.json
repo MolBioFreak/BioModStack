@@ -69,7 +69,6 @@
         "native_identity",
         "source_commit",
         "source_tree",
-        "runtime_implementation_sha256",
         "outcome",
         "verifier_id",
         "verification_authority",

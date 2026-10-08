@@ -1803,17 +1803,22 @@ def _normalize_boltz_cp_params_for_validation(
     if gpu_ids:
         normalized["gpu_ids"] = gpu_ids
 
+    cp_topology = normalized.get("cp_topology", normalized.get("bcp_cp_topology", "2d"))
+    if cp_topology not in ("2d", "1d"):
+        raise HTTPException(status_code=422, detail="Fold-CP cp_topology must be one of: 2d, 1d")
+    normalized["cp_topology"] = cp_topology
     size_cp = _coerce_positive_int(normalized.get("size_cp")) or _coerce_positive_int(
         normalized.get("bcp_size_cp")
     )
     requested_cp = normalized.get("size_cp", normalized.get("bcp_size_cp"))
-    if requested_cp not in (None, ""):
+    if requested_cp not in (None, "") or cp_topology == "1d":
         from services.nextflow import _derive_boltz_cp_gpu_launch_settings
         try:
             gpu_ids, size_cp = _derive_boltz_cp_gpu_launch_settings(
                 pinned_gpus=normalized.get("pinned_gpus"),
                 requested_size_cp=requested_cp,
                 fallback_gpu_ids=gpu_ids,
+                cp_topology=cp_topology,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -5363,6 +5368,39 @@ def _is_protein_local_redesign_job(job: Job) -> bool:
     )
 
 
+def _scientific_family_ids(job_id: str):
+    """Read persisted scientific edges, never rewrite scheduler parentage.
+
+    The existing Jobs listing remains the paged readback owner. Traverse on the
+    server so reopening an old round does not download unrelated job history.
+    """
+    from sqlalchemy import union_all
+
+    def text_value(value):
+        return func.nullif(value, "")
+
+    root = func.coalesce(text_value(Job.lineage_root_job_id),
+                         text_value(Job.params["lineage_root_job_id"].as_string()),
+                         text_value(Job.params["iteration_source_root_job_id"].as_string()))
+    source = func.coalesce(text_value(Job.selection_source_job_id),
+                           text_value(Job.source_stage_job_id),
+                           text_value(Job.params["selection_source_job_id"].as_string()),
+                           text_value(Job.params["source_stage_job_id"].as_string()),
+                           text_value(Job.params["iteration_source_job_id"].as_string()))
+    # Only legacy records without scientific references use scheduler edges.
+    legacy = select(Job.id.label("child"), Job.parent_job_id.label("source")).where(
+        root.is_(None), source.is_(None), Job.parent_job_id.is_not(None))
+    edges = union_all(select(Job.id.label("child"), root.label("source")).where(root.is_not(None)),
+                      select(Job.id.label("child"), source.label("source")).where(source.is_not(None)),
+                      legacy).cte("scientific_edges")
+    family = select(Job.id).where(Job.id == job_id).cte("scientific_family", recursive=True)
+    family = family.union(
+        select(edges.c.source).join(family, edges.c.child == family.c.id),
+        select(edges.c.child).join(family, edges.c.source == family.c.id),
+    )
+    return select(family.c.id)
+
+
 @router.get("", response_model=JobList | JobSummaryList)
 async def list_jobs(
     status: Optional[JobStatus] = None,
@@ -5375,6 +5413,7 @@ async def list_jobs(
     q_ignore_case_id: bool = False,  # NGS historically searches IDs case-insensitively
     exclude_ngs: bool = False,  # Dashboard Show NGS Jobs filter, before paging/count
     include_children: bool = False,  # New param: show child jobs if True
+    scientific_family_job_id: Optional[str] = None,
     summary: bool = False,  # Mobile/list views: omit heavyweight detail fields until a job is opened
     session: AsyncSession = Depends(get_session),
     *,
@@ -5433,10 +5472,14 @@ async def list_jobs(
         Job.provenance[("execution_plan_approval", "plan", "metadata", "static_components")].label("stage_plan_components"),
         Job.provenance[("remote_execution_assignment", "resources", "components")].label("stage_assigned_components"),
         Job.provenance["stage_terminal_states"].label("stage_terminal_states"),
+        Job.provenance[("remote_execution_receipt", "received_manifest_sha256")].label("remote_received_manifest_sha256"),
+        Job.provenance[("remote_execution_receipt", "result_manifest_sha256")].label("remote_result_manifest_sha256"),
     )
     # Use identical predicates for the bounded page and its total. These are
     # presentation filters, not changes to execution/status authority.
     filters = []
+    if scientific_family_job_id:
+        filters.append(Job.id.in_(_scientific_family_ids(scientific_family_job_id)))
     if not include_children:
         filters.append(Job.parent_job_id.is_(None))
     if status:
@@ -5622,6 +5665,11 @@ async def list_jobs(
             conformational_mapping_request_id=conformational_mapping_request_id_by_job.get(str(job.id)),
         )
         if summary:
+            received_digest = job.remote_received_manifest_sha256
+            public_fields["remote_results_received"] = (
+                isinstance(received_digest, str) and bool(received_digest)
+                and received_digest == job.remote_result_manifest_sha256
+            )
             job_responses.append(JobSummaryResponse(**public_fields))
         else:
             job_responses.append(JobResponse(
@@ -5912,6 +5960,20 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         return job_data
+    if normalized_model_id == 'protonpottsmpnn':
+        from services.protonpottsmpnn_design import normalize_design_params, REQUEST_FIELD
+        try:
+            values = dict(job_data.params)
+            # Placement is system-owned: remote workers use their allocated GPU;
+            # explicit Local must not inherit a parent's CUDA placement.
+            values['protonpottsmpnn_device'] = ('cuda' if job_data.execution_target_id
+                else os.environ.get('BMS_PROTONPOTTSMPNN_DEVICE', 'cpu'))
+            if not values.get(REQUEST_FIELD) and values.get('target_pdb'):
+                values['target_pdb'] = _resolve_alias_path_for_runtime(values['target_pdb'])
+            job_data.params = normalize_design_params(normalized_mode, values)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(422, detail=str(exc)) from exc
+        return job_data
     if normalized_model_id == 'ligandmpnn' and normalized_mode in LIGANDMPNN_DESIGN_MODES:
         from services.ligandmpnn_design import normalize_design_params
         transport_keys = {'ligandmpnn_design_request', 'ligandmpnn_design_input',
@@ -6138,6 +6200,10 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
     # Skip validation for template jobs and mutagenesis batches
     # Mutagenesis uses mutagenesis_variants array instead of top-level sequence
     validation_params = _normalize_boltz_cp_params_for_validation(job_data.model_id, job_data.params)
+    if job_data.model_id == "boltz_cp_experimental":
+        # Persist the effective public setting for saved requests, clones and retries.
+        job_data.params["cp_topology"] = validation_params["cp_topology"]
+        job_data.params.pop("bcp_cp_topology", None)
     is_mutagenesis = 'mutagenesis_variants' in job_data.params
     if native_entrypoint is not None or (not job_data.model_id.startswith('template_') and not is_mutagenesis):
         # Trusted selected-native callers retain schema validation for aliases;
@@ -6482,6 +6548,20 @@ async def _create_job(
                     status_code=503,
                     detail="Committed BMS source identity is unavailable",
                 ) from exc
+    if (normalized_model_id == 'protonpottsmpnn' and normalized_mode == 'redesign'
+            and selected_execution_target is not None
+            and not job_data.params.get('protonpottsmpnn_design_request')):
+        from services.protonpottsmpnn_design import prepare_for_job
+        job_data = normalize_job_request(job_data)
+        prepared = get_inputs_dir() / 'protonpottsmpnn-design' / str(uuid.uuid4())
+        try:
+            job_data.params.update(await asyncio.to_thread(
+                prepare_for_job, normalized_mode, job_data.params, prepared,
+                allowed_roots=(*get_allowed_roots().values(), get_data_root(), get_inputs_dir(), get_results_dir()),
+            ))
+        except (OSError, ValueError, KeyError) as exc:
+            raise HTTPException(422, detail=str(exc)) from exc
+
     if (normalized_model_id == 'ligandmpnn' and normalized_mode in LIGANDMPNN_DESIGN_MODES
             and selected_execution_target is not None
             and not job_data.params.get('ligandmpnn_design_request')):
@@ -7203,6 +7283,18 @@ async def _create_job(
             job_name = job_data.name
             output_dir = base_output_dir
             job_params = dict(job_data.params)
+
+        if normalized_model_id == 'protonpottsmpnn' and normalized_mode == 'redesign':
+            from services.protonpottsmpnn_design import prepare_for_job
+            try:
+                job_params.update(await asyncio.to_thread(
+                    prepare_for_job, normalized_mode, job_params,
+                    Path(output_dir) / 'inputs' / 'protonpottsmpnn-design',
+                    allowed_roots=(*get_allowed_roots().values(), get_data_root(), get_inputs_dir(), get_results_dir()),
+                    retain_prepared=execution_preview is not None,
+                ))
+            except (OSError, ValueError, KeyError) as exc:
+                raise HTTPException(422, detail=str(exc)) from exc
 
         if normalized_model_id == 'ligandmpnn' and normalized_mode in LIGANDMPNN_DESIGN_MODES:
             from services.ligandmpnn_design import prepare_for_job
@@ -9380,6 +9472,34 @@ async def get_bindcraft2_native_results(
         raise HTTPException(status_code=409, detail="Verified native results unavailable") from exc
 
 
+@router.get("/{job_id}/bindcraft2-results/trajectory")
+async def get_bindcraft2_native_trajectory(
+    job_id: str,
+    design: str = Query(..., min_length=1),
+    arm: Optional[str] = None,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(1000, ge=1, le=1000),
+    session: AsyncSession = Depends(get_session),
+):
+    """Read recorded native trajectory updates from the verified publication."""
+    from services.bindcraft2_result_readback import read_bindcraft2_trajectory
+    from services.bindcraft2_publication import PublicationError
+    from services.bindcraft2_native_results import NativeResultError
+
+    job = await session.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.model_id != "bindcraft2":
+        raise HTTPException(status_code=400, detail="Job is not a BindCraft2 campaign")
+    try:
+        return await read_bindcraft2_trajectory(
+            job, session, design=design, arm=arm, offset=offset, limit=limit,
+        )
+    except (PublicationError, NativeResultError, OSError) as exc:
+        logger.warning("BC2 native trajectory unavailable for job %s: %s", job_id, exc)
+        raise HTTPException(status_code=409, detail="Verified native trajectory unavailable") from exc
+
+
 @router.get("/{job_id}/execution-settings", response_model=ExecutionSettings)
 async def job_execution_settings(job_id: str, session: AsyncSession = Depends(get_session)):
     from services.core_protein_execution_settings import verify_receipts
@@ -9452,6 +9572,10 @@ async def resubmit_job(
     output_dir = str(get_results_dir() / f"{new_name}_{timestamp}")
 
     resubmit_params = deepcopy(original_job.params) if isinstance(original_job.params, dict) else {}
+    if original_job.model_id == "nanopore":
+        resubmit_params = ont_ngs_contract.replay_expected_plasmid_size(
+            resubmit_params, original_job.provenance, mode=original_job.mode,
+        )
     resubmit_params.pop("remote_result_policy", None)
     from services.msa_policy import apply_msa_policy
     try:
@@ -11020,6 +11144,10 @@ async def resume_job(
         **_normalize_antibody_job_params(_normalize_structure_geometry_params(job.params or {})),
         **param_overrides,
     }
+    if job.model_id == "nanopore":
+        merged_params = ont_ngs_contract.replay_expected_plasmid_size(
+            merged_params, job.provenance, mode=job.mode,
+        )
     from services.msa_policy import apply_msa_policy
     try:
         merged_params = apply_msa_policy(job.model_id, merged_params)
@@ -11065,6 +11193,16 @@ async def resume_job(
     merged_params = _normalize_structure_runtime_paths(job.model_id, merged_params)
     merged_params = _normalize_structure_geometry_params(merged_params)
     merged_params = _normalize_antibody_job_params(merged_params)
+    if job.model_id == "boltz_cp_experimental":
+        # An explicit workflow override must replace the parent's public value.
+        for public_key, workflow_key in (("cp_topology", "bcp_cp_topology"), ("size_cp", "bcp_size_cp")):
+            if public_key in param_overrides or workflow_key in param_overrides:
+                merged_params[public_key] = param_overrides.get(public_key, param_overrides.get(workflow_key))
+                merged_params.pop(workflow_key, None)
+        merged_params["cp_topology"] = merged_params.get(
+            "cp_topology", merged_params.get("bcp_cp_topology", "2d")
+        )
+        merged_params.pop("bcp_cp_topology", None)
     _validate_antibody_runtime_paths(job.model_id, merged_params)
     resume_selected_input_artifact_class = normalize_antibody_artifact_class(
         merged_params.get("selected_input_artifact_class")

@@ -1,0 +1,208 @@
+{
+  "dataset_id": "pryor2020-s002",
+  "metric_version": "pryor-pair-pooled-v1",
+  "label": "Estimated junction-set correctness (empirical ligation model)",
+  "condition_use": "reference",
+  "junctions": [
+    "GGAG",
+    "TGAC",
+    "TCCC",
+    "TACT",
+    "CCAT",
+    "AATG",
+    "AGCC",
+    "TTCG",
+    "GCTT",
+    "GGTA",
+    "CGCT"
+  ],
+  "inventory": [],
+  "inventory_complete": false,
+  "unmodeled_inventory_instance_ids": [],
+  "scope": "idealized_intended_unique_junction_set",
+  "caveats": [
+    "Idealized intended unique-junction set, not mass yield or colony success.",
+    "Zero observations are unobserved events, not impossible chemistry.",
+    "Background, concentration, recutting, depletion and nick closure are unmodeled."
+  ],
+  "dataset": {
+    "id": "pryor2020-s002",
+    "file_name": "pone.0238592.s002.xlsx",
+    "source_url": "https://journals.plos.org/plosone/article/file?id=10.1371/journal.pone.0238592.s002&type=supplementary",
+    "sha256": "7c444e99e5e4d245461a892e8543a35c84987f93abcee7098de9d9d817237e94",
+    "rows": 256,
+    "columns": 256,
+    "end_length": 4,
+    "polarity": "five_prime",
+    "ligation_enzyme": "T4 DNA ligase",
+    "restriction_enzyme_variant": "BsmBI-v2",
+    "thermal_profile": "42C/16C",
+    "buffer": "T4 buffer",
+    "cycles": 30,
+    "minutes_per_step": 5,
+    "final_step": "60C for 5 minutes",
+    "license_source": "Primary PLOS article/supplements; CC BY 4.0",
+    "worksheet": "Table S2. BsmBI-v2",
+    "parsed_file": "pryor2020-s002.json.gz",
+    "parsed_sha256": "175a524fc5ff399399cb2ac63aec440a58275ab219dec9874f986ff38925bb74",
+    "conversion_version": "pryor-xlsx-labels-v1",
+    "metric_version": "pryor-pair-pooled-v1",
+    "doi": "10.1371/journal.pone.0238592",
+    "license": "CC-BY-4.0",
+    "license_url": "https://creativecommons.org/licenses/by/4.0/",
+    "axis_convention": "physical protruding strands, each written 5-prime to 3-prime",
+    "reaction_volume_uL": 20,
+    "substrate_nM": 100,
+    "enzyme_mix_uL": 2,
+    "restriction_enzyme_U": null,
+    "ligase_U": null,
+    "component_concentrations": "Not reported for proprietary Golden Gate Enzyme Mixes",
+    "replication": "Minimum two reactions on separate days; minimum two SMRT cells per library",
+    "measurement": "Recovered ligation-product observations, not kinetic rate constants",
+    "buffer_strength": "1X"
+  },
+  "status": "available",
+  "f_set": 0.8092502583687903,
+  "log_f_set": -0.21164706690639923,
+  "exact_zero_observed_correct": false,
+  "reasons": [],
+  "repeated_classes": [],
+  "palindromes": [],
+  "per_junction": [
+    {
+      "representative": "AAGC",
+      "complement": "GCTT",
+      "correct_observations": 1016,
+      "total_observations": 1016,
+      "probability": 1.0
+    },
+    {
+      "representative": "AATG",
+      "complement": "CATT",
+      "correct_observations": 1358,
+      "total_observations": 1358,
+      "probability": 1.0
+    },
+    {
+      "representative": "AGCC",
+      "complement": "GGCT",
+      "correct_observations": 822,
+      "total_observations": 858,
+      "probability": 0.958041958041958
+    },
+    {
+      "representative": "AGCG",
+      "complement": "CGCT",
+      "correct_observations": 706,
+      "total_observations": 736,
+      "probability": 0.9592391304347826
+    },
+    {
+      "representative": "AGTA",
+      "complement": "TACT",
+      "correct_observations": 1428,
+      "total_observations": 1493,
+      "probability": 0.956463496316142
+    },
+    {
+      "representative": "ATGG",
+      "complement": "CCAT",
+      "correct_observations": 920,
+      "total_observations": 920,
+      "probability": 1.0
+    },
+    {
+      "representative": "CGAA",
+      "complement": "TTCG",
+      "correct_observations": 1334,
+      "total_observations": 1334,
+      "probability": 1.0
+    },
+    {
+      "representative": "CTCC",
+      "complement": "GGAG",
+      "correct_observations": 778,
+      "total_observations": 778,
+      "probability": 1.0
+    },
+    {
+      "representative": "GGGA",
+      "complement": "TCCC",
+      "correct_observations": 1032,
+      "total_observations": 1043,
+      "probability": 0.9894534995206136
+    },
+    {
+      "representative": "GGTA",
+      "complement": "TACC",
+      "correct_observations": 1044,
+      "total_observations": 1122,
+      "probability": 0.93048128342246
+    },
+    {
+      "representative": "GTCA",
+      "complement": "TGAC",
+      "correct_observations": 1306,
+      "total_observations": 1306,
+      "probability": 1.0
+    }
+  ],
+  "joining_bias": [
+    {
+      "representative": "AAGC",
+      "pooled_wc_observations": 1016,
+      "relative_to_dataset_max_pooled_wc": 0.5521739130434783
+    },
+    {
+      "representative": "AATG",
+      "pooled_wc_observations": 1358,
+      "relative_to_dataset_max_pooled_wc": 0.7380434782608696
+    },
+    {
+      "representative": "AGCC",
+      "pooled_wc_observations": 822,
+      "relative_to_dataset_max_pooled_wc": 0.4467391304347826
+    },
+    {
+      "representative": "AGCG",
+      "pooled_wc_observations": 706,
+      "relative_to_dataset_max_pooled_wc": 0.38369565217391305
+    },
+    {
+      "representative": "AGTA",
+      "pooled_wc_observations": 1428,
+      "relative_to_dataset_max_pooled_wc": 0.7760869565217391
+    },
+    {
+      "representative": "ATGG",
+      "pooled_wc_observations": 920,
+      "relative_to_dataset_max_pooled_wc": 0.5
+    },
+    {
+      "representative": "CGAA",
+      "pooled_wc_observations": 1334,
+      "relative_to_dataset_max_pooled_wc": 0.725
+    },
+    {
+      "representative": "CTCC",
+      "pooled_wc_observations": 778,
+      "relative_to_dataset_max_pooled_wc": 0.42282608695652174
+    },
+    {
+      "representative": "GGGA",
+      "pooled_wc_observations": 1032,
+      "relative_to_dataset_max_pooled_wc": 0.5608695652173913
+    },
+    {
+      "representative": "GGTA",
+      "pooled_wc_observations": 1044,
+      "relative_to_dataset_max_pooled_wc": 0.5673913043478261
+    },
+    {
+      "representative": "GTCA",
+      "pooled_wc_observations": 1306,
+      "relative_to_dataset_max_pooled_wc": 0.7097826086956521
+    }
+  ],
+  "pair_observations": []
+}

@@ -507,6 +507,7 @@ from services.caliby_native import SUPPORTED_MODES as CALIBY_NATIVE_MODES
 from services.ligandmpnn_design import MODES as LIGANDMPNN_DESIGN_MODES
 
 MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
+    ('protonpottsmpnn', 'redesign'): 'workflows/protonpottsmpnn_design.nf',
     **{('bindcraft2', native_mode): 'workflows/bindcraft2.nf'
        for native_mode in ('campaign', *BC2_NATIVE_ACTIONS)},
     ('binder_refinement', 'refine'): 'workflows/binder_refinement.nf',
@@ -1117,6 +1118,7 @@ def _derive_boltz_cp_gpu_launch_settings(
     requested_size_cp: object,
     fallback_gpu_ids: object = None,
     scheduler_gpu_id: object = None,
+    cp_topology: str = "2d",
 ) -> Tuple[str, int]:
     """Resolve the physical CP launch bridge without assuming host GPU ordinals."""
     raw_gpu_ids = None
@@ -1128,6 +1130,24 @@ def _derive_boltz_cp_gpu_launch_settings(
         raw_gpu_ids = scheduler_gpu_id
 
     parsed_gpu_ids = _parse_boltz_cp_gpu_ids(raw_gpu_ids)
+    if cp_topology not in ("2d", "1d"):
+        raise ValueError("Fold-CP cp_topology must be one of: 2d, 1d")
+    if cp_topology == "1d":
+        gpu_count = len(parsed_gpu_ids)
+        if requested_size_cp in (None, ""):
+            size_cp = next((size for size in range(min(gpu_count, 16), 0, -1)
+                            if gpu_count % size == 0), 1)
+        else:
+            requested = _coerce_int(requested_size_cp, 0)
+            if (isinstance(requested_size_cp, bool) or str(requested) != str(requested_size_cp)
+                    or not 1 <= requested <= 16 or (gpu_count and gpu_count % requested != 0)
+                    or (requested > 1 and not parsed_gpu_ids)):
+                raise ValueError(
+                    f"Fold-CP size_cp {requested_size_cp} requires a positive integer up to 16 "
+                    "and an explicit GPU selection divisible by that CP size; CP cannot be reduced automatically"
+                )
+            size_cp = requested
+        return ",".join(str(gpu_id) for gpu_id in parsed_gpu_ids), size_cp
     size_cp = _largest_square_divisor(len(parsed_gpu_ids), requested_size_cp)
     if requested_size_cp not in (None, ""):
         requested = _coerce_int(requested_size_cp, 0)
@@ -4106,6 +4126,9 @@ def compile_job_nextflow_invocation(job, params, output_dir, *, _preview_only: b
     # would change its legacy scientific transport flags.
     requested_json = canonical_bytes(dict(job.params or {}) if requested is None else requested)
     prepared = workflow_params(job, params)
+    if job.model_id == 'nanopore':
+        from services.ont_ngs_contract import replay_expected_plasmid_size
+        prepared = replay_expected_plasmid_size(prepared, job.provenance, mode=job.mode)
     msa_authority = (job.provenance or {}).get('esmf_msa_preparation')
     if job.model_id in {'esmfold2', 'esmfold2_experimental'} and msa_authority is not None:
         prepared['esmf_msa_preparation_json'] = json.dumps(msa_authority, allow_nan=False, sort_keys=True)
@@ -5403,6 +5426,7 @@ def compile_nextflow_invocation(
 
     # Model + mode to profile mapping (for API-driven jobs)
     model_mode_to_profile = {
+        ('protonpottsmpnn', 'redesign'): 'protonpottsmpnn_design',
         **{pair: 'protein_sequence_design' for pair in PUBLIC_SEQUENCE_MODES},
         ('boltz2', 'predict'): 'boltz',
         ('boltz2', 'complex'): 'boltz',
@@ -5672,14 +5696,14 @@ def compile_nextflow_invocation(
         "boltz_models": explicit_boltz_models,
         "alphafold_params": explicit_alphafold_params,
     }
-    if (is_generic_sequence_command or model_id in {'binder_refinement', 'caliby_binder', 'caliby_experimental', 'ppiflow', 'boltzgen'}
+    if (is_generic_sequence_command or model_id in {'binder_refinement', 'caliby_binder', 'caliby_experimental', 'ppiflow', 'boltzgen', 'protonpottsmpnn'}
             or model_id == 'ligandmpnn' and mode in LIGANDMPNN_DESIGN_MODES):
         # No diffusion, prediction or hosted/local MSA stage is selected by the
         # sequence-only wrapper. Do not demand their unselected input stores.
         for key in ('rfd_models', 'af2_models', 'boltz_models', 'alphafold_params'):
             explicit_path_defaults.pop(key, None)
     if (not is_fastq_only_ont_command and not is_generic_sequence_command
-            and model_id not in {'bindcraft2', 'binder_refinement', 'caliby_binder', 'caliby_experimental', 'ppiflow', 'boltzgen'}
+            and model_id not in {'bindcraft2', 'binder_refinement', 'caliby_binder', 'caliby_experimental', 'ppiflow', 'boltzgen', 'protonpottsmpnn'}
             and not (model_id == 'ligandmpnn' and mode in LIGANDMPNN_DESIGN_MODES)
             and (model_id, mode) not in {('ligandmpnn', 'interface_context'),
                                          ('esmfold2', 'blind_pose')}):
@@ -5691,6 +5715,40 @@ def compile_nextflow_invocation(
         if params.get(key) in (None, ""):
             cmd.extend([f"--{key}", str(value)])
             native_parameters[key] = str(value)
+
+    if model_id == 'protonpottsmpnn' and mode == 'redesign':
+        from services.protonpottsmpnn_design import science_params, prepare_design_request, read_prepared_request, execution_device
+        science = science_params(mode, params)
+        params.update(science)
+        native_parameters.update(science)
+        native_parameters['protonpottsmpnn_device'] = execution_device(params)
+        cmd.extend(['--protonpottsmpnn_device', str(native_parameters['protonpottsmpnn_device'])])
+        from services.remote_execution.images import image_reference
+        image_path, _ = image_reference('protonpottsmpnn.sif', Path(explicit_container_dir), params)
+        native_parameters['protonpottsmpnn_container_path'] = str(image_path)
+        cmd.extend(['--protonpottsmpnn_container_path', str(image_path)])
+        request_path = params.get('protonpottsmpnn_design_request')
+        source_path = params.get('protonpottsmpnn_design_input')
+        if request_path:
+            from paths import get_inputs_dir, get_results_dir
+            read_prepared_request(mode, params,
+                allowed_roots=(get_data_root(), get_inputs_dir(), get_results_dir()))
+            native_parameters.update(protonpottsmpnn_design_request=str(request_path),
+                                     protonpottsmpnn_design_input=str(source_path))
+        elif _preview_only:
+            request_path = Path(output_dir) / '.protonpottsmpnn-design-request.json'
+            plan_input(request_path, json.dumps(prepare_design_request(mode, science),
+                       sort_keys=True, allow_nan=False).encode('utf-8'))
+            source_path = science['target_pdb']
+        else:
+            raise ValueError('ProtonPottsMPNN requires its materialized native request')
+        cmd.extend(['--protonpottsmpnn_design_request', str(request_path),
+                    '--protonpottsmpnn_design_input', str(source_path)])
+        for key in (*explicit_path_defaults, 'cpus',):
+            if key in params and params[key] is not None:
+                cmd.extend(['--' + key, str(params[key])])
+                native_parameters[key] = params[key]
+        return finish_command(cmd)
 
     if model_id == 'ligandmpnn' and mode in LIGANDMPNN_DESIGN_MODES:
         from services.ligandmpnn_design import science_params, prepare_design_request, read_prepared_request
@@ -5848,6 +5906,12 @@ def compile_nextflow_invocation(
         for key, value in expected.items():
             cmd.extend([f'--{key}', value])
             native_parameters[key] = value
+        # Carry scheduler placement through this early return. Container visibility
+        # is explicit, so host CUDA_VISIBLE_DEVICES alone cannot select the card.
+        for key in ('gpu_id', 'bc2_gpu_ids'):
+            if params.get(key) is not None:
+                cmd.extend([f'--{key}', str(params[key])])
+                native_parameters[key] = params[key]
         return finish_command(cmd)
 
     if (model_id, mode) == ('ligandmpnn', 'interface_context'):
@@ -6458,6 +6522,7 @@ def compile_nextflow_invocation(
             'input_path': 'bcp_input_path',
             'gpu_ids': 'bcp_gpu_ids',
             'size_cp': 'bcp_size_cp',
+            'cp_topology': 'bcp_cp_topology',
             'input_format': 'bcp_input_format',
             'output_format': 'bcp_output_format',
             'write_full_pae': 'bcp_write_full_pae',
@@ -6471,7 +6536,7 @@ def compile_nextflow_invocation(
             if src_key == dest_key:
                 continue
             if src_key in params:
-                if dest_key not in params:
+                if src_key == 'cp_topology' or dest_key not in params:
                     params[dest_key] = params[src_key]
                 params.pop(src_key, None)
 
@@ -6485,11 +6550,13 @@ def compile_nextflow_invocation(
             elif params.get('boltz_diffusion_samples') not in (None, ''):
                 params['bcp_diffusion_samples'] = params['boltz_diffusion_samples']
 
+        params.setdefault('bcp_cp_topology', '2d')
         derived_gpu_ids, derived_size_cp = _derive_boltz_cp_gpu_launch_settings(
             pinned_gpus=params.get('pinned_gpus'),
             requested_size_cp=params.get('bcp_size_cp'),
             fallback_gpu_ids=params.get('bcp_gpu_ids'),
             scheduler_gpu_id=params.get('gpu_id'),
+            cp_topology=params['bcp_cp_topology'],
         )
         if derived_gpu_ids:
             params['bcp_gpu_ids'] = derived_gpu_ids

@@ -192,7 +192,9 @@ def _write_terminal_product_tree(output: Path) -> tuple[Path, dict[str, Any]]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("consensus_config", [None, "hiseq", "hifi", "r10.4_sup", "r10.4_dup", "ultima"])
 async def test_nanopore_resubmit_and_resume_each_issue_fresh_job_capability(
+    consensus_config,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -212,7 +214,7 @@ async def test_nanopore_resubmit_and_resume_each_issue_fresh_job_capability(
                 name="ont-capability",
                 model_id="nanopore",
                 mode="fastq_qc",
-                params={"fastq_path": "/tmp/reads.fastq"},
+                params={"fastq_path": "/tmp/reads.fastq", "samtools_consensus_config": consensus_config},
                 status=JobStatus.FAILED.value,
                 output_dir=str(original_output),
                 completed_stages=[],
@@ -295,6 +297,8 @@ async def test_nanopore_resubmit_and_resume_each_issue_fresh_job_capability(
             assert resumed_job is not None
             _assert_job_scoped_capability(resume_response, resumed_job)
 
+            assert resubmitted_job.params["samtools_consensus_config"] == consensus_config
+            assert resumed_job.params["samtools_consensus_config"] == consensus_config
             assert resubmitted_job.id != resumed_job.id
             assert (
                 resubmitted_job.provenance[alignment_access.PROVENANCE_DIGEST_KEY]

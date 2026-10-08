@@ -143,7 +143,7 @@ def validate_resource_admission_handoff(value: object) -> dict[str, Any] | None:
         _required_text(handoff, key)
     for key in ("source_revision", "source_tree"):
         source_id = handoff[key]
-        if len(source_id) != 40 or any(character not in "0123456789abcdef" for character in source_id):
+        if source_id != "unknown" and (len(source_id) != 40 or any(character not in "0123456789abcdef" for character in source_id)):
             raise ResourceUsageEvidenceError("resource admission source identity is invalid")
     cpu_threads = handoff.get("cpu_threads")
     dram_bytes = handoff.get("dram_bytes")

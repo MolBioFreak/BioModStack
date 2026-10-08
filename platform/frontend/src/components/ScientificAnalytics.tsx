@@ -1,59 +1,88 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { CohortAnalytics } from './CohortAnalytics';
+import { metricLabel } from '../lib/cohortAnalytics';
 import type { ScientificCohort, ScientificPoint } from '../lib/scientificAnalytics';
 
-/** The server owns native values, compatible cohorts and complete-case pairs. */
-export function ScientificAnalytics({points, cohorts}:{points:ScientificPoint[];cohorts:ScientificCohort[]}) {
-    const [sortMetrics,setSortMetrics]=useState<Record<string,string>>({});
-    const keys=[...new Set(points.map(point=>point.cohort_key))];
-    return <section aria-label="Scientific result analytics">
-        <h2>Scientific result analytics</h2>
-        <p>Revision 1. Each cohort uses compatible native metrics. Statistics describe this loaded selection.</p>
-        {keys.map(key=>{
-            const rows=points.filter(point=>point.cohort_key===key);
-            const cohort=cohorts.find(cohort=>cohort.cohort_key===key);
-            const metric=sortMetrics[key];
-            const ordered=metric?[...rows].sort((a,b)=>{
-                const av=a.metric_states[metric],bv=b.metric_states[metric];
-                if(av?.state!=='ok')return bv?.state==='ok'?1:0;
-                if(bv?.state!=='ok')return -1;
-                return av.value-bv.value;
-            }):rows;
-            return <section key={key} aria-label={`Cohort ${key}`}>
-                <h3>{key}</h3>
-                <label>Sort metric (ascending, missing last)
-                    <select aria-label={`Sort metric for ${key}`} value={metric??''} onChange={event=>setSortMetrics({...sortMetrics,[key]:event.target.value})}>
-                        <option value="">Publication order</option>
-                        {Object.entries(rows[0].metric_descriptors).map(([id,d])=><option key={id} value={id}>{id} / {d.scope} / {d.unit}</option>)}
-                    </select>
-                </label>
-                {rows.filter(row=>row.publication_state).map(row=><p key={row.id}>{row.name} ({row.id}): {row.publication_state!.state}: {row.publication_state!.reason_code}</p>)}
-                {cohort ? Object.entries(cohort.pairs).map(([name,pair])=>{
-                    const xd=cohort.metrics[pair.x_metric].descriptor,yd=cohort.metrics[pair.y_metric].descriptor;
-                    const xmax=Math.max(1,...pair.points.map(p=>p.x)),xmin=Math.min(0,...pair.points.map(p=>p.x));
-                    const ymax=Math.max(1,...pair.points.map(p=>p.y)),ymin=Math.min(0,...pair.points.map(p=>p.y));
-                    return <div key={name}>
-                        <svg role="img" aria-label={`${pair.x_metric} versus ${pair.y_metric} complete-case scatter`} viewBox="0 0 640 350" style={{width:'100%',maxWidth:640}}>
-                            <path d="M60 20V290H610" fill="none" stroke="currentColor"/>
-                            <text x="180" y="335" fill="currentColor">{pair.x_metric} ({xd.unit})</text>
-                            <text x="5" y="15" fill="currentColor">{pair.y_metric} ({yd.unit})</text>
-                            <text x="50" y="310" fill="currentColor">{xmin}</text><text x="560" y="310" fill="currentColor">{xmax}</text>
-                            <text x="10" y="290" fill="currentColor">{ymin}</text><text x="10" y="35" fill="currentColor">{ymax}</text>
-                            {pair.points.map(p=><circle key={p.id} data-candidate-id={p.id} data-x={p.x} data-y={p.y} cx={60+(p.x-xmin)/(xmax-xmin)*540} cy={290-(p.y-ymin)/(ymax-ymin)*250} r="4" fill="#60a5fa"><title>{`${p.id}: ${p.x}, ${p.y}`}</title></circle>)}
-                        </svg>
-                        <p>Complete pairs: {pair.pair_count}. Excluded: {pair.excluded_count}. Correlation: {pair.correlation.state==='ok'?pair.correlation.value:pair.correlation.reason_code}</p>
-                    </div>;
-                }):<p>Paired statistics are unavailable for this response.</p>}
-                <table><thead><tr><th>Candidate</th><th>Metric / scope / unit</th><th>Value or reason</th><th>Source</th></tr></thead>
-                    <tbody>{ordered.flatMap(row=>Object.entries(row.metric_states).map(([metric,state])=><tr key={`${row.id}:${metric}`}>
-                        <td>{row.name} ({row.id})</td><td>{metric} / {row.metric_descriptors[metric].scope} / {row.metric_descriptors[metric].unit}</td>
-                        <td>{state.state==='ok'?state.value:`${state.state}: ${state.reason_code}`}</td>
-                        <td>{row.source_job_id}: {row.metric_sources[metric]?.artifact_sha256 ?? 'Source unavailable'}</td>
-                    </tr>))}</tbody>
+const panel = 'min-w-0 rounded-lg border border-[var(--border-color)] bg-[var(--bg-secondary)] p-3';
+const control = 'rounded border border-[var(--border-color)] bg-[var(--bg-primary)] p-2 text-sm';
+
+/** Adapt canonical observations to the existing dashboard and Plotly Lab. Never
+ * merge producer cohorts or reinterpret native values through Design aliases. */
+export function ScientificAnalytics({ points, cohorts }: { points: ScientificPoint[]; cohorts: ScientificCohort[] }) {
+    const groups = useMemo(() => {
+        const grouped = new Map<string, ScientificPoint[]>();
+        for (const point of points) {
+            const group = grouped.get(point.cohort_key) ?? [];
+            group.push(point);
+            grouped.set(point.cohort_key, group);
+        }
+        return [...grouped];
+    }, [points]);
+    return <section aria-label="Scientific result analytics" className="min-w-0 space-y-4 text-[var(--text-primary)]">
+        {groups.map(([key, rows], index) => <ScientificCohortCharts key={key} points={rows}
+            cohort={cohorts.find(cohort => cohort.cohort_key === key)}
+            title={groups.length > 1 ? `Recorded measurements · cohort ${index + 1}` : 'Recorded measurements'} />)}
+    </section>;
+}
+
+function ScientificCohortCharts({ points, cohort, title }: { points: ScientificPoint[]; cohort?: ScientificCohort; title: string }) {
+    const [selectedIds, setSelectedIds] = useState<string[]>([]);
+    const [activeId, setActiveId] = useState<string>();
+    const [sortMetric, setSortMetric] = useState('');
+    const [showDetails, setShowDetails] = useState(false);
+    const descriptors = Object.assign({}, ...points.map(point => point.metric_descriptors)) as ScientificPoint['metric_descriptors'];
+    const label = (key: string) => {
+        const descriptor = descriptors[key];
+        return descriptor ? `${metricLabel(key)} · ${descriptor.scope.replaceAll('_', ' ')} (${descriptor.unit})` : metricLabel(key);
+    };
+    const rows = useMemo(() => points.map(point => ({
+        id: point.id, label: point.name,
+        values: Object.fromEntries(Object.entries(point.metric_states).map(([key, state]) => [key, state.state === 'ok' ? state.value : undefined])),
+    })), [points]);
+    // Prefer a populated published pair; arbitrary axes remain configurable in Lab.
+    const pair = Object.values(cohort?.pairs ?? {}).sort((a, b) => b.pair_count - a.pair_count)[0];
+    const incomplete = points.filter(point => point.publication_state || Object.values(point.metric_states).some(state => state.state !== 'ok')).length;
+    const active = points.find(point => point.id === activeId);
+    const ordered = sortMetric ? [...points].sort((a, b) => {
+        const av = a.metrics[sortMetric], bv = b.metrics[sortMetric];
+        return av === undefined ? bv === undefined ? 0 : 1 : bv === undefined ? -1 : av - bv;
+    }) : points;
+    return <section aria-label={title} className="min-w-0 space-y-3">
+        <header className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="font-semibold">{title}</h2>
+            <span className="text-sm text-[var(--text-secondary)]">{points.length} records · native units</span>
+        </header>
+        {incomplete > 0 && <p role="status" className={`${panel} text-sm`}>{incomplete} of {points.length} records have unavailable measurements. Charts use observed values only; missing values are not zero.</p>}
+        <CohortAnalytics rows={rows} selectedIds={selectedIds} activeId={activeId}
+            onInspect={id => { setActiveId(id); setShowDetails(true); }} onSelect={ids => setSelectedIds(previous => [...new Set([...previous, ...ids])])}
+            mode="analytics" getMetricLabel={label} inspectionHint="click a point to inspect its recorded measurements"
+            initialMetrics={pair ? { x: pair.x_metric, y: pair.y_metric, distribution: pair.x_metric } : undefined} />
+        {(active || selectedIds.length > 0) && <div className={`${panel} flex flex-wrap items-center gap-3 text-sm`}>
+            {active && <span>Inspecting measurements: {active.name}</span>}
+            {selectedIds.length > 0 && <><span>{selectedIds.length} records selected in charts</span><button type="button" className={control} onClick={() => setSelectedIds([])}>Clear chart selection</button></>}
+        </div>}
+        <details className={`${panel} text-sm`} open={showDetails} onToggle={event => setShowDetails(event.currentTarget.open)}>
+            <summary className="cursor-pointer">Measurement details{active ? ` · ${active.name}` : ''}</summary>
+            <label className="my-3 flex flex-wrap items-center gap-2">Sort measurements
+                <select className={control} aria-label="Sort measurements" value={sortMetric} onChange={event => setSortMetric(event.target.value)}>
+                    <option value="">Publication order</option>
+                    {Object.keys(descriptors).map(key => <option key={key} value={key}>{label(key)}</option>)}
+                </select>
+            </label>
+            <p className="mb-2 text-xs text-[var(--text-secondary)]">Ascending; unavailable measurements last. Exact native keys and source evidence are retained here.</p>
+            <div className="max-h-80 overflow-auto">
+                <table className="w-full text-left text-xs"><thead><tr><th className="p-2">Record</th><th>Measurement / scope / unit</th><th>Value or reason</th></tr></thead>
+                    <tbody>{ordered.filter(point => !active || point.id === active.id).flatMap(point => [
+                        ...(point.publication_state ? [<tr key={`${point.id}:publication`}><td className="p-2">{point.name}</td><td>Publication</td><td>{point.publication_state.reason_code}</td></tr>] : []),
+                        ...Object.entries(point.metric_states).map(([key, state]) => <tr key={`${point.id}:${key}`} className="border-t border-[var(--border-color)]">
+                            <td className="p-2" title={point.id}>{point.name}</td>
+                            <td title={JSON.stringify(point.metric_sources[key])}>{key} / {descriptors[key].scope} / {descriptors[key].unit}</td>
+                            <td>{state.state === 'ok' ? state.value : `${state.state}: ${state.reason_code}`}</td>
+                        </tr>),
+                    ])}</tbody>
                 </table>
-                {cohort&&<table><caption>Observed measurements only</caption><thead><tr><th>Metric</th><th>Observed</th><th>Unavailable</th><th>Invalid</th><th>Mean</th></tr></thead>
-                    <tbody>{Object.entries(cohort.metrics).map(([metric,s])=><tr key={metric}><td>{metric}</td><td>{s.observed_count}</td><td>{s.unavailable_count}</td><td>{s.invalid_count}</td><td>{s.statistics?.avg??s.reason_code}</td></tr>)}</tbody>
-                </table>}
-            </section>;
-        })}
+            </div>
+            {active && <button type="button" className={`${control} mt-2`} onClick={() => setActiveId(undefined)}>Show all records</button>}
+        </details>
     </section>;
 }

@@ -111,6 +111,17 @@ const DIGEST = { schema: 'bms.molbio.restriction-digest-simulation.v1', cleavage
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
 
 describe('restriction API boundary', () => {
+    it('accepts hash-free previews and historical identities without relaxing source/catalog checks', () => {
+        const preview = { ...DIGEST, analysis_result_sha256: null, resource_policy_sha256: null, request_sha256: null, simulation_sha256: null };
+        expect(parseRestrictionDigestSimulation(preview)).toEqual(preview);
+        expect(parseRestrictionDigestSimulation(DIGEST)).toEqual(DIGEST);
+        const analyzed = { ...ANALYSIS, request_sha256: null, result_sha256: null, analysis: { ...ANALYSIS.analysis, result_sha256: null } };
+        expect(parseRestrictionAnalysis(analyzed)).toEqual(analyzed);
+        expect(() => parseRestrictionDigestSimulation({ ...preview, simulation_sha256: 'not-a-hash' })).toThrow();
+        expect(() => parseRestrictionDigestSimulation({ ...preview, source: { ...SOURCE, content_sha256: null } })).toThrow();
+        expect(() => parseRestrictionAnalysis({ ...analyzed, catalog: { ...RECEIPT, catalog_sha256: null } })).toThrow();
+    });
+
     it('molbio-sanity-c canonicalizes lowercase DNA and trimmed names for analysis and digest', async () => {
         vi.stubGlobal('crypto', webcrypto);
         try {

@@ -23,8 +23,11 @@ async def resolve_root(session: AsyncSession, source_job_id: str) -> tuple[Job, 
         params = current.params or {}
         root_id = (current.lineage_root_job_id or params.get('lineage_root_job_id')
                    or params.get('iteration_source_root_job_id'))
-        next_id = root_id if root_id and root_id != current.id else current.parent_job_id
-        if not next_id:
+        source_id = (current.selection_source_job_id or current.source_stage_job_id
+                     or params.get('selection_source_job_id') or params.get('source_stage_job_id')
+                     or params.get('iteration_source_job_id'))
+        next_id = root_id or source_id or current.parent_job_id
+        if not next_id or next_id == current.id:
             return source, current
         parent = await session.get(Job, next_id)
         if parent is None:
@@ -62,7 +65,7 @@ async def resolve_candidate_documents(session, designs, candidate_documents):
 
 
 def snapshot_selection(source: Job, root: Job, designs: list[Design], *,
-                       candidate_documents: dict | None = None) -> Path:
+                       candidate_documents: dict | None = None, native_sources: list | None = None) -> Path:
     from routers.jobs import _materialize_antibody_selection
     from types import SimpleNamespace
     import hashlib
@@ -77,6 +80,27 @@ def snapshot_selection(source: Job, root: Job, designs: list[Design], *,
             design.pdb_path = str(resolved[design.id][0])
     directory = _materialize_antibody_selection(root, source, inputs, 'selected', namespace='binder')
     manifest = json.loads((directory / 'selection_manifest.json').read_text())
+    for selection in native_sources or []:
+        from routers.jobs import _cif_selection_pdb
+        path, identity = selection
+        key = identity['artifact_id']
+        destination = directory / f'native_{key}.pdb'
+        native_path = directory / f'native_{key}{path.suffix}' if path.suffix.lower() not in {'.pdb', '.ent'} else destination
+        from services.frustrampnn.jobs import _read_owned_structure
+        native_path.write_bytes(_read_owned_structure(path, label='Selected native structure'))
+        if hashlib.sha256(native_path.read_bytes()).hexdigest() != identity['artifact_sha256']:
+            shutil.rmtree(directory)
+            raise ValueError('Selected native snapshot differs from its owned artifact')
+        if native_path != destination:
+            _cif_selection_pdb(native_path, destination)
+        manifest['designs'].append({'design_id': None, 'selection_id': key,
+            'design_job_id': identity['owner_job_id'], 'selection_pdb_path': str(destination),
+            'source_structure_path': str(path), 'selected_document': identity,
+            'native_source': {'job_id': identity['owner_job_id'], 'artifact_id': key},
+            'source_design_provenance': {},
+            'selection_structure_sha256': hashlib.sha256(destination.read_bytes()).hexdigest()})
+    manifest['native_source_count'] = len(native_sources or [])
+    manifest['selection_count'] = len(manifest['designs'])
     rows = []
     for item in manifest['designs']:
         if item['design_id'] in resolved:
@@ -109,6 +133,7 @@ MODEL_OPERATIONS = {
     'caliby': ('caliby_binder', 'design'),
     'fampnn': ('fampnn', 'binder_design'),
     'proteinmpnn': ('proteinmpnn', 'design'),
+    'protonpottsmpnn': ('protonpottsmpnn', 'redesign'),
     'predict_boltz2': ('boltz2', 'complex'),
     'predict_protenix': ('protenix', 'complex'),
 }
@@ -136,13 +161,14 @@ def model_request(*, operation: str, params: dict, source: Job, root: Job,
         'selected_input_dir': str(selection_dir),
         'selected_input_manifest': str(manifest_path),
         'source_selection_manifest_path': str(manifest_path),
-        'selection_source_type': 'selected_designs',
+        'selection_source_type': 'selected_native_artifacts' if any(item.get('native_source') for item in manifest['designs']) else 'selected_designs',
         'selection_source_job_id': source.id,
         'selected_input_source_job_id': source.id,
         'lineage_root_job_id': root.id,
         'iteration_source_root_job_id': root.id,
         'iteration_source_job_id': source.id,
-        'iteration_source_design_ids': [item['design_id'] for item in manifest['designs']],
+        'iteration_source_design_ids': [item['design_id'] for item in manifest['designs'] if item['design_id']],
+        'native_sources': [item['native_source'] for item in manifest['designs'] if item.get('native_source')],
         'source_selection_count': len(manifest['designs']),
     })
     from routers.jobs import normalize_job_request
@@ -162,10 +188,15 @@ def individual_model_requests(base: JobCreate, operation: str, selection_dir: Pa
     for item in manifest['designs']:
         params = dict(base.params)
         path = item['selection_pdb_path']
-        params.update(iteration_source_design_ids=[item['design_id']], source_selection_count=1,
+        params.update(iteration_source_design_ids=[item['design_id']] if item['design_id'] else [], source_selection_count=1,
                       source_design_id=item['design_id'], source_pdb_path=path,
                       source_stage_job_id=item['design_job_id'])
-        if operation in {'fampnn', 'proteinmpnn'}:
+        params['native_sources'] = [item['native_source']] if item.get('native_source') else []
+        params['selection_source_type'] = 'selected_native_artifacts' if item.get('native_source') else 'selected_designs'
+        if operation == 'protonpottsmpnn':
+            params['target_pdb'] = path
+            params['pdb_paths'] = path
+        elif operation in {'fampnn', 'proteinmpnn'}:
             params['input_pdb'] = path
             # The single-input child must not retain the batch CSV as a path;
             # shared portable discovery treats native file values literally.
@@ -188,6 +219,6 @@ def individual_model_requests(base: JobCreate, operation: str, selection_dir: Pa
                 raise HTTPException(422, 'Selected structure contains no protein sequence')
             params['complex_components'] = components
             params['sequence'] = ':'.join(component['sequence'] for component in components)
-            params['sequence_name'] = item['design_id']
-        requests.append(base.model_copy(update={'name': f'{base.name}-{item["design_id"]}', 'params': params}))
+            params['sequence_name'] = item.get('selection_id') or item['design_id']
+        requests.append(base.model_copy(update={'name': f'{base.name}-{item.get("selection_id") or item["design_id"]}', 'params': params}))
     return requests

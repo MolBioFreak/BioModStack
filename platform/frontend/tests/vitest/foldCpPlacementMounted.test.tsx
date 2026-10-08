@@ -4,6 +4,8 @@ import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'rea
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, expect, it, vi } from 'vitest';
 import { api, EXECUTION_TARGET_STORAGE_KEY } from '../../src/lib/api';
+import { deriveBoltzCpGpuLaunchSettings } from '../../src/components/structurePredictionUiState';
+import { JobSubmission } from '../../src/components/JobSubmission';
 import { StructurePredictionTemplate } from '../../src/components/StructurePredictionTemplate';
 import { ExecutionTargetPicker } from '../../src/components/ExecutionTargetPicker';
 vi.mock('../../src/components/MolstarViewer', () => ({ default: () => null }));
@@ -28,11 +30,21 @@ let posts: any[];
 let reads: string[];
 let cacheReads: any[];
 let cacheReady = false;
+let drafts: any[] = [];
+let templates: any[] = [];
 const adapter = api.defaults.adapter;
+// Transport inventory mirrors the settled model-owned public keys; no scientific run.
+const nativeDefinition = { id: 'boltz_cp_experimental', name: 'Fold-CP', category: 'structure_prediction',
+    modes: [{ id: 'design', name: 'Design', params: ['cp_topology', 'size_cp', 'sequence', 'seed', 'write_full_pae'] }],
+    params: [{ name: 'cp_topology', label: 'Context Parallel Topology', type: 'string', enum: ['2d', '1d'], default: '2d', ui_group: 'General' },
+        { name: 'size_cp', type: 'integer', default: 4, min: 1, max: 16, ui_group: 'General' },
+        { name: 'sequence', type: 'string', default: 'MKTIIALSYIFCLVFADYKDDDDA', ui_group: 'Inputs' },
+        { name: 'seed', type: 'integer', default: 0, ui_group: 'General' },
+        { name: 'write_full_pae', type: 'boolean', default: false, ui_group: 'General' }] };
 const fixture = { pred_method: 'fold_cp', sequence: 'MKTIIALSYIFCLVFADYKDDDDA', bcp_size_cp: 4,
     boltz_num_samples: 1, boltz_use_msa: false, run_frustrampnn: false };
-async function mount(initialValues: any = fixture, target: string | null = null) {
-    posts = []; reads = []; cacheReads = [];
+async function mount(initialValues: any = fixture, target: string | null = null, parentRoute?: string) {
+    posts = []; reads = []; cacheReads = []; drafts = []; templates = [];
     window.history.replaceState({}, '', '/submit');
     if (target) sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, target); else sessionStorage.removeItem(EXECUTION_TARGET_STORAGE_KEY);
     vi.spyOn(window, 'alert').mockImplementation(() => {});
@@ -47,17 +59,99 @@ async function mount(initialValues: any = fixture, target: string | null = null)
         if (config.url === '/api/execution-targets') data = targets;
         else if (config.url === '/api/execution-targets/active/telemetry') {
             reads.push(config.params.execution_target_id); data = telemetry(config.params.execution_target_id);
-        } else if (config.url?.includes('msa')) data = { providers: {}, cache_entries: 0 };
+        } else if (config.url === '/api/models') data = [];
+ else if (config.url === '/api/models/boltz_cp_experimental') data = nativeDefinition;
+ else if (config.url === '/api/templates') data = [];
+ else if (config.url?.includes('integration')) data = { workflows: {} };
+ else if (config.url?.includes('msa')) data = { providers: {}, cache_entries: 0 };
         else throw new Error(`Unexpected fixture GET ${config.url}`);
         return { data, status: 200, statusText: 'OK', headers: {}, config };
     };
     client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-    await act(async () => { renderer = create(<MemoryRouter><QueryClientProvider client={client}>
-        <StructurePredictionTemplate onBack={() => {}} initialValues={initialValues} />
+    await act(async () => { renderer = create(<MemoryRouter initialEntries={[parentRoute ?? '/submit']}><QueryClientProvider client={client}>
+        {parentRoute ? <JobSubmission /> : <StructurePredictionTemplate onBack={() => {}} initialValues={initialValues} onDraftChange={v => drafts.push(v)} onOpenTemplateManager={v => templates.push(v)} />}
     </QueryClientProvider></MemoryRouter>); });
     await flush(); await flush();
 }
 const preview = () => renderer.root.findByType(ExecutionTargetPicker).props.workflowRequest;
+it.each([2, 3, 5, 6, 7, 8, 12, 15, 16])('1D CP %i permits non-square divisors without changing 2D derivation', sizeCp => {
+    const pinnedGpus = Array.from({ length: sizeCp }, (_, i) => i);
+    expect(deriveBoltzCpGpuLaunchSettings({ pinnedGpus, requestedSizeCp: sizeCp, cpTopology: '1d' }).error).toBeUndefined();
+    expect(deriveBoltzCpGpuLaunchSettings({ pinnedGpus, cpTopology: '1d' }).sizeCp).toBe(sizeCp);
+    const square = Number.isInteger(Math.sqrt(sizeCp));
+    expect(Boolean(deriveBoltzCpGpuLaunchSettings({ pinnedGpus, requestedSizeCp: sizeCp }).error)).toBe(!square);
+});
+it.each([0, -1, 1.5, 3, 17])('1D retains invalid size %i rather than silently changing the request', sizeCp => {
+    const result = deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [0, 1, 2, 3], requestedSizeCp: sizeCp, cpTopology: '1d' });
+    expect(result.sizeCp).toBe(sizeCp); expect(result.error).toBeTruthy();
+});
+it('omitted 2D still derives the largest square divisor while 1D stays bounded by 16', () => {
+    const pinnedGpus = Array.from({ length: 24 }, (_, i) => i);
+    expect(deriveBoltzCpGpuLaunchSettings({ pinnedGpus }).sizeCp).toBe(4);
+    expect(deriveBoltzCpGpuLaunchSettings({ pinnedGpus, cpTopology: '1d' })).toMatchObject({ sizeCp: 12 });
+});
+
+it('real JobSubmission clone hydrates a public 1D request into Structure Prediction without catalog default overwrite', async () => {
+    localStorage.setItem('clonedJobData', JSON.stringify({ name: 'retained-fold', model_id: 'boltz_cp_experimental', mode: 'design',
+        params: { ...fixture, cp_topology: '1d', size_cp: 2, seed: 0, write_full_pae: true } }));
+    await mount(undefined, null, '/submit');
+    for (let i = 0; i < 60 && !renderer.root.findAllByType(StructurePredictionTemplate).length; i++) await flush();
+    expect(renderer.root.findByProps({ 'aria-label': 'Context Parallel Topology' }).props.value).toBe('1d');
+    await click('Launch Prediction');
+    expect(posts).toHaveLength(1);
+    expect(posts[0].params).toMatchObject({ bcp_cp_topology: '1d', bcp_size_cp: 2, bcp_seed: 0, bcp_write_full_pae: true });
+});
+it('standalone model route uses the model-owned enum and sends cp_topology exactly without pipeline alias', async () => {
+    await mount(undefined, null, '/submit?model=boltz_cp_experimental&mode=design');
+    for (let i = 0; i < 60 && !renderer.root.findAllByType('select').some(n => n.props.value === '2d'); i++) await flush();
+    const topology = renderer.root.findAllByType('select').find(n => n.props.value === '2d');
+    expect(topology).toBeTruthy();
+    expect(topology!.findAllByType('option').map(n => n.props.value)).toEqual(['2d', '1d']);
+    await act(async () => topology!.props.onChange({ target: { value: '1d' } })); await flush();
+    expect(text(renderer.root)).toContain('confidence values can diverge');
+    await act(async () => renderer.root.findByProps({ 'aria-label': 'Fold-CP job name' }).props.onChange({ target: { value: 'offline-native-fold' } }));
+    await click('Launch Experiment');
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toMatchObject({ model_id: 'boltz_cp_experimental', mode: 'design', params: { cp_topology: '1d', seed: 0, write_full_pae: false } });
+    expect(posts[0].params).not.toHaveProperty('bcp_cp_topology');
+});
+
+it.each(['cp_topology', 'bcp_cp_topology'])('retains populated %s 1D through draft, serialized template reopen and submitted clone', async key => {
+    await mount({ ...fixture, [key]: '1d', bcp_size_cp: 2, bcp_seed: 0, bcp_write_full_pae: true });
+    expect(renderer.root.findByProps({ 'aria-label': 'Context Parallel Topology' }).props.value).toBe('1d');
+    expect(text(renderer.root)).toContain('confidence values can diverge');
+    await click('Save Template');
+    const saved = JSON.parse(JSON.stringify(templates.at(-1).currentParams));
+    expect(saved).toMatchObject({ bcp_cp_topology: '1d', bcp_size_cp: 2, bcp_seed: 0, bcp_write_full_pae: true });
+    expect(saved).toEqual(drafts.at(-1));
+    await act(async () => renderer.unmount()); client.clear();
+    await mount(saved);
+    await click('Launch Prediction');
+    expect(posts).toHaveLength(1);
+    expect(posts[0].params).toMatchObject({ bcp_cp_topology: '1d', bcp_size_cp: 2, bcp_gpu_ids: '8,9', bcp_seed: 0, bcp_write_full_pae: true });
+    expect(posts[0].params).not.toHaveProperty('cp_topology');
+    const clonedParams = JSON.parse(JSON.stringify(posts[0].params));
+    await act(async () => renderer.unmount()); client.clear();
+    await mount(clonedParams);
+    expect(renderer.root.findByProps({ 'aria-label': 'Context Parallel Topology' }).props.value).toBe('1d');
+    await click('Launch Prediction');
+    expect(posts[0].params).toMatchObject({ bcp_cp_topology: '1d', bcp_size_cp: 2, bcp_seed: 0 });
+});
+it('keeps omitted 2D square behavior and only admits non-square CP after explicit 1D selection', async () => {
+    await mount({ ...fixture, bcp_size_cp: 2 });
+    expect(renderer.root.findByProps({ 'aria-label': 'Context Parallel Topology' }).props.value).toBe('2d');
+    expect(preview().params).not.toHaveProperty('bcp_cp_topology');
+    await click('Launch Prediction'); expect(posts).toHaveLength(0);
+    await act(async () => renderer.root.findByProps({ 'aria-label': 'Context Parallel Topology' }).props.onChange({ target: { value: '1d' } }));
+    await flush();
+    expect(preview().params).toMatchObject({ bcp_cp_topology: '1d', bcp_size_cp: 2 });
+    await click('Launch Prediction'); expect(posts).toHaveLength(1);
+    await act(async () => renderer.root.findByProps({ 'aria-label': 'Context Parallel Topology' }).props.onChange({ target: { value: '2d' } }));
+    await flush();
+    expect(preview().params).toMatchObject({ bcp_cp_topology: '2d', bcp_size_cp: 2 });
+    await click('Launch Prediction'); expect(posts).toHaveLength(1);
+});
+
 async function click(label: string) {
     const button = renderer.root.findAllByType('button').find(n => text(n).includes(label));
     expect(button, label).toBeTruthy();
@@ -66,7 +160,7 @@ async function click(label: string) {
 async function sample(data: any) {
     await act(async () => { client.setQueryData(['active-remote-gpu-telemetry', 'vast:one'], { data }); }); await flush();
 }
-afterEach(async () => { if (renderer) await act(async () => renderer.unmount()); client?.clear(); api.defaults.adapter = adapter; sessionStorage.clear(); cacheReady = false; vi.restoreAllMocks(); });
+afterEach(async () => { if (renderer) await act(async () => renderer.unmount()); client?.clear(); api.defaults.adapter = adapter; sessionStorage.clear(); localStorage.clear(); cacheReady = false; vi.restoreAllMocks(); });
 
 it('admits a saved local MSA provider when Fold-CP MSA is disabled', async () => {
     await mount({ ...fixture, bcp_size_cp: 1, msa_provider: 'local' });

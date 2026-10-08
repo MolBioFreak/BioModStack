@@ -21,6 +21,8 @@ class FragmentEnd:
     type: EndType
     overhang: str = ""
     label: Optional[str] = None
+    # Physical protruding strand, written 5′→3′; None retains legacy notation.
+    protruding_strand: Optional[Literal["top", "bottom"]] = None
 
 
 @dataclass(slots=True)

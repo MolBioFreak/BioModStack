@@ -445,6 +445,17 @@ def test_canonical_environment_root_requires_exact_clean_durable_branch(tmp_path
         tailnet._validate_canonical_environment_root(root, "development")
 
     subprocess.run(["git", "-C", str(root), "restore", "tracked.txt"], check=True)
+
+    # Managed Development sync keeps the canonical checkout detached at origin/test.
+    subprocess.run(["git", "-C", str(root), "checkout", "-q", "--detach", head], check=True)
+    assert tailnet._validate_canonical_environment_root(root, "development") == head
+
+    (root / "tracked.txt").write_text("ahead\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "commit", "-q", "-am", "ahead"], check=True)
+    with pytest.raises(tailnet.TailnetEnvironmentError, match="does not exactly match origin/test"):
+        tailnet._validate_canonical_environment_root(root, "development")
+
+    subprocess.run(["git", "-C", str(root), "checkout", "-q", "test"], check=True)
     subprocess.run(["git", "-C", str(root), "branch", "-m", "main"], check=True)
     with pytest.raises(tailnet.TailnetEnvironmentError, match="must be branch test"):
         tailnet._validate_canonical_environment_root(root, "development")
@@ -730,9 +741,21 @@ def test_operator_development_frontend_is_pinned_to_isolated_dev_api(monkeypatch
     assert "http://127.0.0.1:8000" not in unit
     assert "http://127.0.0.1:8000" not in dropin
     assert f"VITE_BMS_BUILD_SHA={'a' * 40}" in unit
-    assert f"VITE_BMS_BUILD_SHA={'a' * 40}" in dropin
+    assert "VITE_BMS_BUILD_SHA=" not in dropin
     assert "VITE_BMS_BUILD_TIME=2026-07-27T01:00:00Z" in unit
-    assert "VITE_BMS_BUILD_TIME=2026-07-27T01:00:00Z" in dropin
+    assert "VITE_BMS_BUILD_ID=" not in dropin
+    assert "VITE_BMS_BUILD_TIME=" not in dropin
+    # A later managed sync regenerates the base unit without rerunning this
+    # installer; a surviving drop-in must not repin the previous revision.
+    next_unit = unit.replace("a" * 40, "b" * 40)
+    (systemd_dir / tailnet.FRONTEND_SERVICE).write_text(next_unit)
+    effective = {}
+    for line in (next_unit + "\n" + dropin).splitlines():
+        if line.startswith("Environment="):
+            key, value = line.removeprefix("Environment=").split("=", 1)
+            effective[key] = value
+    assert effective["VITE_BMS_BUILD_SHA"] == "b" * 40
+    assert effective["BMS_DEV_API_PROXY_TARGET"] == "http://127.0.0.1:18002"
 
 
 def test_development_frontend_requires_every_exclusive_loopback_vite_owner(monkeypatch, tmp_path: Path) -> None:

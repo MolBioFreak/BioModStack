@@ -6,7 +6,8 @@ import {QueryClient, QueryClientProvider} from '@tanstack/react-query';
 import {api, type Design} from '../../src/lib/api';
 import {AnalyticsDashboard} from '../../src/components/AnalyticsDashboard';
 import {validateScientificEnvelope} from '../../src/lib/scientificAnalytics';
-vi.mock('react-plotly.js',()=>({default:()=>null}));
+import { change, plots, scatter, settled } from './analyticsPlotHarness';
+vi.mock('react-plotly.js',()=>import('./analyticsPlotHarness'));
 const directory=process.env.BMS_BOLTZGEN_ANALYTICS_WIRES;
 if(!directory)throw new Error('Real published SQLite API wires required');
 const load=(name:string)=>JSON.parse(readFileSync(`${directory}/${name}.json`,'utf8'));
@@ -21,17 +22,30 @@ test.each(['zero','csv_zero','missing','invalid','source_swapped','unknown_produ
     const client=new QueryClient({defaultOptions:{queries:{retry:false}}});
     const host=document.createElement('div');document.body.append(host);root=createRoot(host);
     await act(async()=>root!.render(<QueryClientProvider client={client}><AnalyticsDashboard designs={wire.points as Design[]} jobId="job" jobName="Published BoltzGen"/></QueryClientProvider>));
-    await act(async()=>{await new Promise(resolve=>setTimeout(resolve,30));});
+    await settled(host);
     expect(requests).toContain('/api/designs/by-job/job/plotly-metrics');
     expect(host.textContent).toContain('design_ptm / native_design_chain_tokens / fraction');
     expect(host.textContent).toContain(`filter_rmsd / ${name==='csv_zero'?'native_refolded_complex_backbone':'native_filter_complex_alignment'} / angstrom`);
-    expect(host.querySelectorAll('circle')).toHaveLength(name==='zero'?1:name==='csv_zero'?3:0);
     if(name==='zero'||name==='csv_zero'){
-        for(const mark of host.querySelectorAll('circle')){
-            expect(mark.getAttribute('data-x')).toBe('0');expect(mark.getAttribute('data-y')).toBe('0');
-        }
+        expect(host.querySelector('[aria-label="Plotly Lab"]')).not.toBeNull();
+        await change(host, '2D X metric', 'design_ptm');
+        await change(host, '2D Y metric', name === 'csv_zero' ? 'filter_rmsd' : 'affinity_probability');
+        const count = wire.points.length;
+        expect(scatter(host).data[0].x).toEqual(Array(count).fill(0));
+        expect(scatter(host).data[0].y).toEqual(Array(count).fill(0));
+        expect(scatter(host).layout.xaxis.title.text).toContain('(fraction)');
+        expect(scatter(host).layout.yaxis.title.text).toContain(name === 'csv_zero' ? '(angstrom)' : '(fraction)');
     }else{
-        expect(host.textContent).toContain(wire.points[0].metric_states.design_ptm.reason_code);
+        if (Object.keys(wire.points[0].metrics).length) {
+            expect(host.querySelector('[aria-label="Plotly Lab"]')).not.toBeNull();
+            expect(plots(host).some(plot => plot.data[0].type === 'histogram')).toBe(true);
+            expect([...host.querySelectorAll('select[aria-label="2D X metric"] option')].map(option => (option as HTMLOptionElement).value)).not.toContain('design_ptm');
+        } else {
+            expect(plots(host)).toHaveLength(0);
+            expect(host.textContent).toContain('No finite numeric observations');
+        }
+        const reason = [...host.querySelectorAll('td')].find(td => td.textContent?.includes(wire.points[0].metric_states.design_ptm.reason_code));
+        expect(reason?.closest('details')?.open).toBe(false);
     }
     client.clear();
 });

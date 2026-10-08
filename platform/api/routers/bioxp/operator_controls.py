@@ -20,9 +20,9 @@ from services.bioxp.operator_requests import (
     OperatorAdmissionRequest,
     OperatorAssessmentRequest,
     OperatorDeckMoveInputsV1,
+    OperatorDeckMoveToWellInputsV2,
     OperatorEmptyInputsV2,
     OperatorInterruptRequestV1,
-    OperatorMethodRequestV1,
     OperatorMoveAbsoluteInputsV2,
     OperatorMoveStepsInputsV2,
     OperatorMoveXYInputsV2,
@@ -99,6 +99,61 @@ def _robot_request_body(request: Any) -> dict[str, Any]:
     return request.model_dump(exclude={"expected_connection_generation"}, mode="json")
 
 
+# Full passive readers use the existing generation lease, not action admission.
+@router.get("/operator-controls/readers/settings", response_model=None)
+async def operator_reader_settings(
+    expected_connection_generation: int = Query(gt=0),
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+) -> Any:
+    return await _relay(runtime.connection.request_active_query(
+        "oem_machine_config", expected_generation=expected_connection_generation,
+        require_fresh=False,
+    ))
+
+
+@router.get("/operator-controls/readers/position-table", response_model=None)
+async def operator_reader_position_table(
+    expected_connection_generation: int = Query(gt=0),
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+) -> Any:
+    return await _relay(runtime.connection.request_active_query(
+        "oem_position_table", expected_generation=expected_connection_generation,
+        require_fresh=False,
+    ))
+
+
+@router.get("/operator-controls/updates", response_model=None)
+async def operator_updates(
+    request: Request,
+    response: Response,
+    expected_connection_generation: int = Query(gt=0),
+    after_sequence: int | None = Query(default=None, ge=0),
+    after_pose_sequence: int | None = Query(default=None, ge=0),
+    wait_s: float = Query(default=25.0, ge=0, le=25, allow_inf_nan=False),
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+) -> Any:
+    response.headers["Cache-Control"] = "no-store"
+    call = asyncio.create_task(_relay(runtime.connection.operator_updates(
+        expected_generation=expected_connection_generation,
+        after_sequence=after_sequence, after_pose_sequence=after_pose_sequence, wait_s=wait_s,
+    )))
+
+    async def disconnected() -> None:
+        while (await request.receive())["type"] != "http.disconnect":
+            pass
+
+    disconnect = asyncio.create_task(disconnected())
+    try:
+        done, _ = await asyncio.wait((call, disconnect), return_when=asyncio.FIRST_COMPLETED)
+        if call in done:
+            return call.result()
+        raise asyncio.CancelledError()
+    finally:
+        call.cancel()
+        disconnect.cancel()
+        await asyncio.gather(call, disconnect, return_exceptions=True)
+
+
 # --- V2 canonical operator plane -------------------------------------------------
 
 _V2_NORMAL_INPUT_TYPES = {
@@ -111,6 +166,7 @@ _V2_NORMAL_INPUT_TYPES = {
     "oem.y.move_absolute": OperatorYMoveAbsoluteInputsV2,
     "oem.y.manual_panel_home": OperatorEmptyInputsV2,
     "oem.z.manual_home": OperatorEmptyInputsV2,
+    "oem.z.diagnostic_home_axis": OperatorEmptyInputsV2,
     "oem.z.clear": OperatorEmptyInputsV2,
     "oem.z.move_steps": OperatorMoveStepsInputsV2,
     "oem.z.move_absolute": OperatorMoveAbsoluteInputsV2,
@@ -118,6 +174,7 @@ _V2_NORMAL_INPUT_TYPES = {
     "oem.xy.home": OperatorEmptyInputsV2,
     "oem.deck.collect_authority": OperatorEmptyInputsV2,
     "oem.deck.move_to_location": OperatorDeckMoveInputsV1,
+    "oem.deck.move_to_well": OperatorDeckMoveToWellInputsV2,
 }
 
 
@@ -214,28 +271,6 @@ async def operator_action_receipt_v2(
                            path_params={"command_id": command_id}, params={"detail": detail})
 
 
-@router.post(
-    "/operator-controls/v2/methods",
-    response_model=None,
-    status_code=202,
-    dependencies=[Depends(require_bioxp_mutation_access)],
-)
-async def submit_operator_method_v1(
-    request: OperatorMethodRequestV1,
-    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
-) -> Any:
-    return await _relay(runtime.connection.request_active_v2_enqueue(
-        "submit_operator_method_v1",
-        expected_generation=request.expected_connection_generation,
-        json_data=_robot_request_body(request),
-    ))
-
-
-@router.get("/operator-controls/v2/methods/{method_id}", response_model=None)
-async def operator_method_status_v1(method_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> Any:
-    return await _v2_query(runtime, "operator_method_status_v1", path_params={"method_id": method_id})
-
-
 @router.get("/operator-controls/v2/commands/{command_id}", response_model=None)
 async def operator_command_status_v2(
     command_id: str,
@@ -251,20 +286,28 @@ async def operator_command_status_v2(
 @router.get("/operator-controls/catalog", response_model=None)
 async def operator_control_catalog(
     z_target_steps: int | None = Query(default=None, ge=-2147483648, le=2147483647),
+    view: Literal["full", "metadata", "assessment"] = Query(default="full"),
+    assessment_base: str | None = Query(default=None, max_length=64),
+    canonical_assessment_base: str | None = Query(default=None, max_length=64),
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> Any:
     generation = runtime.connection.generation
+    view_params = {"view": view} if view != "full" else {}
     queries = [asyncio.create_task(query) for query in (
         runtime.connection.request_active_query(
             "operator_control_catalog",
-            params={"z_target_steps": z_target_steps} if z_target_steps is not None else None,
+            params={**view_params,
+                    **({"assessment_base": assessment_base} if view == "assessment" and isinstance(assessment_base, str) else {}),
+                    **({"z_target_steps": z_target_steps} if z_target_steps is not None else {})} or None,
             expected_generation=generation,
             require_fresh=False,
         ),
         runtime.connection.request_active_v2_query(
             "operator_control_catalog_v2",
             expected_generation=generation,
-            params={"schema_version": "bioxp.operator_control_catalog.v2"},
+            params={"schema_version": "bioxp.operator_control_catalog.v2", **view_params,
+                    **({"assessment_base": canonical_assessment_base}
+                       if view == "assessment" and isinstance(canonical_assessment_base, str) else {})},
         ),
     )]
     try:
@@ -277,6 +320,13 @@ async def operator_control_catalog(
             if not query.done():
                 query.cancel()
         await asyncio.gather(*queries, return_exceptions=True)
+    if view != "full" and any(not isinstance(body, dict) or body.get("catalog_view") != view for body in (catalog, canonical)):
+        raise HTTPException(426, detail="Robot catalog split-view release required; no full-poll fallback")
+    if view == "assessment" and any(
+        isinstance(requested, str) and (not isinstance(body, dict) or "assessment_revision" not in body)
+        for requested, body in ((assessment_base, catalog), (canonical_assessment_base, canonical))
+    ):
+        raise HTTPException(426, detail="Robot catalog update release required; no full-poll fallback")
     if isinstance(catalog, dict):
         catalog = {**catalog, "canonical": canonical}
     return catalog

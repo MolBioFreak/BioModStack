@@ -1,0 +1,897 @@
+{
+  "http_status": 200,
+  "request": {
+    "method": {
+      "schema": "bms.bioxp-method.v1",
+      "name": "Thermal UI receiving test \u2014 compile only, not a validated recipe",
+      "parameters": [],
+      "procedures": [],
+      "steps": [
+        {
+          "step_id": "thermal-ui-0",
+          "type": "action",
+          "action": "chiller_setpoint",
+          "inputs": {
+            "bank": "rc",
+            "target_temp_c": "10.00"
+          }
+        },
+        {
+          "step_id": "thermal-ui-1",
+          "type": "action",
+          "action": "chiller_setpoint",
+          "inputs": {
+            "bank": "oc",
+            "target_temp_c": "10.00"
+          }
+        },
+        {
+          "step_id": "thermal-ui-2",
+          "type": "action",
+          "action": "thermal_door",
+          "inputs": {
+            "door_command": "DO"
+          }
+        },
+        {
+          "step_id": "thermal-ui-3",
+          "type": "action",
+          "action": "thermal_door",
+          "inputs": {
+            "door_command": "DC"
+          }
+        },
+        {
+          "step_id": "thermal-ui-4",
+          "type": "action",
+          "action": "thermal_setpoint",
+          "inputs": {
+            "bank": "lid",
+            "target_temp_c": "105.00"
+          }
+        },
+        {
+          "step_id": "thermal-ui-5",
+          "type": "action",
+          "action": "thermal_setpoint",
+          "inputs": {
+            "bank": "pedestal",
+            "target_temp_c": "40.00"
+          }
+        },
+        {
+          "step_id": "thermal-ui-6",
+          "type": "action",
+          "action": "thermal_profile",
+          "inputs": {
+            "repeat": "3",
+            "segments": [
+              {
+                "bank": "nest",
+                "target_temp_c": "95.00",
+                "duration_s": "30.00",
+                "start": "attainment",
+                "tolerance_c": "0.5",
+                "timeout_s": "120",
+                "cool_rate_c_s": "-1.00",
+                "heat_rate_c_s": "1.00",
+                "fan_speed": "128"
+              },
+              {
+                "bank": "nest",
+                "target_temp_c": "55.00",
+                "duration_s": "30.00",
+                "start": "dispatch"
+              },
+              {
+                "bank": "nest",
+                "target_temp_c": "72.00",
+                "duration_s": "60.00",
+                "start": "dispatch"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "bindings": {},
+    "dependencies": {},
+    "initial_state": {}
+  },
+  "result": {
+    "document": {
+      "protocol_id": "method-8c42ac192b18012165172fa92e6626664890787bc544e8f38214d6bd5030084f",
+      "version": 1,
+      "stages": [
+        {
+          "stage_id": "manual",
+          "title": "Manual pipetting",
+          "review_required": false,
+          "actions": [
+            {
+              "action_id": "method-action-0",
+              "stage_id": "manual",
+              "kind": "chiller_setpoint",
+              "params": {
+                "bank": "rc",
+                "target_temp_c": 10.0
+              },
+              "description": null,
+              "required_capability": null,
+              "review_required": false,
+              "pause_message": null,
+              "oem_opcode": null,
+              "source_occurrence_id": "occ-558165f8a00a026a2d19276c",
+              "source_key": null,
+              "metadata": {
+                "generated_index": 0,
+                "bms_method": {
+                  "occurrence_id": "occ-558165f8a00a026a2d19276c",
+                  "step_id": "thermal-ui-0",
+                  "path": "/method/steps/0",
+                  "call_path": [],
+                  "loop_path": [],
+                  "group_path": []
+                }
+              },
+              "on_error": "stop"
+            },
+            {
+              "action_id": "method-action-1",
+              "stage_id": "manual",
+              "kind": "chiller_setpoint",
+              "params": {
+                "bank": "oc",
+                "target_temp_c": 10.0
+              },
+              "description": null,
+              "required_capability": null,
+              "review_required": false,
+              "pause_message": null,
+              "oem_opcode": null,
+              "source_occurrence_id": "occ-1a091de7bdf16e3dc9ba3d8f",
+              "source_key": null,
+              "metadata": {
+                "generated_index": 0,
+                "bms_method": {
+                  "occurrence_id": "occ-1a091de7bdf16e3dc9ba3d8f",
+                  "step_id": "thermal-ui-1",
+                  "path": "/method/steps/1",
+                  "call_path": [],
+                  "loop_path": [],
+                  "group_path": []
+                }
+              },
+              "on_error": "stop"
+            },
+            {
+              "action_id": "method-action-2",
+              "stage_id": "manual",
+              "kind": "thermal_door",
+              "params": {
+                "door_command": "DO"
+              },
+              "description": null,
+              "required_capability": null,
+              "review_required": false,
+              "pause_message": null,
+              "oem_opcode": null,
+              "source_occurrence_id": "occ-8a66d3246df43fbb0dca27b5",
+              "source_key": null,
+              "metadata": {
+                "generated_index": 0,
+                "bms_method": {
+                  "occurrence_id": "occ-8a66d3246df43fbb0dca27b5",
+                  "step_id": "thermal-ui-2",
+                  "path": "/method/steps/2",
+                  "call_path": [],
+                  "loop_path": [],
+                  "group_path": []
+                }
+              },
+              "on_error": "stop"
+            },
+            {
+              "action_id": "method-action-3",
+              "stage_id": "manual",
+              "kind": "thermal_door",
+              "params": {
+                "door_command": "DC"
+              },
+              "description": null,
+              "required_capability": null,
+              "review_required": false,
+              "pause_message": null,
+              "oem_opcode": null,
+              "source_occurrence_id": "occ-ead5360235433248a44b34ae",
+              "source_key": null,
+              "metadata": {
+                "generated_index": 0,
+                "bms_method": {
+                  "occurrence_id": "occ-ead5360235433248a44b34ae",
+                  "step_id": "thermal-ui-3",
+                  "path": "/method/steps/3",
+                  "call_path": [],
+                  "loop_path": [],
+                  "group_path": []
+                }
+              },
+              "on_error": "stop"
+            },
+            {
+              "action_id": "method-action-4",
+              "stage_id": "manual",
+              "kind": "thermal_setpoint",
+              "params": {
+                "bank": "lid",
+                "target_temp_c": 105.0
+              },
+              "description": null,
+              "required_capability": null,
+              "review_required": false,
+              "pause_message": null,
+              "oem_opcode": null,
+              "source_occurrence_id": "occ-e0cdae7ff15686e6dd1f8919",
+              "source_key": null,
+              "metadata": {
+                "generated_index": 0,
+                "bms_method": {
+                  "occurrence_id": "occ-e0cdae7ff15686e6dd1f8919",
+                  "step_id": "thermal-ui-4",
+                  "path": "/method/steps/4",
+                  "call_path": [],
+                  "loop_path": [],
+                  "group_path": []
+                }
+              },
+              "on_error": "stop"
+            },
+            {
+              "action_id": "method-action-5",
+              "stage_id": "manual",
+              "kind": "thermal_setpoint",
+              "params": {
+                "bank": "pedestal",
+                "target_temp_c": 40.0
+              },
+              "description": null,
+              "required_capability": null,
+              "review_required": false,
+              "pause_message": null,
+              "oem_opcode": null,
+              "source_occurrence_id": "occ-1176f152ce27464fbd7aca6b",
+              "source_key": null,
+              "metadata": {
+                "generated_index": 0,
+                "bms_method": {
+                  "occurrence_id": "occ-1176f152ce27464fbd7aca6b",
+                  "step_id": "thermal-ui-5",
+                  "path": "/method/steps/5",
+                  "call_path": [],
+                  "loop_path": [],
+                  "group_path": []
+                }
+              },
+              "on_error": "stop"
+            },
+            {
+              "action_id": "method-action-6",
+              "stage_id": "manual",
+              "kind": "thermal_profile",
+              "params": {
+                "repeat": 3,
+                "segments": [
+                  {
+                    "bank": "nest",
+                    "target_temp_c": 95.0,
+                    "duration_s": 30.0,
+                    "start": "attainment",
+                    "tolerance_c": 0.5,
+                    "timeout_s": 120.0,
+                    "cool_rate_c_s": -1.0,
+                    "heat_rate_c_s": 1.0,
+                    "fan_speed": 128
+                  },
+                  {
+                    "bank": "nest",
+                    "target_temp_c": 55.0,
+                    "duration_s": 30.0,
+                    "start": "dispatch"
+                  },
+                  {
+                    "bank": "nest",
+                    "target_temp_c": 72.0,
+                    "duration_s": 60.0,
+                    "start": "dispatch"
+                  }
+                ]
+              },
+              "description": null,
+              "required_capability": null,
+              "review_required": false,
+              "pause_message": null,
+              "oem_opcode": null,
+              "source_occurrence_id": "occ-4cb7a70490b2d89831746b7e",
+              "source_key": null,
+              "metadata": {
+                "generated_index": 0,
+                "bms_method": {
+                  "occurrence_id": "occ-4cb7a70490b2d89831746b7e",
+                  "step_id": "thermal-ui-6",
+                  "path": "/method/steps/6",
+                  "call_path": [],
+                  "loop_path": [],
+                  "group_path": []
+                }
+              },
+              "on_error": "stop"
+            }
+          ],
+          "metadata": {
+            "bms_method": {
+              "group_path": [],
+              "call_path": [],
+              "loop_path": []
+            }
+          }
+        }
+      ],
+      "metadata": {
+        "manual_scope": "explicit_steps_only",
+        "well_alignment": "source_machine_tip_location",
+        "bms_method": {
+          "compiler": "bms-method-compiler.v1",
+          "digest": "8c42ac192b18012165172fa92e6626664890787bc544e8f38214d6bd5030084f",
+          "method": {
+            "schema": "bms.bioxp-method.v1",
+            "name": "Thermal UI receiving test \u2014 compile only, not a validated recipe",
+            "parameters": [],
+            "procedures": [],
+            "steps": [
+              {
+                "step_id": "thermal-ui-0",
+                "type": "action",
+                "action": "chiller_setpoint",
+                "inputs": {
+                  "bank": "rc",
+                  "target_temp_c": "10.00"
+                }
+              },
+              {
+                "step_id": "thermal-ui-1",
+                "type": "action",
+                "action": "chiller_setpoint",
+                "inputs": {
+                  "bank": "oc",
+                  "target_temp_c": "10.00"
+                }
+              },
+              {
+                "step_id": "thermal-ui-2",
+                "type": "action",
+                "action": "thermal_door",
+                "inputs": {
+                  "door_command": "DO"
+                }
+              },
+              {
+                "step_id": "thermal-ui-3",
+                "type": "action",
+                "action": "thermal_door",
+                "inputs": {
+                  "door_command": "DC"
+                }
+              },
+              {
+                "step_id": "thermal-ui-4",
+                "type": "action",
+                "action": "thermal_setpoint",
+                "inputs": {
+                  "bank": "lid",
+                  "target_temp_c": "105.00"
+                }
+              },
+              {
+                "step_id": "thermal-ui-5",
+                "type": "action",
+                "action": "thermal_setpoint",
+                "inputs": {
+                  "bank": "pedestal",
+                  "target_temp_c": "40.00"
+                }
+              },
+              {
+                "step_id": "thermal-ui-6",
+                "type": "action",
+                "action": "thermal_profile",
+                "inputs": {
+                  "repeat": "3",
+                  "segments": [
+                    {
+                      "bank": "nest",
+                      "target_temp_c": "95.00",
+                      "duration_s": "30.00",
+                      "start": "attainment",
+                      "tolerance_c": "0.5",
+                      "timeout_s": "120",
+                      "cool_rate_c_s": "-1.00",
+                      "heat_rate_c_s": "1.00",
+                      "fan_speed": "128"
+                    },
+                    {
+                      "bank": "nest",
+                      "target_temp_c": "55.00",
+                      "duration_s": "30.00",
+                      "start": "dispatch"
+                    },
+                    {
+                      "bank": "nest",
+                      "target_temp_c": "72.00",
+                      "duration_s": "60.00",
+                      "start": "dispatch"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "bindings": {},
+          "dependencies": {},
+          "native_source_commit": "610e396dcbdedd6ba31ccd8fd3d697096dcedec2",
+          "resolved_liquids": [],
+          "water_substitutions": [],
+          "initial_state": {}
+        }
+      }
+    },
+    "issues": [],
+    "digest": "8c42ac192b18012165172fa92e6626664890787bc544e8f38214d6bd5030084f",
+    "resolved": {
+      "parameters": {},
+      "occurrences": [
+        {
+          "occurrence_id": "occ-558165f8a00a026a2d19276c",
+          "step_id": "thermal-ui-0",
+          "path": "/method/steps/0",
+          "call_path": [],
+          "loop_path": [],
+          "group_path": [],
+          "on_error": "stop",
+          "action": "chiller_setpoint",
+          "inputs": {
+            "bank": "rc",
+            "target_temp_c": "10.00"
+          }
+        },
+        {
+          "occurrence_id": "occ-1a091de7bdf16e3dc9ba3d8f",
+          "step_id": "thermal-ui-1",
+          "path": "/method/steps/1",
+          "call_path": [],
+          "loop_path": [],
+          "group_path": [],
+          "on_error": "stop",
+          "action": "chiller_setpoint",
+          "inputs": {
+            "bank": "oc",
+            "target_temp_c": "10.00"
+          }
+        },
+        {
+          "occurrence_id": "occ-8a66d3246df43fbb0dca27b5",
+          "step_id": "thermal-ui-2",
+          "path": "/method/steps/2",
+          "call_path": [],
+          "loop_path": [],
+          "group_path": [],
+          "on_error": "stop",
+          "action": "thermal_door",
+          "inputs": {
+            "door_command": "DO"
+          }
+        },
+        {
+          "occurrence_id": "occ-ead5360235433248a44b34ae",
+          "step_id": "thermal-ui-3",
+          "path": "/method/steps/3",
+          "call_path": [],
+          "loop_path": [],
+          "group_path": [],
+          "on_error": "stop",
+          "action": "thermal_door",
+          "inputs": {
+            "door_command": "DC"
+          }
+        },
+        {
+          "occurrence_id": "occ-e0cdae7ff15686e6dd1f8919",
+          "step_id": "thermal-ui-4",
+          "path": "/method/steps/4",
+          "call_path": [],
+          "loop_path": [],
+          "group_path": [],
+          "on_error": "stop",
+          "action": "thermal_setpoint",
+          "inputs": {
+            "bank": "lid",
+            "target_temp_c": "105.00"
+          }
+        },
+        {
+          "occurrence_id": "occ-1176f152ce27464fbd7aca6b",
+          "step_id": "thermal-ui-5",
+          "path": "/method/steps/5",
+          "call_path": [],
+          "loop_path": [],
+          "group_path": [],
+          "on_error": "stop",
+          "action": "thermal_setpoint",
+          "inputs": {
+            "bank": "pedestal",
+            "target_temp_c": "40.00"
+          }
+        },
+        {
+          "occurrence_id": "occ-4cb7a70490b2d89831746b7e",
+          "step_id": "thermal-ui-6",
+          "path": "/method/steps/6",
+          "call_path": [],
+          "loop_path": [],
+          "group_path": [],
+          "on_error": "stop",
+          "action": "thermal_profile",
+          "inputs": {
+            "repeat": "3",
+            "segments": [
+              {
+                "bank": "nest",
+                "target_temp_c": "95.00",
+                "duration_s": "30.00",
+                "start": "attainment",
+                "tolerance_c": "0.5",
+                "timeout_s": "120",
+                "cool_rate_c_s": "-1.00",
+                "heat_rate_c_s": "1.00",
+                "fan_speed": "128"
+              },
+              {
+                "bank": "nest",
+                "target_temp_c": "55.00",
+                "duration_s": "30.00",
+                "start": "dispatch"
+              },
+              {
+                "bank": "nest",
+                "target_temp_c": "72.00",
+                "duration_s": "60.00",
+                "start": "dispatch"
+              }
+            ]
+          }
+        }
+      ],
+      "liquids": []
+    },
+    "dependencies": {},
+    "water_substitutions": [],
+    "provenance": [
+      {
+        "occurrence_id": "occ-558165f8a00a026a2d19276c",
+        "step_id": "thermal-ui-0",
+        "path": "/method/steps/0",
+        "call_path": [],
+        "loop_path": [],
+        "native_action_ids": [
+          "method-action-0"
+        ]
+      },
+      {
+        "occurrence_id": "occ-1a091de7bdf16e3dc9ba3d8f",
+        "step_id": "thermal-ui-1",
+        "path": "/method/steps/1",
+        "call_path": [],
+        "loop_path": [],
+        "native_action_ids": [
+          "method-action-1"
+        ]
+      },
+      {
+        "occurrence_id": "occ-8a66d3246df43fbb0dca27b5",
+        "step_id": "thermal-ui-2",
+        "path": "/method/steps/2",
+        "call_path": [],
+        "loop_path": [],
+        "native_action_ids": [
+          "method-action-2"
+        ]
+      },
+      {
+        "occurrence_id": "occ-ead5360235433248a44b34ae",
+        "step_id": "thermal-ui-3",
+        "path": "/method/steps/3",
+        "call_path": [],
+        "loop_path": [],
+        "native_action_ids": [
+          "method-action-3"
+        ]
+      },
+      {
+        "occurrence_id": "occ-e0cdae7ff15686e6dd1f8919",
+        "step_id": "thermal-ui-4",
+        "path": "/method/steps/4",
+        "call_path": [],
+        "loop_path": [],
+        "native_action_ids": [
+          "method-action-4"
+        ]
+      },
+      {
+        "occurrence_id": "occ-1176f152ce27464fbd7aca6b",
+        "step_id": "thermal-ui-5",
+        "path": "/method/steps/5",
+        "call_path": [],
+        "loop_path": [],
+        "native_action_ids": [
+          "method-action-5"
+        ]
+      },
+      {
+        "occurrence_id": "occ-4cb7a70490b2d89831746b7e",
+        "step_id": "thermal-ui-6",
+        "path": "/method/steps/6",
+        "call_path": [],
+        "loop_path": [],
+        "native_action_ids": [
+          "method-action-6"
+        ]
+      }
+    ],
+    "simulation": {
+      "layer": "planned",
+      "state": {
+        "vessels": {},
+        "channels": {},
+        "labware": {},
+        "thermal_tasks": {
+          "occ-558165f8a00a026a2d19276c": {
+            "action": "chiller_setpoint",
+            "inputs": {
+              "bank": "rc",
+              "target_temp_c": "10.00"
+            },
+            "attainment": "unknown"
+          },
+          "occ-1a091de7bdf16e3dc9ba3d8f": {
+            "action": "chiller_setpoint",
+            "inputs": {
+              "bank": "oc",
+              "target_temp_c": "10.00"
+            },
+            "attainment": "unknown"
+          },
+          "occ-e0cdae7ff15686e6dd1f8919": {
+            "action": "thermal_setpoint",
+            "inputs": {
+              "bank": "lid",
+              "target_temp_c": "105.00"
+            },
+            "attainment": "unknown"
+          },
+          "occ-1176f152ce27464fbd7aca6b": {
+            "action": "thermal_setpoint",
+            "inputs": {
+              "bank": "pedestal",
+              "target_temp_c": "40.00"
+            },
+            "attainment": "unknown"
+          },
+          "occ-4cb7a70490b2d89831746b7e": {
+            "action": "thermal_profile",
+            "inputs": {
+              "repeat": "3",
+              "segments": [
+                {
+                  "bank": "nest",
+                  "target_temp_c": "95.00",
+                  "duration_s": "30.00",
+                  "start": "attainment",
+                  "tolerance_c": "0.5",
+                  "timeout_s": "120",
+                  "cool_rate_c_s": "-1.00",
+                  "heat_rate_c_s": "1.00",
+                  "fan_speed": "128"
+                },
+                {
+                  "bank": "nest",
+                  "target_temp_c": "55.00",
+                  "duration_s": "30.00",
+                  "start": "dispatch"
+                },
+                {
+                  "bank": "nest",
+                  "target_temp_c": "72.00",
+                  "duration_s": "60.00",
+                  "start": "dispatch"
+                }
+              ]
+            },
+            "attainment": "unknown"
+          }
+        }
+      },
+      "observed": null,
+      "issues": [],
+      "lineage": [],
+      "strokes": [],
+      "after_occurrences": [
+        {
+          "occurrence_id": "occ-558165f8a00a026a2d19276c",
+          "state_delta": {
+            "vessels": {},
+            "channels": {},
+            "thermal_tasks": {
+              "occ-558165f8a00a026a2d19276c": {
+                "action": "chiller_setpoint",
+                "inputs": {
+                  "bank": "rc",
+                  "target_temp_c": "10.00"
+                },
+                "attainment": "unknown"
+              }
+            }
+          }
+        },
+        {
+          "occurrence_id": "occ-1a091de7bdf16e3dc9ba3d8f",
+          "state_delta": {
+            "vessels": {},
+            "channels": {},
+            "thermal_tasks": {
+              "occ-1a091de7bdf16e3dc9ba3d8f": {
+                "action": "chiller_setpoint",
+                "inputs": {
+                  "bank": "oc",
+                  "target_temp_c": "10.00"
+                },
+                "attainment": "unknown"
+              }
+            }
+          }
+        },
+        {
+          "occurrence_id": "occ-8a66d3246df43fbb0dca27b5",
+          "state_delta": {
+            "vessels": {},
+            "channels": {}
+          }
+        },
+        {
+          "occurrence_id": "occ-ead5360235433248a44b34ae",
+          "state_delta": {
+            "vessels": {},
+            "channels": {}
+          }
+        },
+        {
+          "occurrence_id": "occ-e0cdae7ff15686e6dd1f8919",
+          "state_delta": {
+            "vessels": {},
+            "channels": {},
+            "thermal_tasks": {
+              "occ-e0cdae7ff15686e6dd1f8919": {
+                "action": "thermal_setpoint",
+                "inputs": {
+                  "bank": "lid",
+                  "target_temp_c": "105.00"
+                },
+                "attainment": "unknown"
+              }
+            }
+          }
+        },
+        {
+          "occurrence_id": "occ-1176f152ce27464fbd7aca6b",
+          "state_delta": {
+            "vessels": {},
+            "channels": {},
+            "thermal_tasks": {
+              "occ-1176f152ce27464fbd7aca6b": {
+                "action": "thermal_setpoint",
+                "inputs": {
+                  "bank": "pedestal",
+                  "target_temp_c": "40.00"
+                },
+                "attainment": "unknown"
+              }
+            }
+          }
+        },
+        {
+          "occurrence_id": "occ-4cb7a70490b2d89831746b7e",
+          "state_delta": {
+            "vessels": {},
+            "channels": {},
+            "thermal_tasks": {
+              "occ-4cb7a70490b2d89831746b7e": {
+                "action": "thermal_profile",
+                "inputs": {
+                  "repeat": "3",
+                  "segments": [
+                    {
+                      "bank": "nest",
+                      "target_temp_c": "95.00",
+                      "duration_s": "30.00",
+                      "start": "attainment",
+                      "tolerance_c": "0.5",
+                      "timeout_s": "120",
+                      "cool_rate_c_s": "-1.00",
+                      "heat_rate_c_s": "1.00",
+                      "fan_speed": "128"
+                    },
+                    {
+                      "bank": "nest",
+                      "target_temp_c": "55.00",
+                      "duration_s": "30.00",
+                      "start": "dispatch"
+                    },
+                    {
+                      "bank": "nest",
+                      "target_temp_c": "72.00",
+                      "duration_s": "60.00",
+                      "start": "dispatch"
+                    }
+                  ]
+                },
+                "attainment": "unknown"
+              }
+            }
+          }
+        }
+      ],
+      "accounting": {
+        "liquid": {
+          "known_ul": "0",
+          "has_unknown": false
+        },
+        "conditioning_return": {
+          "known_ul": "0",
+          "has_unknown": false
+        },
+        "excess": {
+          "known_ul": "0",
+          "has_unknown": false
+        },
+        "waste": {
+          "known_ul": "0",
+          "has_unknown": false
+        },
+        "air": {
+          "known_ul": "0",
+          "has_unknown": false
+        },
+        "commanded_displacement": {
+          "known_ul": "0",
+          "has_unknown": false
+        }
+      },
+      "time": {
+        "known_duration_ms": "0",
+        "unknown_occurrences": [
+          "occ-558165f8a00a026a2d19276c",
+          "occ-1a091de7bdf16e3dc9ba3d8f",
+          "occ-8a66d3246df43fbb0dca27b5",
+          "occ-ead5360235433248a44b34ae",
+          "occ-e0cdae7ff15686e6dd1f8919",
+          "occ-1176f152ce27464fbd7aca6b",
+          "occ-4cb7a70490b2d89831746b7e"
+        ],
+        "eta_ms": null
+      },
+      "limitations": [
+        "Not hardware readback",
+        "No reaction yield, evaporation or purification prediction",
+        "Corrected displacement and segments are not measured liquid delivery"
+      ]
+    }
+  }
+}

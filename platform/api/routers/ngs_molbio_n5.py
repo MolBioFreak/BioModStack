@@ -55,10 +55,7 @@ from molbio_ngs_models import (
 )
 from routers.experiment_workspaces import _operator_principal, _require_mutation_owner
 from services.ngs_molbio_capabilities import NgsMolBioCapabilityError
-from services.ngs_molbio_runtime_status import (
-    NgsMolBioRuntimeAuthorityError,
-    runtime_implementation_record,
-)
+from build_identity import deployed_source_identity
 from services.molbio_ngs_member_receipts import persist_member_receipt, resolve_molecular_revision_receipt
 from services.molbio_persistence import begin_immediate_molbio_write, record_sequence_revision
 from molbio_ngs_services import RevisionConflict as NativeRevisionConflict, StateMember, save_state_revision
@@ -1498,19 +1495,11 @@ async def audit(project_id: str, experiment_id: str, domain_id: str, cursor: str
         raise _error(exc) from exc
 
 
-@router.get("/api/operations/ngs-molbio/runtime-implementation")
-def runtime_implementation_status(request: Request) -> dict[str, Any]:
+@router.get("/api/operations/ngs-molbio/source-identity")
+def source_identity_status(request: Request) -> dict[str, Any]:
     _operator_principal(request)
-    try:
-        return _bounded_response(runtime_implementation_record())
-    except NgsMolBioRuntimeAuthorityError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "code": "runtime_implementation_authority_unavailable",
-                "message": str(exc),
-            },
-        ) from exc
+    revision, tree = deployed_source_identity()
+    return _bounded_response({"source_revision": revision, "source_tree": tree})
 
 
 @router.get("/api/operations/ngs-molbio/status")

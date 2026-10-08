@@ -138,6 +138,7 @@ export interface Job {
     execution_bundle_sha256?: string | null;
     remote_attempt_id?: string | null;
     remote_state?: string | null;
+    remote_results_received?: boolean | null;
     started_at?: string | null;
     completed_at?: string | null;
     vram_estimate_mb?: number | null;
@@ -2768,8 +2769,8 @@ export interface BatchAnalytics {
 export const fetchJobAnalytics = (jobId: string) =>
     api.get<JobAnalytics>(`/api/analytics/job/${jobId}`).then(response => ({...response, data: validateScientificEnvelope(response.data)}));
 
-export const fetchJobDesignMetrics = (jobId: string) =>
-    api.get<unknown>(`/api/analytics/job/${jobId}/designs`).then(response => ({...response, data: parseMetricPoints(response.data)}));
+export const fetchJobDesignMetrics = (jobId: string, includeChildren?: boolean) =>
+    api.get<unknown>(`/api/analytics/job/${jobId}/designs`, includeChildren === undefined ? undefined : { params: { include_children: includeChildren } }).then(response => ({...response, data: parseMetricPoints(response.data)}));
 
 export const fetchBatchAnalytics = (jobIds: string[]) =>
     api.post<BatchAnalytics>('/api/analytics/batch', jobIds).then(response => ({...response, data: validateScientificEnvelope(response.data)}));
@@ -2984,14 +2985,17 @@ export interface UserTemplateCreate {
     description?: string;
     icon?: string;
     color?: string;
-    base_template_id?: string;
-    model_id?: string;
+    base_template_id?: string | null;
+    model_id?: string | null;
     mode?: string;
     params: Record<string, UntypedApiValue>;
 }
 
-export const fetchUserTemplates = (search?: string, model_id?: string) =>
-    api.get<UserTemplate[]>('/api/user-templates', { params: { search, model_id } });
+export const fetchUserTemplates = (search?: string, model_id?: string, mode?: string, exclude_mode?: string) =>
+    api.get<UserTemplate[]>('/api/user-templates', { params: { search, model_id, mode, exclude_mode } });
+
+export const fetchUserTemplate = (id: string) =>
+    api.get<UserTemplate>(`/api/user-templates/${encodeURIComponent(id)}`);
 
 export const createUserTemplate = (data: UserTemplateCreate) =>
     api.post<UserTemplate>('/api/user-templates', data);
@@ -3108,6 +3112,7 @@ export interface QueuedJob {
     execution_target_id?: string | null;
     remote_state?: string | null;
     remote_waiting_reason?: string | null;
+    remote_results_received?: boolean | null;
     provenance?: Record<string, unknown> | null;
     priority: number;
     vram_estimate_mb: number | null;
@@ -3341,6 +3346,8 @@ export interface NucleotideSequenceCreate {
 }
 
 export interface AssemblyFragmentEnd {
+    /** Physical protrusion written 5′→3′; absent means historical unspecified notation. */
+    protruding_strand?: 'top' | 'bottom' | null;
     type: 'blunt' | 'sticky_5' | 'sticky_3';
     overhang?: string;
     label?: string;
@@ -3414,9 +3421,11 @@ export interface AssemblyProduct {
     golden_gate_authority: GoldenGateCatalogAuthority | null;
 }
 
+export type SavedSequenceMetadata = Omit<NucleotideSequence, 'sequence'>;
+
 export interface AssemblyOperationResponse {
     product: AssemblyProduct;
-    saved_sequence?: NucleotideSequence | null;
+    saved_sequence?: SavedSequenceMetadata | null;
     message: string;
 }
 
@@ -3546,7 +3555,7 @@ export interface GibsonDesignResponse {
     selected_product: AssemblyProduct;
     warnings: string[];
     source_provenance: Array<Record<string, unknown>>;
-    saved_sequence?: NucleotideSequence | null;
+    saved_sequence?: SavedSequenceMetadata | null;
     message: string;
 }
 
@@ -3561,6 +3570,7 @@ export interface GoldenGateAssemblyRequest {
 }
 
 export interface GoldenGateAssemblyOptionsResponse {
+    raw_design?: { schema_version: string; raw_enzyme_adapters: string[]; datasets: Array<{ id: string; restriction_enzyme_variant: string; thermal_profile: string; buffer: string }>; limitations: string[] };
     catalog: {
         catalog_id: string;
         catalog_sha256: string;
@@ -3679,8 +3689,8 @@ export const previewMolBioSequenceImport = (payload: MolBioSequenceImportPayload
 export const commitMolBioSequenceImport = (payload: MolBioSequenceImportPayload) =>
     api.post<MolBioSequenceImportCommitResponse>('/api/molbio/sequences/import/commit', payload);
 
-export const fetchSavedGibsonWorkups = () =>
-    api.get<SavedGibsonWorkupListItem[]>('/api/sequences/assembly-workups');
+export const fetchSavedGibsonWorkups = (params?: { limit?: number; offset?: number }, signal?: AbortSignal) =>
+    api.get<SavedGibsonWorkupListItem[]>('/api/sequences/assembly-workups', { params, signal });
 
 export const fetchNucleotideSequence = (id: string) =>
     api.get<NucleotideSequence>(`/api/sequences/${id}`);
@@ -3973,41 +3983,41 @@ export const alignMolBioSequences = (data: {
     settings?: Partial<SequenceAlignmentSettings>;
 }) => api.post<SequenceAlignmentResult>('/api/molbio/alignment', data);
 
-export const simulateLigationAssembly = (data: LigationAssemblyRequest) =>
-    api.post<AssemblyOperationResponse>('/api/molbio/assembly/ligation/simulate', data);
+export const simulateLigationAssembly = (data: LigationAssemblyRequest, signal?: AbortSignal) =>
+    api.post<AssemblyOperationResponse>('/api/molbio/assembly/ligation/simulate', data, { signal });
 
 export const saveLigationAssembly = (data: LigationAssemblyRequest) =>
-    api.post<AssemblyOperationResponse>('/api/molbio/assembly/ligation/save', data);
+    api.post<AssemblyOperationResponse>('/api/molbio/assembly/ligation/save', data, { params: { response_view: 'compact' } });
 
-export const simulateGibsonAssembly = (data: GibsonAssemblyRequest) =>
-    api.post<AssemblyOperationResponse>('/api/molbio/assembly/gibson/simulate', data);
+export const simulateGibsonAssembly = (data: GibsonAssemblyRequest, signal?: AbortSignal) =>
+    api.post<AssemblyOperationResponse>('/api/molbio/assembly/gibson/simulate', data, { signal });
 
 export const saveGibsonAssembly = (data: GibsonAssemblyRequest) =>
-    api.post<AssemblyOperationResponse>('/api/molbio/assembly/gibson/save', data);
+    api.post<AssemblyOperationResponse>('/api/molbio/assembly/gibson/save', data, { params: { response_view: 'compact' } });
 
-export const planDnaWeaverGibsonAssembly = (data: DnaWeaverPlanRequest) =>
-    api.post<DnaWeaverPlanResponse>('/api/molbio/assembly/gibson/dnaweaver/plan', data);
+export const planDnaWeaverGibsonAssembly = (data: DnaWeaverPlanRequest, signal?: AbortSignal) =>
+    api.post<DnaWeaverPlanResponse>('/api/molbio/assembly/gibson/dnaweaver/plan', data, { signal });
 
 export const saveDnaWeaverGibsonAssembly = (data: DnaWeaverPlanSaveRequest) =>
     api.post<DnaWeaverPlanResponse>('/api/molbio/assembly/gibson/dnaweaver/save', data);
 
-export const designGibsonAssembly = (data: GibsonDesignRequest) =>
-    api.post<GibsonDesignResponse>('/api/molbio/assembly/gibson/design', data);
+export const designGibsonAssembly = (data: GibsonDesignRequest, signal?: AbortSignal) =>
+    api.post<GibsonDesignResponse>('/api/molbio/assembly/gibson/design', data, { signal });
 
 export const saveDesignedGibsonAssembly = (data: GibsonDesignRequest) =>
-    api.post<GibsonDesignResponse>('/api/molbio/assembly/gibson/design/save', data);
+    api.post<GibsonDesignResponse>('/api/molbio/assembly/gibson/design/save', data, { params: { response_view: 'compact' } });
 
-export const fetchGoldenGateAssemblyOptions = () =>
-    api.get<GoldenGateAssemblyOptionsResponse>('/api/molbio/assembly/golden-gate/options');
+export const fetchGoldenGateAssemblyOptions = (signal?: AbortSignal) =>
+    api.get<GoldenGateAssemblyOptionsResponse>('/api/molbio/assembly/golden-gate/options', { signal });
 
-export const simulateGoldenGateAssembly = (data: GoldenGateAssemblyRequest) =>
-    api.post<AssemblyOperationResponse>('/api/molbio/assembly/golden-gate/simulate', data).then((response) => {
+export const simulateGoldenGateAssembly = (data: GoldenGateAssemblyRequest, signal?: AbortSignal) =>
+    api.post<AssemblyOperationResponse>('/api/molbio/assembly/golden-gate/simulate', data, { signal }).then((response) => {
         requireGoldenGateAssemblyResponse(response.data);
         return response;
     });
 
 export const saveGoldenGateAssembly = (data: GoldenGateAssemblyRequest) =>
-    api.post<AssemblyOperationResponse>('/api/molbio/assembly/golden-gate/save', data).then((response) => {
+    api.post<AssemblyOperationResponse>('/api/molbio/assembly/golden-gate/save', data, { params: { response_view: 'compact' } }).then((response) => {
         requireGoldenGateAssemblyResponse(response.data);
         return response;
     });
@@ -4528,13 +4538,13 @@ export interface PrimerUpdate {
     tm_settings?: PrimerTmSettings;
 }
 
-export const fetchPrimerTmOptions = () =>
-    api.get<PrimerTmOptionsResponse>('/api/molbio/primer-tm/options');
+export const fetchPrimerTmOptions = (signal?: AbortSignal) =>
+    api.get<PrimerTmOptionsResponse>('/api/molbio/primer-tm/options', { signal });
 
 export const calculatePrimerTm = (data: {
     primers: PrimerTmInput[];
     settings?: PrimerTmSettings;
-}) => api.post<PrimerTmResult[]>('/api/molbio/primer-tm/calculate', data);
+}, signal?: AbortSignal) => api.post<PrimerTmResult[]>('/api/molbio/primer-tm/calculate', data, { signal });
 
 export const calculatePrimerQc = (data: {
     primers: Array<{
@@ -4547,10 +4557,10 @@ export const calculatePrimerQc = (data: {
     template_sequence_type?: 'dna' | 'rna';
     template_is_circular?: boolean;
     include_pairwise?: boolean;
-}) => api.post<PrimerQcResponse>('/api/molbio/primer-qc', data);
+}, signal?: AbortSignal) => api.post<PrimerQcResponse>('/api/molbio/primer-qc', data, { signal });
 
-export const designPrimers = (data: PrimerDesignRequest) =>
-    api.post<PrimerDesignResponse>('/api/molbio/primer-design', data);
+export const designPrimers = (data: PrimerDesignRequest, signal?: AbortSignal) =>
+    api.post<PrimerDesignResponse>('/api/molbio/primer-design', data, { signal });
 
 export const fetchPrimers = (params?: {
     search?: string;
@@ -5407,8 +5417,8 @@ export interface PcrOperationResponse {
     reused: boolean;
 }
 
-export const runPcrOperation = (payload: PcrOperationRequest) =>
-    apiData(api.post<PcrOperationResponse>('/api/molbio/pcr', payload));
+export const runPcrOperation = (payload: PcrOperationRequest, signal?: AbortSignal) =>
+    apiData(api.post<PcrOperationResponse>('/api/molbio/pcr', payload, { signal }));
 
 export const fetchPcrExperiments = (limit = 100) =>
     apiData(api.get<{ items: PcrExperimentListItem[]; count: number; limit: number }>(

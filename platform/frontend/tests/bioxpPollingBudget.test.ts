@@ -6,7 +6,6 @@ import test from 'node:test';
 const client = readFileSync(resolve('src/lib/bioxpClient.ts'), 'utf8');
 const cameraPanel = readFileSync(resolve('src/components/BioXpCameraPanel.tsx'), 'utf8');
 const cockpit = readFileSync(resolve('src/components/BioXpCockpit.tsx'), 'utf8');
-const quickDashboard = readFileSync(resolve('src/components/BioXpQuickDashboard.tsx'), 'utf8');
 
 const hookSource = (start: string, end: string): string => {
     const from = client.indexOf(start);
@@ -24,7 +23,10 @@ test('one catalog owns live enablement and embedded dashboards; camera status is
     assert.match(catalog, /signal, timeout: 12_000/);
     assert.match(catalog, /refetchIntervalInBackground: false/);
     assert.doesNotMatch(client, /export const useBioXpOperatorDashboard|export const useBioXpOperatorControlCatalogV2/);
-    assert.match(hookSource('export const useBioXpCameraStatus', 'export const useBioXpCameraStreamState'), /refetchInterval: enabled \? 2_000 : false/);
+    assert.match(hookSource('export const useBioXpCameraStatus', 'export const useBioXpCameraStreamState'), /refetchInterval: enabled \? interval : false/);
+    assert.match(cameraPanel, /streamQuery.data\?\.active === true \? 2_000 : false/);
+    assert.match(client, /query.state.data\?\.active \? 2_000 : 15_000/);
+    assert.match(cameraPanel, /connected && observing/);
 });
 
 test('cockpit keeps one bounded catalog loop and uses age only as presentation', () => {
@@ -35,8 +37,8 @@ test('cockpit keeps one bounded catalog loop and uses age only as presentation',
     assert.match(cockpit, /const displayTelemetry = displayDashboardV2\?\.telemetry/);
     assert.match(cockpit, /localAgeMs >= 15_000 \|\| upstreamAgeMs >= 15_000/);
     assert.doesNotMatch(cockpit, /setInterval/);
-    assert.match(quickDashboard, /Last-known observation/);
-    assert.match(cockpit, /useBioXpOperatorActionHistory\(generation, linkConnected, historyLimit, historyPagination.cursor\)/);
+    assert.match(cockpit, /stale=\{showingLastKnown\}/);
+    assert.match(cockpit, /useBioXpOperatorActionHistory\(generation, linkConnected && controlsVisible && historyOpen, historyLimit, historyPagination.cursor\)/);
     assert.match(cockpit, /!displayConnected \? \[\]/);
 });
 

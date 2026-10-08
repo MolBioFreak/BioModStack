@@ -30,6 +30,13 @@ def test_every_non_get_route_carries_the_global_guard() -> None:
             "/operator-controls/pipettes/readback",  # query-only, typed/idempotent
             "/operator-controls/pipettes/application/plan",  # no-motion planner
             "/operator-controls/reports/exports",  # retained evidence artifact
+            "/workflows/preview",  # pure local compiler
+            "/workflows/clone",  # passive snapshot projection
+            "/methods/check", "/methods/compile", "/methods/migrate",
+            "/methods/runs/{job_id}/clone", "/methods/runs/{job_id}/recovery-draft",
+            "/methods/{collection}", "/methods/{collection}/import",
+            "/methods/{collection}/{template_id}",
+            "/methods/{collection}/{template_id}/duplicate",
         }:
             continue
         assert any(dependency.dependency is require_bioxp_mutation_access for dependency in route.dependencies), f"missing mutation dependency: {route.path}"

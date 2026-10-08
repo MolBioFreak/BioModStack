@@ -57,7 +57,7 @@ function CandidateHandoffForm({ parentJobId, parentInvocationId, parentLandscape
             <p className="mt-1 text-xs text-slate-400">Upload a PDB or mmCIF candidate to run a new analysis linked to this result.</p>
             <fieldset disabled={mutation.isPending} className="mt-3 grid gap-3 md:grid-cols-2">
                 <label className="text-xs text-slate-400">Candidate name<input value={candidateId} onChange={(event) => { mutation.reset(); setCandidateId(event.target.value); }} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-slate-200" placeholder="variant-1" /></label>
-                <label className="text-xs text-slate-400">Produced by<input value={producerId} onChange={(event) => { mutation.reset(); setProducerId(event.target.value); }} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-slate-200" placeholder="external-redesign" /></label>
+                <label className="text-xs text-slate-400">Produced by<input value={producerId} onChange={(event) => { mutation.reset(); setProducerId(event.target.value); }} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-slate-200" placeholder="structure-source" /></label>
                 <label className="text-xs text-slate-400">Protein sequence SHA-256 (optional)<input value={proteinSequenceSha256} onChange={(event) => { mutation.reset(); setProteinSequenceSha256(event.target.value); }} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 font-mono text-slate-200" /></label>
                 <label className="text-xs text-slate-400">Structure snapshot (.pdb/.cif)<input type="file" accept=".pdb,.cif,.mmcif" required onChange={(event) => { mutation.reset(); setFile(event.target.files?.[0] ?? null); }} className="mt-1 block w-full text-xs text-slate-300" /></label>
             </fieldset>
@@ -77,7 +77,7 @@ function CandidateHandoffForm({ parentJobId, parentInvocationId, parentLandscape
                     {guidanceId && <div><dt className="inline">Guidance: </dt><dd className="inline font-mono">{guidanceId}</dd></div>}
                 </dl>
             </details>
-            <button type="button" disabled={!sourceReady || mutation.isPending || !file || !candidateId.trim() || !producerId.trim()} onClick={submit} className="mt-3 rounded bg-amber-500 px-3 py-2 text-sm text-slate-950 disabled:opacity-40">{mutation.isPending ? 'Queueing reanalysis…' : 'Queue FrustraMPNN reanalysis'}</button>
+            <button type="button" disabled={!sourceReady || mutation.isPending || !file || !candidateId.trim() || !producerId.trim()} onClick={submit} className="mt-3 rounded bg-amber-500 px-3 py-2 text-sm text-slate-950 disabled:opacity-40">{mutation.isPending ? 'Queueing reanalysis…' : 'Run FrustraMPNN analysis'}</button>
             {mutation.isError && <div role="alert" className="mt-2 text-xs text-red-300">{mutation.error?.message}</div>}
             {mutation.data && <div className="mt-3 rounded border border-emerald-500/30 bg-emerald-500/10 p-2 text-xs text-emerald-100">
                 <div>Analysis queued: <span className="font-mono">{mutation.data.child_job_id}</span>. Results will appear when analysis completes.</div>

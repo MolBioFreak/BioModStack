@@ -4,7 +4,6 @@
 
 import { useState, useRef, useEffect, useLayoutEffect, useId } from 'react';
 import { createPortal } from 'react-dom';
-import { jsonToGenbank } from '@teselagen/bio-parsers';
 import type { HistoryEntry } from './hooks/useSequenceHistory';
 import {
     buildPrimersTsv,
@@ -70,6 +69,7 @@ function formatNotes(feature: NonNullable<ExportDropdownProps['sequenceData']['f
 
 export function ExportDropdown({ sequenceData, historyJournal = [], className }: ExportDropdownProps) {
     const [isOpen, setIsOpen] = useState(false);
+    const [exportError, setExportError] = useState<string | null>(null);
     const dropdownRef = useRef<HTMLDivElement>(null);
     const buttonRef = useRef<HTMLButtonElement>(null);
     const popupRef = useRef<HTMLDivElement>(null);
@@ -120,83 +120,89 @@ export function ExportDropdown({ sequenceData, historyJournal = [], className }:
         };
     }, [isOpen]);
 
-    const exportAs = (format: 'genbank' | 'fasta' | 'json' | 'features_tsv' | 'primers_tsv' | 'history_txt') => {
-        let content: string;
-        let extension: string;
+    const exportAs = async (format: 'genbank' | 'fasta' | 'json' | 'features_tsv' | 'primers_tsv' | 'history_txt') => {
+        setExportError(null);
+        try {
+            let content: string;
+            let extension: string;
 
-        if (format === 'fasta') {
-            const header = sequenceData.description
-                ? `>${sequenceData.name} ${sequenceData.description}`
-                : `>${sequenceData.name}`;
-            content = `${header}\n${sequenceData.sequence.match(/.{1,80}/g)?.join('\n') || ''}`;
-            extension = 'fasta';
-        } else if (format === 'json') {
-            content = JSON.stringify({
-                ...sequenceData,
-                historyJournal,
-            }, null, 2);
-            extension = 'molbio.json';
-        } else if (format === 'features_tsv') {
-            const rows = (sequenceData.features || []).map((feature) => [
-                feature.name,
-                feature.type,
-                feature.start + 1,
-                feature.end,
-                feature.strand,
-                (feature.segments || []).map((segment) => `${segment.start + 1}-${segment.end}`).join(';'),
-                feature.description || '',
-            ].join('\t'));
-            content = ['name\ttype\tstart\tend\tstrand\tsegments\tdescription', ...rows].join('\n');
-            extension = 'features.tsv';
-        } else if (format === 'primers_tsv') {
-            content = buildPrimersTsv(
-                sequenceData.primers || [],
-                sequenceData.sequenceType === 'rna' ? 'rna' : 'dna',
-                sequenceData.sequence.length,
-                Boolean(sequenceData.circular),
-            );
-            extension = 'primers.tsv';
-        } else if (format === 'history_txt') {
-            content = historyJournal.length === 0
-                ? 'No history entries recorded for this workspace.\n'
-                : historyJournal.map((entry) => `${entry.timestamp}\t${entry.label}\t${entry.summary}`).join('\n');
-            extension = 'history.txt';
-        } else {
-            content = jsonToGenbank({
-                name: sequenceData.name,
-                description: sequenceData.description,
-                sequence: sequenceData.sequence,
-                circular: sequenceData.circular,
-                type: sequenceData.sequenceType === 'rna' ? 'RNA' : 'DNA',
-                features: (sequenceData.features || []).map((feature) => ({
-                    ...feature,
-                    locations: featureLocations(feature),
-                    notes: formatNotes(feature),
-                })),
-                primers: (sequenceData.primers || []).map((primer) => (
-                    canonicalizeExportablePrimer(
-                        primer,
-                        sequenceData.sequence.length,
-                        Boolean(sequenceData.circular),
-                    )
-                )),
-            }) || '';
-            extension = 'gb';
+            if (format === 'fasta') {
+                const header = sequenceData.description
+                    ? `>${sequenceData.name} ${sequenceData.description}`
+                    : `>${sequenceData.name}`;
+                content = `${header}\n${sequenceData.sequence.match(/.{1,80}/g)?.join('\n') || ''}`;
+                extension = 'fasta';
+            } else if (format === 'json') {
+                content = JSON.stringify({
+                    ...sequenceData,
+                    historyJournal,
+                }, null, 2);
+                extension = 'molbio.json';
+            } else if (format === 'features_tsv') {
+                const rows = (sequenceData.features || []).map((feature) => [
+                    feature.name,
+                    feature.type,
+                    feature.start + 1,
+                    feature.end,
+                    feature.strand,
+                    (feature.segments || []).map((segment) => `${segment.start + 1}-${segment.end}`).join(';'),
+                    feature.description || '',
+                ].join('\t'));
+                content = ['name\ttype\tstart\tend\tstrand\tsegments\tdescription', ...rows].join('\n');
+                extension = 'features.tsv';
+            } else if (format === 'primers_tsv') {
+                content = buildPrimersTsv(
+                    sequenceData.primers || [],
+                    sequenceData.sequenceType === 'rna' ? 'rna' : 'dna',
+                    sequenceData.sequence.length,
+                    Boolean(sequenceData.circular),
+                );
+                extension = 'primers.tsv';
+            } else if (format === 'history_txt') {
+                content = historyJournal.length === 0
+                    ? 'No history entries recorded for this workspace.\n'
+                    : historyJournal.map((entry) => `${entry.timestamp}\t${entry.label}\t${entry.summary}`).join('\n');
+                extension = 'history.txt';
+            } else {
+                const { jsonToGenbank } = await import('@teselagen/bio-parsers');
+                content = jsonToGenbank({
+                    name: sequenceData.name,
+                    description: sequenceData.description,
+                    sequence: sequenceData.sequence,
+                    circular: sequenceData.circular,
+                    type: sequenceData.sequenceType === 'rna' ? 'RNA' : 'DNA',
+                    features: (sequenceData.features || []).map((feature) => ({
+                        ...feature,
+                        locations: featureLocations(feature),
+                        notes: formatNotes(feature),
+                    })),
+                    primers: (sequenceData.primers || []).map((primer) => (
+                        canonicalizeExportablePrimer(
+                            primer,
+                            sequenceData.sequence.length,
+                            Boolean(sequenceData.circular),
+                        )
+                    )),
+                }) || '';
+                extension = 'gb';
+            }
+
+            // Download
+            const blob = new Blob([content], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `${sequenceData.name.replace(/[^a-z0-9]/gi, '_')}.${extension}`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+
+            setIsOpen(false);
+            buttonRef.current?.focus();
+        } catch (error) {
+            setExportError(error instanceof Error ? error.message : 'Export failed');
         }
-
-        // Download
-        const blob = new Blob([content], { type: 'text/plain' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `${sequenceData.name.replace(/[^a-z0-9]/gi, '_')}.${extension}`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-
-        setIsOpen(false);
-        buttonRef.current?.focus();
     };
 
     return (
@@ -218,6 +224,7 @@ export function ExportDropdown({ sequenceData, historyJournal = [], className }:
                 </svg>
             </button>
 
+            {exportError && <p role="alert">Could not export: {exportError}</p>}
             {isOpen && createPortal(
                 <div ref={popupRef} id={popupId} role="group" aria-label="Export formats"
                     style={{ ...position, maxWidth: 'calc(100vw - 16px)', maxHeight: 'calc(100vh - 16px)' }}

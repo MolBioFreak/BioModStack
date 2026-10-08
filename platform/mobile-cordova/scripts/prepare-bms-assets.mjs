@@ -1098,56 +1098,34 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       && Number.isInteger(check.stale_after_ms) && check.stale_after_ms > 0
       && check.age_ms <= check.stale_after_ms
     );
+    // The API owns its health semantics and evolves its detail fields (for
+    // example light-mode MolBio checks report quick_check "not_run" and null
+    // counts). The shell trusts the API's own verdict and keeps runtime
+    // identity exact, rather than mirroring every internal health field.
+    const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+    const requiredChecksReady = (checks) => isPlainObject(checks)
+      && Object.keys(checks).length > 0
+      && Object.values(checks).every((check) => (
+        isPlainObject(check) && (check.required !== true || check.ready === true)
+      ));
+    const launchAllowed = (check) => isPlainObject(check)
+      && check.ready === true
+      && check.required === true
+      && check.allowed === true
+      && check.status === 'allowed';
     const validApiPayload = (payload) => (
-      hasExactKeys(payload, [
-        'build', 'liveness', 'molbio', 'molbio_ngs', 'readiness', 'service', 'status',
-      ])
+      isPlainObject(payload)
       && payload.status === 'healthy'
       && payload.service === 'biomodstack-api'
       && validBuild(payload.build)
-      && hasExactKeys(payload.liveness, ['alive', 'status'])
+      && isPlainObject(payload.liveness)
       && payload.liveness.alive === true
       && payload.liveness.status === 'alive'
-      && hasExactKeys(payload.molbio, [
-        'database_kind', 'database_schema_current', 'database_schema_issue_count',
-        'foreign_key_violations', 'immutable_trigger_count', 'immutable_triggers_current',
-        'latest_migration', 'migration_count', 'migrations_current', 'owner', 'quick_check',
-        'sequence_parent_cycle_count', 'sequence_parent_foreign_key_current', 'status',
-      ])
-      && ['database_schema_current', 'immutable_triggers_current', 'migrations_current',
-        'sequence_parent_foreign_key_current'].every((key) => typeof payload.molbio[key] === 'boolean')
-      && ['database_schema_issue_count', 'foreign_key_violations', 'immutable_trigger_count',
-        'migration_count', 'sequence_parent_cycle_count'].every((key) => Number.isInteger(payload.molbio[key]))
-      && ['database_kind', 'latest_migration', 'owner', 'quick_check', 'status']
-        .every((key) => nonEmptyBounded(payload.molbio[key], 512))
-      && payload.molbio.status === 'healthy'
-      && payload.molbio.database_schema_current === true
-      && payload.molbio.immutable_triggers_current === true
-      && payload.molbio.migrations_current === true
-      && payload.molbio.sequence_parent_foreign_key_current === true
-      && payload.molbio.database_schema_issue_count === 0
-      && payload.molbio.foreign_key_violations === 0
-      && payload.molbio.sequence_parent_cycle_count === 0
-      && validMolbioNgs(payload.molbio_ngs)
-      && hasExactKeys(payload.readiness, ['checks', 'mode', 'ready'])
+      && isPlainObject(payload.readiness)
       && payload.readiness.ready === true
       && payload.readiness.mode === (environment === 'development' ? 'native' : 'container')
-      && hasExactKeys(payload.readiness.checks, [
-        'core_database', 'core_schema_migrations', 'frontend', 'molbio_database',
-        'molbio_ngs_database', 'process_liveness', 'telemetry_collection',
-        'workflow_adapter', 'workflow_launch',
-      ])
-      && Object.entries({
-        core_database: 'ready',
-        frontend: 'http_200',
-        molbio_database: 'ready',
-        process_liveness: 'alive',
-      }).every(([key, status]) => validReadinessCheck(payload.readiness.checks[key], status))
-      && validMigrationReadiness(payload.readiness.checks.core_schema_migrations)
-      && validTelemetryReadiness(payload.readiness.checks.telemetry_collection)
-      && validReadinessCheck(payload.readiness.checks.molbio_ngs_database, 'ready')
-      && validReadinessCheck(payload.readiness.checks.workflow_adapter, 'http_200')
-      && validReadinessCheck(payload.readiness.checks.workflow_launch, 'allowed', true)
+      && requiredChecksReady(payload.readiness.checks)
+      && launchAllowed(payload.readiness.checks.workflow_launch)
     );
     const validProbe = (report, requestedUrl, finalUrl, expectApi) => (
       hasExactKeys(report, ['url', 'final_url', 'status', 'payload'])
@@ -2322,6 +2300,48 @@ export function buildPreflightScript() {
     }
   }
 
+  function sameAssetList(left, right) {
+    const a = Array.isArray(left) ? left : [];
+    const b = Array.isArray(right) ? right : [];
+    return a.length === b.length && a.every((value, index) => String(value) === String(b[index]));
+  }
+
+  function isSameUiBundle(installed, candidate) {
+    return Boolean(
+      installed
+      && candidate
+      && String(installed.version || '') === String(candidate.version || '')
+      && sameAssetList(installed.entryJs, candidate.entryJs)
+      && sameAssetList(installed.entryCss, candidate.entryCss)
+    );
+  }
+
+  // The installed UI bundle is the plugin's active slot, not bootStatus: in
+  // remote-live mode bootStatus describes the mirrored Tailnet page.
+  // An unreadable or malformed descriptor counts as not installed, so the
+  // ordinary download path repairs it.
+  function tryNormalizeInstalledDescriptor(rawDescriptor) {
+    try {
+      return rawDescriptor ? normalizeBundleDescriptor(rawDescriptor) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async function readInstalledUiDescriptor() {
+    let status = null;
+    try {
+      status = await callUiBundlePlugin('getStatus');
+    } catch (_) {
+      status = null;
+    }
+    if (status && typeof status === 'object' && typeof status.installed === 'boolean') {
+      return status.installed ? tryNormalizeInstalledDescriptor(status.descriptor) : null;
+    }
+    const storedBundle = readBundleState();
+    return tryNormalizeInstalledDescriptor(storedBundle && storedBundle.descriptor);
+  }
+
   async function checkUiUpdate(panel, apiBaseUrl, uiUpdateChannel) {
     try {
       const manifest = await fetchManifest(panel, apiBaseUrl, uiUpdateChannel);
@@ -2331,11 +2351,11 @@ export function buildPreflightScript() {
         return null;
       }
 
-      const currentSnapshot = getCurrentUiSnapshot();
-      if (currentSnapshot.descriptor && currentSnapshot.descriptor.version === manifest.descriptor.version) {
+      const installed = await readInstalledUiDescriptor();
+      if (isSameUiBundle(installed, manifest.descriptor)) {
         setStatus(panel, 'UI is already on ' + manifest.descriptor.version + '.', 'success');
       } else {
-        setStatus(panel, 'Update available: ' + describeDescriptor(currentSnapshot.descriptor, defaults.bundledUiVersion || 'bundled') + ' → ' + describeDescriptor(manifest.descriptor, manifest.descriptor.version) + '.', 'success');
+        setStatus(panel, 'Update available: ' + describeDescriptor(installed || bundledDescriptor, defaults.bundledUiVersion || 'bundled') + ' → ' + describeDescriptor(manifest.descriptor, manifest.descriptor.version) + '.', 'success');
       }
       return manifest;
     } catch (error) {
@@ -2355,6 +2375,13 @@ export function buildPreflightScript() {
       const shellApiVersion = Number.parseInt(defaults.shellApiVersion ?? runtime.shellApiVersion ?? 1, 10) || 1;
       if (manifest.descriptor.shellApiVersion !== shellApiVersion) {
         setStatus(panel, 'Update ' + manifest.descriptor.version + ' targets shell API ' + manifest.descriptor.shellApiVersion + ', not this APK shell API ' + shellApiVersion + '.', 'error');
+        return;
+      }
+
+      const installed = await readInstalledUiDescriptor();
+      if (isSameUiBundle(installed, manifest.descriptor)) {
+        setActiveUiLabel(panel, { source: 'downloaded', descriptor: installed });
+        setStatus(panel, 'UI is already on ' + manifest.descriptor.version + '; nothing to download.', 'success');
         return;
       }
 

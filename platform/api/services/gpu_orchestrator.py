@@ -257,6 +257,7 @@ VRAM_PROFILES = {
     'fampnn_child': {'base': 3000, 'scale': 10},# FAMPNN child jobs
     'proteinmpnn': {'base': 2000, 'scale': 5},  # ProteinMPNN (vanilla)
     'mpnn': {'base': 2000, 'scale': 5},         # Alias for ProteinMPNN
+    'protonpottsmpnn': {'base': 2000, 'scale': 5},  # CUDA preparation estimate, not measured VRAM.
     'ligandmpnn': {'base': 2500, 'scale': 8},   # LigandMPNN (ligand-aware sequence design)
     'thermompnn': {'base': 2000, 'scale': 5},   # ThermoMPNN (stability-focused)
     'frustrampnn': {'base': 2500, 'scale': 8},  # FrustraMPNN (frustration analysis)
@@ -1038,6 +1039,10 @@ def estimate_vram(model_type: str, sequence_length: int, params: Optional[Any] =
     """
     normalized_model = (model_type or "default").strip().lower()
     effective_length = max(1, _coerce_int(sequence_length, 300))
+    if normalized_model == 'protonpottsmpnn':
+        from services.protonpottsmpnn_design import execution_device
+        if not str(execution_device(params if isinstance(params, dict) else None)).startswith('cuda'):
+            return 0  # Preserve the CPU fast path; CUDA uses the existing allocator.
     runtime_multiplier = 1.0
     profile_key = normalized_model
 
@@ -2851,6 +2856,7 @@ class GPUOrchestrator:
                             _derive_boltz_cp_gpu_launch_settings(
                                 pinned_gpus=requested_remote_gpus,
                                 requested_size_cp=job_params.get("bcp_size_cp", job_params.get("size_cp")),
+                                cp_topology=job_params.get("bcp_cp_topology", job_params.get("cp_topology", "2d")),
                             )
                         except ValueError as exc:
                             job.remote_state = "waiting_remote_gpu"

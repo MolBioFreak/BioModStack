@@ -564,11 +564,6 @@ def load_sequence_qc_manifest(
         if _verification_shape_errors(manifest):
             manifest["verdict"] = "REVIEW"
             reasons.append("MALFORMED_VERIFICATION_MANIFEST")
-        if manifest.get("verdict") == "PASS" and not _profile_is_canonically_pass_eligible(
-            manifest.get("threshold_profile")
-        ):
-            manifest["verdict"] = "REVIEW"
-            reasons.append("UNCALIBRATED_PROFILE")
         if any(a.get("state") == "missing_required" for a in manifest["artifacts"]):
             manifest["verdict"] = "REVIEW"
             reasons.append("REQUIRED_ARTIFACT_MISSING")

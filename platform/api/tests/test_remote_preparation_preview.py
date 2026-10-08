@@ -76,7 +76,7 @@ async def test_scoped_image_catalog_is_not_composed_model_closure(assets, monkey
     target = SimpleNamespace(id='one', host='worker', port=22, username='root', remote_root='/worker', host_key_sha256='c'*64)
     for model, image in [('boltzgen', 'boltzgen.sif'), ('protein_local_redesign', 'foundry.sif'),
                          ('molecular_dynamics', 'gromacs-md-2025.3.sif'),
-                         ('boltz_cp_experimental', 'fold-cp.sif'), ('confornets_experimental', 'confornets.sif')]:
+                         ('confornets_experimental', 'confornets.sif')]:
         assert {'kind': 'image', 'model_id': model} in catalog
         assert {'kind': 'model', 'model_id': model} not in catalog
         (assets[0] / image).write_bytes(b'controlled image')
@@ -85,6 +85,8 @@ async def test_scoped_image_catalog_is_not_composed_model_closure(assets, monkey
         assert entries[0].remote_destination == 'containers/' + image
         blocked, entries = cache.independent_preview(ProvisionSelection(kind='model', model_id=model), target)
         assert blocked.blockers[0].startswith('binding_unavailable:') and not entries
+    assert {'kind': 'image', 'model_id': 'boltz_cp_experimental'} in catalog
+    assert {'kind': 'model', 'model_id': 'boltz_cp_experimental'} in catalog
     assert not any(r.get('model_id') in {'diffdock', 'oligo_design', 'antibody_child'} for r in catalog)
 
 

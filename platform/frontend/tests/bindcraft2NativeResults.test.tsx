@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { BindCraft2NativeResults, type BindCraft2NativePage } from '../src/components/BindCraft2NativeResults';
+import { BindCraft2SettingsReadback, type BindCraft2NativePage } from '../src/components/BindCraft2NativeResults';
 
 test('BC2 result view keeps unknown state, missing counts and explicit draw join visible', () => {
   const page: BindCraft2NativePage = {
@@ -13,9 +13,9 @@ test('BC2 result view keeps unknown state, missing counts and explicit draw join
     rows: [{ design: 't_seq0', scored_design: 't_candidate2', target_state: null,
       values: { i_pTM: '0.9', Interface_Residues: '' } }],
   };
-  const html = renderToStaticMarkup(React.createElement(BindCraft2NativeResults, { page, onPage: () => {} }));
+  const html = renderToStaticMarkup(React.createElement(BindCraft2SettingsReadback, { value: page }));
   assert.match(html, /t_candidate2/);
   assert.match(html, /i_pTM/);
-  assert.match(html, /Unknown \/ not emitted/);
+  assert.match(html, /Explicit null/);
   assert.doesNotMatch(html, /Selection unavailable/);
 });

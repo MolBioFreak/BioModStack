@@ -87,6 +87,7 @@ from migrations.add_remote_execution import migrate as migrate_remote_execution
 from migrations.enable_multiple_execution_targets import migrate as migrate_multiple_execution_targets
 from run_migration import migrate as migrate_stage_tracking
 from migrations.add_design_producer_identity import migrate as migrate_design_producer_identity
+from migrations.add_user_template_revisions import migrate as migrate_user_template_revisions
 
 
 @dataclass
@@ -164,6 +165,7 @@ MIGRATIONS: List[Migration] = [
     Migration(45, "add_remote_execution", migrate_remote_execution),
     Migration(46, "enable_multiple_execution_targets", migrate_multiple_execution_targets),
     Migration(47, "add_design_producer_identity", migrate_design_producer_identity),
+    Migration(48, "add_user_template_revisions", migrate_user_template_revisions),
 ]
 
 

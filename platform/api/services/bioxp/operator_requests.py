@@ -132,6 +132,15 @@ class OperatorDeckMoveInputsV1(BaseModel):
         return self
 
 
+class OperatorDeckMoveToWellInputsV2(BaseModel):
+    """Explicit native well intent; resource/well semantics remain robot-owned."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    location_id: StrictInt
+    well: str | StrictInt
+    position_flag: Annotated[StrictInt, Field(ge=0, le=2)]
+
+
 def _canonical_board_epoch_map(value: dict[str, int]) -> dict[str, int]:
     if any(not key.isdecimal() or str(int(key)) != key for key in value):
         raise ValueError("board epoch keys must be canonical nonnegative decimal board IDs")
@@ -200,46 +209,6 @@ class OperatorInterruptRequestV1(BaseModel):
     @classmethod
     def canonical_observed_board_epoch_keys(cls, value: dict[str, int]) -> dict[str, int]:
         return _canonical_board_epoch_map(value)
-
-
-class OperatorXYMoveAbsoluteInputsV1(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-    x_steps: SignedInt32
-    y_steps: SignedInt32
-
-
-class OperatorMethodRequestV1(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-    expected_connection_generation: StrictInt = Field(ge=1)
-    schema_version: Literal["bioxp.operator_method_request.v1"]
-    idempotency_key: str = Field(min_length=1, max_length=128)
-    method_action_id: Literal["oem.xy.move_absolute", "oem.xy.home"]
-    expected_ownership_generation: NonnegativeStrictInt
-    expected_board_epoch_by_board: dict[str, NonnegativeStrictInt]
-    inputs: OperatorXYMoveAbsoluteInputsV1 | OperatorEmptyInputsV2
-
-    @field_validator("idempotency_key")
-    @classmethod
-    def bounded_method_idempotency_bytes(cls, value: str) -> str:
-        if len(value.encode("utf-8")) > 128:
-            raise ValueError("idempotency_key must be at most 128 bytes")
-        return value
-
-    @field_validator("expected_board_epoch_by_board")
-    @classmethod
-    def canonical_method_board_epoch_keys(cls, value: dict[str, int]) -> dict[str, int]:
-        return _canonical_board_epoch_map(value)
-
-    @model_validator(mode="after")
-    def bind_inputs_to_method(self):
-        expected_type = (
-            OperatorXYMoveAbsoluteInputsV1
-            if self.method_action_id == "oem.xy.move_absolute"
-            else OperatorEmptyInputsV2
-        )
-        if not isinstance(self.inputs, expected_type):
-            raise ValueError("method inputs do not match method_action_id")
-        return self
 
 
 class OperatorReportExportRequestV1(BaseModel):

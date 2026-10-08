@@ -248,7 +248,7 @@ class AnalysisResult(StrictModel):
     grouped_cleavages: tuple[GroupedCleavage, ...]
     warnings: tuple[str, ...]
     limitations: tuple[AnalysisLimitation, ...]
-    result_sha256: str
+    result_sha256: str | None = None
 
     def canonical_result_bytes(self) -> bytes:
         payload = self.model_dump(mode="json", by_alias=True)
@@ -536,12 +536,13 @@ def analyze_sequence(
     records: Sequence[RestrictionRecord],
     include_possible_sites: bool = True,
     regions: tuple[tuple[int, int], ...] = (),
+    persisted_identity: bool = False,
 ) -> AnalysisResult:
     normalized = normalize_dna(sequence)
     return _analyze_normalized_sequence(
         sequence=normalized, source_sha=hashlib.sha256(normalized.encode("ascii")).hexdigest(),
         topology=topology, catalog=catalog, records=records,
-        include_possible_sites=include_possible_sites, regions=regions,
+        include_possible_sites=include_possible_sites, regions=regions, persisted_identity=persisted_identity,
     )
 
 
@@ -549,6 +550,7 @@ def _analyze_normalized_sequence(
     *, sequence: str, source_sha: str, topology: Literal["linear", "circular"],
     catalog: CatalogView, records: Sequence[RestrictionRecord],
     include_possible_sites: bool = True, regions: tuple[tuple[int, int], ...] = (),
+    persisted_identity: bool = True,
 ) -> AnalysisResult:
     """Internal pipeline: DNA and its hash were established at the source boundary."""
     normalized = sequence
@@ -585,7 +587,7 @@ def _analyze_normalized_sequence(
     })).hexdigest()
     cache_key = tuple(str(item) for item in (
         source_sha, topology, catalog.content_sha256, scope_sha, region_sha, ALGORITHM_VERSION,
-        policy_sha256,
+        policy_sha256, persisted_identity,
     ))
     with _cache_lock:
         cached = _cache.get(cache_key)
@@ -778,12 +780,12 @@ def _analyze_normalized_sequence(
         "warnings": warnings,
         "limitations": typed_limitations,
     }
-    digest_payload = AnalysisResult.model_validate({**payload, "result_sha256": "0" * 64})
-    result = AnalysisResult.model_validate({
-        **payload,
-        "result_sha256": hashlib.sha256(digest_payload.canonical_result_bytes()).hexdigest(),
-    })
-    canonical_result = rfc8785.dumps(result.model_dump(mode="json", by_alias=True))
+    result = AnalysisResult.model_validate(payload)
+    if persisted_identity:
+        result = result.model_copy(update={
+            "result_sha256": hashlib.sha256(result.canonical_result_bytes()).hexdigest(),
+        })
+    canonical_result = result.model_dump_json(by_alias=True).encode("utf-8")
     if len(canonical_result) > MAX_RESPONSE_BYTES:
         raise AnalysisLimitError("analysis response exceeds byte limit")
     entry = _CacheEntry(key=cache_key, canonical_result=canonical_result)

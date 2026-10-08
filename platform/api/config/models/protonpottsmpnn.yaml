@@ -1,0 +1,153 @@
+id: protonpottsmpnn
+name: ProtonPottsMPNN
+version: 1.0.0
+category: sequence_design
+description: Protonation-aware binder redesign on selected complex structures; native
+  energies and sequences, not predicted structures.
+container: protonpottsmpnn.sif
+ui_icon: flask
+ui_color: '#0D9488'
+inputs:
+- pdb
+- cif
+outputs:
+- fasta
+- json
+- tsv
+modes:
+- id: redesign
+  name: pH-specific redesign
+  description: "Run native PHDesignCriteria on a supplied binder\u2013target structure"
+  params:
+  - target_pdb
+  - binder_chain
+  - criteria
+  - seed
+  - initial_sequences
+  - engine_options
+  - write_fasta
+  - write_structures
+params:
+- name: target_pdb
+  type: file
+  label: Target pdb
+  description: Native target_pdb
+  required: true
+  ui_control: file
+- name: binder_chain
+  type: string
+  label: Binder chain
+  description: Native binder_chain
+  required: true
+  ui_control: chain
+- name: criteria
+  type: array
+  label: Criteria
+  description: Native criteria
+  required: false
+  default:
+  - backend: potts
+    selective_source: potts
+    center_protonation_types:
+    - HIS-P
+    - ASP-P
+    - GLU-P
+    dep_map:
+      HIS-P:
+      - HIS-S
+      ASP-P:
+      - ASP-D
+      GLU-P:
+      - GLU-D
+    topk_sites: 2
+    placement_seq_masked: false
+    method: block_descent
+    selective: true
+    combined_lambda: 0.3
+    two_phase_frac: 0.5
+    temperature: 0.05
+    samples_per_site: 2
+    cv_patience: 3
+    cv_max: 50
+    block_size: 3
+    global_weight: 0.0
+    rank_normalize: false
+    zscale_mode: block
+    adjacent_repeat_weight: 0.0
+    repetitive_window_weight: 1.0
+    repetitive_window_radius: 2
+    repetitive_window_parents:
+    - ARG
+    - LYS
+    - HIS
+    - ASP
+    - GLU
+    repetitive_window_gate_types: []
+    self_weight: 1.0
+    block_max_rounds: 10
+    seed_source: native
+    forbidden_tokens:
+    - HIS-A
+    - ASP-A
+    - GLU-A
+    - UNK
+    num_designs: 8
+    record_trajectory: true
+    center_count: 3
+    explicit_centers: []
+    center_types:
+    - HIS-P
+    - ASP-P
+    - GLU-P
+    placement_region:
+    - all
+    placement_by: scan_potts
+    placement_label: ''
+    candidate_pool: 12
+    n_plan_samples: 64
+    max_plans_per_seed: 8
+    infill_scope: neighbourhood
+    sweep_order: position
+    neighbour_k: 16
+    max_mutations: 20
+  ui_control: criteria-table
+- name: seed
+  type: integer
+  label: Seed
+  description: Native seed
+  required: false
+  default: 0
+  ui_control: number
+- name: initial_sequences
+  type: array
+  label: Initial sequences
+  description: Native initial_sequences
+  required: false
+  default: null
+  ui_control: sequence-list
+- name: engine_options
+  type: object
+  label: Engine options
+  description: Native engine_options
+  required: false
+  default:
+    extended_vocab: v6
+    field_source: self_edge
+    etab_source: null
+    etab_hidden: null
+    field_hidden: null
+  ui_control: parameter-group
+- name: write_fasta
+  type: boolean
+  label: Write fasta
+  description: Native write_fasta
+  required: false
+  default: false
+  ui_control: checkbox
+- name: write_structures
+  type: boolean
+  label: Write structures
+  description: Native write_structures
+  required: false
+  default: false
+  ui_control: checkbox

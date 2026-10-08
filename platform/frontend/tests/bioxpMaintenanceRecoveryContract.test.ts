@@ -18,7 +18,7 @@ test('activation and non-homing recovery use the robot-owned v2 action catalog',
   assert.match(source, /invokeLifecycleAction\('meta\.recover_motion_non_homing'\)/);
   assert.match(source, /invokeLifecycleActionMutation\.mutate/);
   assert.match(source, /lifecycleReceipt/);
-  assert.match(source, />Non-homing Recovery<\/button>/);
+  assert.match(source, /aria-label="Recover controllers \(no homing\)"/);
   assert.ok(lifecycleAction.length > 0);
   for (const value of ['operator_ack', 'operator_reason']) assert.doesNotMatch(lifecycleAction, new RegExp(value));
   for (const value of ['window.prompt', 'window.confirm']) assert.doesNotMatch(source, new RegExp(value));

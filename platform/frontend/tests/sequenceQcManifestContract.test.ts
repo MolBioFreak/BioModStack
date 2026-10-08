@@ -93,7 +93,8 @@ test('NGSToolkit consumes useSequenceQcManifest and renders a manifest-first pan
     assert.match(panel, /manifest\.execution/u);
     assert.match(panel, /calibration_status/u);
     assert.match(panel, /public_accuracy_validated/u);
-    assert.match(panel, /Experimental thresholds/u);
+    assert.match(panel, /Profile uncalibrated/u);
+    assert.match(panel, /passes configured checks/u);
     assert.match(panel, /manifest\.checks/u);
     assert.match(panel, /manifest\.variants/u);
     assert.match(panel, /Sequence identity/u);

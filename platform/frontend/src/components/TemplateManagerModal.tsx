@@ -62,10 +62,11 @@ export function TemplateManagerModal({
 
     // Fetch templates
     const { data: templates = [], isLoading } = useQuery({
-        queryKey: ['user-templates', searchQuery],
-        queryFn: () => fetchUserTemplates(searchQuery || undefined),
+        queryKey: ['user-templates', 'model-library', searchQuery],
+        queryFn: () => fetchUserTemplates(searchQuery || undefined, undefined, undefined, 'bioxp_workflow'),
         enabled: isOpen,
-        select: (res) => res.data,
+        // Robot drafts reopen in the BioXP editor, not a scientific model launcher.
+        select: (res) => res.data.filter(template => template.mode !== 'bioxp_workflow'),
     });
 
     // Create mutation

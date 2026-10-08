@@ -33,6 +33,52 @@ test('returning disables the pull and persistent failure offers only explicit re
     assert.equal(remotePullError(null), null);
 });
 
+test('compact receipt projection agrees with full receipts without changing eligible states', () => {
+    for (const received of [true, false]) {
+        const provenance = { remote_execution_receipt: {
+            result_manifest_sha256: 'current', received_manifest_sha256: received ? 'current' : 'previous',
+        } };
+        for (const phase of [
+            { status: 'awaiting_input', remote_state: 'result_pull_failed' },
+            { status: 'running', remote_state: 'returning' },
+        ]) {
+            const detail = { ...ready, ...phase, provenance };
+            const summary = { ...ready, ...phase, remote_results_received: received };
+            assert.deepEqual(remoteResultsState(summary), remoteResultsState(detail));
+            assert.equal(remoteResultsState(summary)?.received, received);
+        }
+    }
+    const failed = { ...ready, remote_state: 'result_pull_failed' };
+    assert.equal(remoteResultsState({ ...failed, remote_results_received: null })?.received, false);
+    // Explicit server projection takes precedence; null/omitted falls back to old payloads.
+    const provenance = { remote_execution_receipt: { received_manifest_sha256: 'current', result_manifest_sha256: 'current' } };
+    assert.equal(remoteResultsState({ ...failed, provenance, remote_results_received: false })?.received, false);
+    assert.equal(remoteResultsState({ ...failed, provenance, remote_results_received: null })?.received, true);
+    assert.equal(remoteResultsState({ ...failed, remote_results_received: true, status: 'completed' }), null);
+    assert.equal(remoteResultsState({ ...failed, remote_results_received: true, awaiting_stage: 'other' }), null);
+});
+
+test('only classified received terminal import failure offers explicit import retry', () => {
+    const failed = { ...ready, status: 'failed', queue_status: 'failed', awaiting_input: false,
+        awaiting_stage: null, remote_state: 'result_import_failed', remote_results_received: true };
+    const expected = { busy: false, failed: true, received: true, terminal: true, label: 'Retry import' };
+    assert.deepEqual(remoteResultsState(failed), expected);
+    const { remote_results_received: _projection, ...detail } = failed;
+    assert.deepEqual(remoteResultsState({ ...detail, provenance: { remote_execution_receipt: {
+        received_manifest_sha256: 'current', result_manifest_sha256: 'current',
+    } } }), expected);
+    for (const patch of [
+        { status: 'cancelled' }, { status: 'completed' }, { status: 'running' },
+        { remote_state: 'failed' }, { remote_state: 'result_pull_failed' }, { remote_state: 'returned_ingestion_failed' }, { remote_state: null },
+        { execution_target_id: null }, { remote_results_received: false }, { remote_results_received: undefined },
+    ]) assert.equal(remoteResultsState({ ...failed, ...patch }), null, JSON.stringify(patch));
+    for (const received_manifest_sha256 of ['', 'old']) {
+        assert.equal(remoteResultsState({ ...detail, provenance: { remote_execution_receipt: {
+            received_manifest_sha256, result_manifest_sha256: 'current',
+        } } }), null);
+    }
+});
+
 test('ingestion refreshes existing jobs and output query families', () => {
     const keys = remoteResultQueryKeys(ready.id);
     for (const key of [['queue'], ['jobs'], ['job', ready.id], ['designs'], ['structure-files', ready.id], ['docking-results', ready.id]]) {
@@ -75,5 +121,5 @@ test('normal queue and details retain the prompt and poll only server job metada
     assert.match(table, /job\.status === 'awaiting_input' && !\(job\.execution_target_id && job\.awaiting_stage === 'remote_results'\)/u);
     assert.match(table, /<RemoteResultsPrompt job=\{job\} \/>/u);
     assert.match(readFileSync('src/components/RemoteResultsPrompt.tsx', 'utf8'), /Execution finished; worker availability is checked when you pull/u);
-    assert.match(detail, /remoteResultsState\(job\)\) \? jobPollingInterval/u);
+    assert.match(detail, /results && !results\.terminal\) \? jobPollingInterval/u);
 });

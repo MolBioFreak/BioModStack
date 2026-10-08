@@ -469,13 +469,13 @@ def test_phase2_contract_files_exist() -> None:
     assert missing == [], f"missing Phase 2 contract files: {missing}"
 
 
-def test_exact_clean_evidence_under_experimental_profile_requires_review(tmp_path: Path) -> None:
+def test_exact_clean_evidence_passes_checks_under_experimental_profile(tmp_path: Path) -> None:
     result, manifest, out_dir = _run_case(tmp_path)
 
     assert result.returncode == 0, result.stderr
     assert manifest["schema"] == "biomodstack.construct_verification.v2"
-    assert manifest["verdict"] == "REVIEW"
-    assert "UNCALIBRATED_PROFILE" in manifest["reason_codes"]
+    assert manifest["verdict"] == "PASS"
+    assert manifest["reason_codes"] == ["ALL_CHECKS_PASS"]
     assert all(check["status"] == "pass" for check in manifest["checks"].values())
     assert manifest["variants"] == []
     assert (out_dir / "observed_consensus.fasta").is_file()
@@ -523,12 +523,12 @@ def test_untrusted_or_missing_observed_evidence_is_review_not_pass(
         _reverse_complement(REFERENCE[9:] + REFERENCE[:9]),
     ],
 )
-def test_circular_rotation_and_reverse_complement_do_not_change_review_verdict(tmp_path: Path, observed: str) -> None:
+def test_circular_rotation_and_reverse_complement_preserve_check_pass(tmp_path: Path, observed: str) -> None:
     result, manifest, _ = _run_case(tmp_path, observed=observed)
 
     assert result.returncode == 0, result.stderr
-    assert manifest["verdict"] == "REVIEW"
-    assert "UNCALIBRATED_PROFILE" in manifest["reason_codes"]
+    assert manifest["verdict"] == "PASS"
+    assert manifest["reason_codes"] == ["ALL_CHECKS_PASS"]
     assert manifest["summary"]["sequence_identity_fraction"] == pytest.approx(1.0)
     assert manifest["summary"]["reference_topology"] == "circular"
 
@@ -890,7 +890,7 @@ def test_manifest_separates_execution_and_scientific_status(tmp_path: Path) -> N
 
     assert result.returncode == 0, result.stderr
     assert manifest["execution"] == {"status": "SUCCEEDED", "exit_code": 0, "reason_codes": []}
-    assert manifest["verdict"] == "REVIEW"
+    assert manifest["verdict"] == "PASS"
 
 
 def test_manifest_binds_reference_workflow_and_experimental_policy(tmp_path: Path) -> None:

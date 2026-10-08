@@ -1,3 +1,4 @@
+import { CohortMetricPicker } from '../../src/components/CohortMetricPicker';
 import React, { useState } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -28,9 +29,9 @@ let blobs: Map<string, Blob>;
 const changes = vi.fn();
 const text = (node: any): string => typeof node === 'string' ? node : (node.children ?? []).map(text).join('');
 const button = (label: string) => tree.root.findAllByType('button').find(node => text(node) === label)!;
-const control = (label: string) => tree.root.findByProps({ 'aria-label': label });
+const control = (label: string) => tree.root.findAllByType(CohortMetricPicker).find(node => node.props.label === ({ 'X metric': '2D X metric', 'Y metric': '2D Y metric' }[label] ?? label)) ?? tree.root.findByProps({ 'aria-label': label });
 const click = async (label: string) => { await act(async () => button(label).props.onClick()); };
-const change = async (label: string, value: string | boolean) => { await act(async () => control(label).props.onChange({ target: typeof value === 'boolean' ? { checked: value } : { value } })); };
+const change = async (label: string, value: string | boolean) => { await act(async () => { const field = control(label); field.props.onChange(field.type === CohortMetricPicker ? value : { target: typeof value === 'boolean' ? { checked: value } : { value } }); }); };
 const flush = async () => { for (let i = 0; i < 10; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); };
 const tableRows = () => control('Candidate data table').findByType('tbody').findAllByType('tr');
 const visibleIds = () => tableRows().map(row => text(row.findAllByType('button')[0]));
@@ -63,6 +64,7 @@ async function exported(label: string): Promise<string> {
     return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsText(blob!); });
 }
 beforeEach(() => {
+    sessionStorage.clear();
     vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
     requests = []; blobs = new Map(); changes.mockClear();
     vi.spyOn(URL, 'createObjectURL').mockImplementation(blob => { const url = `blob:test-${blobs.size}`; blobs.set(url, blob as Blob); return url; });
@@ -80,9 +82,9 @@ it('loads 1205 records through native pages while bounding the table and chartin
     expect(cohortIds()).toEqual(rows.map(row => row.candidate_key));
     expect(scatter().props.data[0].customdata).toHaveLength(1205);
     expect(scatter().props.data[0].x).toEqual(rows.map(row => (row.metrics as any).seq_length));
-    await click('Analytics');
+    await click('Plotly Lab');
     const stats = tree.root.findAllByType('table').find(table => table.findAllByType('caption').some(caption => text(caption) === 'Descriptive statistics for the full filtered cohort'))!;
-    const seq = stats.findByType('tbody').findAllByType('tr').find(row => text(row.findByType('code')) === 'seq_length')!;
+    const seq = stats.findByType('tbody').findAllByType('tr').find(row => row.findByType('th').props.title === 'seq_length')!;
     expect(text(seq.findAllByType('td')[0])).toBe('1,205');
     await change('Rows per page', '100'); expect(tableRows()).toHaveLength(100);
     await click('Next native records'); expect(visibleIds()[0]).toBe('native:100');
@@ -156,14 +158,14 @@ it('preserves parent/off-view selection through page toggles, matching selection
     expect(changes.mock.lastCall![0]).toEqual(['external-design', ...Array.from({ length: 50 }, (_, i) => `design/${i}`)]);
 });
 
-it('maps Plotly native identities to canonical Design IDs, ignores unjoined/unknown IDs, and separates inspection', async () => {
+it('maps linked Plotly records to Design IDs while retaining native-only records for export', async () => {
     const rows = fixture(); delete rows[1203].design_id;
     await mount(rows, { selectedDesignIds: ['external-design'] });
     await change('Scatter drag mode', 'lasso');
     expect(scatter().props.layout.dragmode).toBe('lasso');
     await act(async () => scatter().props.onSelected({ points: [{ customdata: 'native:1204' }, { customdata: 'native:1204' }, { customdata: 'native:1203' }, { customdata: 'unknown' }, { pointIndex: 1 }] }));
     expect(changes).toHaveBeenLastCalledWith(['external-design', 'design/1204']);
-    expect(tree.root.findByType(CohortAnalytics).props.selectedIds).toEqual(['native:1204']);
+    expect(tree.root.findByType(CohortAnalytics).props.selectedIds).toEqual(['native:1203', 'native:1204']);
     const count = changes.mock.calls.length;
     await act(async () => scatter().props.onClick({ points: [{ customdata: 'native:1204' }] }));
     expect(tree.root.findByType(StructureWorkbench).props.structureUrl).toBe('/api/files/1204.pdb');
@@ -273,7 +275,7 @@ it('projects BoltzGen verified native scalars without turning disposition criter
     expect(scatter().props.data[0].customdata).toEqual(['selected-cif']);
     expect(scatter().props.data[0].x).toEqual([0.8]);
     expect(scatter().props.data[0].y).toEqual([0]);
-    expect(text(control('Candidate data table'))).toContain('Filter rmsd (angstrom)');
+    expect(text(control('Candidate data table'))).toContain('Filter RMSD (angstrom)');
     expect(tableRows()[0].findAllByType('td')[2].props.title).toBe('0 · fraction');
     expect(tableRows()[1].findAllByType('td')[1].props.title).toBe('Not reported · fraction · unavailable · missing_native_metric');
     expect(tableRows()[1].findAllByType('td')[2].props.title).toBe('Not reported · fraction · invalid · nonfinite');
@@ -283,7 +285,7 @@ it('projects BoltzGen verified native scalars without turning disposition criter
     expect(JSON.parse(await exported('Native JSON'))).toEqual(rows);
     await click('selected-cif');
     expect(tree.root.findByType(StructureWorkbench).props).toMatchObject({ structureUrl: '/api/files/selected-cif.cif', structureDocumentId: 'native-cif', structureContentSha256: 'c'.repeat(64), format: 'cif' });
-    expect(text(control('Candidate structure inspector'))).toContain('Filter rmsd (angstrom)');
+    expect(text(control('Candidate structure inspector'))).toContain('Filter RMSD (angstrom)');
     expect(changes).not.toHaveBeenCalled();
 });
 

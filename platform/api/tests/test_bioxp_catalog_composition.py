@@ -63,11 +63,11 @@ def test_real_producer_catalog_preserves_both_contracts(producer, tmp_path, targ
                 assert response.status_code == 200, response.text
                 body = response.json()
                 legacy = raw['operator_control_catalog']
-                expected_legacy = routes.OperatorControlCatalog.model_validate(legacy).model_dump(mode='json')
+                expected_legacy = legacy  # Existing relay preserves robot replies without coercion.
                 assert {key: value for key, value in body.items() if key != 'canonical'} == {
                     key: value for key, value in expected_legacy.items() if key != 'canonical'
                 }
-                expected_canonical = routes.OperatorControlCatalogV2.model_validate(raw['operator_control_catalog_v2']).model_dump(mode='json')
+                expected_canonical = raw['operator_control_catalog_v2']
                 assert body['canonical'] == expected_canonical
                 assert any(a['informational_path'] == '/led/rgb' and a['inputs'] for a in body['actions'])
                 assert body['canonical']['actions']
@@ -113,7 +113,7 @@ def test_composed_queries_concurrency_generation_and_cleanup(tmp_path, ending):
             finally:
                 drained.add(name)
         original.request = request
-        task = asyncio.create_task(routes.operator_control_catalog(z_target_steps=0, runtime=SimpleNamespace(connection=service)))
+        task = asyncio.create_task(routes.operator_control_catalog(z_target_steps=0, view='full', runtime=SimpleNamespace(connection=service)))
         await asyncio.wait_for(asyncio.gather(*(event.wait() for event in entered.values())), 2)
         disconnect = None
         if ending == 'replacement':

@@ -64,12 +64,27 @@ async function listReady(name = saved.name) {
     });
 }
 
+it('keeps standalone BioXP drafts out of the model library and its launch callback', async () => {
+    const robotDraft = { ...saved, id: 'bioxp-draft', name: 'Robot-only workflow', model_id: null,
+        base_template_id: null, mode: 'bioxp_workflow',
+        params: { schema: 'bms.bioxp-workflow-draft.v1', steps: [], editor_state: {} } };
+    // Deliberately return a mixed list to qualify the receiving boundary too.
+    rows = [robotDraft, saved];
+    await render({ initialIntent: 'browse' }); await listReady();
+    expect(api.list).toHaveBeenCalledWith(undefined, undefined, undefined, 'bioxp_workflow');
+    expect(document.body.textContent).not.toContain(robotDraft.name);
+    expect([...document.querySelectorAll('button')].filter(node => node.textContent?.trim() === 'Load')).toHaveLength(1);
+    await click('Load');
+    expect(props.onSelect).toHaveBeenCalledExactlyOnceWith(saved);
+    expect(api.create).not.toHaveBeenCalled(); expect(api.update).not.toHaveBeenCalled();
+});
+
 it('opens in save mode, then back/search/load stays in the settled list and selects the exact native template', async () => {
     await render(); expect(heading()).toBe('Save as Template');
     await click('← Back to list'); await listReady();
     await render({ currentParams: { ...nativeParams } }); await listReady();
     await type('Search templates...', 'Saved native'); await listReady();
-    expect(api.list).toHaveBeenLastCalledWith('Saved native');
+    expect(api.list).toHaveBeenLastCalledWith('Saved native', undefined, undefined, 'bioxp_workflow');
     await click('Load');
     expect(props.onSelect).toHaveBeenCalledWith(saved);
     expect(props.onClose).toHaveBeenCalledOnce();

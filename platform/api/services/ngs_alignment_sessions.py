@@ -33,8 +33,7 @@ import pysam
 
 from paths import get_analysis_cache_dir, get_results_dir
 from services.ont_ngs_contract import DORADO_LOCK_PATH
-from services.ngs_molbio_source_authority import SourceBuildRevisionError, source_build_revision
-from services.ngs_molbio_runtime_status import NgsMolBioRuntimeAuthorityError, runtime_implementation_record
+from build_identity import deployed_source_identity
 
 # Scientific task scripts and the API share one immutable image-store owner.
 _SCRIPTS_ROOT = Path(__file__).resolve().parents[3] / "scripts"
@@ -2508,14 +2507,8 @@ def _selected_set_digest(ids: list[str]) -> str:
 
 
 def _creation_authority() -> tuple[str, str | None]:
-    try:
-        revision = source_build_revision()
-        tree = runtime_implementation_record().get("successor_source_tree")
-    except (SourceBuildRevisionError, NgsMolBioRuntimeAuthorityError, OSError, RuntimeError, ValueError) as exc:
-        raise AlignmentSessionError("derived-artifact creation revision authority is unavailable") from exc
-    if not isinstance(tree, str) or re.fullmatch(r"[0-9a-f]{40}", tree) is None:
-        tree = None
-    return revision, tree
+    revision, tree = deployed_source_identity()
+    return revision, None if tree == "unknown" else tree
 
 
 def _presentation_root(cache_root: Path | None, source_bam: Path | None = None) -> Path:

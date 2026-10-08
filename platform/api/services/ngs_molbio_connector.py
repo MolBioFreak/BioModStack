@@ -45,7 +45,7 @@ from molbio_ngs_models import (
     MolBioNGSOutboxEvent,
     MolBioNGSOutboxStream,
 )
-from services.ngs_molbio_source_authority import source_build_revision
+from build_identity import source_build_revision
 from services.ngs_molbio_capabilities import _read_version, _compiled_validator, NgsMolBioCapabilityError
 
 

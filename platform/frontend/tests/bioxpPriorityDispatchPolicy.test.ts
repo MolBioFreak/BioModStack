@@ -37,8 +37,9 @@ test('operator polling budget retains bounded live catalog and cross-client hist
     const camera = hookBody('useBioXpCameraStatus', 'export async function fetchBioXpCameraFrame');
     assert.match(catalog, /1_000 : 5_000/);
     assert.doesNotMatch(admission, /refetchInterval:/);
-    assert.match(history, /refetchInterval/);
-    assert.match(camera, /refetchInterval: enabled \? 2_000 : false/);
+    assert.doesNotMatch(history, /refetchInterval/);
+    assert.match(history, /useBioXpOperatorUpdates\(connectionGeneration, enabled\)/);
+    assert.match(camera, /refetchInterval: enabled \? interval : false/);
 });
 
 test('generic mutation refresh no longer extends pending state', () => {

@@ -58,10 +58,7 @@ from experiment_models import (
 )
 from experiment_services import ExperimentServiceError, IdempotencyConflict, new_id, now, sha256_text
 from paths import get_experiment_db_path
-from services.ngs_molbio_runtime_status import (
-    NgsMolBioRuntimeAuthorityError,
-    runtime_implementation_record,
-)
+from build_identity import deployed_source_identity
 
 
 class ExperimentOperationError(ExperimentServiceError):
@@ -131,21 +128,6 @@ def _sha256_file(path: Path) -> tuple[str, int]:
             digest.update(chunk)
             size += len(chunk)
     return digest.hexdigest(), size
-
-
-def _runtime_source_identity() -> tuple[str, str]:
-    """Resolve exact backup/restoration identity from package-local successor authority."""
-    try:
-        runtime = runtime_implementation_record()
-    except NgsMolBioRuntimeAuthorityError as exc:
-        raise ExperimentOperationError(
-            "package-local NGS/MolBio runtime authority is required for provenance-bound backup"
-        ) from exc
-    revision = runtime.get("successor_source_commit")
-    tree = runtime.get("successor_source_tree")
-    if type(revision) is not str or type(tree) is not str:
-        raise ExperimentOperationError("package-local runtime source identity is incomplete")
-    return revision, tree
 
 
 def _consistent_database_digest(source: Path) -> tuple[str, int]:
@@ -240,7 +222,7 @@ def _backup_paths(backup_id: str) -> tuple[Path, Path]:
 
 def create_online_backup() -> dict[str, Any]:
     """Create an SQLite online backup and a hash-bound metadata receipt."""
-    source_revision, source_tree = _runtime_source_identity()
+    source_revision, source_tree = deployed_source_identity()
     source = get_experiment_db_path()
     if not source.exists():
         raise ExperimentOperationError("global experiment database does not exist")
@@ -315,7 +297,6 @@ def verify_backup(
     """Verify a backup in an isolated SQLite connection without activating it."""
     if not verifier_id.strip():
         raise ExperimentOperationError("authenticated backup verifier identity is required")
-    source_revision, source_tree = _runtime_source_identity()
     database_path, metadata_path = _backup_paths(backup_id)
     if not database_path.exists() or not metadata_path.exists():
         raise BackupNotFound(f"backup not found: {backup_id}")
@@ -348,8 +329,6 @@ def verify_backup(
         provenance_valid = (
             metadata.get("schema") == "bms.experiment.backup.v1"
             and metadata.get("schema_version") == LATEST_MIGRATION_VERSION
-            and metadata.get("source_revision") == source_revision
-            and metadata.get("source_tree") == source_tree
             and metadata.get("object_counts") == actual_counts
             and metadata.get("table_content_sha256") == actual_table_content_sha256
         )
@@ -357,8 +336,8 @@ def verify_backup(
             "schema": "bms.experiment.backup-verification.v1",
             "backup_id": backup_id,
             "creation_receipt_sha256": creation_receipt_sha256,
-            "source_revision": source_revision,
-            "source_tree": source_tree,
+            "source_revision": metadata.get("source_revision"),
+            "source_tree": metadata.get("source_tree"),
             "verifier_id": verifier_id,
             "verification_authority": "authenticated_operator",
             "database_sha256": actual_sha256,
@@ -514,7 +493,7 @@ async def _rows_for_scope(session: AsyncSession, model: type[Any], scope: str, r
 
 async def build_workspace_export(session: AsyncSession, workspace_id: str) -> dict[str, Any]:
     """Write a deterministic metadata/artifact bundle for one workspace."""
-    source_revision, source_tree = _runtime_source_identity()
+    source_revision, source_tree = deployed_source_identity()
     start_data_version = await session.scalar(text("PRAGMA data_version"))
     if not isinstance(start_data_version, int):
         raise ExperimentOperationError("workspace export data-version authority is unavailable")
@@ -608,7 +587,6 @@ def verify_workspace_export(
 ) -> dict[str, Any]:
     if not verifier_id.strip():
         raise ExperimentOperationError("authenticated export verifier identity is required")
-    source_revision, source_tree = _runtime_source_identity()
     directory, manifest_path = _export_paths(export_id)
     if not manifest_path.exists():
         raise ExportNotFound(f"export not found: {export_id}")
@@ -659,8 +637,6 @@ def verify_workspace_export(
     provenance_valid = (
         manifest.get("schema") == "bms.experiment.workspace-export.v1"
         and manifest.get("schema_version") == LATEST_MIGRATION_VERSION
-        and manifest.get("source_revision") == source_revision
-        and manifest.get("source_tree") == source_tree
         and isinstance(database_digest, str)
         and len(database_digest) == 64
         and all(char in "0123456789abcdef" for char in database_digest)

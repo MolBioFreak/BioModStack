@@ -56,7 +56,7 @@ def test_routed_source_normalizes_and_hashes_dna_once(monkeypatch, digest):
         assert output.simulation.source.name == "example"
     else:
         output = routes._complete_analysis_pipeline(payload=payload, authority=catalog_authority, resolved_revision=None)
-        assert output.response.source.name == "example"
+        assert routes.AnalysisResponse.model_validate_json(output).source.name == "example"
     assert normalize_calls == ["ttgaattcaa"]
     assert len(dna_hash_calls) == 1
 

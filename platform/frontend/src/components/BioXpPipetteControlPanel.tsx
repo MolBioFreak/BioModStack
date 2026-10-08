@@ -16,6 +16,7 @@ import {
 type SnapshotFreshness = BioXpOperatorDashboard['snapshot']['freshness'];
 
 type Props = {
+    visible?: boolean;
     generation?: number;
     connected?: boolean;
     pipettes?: BioXpOperatorDashboard['pipettes'];
@@ -108,8 +109,8 @@ function DirectLiquidEvidence({ owner }: { owner: Pick<ReturnType<typeof useRead
     </div>;
 }
 
-export function BioXpPipetteControlPanel({ generation = 0, connected = true, pipettes, freshness, actions = [], catalogLoading = false, invokePending = false, invokeAction }: Props) {
-    const status = useBioXpPipetteApplicationStatus(generation, connected);
+export function BioXpPipetteControlPanel({ visible = true, generation = 0, connected = true, pipettes, freshness, actions = [], catalogLoading = false, invokePending = false, invokeAction }: Props) {
+    const status = useBioXpPipetteApplicationStatus(generation, connected && visible);
     const planner = usePlanBioXpPipetteApplication(generation, connected);
     const readback = useReadBioXpPipetteReadback(generation, connected);
     const [includeData, setIncludeData] = useState(false);

@@ -55,7 +55,7 @@ from services.molbio_sequence_import import (
     build_sequence_import_preview,
     commit_sequence_import,
 )
-from services.assembly.common import fragment_provenance_payload
+from services.assembly.common import fragment_provenance_payload, orient_fragment, reverse_complement_end
 from services.assembly.gibson import simulate_gibson
 from services.assembly.golden_gate import (
     GoldenGateAnalysisLimitError,
@@ -753,14 +753,6 @@ async def authenticated_molbio_reviewer(request: Request) -> Optional[str]:
     return str(actor)
 
 
-class LigationRequest(BaseModel):
-    fragments: List[str]
-    circular: bool = True
-    parent_id: Optional[str] = None
-    save: bool = True
-    new_name: Optional[str] = None
-
-
 class MutationSchema(BaseModel):
     pos: int
     to: str
@@ -775,20 +767,10 @@ class MutagenesisRequest(SequenceInput):
     new_name: Optional[str] = None
 
 
-class GibsonRequest(BaseModel):
-    fragments: List[str]
-    overlap_length: int = 20
-    circular: bool = True
-    parent_id: Optional[str] = None
-    save: bool = True
-    new_name: Optional[str] = None
-
-
-class NucleotideSequenceResponse(BaseModel):
+class SavedSequenceMetadata(BaseModel):
     id: str
     name: str
     description: Optional[str]
-    sequence: str
     sequence_type: str
     is_circular: bool
     length: int
@@ -806,6 +788,10 @@ class NucleotideSequenceResponse(BaseModel):
     updated_at: Optional[datetime]
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class NucleotideSequenceResponse(SavedSequenceMetadata):
+    sequence: str
 
 
 class PCRProductResponse(BaseModel):
@@ -860,6 +846,10 @@ class AssemblyFragmentEndSchema(BaseModel):
     type: Literal["blunt", "sticky_5", "sticky_3"]
     overhang: str = ""
     label: Optional[str] = None
+    protruding_strand: Optional[Literal["top", "bottom"]] = Field(
+        default=None,
+        description="Physical overhang strand; overhang is that strand 5′→3′ and sequence is the top span. Omit for historical unspecified notation.",
+    )
 
 
 class AssemblyFragmentSchema(BaseModel):
@@ -945,7 +935,7 @@ class AssemblyProductResponse(BaseModel):
 
 class AssemblyOperationResponse(BaseModel):
     product: AssemblyProductResponse
-    saved_sequence: Optional[NucleotideSequenceResponse] = None
+    saved_sequence: NucleotideSequenceResponse | SavedSequenceMetadata | None = None
     message: str
 
 
@@ -1078,7 +1068,7 @@ class GibsonDesignResponse(BaseModel):
     selected_product: AssemblyProductResponse
     warnings: List[str] = Field(default_factory=list)
     source_provenance: List[dict[str, Any]] = Field(default_factory=list)
-    saved_sequence: Optional[NucleotideSequenceResponse] = None
+    saved_sequence: NucleotideSequenceResponse | SavedSequenceMetadata | None = None
     message: str
 
 
@@ -1324,6 +1314,7 @@ def build_assembly_fragment(fragment: AssemblyFragmentSchema) -> AssemblyFragmen
             type=fragment.left_end.type,  # type: ignore[arg-type]
             overhang=fragment.left_end.overhang,
             label=fragment.left_end.label,
+            protruding_strand=fragment.left_end.protruding_strand,
         ),
         right_end=None
         if fragment.right_end is None
@@ -1331,6 +1322,7 @@ def build_assembly_fragment(fragment: AssemblyFragmentSchema) -> AssemblyFragmen
             type=fragment.right_end.type,  # type: ignore[arg-type]
             overhang=fragment.right_end.overhang,
             label=fragment.right_end.label,
+            protruding_strand=fragment.right_end.protruding_strand,
         ),
         metadata=fragment.metadata or {},
     )
@@ -1380,6 +1372,7 @@ def assembly_product_to_response(product: "AssemblyProduct") -> AssemblyProductR
                     type=fragment.left_end.type,
                     overhang=fragment.left_end.overhang,
                     label=fragment.left_end.label,
+                    protruding_strand=fragment.left_end.protruding_strand,
                 ),
                 right_end=None
                 if fragment.right_end is None
@@ -1387,6 +1380,7 @@ def assembly_product_to_response(product: "AssemblyProduct") -> AssemblyProductR
                     type=fragment.right_end.type,
                     overhang=fragment.right_end.overhang,
                     label=fragment.right_end.label,
+                    protruding_strand=fragment.right_end.protruding_strand,
                 ),
                 metadata=fragment.metadata or None,
             )
@@ -1412,7 +1406,7 @@ def assembly_product_to_response(product: "AssemblyProduct") -> AssemblyProductR
 def gibson_design_to_response(
     result: GibsonDesignResult,
     *,
-    saved_sequence: Optional[NucleotideSequence] = None,
+    saved_sequence: NucleotideSequence | SavedSequenceMetadata | None = None,
     message: str = "Designed Gibson assembly",
 ) -> GibsonDesignResponse:
     if not result.selected_candidate_checksum:
@@ -1530,6 +1524,16 @@ async def persist_assembly_product(
 
     input_revisions = []
     inline_inputs = []
+    # Transaction-local immutable source authority, never a cross-request cache.
+    resolved_sources = {}
+    source_keys = {(f.source_sequence_id, f.source_revision) for f in product.fragments if f.source_sequence_id}
+    # Resolve heads first so an explicit reference to the same revision reuses it,
+    # regardless of part order. Historical revisions remain distinct.
+    for source_key in sorted(source_keys, key=lambda key: (key[0], key[1] is not None, key[1] or 0)):
+        if source_key not in resolved_sources:
+            resolved = await _assembly_source_revision(session, *source_key)
+            resolved_sources[source_key] = resolved
+            resolved_sources[(source_key[0], resolved[0].revision_number)] = resolved
     for fragment in product.fragments:
         fragment_snapshot = {
             "fragment": {
@@ -1549,9 +1553,8 @@ async def persist_assembly_product(
             }
         }
         if fragment.source_sequence_id:
-            source_revision, source = await _assembly_source_revision(
-                session, fragment.source_sequence_id, fragment.source_revision
-            )
+            source_key = (fragment.source_sequence_id, fragment.source_revision)
+            source_revision, source = resolved_sources[source_key]
             start = fragment.source_start
             end = fragment.source_end
             if (start is None) != (end is None):
@@ -1593,11 +1596,17 @@ async def persist_assembly_product(
                     )
                 expected_sequence = source.sequence[start:end]
 
-            if fragment.orientation == "reverse":
-                expected_sequence = reverse_complement(
-                    expected_sequence,
-                    source.sequence_type or "dna",
-                )
+            if fragment.orientation == "reverse" and any(
+                end and end.protruding_strand for end in (fragment.left_end, fragment.right_end)
+            ):
+                expected_sequence = orient_fragment(AssemblyFragment(
+                    id=fragment.id, name=fragment.name, sequence=expected_sequence,
+                    orientation="reverse",
+                    left_end=reverse_complement_end(fragment.right_end),
+                    right_end=reverse_complement_end(fragment.left_end),
+                )).sequence
+            elif fragment.orientation == "reverse":
+                expected_sequence = reverse_complement(expected_sequence, source.sequence_type or "dna")
             if fragment.sequence != expected_sequence:
                 raise HTTPException(
                     status_code=409,
@@ -1748,25 +1757,6 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
         sequence_type="dna",
         settings=resolved_tm_settings,
     )
-    forward_snapshot = {
-        "sequence": forward_primer,
-        "sha256": hashlib.sha256(forward_primer.encode("utf-8")).hexdigest(),
-        "tm": forward_tm.model_dump(),
-    }
-    reverse_snapshot = {
-        "sequence": reverse_primer,
-        "sha256": hashlib.sha256(reverse_primer.encode("utf-8")).hexdigest(),
-        "tm": reverse_tm.model_dump(),
-    }
-    tm_snapshot = {
-        "settings": resolved_tm_settings.model_dump(),
-        "forward": forward_tm.model_dump(),
-        "reverse": reverse_tm.model_dump(),
-        "algorithm_definition": TM_ALGORITHM_DEFS.get(resolved_tm_settings.algorithm),
-        "salt_correction_definition": TM_SALT_CORRECTION_DEFS.get(
-            resolved_tm_settings.salt_correction
-        ),
-    }
     provenance = dict(request.provenance)
     provenance.update(
         {
@@ -1778,70 +1768,94 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
         }
     )
 
-    template_revision = (
-        await current_molecular_revision(session, parent.id)
-        if request.sequence_id
-        else None
-    )
-    template_projection_snapshot = sequence_snapshot(parent)
-    if not request.sequence_id:
-        # The generated ORM identity is not part of an inline request.
-        template_projection_snapshot.pop("id", None)
-        template_projection_snapshot.pop("created_at", None)
-        template_projection_snapshot.pop("updated_at", None)
-    request_fingerprint = canonical_request_fingerprint(
-        {
-            "schema": "pcr-request-v1",
-            "template": {
-                "document_id": request.sequence_id,
-                "revision_id": template_revision.id if template_revision else None,
-                "revision_sha256": template_revision.content_sha256
-                if template_revision
-                else None,
-                "revision_snapshot": template_revision.snapshot
-                if template_revision
-                else None,
-                "projection_sha256": hashlib.sha256(
-                    parent.sequence.encode("utf-8")
-                ).hexdigest(),
-                "projection_snapshot": template_projection_snapshot,
-            },
-            "forward_primer_snapshot": forward_snapshot,
-            "reverse_primer_snapshot": reverse_snapshot,
-            "tm_snapshot": tm_snapshot,
-            "tm_model_revision": tm_model_revision_identity(tm_snapshot),
-            "polymerase_preset_revision_id": request.polymerase_preset_revision_id,
-            "reaction_settings": request.reaction_settings,
-            "cycling_assumptions": request.cycling_assumptions,
-            "save_intent": {
-                "save": request.save,
-                "persist_experiment": request.persist_experiment,
-                "new_name": request.new_name,
-            },
-            "experiment": {
-                "notes": request.notes,
-                "review_state": request.review_state,
-            },
-            "provenance": provenance,
-            "implementation": "services.molbio_ops.pcr_product:v1",
+    forward_snapshot: dict[str, Any] = {}
+    reverse_snapshot: dict[str, Any] = {}
+    tm_snapshot: dict[str, Any] = {}
+    request_fingerprint = ""
+    if request.persist_experiment:
+        forward_snapshot = {
+            "sequence": forward_primer,
+            "sha256": hashlib.sha256(forward_primer.encode("utf-8")).hexdigest(),
+            "tm": forward_tm.model_dump(),
         }
-    )
+        reverse_snapshot = {
+            "sequence": reverse_primer,
+            "sha256": hashlib.sha256(reverse_primer.encode("utf-8")).hexdigest(),
+            "tm": reverse_tm.model_dump(),
+        }
+        tm_snapshot = {
+            "settings": resolved_tm_settings.model_dump(),
+            "forward": forward_tm.model_dump(),
+            "reverse": reverse_tm.model_dump(),
+            "algorithm_definition": TM_ALGORITHM_DEFS.get(resolved_tm_settings.algorithm),
+            "salt_correction_definition": TM_SALT_CORRECTION_DEFS.get(
+                resolved_tm_settings.salt_correction
+            ),
+        }
+        template_revision = (
+            await current_molecular_revision(session, parent.id)
+            if request.sequence_id
+            else None
+        )
+        template_projection_snapshot = sequence_snapshot(parent)
+        if not request.sequence_id:
+            # The generated ORM identity is not part of an inline request.
+            template_projection_snapshot.pop("id", None)
+            template_projection_snapshot.pop("created_at", None)
+            template_projection_snapshot.pop("updated_at", None)
+        request_fingerprint = canonical_request_fingerprint(
+            {
+                "schema": "pcr-request-v1",
+                "template": {
+                    "document_id": request.sequence_id,
+                    "revision_id": template_revision.id if template_revision else None,
+                    "revision_sha256": template_revision.content_sha256
+                    if template_revision
+                    else None,
+                    "revision_snapshot": template_revision.snapshot
+                    if template_revision
+                    else None,
+                    "projection_sha256": hashlib.sha256(
+                        parent.sequence.encode("utf-8")
+                    ).hexdigest(),
+                    "projection_snapshot": template_projection_snapshot,
+                },
+                "forward_primer_snapshot": forward_snapshot,
+                "reverse_primer_snapshot": reverse_snapshot,
+                "tm_snapshot": tm_snapshot,
+                "tm_model_revision": tm_model_revision_identity(tm_snapshot),
+                "polymerase_preset_revision_id": request.polymerase_preset_revision_id,
+                "reaction_settings": request.reaction_settings,
+                "cycling_assumptions": request.cycling_assumptions,
+                "save_intent": {
+                    "save": request.save,
+                    "persist_experiment": request.persist_experiment,
+                    "new_name": request.new_name,
+                },
+                "experiment": {
+                    "notes": request.notes,
+                    "review_state": request.review_state,
+                },
+                "provenance": provenance,
+                "implementation": "services.molbio_ops.pcr_product:v1",
+            }
+        )
 
-    if request.persist_experiment and request.idempotency_key:
-        try:
-            existing = await get_pcr_by_idempotency_key(
-                session,
-                request.idempotency_key,
-                request_fingerprint=request_fingerprint,
-            )
-        except IdempotencyConflictError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        if existing is not None:
-            return _pcr_replay_response(existing)
-        # Release the read snapshot before persistence acquires SQLite's writer
-        # lock. Loaded immutable identity data remains available because the
-        # Mol Bio session factory uses expire_on_commit=False.
-        await session.commit()
+        if request.idempotency_key:
+            try:
+                existing = await get_pcr_by_idempotency_key(
+                    session,
+                    request.idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                )
+            except IdempotencyConflictError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            if existing is not None:
+                return _pcr_replay_response(existing)
+            # Release the read snapshot before persistence acquires SQLite's writer
+            # lock. Loaded immutable identity data remains available because the
+            # Mol Bio session factory uses expire_on_commit=False.
+            await session.commit()
 
     try:
         product = await run_in_threadpool(pcr_product,
@@ -1864,11 +1878,6 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
     warnings = list(forward_tm.warnings) + list(reverse_tm.warnings)
     if product.wraps_origin:
         warnings.append("PCR product crosses the circular sequence origin.")
-    product_snapshot = {
-        **product_payload.model_dump(),
-        "sha256": hashlib.sha256(product.sequence.encode("utf-8")).hexdigest(),
-    }
-
     saved_sequence = None
     operation_id = None
     if request.save:
@@ -1897,7 +1906,10 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
                 polymerase_preset_revision_id=request.polymerase_preset_revision_id,
                 reaction_settings=request.reaction_settings,
                 cycling_assumptions=request.cycling_assumptions,
-                product_snapshot=product_snapshot,
+                product_snapshot={
+                    **product_payload.model_dump(),
+                    "sha256": hashlib.sha256(product.sequence.encode("utf-8")).hexdigest(),
+                },
                 warnings=warnings,
                 notes=request.notes,
                 review_state=request.review_state,
@@ -2273,7 +2285,7 @@ async def get_molecular_operation(
             await session.scalars(
                 select(MolecularOperationInput)
                 .where(MolecularOperationInput.operation_id == operation_id)
-                .order_by(MolecularOperationInput.ordinal, MolecularOperationInput.id)
+                .order_by(MolecularOperationInput.position, MolecularOperationInput.id)
             )
         ).all()
     )
@@ -2282,21 +2294,21 @@ async def get_molecular_operation(
             await session.scalars(
                 select(MolecularOperationOutput)
                 .where(MolecularOperationOutput.operation_id == operation_id)
-                .order_by(MolecularOperationOutput.ordinal, MolecularOperationOutput.id)
+                .order_by(MolecularOperationOutput.position, MolecularOperationOutput.id)
             )
         ).all()
     )
     return {
         "operation_id": operation.id,
-        "operation_type": operation.operation_type,
+        "operation_type": operation.operation_kind,
         "status": operation.status,
-        "request_fingerprint_sha256": operation.request_fingerprint_sha256,
+        "request_fingerprint_sha256": operation.request_fingerprint,
         "inputs": [
-            {"revision_id": item.revision_id, "role": item.role, "ordinal": item.ordinal}
+            {"revision_id": item.revision_id, "role": item.role, "ordinal": item.position}
             for item in inputs
         ],
         "outputs": [
-            {"revision_id": item.revision_id, "role": item.role, "ordinal": item.ordinal}
+            {"revision_id": item.revision_id, "role": item.role, "ordinal": item.position}
             for item in outputs
         ],
     }
@@ -2322,6 +2334,7 @@ async def simulate_ligation_assembly(request: LigationAssemblyRequest):
 async def save_ligation_assembly(
     request: LigationAssemblyRequest,
     session: AsyncSession = Depends(get_molbio_session),
+    response_view: Literal["full", "compact"] = "full",
 ):
     try:
         product = await run_in_threadpool(simulate_ligation,
@@ -2336,10 +2349,11 @@ async def save_ligation_assembly(
         product=product,
         name=request.new_name,
         save_description=request.save_description,
+        extra_operation_params={"assembly_request": request.model_dump(mode="json")},
     )
     return AssemblyOperationResponse(
         product=assembly_product_to_response(product),
-        saved_sequence=saved,
+        saved_sequence=(SavedSequenceMetadata.model_validate(saved) if response_view == "compact" else saved),
         message=f"Saved ligation product '{saved.name}'",
     )
 
@@ -2758,6 +2772,7 @@ async def design_gibson_assembly(
 async def save_designed_gibson_assembly(
     request: GibsonDesignRequest,
     session: AsyncSession = Depends(get_molbio_session),
+    response_view: Literal["full", "compact"] = "full",
 ):
     if not request.selected_candidate_checksum:
         raise HTTPException(
@@ -2809,7 +2824,7 @@ async def save_designed_gibson_assembly(
         )
         response = gibson_design_to_response(
             result,
-            saved_sequence=saved,
+            saved_sequence=(SavedSequenceMetadata.model_validate(saved) if response_view == "compact" else saved),
             message="Saved the computed Gibson assembly without replanning",
         )
         response.computation_id = computation_id
@@ -2841,6 +2856,7 @@ async def simulate_gibson_assembly(request: GibsonAssemblyRequest):
 async def save_gibson_assembly(
     request: GibsonAssemblyRequest,
     session: AsyncSession = Depends(get_molbio_session),
+    response_view: Literal["full", "compact"] = "full",
 ):
     try:
         product = await run_in_threadpool(simulate_gibson,
@@ -2861,7 +2877,7 @@ async def save_gibson_assembly(
     )
     return AssemblyOperationResponse(
         product=assembly_product_to_response(product),
-        saved_sequence=saved,
+        saved_sequence=(SavedSequenceMetadata.model_validate(saved) if response_view == "compact" else saved),
         message=f"Saved Gibson product '{saved.name}'",
     )
 
@@ -2873,7 +2889,18 @@ async def golden_gate_options():
     except AssemblyError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     first = enzymes[0] if enzymes else None
+    from services.assembly.golden_gate_workflow_types import REQUEST_ADAPTER, SaveDesignRequest
+    from services.assembly.golden_gate_fidelity import discover_datasets
+    from services.assembly.golden_gate_design import RAW_ENZYMES
     return {
+        "raw_design": {
+            "schema_version": "bms.golden-gate-design.v1",
+            "request_schema": REQUEST_ADAPTER.json_schema(),
+            "save_schema": SaveDesignRequest.model_json_schema(),
+            "raw_enzyme_adapters": sorted(RAW_ENZYMES),
+            "datasets": discover_datasets(),
+            "limitations": ["No kinetic or exhaustive competing-product simulation", "No shipped standard presets or combinatorial scheduler"],
+        },
         "catalog": (
             {
                 "catalog_id": first.catalog_id,
@@ -2930,6 +2957,7 @@ async def simulate_golden_gate_assembly(request: GoldenGateAssemblyRequest):
 async def save_golden_gate_assembly(
     request: GoldenGateAssemblyRequest,
     session: AsyncSession = Depends(get_molbio_session),
+    response_view: Literal["full", "compact"] = "full",
 ):
     try:
         enzyme = resolve_golden_gate_enzyme(
@@ -2962,6 +2990,7 @@ async def save_golden_gate_assembly(
         name=request.new_name,
         save_description=request.save_description,
         extra_operation_params={
+            "assembly_request": request.model_dump(mode="json"),
             "enzyme_id": authority.enzyme_id,
             "catalog_id": authority.catalog_id,
             "catalog_sha256": authority.catalog_sha256,
@@ -2969,34 +2998,8 @@ async def save_golden_gate_assembly(
     )
     return AssemblyOperationResponse(
         product=assembly_product_to_response(product),
-        saved_sequence=saved,
+        saved_sequence=(SavedSequenceMetadata.model_validate(saved) if response_view == "compact" else saved),
         message=f"Saved Golden Gate product '{saved.name}'",
-    )
-
-
-@router.post("/ligate", response_model=MolbioOperationResponse)
-async def ligate(
-    request: LigationRequest, session: AsyncSession = Depends(get_molbio_session)
-):
-    raise HTTPException(
-        status_code=400,
-        detail=(
-            "The legacy /ligate route is deprecated because it does not carry fragment-end metadata. "
-            "Use /api/molbio/assembly/ligation/simulate or /save with explicit fragment ends."
-        ),
-    )
-
-
-@router.post("/gibson", response_model=MolbioOperationResponse)
-async def gibson(
-    request: GibsonRequest, session: AsyncSession = Depends(get_molbio_session)
-):
-    raise HTTPException(
-        status_code=400,
-        detail=(
-            "The legacy /gibson route is deprecated because it does not carry validated overlap contracts. "
-            "Use /api/molbio/assembly/gibson/simulate or /save."
-        ),
     )
 
 

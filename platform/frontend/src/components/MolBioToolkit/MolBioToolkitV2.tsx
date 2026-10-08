@@ -4,24 +4,25 @@
  * Clean rewrite replacing OVE with modern component architecture.
  */
 
-import { useState, useEffect, useCallback, useMemo, useRef, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { useLocation } from 'react-router-dom';
-import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
+const GoldenGateRetainedWorkspace = lazy(() => import('./panels/golden-gate/GoldenGateWorkflowWorkspace'));
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ngsResultHref } from '../../lib/ngsResultRouting';
 import { createLatestAsyncResourceController } from '../../lib/latestAsyncResource';
 import {
     fetchRestrictionAnalysisBatch,
-    fetchRestrictionCatalog,
+    fetchRestrictionCatalogBrowse,
+    fetchRestrictionCatalogDetails,
     parseRestrictionProducts,
     simulateRestrictionDigest,
     type RestrictionAnalysisBatch,
     type RestrictionCatalogReceipt,
     type RestrictionDigestSimulation,
     type RestrictionProductReleaseReceipt,
-    type RestrictionRecord,
+    type RestrictionCatalogSummary,
     type RestrictionSource,
 } from '../../lib/restrictionAnalysis';
-import { anyToJson } from '@teselagen/bio-parsers';
 import { SequenceViewer, type ColorPaletteName } from './SequenceViewer';
 import { DEFAULT_VISIBILITY } from './sequenceViewerConstants';
 import { SequenceHeader } from './SequenceHeader';
@@ -36,7 +37,6 @@ import { createHistoryState, reconcileSavedHistory, useSequenceHistory, type His
 import { useSequenceOperations } from './hooks/useSequenceOperations';
 import { AlignmentPanel, AssemblyPanel, DigestPanel, HistoryPanel, PCRPanel, PrimerPanel, RnaStructurePanel, FeaturePanel, EditPanel, SearchPanel } from './panels';
 import { AutoAnnotatePanel, type AutoAnnotateSettings } from './AutoAnnotatePanel';
-import { GCContentTrack } from './GCContentTrack';
 import {
     SelectionActionDialog,
     type SelectionActionKind,
@@ -76,7 +76,6 @@ import {
     fetchPrimerTmOptions,
     type MolecularRevision,
     type SequenceAnalysisTrack,
-    type PrimerTmOptionsResponse,
     type PrimerTmSettings,
     type RnaStructureResult,
     type NucleotideSequenceCreate,
@@ -157,6 +156,8 @@ import {
     type MolBioMobileSurface,
 } from './utils/mobileLayout';
 import { useMolBioBodyScrollLock } from './useMolBioBodyScrollLock';
+
+const GCContentTrack = lazy(() => import('./GCContentTrack').then(module => ({ default: module.GCContentTrack })));
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SEQUENCE LIBRARY SIDEBAR WITH IMPORT
@@ -770,9 +771,12 @@ export function MolBioToolkitV2() {
     const deepLinkRevisionId = requestedLegacyMolecularRevisionId;
     const deepLinkOperationId = queryParams.get('operation_id')?.trim() || null;
     const deepLinkReceiptId = queryParams.get('receipt_id')?.trim() || null;
+    const [goldenGateLinkedOperation,setGoldenGateLinkedOperation]=useState<string | null>(null);
+    const [showLinkedGoldenGate,setShowLinkedGoldenGate]=useState(false);
     const [deepLinkOperationState, setDeepLinkOperationState] = useState<'loading' | 'loaded' | 'unavailable' | null>(null);
     const openedDeepLinkRef = useRef<string | null>(null);
     // State
+    const [digestAssemblyFragments, setDigestAssemblyFragments] = useState<import('../../lib/api').AssemblyFragmentInput[] | null>(null);
     const [sequences, setSequences] = useState<NucleotideSequenceListItem[]>([]);
     const [showAllConstructs, setShowAllConstructs] = useState(false);
     const [selectedSequenceId, setSelectedSequenceId] = useState<string | null>(null);
@@ -878,7 +882,7 @@ export function MolBioToolkitV2() {
 
     const queryClient = useQueryClient();
     const [restrictionCatalog, setRestrictionCatalog] = useState<RestrictionCatalogReceipt | null>(null);
-    const [restrictionCatalogRecords, setRestrictionCatalogRecords] = useState<RestrictionRecord[]>([]);
+    const [restrictionCatalogRecords, setRestrictionCatalogRecords] = useState<RestrictionCatalogSummary[]>([]);
     const [restrictionProductEvidence, setRestrictionProductEvidence] = useState<RestrictionProductReleaseReceipt | null>(null);
     const [restrictionAnalysis, setRestrictionAnalysis] = useState<RestrictionAnalysisBatch | null>(null);
     const [restrictionAuthorityLoading, setRestrictionAuthorityLoading] = useState(false);
@@ -887,7 +891,7 @@ export function MolBioToolkitV2() {
     const [restrictionDigestLoading, setRestrictionDigestLoading] = useState(false);
     const [restrictionDigestError, setRestrictionDigestError] = useState<string | null>(null);
 
-    const restrictionCatalogRecordsRef = useRef<RestrictionRecord[]>([]);
+    const restrictionCatalogRecordsRef = useRef<RestrictionCatalogSummary[]>([]);
     const restrictionAnalysisAbortRef = useRef<AbortController | null>(null);
     const restrictionAnalysisControllerRef = useRef(createLatestAsyncResourceController());
     const restrictionAuthorityControllerRef = useRef(createLatestAsyncResourceController());
@@ -1488,11 +1492,13 @@ export function MolBioToolkitV2() {
             return;
         }
         let cancelled = false;
+        setGoldenGateLinkedOperation(null);
         setDeepLinkOperationState('loading');
         void fetch(`/api/molbio/operations/${encodeURIComponent(deepLinkOperationId)}`)
             .then(async (response) => {
                 if (!response.ok) throw new Error('operation unavailable');
                 const detail = await response.json() as {
+                    operation_type?: string;
                     operation_id?: string;
                     inputs?: Array<{ revision_id?: string }>;
                     outputs?: Array<{ revision_id?: string }>;
@@ -1506,7 +1512,7 @@ export function MolBioToolkitV2() {
                 ) {
                     throw new Error('operation identity mismatch');
                 }
-                if (!cancelled) setDeepLinkOperationState('loaded');
+                if (!cancelled) { setDeepLinkOperationState('loaded'); if(detail.operation_type === 'golden_gate_design') setGoldenGateLinkedOperation(deepLinkOperationId); }
             })
             .catch(() => {
                 if (!cancelled) setDeepLinkOperationState('unavailable');
@@ -1581,6 +1587,7 @@ export function MolBioToolkitV2() {
         const ownsCompletion = captureEditableOwner();
         if (exactMolecularAuthorityRef.current) return;
         try {
+            const { anyToJson } = await import('@teselagen/bio-parsers');
             const result = await anyToJson(file, {
                 fileName: file.name,
                 parseOptions: { inclusive1BasedStart: false, jsonType: 'json' }
@@ -2299,7 +2306,7 @@ export function MolBioToolkitV2() {
         let cancelled = false;
         void queryClient.fetchQuery({
             queryKey: ['molbio-restriction-catalog'],
-            queryFn: ({ signal }) => fetchRestrictionCatalog({ signal }),
+            queryFn: ({ signal }) => fetchRestrictionCatalogBrowse({ signal }),
             staleTime: 300_000,
         }).then((page) => {
             if (cancelled) return;
@@ -2311,6 +2318,16 @@ export function MolBioToolkitV2() {
         });
         return () => { cancelled = true; };
     }, [queryClient, restrictionConsumerVisible]);
+
+    const readRestrictionDetails = useCallback((enzymeIds: string[]) => {
+        if (!restrictionCatalog) return Promise.resolve([]);
+        const ids = [...new Set(enzymeIds)].sort();
+        return queryClient.fetchQuery({
+            queryKey: ['molbio-restriction-details', restrictionCatalog.catalog_id, restrictionCatalog.catalog_sha256, ids],
+            queryFn: ({ signal }) => fetchRestrictionCatalogDetails({ enzymeIds: ids, catalog: { catalog_id: restrictionCatalog.catalog_id, expected_catalog_sha256: restrictionCatalog.catalog_sha256 }, signal }),
+            staleTime: 300_000,
+        });
+    }, [queryClient, restrictionCatalog]);
 
     // Supplier products do not own recognition-site or cleavage geometry.
     useEffect(() => {
@@ -2347,7 +2364,14 @@ export function MolBioToolkitV2() {
 
     // GC track visibility state
     const [showGCTrack, setShowGCTrack] = useState(false);
-    const [primerTmOptions, setPrimerTmOptions] = useState<PrimerTmOptionsResponse | null>(null);
+    const primerTmOptionsQuery = useQuery({
+        queryKey: ['molbio-primer-tm-options'],
+        queryFn: async ({ signal }) => (await fetchPrimerTmOptions(signal)).data,
+        staleTime: 300_000,
+        refetchOnWindowFocus: false,
+        refetchOnReconnect: false,
+    });
+    const primerTmOptions = primerTmOptionsQuery.data ?? null;
     const [primerTmSettings, setPrimerTmSettings] = useState<PrimerTmSettings>(DEFAULT_DNA_TM_SETTINGS);
     const viewerLayout = useMemo(() => resolveMolBioViewerLayout({
         activePanel,
@@ -2368,26 +2392,8 @@ export function MolBioToolkitV2() {
     ]);
 
     useEffect(() => {
-        let cancelled = false;
-
-        const loadPrimerTmOptions = async () => {
-            try {
-                const response = await queryClient.fetchQuery({ queryKey: ['molbio-primer-tm-options'], queryFn: fetchPrimerTmOptions, staleTime: 300_000 });
-                if (cancelled) {
-                    return;
-                }
-                setPrimerTmOptions(response.data);
-            } catch (tmError) {
-                console.error('Failed to load primer Tm options:', tmError);
-                if (!cancelled) setWorkspaceRestoreNotice('Primer Tm options unavailable. Reload to retry.');
-            }
-        };
-
-        loadPrimerTmOptions();
-        return () => {
-            cancelled = true;
-        };
-    }, [queryClient]);
+        if (primerTmOptionsQuery.error) setWorkspaceRestoreNotice('Primer Tm options unavailable. Reload to retry.');
+    }, [primerTmOptionsQuery.error]);
 
     useEffect(() => {
         if (!primerTmOptions) {
@@ -2577,6 +2583,7 @@ export function MolBioToolkitV2() {
             assertAnnotationArtifactChecksum(publishedSource, sourceFileSha256);
         }
 
+        const { anyToJson } = await import('@teselagen/bio-parsers');
         const result = await anyToJson(file, {
             fileName: file.name,
             inclusive1BasedStart: false,
@@ -3183,6 +3190,7 @@ export function MolBioToolkitV2() {
                 )}
                 digest={(
                     <DigestPanel
+                        onUseInAssembly={fragments => { setDigestAssemblyFragments(fragments); setActivePanel('assembly'); }}
                         mobile
                         compactLandscape={viewportWidth > viewportHeight && viewportHeight <= 500}
                         sequenceData={sequenceData}
@@ -3195,6 +3203,7 @@ export function MolBioToolkitV2() {
                         catalog={restrictionCatalog}
                         productEvidence={restrictionProductEvidence}
                         catalogRecords={restrictionCatalogRecords}
+                        onReadEnzymeDetails={readRestrictionDetails}
                         analysis={restrictionAnalysis}
                         authorityLoading={restrictionAuthorityLoading}
                         authorityError={restrictionAuthorityError}
@@ -3223,6 +3232,7 @@ export function MolBioToolkitV2() {
 
     return (
         <>
+            {goldenGateLinkedOperation && <section><button onClick={()=>setShowLinkedGoldenGate(!showLinkedGoldenGate)}>Open retained Golden Gate operation</button>{showLinkedGoldenGate && <Suspense fallback={<p>Loading retained Golden Gate workup…</p>}><GoldenGateRetainedWorkspace sequenceData={sequenceData} options={null} operationId={goldenGateLinkedOperation} onLoadProduct={handleLoadAssemblyProduct}/></Suspense>}</section>}
             {(deepLinkOperationId || deepLinkReceiptId) && (
                 <aside className="border-b border-slate-700 bg-slate-950 px-4 py-2 text-xs text-slate-200" aria-label="Exact MolBio source context">
                     {deepLinkOperationId && (
@@ -3475,20 +3485,22 @@ export function MolBioToolkitV2() {
                             <>
                                 {/* GC Content Track */}
                                 {!isViewerFullscreen && showGCTrack && (
-                                    <GCContentTrack
-                                        onRestrictionAnalysisRequested={requestDiagnosticRestrictionAnalysis}
-                                        sequence={sequenceData.sequence}
-                                        sequenceType={sequenceData.sequenceType === 'rna' ? 'rna' : 'dna'}
-                                        reverseCoordinates={sourceDisplayStrand !== activeDisplayStrand}
-                                        circular={sequenceData.circular}
-                                        selectedEnzymes={selectedEnzymes}
-                                        restrictionOccurrences={restrictionAnalysis?.analysis.occurrences ?? []}
-                                        selection={selection}
-                                        onSelectionChange={handleSelection}
-                                        onClearSelection={() => setSelection(null)}
-                                        windowSize={Math.max(20, Math.min(100, Math.floor(sequenceData.sequence.length / 50)))}
-                                        height={108}
-                                    />
+                                    <Suspense fallback={<div role="status">Loading GC track…</div>}>
+                                        <GCContentTrack
+                                            onRestrictionAnalysisRequested={requestDiagnosticRestrictionAnalysis}
+                                            sequence={sequenceData.sequence}
+                                            sequenceType={sequenceData.sequenceType === 'rna' ? 'rna' : 'dna'}
+                                            reverseCoordinates={sourceDisplayStrand !== activeDisplayStrand}
+                                            circular={sequenceData.circular}
+                                            selectedEnzymes={selectedEnzymes}
+                                            restrictionOccurrences={restrictionAnalysis?.analysis.occurrences ?? []}
+                                            selection={selection}
+                                            onSelectionChange={handleSelection}
+                                            onClearSelection={() => setSelection(null)}
+                                            windowSize={Math.max(20, Math.min(100, Math.floor(sequenceData.sequence.length / 50)))}
+                                            height={108}
+                                        />
+                                    </Suspense>
                                 )}
 
                                 {/* Sequence Viewer */}
@@ -3689,6 +3701,7 @@ export function MolBioToolkitV2() {
                         )}
                         {!isExactMolecularAuthority && activePanel === 'assembly' && (
                             <AssemblyPanel
+                                transferredFragments={digestAssemblyFragments}
                                 sequenceData={sequenceData}
                                 selection={selection}
                                 selectedSequenceId={selectedSequenceId}
@@ -3712,6 +3725,7 @@ export function MolBioToolkitV2() {
                         )}
                         {!isExactMolecularAuthority && activePanel === 'digest' && (
                             <DigestPanel
+                                onUseInAssembly={fragments => { setDigestAssemblyFragments(fragments); setActivePanel('assembly'); }}
                                 sequenceData={sequenceData}
                                 sequenceId={selectedSequenceId}
                                 selection={selection}
@@ -3722,6 +3736,7 @@ export function MolBioToolkitV2() {
                         catalog={restrictionCatalog}
                         productEvidence={restrictionProductEvidence}
                         catalogRecords={restrictionCatalogRecords}
+                        onReadEnzymeDetails={readRestrictionDetails}
                         analysis={restrictionAnalysis}
                         authorityLoading={restrictionAuthorityLoading}
                         authorityError={restrictionAuthorityError}

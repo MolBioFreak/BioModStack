@@ -91,10 +91,7 @@ from services.molbio_ngs_member_receipts import (
 from services.molbio_ngs_references import resolve_ngs_reference_revision_receipt
 from services.molbio_ngs_evidence import resolve_evidence_assessment_receipt
 from services.ngs_comparison_panels import _validated_panel_manifest
-from services.ngs_molbio_source_authority import (
-    SourceBuildRevisionError,
-    source_build_revision,
-)
+from build_identity import source_build_revision
 from paths import get_inputs_dir, get_results_dir, resolve_runtime_data_path
 
 
@@ -186,16 +183,6 @@ class AdapterRegistry:
 
 
 registry = AdapterRegistry()
-
-
-def _source_build_revision() -> str:
-    try:
-        return source_build_revision()
-    except SourceBuildRevisionError as exc:
-        raise AdapterError(
-            "source_revision_unavailable",
-            str(exc),
-        ) from exc
 
 
 def _search_inputs(query: str, limit: int) -> str:
@@ -393,7 +380,7 @@ def _receipt(
         "entity_revision_id": entity_revision_id or contract_digest or content_digest,
         "content_digest": content_digest,
         "contract_digest": contract_digest,
-        "source_build_revision": _source_build_revision(),
+        "source_build_revision": source_build_revision(),
         "verified_at": datetime.now(timezone.utc).isoformat(),
         "verifier_id": adapter.adapter_id,
         "availability": "available",
@@ -1355,7 +1342,7 @@ class MolBioOperationAdapter:
         digest = _canonical_json_sha256(payload)
         contract_digest = operation.request_fingerprint or digest
         contract_digest = _sha256(contract_digest, "molecular operation contract digest")
-        first_output = outputs[0] if outputs else None
+        first_output = next((row for row in outputs if row.role == "product"), outputs[0] if outputs else None)
         if first_output is not None:
             output_revision = revisions[first_output.revision_id]
             reopen_uri = _query_uri(
@@ -2142,7 +2129,7 @@ def _exact_member_receipt(
         contract_digest=_canonical_json_sha256(
             {
                 "adapter_id": adapter.adapter_id,
-                "source_build_revision": _source_build_revision(),
+                "source_build_revision": source_build_revision(),
                 "native_member_receipt_id": member.receipt_id,
                 "content_digest": member.content_digest,
             }

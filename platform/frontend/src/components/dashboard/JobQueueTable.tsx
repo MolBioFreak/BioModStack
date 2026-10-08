@@ -4,6 +4,7 @@ import type { Job } from '../../lib/api';
 import { isNgsJob, ngsResultHref } from '../../lib/ngsResultRouting';
 import { JobDetailsPanel } from '../JobDetailsPanel';
 import { RemoteResultsPrompt } from '../RemoteResultsPrompt';
+import { remoteResultsState } from '../remoteResultsState';
 import { getModeDisplayName } from '../../constants/displayNames';
 import { JobStageProgress } from '../JobStageProgress';
 import {
@@ -331,7 +332,7 @@ export function JobQueueTable({
                     </button>
                 )}
 
-                {job.execution_target_id && job.awaiting_stage === 'remote_results' && (
+                {remoteResultsState(job) && (
                     <div onClick={event => event.stopPropagation()}>
                         <RemoteResultsPrompt job={job} />
                     </div>
@@ -525,7 +526,7 @@ export function JobQueueTable({
                                     </span>
                                 </td>
                                 <td className="px-4 py-3">
-                                    <StatusBadge status={job.status} errorMessage={job.error_message} acceptedResultCount={job.model_id === 'frustrampnn' ? job.frustrampnn_result_count : undefined} />
+                                    <StatusBadge status={job.status} label={remoteResultsState(job)?.terminal ? 'Result import failed' : undefined} errorMessage={job.error_message} acceptedResultCount={job.model_id === 'frustrampnn' ? job.frustrampnn_result_count : undefined} />
                                 </td>
                                 <td className="px-4 py-3">{renderDesignCountCell(job)}</td>
                                 <td className="px-4 py-3 text-sm text-slate-400">
@@ -595,7 +596,7 @@ export function JobQueueTable({
                             </span>
                         </td>
                         <td className="px-4 py-3">
-                            <StatusBadge status={job.status} errorMessage={job.error_message} acceptedResultCount={job.model_id === 'frustrampnn' ? job.frustrampnn_result_count : undefined} />
+                            <StatusBadge status={job.status} label={remoteResultsState(job)?.terminal ? 'Result import failed' : undefined} errorMessage={job.error_message} acceptedResultCount={job.model_id === 'frustrampnn' ? job.frustrampnn_result_count : undefined} />
                         </td>
                         <td className="px-4 py-3">{renderDesignCountCell(job)}</td>
                         <td className="px-4 py-3 text-sm text-slate-400">
@@ -661,7 +662,7 @@ export function JobQueueTable({
                                 <span className="rounded bg-blue-500/20 px-2 py-1 text-[11px] text-blue-400">
                                     {getModeDisplayName(job.mode)}
                                 </span>
-                                <StatusBadge status={job.status} errorMessage={job.error_message} acceptedResultCount={job.model_id === 'frustrampnn' ? job.frustrampnn_result_count : undefined} />
+                                <StatusBadge status={job.status} label={remoteResultsState(job)?.terminal ? 'Result import failed' : undefined} errorMessage={job.error_message} acceptedResultCount={job.model_id === 'frustrampnn' ? job.frustrampnn_result_count : undefined} />
                             </div>
                         </div>
                         <div className="shrink-0 text-right text-[11px] text-slate-400">
@@ -859,7 +860,7 @@ export function JobQueueTable({
     );
 }
 
-function StatusBadge({ status, errorMessage, acceptedResultCount }: { status: string; errorMessage?: string | null; acceptedResultCount?: number }) {
+function StatusBadge({ status, label, errorMessage, acceptedResultCount }: { status: string; label?: string; errorMessage?: string | null; acceptedResultCount?: number }) {
     const completedWithError = status === 'completed' && !!errorMessage;
     const scientificResultStatus = getCompletedScientificResultStatus(status as Job['status'], acceptedResultCount);
     const styles: Record<string, string> = {
@@ -891,7 +892,7 @@ function StatusBadge({ status, errorMessage, acceptedResultCount }: { status: st
     return (
         <div className="group relative inline-block">
             <span className={`cursor-default rounded px-2 py-1 text-xs font-medium ${badgeStyle}`}>
-                {badgeLabel}
+                {label ?? badgeLabel}
             </span>
             {showTooltip && (
                 <div className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 max-w-xs -translate-x-1/2 rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-xs text-slate-200 opacity-0 shadow-xl transition-opacity duration-200 group-hover:opacity-100">

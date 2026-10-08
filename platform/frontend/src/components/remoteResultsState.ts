@@ -5,6 +5,7 @@ export interface RemoteResultsJob {
     queue_status?: string;
     execution_target_id?: string | null;
     remote_state?: string | null;
+    remote_results_received?: boolean | null;
     awaiting_input?: boolean | null;
     awaiting_stage?: string | null;
     error_message?: string | null;
@@ -13,13 +14,20 @@ export interface RemoteResultsJob {
 }
 
 export function remoteResultsState(job: RemoteResultsJob) {
-    if (!job.execution_target_id || job.awaiting_input !== true || job.awaiting_stage !== 'remote_results') return null;
+    if (!job.execution_target_id) return null;
     const rawReceipt = job.provenance?.remote_execution_receipt;
     const receipt = rawReceipt && typeof rawReceipt === 'object' && !Array.isArray(rawReceipt)
         ? rawReceipt as Record<string, unknown> : null;
-    const received = typeof receipt?.received_manifest_sha256 === 'string'
+    // Summary responses omit provenance; use their bounded receipt projection.
+    // Older/detail payloads retain the same evidence in the execution receipt.
+    const received = job.remote_results_received ?? (typeof receipt?.received_manifest_sha256 === 'string'
         && receipt.received_manifest_sha256.length > 0
-        && receipt.received_manifest_sha256 === receipt.result_manifest_sha256;
+        && receipt.received_manifest_sha256 === receipt.result_manifest_sha256);
+    // Only the backend-classified received import failure permits a terminal retry.
+    if (job.status === 'failed' && job.remote_state === 'result_import_failed' && received) {
+        return { busy: false, failed: true, received, terminal: true, label: 'Retry import' };
+    }
+    if (job.awaiting_input !== true || job.awaiting_stage !== 'remote_results') return null;
     if (job.remote_state === 'returning') {
         return job.status === 'running'
             ? { busy: true, failed: false, received, label: received ? 'Importing received results…' : 'Pulling results…' } : null;

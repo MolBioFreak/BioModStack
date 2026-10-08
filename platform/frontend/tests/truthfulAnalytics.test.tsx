@@ -1,10 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import React from 'react';
-Object.assign(globalThis, {React});
-import { renderToStaticMarkup } from 'react-dom/server';
 import { parseScientificPoint } from '../src/lib/scientificAnalytics';
-import { ScientificAnalytics } from '../src/components/ScientificAnalytics';
 
 const fixture = () => ({ id: 'a', name: 'A', contract_revision: 1, source_job_id: 'j', cohort_key: 'v1:profile:j',
     metrics: { plddt_overall: 0, pae_overall: 2 },
@@ -25,15 +21,13 @@ test('runtime scalar parser rejects coercion, incoherent absence, and synthetic 
     assert.throws(() => parseScientificPoint(extra));
 });
 
-test('UI-only scalar fixture renders zero and absence; omitted server pairs stay absent', () => {
-    const point = parseScientificPoint(fixture());
-    const html = renderToStaticMarkup(<ScientificAnalytics points={[point]} cohorts={[]} />);
-    assert.match(html, /<td>A \(a\)<\/td>/);
-    assert.doesNotMatch(html, /data-x=/);
-    assert.match(html, /Paired statistics are unavailable for this response/);
-    assert.match(html, />0</);
-    assert.match(html, /not_reported/);
-    assert.match(html, /pLDDT/);
-    assert.match(html, /pae_overall.*angstrom/);
-    assert.doesNotMatch(html, /data-rmsd="0"/);
+test('scalar round trip retains native units, zero and absence without aliases', () => {
+    const point = parseScientificPoint(JSON.parse(JSON.stringify(fixture())));
+    assert.equal(point.metrics.plddt_overall, 0);
+    assert.equal(point.metric_descriptors.plddt_overall.unit, 'pLDDT');
+    assert.equal(point.metric_descriptors.pae_overall.unit, 'angstrom');
+    assert.equal(point.metric_states.rmsd_overall.state, 'unavailable');
+    assert.equal(point.metric_states.rmsd_overall.reason_code, 'not_reported');
+    assert.equal(Object.hasOwn(point.metrics, 'rmsd_overall'), false);
+    // Mounted full-dashboard chart/controls coverage lives in truthfulAnalyticsMounted.
 });

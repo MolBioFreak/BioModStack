@@ -892,24 +892,10 @@ test('selection response contract accepts exact development and production recei
     (value) => { value.health.rogue = true; },
     (value) => { value.health.local_frontend.rogue = true; },
     (value) => { value.health.local_api.rogue = true; },
-    (value) => { value.health.local_api.payload.rogue = true; },
     (value) => { value.health.local_api.payload.build.rogue = true; },
-    (value) => { value.health.local_api.payload.liveness.rogue = true; },
-    (value) => { value.health.local_api.payload.readiness.rogue = true; },
-    (value) => { value.health.local_api.payload.readiness.checks.frontend.rogue = true; },
     (value) => {
       for (const probe of ['local_api', 'tailnet_api']) {
         value.health[probe].payload.readiness.checks.core_database.ready = false;
-      }
-    },
-    (value) => {
-      for (const probe of ['local_api', 'tailnet_api']) {
-        value.health[probe].payload.readiness.checks.frontend.required = false;
-      }
-    },
-    (value) => {
-      for (const probe of ['local_api', 'tailnet_api']) {
-        value.health[probe].payload.readiness.checks.workflow_adapter.status = 'failed';
       }
     },
     (value) => {
@@ -925,18 +911,6 @@ test('selection response contract accepts exact development and production recei
     (value) => {
       for (const probe of ['local_api', 'tailnet_api']) {
         value.health[probe].payload.readiness.checks.workflow_launch.status = 'blocked';
-      }
-    },
-    (value) => { value.health.local_api.payload.molbio.rogue = true; },
-    (value) => { value.health.local_api.payload.molbio_ngs.rogue = true; },
-    (value) => {
-      for (const probe of ['local_api', 'tailnet_api']) {
-        value.health[probe].payload.molbio_ngs.attestation.ok = false;
-      }
-    },
-    (value) => {
-      for (const probe of ['local_api', 'tailnet_api']) {
-        value.health[probe].payload.readiness.checks.core_schema_migrations.status = 'behind';
       }
     },
     (value) => {
@@ -1197,6 +1171,43 @@ test('buildPreflight assets expose endpoint, manual update, and rollback control
   assert.match(css, /bms-cordova-preflight-toggle/);
 });
 
+test('selection contract follows the API health verdict instead of mirroring its internal detail fields', () => {
+  const origin = 'https://compute-node.taileb3a90.ts.net';
+  const evolved = exactCurrentSelectionReceipt('development');
+  for (const probe of ['local_api', 'tailnet_api']) {
+    const payload = evolved.health[probe].payload;
+    // Light-mode MolBio health and newly added readiness checks from current APIs.
+    Object.assign(payload.molbio, {
+      check_mode: 'light', integrity_checks_run: false, quick_check: 'not_run',
+      foreign_key_violations: null, database_schema_current: null, sequence_parent_cycle_count: null,
+    });
+    payload.molbio_ngs.attestation.data_integrity_checked = false;
+    payload.readiness.checks.restriction_catalog = { ready: true, required: true, status: 'ready', catalog_id: 'x' };
+    payload.readiness.checks.restriction_products = { ready: true, required: true, status: 'evidence_unavailable' };
+    payload.readiness.checks.telemetry_collection.future_sample_count = 0;
+  }
+  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(evolved, 'development', origin));
+
+  for (const mutation of [
+    (value) => { value.health.local_api.payload.status = 'degraded'; },
+    (value) => { value.health.local_api.payload.readiness.checks.restriction_catalog = { ready: false, required: true, status: 'missing' }; },
+    (value) => { value.health.tailnet_api.payload.readiness.checks.core_database.ready = false; },
+    (value) => { value.health.local_api.payload.readiness.checks.workflow_launch.allowed = false; },
+    (value) => { delete value.health.local_api.payload.readiness.checks.workflow_launch; },
+    (value) => { value.health.local_api.payload.readiness.checks = {}; },
+    (value) => { value.health.tailnet_api.payload.build.revision = 'b'.repeat(40); },
+    (value) => { value.health.local_api.payload.service = 'other-service'; },
+  ]) {
+    const malformed = structuredClone(evolved);
+    mutation(malformed);
+    assert.throws(
+      () => prepareAssets.validateTailnetSelectionPayload(malformed, 'development', origin),
+      /mismatched runtime identity/,
+      mutation.toString(),
+    );
+  }
+});
+
 test('native APK state reducer rejects malformed and stale events and normalizes valid bounded state', () => {
   assert.equal(typeof prepareAssets.reduceNativeApkState, 'function');
   const reduce = prepareAssets.reduceNativeApkState;
@@ -1405,4 +1416,133 @@ test('capability rows expose distinct pending available and unavailable states',
   assert.match(css, /data-available='false'/);
   assert.match(css, /bms-cordova-preflight__capabilities/);
   assert.match(css, /bms-cordova-preflight__capability/);
+});
+
+function mountPreflightForUiUpdate({ pluginStatus, manifestDescriptor }) {
+  const calls = { fetches: [], installs: 0, reloads: 0 };
+  const byId = new Map();
+  const statusNode = { dataset: {}, textContent: '' };
+  const labelNode = { dataset: {}, textContent: '' };
+  const inputs = {
+    '[data-role="api-base-url"]': { value: 'https://compute-node.taileb3a90.ts.net', addEventListener() {} },
+    '[data-role="tailnet-environment"]': { value: '', addEventListener() {} },
+    '[data-role="ui-update-channel"]': { value: 'phone', addEventListener() {} },
+    '[data-role="mobile-scale"]': { value: '0.55', addEventListener() {} },
+    '[data-role="scale-value"]': { textContent: '' },
+    '[data-role="compact-mode"]': { checked: true, addEventListener() {} },
+    'button[data-action="launch"]': { disabled: true },
+    '[data-role="action-status"]': statusNode,
+    '[data-role="active-ui-label"]': labelNode,
+  };
+  let clickHandler = null;
+  const makeElement = () => ({
+    dataset: {},
+    style: {},
+    hidden: false,
+    setAttribute() {},
+    addEventListener(type, handler) {
+      if (type === 'click') clickHandler = handler;
+    },
+    querySelector: (selector) => inputs[selector] || null,
+  });
+  const document = {
+    readyState: 'complete',
+    body: { appendChild: (element) => { if (element.id) byId.set(element.id, element); } },
+    getElementById: (id) => byId.get(id) || null,
+    createElement: makeElement,
+    addEventListener() {},
+  };
+  const manifestPayload = {
+    channel: 'phone',
+    version: manifestDescriptor.version,
+    descriptor: manifestDescriptor,
+    files: [{ path: 'index.html', url: 'https://compute-node.taileb3a90.ts.net/api/mobile-ui/files/phone/x/index.html' }],
+  };
+  const window = {
+    __BMS_CORDOVA_RUNTIME__: { apiBaseUrl: 'https://compute-node.taileb3a90.ts.net', uiUpdateChannel: 'phone' },
+    __BMS_CORDOVA_UI_BOOT_STATUS__: { source: 'preflight', descriptor: { version: 'https://compute-node.taileb3a90.ts.net/', shellApiVersion: 1, entryCss: [], entryJs: [] } },
+    location: { replace: () => { calls.reloads += 1; }, reload() {} },
+    addEventListener() {},
+    cordova: {
+      plugins: {
+        bmsUiBundle: {
+          getStatus: async () => pluginStatus,
+          installBundle: async () => { calls.installs += 1; return { basePath: '/__bms_ui__/active/' }; },
+          clearBundle: async () => ({}),
+        },
+      },
+    },
+  };
+  window.window = window;
+  window.fetch = async (url) => {
+    calls.fetches.push(String(url));
+    if (String(url).endsWith('/manifest')) {
+      return { ok: true, status: 200, json: async () => manifestPayload };
+    }
+    if (String(url).includes('/api/mobile-ui/files/')) {
+      return { ok: true, status: 200, headers: { get: () => 'text/html' }, arrayBuffer: async () => new ArrayBuffer(4) };
+    }
+    return { ok: false, status: 503, json: async () => ({}) };
+  };
+  const context = {
+    window,
+    document,
+    URL,
+    fetch: (...args) => window.fetch(...args),
+    btoa: (value) => Buffer.from(value, 'binary').toString('base64'),
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    setTimeout: () => 0,
+    clearTimeout() {},
+  };
+  vm.createContext(context);
+  new vm.Script(buildPreflightScript()).runInContext(context);
+  assert.equal(typeof clickHandler, 'function');
+  const click = (action) => clickHandler({
+    target: { closest: () => ({ dataset: { action }, disabled: false }) },
+  });
+  return { calls, click, statusNode };
+}
+
+const currentPhoneDescriptor = {
+  version: '0.4.14',
+  shellApiVersion: 1,
+  entryCss: ['assets/index-D7PBJ-jq.css'],
+  entryJs: ['assets/index-C5-Eh7XR.js'],
+};
+
+test('Update UI skips download and reinstall when the installed bundle already matches the channel', async () => {
+  const { calls, click, statusNode } = mountPreflightForUiUpdate({
+    pluginStatus: { installed: true, basePath: '/__bms_ui__/active/', descriptor: currentPhoneDescriptor },
+    manifestDescriptor: currentPhoneDescriptor,
+  });
+
+  await click('update-ui');
+
+  assert.equal(calls.fetches.filter((url) => url.includes('/api/mobile-ui/files/')).length, 0);
+  assert.equal(calls.installs, 0);
+  assert.equal(calls.reloads, 0);
+  assert.match(statusNode.textContent, /already on 0\.4\.14/);
+
+  await click('check-ui-update');
+  assert.match(statusNode.textContent, /UI is already on 0\.4\.14/);
+});
+
+test('Update UI downloads when the channel publishes a different bundle or none is installed', async () => {
+  for (const pluginStatus of [
+    { installed: true, descriptor: { ...currentPhoneDescriptor, version: '0.4.13' } },
+    { installed: true, descriptor: { ...currentPhoneDescriptor, entryJs: ['assets/index-older.js'] } },
+    { installed: true, descriptor: { version: '', entryJs: [] } },
+    { installed: false, basePath: '/__bms_ui__/active/' },
+  ]) {
+    const { calls, click, statusNode } = mountPreflightForUiUpdate({
+      pluginStatus,
+      manifestDescriptor: currentPhoneDescriptor,
+    });
+
+    await click('update-ui');
+
+    assert.equal(calls.fetches.filter((url) => url.includes('/api/mobile-ui/files/')).length, 1);
+    assert.equal(calls.installs, 1, JSON.stringify(pluginStatus));
+    assert.match(statusNode.textContent, /Installed UI 0\.4\.14/);
+  }
 });
