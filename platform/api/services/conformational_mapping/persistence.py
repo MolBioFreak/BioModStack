@@ -18,6 +18,9 @@ from database import (
     ConformationalMappingLandscapeRow,
     ConformationalMappingRecord,
     ConformationalMappingRequest,
+    ConformationalMappingStateLandscapeAnalysisHeader,
+    ConformationalMappingStateLandscapeAnalysisPair,
+    ConformationalMappingStateLandscapeAnalysisRow,
     Job,
 )
 
@@ -289,6 +292,116 @@ async def persist_landscape_matrix(
             ))
 
 
+async def _preflight_state_landscape_analysis_projection(
+    session: AsyncSession,
+    request_id: str,
+    analysis: Mapping[str, Any] | None,
+) -> Mapping[str, Any] | None:
+    """Reject projection identity conflicts before any canonical write is visible."""
+
+    if analysis is None:
+        return None
+    analysis_id = str(analysis["analysis_id"])
+    content_sha256 = canonical_sha256(analysis)
+    existing = (
+        await session.execute(
+            select(ConformationalMappingStateLandscapeAnalysisHeader).where(
+                ConformationalMappingStateLandscapeAnalysisHeader.request_id == request_id,
+                ConformationalMappingStateLandscapeAnalysisHeader.analysis_id == analysis_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        if existing.content_sha256 != content_sha256:
+            raise ConformationalPersistenceError(
+                "state landscape analysis projection identity conflicts with persisted payload"
+            )
+        return None
+    return analysis
+
+
+def _state_analysis_availability(metrics: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """Copy artifact availability into a compact query field; never recompute metrics."""
+
+    return {
+        str(name): {"status": metric["status"], "reason": metric["reason"]}
+        for name, metric in metrics.items()
+    }
+
+
+async def _persist_preflighted_state_landscape_analysis_projection(
+    session: AsyncSession,
+    request_id: str,
+    analysis: Mapping[str, Any] | None,
+) -> None:
+    """Write one already-bound projection before canonical record visibility."""
+
+    if analysis is None:
+        return
+    analysis_id = str(analysis["analysis_id"])
+    session.add(
+        ConformationalMappingStateLandscapeAnalysisHeader(
+            request_id=request_id,
+            analysis_id=analysis_id,
+            content_sha256=canonical_sha256(analysis),
+            source_ensemble_sha256=str(analysis["source_ensemble_sha256"]),
+            source_landscape_sha256=str(analysis["source_landscape_sha256"]),
+            source_structure_map_sha256=str(analysis["source_structure_map_sha256"]),
+            comparison_sha256=str(analysis["comparison_sha256"]),
+            formula_version=str(analysis["formula_version"]),
+            formula_sha256=str(analysis["formula_sha256"]),
+            policy_sha256=str(analysis["policy_sha256"]),
+            comparison_mode=str(analysis["comparison_mode"]),
+            comparison_target_id=str(analysis["comparison_target_id"]),
+            comparison_scope=str(analysis["comparison_scope"]),
+            reference_backend_coordinates_json=(
+                dict(analysis["reference_backend_coordinates"])
+                if analysis["reference_backend_coordinates"] is not None else None
+            ),
+            reference_candidate_id=analysis["reference_candidate_id"],
+            pair_count=len(analysis["resolved_pairs"]),
+            row_count=len(analysis["rows"]),
+            exclusion_count=len(analysis["exclusion_ledger"]),
+        )
+    )
+    for pair in analysis["resolved_pairs"]:
+        session.add(
+            ConformationalMappingStateLandscapeAnalysisPair(
+                request_id=request_id,
+                analysis_id=analysis_id,
+                pair_id=str(pair["pair_id"]),
+                candidate_a_id=str(pair["candidate_a_id"]),
+                candidate_b_id=str(pair["candidate_b_id"]),
+            )
+        )
+    for row in analysis["rows"]:
+        identity = row["identity"]
+        metrics = row["metrics"]
+        session.add(
+            ConformationalMappingStateLandscapeAnalysisRow(
+                id="cm_state_analysis_row_" + canonical_sha256(
+                    {"request_id": request_id, "analysis_id": analysis_id, "row": row}
+                )[:64],
+                request_id=request_id,
+                analysis_id=analysis_id,
+                pair_id=str(row["pair_id"]),
+                candidate_a_id=str(row["candidate_a_id"]),
+                candidate_b_id=str(row["candidate_b_id"]),
+                target_id=str(identity["target_id"]),
+                entity_instance_id=str(identity["entity_instance_id"]),
+                auth_asym_id=str(identity["auth_asym_id"]),
+                auth_seq_id=int(identity["auth_seq_id"]),
+                insertion_code=str(identity["insertion_code"]),
+                sequence_index=int(identity["sequence_index"]),
+                validated_wt=str(identity["validated_wt"]),
+                metrics_json=dict(metrics),
+                availability_json=_state_analysis_availability(metrics),
+            )
+        )
+    # Force projection writes before canonical records and terminal visibility.
+    await session.flush()
+
+
 async def ingest_result_bundle(
     session: AsyncSession,
     record: ConformationalMappingRequest,
@@ -405,6 +518,7 @@ async def ingest_result_bundle(
     if not isinstance(bundle.get("cm_analysis_v1"), Mapping):
         raise ConformationalPersistenceError("canonical analysis authority is missing")
     state_analysis_value = bundle.get("cm_state_landscape_analyses")
+    proposed_state_analysis: Mapping[str, Any] | None = None
     state_analysis_requested = "state_landscape_comparison" in record.request_json
     if not state_analysis_requested:
         if state_analysis_value is not None and (
@@ -514,6 +628,12 @@ async def ingest_result_bundle(
             raise ConformationalPersistenceError("landscape retry conflicts with persisted matrix")
         landscapes_to_insert = []
 
+    state_analysis_projection = await _preflight_state_landscape_analysis_projection(
+        session, record.request_id, proposed_state_analysis,
+    )
+    await _persist_preflighted_state_landscape_analysis_projection(
+        session, record.request_id, state_analysis_projection,
+    )
     if resume_key_to_persist is not None:
         record.resume_key = resume_key_to_persist
     await _replace_record(session, record.request_id, "ensemble", "primary", ensemble)
