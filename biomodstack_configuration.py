@@ -447,44 +447,53 @@ def commit_managed_release(project_root: Path, expected_base: dict, release_id: 
     canonical = Path(_context(project_root)["state_home"]) / "biomodstack/releases/known-good.json"
     if known_good_path != canonical:
         raise ConfigurationBlocked("managed_release_state_override_unsupported")
-    with configuration_lock():
-        root = transaction_dir()
-        path = root / "release.json"
-        if os.path.lexists(path):
-            record = json.loads(_regular_text(path))
-            if record["manifest"]["release_id"] != release_id or record["manifest"]["receipt"] != receipt:
-                raise ConfigurationBlocked("managed_release_migration_unsupported")
-            if record["base"] != expected_base:
-                raise ConfigurationBlocked("managed_release_stale_base")
-        else:
-            if managed_release_base(project_root) != expected_base or expected_base["generation_id"] != "generation":
-                raise ConfigurationBlocked("managed_release_stale_base")
-            if os.path.lexists(canonical):
-                raise ConfigurationBlocked("managed_release_existing_known_good")
-            journal = _load()
-            generation = "release-" + _digest(release_id.encode())
-            if os.path.lexists(root / generation):
-                raise ConfigurationBlocked("release_staging_conflict")
-            manifest = {"schema_version": "bms.configuration-release.v1", "release_id": release_id,
-                        "operation_id": journal["operation_id"], "generation_id": generation,
-                        "base_hashes": journal["hashes"], "receipt": receipt,
-                        "hashes": {k: _digest(v.encode()) for k, v in _release_files(journal, receipt).items()}}
-            record = {"state": "prepared", "base": expected_base, "manifest": manifest,
-                      "known_good_path": str(canonical), "known_good": {**known_good,
-                      "release_id": release_id, "configuration_generation_id": generation}}
-            _checkpoint("release_before_intent")
+    intent_recorded = False
+    try:
+        with configuration_lock():
+            root = transaction_dir()
+            path = root / "release.json"
+            if os.path.lexists(path):
+                record = json.loads(_regular_text(path))
+                if record["manifest"]["release_id"] != release_id or record["manifest"]["receipt"] != receipt:
+                    raise ConfigurationBlocked("managed_release_migration_unsupported")
+                if record["base"] != expected_base:
+                    raise ConfigurationBlocked("managed_release_stale_base")
+            else:
+                if managed_release_base(project_root) != expected_base or expected_base["generation_id"] != "generation":
+                    raise ConfigurationBlocked("managed_release_stale_base")
+                if os.path.lexists(canonical):
+                    raise ConfigurationBlocked("managed_release_existing_known_good")
+                journal = _load()
+                generation = "release-" + _digest(release_id.encode())
+                if os.path.lexists(root / generation):
+                    raise ConfigurationBlocked("release_staging_conflict")
+                manifest = {"schema_version": "bms.configuration-release.v1", "release_id": release_id,
+                            "operation_id": journal["operation_id"], "generation_id": generation,
+                            "base_hashes": journal["hashes"], "receipt": receipt,
+                            "hashes": {k: _digest(v.encode()) for k, v in _release_files(journal, receipt).items()}}
+                record = {"state": "prepared", "base": expected_base, "manifest": manifest,
+                          "known_good_path": str(canonical), "known_good": {**known_good,
+                          "release_id": release_id, "configuration_generation_id": generation}}
+                _checkpoint("release_before_intent")
+                try:
+                    _write(path, _json(record), release=True)
+                except BaseException as exc:
+                    if os.path.lexists(path):
+                        intent_recorded = True
+                        raise ManagedReleaseRecoveryRequired(f"managed_release_recovery_required: {release_id}") from exc
+                    raise
+            intent_recorded = True
             try:
-                _write(path, _json(record), release=True)
+                _sync(root)
+                _checkpoint("release_intent")
+                return _finish_managed_release(project_root, record)
             except BaseException as exc:
-                if os.path.lexists(path):
-                    raise ManagedReleaseRecoveryRequired(f"managed_release_recovery_required: {release_id}") from exc
-                raise
-        try:
-            _sync(root)
-            _checkpoint("release_intent")
-            return _finish_managed_release(project_root, record)
-        except BaseException as exc:
-            raise ManagedReleaseRecoveryRequired(f"managed_release_recovery_required: {release_id}: {exc}") from exc
+                raise ManagedReleaseRecoveryRequired(f"managed_release_recovery_required: {release_id}: {exc}") from exc
+    except BaseException as exc:
+        if intent_recorded and not isinstance(exc, ManagedReleaseRecoveryRequired):
+            raise ManagedReleaseRecoveryRequired(
+                f"managed_release_recovery_required: {release_id}: {exc}") from exc
+        raise
 
 
 def recover_managed_release(project_root: Path, release_id: str) -> dict:
