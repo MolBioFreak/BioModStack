@@ -8,7 +8,7 @@ description: >
   structure imports. Submission uses the dedicated typed API.
 container: conformational_mapping.sif
 workflow: conformational_mapping
-experimental: true
+experimental: false
 enabled: true
 ui_icon: route
 ui_color: "#F97316"

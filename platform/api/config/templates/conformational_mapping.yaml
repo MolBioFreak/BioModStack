@@ -2,7 +2,7 @@ id: conformational_mapping
 name: Conformational Mapping
 icon: route
 color: "#F97316"
-experimental: true
+experimental: false
 description: >
   Generate complete-complex Protenix v2 ensembles across explicit target, seed and
   sample coordinates; alternatively run canonical single-chain ConforNets or secure
