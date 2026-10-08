@@ -297,7 +297,7 @@ def compile_ideal_comparison_settings(
     for key, definition in operator.items():
         value = requested[key]
         if "enum" in definition and value not in definition["enum"]:
-            raise OntSignalError(f"{key} is outside the closed parameter contract")
+            raise OntSignalError(f"Unsupported value for {key}.")
         if definition.get("type") == "integer" and (
             isinstance(value, bool) or not isinstance(value, int)
         ):
@@ -3310,7 +3310,7 @@ async def workbench_capabilities(
     if any(value is not None for value in reference_scope) and not all(
         isinstance(value, str) and value for value in reference_scope
     ):
-        raise OntSignalError("exact reference capability authority is incomplete")
+        raise OntSignalError("Provide alignment_job_id, alignment_session_id and reference_revision_id together.")
     representations = list((await session.execute(select(OntRawSignalRepresentation).where(
         OntRawSignalRepresentation.run_id == run_id,
         OntRawSignalRepresentation.observed_generation == observed_generation,

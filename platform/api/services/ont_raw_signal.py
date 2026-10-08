@@ -403,20 +403,6 @@ def _open_live_pod5_candidate(
     raise ValueError("live POD5 is outside configured MinKNOW output roots")
 
 
-def _external_pod5_root() -> Path:
-    configured = os.getenv(EXTERNAL_POD5_ROOT_ENV, "").strip()
-    if not configured:
-        raise RuntimeError(f"{EXTERNAL_POD5_ROOT_ENV} is not configured")
-    root = Path(configured).expanduser().absolute()
-    for component in (root, *root.parents):
-        if component.is_symlink():
-            raise RuntimeError("external POD5 root must not contain symbolic links")
-    root = root.resolve(strict=True)
-    if not root.is_dir():
-        raise RuntimeError("external POD5 root must be a real directory")
-    return root
-
-
 def _open_external_pod5_root() -> tuple[Path, int]:
     """Open each root component without following filesystem indirection."""
     configured = os.getenv(EXTERNAL_POD5_ROOT_ENV, "").strip()
@@ -467,20 +453,6 @@ def _descriptor_pod5_candidates(directory_fd: int, prefix: Path = Path()) -> lis
             elif stat.S_ISREG(info.st_mode) and entry.name.lower().endswith(".pod5"):
                 candidates.append((relative.as_posix(), info))
     return candidates
-
-
-def _assert_confined_regular_file(path: Path, root: Path) -> os.stat_result:
-    relative = path.relative_to(root)
-    current = root
-    for part in relative.parts:
-        current = current / part
-        info = current.lstat()
-        if stat.S_ISLNK(info.st_mode):
-            raise ValueError("external POD5 candidate path contains a symbolic link")
-    info = path.lstat()
-    if not stat.S_ISREG(info.st_mode):
-        raise ValueError("external POD5 candidate is not a regular file")
-    return info
 
 
 def list_external_pod5_candidates() -> list[dict[str, Any]]:

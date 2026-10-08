@@ -323,50 +323,6 @@ class RetainedParentSet:
     def parents(self) -> tuple[RetainedParent, ...]:
         return tuple(self._parents)
 
-    def pin(
-        self,
-        path: Path,
-        *,
-        alias: str,
-        expected_sha256: str,
-        expected_size: int,
-    ) -> RetainedParent:
-        if self._closed:
-            raise RuntimeError("retained-parent set is closed")
-        if (
-            not alias
-            or alias in {".", ".."}
-            or "/" in alias
-            or "\\" in alias
-            or len(alias) > 128
-            or any(parent.alias == alias for parent in self._parents)
-        ):
-            raise RuntimeError("retained-parent alias is invalid or duplicated")
-        governed_roots = self._governed_roots or (path.parent,)
-        descriptor = _open_beneath_governed_root(path, governed_roots)
-        leased = False
-        try:
-            if not hasattr(fcntl, "F_SETLEASE"):
-                raise RuntimeError("Linux file leases are unavailable")
-            fcntl.fcntl(descriptor, fcntl.F_SETOWN, os.getpid())
-            fcntl.fcntl(descriptor, fcntl.F_SETLEASE, fcntl.F_RDLCK)
-            leased = True
-            digest, size, identity = _identity_from_descriptor(descriptor)
-            if digest != expected_sha256 or size != expected_size:
-                raise ParentAuthorityDrift("retained parent diverged from immutable hash/size authority")
-            parent = RetainedParent(descriptor, alias, digest, size, identity)
-            self._parents.append(parent)
-            self.assert_unbroken()
-            return parent
-        except BaseException:
-            if leased:
-                try:
-                    fcntl.fcntl(descriptor, fcntl.F_SETLEASE, fcntl.F_UNLCK)
-                except OSError:
-                    pass
-            os.close(descriptor)
-            raise
-
     async def pin_async(
         self,
         path: Path,
@@ -890,22 +846,6 @@ class OntSignalWorker:
         return await asyncio.to_thread(OntSignalWorker._stable_file_identity, path)
 
     @staticmethod
-    async def _pin_parent_async(
-        parents: RetainedParentSet,
-        path: Path,
-        *,
-        alias: str,
-        expected_sha256: str,
-        expected_size: int,
-    ) -> RetainedParent:
-        return await parents.pin_async(
-            path,
-            alias=alias,
-            expected_sha256=expected_sha256,
-            expected_size=expected_size,
-        )
-
-    @staticmethod
     async def _resolve_session_alignment_bundle_async(
         alignment_job_id: str,
         alignment_session_id: str,
@@ -1006,60 +946,11 @@ class OntSignalWorker:
                     selected.append(pair)
         if not selected:
             raise RuntimeError("no governed BLOW5 partitions were selected")
-        identities: list[dict[str, str]] = []
         for blow5, index in selected:
             blow5_item, index_item = by_path.get(blow5), by_path.get(index)
             if blow5_item is None or index_item is None or index != Path(f"{blow5}.idx"):
                 raise RuntimeError("selected BLOW5 partition/index lacks immutable manifest authority")
-            blow5_actual, blow5_size = cls._stable_file_identity(blow5)
-            index_actual, index_size = cls._stable_file_identity(index)
-            if (
-                blow5_actual != blow5_item.get("sha256")
-                or blow5_size != blow5_item.get("bytes")
-                or index_actual != index_item.get("sha256")
-                or index_size != index_item.get("bytes")
-            ):
-                raise RuntimeError("selected BLOW5 partition/index diverged from immutable artifact authority")
-            identities.append({"sha256": blow5_actual, "index_sha256": index_actual})
-        return selected, {"routing_sha256": routing_sha256, "blow5": identities}
-
-    @staticmethod
-    def _pin_raw_partitions(
-        parents: RetainedParentSet,
-        representation: OntRawSignalRepresentation,
-        selected: list[tuple[Path, Path]],
-    ) -> list[dict[str, str]]:
-        manifest = representation.artifact_manifest if isinstance(representation.artifact_manifest, dict) else {}
-        artifacts_value: Any = manifest.get("artifacts")
-        artifacts: list[Any] = artifacts_value if isinstance(artifacts_value, list) else []
-        by_path = {
-            Path(str(item["path"])): item
-            for item in artifacts
-            if isinstance(item, dict) and item.get("path")
-        }
-        identities: list[dict[str, str]] = []
-        for index, (blow5, adjacent) in enumerate(selected):
-            blow5_item = by_path.get(blow5)
-            adjacent_item = by_path.get(adjacent)
-            if blow5_item is None or adjacent_item is None:
-                raise RuntimeError("selected raw partition lacks manifest authority")
-            retained_blow5 = parents.pin(
-                blow5,
-                alias=f"raw-{index}.blow5",
-                expected_sha256=str(blow5_item.get("sha256") or ""),
-                expected_size=int(blow5_item.get("bytes") or 0),
-            )
-            retained_index = parents.pin(
-                adjacent,
-                alias=f"raw-{index}.blow5.idx",
-                expected_sha256=str(adjacent_item.get("sha256") or ""),
-                expected_size=int(adjacent_item.get("bytes") or 0),
-            )
-            identities.append({
-                "sha256": retained_blow5.sha256,
-                "index_sha256": retained_index.sha256,
-            })
-        return identities
+        return selected, {"routing_sha256": routing_sha256}
 
     @classmethod
     async def _resolve_selected_raw_partitions_async(
@@ -1089,15 +980,13 @@ class OntSignalWorker:
             adjacent_item = by_path.get(adjacent)
             if blow5_item is None or adjacent_item is None:
                 raise RuntimeError("selected raw partition lacks manifest authority")
-            retained_blow5 = await OntSignalWorker._pin_parent_async(
-                parents,
+            retained_blow5 = await parents.pin_async(
                 blow5,
                 alias=f"raw-{index}.blow5",
                 expected_sha256=str(blow5_item.get("sha256") or ""),
                 expected_size=int(blow5_item.get("bytes") or 0),
             )
-            retained_index = await OntSignalWorker._pin_parent_async(
-                parents,
+            retained_index = await parents.pin_async(
                 adjacent,
                 alias=f"raw-{index}.blow5.idx",
                 expected_sha256=str(adjacent_item.get("sha256") or ""),
@@ -1749,8 +1638,7 @@ class OntSignalWorker:
             )
         if authority.path is None:
             raise RuntimeError("move BAM authority has no retained source")
-        return await OntSignalWorker._pin_parent_async(
-            parents,
+        return await parents.pin_async(
             authority.path,
             alias=alias,
             expected_sha256=expected_sha256,
@@ -1961,15 +1849,13 @@ class OntSignalWorker:
                 expected_size=source.artifact_size_bytes,
             )
             self._assert_external_move_bam_identity(retained_original, original_bam_authority)
-            retained_filtered = await self._pin_parent_async(
-                parents,
+            retained_filtered = await parents.pin_async(
                 filtered_bam,
                 alias="filtered_moves.bam",
                 expected_sha256=str(managed_hashes.get("filtered_move_bam_sha256") or ""),
                 expected_size=int(managed_hashes.get("filtered_move_bam_size_bytes") or 0),
             )
-            retained_inventory = await self._pin_parent_async(
-                parents,
+            retained_inventory = await parents.pin_async(
                 inventory,
                 alias="read_inventory.txt",
                 expected_sha256=str(source.read_inventory_sha256 or ""),
@@ -2096,15 +1982,13 @@ class OntSignalWorker:
                 expected_size=source.artifact_size_bytes,
             )
             self._assert_external_move_bam_identity(retained_original, original_bam_authority)
-            retained_filtered = await self._pin_parent_async(
-                parents,
+            retained_filtered = await parents.pin_async(
                 filtered_bam,
                 alias="filtered_moves.bam",
                 expected_sha256=str(managed_hashes.get("filtered_move_bam_sha256") or ""),
                 expected_size=int(managed_hashes.get("filtered_move_bam_size_bytes") or 0),
             )
-            retained_inventory = await self._pin_parent_async(
-                parents,
+            retained_inventory = await parents.pin_async(
                 inventory,
                 alias="read_inventory.txt",
                 expected_sha256=str(source.read_inventory_sha256 or ""),
@@ -2136,22 +2020,19 @@ class OntSignalWorker:
                     getattr(alignment_job, "child_output_dir", None) or alignment_job.output_dir,
                 )
                 parent_reform = Path(parent_artifact.managed_relative_path)
-                retained_reform = await self._pin_parent_async(
-                    parents,
+                retained_reform = await parents.pin_async(
                     parent_reform,
                     alias="reform.paf",
                     expected_sha256=parent_artifact.sha256,
                     expected_size=parent_artifact.size_bytes,
                 )
-                retained_alignment = await self._pin_parent_async(
-                    parents,
+                retained_alignment = await parents.pin_async(
                     alignment_bam,
                     alias="alignment.bam",
                     expected_sha256=str(alignment_meta.get("sha256") or ""),
                     expected_size=int(alignment_meta.get("size_bytes") or 0),
                 )
-                retained_alignment_index = await self._pin_parent_async(
-                    parents,
+                retained_alignment_index = await parents.pin_async(
                     alignment_index,
                     alias="alignment.bam.bai",
                     expected_sha256=str(alignment_index_meta.get("sha256") or ""),
@@ -2171,8 +2052,7 @@ class OntSignalWorker:
                     if expected_domain_revision != live_domain_revision:
                         raise RuntimeError("mapping domain revision authority diverged")
                     reference = get_molbio_ngs_reference_root() / artifact.managed_relative_path
-                    retained_reference = await self._pin_parent_async(
-                        parents,
+                    retained_reference = await parents.pin_async(
                         reference,
                         alias="reference.fasta",
                         expected_sha256=artifact.sha256,
@@ -2289,8 +2169,7 @@ class OntSignalWorker:
             filtered_moves = Path(str(source_outputs.get("filtered_move_bam", "")))
             mapping_path = Path(artifact.managed_relative_path)
             mapping_alias = "mapping.paf.gz" if artifact.kind == "realign_paf" else "mapping.paf"
-            retained_mapping = await self._pin_parent_async(
-                parents,
+            retained_mapping = await parents.pin_async(
                 mapping_path,
                 alias=mapping_alias,
                 expected_sha256=artifact.sha256,
@@ -2300,8 +2179,7 @@ class OntSignalWorker:
             mapping_index_sha: str | None = None
             if artifact.kind == "realign_paf":
                 mapping_index = Path(f"{mapping_path}.tbi")
-                retained_mapping_index = await self._pin_parent_async(
-                    parents,
+                retained_mapping_index = await parents.pin_async(
                     mapping_index,
                     alias=f"{mapping_alias}.tbi",
                     expected_sha256=str(artifact.validation_receipt.get("index_sha256") or ""),
@@ -2353,8 +2231,7 @@ class OntSignalWorker:
                 args.extend(["--blow5", f"/parents/raw-{index}.blow5"])
             if view.mode == "read":
                 expected_hashes = source.validation_receipt.get("managed_output_sha256s", {}) or {}
-                retained_sequence = await self._pin_parent_async(
-                    parents,
+                retained_sequence = await parents.pin_async(
                     filtered_moves,
                     alias="filtered_moves.bam",
                     expected_sha256=str(expected_hashes.get("filtered_move_bam_sha256") or ""),
@@ -2369,8 +2246,7 @@ class OntSignalWorker:
                     reference_artifact = None if revision is None else await domain_session.get(MolBioNGSReferenceArtifact, revision.artifact_id)
                     if revision is None or reference_artifact is None: raise RuntimeError("render reference authority disappeared")
                     reference = get_molbio_ngs_reference_root() / reference_artifact.managed_relative_path
-                    retained_reference = await self._pin_parent_async(
-                        parents,
+                    retained_reference = await parents.pin_async(
                         reference,
                         alias="reference.fasta",
                         expected_sha256=reference_artifact.sha256,
@@ -2389,8 +2265,7 @@ class OntSignalWorker:
                 bed_path, managed_bed_identity = await self._verify_managed_bed_parent(
                     session, params
                 )
-                await self._pin_parent_async(
-                    parents,
+                await parents.pin_async(
                     bed_path,
                     alias="annotation.bed",
                     expected_sha256=str(managed_bed_identity["sha256"]),
@@ -2498,13 +2373,13 @@ class OntSignalWorker:
             self._require_hash_contract("comparison original move snapshot", mapping_parents.get("move_bam_sha256"), source.artifact_sha256)
             self._require_hash_contract("comparison move inventory snapshot", mapping_parents.get("move_read_inventory_sha256"), source.read_inventory_sha256)
             mapping_path = Path(artifact.managed_relative_path)
-            retained_mapping = await self._pin_parent_async(
-                parents, mapping_path, alias="mapping.paf.gz",
+            retained_mapping = await parents.pin_async(
+                mapping_path, alias="mapping.paf.gz",
                 expected_sha256=artifact.sha256, expected_size=artifact.size_bytes,
             )
             mapping_index_path = Path(f"{mapping_path}.tbi")
-            retained_mapping_index = await self._pin_parent_async(
-                parents, mapping_index_path, alias="mapping.paf.gz.tbi",
+            retained_mapping_index = await parents.pin_async(
+                mapping_index_path, alias="mapping.paf.gz.tbi",
                 expected_sha256=str(artifact.validation_receipt.get("index_sha256") or ""),
                 expected_size=int(artifact.validation_receipt.get("index_size_bytes") or 0),
             )
@@ -2518,8 +2393,8 @@ class OntSignalWorker:
             }
             source_outputs = source.validation_receipt.get("managed_outputs", {}) if isinstance(source.validation_receipt, dict) else {}
             source_hashes = source.validation_receipt.get("managed_output_sha256s", {}) if isinstance(source.validation_receipt, dict) else {}
-            retained_moves = await self._pin_parent_async(
-                parents, Path(str(source_outputs.get("filtered_move_bam", ""))), alias="filtered_moves.bam",
+            retained_moves = await parents.pin_async(
+                Path(str(source_outputs.get("filtered_move_bam", ""))), alias="filtered_moves.bam",
                 expected_sha256=str(source_hashes.get("filtered_move_bam_sha256") or ""),
                 expected_size=int(source_hashes.get("filtered_move_bam_size_bytes") or 0),
             )
@@ -2562,8 +2437,8 @@ class OntSignalWorker:
                 if revision is None or reference_artifact is None:
                     raise RuntimeError("comparison managed reference authority disappeared")
                 reference_path = get_molbio_ngs_reference_root() / reference_artifact.managed_relative_path
-                retained_reference = await self._pin_parent_async(
-                    parents, reference_path, alias="reference.fasta",
+                retained_reference = await parents.pin_async(
+                    reference_path, alias="reference.fasta",
                     expected_sha256=reference_artifact.sha256, expected_size=reference_artifact.size_bytes,
                 )
             expected_parents = {
@@ -2618,7 +2493,7 @@ class OntSignalWorker:
         ):
             path = output / filename
             digest, size = await self._stable_file_identity_async(path)
-            await self._pin_parent_async(parents, path, alias=filename, expected_sha256=digest, expected_size=size)
+            await parents.pin_async(path, alias=filename, expected_sha256=digest, expected_size=size)
         render_args = [
             "render", "--real-blow5", "/parents/raw-0.blow5",
             "--real-mapping", "/parents/mapping.paf.gz", "--real-moves", "/parents/filtered_moves.bam",
