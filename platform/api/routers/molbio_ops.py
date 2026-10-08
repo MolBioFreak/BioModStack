@@ -2,6 +2,7 @@
 Molecular biology operations API.
 Provides digest, PCR, ligation, mutagenesis, Gibson, and Golden Gate workflows.
 """
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -18,7 +19,12 @@ import uuid
 from Bio.SeqUtils import MeltingTemp as mt
 
 from molbio_database import get_molbio_session
-from molbio_models import NucleotideSequence, PCRExperiment, PCRExperimentRevision, Primer
+from molbio_models import (
+    NucleotideSequence,
+    PCRExperiment,
+    PCRExperimentRevision,
+    Primer,
+)
 from services.molbio_persistence import (
     IdempotencyConflictError,
     begin_immediate_molbio_write,
@@ -34,7 +40,11 @@ from services.molbio_persistence import (
 )
 from services.assembly.common import fragment_provenance_payload
 from services.assembly.gibson import simulate_gibson
-from services.assembly.golden_gate import TYPE_IIS_ENZYMES, get_type_iis_enzyme, simulate_golden_gate
+from services.assembly.golden_gate import (
+    TYPE_IIS_ENZYMES,
+    get_type_iis_enzyme,
+    simulate_golden_gate,
+)
 from services.assembly.ligation import simulate_ligation
 from services.assembly.pydna_gibson import design_gibson
 from services.assembly.dnaweaver_gibson import DnaWeaverGibsonPlan, plan_vendor_gibson
@@ -82,7 +92,9 @@ def _annotation_source_http_error(error: Exception) -> HTTPException:
         return HTTPException(status_code=409, detail=str(error))
     if isinstance(error, AnnotationSourceConfigurationError):
         return HTTPException(status_code=503, detail=str(error))
-    if isinstance(error, (AnnotationSourceAuthenticationError, AnnotationSourceResponseError)):
+    if isinstance(
+        error, (AnnotationSourceAuthenticationError, AnnotationSourceResponseError)
+    ):
         return HTTPException(status_code=502, detail=str(error))
     return HTTPException(status_code=502, detail="Annotation source retrieval failed")
 
@@ -152,7 +164,9 @@ class PCRRequest(SequenceInput):
     reaction_settings: dict[str, Any] = Field(default_factory=dict)
     cycling_assumptions: dict[str, Any] = Field(default_factory=dict)
     notes: Optional[str] = None
-    review_state: str = Field(default="draft", pattern="^(draft|in_review|approved|rejected)$")
+    review_state: str = Field(
+        default="draft", pattern="^(draft|in_review|approved|rejected)$"
+    )
     provenance: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -312,6 +326,7 @@ class AssemblyFragmentSchema(BaseModel):
     id: str
     name: str
     sequence: str
+    sequence_sha256: Optional[str] = None
     orientation: Literal["forward", "reverse"] = "forward"
     circular: bool = False
     role: Optional[str] = None
@@ -393,28 +408,55 @@ class GibsonAssemblyRequest(BaseModel):
 
 
 class DnaWeaverPlanRequest(BaseModel):
-    target_sequence: str = Field(min_length=4, max_length=200_000)
+    target_sequence: str = Field(min_length=1, max_length=2_000_000)
+    target_sequence_id: Optional[str] = None
     circular: bool = True
-    min_fragment_length: int = Field(default=500, ge=2, le=20_000)
-    max_fragment_length: int = Field(default=1500, ge=2, le=20_000)
+    min_fragment_length: int = Field(default=500, ge=100, le=100_000)
+    max_fragment_length: int = Field(default=1500, ge=101, le=200_000)
     overlap_length: int = Field(default=30, ge=15, le=80)
-    vendor_name: str = Field(default="Configured commercial DNA vendor", min_length=1, max_length=120)
-    price_per_bp: float = Field(default=0.15, ge=0, le=1000, allow_inf_nan=False)
-    lead_time_days: float = Field(default=10.0, ge=0, le=3650, allow_inf_nan=False)
+    vendor_name: str = Field(
+        default="Configured commercial DNA vendor", min_length=1, max_length=200
+    )
+    price_per_bp: float = Field(default=0.15, ge=0.0, le=1000.0, allow_inf_nan=False)
+    lead_time_days: float = Field(default=10.0, ge=0.0, le=3650.0, allow_inf_nan=False)
+
+
+class DnaWeaverPlanSaveRequest(DnaWeaverPlanRequest):
+    selected_plan_checksum: str = Field(min_length=64, max_length=64)
+    new_name: Optional[str] = None
+    save_description: Optional[str] = None
+
+
+class DnaWeaverQualityCheckResponse(BaseModel):
+    check_id: str
+    status: str
+    detail: str
+
+    model_config = ConfigDict(extra="allow")
 
 
 class DnaWeaverPlanResponse(BaseModel):
-    engine: str
-    engine_version: str
+    planner_engine: str
+    planner_version: str
     validator_engine: str
     validator_version: str
-    estimated_price: Optional[float] = None
-    lead_time_days: Optional[float] = None
-    source_intervals: List[dict[str, int]]
-    pydna_exact_candidate_count: int
+    vendor_name: str
+    estimated_price: Optional[float]
+    estimated_lead_time_days: Optional[float]
     ordered_fragments: List[AssemblyFragmentSchema]
-    product: AssemblyProductResponse
+    quote: dict[str, Any]
+    pydna_exact_candidate_count: int
+    selected_product: AssemblyProductResponse
+    target_checksum: str
+    plan_checksum: str
+    planning_parameters: dict[str, Any]
+    manufacturability_profile: str
+    quality_checks: List[DnaWeaverQualityCheckResponse]
+    order_ready: bool
     warnings: List[str] = Field(default_factory=list)
+    validation_notes: List[str] = Field(default_factory=list)
+    saved_sequence: Optional[NucleotideSequenceResponse] = None
+    message: str
 
 
 class GibsonDesignFragmentSchema(AssemblyFragmentSchema):
@@ -550,7 +592,9 @@ class SequenceAlignmentResponse(BaseModel):
     variants: List[AlignmentVariantResponse] = Field(default_factory=list)
 
 
-def normalize_sequence_type(sequence_type: Optional[str], sequence: Optional[str]) -> str:
+def normalize_sequence_type(
+    sequence_type: Optional[str], sequence: Optional[str]
+) -> str:
     normalized = (sequence_type or "").strip().lower()
     if normalized in {"dna", "rna"}:
         return normalized
@@ -563,12 +607,16 @@ def normalize_sequence_type(sequence_type: Optional[str], sequence: Optional[str
 
 def clean_inline_sequence(sequence: str, sequence_type: str) -> str:
     try:
-        return canonicalize_nucleotide_sequence(sequence, sequence_type, allow_empty=True)
+        return canonicalize_nucleotide_sequence(
+            sequence, sequence_type, allow_empty=True
+        )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
-async def resolve_sequence(data: SequenceInput, session: AsyncSession) -> NucleotideSequence:
+async def resolve_sequence(
+    data: SequenceInput, session: AsyncSession
+) -> NucleotideSequence:
     if data.sequence_id:
         result = await session.execute(
             select(NucleotideSequence).where(NucleotideSequence.id == data.sequence_id)
@@ -578,14 +626,20 @@ async def resolve_sequence(data: SequenceInput, session: AsyncSession) -> Nucleo
             raise HTTPException(status_code=404, detail="Sequence not found")
         return seq
     if not data.sequence:
-        raise HTTPException(status_code=400, detail="Sequence or sequence_id is required")
+        raise HTTPException(
+            status_code=400, detail="Sequence or sequence_id is required"
+        )
     sequence_type = normalize_sequence_type(data.sequence_type, data.sequence)
     seq_clean = clean_inline_sequence(data.sequence, sequence_type)
     if not seq_clean:
-        raise HTTPException(status_code=400, detail="Sequence contains no valid nucleotides")
+        raise HTTPException(
+            status_code=400, detail="Sequence contains no valid nucleotides"
+        )
     gc = 0.0
     if seq_clean:
-        gc = round(((seq_clean.count('G') + seq_clean.count('C')) / len(seq_clean)) * 100, 2)
+        gc = round(
+            ((seq_clean.count("G") + seq_clean.count("C")) / len(seq_clean)) * 100, 2
+        )
     # Construct a temporary sequence object
     return NucleotideSequence(
         id=str(uuid.uuid4()),
@@ -620,7 +674,7 @@ def create_child_sequence(
     def calc_gc(seq: str) -> float:
         if not seq:
             return 0.0
-        gc = seq.count('G') + seq.count('C')
+        gc = seq.count("G") + seq.count("C")
         return round((gc / len(seq)) * 100, 2)
 
     parent_id = parent.id if parent else None
@@ -630,7 +684,9 @@ def create_child_sequence(
         name=name,
         description=parent.description if parent else None,
         sequence=sequence,
-        sequence_type=normalize_sequence_type(sequence_type or (parent.sequence_type if parent else None), sequence),
+        sequence_type=normalize_sequence_type(
+            sequence_type or (parent.sequence_type if parent else None), sequence
+        ),
         molecule_strandedness=(parent.molecule_strandedness if parent else "unknown"),
         molecule_orientation=(parent.molecule_orientation if parent else "unknown"),
         is_circular=circular,
@@ -663,12 +719,16 @@ def build_assembly_fragment(fragment: AssemblyFragmentSchema) -> AssemblyFragmen
         source_start=fragment.source_start,
         source_end=fragment.source_end,
         source_wraps_origin=fragment.source_wraps_origin,
-        left_end=None if fragment.left_end is None else FragmentEnd(
+        left_end=None
+        if fragment.left_end is None
+        else FragmentEnd(
             type=fragment.left_end.type,  # type: ignore[arg-type]
             overhang=fragment.left_end.overhang,
             label=fragment.left_end.label,
         ),
-        right_end=None if fragment.right_end is None else FragmentEnd(
+        right_end=None
+        if fragment.right_end is None
+        else FragmentEnd(
             type=fragment.right_end.type,  # type: ignore[arg-type]
             overhang=fragment.right_end.overhang,
             label=fragment.right_end.label,
@@ -677,7 +737,9 @@ def build_assembly_fragment(fragment: AssemblyFragmentSchema) -> AssemblyFragmen
     )
 
 
-def assembly_junction_to_response(junction: AssemblyJunction) -> AssemblyJunctionResponse:
+def assembly_junction_to_response(
+    junction: AssemblyJunction,
+) -> AssemblyJunctionResponse:
     return AssemblyJunctionResponse(
         left_fragment_id=junction.left_fragment_id,
         right_fragment_id=junction.right_fragment_id,
@@ -713,12 +775,16 @@ def assembly_product_to_response(product: "AssemblyProduct") -> AssemblyProductR
                 source_start=fragment.source_start,
                 source_end=fragment.source_end,
                 source_wraps_origin=fragment.source_wraps_origin,
-                left_end=None if fragment.left_end is None else AssemblyFragmentEndSchema(
+                left_end=None
+                if fragment.left_end is None
+                else AssemblyFragmentEndSchema(
                     type=fragment.left_end.type,
                     overhang=fragment.left_end.overhang,
                     label=fragment.left_end.label,
                 ),
-                right_end=None if fragment.right_end is None else AssemblyFragmentEndSchema(
+                right_end=None
+                if fragment.right_end is None
+                else AssemblyFragmentEndSchema(
                     type=fragment.right_end.type,
                     overhang=fragment.right_end.overhang,
                     label=fragment.right_end.label,
@@ -727,7 +793,9 @@ def assembly_product_to_response(product: "AssemblyProduct") -> AssemblyProductR
             )
             for fragment in product.fragments
         ],
-        junctions=[assembly_junction_to_response(junction) for junction in product.junctions],
+        junctions=[
+            assembly_junction_to_response(junction) for junction in product.junctions
+        ],
         warnings=product.warnings,
         validation_notes=product.validation_notes,
     )
@@ -750,7 +818,9 @@ def gibson_design_to_response(
         None,
     )
     if selected is None:
-        raise AssemblyError("Selected Gibson candidate is missing from the design result")
+        raise AssemblyError(
+            "Selected Gibson candidate is missing from the design result"
+        )
     return GibsonDesignResponse(
         engine=result.engine,
         engine_version=result.engine_version,
@@ -807,6 +877,7 @@ async def persist_assembly_product(
     name: Optional[str],
     save_description: Optional[str],
     extra_operation_params: Optional[dict[str, Any]] = None,
+    product_primers: Optional[list[dict[str, Any]]] = None,
 ):
     await begin_immediate_molbio_write(session)
     source_ids = [
@@ -838,7 +909,9 @@ async def persist_assembly_product(
                 "name": fragment.name,
                 "role": fragment.role,
                 "orientation": fragment.orientation,
-                "sequence_sha256": hashlib.sha256(fragment.sequence.encode("utf-8")).hexdigest(),
+                "sequence_sha256": hashlib.sha256(
+                    fragment.sequence.encode("utf-8")
+                ).hexdigest(),
                 "sequence_length": len(fragment.sequence),
                 "source_sequence_id": fragment.source_sequence_id,
                 "source_start": fragment.source_start,
@@ -909,9 +982,14 @@ async def persist_assembly_product(
                 )
             fragment.source_name = source.name
 
-            source_revision = await current_molecular_revision(session, fragment.source_sequence_id)
+            source_revision = await current_molecular_revision(
+                session, fragment.source_sequence_id
+            )
             current_hash = hashlib.sha256(source.sequence.encode("utf-8")).hexdigest()
-            if source_revision is not None and source_revision.content_sha256 != current_hash:
+            if (
+                source_revision is not None
+                and source_revision.content_sha256 != current_hash
+            ):
                 raise HTTPException(
                     status_code=409,
                     detail=(
@@ -927,6 +1005,26 @@ async def persist_assembly_product(
                         f"{fragment.source_sequence_id}"
                     ),
                 )
+            if (
+                fragment.source_revision is not None
+                and fragment.source_revision != source_revision.revision_number
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Assembly fragment '{fragment.name}' source revision "
+                        f"{fragment.source_revision} does not match current immutable revision "
+                        f"{source_revision.revision_number}"
+                    ),
+                )
+            fragment.source_revision = source_revision.revision_number
+            fragment_snapshot["fragment"].update(
+                {
+                    "source_revision": source_revision.revision_number,
+                    "source_revision_id": source_revision.id,
+                    "source_revision_sha256": source_revision.content_sha256,
+                }
+            )
             input_revisions.append((source_revision, "fragment", fragment_snapshot))
         else:
             inline_fragment = NucleotideSequence(
@@ -960,7 +1058,12 @@ async def persist_assembly_product(
     operation_params = {
         "mode": product.mode,
         "fragments": fragment_provenance_payload(product.fragments),
-        "junctions": [junction.model_dump() for junction in [assembly_junction_to_response(item) for item in product.junctions]],
+        "junctions": [
+            junction.model_dump()
+            for junction in [
+                assembly_junction_to_response(item) for item in product.junctions
+            ]
+        ],
         "warnings": product.warnings,
         "validation_notes": product.validation_notes,
         "topology": "circular" if product.circular else "linear",
@@ -968,7 +1071,9 @@ async def persist_assembly_product(
     if extra_operation_params:
         operation_params.update(extra_operation_params)
 
-    sequence_name = (name or "").strip() or f"{product.mode.replace('_', ' ').title()} product"
+    sequence_name = (
+        name or ""
+    ).strip() or f"{product.mode.replace('_', ' ').title()} product"
     if parent is not None:
         sequence_row = create_child_sequence(
             parent=parent,
@@ -994,12 +1099,21 @@ async def persist_assembly_product(
             organism=None,
             accession=None,
             source_file=None,
-            gc_content=round(((product.sequence.count("G") + product.sequence.count("C")) / max(len(product.sequence), 1)) * 100, 2),
+            gc_content=round(
+                (
+                    (product.sequence.count("G") + product.sequence.count("C"))
+                    / max(len(product.sequence), 1)
+                )
+                * 100,
+                2,
+            ),
             parent_id=None,
             operation=product.mode,
             operation_params=operation_params,
             version=1,
         )
+
+    sequence_row.primers = product_primers or []
 
     await record_generated_sequence(
         session,
@@ -1020,11 +1134,13 @@ async def persist_assembly_product(
 
 @router.post("/digest", response_model=MolbioOperationResponse)
 async def digest(
-    request: DigestRequest,
-    session: AsyncSession = Depends(get_molbio_session)
+    request: DigestRequest, session: AsyncSession = Depends(get_molbio_session)
 ):
     parent = await resolve_sequence(request, session)
-    enzymes = [DigestEnzyme(name=e.name, site=e.site, cut_index=e.cut_index) for e in request.enzymes]
+    enzymes = [
+        DigestEnzyme(name=e.name, site=e.site, cut_index=e.cut_index)
+        for e in request.enzymes
+    ]
     fragments = digest_sequence(parent.sequence, enzymes, circular=parent.is_circular)
     fragment_payload = [
         DigestFragmentResponse(
@@ -1040,7 +1156,7 @@ async def digest(
     if not request.save:
         return MolbioOperationResponse(
             fragments=fragment_payload,
-            message=f"Digest produced {len(fragment_payload)} fragments"
+            message=f"Digest produced {len(fragment_payload)} fragments",
         )
 
     new_name = request.new_name or f"{parent.name}_digest"
@@ -1080,17 +1196,12 @@ async def digest(
     await session.commit()
     await session.refresh(seq_obj)
     return MolbioOperationResponse(
-        sequence=seq_obj,
-        fragments=fragment_payload,
-        message="Digest complete"
+        sequence=seq_obj, fragments=fragment_payload, message="Digest complete"
     )
 
 
 @router.post("/pcr", response_model=MolbioOperationResponse)
-async def pcr(
-    request: PCRRequest,
-    session: AsyncSession = Depends(get_molbio_session)
-):
+async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_session)):
     parent = await resolve_sequence(request, session)
     forward_primer, _ = normalize_primer_sequence(request.primer_fwd, "dna")
     reverse_primer, _ = normalize_primer_sequence(request.primer_rev, "dna")
@@ -1101,7 +1212,9 @@ async def pcr(
             else default_tm_settings_for_sequence_type("dna")
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid Tm settings: {exc}") from exc
+        raise HTTPException(
+            status_code=400, detail=f"Invalid Tm settings: {exc}"
+        ) from exc
 
     forward_tm = calculate_primer_tm_result(
         forward_primer,
@@ -1128,19 +1241,25 @@ async def pcr(
         "forward": forward_tm.model_dump(),
         "reverse": reverse_tm.model_dump(),
         "algorithm_definition": TM_ALGORITHM_DEFS.get(resolved_tm_settings.algorithm),
-        "salt_correction_definition": TM_SALT_CORRECTION_DEFS.get(resolved_tm_settings.salt_correction),
+        "salt_correction_definition": TM_SALT_CORRECTION_DEFS.get(
+            resolved_tm_settings.salt_correction
+        ),
     }
     provenance = dict(request.provenance)
     provenance.update(
         {
             "source": "api",
             "endpoint": "POST /api/molbio/pcr",
-            "template_input": "stored_sequence" if request.sequence_id else "inline_sequence",
+            "template_input": "stored_sequence"
+            if request.sequence_id
+            else "inline_sequence",
         }
     )
 
     template_revision = (
-        await current_molecular_revision(session, parent.id) if request.sequence_id else None
+        await current_molecular_revision(session, parent.id)
+        if request.sequence_id
+        else None
     )
     template_projection_snapshot = sequence_snapshot(parent)
     if not request.sequence_id:
@@ -1154,9 +1273,15 @@ async def pcr(
             "template": {
                 "document_id": request.sequence_id,
                 "revision_id": template_revision.id if template_revision else None,
-                "revision_sha256": template_revision.content_sha256 if template_revision else None,
-                "revision_snapshot": template_revision.snapshot if template_revision else None,
-                "projection_sha256": hashlib.sha256(parent.sequence.encode("utf-8")).hexdigest(),
+                "revision_sha256": template_revision.content_sha256
+                if template_revision
+                else None,
+                "revision_snapshot": template_revision.snapshot
+                if template_revision
+                else None,
+                "projection_sha256": hashlib.sha256(
+                    parent.sequence.encode("utf-8")
+                ).hexdigest(),
                 "projection_snapshot": template_projection_snapshot,
             },
             "forward_primer_snapshot": forward_snapshot,
@@ -1265,7 +1390,9 @@ async def pcr(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except IntegrityError as exc:
             await session.rollback()
-            if not request.idempotency_key or not _is_pcr_idempotency_integrity_error(exc):
+            if not request.idempotency_key or not _is_pcr_idempotency_integrity_error(
+                exc
+            ):
                 raise
             try:
                 raced = await get_pcr_by_idempotency_key(
@@ -1375,10 +1502,16 @@ async def list_pcr_experiments(
 ):
     bounded_limit = max(1, min(limit, 500))
     experiments = (
-        await session.execute(
-            select(PCRExperiment).order_by(PCRExperiment.updated_at.desc()).limit(bounded_limit)
+        (
+            await session.execute(
+                select(PCRExperiment)
+                .order_by(PCRExperiment.updated_at.desc())
+                .limit(bounded_limit)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     items = []
     for experiment in experiments:
         current = (
@@ -1409,12 +1542,16 @@ async def get_pcr_experiment(
     if experiment is None:
         raise HTTPException(status_code=404, detail="PCR experiment not found")
     revisions = (
-        await session.execute(
-            select(PCRExperimentRevision)
-            .where(PCRExperimentRevision.experiment_id == experiment.id)
-            .order_by(PCRExperimentRevision.revision_number.desc())
+        (
+            await session.execute(
+                select(PCRExperimentRevision)
+                .where(PCRExperimentRevision.experiment_id == experiment.id)
+                .order_by(PCRExperimentRevision.revision_number.desc())
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return {
         "id": experiment.id,
         "name": experiment.name,
@@ -1433,7 +1570,9 @@ async def update_pcr_experiment_review_state(
     session: AsyncSession = Depends(get_molbio_session),
     authenticated_actor: Optional[str] = Depends(authenticated_molbio_reviewer),
 ):
-    trusted_actor = authenticated_actor if isinstance(authenticated_actor, str) else None
+    trusted_actor = (
+        authenticated_actor if isinstance(authenticated_actor, str) else None
+    )
     if request.review_state in {"approved", "rejected"} and trusted_actor is None:
         raise HTTPException(
             status_code=403,
@@ -1507,8 +1646,7 @@ async def save_ligation_assembly(
 
 @router.post("/mutagenesis", response_model=MolbioOperationResponse)
 async def mutagenesis(
-    request: MutagenesisRequest,
-    session: AsyncSession = Depends(get_molbio_session)
+    request: MutagenesisRequest, session: AsyncSession = Depends(get_molbio_session)
 ):
     parent = await resolve_sequence(request, session)
     sequence_type = normalize_sequence_type(parent.sequence_type, parent.sequence)
@@ -1531,14 +1669,14 @@ async def mutagenesis(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if len(to_residue) != 1 or (from_residue is not None and len(from_residue) != 1):
+        if len(to_residue) != 1 or (
+            from_residue is not None and len(from_residue) != 1
+        ):
             raise HTTPException(
                 status_code=400,
                 detail="Mutations require exactly one source and one replacement residue",
             )
-        mutations.append(
-            {"pos": mutation.pos, "from": from_residue, "to": to_residue}
-        )
+        mutations.append({"pos": mutation.pos, "from": from_residue, "to": to_residue})
     try:
         mutated = apply_mutations(parent.sequence, mutations)
     except ValueError as exc:
@@ -1622,25 +1760,48 @@ def _gibson_design_operation_params(
             }
             for primer in result.primers
         ],
+        "designed_fragments": [
+            {
+                "id": fragment.id,
+                "name": fragment.name,
+                "preparation": fragment.preparation,
+                "sequence": fragment.sequence,
+                "checksum": fragment.checksum,
+                "primer_ids": fragment.primer_ids,
+            }
+            for fragment in result.designed_fragments
+        ],
+        "validator": {
+            "engine": "services.assembly.gibson.simulate_gibson",
+            "validation": "exact_sequence_and_topology",
+        },
         "design_warnings": result.warnings,
     }
 
 
-def _dnaweaver_plan_to_response(plan: DnaWeaverGibsonPlan) -> DnaWeaverPlanResponse:
+def _dnaweaver_plan_to_response(
+    plan: DnaWeaverGibsonPlan,
+    *,
+    vendor_name: str,
+    saved_sequence: Optional[NucleotideSequence] = None,
+    message: str = "Planned vendor Gibson fragments and validated the exact product with pydna",
+) -> DnaWeaverPlanResponse:
     return DnaWeaverPlanResponse(
-        engine=plan.engine,
-        engine_version=plan.engine_version,
+        planner_engine=plan.engine,
+        planner_version=plan.engine_version,
         validator_engine=plan.validator_engine,
         validator_version=plan.validator_version,
+        vendor_name=vendor_name,
         estimated_price=plan.estimated_price,
-        lead_time_days=plan.lead_time_days,
-        source_intervals=plan.source_intervals,
-        pydna_exact_candidate_count=plan.pydna_exact_candidate_count,
+        estimated_lead_time_days=plan.lead_time_days,
         ordered_fragments=[
             AssemblyFragmentSchema(
                 id=fragment.id,
                 name=fragment.name,
                 sequence=fragment.sequence,
+                sequence_sha256=hashlib.sha256(
+                    fragment.sequence.encode("ascii")
+                ).hexdigest(),
                 orientation=fragment.orientation,
                 circular=False,
                 role=fragment.role,
@@ -1654,25 +1815,154 @@ def _dnaweaver_plan_to_response(plan: DnaWeaverGibsonPlan) -> DnaWeaverPlanRespo
             )
             for fragment in plan.product.fragments
         ],
-        product=assembly_product_to_response(plan.product),
+        quote={
+            "vendor_name": vendor_name,
+            "estimated_price": plan.estimated_price,
+            "estimated_lead_time_days": plan.lead_time_days,
+            "source_intervals": plan.source_intervals,
+            "currency": "unspecified",
+            "assumption": "Configured per-base price/lead-time model; obtain a vendor quote before ordering",
+        },
+        pydna_exact_candidate_count=plan.pydna_exact_candidate_count,
+        selected_product=assembly_product_to_response(plan.product),
+        target_checksum=plan.target_checksum,
+        plan_checksum=plan.plan_checksum,
+        planning_parameters=plan.planning_parameters,
+        manufacturability_profile=plan.manufacturability_profile,
+        quality_checks=[
+            DnaWeaverQualityCheckResponse(**item) for item in plan.quality_checks
+        ],
+        order_ready=plan.order_ready,
         warnings=plan.warnings,
+        validation_notes=plan.product.validation_notes,
+        saved_sequence=(
+            NucleotideSequenceResponse.model_validate(saved_sequence)
+            if saved_sequence
+            else None
+        ),
+        message=message,
     )
 
 
-@router.post("/assembly/gibson/dnaweaver/plan", response_model=DnaWeaverPlanResponse)
-async def plan_dnaweaver_gibson_assembly(request: DnaWeaverPlanRequest):
-    try:
-        plan = plan_vendor_gibson(
-            request.target_sequence,
-            circular=request.circular,
-            min_fragment_length=request.min_fragment_length,
-            max_fragment_length=request.max_fragment_length,
-            overlap_length=request.overlap_length,
-            vendor_name=request.vendor_name,
-            price_per_bp=request.price_per_bp,
-            lead_time_days=request.lead_time_days,
+def _execute_dnaweaver_plan(
+    request: DnaWeaverPlanRequest, target_sequence: str
+) -> DnaWeaverGibsonPlan:
+    return plan_vendor_gibson(
+        target_sequence,
+        circular=request.circular,
+        min_fragment_length=request.min_fragment_length,
+        max_fragment_length=request.max_fragment_length,
+        overlap_length=request.overlap_length,
+        vendor_name=request.vendor_name,
+        price_per_bp=request.price_per_bp,
+        lead_time_days=request.lead_time_days,
+    )
+
+
+async def _resolve_dnaweaver_target(
+    request: DnaWeaverPlanRequest,
+    session: AsyncSession,
+) -> tuple[str, Optional[NucleotideSequence]]:
+    if not request.target_sequence_id:
+        return request.target_sequence, None
+    source = await session.get(NucleotideSequence, request.target_sequence_id)
+    if source is None:
+        raise AssemblyError("The selected target sequence no longer exists")
+    requested = "".join(request.target_sequence.split()).upper()
+    if requested != source.sequence.upper() or request.circular != source.is_circular:
+        raise AssemblyError(
+            "The selected target changed after it was loaded; reload it before planning or saving"
         )
-        return _dnaweaver_plan_to_response(plan)
+    return source.sequence, source
+
+
+def _dnaweaver_operation_params(
+    plan: DnaWeaverGibsonPlan,
+    request: DnaWeaverPlanSaveRequest,
+) -> dict[str, Any]:
+    return {
+        "engine": plan.engine,
+        "engine_version": plan.engine_version,
+        "validator_engine": plan.validator_engine,
+        "validator_version": plan.validator_version,
+        "plan_checksum": plan.plan_checksum,
+        "candidate_checksum": hashlib.sha256(
+            plan.product.sequence.encode("ascii")
+        ).hexdigest(),
+        "target_checksum": plan.target_checksum,
+        "target_sequence_id": request.target_sequence_id,
+        "planning_parameters": plan.planning_parameters,
+        "manufacturability_profile": plan.manufacturability_profile,
+        "quality_checks": plan.quality_checks,
+        "order_ready": plan.order_ready,
+        "estimated_price": plan.estimated_price,
+        "estimated_lead_time_days": plan.lead_time_days,
+        "pydna_exact_candidate_count": plan.pydna_exact_candidate_count,
+        "source_intervals": plan.source_intervals,
+        "ordered_fragments": [
+            {
+                "id": fragment.id,
+                "name": fragment.name,
+                "sequence": fragment.sequence,
+                "sequence_sha256": hashlib.sha256(
+                    fragment.sequence.encode("ascii")
+                ).hexdigest(),
+                "length": len(fragment.sequence),
+                "source_core_start": fragment.metadata.get("source_core_start"),
+                "source_core_end": fragment.metadata.get("source_core_end"),
+                "terminal_overlap_length": fragment.metadata.get(
+                    "terminal_overlap_length"
+                ),
+                "preparation": "ready_linear",
+                "procurement": "vendor_purchase",
+            }
+            for fragment in plan.product.fragments
+        ],
+    }
+
+
+@router.post("/assembly/gibson/dnaweaver/plan", response_model=DnaWeaverPlanResponse)
+async def plan_dnaweaver_gibson_assembly(
+    request: DnaWeaverPlanRequest,
+    session: AsyncSession = Depends(get_molbio_session),
+):
+    try:
+        target, _ = await _resolve_dnaweaver_target(request, session)
+        plan = _execute_dnaweaver_plan(request, target)
+        return _dnaweaver_plan_to_response(plan, vendor_name=request.vendor_name)
+    except AssemblyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/assembly/gibson/dnaweaver/save", response_model=DnaWeaverPlanResponse)
+async def save_dnaweaver_gibson_assembly(
+    request: DnaWeaverPlanSaveRequest,
+    session: AsyncSession = Depends(get_molbio_session),
+):
+    try:
+        target, _source = await _resolve_dnaweaver_target(request, session)
+        plan = _execute_dnaweaver_plan(request, target)
+        if request.selected_plan_checksum != plan.plan_checksum:
+            raise AssemblyError(
+                "Selected DNA Weaver plan checksum is stale or invalid; plan again before saving"
+            )
+        if not plan.order_ready:
+            raise AssemblyError(
+                "DNA Weaver plan has manufacturability blockers and cannot be saved as order-ready"
+            )
+        saved = await persist_assembly_product(
+            session,
+            product=plan.product,
+            name=request.new_name,
+            save_description=request.save_description,
+            extra_operation_params=_dnaweaver_operation_params(plan, request),
+        )
+        return _dnaweaver_plan_to_response(
+            plan,
+            vendor_name=request.vendor_name,
+            saved_sequence=saved,
+            message="Regenerated, checksum-verified, pydna-validated, and saved the DNA Weaver purchase plan",
+        )
     except AssemblyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1692,7 +1982,9 @@ async def save_designed_gibson_assembly(
     session: AsyncSession = Depends(get_molbio_session),
 ):
     if not request.selected_candidate_checksum:
-        raise HTTPException(status_code=400, detail="A selected candidate checksum is required")
+        raise HTTPException(
+            status_code=400, detail="A selected candidate checksum is required"
+        )
     try:
         result = _execute_gibson_design(request)
         selected = next(
@@ -1704,7 +1996,9 @@ async def save_designed_gibson_assembly(
             None,
         )
         if selected is None or not selected.exact_match:
-            raise AssemblyError("Selected candidate checksum is not a valid exact design candidate")
+            raise AssemblyError(
+                "Selected candidate checksum is not a valid exact design candidate"
+            )
         saved = await persist_assembly_product(
             session,
             product=selected.product,
@@ -1714,6 +2008,25 @@ async def save_designed_gibson_assembly(
                 result,
                 request.selected_candidate_checksum,
             ),
+            product_primers=[
+                {
+                    "id": primer.id,
+                    "name": f"{primer.fragment_name} {primer.direction}",
+                    "sequence": primer.full_sequence,
+                    "sequence_type": "dna",
+                    "start": 0,
+                    "end": 0,
+                    "strand": 1 if primer.direction == "forward" else -1,
+                    "tm": primer.tm,
+                    "notes": {
+                        "fragment_id": primer.fragment_id,
+                        "annealing_sequence": primer.annealing_sequence,
+                        "tail_sequence": primer.tail_sequence,
+                        "warnings": primer.warnings,
+                    },
+                }
+                for primer in result.primers
+            ],
         )
         return gibson_design_to_response(
             result,
@@ -1833,8 +2146,7 @@ async def save_golden_gate_assembly(
 
 @router.post("/ligate", response_model=MolbioOperationResponse)
 async def ligate(
-    request: LigationRequest,
-    session: AsyncSession = Depends(get_molbio_session)
+    request: LigationRequest, session: AsyncSession = Depends(get_molbio_session)
 ):
     raise HTTPException(
         status_code=400,
@@ -1847,8 +2159,7 @@ async def ligate(
 
 @router.post("/gibson", response_model=MolbioOperationResponse)
 async def gibson(
-    request: GibsonRequest,
-    session: AsyncSession = Depends(get_molbio_session)
+    request: GibsonRequest, session: AsyncSession = Depends(get_molbio_session)
 ):
     raise HTTPException(
         status_code=400,
@@ -1861,8 +2172,7 @@ async def gibson(
 
 @router.post("/golden-gate", response_model=MolbioOperationResponse)
 async def golden_gate(
-    request: GoldenGateRequest,
-    session: AsyncSession = Depends(get_molbio_session)
+    request: GoldenGateRequest, session: AsyncSession = Depends(get_molbio_session)
 ):
     raise HTTPException(
         status_code=400,
@@ -1905,16 +2215,25 @@ async def align_molecular_sequences(request: SequenceAlignmentRequest):
 # Auto-Annotation using pLannotate
 # ============================================================================
 
+
 class AutoAnnotateRequest(BaseModel):
     """Request for automatic feature detection using pLannotate."""
+
     sequence: str = Field(..., description="DNA sequence to annotate")
-    is_linear: bool = Field(False, description="Whether the sequence is linear (default: circular)")
-    detailed: bool = Field(False, description="Use detailed search mode (more hits, more false positives)")
-    min_identity: float = Field(50.0, description="Minimum percent identity threshold for features")
+    is_linear: bool = Field(
+        False, description="Whether the sequence is linear (default: circular)"
+    )
+    detailed: bool = Field(
+        False, description="Use detailed search mode (more hits, more false positives)"
+    )
+    min_identity: float = Field(
+        50.0, description="Minimum percent identity threshold for features"
+    )
 
 
 class DetectedFeature(BaseModel):
     """A feature detected by pLannotate."""
+
     name: str
     type: str
     start: int
@@ -1929,6 +2248,7 @@ class DetectedFeature(BaseModel):
 
 class AutoAnnotateResponse(BaseModel):
     """Response from auto-annotation."""
+
     features: List[DetectedFeature]
     message: str
 
@@ -1962,7 +2282,9 @@ def _build_plannotate_command(
         str(Path.home() / ".plannotate_sensitive.yml"),
     )
     plannotate_bin = _resolve_plannotate_executable(os.getenv("BMS_PLANNOTATE_BIN"))
-    micromamba_bin = _resolve_plannotate_executable(os.getenv("BMS_MICROMAMBA_BIN")) or shutil.which("micromamba")
+    micromamba_bin = _resolve_plannotate_executable(
+        os.getenv("BMS_MICROMAMBA_BIN")
+    ) or shutil.which("micromamba")
     micromamba_root_prefix = os.getenv("BMS_MICROMAMBA_ROOT_PREFIX")
     plannotate_env = os.getenv("BMS_PLANNOTATE_ENV", "plannotate")
 
@@ -1984,12 +2306,16 @@ def _build_plannotate_command(
             )
         cmd = [plannotate_bin]
 
-    cmd.extend([
-        "batch",
-        "-i", input_file,
-        "-o", output_dir,
-        "--csv",
-    ])
+    cmd.extend(
+        [
+            "batch",
+            "-i",
+            input_file,
+            "-o",
+            output_dir,
+            "--csv",
+        ]
+    )
     if os.path.exists(sensitive_yaml):
         cmd.extend(["-y", sensitive_yaml])
     if is_linear:
@@ -2014,40 +2340,40 @@ def _plannotate_error_means_no_features(stderr: str, stdout: str) -> bool:
 async def auto_annotate(request: AutoAnnotateRequest):
     """
     Auto-detect plasmid features using pLannotate.
-    
+
     Uses BLAST-based detection to identify common plasmid components like:
     - Origins of replication (ori, ColE1, etc.)
     - Antibiotic resistance genes (KanR, AmpR, CmR, etc.)
     - Promoters and terminators
     - Common tags and reporters
-    
+
     Requires pLannotate to be available directly or through the configured micromamba env.
     """
     import subprocess
     import tempfile
     import csv
     import os
-    
+
     # Validate sequence
     sequence = request.sequence.upper().replace(" ", "").replace("\n", "")
     if not sequence:
         raise HTTPException(status_code=400, detail="Empty sequence provided")
-    
+
     if not all(c in "ATGCNRYSWKMBDHV" for c in sequence):
         raise HTTPException(status_code=400, detail="Invalid DNA sequence characters")
-    
+
     # Create temporary files for input/output
     with tempfile.TemporaryDirectory() as tmpdir:
         input_file = os.path.join(tmpdir, "input.fasta")
         output_dir = tmpdir
-        
+
         # Write input FASTA
         with open(input_file, "w") as f:
             f.write(">input_sequence\n")
             # Write sequence in 60-char lines
             for i in range(0, len(sequence), 60):
-                f.write(sequence[i:i+60] + "\n")
-        
+                f.write(sequence[i : i + 60] + "\n")
+
         # Build pLannotate command with optional sensitive search config.
         cmd = _build_plannotate_command(
             input_file=input_file,
@@ -2055,7 +2381,7 @@ async def auto_annotate(request: AutoAnnotateRequest):
             is_linear=request.is_linear,
             detailed=request.detailed,
         )
-        
+
         # Run pLannotate
         try:
             result = await asyncio.to_thread(
@@ -2073,61 +2399,70 @@ async def auto_annotate(request: AutoAnnotateRequest):
                 detail=f"pLannotate runtime unavailable: {str(e)}",
             ) from e
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"pLannotate execution failed: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"pLannotate execution failed: {str(e)}"
+            )
 
         if result.returncode != 0:
             stderr = (result.stderr or "").strip()
             stdout = (result.stdout or "").strip()
             if _plannotate_error_means_no_features(stderr, stdout):
                 return AutoAnnotateResponse(features=[], message="No features detected")
-            detail = stderr or stdout or f"pLannotate exited with status {result.returncode}"
+            detail = (
+                stderr or stdout or f"pLannotate exited with status {result.returncode}"
+            )
             raise HTTPException(status_code=500, detail=detail[:1000])
-        
+
         # Find and parse CSV output
         csv_files = [f for f in os.listdir(output_dir) if f.endswith("_pLann.csv")]
         if not csv_files:
             # pLannotate ran but found no features
             return AutoAnnotateResponse(features=[], message="No features detected")
-        
+
         csv_path = os.path.join(output_dir, csv_files[0])
         features = []
-        
+
         try:
             with open(csv_path, "r") as f:
                 reader = csv.DictReader(f)
                 for row in reader:
                     identity = float(row.get("percent identity", 0))
-                    
+
                     # Skip features below identity threshold
                     if identity < request.min_identity:
                         continue
-                    
+
                     strand_str = row.get("strand", "+")
                     strand = 1 if strand_str == "1" or strand_str == "+" else -1
-                    
+
                     is_fragment = row.get("fragment", "False").lower() == "true"
-                    
-                    features.append(DetectedFeature(
-                        name=row.get("Feature", "Unknown"),
-                        type=row.get("Type", "misc_feature"),
-                        start=int(row.get("start location", 0)),
-                        end=int(row.get("end location", 0)),
-                        strand=strand,
-                        identity_pct=identity,
-                        match_length_pct=float(row.get("percent match length", 0)),
-                        is_fragment=is_fragment,
-                        database=row.get("database", "unknown"),
-                        description=row.get("Description", "")[:500]  # Truncate long descriptions
-                    ))
+
+                    features.append(
+                        DetectedFeature(
+                            name=row.get("Feature", "Unknown"),
+                            type=row.get("Type", "misc_feature"),
+                            start=int(row.get("start location", 0)),
+                            end=int(row.get("end location", 0)),
+                            strand=strand,
+                            identity_pct=identity,
+                            match_length_pct=float(row.get("percent match length", 0)),
+                            is_fragment=is_fragment,
+                            database=row.get("database", "unknown"),
+                            description=row.get("Description", "")[
+                                :500
+                            ],  # Truncate long descriptions
+                        )
+                    )
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to parse pLannotate output: {str(e)}")
-        
+            raise HTTPException(
+                status_code=500, detail=f"Failed to parse pLannotate output: {str(e)}"
+            )
+
         # Sort by start position
         features.sort(key=lambda f: f.start)
-        
+
         return AutoAnnotateResponse(
-            features=features,
-            message=f"Detected {len(features)} features"
+            features=features, message=f"Detected {len(features)} features"
         )
 
 
@@ -2367,7 +2702,9 @@ def infer_primer_sequence_type(sequence: str) -> str:
     return "dna"
 
 
-def normalize_primer_sequence(sequence: str, sequence_type: Optional[str] = None) -> tuple[str, str]:
+def normalize_primer_sequence(
+    sequence: str, sequence_type: Optional[str] = None
+) -> tuple[str, str]:
     resolved_type = normalize_sequence_type(
         sequence_type or infer_primer_sequence_type(sequence),
         sequence,
@@ -2418,7 +2755,9 @@ async def validate_primer_binding_geometry(
         )
     if target.is_circular:
         if binding_start == binding_end:
-            raise HTTPException(status_code=400, detail="Circular binding geometry cannot be empty")
+            raise HTTPException(
+                status_code=400, detail="Circular binding geometry cannot be empty"
+            )
     elif binding_start >= binding_end:
         raise HTTPException(
             status_code=400,
@@ -2431,12 +2770,14 @@ def calculate_gc_percent(sequence: str) -> float:
     if not sequence or len(sequence) == 0:
         return 0.0
     upper = sequence.upper()
-    gc = upper.count('G') + upper.count('C')
+    gc = upper.count("G") + upper.count("C")
     return round((gc / len(sequence)) * 100, 1)
 
 
 def default_tm_settings_for_sequence_type(sequence_type: str) -> PrimerTmSettings:
-    defaults = DEFAULT_TM_SETTINGS_BY_SEQUENCE_TYPE.get(sequence_type, DEFAULT_TM_SETTINGS_BY_SEQUENCE_TYPE["dna"])
+    defaults = DEFAULT_TM_SETTINGS_BY_SEQUENCE_TYPE.get(
+        sequence_type, DEFAULT_TM_SETTINGS_BY_SEQUENCE_TYPE["dna"]
+    )
     return PrimerTmSettings(**defaults)
 
 
@@ -2449,7 +2790,9 @@ def calculate_primer_tm_result(
 ) -> PrimerTmResult:
     cleaned = clean_primer_sequence(sequence)
     resolved_sequence_type = sequence_type or infer_primer_sequence_type(cleaned)
-    resolved_settings = settings or default_tm_settings_for_sequence_type(resolved_sequence_type)
+    resolved_settings = settings or default_tm_settings_for_sequence_type(
+        resolved_sequence_type
+    )
     gc_percent = calculate_gc_percent(cleaned)
     warnings: List[str] = []
 
@@ -2512,8 +2855,12 @@ def calculate_primer_tm_result(
             algorithm_label=algorithm_def["label"],
             salt_correction=resolved_settings.salt_correction,
             salt_correction_label=resolved_settings.salt_correction,
-            polymer_pairing=algorithm_def.get("polymer_pairing", resolved_sequence_type),
-            warnings=[f"Unknown salt correction '{resolved_settings.salt_correction}'."],
+            polymer_pairing=algorithm_def.get(
+                "polymer_pairing", resolved_sequence_type
+            ),
+            warnings=[
+                f"Unknown salt correction '{resolved_settings.salt_correction}'."
+            ],
         )
 
     if resolved_sequence_type not in algorithm_def["sequence_types"]:
@@ -2527,8 +2874,12 @@ def calculate_primer_tm_result(
             algorithm_label=algorithm_def["label"],
             salt_correction=resolved_settings.salt_correction,
             salt_correction_label=salt_def["label"],
-            polymer_pairing=algorithm_def.get("polymer_pairing", resolved_sequence_type),
-            warnings=[f"Algorithm '{algorithm_def['label']}' does not support {resolved_sequence_type.upper()} primers."],
+            polymer_pairing=algorithm_def.get(
+                "polymer_pairing", resolved_sequence_type
+            ),
+            warnings=[
+                f"Algorithm '{algorithm_def['label']}' does not support {resolved_sequence_type.upper()} primers."
+            ],
         )
 
     tm_value: Optional[float] = None
@@ -2536,17 +2887,19 @@ def calculate_primer_tm_result(
         if algorithm_def["kind"] == "wallace":
             tm_value = float(mt.Tm_Wallace(cleaned, strict=True))
         elif algorithm_def["kind"] == "gc":
-            tm_value = float(mt.Tm_GC(
-                cleaned,
-                strict=True,
-                valueset=algorithm_def.get("gc_valueset", 7),
-                Na=resolved_settings.na_mM,
-                K=resolved_settings.k_mM,
-                Tris=resolved_settings.tris_mM,
-                Mg=resolved_settings.mg_mM,
-                dNTPs=resolved_settings.dntps_mM,
-                saltcorr=salt_def["method"],
-            ))
+            tm_value = float(
+                mt.Tm_GC(
+                    cleaned,
+                    strict=True,
+                    valueset=algorithm_def.get("gc_valueset", 7),
+                    Na=resolved_settings.na_mM,
+                    K=resolved_settings.k_mM,
+                    Tris=resolved_settings.tris_mM,
+                    Mg=resolved_settings.mg_mM,
+                    dNTPs=resolved_settings.dntps_mM,
+                    saltcorr=salt_def["method"],
+                )
+            )
         else:
             tm_kwargs = {
                 "nn_table": getattr(mt, algorithm_def["nn_table_name"]),
@@ -2568,12 +2921,14 @@ def calculate_primer_tm_result(
 
         if resolved_settings.dmso_percent or resolved_settings.formamide_percent:
             warnings.append("DMSO/formamide corrections are approximate.")
-            tm_value = float(mt.chem_correction(
-                tm_value,
-                DMSO=resolved_settings.dmso_percent,
-                fmd=resolved_settings.formamide_percent,
-                GC=gc_percent,
-            ))
+            tm_value = float(
+                mt.chem_correction(
+                    tm_value,
+                    DMSO=resolved_settings.dmso_percent,
+                    fmd=resolved_settings.formamide_percent,
+                    GC=gc_percent,
+                )
+            )
     except Exception as exc:
         warnings.append(str(exc))
 
@@ -2754,28 +3109,50 @@ def _design_candidate(
     }
 
 
-def design_primer_pairs_for_request(request: PrimerDesignRequest, sequence_name: Optional[str]) -> PrimerDesignResponse:
+def design_primer_pairs_for_request(
+    request: PrimerDesignRequest, sequence_name: Optional[str]
+) -> PrimerDesignResponse:
     sequence_type = normalize_sequence_type(request.sequence_type, request.sequence)
     template = clean_inline_sequence(request.sequence or "", sequence_type)
     if not template:
-        raise HTTPException(status_code=400, detail="Sequence contains no valid nucleotides")
+        raise HTTPException(
+            status_code=400, detail="Sequence contains no valid nucleotides"
+        )
 
     sequence_length = len(template)
-    target_end = request.target_end if request.target_end is not None else sequence_length
-    if request.target_start < 0 or target_end > sequence_length or request.target_start >= target_end:
-        raise HTTPException(status_code=400, detail="Target range is invalid for the current sequence")
-    if request.primer_min_length < 12 or request.primer_max_length < request.primer_min_length:
+    target_end = (
+        request.target_end if request.target_end is not None else sequence_length
+    )
+    if (
+        request.target_start < 0
+        or target_end > sequence_length
+        or request.target_start >= target_end
+    ):
+        raise HTTPException(
+            status_code=400, detail="Target range is invalid for the current sequence"
+        )
+    if (
+        request.primer_min_length < 12
+        or request.primer_max_length < request.primer_min_length
+    ):
         raise HTTPException(status_code=400, detail="Primer length range is invalid")
-    if request.product_min_length < 40 or request.product_max_length < request.product_min_length:
+    if (
+        request.product_min_length < 40
+        or request.product_max_length < request.product_min_length
+    ):
         raise HTTPException(status_code=400, detail="Product length range is invalid")
 
-    tm_settings = request.tm_settings or default_tm_settings_for_sequence_type(sequence_type)
+    tm_settings = request.tm_settings or default_tm_settings_for_sequence_type(
+        sequence_type
+    )
     forward_candidates: list[dict[str, Any]] = []
     reverse_candidates: list[dict[str, Any]] = []
     warnings: list[str] = []
 
     if request.is_circular:
-        warnings.append("Primer design currently excludes origin-wrapping candidates on circular templates.")
+        warnings.append(
+            "Primer design currently excludes origin-wrapping candidates on circular templates."
+        )
 
     forward_start_min = max(0, request.target_start - request.flank_search_span)
     forward_start_max = min(sequence_length, request.target_start + 1)
@@ -2783,7 +3160,9 @@ def design_primer_pairs_for_request(request: PrimerDesignRequest, sequence_name:
     reverse_end_max = min(sequence_length, target_end + request.flank_search_span)
 
     for start in range(forward_start_min, forward_start_max):
-        for anneal_length in range(request.primer_min_length, request.primer_max_length + 1):
+        for anneal_length in range(
+            request.primer_min_length, request.primer_max_length + 1
+        ):
             end = start + anneal_length
             anneal_sequence = _linear_segment(template, start, end)
             if anneal_sequence is None:
@@ -2811,7 +3190,9 @@ def design_primer_pairs_for_request(request: PrimerDesignRequest, sequence_name:
                 forward_candidates.append(candidate)
 
     for end in range(reverse_end_min, reverse_end_max + 1):
-        for anneal_length in range(request.primer_min_length, request.primer_max_length + 1):
+        for anneal_length in range(
+            request.primer_min_length, request.primer_max_length + 1
+        ):
             start = end - anneal_length
             anneal_template = _linear_segment(template, start, end)
             if anneal_template is None:
@@ -2839,14 +3220,27 @@ def design_primer_pairs_for_request(request: PrimerDesignRequest, sequence_name:
             if candidate:
                 reverse_candidates.append(candidate)
 
-    forward_candidates.sort(key=lambda candidate: (abs(candidate["tm"] - request.tm_target_c), candidate["start"]))
-    reverse_candidates.sort(key=lambda candidate: (abs(candidate["tm"] - request.tm_target_c), candidate["start"]))
+    forward_candidates.sort(
+        key=lambda candidate: (
+            abs(candidate["tm"] - request.tm_target_c),
+            candidate["start"],
+        )
+    )
+    reverse_candidates.sort(
+        key=lambda candidate: (
+            abs(candidate["tm"] - request.tm_target_c),
+            candidate["start"],
+        )
+    )
 
     pair_candidates: list[dict[str, Any]] = []
     for forward in forward_candidates[:48]:
         for reverse in reverse_candidates[:48]:
             product_length = reverse["end"] - forward["start"]
-            if product_length < request.product_min_length or product_length > request.product_max_length:
+            if (
+                product_length < request.product_min_length
+                or product_length > request.product_max_length
+            ):
                 continue
             if forward["start"] > request.target_start or reverse["end"] < target_end:
                 continue
@@ -2861,24 +3255,33 @@ def design_primer_pairs_for_request(request: PrimerDesignRequest, sequence_name:
                 + pair_qc.three_prime_heterodimer * 2.8
                 + max(forward.get("off_target_site_count") or 0, 0) * 1.2
                 + max(reverse.get("off_target_site_count") or 0, 0) * 1.2
-                + abs(product_length - (target_end - request.target_start)) / max(20.0, request.flank_search_span),
+                + abs(product_length - (target_end - request.target_start))
+                / max(20.0, request.flank_search_span),
                 3,
             )
-            pair_candidates.append({
-                "penalty": penalty,
-                "tm_delta": round(tm_delta, 2),
-                "product_start": forward["start"],
-                "product_end": reverse["end"],
-                "product_length": product_length,
-                "heterodimer_complement": pair_qc.heterodimer_complement,
-                "three_prime_heterodimer": pair_qc.three_prime_heterodimer,
-                "warnings": [*forward["warnings"], *reverse["warnings"], *pair_qc.warnings],
-                "forward": forward,
-                "reverse": reverse,
-            })
+            pair_candidates.append(
+                {
+                    "penalty": penalty,
+                    "tm_delta": round(tm_delta, 2),
+                    "product_start": forward["start"],
+                    "product_end": reverse["end"],
+                    "product_length": product_length,
+                    "heterodimer_complement": pair_qc.heterodimer_complement,
+                    "three_prime_heterodimer": pair_qc.three_prime_heterodimer,
+                    "warnings": [
+                        *forward["warnings"],
+                        *reverse["warnings"],
+                        *pair_qc.warnings,
+                    ],
+                    "forward": forward,
+                    "reverse": reverse,
+                }
+            )
 
-    pair_candidates.sort(key=lambda pair: (pair["penalty"], pair["tm_delta"], pair["product_length"]))
-    top_pairs = pair_candidates[:request.max_pairs]
+    pair_candidates.sort(
+        key=lambda pair: (pair["penalty"], pair["tm_delta"], pair["product_length"])
+    )
+    top_pairs = pair_candidates[: request.max_pairs]
     pairs = [
         PrimerDesignPairResponse(
             rank=index + 1,
@@ -2897,7 +3300,9 @@ def design_primer_pairs_for_request(request: PrimerDesignRequest, sequence_name:
     ]
 
     if not pairs:
-        warnings.append("No primer pairs met the current GC/Tm/product constraints. Relax the design settings or widen the target flanks.")
+        warnings.append(
+            "No primer pairs met the current GC/Tm/product constraints. Relax the design settings or widen the target flanks."
+        )
 
     return PrimerDesignResponse(
         sequence_name=sequence_name,
@@ -2916,7 +3321,8 @@ def build_primer_response(primer: Primer) -> "PrimerResponse":
         id=primer.id,
         name=primer.name,
         sequence=primer.sequence,
-        sequence_type=primer.sequence_type or infer_primer_sequence_type(primer.sequence),
+        sequence_type=primer.sequence_type
+        or infer_primer_sequence_type(primer.sequence),
         length=primer.length,
         tm=primer.tm,
         gc_percent=primer.gc_percent,
@@ -2938,6 +3344,7 @@ def build_primer_response(primer: Primer) -> "PrimerResponse":
 
 class PrimerCreate(BaseModel):
     """Request to create a new primer."""
+
     name: str
     sequence: str
     sequence_type: Optional[str] = None
@@ -2953,6 +3360,7 @@ class PrimerCreate(BaseModel):
 
 class PrimerUpdate(BaseModel):
     """Request to update an existing primer."""
+
     name: Optional[str] = None
     sequence: Optional[str] = None
     sequence_type: Optional[str] = None
@@ -2969,6 +3377,7 @@ class PrimerUpdate(BaseModel):
 
 class PrimerResponse(BaseModel):
     """Primer library entry response."""
+
     id: str
     name: str
     sequence: str
@@ -3081,8 +3490,12 @@ async def calculate_primer_tm_batch(request: PrimerTmBatchRequest):
     """Calculate Tm for one or more primers using selectable thermodynamic models."""
     results: List[PrimerTmResult] = []
     for primer in request.primers:
-        resolved_sequence_type = primer.sequence_type or infer_primer_sequence_type(primer.sequence)
-        settings = request.settings or default_tm_settings_for_sequence_type(resolved_sequence_type)
+        resolved_sequence_type = primer.sequence_type or infer_primer_sequence_type(
+            primer.sequence
+        )
+        settings = request.settings or default_tm_settings_for_sequence_type(
+            resolved_sequence_type
+        )
         result = calculate_primer_tm_result(
             sequence=primer.sequence,
             sequence_type=resolved_sequence_type,
@@ -3100,14 +3513,20 @@ async def calculate_primer_tm_batch(request: PrimerTmBatchRequest):
 async def calculate_primer_qc(request: PrimerQcRequest):
     """Calculate exact complementarity and template-binding QC metrics for primers or oligos."""
     template_sequence = None
-    template_sequence_type = normalize_sequence_type(request.template_sequence_type, request.template_sequence or "")
+    template_sequence_type = normalize_sequence_type(
+        request.template_sequence_type, request.template_sequence or ""
+    )
     if request.template_sequence:
-        template_sequence = clean_inline_sequence(request.template_sequence, template_sequence_type)
+        template_sequence = clean_inline_sequence(
+            request.template_sequence, template_sequence_type
+        )
 
     primer_results: List[PrimerQcEntryResponse] = []
     normalized_sequences: List[tuple[Optional[str], Optional[str], str, str]] = []
     for primer in request.primers:
-        sequence_type = primer.sequence_type or infer_primer_sequence_type(primer.sequence)
+        sequence_type = primer.sequence_type or infer_primer_sequence_type(
+            primer.sequence
+        )
         qc = evaluate_primer_qc(
             primer.sequence,
             sequence_type=sequence_type,  # type: ignore[arg-type]
@@ -3129,27 +3548,34 @@ async def calculate_primer_qc(request: PrimerQcRequest):
                     hairpin_loop_size=qc.hairpin_loop_size,
                     binding_site_count=qc.binding_site_count,
                     off_target_site_count=qc.off_target_site_count,
-                    binding_positions=[PrimerQcPosition(**position) for position in qc.binding_positions],
+                    binding_positions=[
+                        PrimerQcPosition(**position)
+                        for position in qc.binding_positions
+                    ],
                     warnings=qc.warnings,
                 ),
             )
         )
-        normalized_sequences.append((primer.id, primer.name, qc.sequence, qc.sequence_type))
+        normalized_sequences.append(
+            (primer.id, primer.name, qc.sequence, qc.sequence_type)
+        )
 
     pairwise: List[dict[str, Any]] = []
     if request.include_pairwise and len(normalized_sequences) >= 2:
         for index, left in enumerate(normalized_sequences[:-1]):
-            for right in normalized_sequences[index + 1:]:
+            for right in normalized_sequences[index + 1 :]:
                 pair_qc = evaluate_primer_pair_qc(left[2], right[2])
-                pairwise.append({
-                    "left_id": left[0],
-                    "left_name": left[1],
-                    "right_id": right[0],
-                    "right_name": right[1],
-                    "heterodimer_complement": pair_qc.heterodimer_complement,
-                    "three_prime_heterodimer": pair_qc.three_prime_heterodimer,
-                    "warnings": pair_qc.warnings,
-                })
+                pairwise.append(
+                    {
+                        "left_id": left[0],
+                        "left_name": left[1],
+                        "right_id": right[0],
+                        "right_name": right[1],
+                        "heterodimer_complement": pair_qc.heterodimer_complement,
+                        "three_prime_heterodimer": pair_qc.three_prime_heterodimer,
+                        "warnings": pair_qc.warnings,
+                    }
+                )
 
     return PrimerQcBatchResponse(
         primers=primer_results,
@@ -3166,12 +3592,14 @@ async def design_primers(
     sequence_name = request.name
     if request.sequence_id:
         sequence = await resolve_sequence(request, session)
-        request = request.model_copy(update={
-            "sequence": sequence.sequence,
-            "sequence_type": sequence.sequence_type,
-            "is_circular": sequence.is_circular,
-            "name": sequence.name,
-        })
+        request = request.model_copy(
+            update={
+                "sequence": sequence.sequence,
+                "sequence_type": sequence.sequence_type,
+                "is_circular": sequence.is_circular,
+                "name": sequence.name,
+            }
+        )
         sequence_name = sequence.name
 
     return design_primer_pairs_for_request(request, sequence_name)
@@ -3183,7 +3611,7 @@ async def list_primers(
     primer_type: Optional[str] = None,
     favorites_only: bool = False,
     target_sequence_id: Optional[str] = None,
-    session: AsyncSession = Depends(get_molbio_session)
+    session: AsyncSession = Depends(get_molbio_session),
 ):
     """List all primers with optional filtering."""
     query = (
@@ -3191,32 +3619,34 @@ async def list_primers(
         .where(Primer.deleted_at.is_(None))
         .order_by(Primer.created_at.desc())
     )
-    
+
     if favorites_only:
         query = query.where(Primer.is_favorite.is_(True))
     if primer_type:
         query = query.where(Primer.primer_type == primer_type)
     if target_sequence_id:
         query = query.where(Primer.target_sequence_id == target_sequence_id)
-    
+
     result = await session.execute(query)
     primers = result.scalars().all()
-    
+
     # Filter by search term if provided
     if search:
         search_lower = search.lower()
-        primers = [p for p in primers if 
-                   search_lower in p.name.lower() or 
-                   search_lower in p.sequence.lower() or
-                   (p.description and search_lower in p.description.lower())]
-    
+        primers = [
+            p
+            for p in primers
+            if search_lower in p.name.lower()
+            or search_lower in p.sequence.lower()
+            or (p.description and search_lower in p.description.lower())
+        ]
+
     return [build_primer_response(p) for p in primers]
 
 
 @router.post("/primers", response_model=PrimerResponse)
 async def create_primer(
-    request: PrimerCreate,
-    session: AsyncSession = Depends(get_molbio_session)
+    request: PrimerCreate, session: AsyncSession = Depends(get_molbio_session)
 ):
     """Create a new primer in the library."""
     await begin_immediate_molbio_write(session)
@@ -3232,8 +3662,12 @@ async def create_primer(
         binding_end=request.binding_end,
         binding_strand=request.binding_strand,
     )
-    tm_settings = request.tm_settings or default_tm_settings_for_sequence_type(sequence_type)
-    tm_result = calculate_primer_tm_result(sequence, sequence_type=sequence_type, settings=tm_settings)
+    tm_settings = request.tm_settings or default_tm_settings_for_sequence_type(
+        sequence_type
+    )
+    tm_result = calculate_primer_tm_result(
+        sequence, sequence_type=sequence_type, settings=tm_settings
+    )
 
     primer = Primer(
         id=str(uuid.uuid4()),
@@ -3254,9 +3688,9 @@ async def create_primer(
         binding_strand=request.binding_strand,
         tags=request.tags,
         is_favorite=False,
-        created_at=datetime.utcnow()
+        created_at=datetime.utcnow(),
     )
-    
+
     session.add(primer)
     await record_primer_revision(
         session,
@@ -3266,22 +3700,23 @@ async def create_primer(
     )
     await session.commit()
     await session.refresh(primer)
-    
+
     return build_primer_response(primer)
 
 
 @router.get("/primers/{primer_id}", response_model=PrimerResponse)
 async def get_primer(
-    primer_id: str,
-    session: AsyncSession = Depends(get_molbio_session)
+    primer_id: str, session: AsyncSession = Depends(get_molbio_session)
 ):
     """Get a specific primer by ID."""
-    result = await session.execute(select(Primer).where(Primer.id == primer_id, Primer.deleted_at.is_(None)))
+    result = await session.execute(
+        select(Primer).where(Primer.id == primer_id, Primer.deleted_at.is_(None))
+    )
     primer = result.scalar_one_or_none()
-    
+
     if not primer:
         raise HTTPException(status_code=404, detail="Primer not found")
-    
+
     return build_primer_response(primer)
 
 
@@ -3289,7 +3724,7 @@ async def get_primer(
 async def update_primer(
     primer_id: str,
     request: PrimerUpdate,
-    session: AsyncSession = Depends(get_molbio_session)
+    session: AsyncSession = Depends(get_molbio_session),
 ):
     """Update an existing primer with field-presence and geometry validation."""
     await begin_immediate_molbio_write(session)
@@ -3323,8 +3758,7 @@ async def update_primer(
     )
 
     target_was_cleared = (
-        "target_sequence_id" in provided_fields
-        and request.target_sequence_id is None
+        "target_sequence_id" in provided_fields and request.target_sequence_id is None
     )
     next_target_sequence_id = (
         request.target_sequence_id
@@ -3416,14 +3850,15 @@ async def update_primer(
 
 @router.delete("/primers/{primer_id}")
 async def delete_primer(
-    primer_id: str,
-    session: AsyncSession = Depends(get_molbio_session)
+    primer_id: str, session: AsyncSession = Depends(get_molbio_session)
 ):
     """Soft-delete a primer while preserving its immutable revision history."""
     await begin_immediate_molbio_write(session)
-    result = await session.execute(select(Primer).where(Primer.id == primer_id, Primer.deleted_at.is_(None)))
+    result = await session.execute(
+        select(Primer).where(Primer.id == primer_id, Primer.deleted_at.is_(None))
+    )
     primer = result.scalar_one_or_none()
-    
+
     if not primer:
         raise HTTPException(status_code=404, detail="Primer not found")
 
@@ -3433,26 +3868,30 @@ async def delete_primer(
         session,
         primer,
         change_kind="delete",
-        provenance={"source": "api", "endpoint": "DELETE /api/molbio/primers/{primer_id}"},
+        provenance={
+            "source": "api",
+            "endpoint": "DELETE /api/molbio/primers/{primer_id}",
+        },
     )
     await session.commit()
-    
+
     return {"message": f"Primer '{primer.name}' deleted"}
 
 
 @router.post("/primers/{primer_id}/toggle-favorite", response_model=PrimerResponse)
 async def toggle_primer_favorite(
-    primer_id: str,
-    session: AsyncSession = Depends(get_molbio_session)
+    primer_id: str, session: AsyncSession = Depends(get_molbio_session)
 ):
     """Toggle favorite status for a primer."""
     await begin_immediate_molbio_write(session)
-    result = await session.execute(select(Primer).where(Primer.id == primer_id, Primer.deleted_at.is_(None)))
+    result = await session.execute(
+        select(Primer).where(Primer.id == primer_id, Primer.deleted_at.is_(None))
+    )
     primer = result.scalar_one_or_none()
-    
+
     if not primer:
         raise HTTPException(status_code=404, detail="Primer not found")
-    
+
     primer.is_favorite = not primer.is_favorite
     primer.updated_at = datetime.utcnow()
     await record_primer_revision(
@@ -3463,5 +3902,5 @@ async def toggle_primer_favorite(
     )
     await session.commit()
     await session.refresh(primer)
-    
+
     return build_primer_response(primer)

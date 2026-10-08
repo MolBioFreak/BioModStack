@@ -1,8 +1,10 @@
 """Bounded pydna-backed Gibson assembly design."""
+
 from __future__ import annotations
 
 import hashlib
 from importlib.metadata import version
+import json
 
 from pydna.assembly2 import Assembly
 from pydna.design import assembly_fragments, primer_design
@@ -34,6 +36,34 @@ MAX_FRAGMENTS = 50
 
 def _sha256(sequence: str) -> str:
     return hashlib.sha256(sequence.encode("ascii")).hexdigest()
+
+
+def _candidate_checksum(
+    sequence_identity: str,
+    *,
+    circular: bool,
+    source_provenance: list[dict[str, object]],
+    preparations: list[FragmentPreparation],
+    overlap: int,
+    target_tm: float,
+    min_anneal: int,
+) -> str:
+    """Bind candidate identity to topology and reproducible design provenance."""
+    payload = {
+        "schema": "pydna_gibson_candidate_v2",
+        "engine": ENGINE,
+        "engine_version": ENGINE_VERSION,
+        "sequence_identity": sequence_identity,
+        "circular": circular,
+        "source_provenance": source_provenance,
+        "preparations": preparations,
+        "overlap": overlap,
+        "target_tm": target_tm,
+        "min_anneal": min_anneal,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 def _canonical_circular_rotation(sequence: str) -> str:
@@ -95,10 +125,21 @@ def _validate_request(
         )
     if len(preparations) != len(fragments):
         raise AssemblyError("Each Gibson fragment requires one preparation value")
+    seen_ids: set[str] = set()
+    duplicate_ids: set[str] = set()
+    for fragment in fragments:
+        if fragment.id in seen_ids:
+            duplicate_ids.add(fragment.id)
+        seen_ids.add(fragment.id)
+    if duplicate_ids:
+        raise AssemblyError(
+            "Gibson fragment IDs must be unique: " + ", ".join(sorted(duplicate_ids))
+        )
     invalid_preparations = sorted(set(preparations) - {"pcr", "ready_linear"})
     if invalid_preparations:
         raise AssemblyError(
-            "Unsupported Gibson fragment preparation: " + ", ".join(invalid_preparations)
+            "Unsupported Gibson fragment preparation: "
+            + ", ".join(invalid_preparations)
         )
     adjacent_preparations = list(zip(preparations, preparations[1:]))
     if circular:
@@ -109,13 +150,17 @@ def _validate_request(
             "at least one fragment at each junction must use pcr preparation"
         )
     if any(fragment.circular for fragment in fragments):
-        raise AssemblyError("Gibson design fragments must be provided as linear molecules")
+        raise AssemblyError(
+            "Gibson design fragments must be provided as linear molecules"
+        )
     if not 15 <= overlap <= 80:
         raise AssemblyError("Gibson overlap must be between 15 and 80 nt")
     if not 45.0 <= target_tm <= 72.0:
         raise AssemblyError("Primer target Tm must be between 45 and 72 °C")
     if not 10 <= min_anneal <= 30:
-        raise AssemblyError("Minimum primer annealing length must be between 10 and 30 nt")
+        raise AssemblyError(
+            "Minimum primer annealing length must be between 10 and 30 nt"
+        )
     if not 1 <= max_candidates <= MAX_CANDIDATES:
         raise AssemblyError("Gibson design supports between 1 and 10 candidates")
 
@@ -286,14 +331,17 @@ def design_gibson(
             "Designed fragments did not reconstruct the intended ordered product"
         )
 
+    source_provenance = _source_provenance(oriented, preparations)
     selected_product = AssemblyProduct(
         mode="gibson",
-        sequence=intended_key,
+        sequence=intended_sequence,
         circular=circular,
         fragments=oriented,
         junctions=validated.junctions,
         warnings=list(dict.fromkeys(warnings + validated.warnings)),
-        validation_notes=["Independently validated with services.assembly.gibson.simulate_gibson"],
+        validation_notes=[
+            "Independently validated with services.assembly.gibson.simulate_gibson"
+        ],
     )
 
     unique_sequences = {
@@ -312,24 +360,48 @@ def design_gibson(
     candidates: list[GibsonCandidate] = []
     for sequence in ordered_sequences:
         exact_match = sequence == intended_key
-        product = selected_product if exact_match else AssemblyProduct(
-            mode="gibson",
-            sequence=sequence,
-            circular=circular,
-            fragments=oriented,
-            junctions=validated.junctions,
-            warnings=list(selected_product.warnings),
-            validation_notes=["Alternate ordered product enumerated by pydna"],
+        product = (
+            selected_product
+            if exact_match
+            else AssemblyProduct(
+                mode="gibson",
+                sequence=sequence,
+                circular=circular,
+                fragments=[],
+                junctions=[],
+                warnings=[
+                    "Alternate pydna product was not independently characterized"
+                ],
+                validation_notes=[
+                    "Alternate product identity enumerated by pydna; fragment and junction provenance unavailable"
+                ],
+            )
         )
         candidates.append(
             GibsonCandidate(
-                checksum=_sha256(sequence),
+                checksum=_candidate_checksum(
+                    sequence,
+                    circular=circular,
+                    source_provenance=source_provenance,
+                    preparations=preparations,
+                    overlap=overlap,
+                    target_tm=target_tm,
+                    min_anneal=min_anneal,
+                ),
                 product=product,
                 exact_match=exact_match,
             )
         )
 
-    selected_checksum = _sha256(intended_key)
+    selected_checksum = _candidate_checksum(
+        intended_key,
+        circular=circular,
+        source_provenance=source_provenance,
+        preparations=preparations,
+        overlap=overlap,
+        target_tm=target_tm,
+        min_anneal=min_anneal,
+    )
     return GibsonDesignResult(
         engine=ENGINE,
         engine_version=ENGINE_VERSION,
@@ -342,5 +414,5 @@ def design_gibson(
         candidates=candidates,
         selected_candidate_checksum=selected_checksum,
         warnings=list(dict.fromkeys(selected_product.warnings)),
-        source_provenance=_source_provenance(oriented, preparations),
+        source_provenance=source_provenance,
     )

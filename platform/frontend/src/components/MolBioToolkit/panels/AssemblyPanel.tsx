@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
     fetchGoldenGateAssemblyOptions,
     fetchSavedGibsonWorkups,
     planDnaWeaverGibsonAssembly,
+    saveDnaWeaverGibsonAssembly,
     saveGibsonAssembly,
     saveGoldenGateAssembly,
     saveLigationAssembly,
@@ -12,6 +13,8 @@ import {
     type AssemblyFragmentEnd,
     type AssemblyFragmentInput,
     type AssemblyOperationResponse,
+    type DnaWeaverPlanRequest,
+    type DnaWeaverPlanResponse,
     type GoldenGateAssemblyOptionsResponse,
     type SavedGibsonWorkupListItem,
 } from '../../../lib/api';
@@ -235,15 +238,16 @@ function SavedGibsonWorkupLibrary({
 function workupPreparation(fragment: SavedWorkupRecord): string {
     const metadata = asWorkupRecord(fragment.metadata);
     const preparation = fragment.preparation ?? metadata?.preparation;
+    const procurement = fragment.procurement ?? metadata?.procurement;
     if (preparation === 'ready_linear') {
-        return metadata?.vendor_purchase === 'full_fragment' ? 'Vendor-ready linear' : 'Ready linear';
+        return procurement === 'vendor_purchase' || metadata?.vendor_purchase === 'full_fragment' ? 'Vendor-ready linear' : 'Ready linear';
     }
     return preparation === 'pcr' ? 'PCR' : 'Unspecified preparation';
 }
 
 function SavedGibsonWorkup({ operationParams }: { operationParams?: Record<string, unknown> | null }) {
     if (operationParams?.mode !== 'gibson') return null;
-    const fragments = asWorkupRecords(operationParams.source_fragments ?? operationParams.fragments);
+    const fragments = asWorkupRecords(operationParams.ordered_fragments ?? operationParams.source_fragments ?? operationParams.fragments);
     const junctions = asWorkupRecords(operationParams.junctions);
     const primers = asWorkupRecords(operationParams.primers);
     const validationNotes = Array.isArray(operationParams.validation_notes)
@@ -274,13 +278,18 @@ function SavedGibsonWorkup({ operationParams }: { operationParams?: Record<strin
             <div className="rounded bg-slate-950/50 p-2 text-xs">
                 <div className="text-slate-500">Server-selected candidate checksum</div>
                 <code className="mt-1 block break-all text-[11px] text-emerald-300">{workupText(operationParams.candidate_checksum)}</code>
+                {operationParams.plan_checksum != null && <><div className="mt-2 text-slate-500">DNA Weaver plan checksum</div><code className="mt-1 block break-all text-[11px] text-cyan-300">{workupText(operationParams.plan_checksum)}</code></>}
+                {operationParams.validator_engine != null && <div className="mt-2 text-slate-400">Validator: {workupText(operationParams.validator_engine)} {workupText(operationParams.validator_version)} • exact candidates {workupText(operationParams.pydna_exact_candidate_count)}</div>}
             </div>
             <details open className="rounded border border-slate-700 bg-slate-950/30 p-2">
                 <summary className="cursor-pointer text-xs font-medium text-slate-200">Source fragments ({fragments.length})</summary>
                 <div className="mt-2 max-h-64 space-y-1 overflow-auto text-xs">
-                    {fragments.map((fragment, index) => <div key={`${workupText(fragment.fragment_id)}-${index}`} className="flex flex-wrap justify-between gap-2 border-b border-slate-800 py-1 text-slate-300">
-                        <span>{workupText(fragment.name, workupText(fragment.fragment_id))} • {workupPreparation(fragment)}</span>
-                        <span className="font-mono text-slate-500">{workupText(fragment.source_start)}–{workupText(fragment.source_end)}{fragment.source_wraps_origin === true ? ' ↻' : ''}</span>
+                    {fragments.map((fragment, index) => <div key={`${workupText(fragment.fragment_id ?? fragment.id)}-${index}`} className="border-b border-slate-800 py-1 text-slate-300">
+                        <div className="flex flex-wrap justify-between gap-2">
+                            <span>{workupText(fragment.name, workupText(fragment.fragment_id ?? fragment.id))} • {workupPreparation(fragment)}</span>
+                            <span className="font-mono text-slate-500">{workupText(fragment.source_start ?? fragment.source_core_start)}–{workupText(fragment.source_end ?? fragment.source_core_end)}{fragment.source_wraps_origin === true ? ' ↻' : ''}</span>
+                        </div>
+                        {typeof fragment.sequence === 'string' && <code className="mt-1 block max-h-24 overflow-auto break-all text-[10px] text-slate-500">{fragment.sequence}</code>}
                     </div>)}
                 </div>
             </details>
@@ -335,10 +344,23 @@ export function AssemblyPanel({
     const [result, setResult] = useState<AssemblyOperationResponse | null>(null);
     const [loading, setLoading] = useState<'simulate' | 'save' | null>(null);
     const [planning, setPlanning] = useState(false);
+    const [dnaWeaverPlan, setDnaWeaverPlan] = useState<DnaWeaverPlanResponse | null>(null);
+    const [plannerMinFragmentLength, setPlannerMinFragmentLength] = useState(500);
+    const [plannerMaxFragmentLength, setPlannerMaxFragmentLength] = useState(1500);
+    const [plannerOverlapLength, setPlannerOverlapLength] = useState(30);
+    const [plannerVendorName, setPlannerVendorName] = useState('Configured commercial DNA vendor');
+    const [plannerPricePerBp, setPlannerPricePerBp] = useState(0.08);
+    const [plannerLeadTimeDays, setPlannerLeadTimeDays] = useState(10);
     const [error, setError] = useState<string | null>(null);
     const [savedWorkups, setSavedWorkups] = useState<SavedGibsonWorkupListItem[]>([]);
     const [savedWorkupsLoading, setSavedWorkupsLoading] = useState(false);
     const [savedWorkupsError, setSavedWorkupsError] = useState<string | null>(null);
+    const plannerScopeRef = useRef('');
+
+    useEffect(() => {
+        setDnaWeaverPlan(null);
+        setResult(null);
+    }, [selectedSequenceId, sequenceData.sequence, sequenceData.circular]);
 
     const refreshSavedWorkups = async () => {
         setSavedWorkupsLoading(true);
@@ -431,10 +453,12 @@ export function AssemblyPanel({
         setFragments((current) => current.map((fragment) => (
             fragment.id === fragmentId ? { ...fragment, ...patch } : fragment
         )));
+        setDnaWeaverPlan(null);
     };
 
     const removeFragment = (fragmentId: string) => {
         setFragments((current) => current.filter((fragment) => fragment.id !== fragmentId));
+        setDnaWeaverPlan(null);
         setGibsonPreparations((current) => {
             const next = { ...current };
             delete next[fragmentId];
@@ -451,6 +475,7 @@ export function AssemblyPanel({
             return next;
         });
         setResult(null);
+        setDnaWeaverPlan(null);
     };
 
     const resetForMode = (nextMode: AssemblyMode) => {
@@ -463,53 +488,118 @@ export function AssemblyPanel({
         })));
     };
 
+    const dnaWeaverRequest = (): DnaWeaverPlanRequest => ({
+        target_sequence: sequenceData.sequence.replace(/\s/g, '').toUpperCase(),
+        target_sequence_id: selectedSequenceId || undefined,
+        circular: sequenceData.circular,
+        min_fragment_length: plannerMinFragmentLength,
+        max_fragment_length: plannerMaxFragmentLength,
+        overlap_length: plannerOverlapLength,
+        vendor_name: plannerVendorName.trim() || 'Configured commercial DNA vendor',
+        price_per_bp: plannerPricePerBp,
+        lead_time_days: plannerLeadTimeDays,
+    });
+    const plannerScope = JSON.stringify(dnaWeaverRequest());
+    plannerScopeRef.current = plannerScope;
+
+    useEffect(() => {
+        setDnaWeaverPlan(null);
+        setResult(null);
+        setPlanning(false);
+    }, [plannerScope]);
+
     const planDnaWeaverVendorFragments = async () => {
-        const target = sequenceData.sequence.replace(/\s/g, '').toUpperCase();
-        if (!target) {
+        const request = dnaWeaverRequest();
+        if (!request.target_sequence) {
             setError('The current construct needs a DNA sequence before DNA Weaver can plan vendor fragments.');
             return;
         }
         setPlanning(true);
         setError(null);
+        setDnaWeaverPlan(null);
+        const scope = plannerScope;
         try {
-            const response = await planDnaWeaverGibsonAssembly({
-                target_sequence: target,
-                circular: sequenceData.circular,
-                min_fragment_length: 500,
-                max_fragment_length: 1500,
-                overlap_length: 30,
-            });
+            const response = await planDnaWeaverGibsonAssembly(request);
+            if (plannerScopeRef.current !== scope) return;
             const ordered = response.data.ordered_fragments;
+            setDnaWeaverPlan(response.data);
             setFragments(ordered);
             setGibsonPreparations(Object.fromEntries(ordered.map((fragment) => [fragment.id, 'ready_linear'])));
-            setGibsonMinOverlap(30);
-            setGibsonPreferredOverlap(30);
-            setGibsonMaxOverlap(30);
+            setGibsonMinOverlap(plannerOverlapLength);
+            setGibsonPreferredOverlap(plannerOverlapLength);
+            setGibsonMaxOverlap(plannerOverlapLength);
             setSaveName((current) => current || `${sequenceData.name} DNA Weaver Gibson purchase plan`);
             setResult({
-                product: response.data.product,
-                message: `DNA Weaver proposed ${ordered.length} vendor fragments; pydna returned ${response.data.pydna_exact_candidate_count} exact target candidate(s).`,
+                product: response.data.selected_product,
+                message: response.data.message,
             });
         } catch (planError: UntypedApiValue) {
-            setError(planError?.response?.data?.detail || planError?.message || 'DNA Weaver planning failed');
+            if (plannerScopeRef.current === scope) {
+                setError(planError?.response?.data?.detail || planError?.message || 'DNA Weaver planning failed');
+            }
         } finally {
-            setPlanning(false);
+            if (plannerScopeRef.current === scope) setPlanning(false);
         }
     };
 
+    const downloadVendorOrder = (format: 'fasta' | 'csv') => {
+        if (!dnaWeaverPlan?.order_ready) return;
+        const safeName = (saveName || sequenceData.name || 'dnaweaver-order').replace(/[^A-Za-z0-9._-]+/g, '_');
+        const content = format === 'fasta'
+            ? `${dnaWeaverPlan.ordered_fragments.map((fragment, index) => `>${fragment.name || `fragment_${index + 1}`}|length=${fragment.sequence.length}|sequence_sha256=${fragment.sequence_sha256}|plan_sha256=${dnaWeaverPlan.plan_checksum}\n${fragment.sequence}`).join('\n')}\n`
+            : `order,name,length,source_core_start,source_core_end,terminal_overlap_length,sequence_sha256,sequence,plan_checksum\n${dnaWeaverPlan.ordered_fragments.map((fragment, index) => {
+                const metadata = fragment.metadata ?? {};
+                return [index + 1, fragment.name, fragment.sequence.length, metadata.source_core_start, metadata.source_core_end, metadata.terminal_overlap_length, fragment.sequence_sha256, fragment.sequence, dnaWeaverPlan.plan_checksum]
+                    .map((value) => `"${String(value ?? '').replace(/"/g, '""')}"`).join(',');
+            }).join('\n')}\n`;
+        const blob = new Blob([content], { type: format === 'fasta' ? 'text/plain' : 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = `${safeName}.${format === 'fasta' ? 'fasta' : 'csv'}`;
+        anchor.click();
+        URL.revokeObjectURL(url);
+    };
+
     const execute = async (action: 'simulate' | 'save') => {
+        if (mode === 'gibson' && gibsonWorkflow === 'plan' && action === 'simulate') {
+            await planDnaWeaverVendorFragments();
+            return;
+        }
         if (fragments.length === 0) {
             setError('Add at least one fragment to the basket.');
+            return;
+        }
+        if (mode === 'gibson' && gibsonWorkflow === 'plan' && (!dnaWeaverPlan || !dnaWeaverPlan.order_ready)) {
+            setError('Create an order-ready DNA Weaver plan before saving. Resolve every blocker and re-plan.');
             return;
         }
         setLoading(action);
         setError(null);
         try {
+            if (mode === 'gibson' && gibsonWorkflow === 'plan' && dnaWeaverPlan) {
+                const scope = plannerScope;
+                const response = await saveDnaWeaverGibsonAssembly({
+                    ...dnaWeaverRequest(),
+                    selected_plan_checksum: dnaWeaverPlan.plan_checksum,
+                    new_name: saveName || undefined,
+                    save_description: saveDescription || undefined,
+                });
+                if (plannerScopeRef.current !== scope) return;
+                setDnaWeaverPlan(response.data);
+                setResult({
+                    product: response.data.selected_product,
+                    saved_sequence: response.data.saved_sequence || undefined,
+                    message: response.data.message,
+                });
+                await refreshSavedWorkups();
+                return;
+            }
             let response;
             if (mode === 'ligation') {
                 const payload = {
                     fragments,
-                    circular: true,
+                    circular: sequenceData.circular,
                     new_name: saveName || undefined,
                     save_description: saveDescription || undefined,
                 };
@@ -519,7 +609,7 @@ export function AssemblyPanel({
             } else if (mode === 'gibson') {
                 const payload = {
                     fragments,
-                    circular: true,
+                    circular: sequenceData.circular,
                     minimum_overlap: gibsonMinOverlap,
                     preferred_overlap: gibsonPreferredOverlap,
                     maximum_overlap: gibsonMaxOverlap,
@@ -532,7 +622,7 @@ export function AssemblyPanel({
             } else {
                 const payload = {
                     fragments,
-                    circular: true,
+                    circular: sequenceData.circular,
                     enzyme_name: goldenGateEnzyme,
                     new_name: saveName || undefined,
                     save_description: saveDescription || undefined,
@@ -637,14 +727,36 @@ export function AssemblyPanel({
                         </button>
                     </div>
                     {gibsonWorkflow === 'plan' ? (
-                        <div className="rounded-lg border border-cyan-900/60 bg-cyan-950/20 px-3 py-3 text-xs leading-5 text-cyan-100/80">
+                        <div className="space-y-3 rounded-lg border border-cyan-900/60 bg-cyan-950/20 px-3 py-3 text-xs leading-5 text-cyan-100/80">
                             <p>DNA Weaver will split the current full construct into purchasable, pre-overlapped vendor fragments, then pydna must independently reconstruct the exact requested product.</p>
-                            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                            <div className="grid gap-2 sm:grid-cols-3">
+                                <label>Minimum core bp<input type="number" min={100} value={plannerMinFragmentLength} onChange={(event) => { setPlannerMinFragmentLength(Number(event.target.value)); setDnaWeaverPlan(null); }} className="mt-1 w-full rounded border border-cyan-900 bg-slate-950 px-2 py-1" /></label>
+                                <label>Maximum core bp<input type="number" min={101} value={plannerMaxFragmentLength} onChange={(event) => { setPlannerMaxFragmentLength(Number(event.target.value)); setDnaWeaverPlan(null); }} className="mt-1 w-full rounded border border-cyan-900 bg-slate-950 px-2 py-1" /></label>
+                                <label>Terminal overlap nt<input type="number" min={15} max={80} value={plannerOverlapLength} onChange={(event) => { setPlannerOverlapLength(Number(event.target.value)); setDnaWeaverPlan(null); }} className="mt-1 w-full rounded border border-cyan-900 bg-slate-950 px-2 py-1" /></label>
+                                <label>Vendor/profile<input value={plannerVendorName} onChange={(event) => { setPlannerVendorName(event.target.value); setDnaWeaverPlan(null); }} className="mt-1 w-full rounded border border-cyan-900 bg-slate-950 px-2 py-1" /></label>
+                                <label>Configured price / bp<input type="number" min={0} step="0.01" value={plannerPricePerBp} onChange={(event) => { setPlannerPricePerBp(Number(event.target.value)); setDnaWeaverPlan(null); }} className="mt-1 w-full rounded border border-cyan-900 bg-slate-950 px-2 py-1" /></label>
+                                <label>Configured lead time, days<input type="number" min={0} value={plannerLeadTimeDays} onChange={(event) => { setPlannerLeadTimeDays(Number(event.target.value)); setDnaWeaverPlan(null); }} className="mt-1 w-full rounded border border-cyan-900 bg-slate-950 px-2 py-1" /></label>
+                            </div>
+                            <div className="flex flex-wrap items-center justify-between gap-2">
                                 <span className="text-cyan-200/70">Target: {sequenceData.name} • {sequenceData.sequence.length.toLocaleString()} bp • {sequenceData.circular ? 'circular' : 'linear'}</span>
                                 <button type="button" onClick={() => void planDnaWeaverVendorFragments()} disabled={planning} className="rounded-lg bg-cyan-600 px-3 py-1.5 font-medium text-white hover:bg-cyan-500 disabled:opacity-50">
                                     {planning ? 'Planning vendor fragments…' : 'Plan vendor fragments'}
                                 </button>
                             </div>
+                            {dnaWeaverPlan && (
+                                <div className={`space-y-2 rounded border p-2 ${dnaWeaverPlan.order_ready ? 'border-emerald-800 bg-emerald-950/30' : 'border-red-800 bg-red-950/30'}`}>
+                                    <div className="font-medium">{dnaWeaverPlan.order_ready ? 'Order-ready under generic screening' : 'Blocked: do not order or save'} • {dnaWeaverPlan.ordered_fragments.length} fragments • {dnaWeaverPlan.pydna_exact_candidate_count} exact pydna candidate(s)</div>
+                                    <div>DNA Weaver {dnaWeaverPlan.planner_version} → pydna {dnaWeaverPlan.validator_version} • price model {dnaWeaverPlan.estimated_price ?? 'unavailable'} • lead {dnaWeaverPlan.estimated_lead_time_days ?? 'unavailable'} days</div>
+                                    <code className="block break-all text-[10px] text-cyan-200/60">Plan SHA-256: {dnaWeaverPlan.plan_checksum}</code>
+                                    <div className="space-y-1">
+                                        {dnaWeaverPlan.quality_checks.filter((check) => check.status !== 'pass').map((check) => <div key={check.check_id} className={check.status === 'blocker' ? 'text-red-300' : 'text-amber-300'}>{check.status.toUpperCase()}: {check.detail}</div>)}
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <button type="button" disabled={!dnaWeaverPlan.order_ready} onClick={() => downloadVendorOrder('fasta')} className="rounded bg-slate-800 px-2 py-1 disabled:opacity-40">Export order FASTA</button>
+                                        <button type="button" disabled={!dnaWeaverPlan.order_ready} onClick={() => downloadVendorOrder('csv')} className="rounded bg-slate-800 px-2 py-1 disabled:opacity-40">Export order CSV</button>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     ) : (
                         <p className="rounded-lg border border-cyan-900/60 bg-cyan-950/20 px-3 py-2 text-xs leading-5 text-cyan-100/80">
@@ -654,6 +766,7 @@ export function AssemblyPanel({
                 </>
             )}
 
+            {!(mode === 'gibson' && gibsonWorkflow === 'plan') && (
             <div className="space-y-3 rounded-xl border border-slate-700 bg-slate-900/50 p-3">
                 <div className="flex flex-wrap gap-2">
                     <button
@@ -695,6 +808,7 @@ export function AssemblyPanel({
                     </button>
                 </div>
             </div>
+            )}
 
             {mode === 'gibson' && gibsonWorkflow === 'validate' && (
                 <div className="grid gap-3 rounded-xl border border-slate-700 bg-slate-900/50 p-3 sm:grid-cols-3">
@@ -780,6 +894,16 @@ export function AssemblyPanel({
                             </div>
                         </div>
 
+                        {mode === 'gibson' && gibsonWorkflow === 'plan' && (
+                            <details className="rounded border border-slate-800 bg-slate-950/60 p-2">
+                                <summary className="cursor-pointer text-xs text-cyan-200">Exact purchase sequence and source-core interval</summary>
+                                <div className="mt-2 text-[11px] text-slate-400">
+                                    Core {String(fragment.metadata?.source_core_start ?? '?')}–{String(fragment.metadata?.source_core_end ?? '?')} • terminal overlap {String(fragment.metadata?.terminal_overlap_length ?? '?')} nt
+                                </div>
+                                <code className="mt-2 block max-h-32 overflow-auto break-all text-[10px] leading-4 text-slate-300">{fragment.sequence}</code>
+                            </details>
+                        )}
+
                         <div className="grid gap-2 sm:grid-cols-[minmax(0,0.8fr)_120px_120px]">
                             <input
                                 value={fragment.name}
@@ -859,18 +983,20 @@ export function AssemblyPanel({
                     <button
                         type="button"
                         onClick={() => void execute('simulate')}
-                        disabled={loading !== null}
+                        disabled={loading !== null || planning}
                         className="flex-1 rounded-lg bg-violet-600 px-3 py-2 font-medium text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
                     >
-                        {loading === 'simulate' ? 'Validating…' : 'Simulate'}
+                        {mode === 'gibson' && gibsonWorkflow === 'plan'
+                            ? (planning ? 'Planning…' : 'Re-plan and validate')
+                            : (loading === 'simulate' ? 'Validating…' : 'Simulate')}
                     </button>
                     <button
                         type="button"
                         onClick={() => void execute('save')}
-                        disabled={loading !== null}
+                        disabled={loading !== null || (mode === 'gibson' && gibsonWorkflow === 'plan' && !dnaWeaverPlan?.order_ready)}
                         className="flex-1 rounded-lg bg-emerald-600 px-3 py-2 font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
                     >
-                        {loading === 'save' ? 'Saving…' : 'Validate + Save'}
+                        {loading === 'save' ? 'Saving…' : mode === 'gibson' && gibsonWorkflow === 'plan' ? 'Regenerate + Verify + Save' : 'Validate + Save'}
                     </button>
                     </div>
                 )}
@@ -883,6 +1009,7 @@ export function AssemblyPanel({
                     saveName={saveName}
                     saveDescription={saveDescription}
                     sequenceName={sequenceData.name}
+                    initialCircular={sequenceData.circular}
                     onLoadProduct={onLoadProduct}
                 />
             )}

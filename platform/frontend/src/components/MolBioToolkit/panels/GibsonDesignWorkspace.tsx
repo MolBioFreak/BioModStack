@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
     designGibsonAssembly,
     saveDesignedGibsonAssembly,
@@ -14,15 +14,24 @@ interface GibsonDesignWorkspaceProps {
     saveName: string;
     saveDescription: string;
     sequenceName: string;
+    initialCircular: boolean;
     onLoadProduct: (sequenceData: SequenceData, savedSequenceId?: string | null) => void;
 }
 
 function errorMessage(error: unknown): string {
     const value = error as {
-        response?: { data?: { detail?: string } };
+        response?: { data?: { detail?: unknown } };
         message?: string;
     };
-    return value?.response?.data?.detail || value?.message || 'Gibson design failed';
+    const detail = value?.response?.data?.detail;
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) {
+        return detail.map((item) => {
+            if (item && typeof item === 'object' && 'msg' in item) return String(item.msg);
+            return JSON.stringify(item);
+        }).join('; ');
+    }
+    return value?.message || 'Gibson design failed';
 }
 
 export function GibsonDesignWorkspace({
@@ -31,15 +40,17 @@ export function GibsonDesignWorkspace({
     saveName,
     saveDescription,
     sequenceName,
+    initialCircular,
     onLoadProduct,
 }: GibsonDesignWorkspaceProps) {
-    const [circular, setCircular] = useState(true);
+    const [circular, setCircular] = useState(initialCircular);
     const [overlap, setOverlap] = useState(30);
     const [targetTm, setTargetTm] = useState(60);
     const [minAnneal, setMinAnneal] = useState(13);
     const [result, setResult] = useState<GibsonDesignResponse | null>(null);
     const [loading, setLoading] = useState<'design' | 'save' | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const requestScopeRef = useRef('');
 
     const payload = useMemo<GibsonDesignRequest>(() => ({
         fragments: fragments.map((fragment) => ({
@@ -51,6 +62,12 @@ export function GibsonDesignWorkspace({
         target_tm: targetTm,
         min_anneal: minAnneal,
     }), [circular, fragments, minAnneal, overlap, preparations, targetTm]);
+    const requestScope = JSON.stringify(payload);
+    requestScopeRef.current = requestScope;
+
+    useEffect(() => {
+        setCircular(initialCircular);
+    }, [initialCircular]);
 
     useEffect(() => {
         setResult(null);
@@ -64,11 +81,12 @@ export function GibsonDesignWorkspace({
         }
         setLoading('design');
         setError(null);
+        const scope = requestScope;
         try {
             const response = await designGibsonAssembly(payload);
-            setResult(response.data);
+            if (requestScopeRef.current === scope) setResult(response.data);
         } catch (runError: unknown) {
-            setError(errorMessage(runError));
+            if (requestScopeRef.current === scope) setError(errorMessage(runError));
         } finally {
             setLoading(null);
         }
@@ -78,6 +96,7 @@ export function GibsonDesignWorkspace({
         if (!result) return;
         setLoading('save');
         setError(null);
+        const scope = requestScope;
         try {
             const response = await saveDesignedGibsonAssembly({
                 ...payload,
@@ -85,9 +104,9 @@ export function GibsonDesignWorkspace({
                 new_name: saveName.trim() || `${sequenceName} Gibson product`,
                 save_description: saveDescription.trim() || undefined,
             });
-            setResult(response.data);
+            if (requestScopeRef.current === scope) setResult(response.data);
         } catch (saveError: unknown) {
-            setError(errorMessage(saveError));
+            if (requestScopeRef.current === scope) setError(errorMessage(saveError));
         } finally {
             setLoading(null);
         }
@@ -104,7 +123,22 @@ export function GibsonDesignWorkspace({
             circular: product.circular,
             sequenceType: 'dna',
             features: [],
-            primers: [],
+            primers: result.primers.map((primer) => ({
+                id: primer.id,
+                name: `${primer.fragment_name} ${primer.direction}`,
+                sequence: primer.full_sequence,
+                sequenceType: 'dna' as const,
+                start: 0,
+                end: 0,
+                strand: primer.direction === 'forward' ? 1 as const : -1 as const,
+                tm: primer.tm,
+                notes: {
+                    fragment_id: primer.fragment_id,
+                    annealing_sequence: primer.annealing_sequence,
+                    tail_sequence: primer.tail_sequence,
+                    warnings: primer.warnings,
+                },
+            })),
             translations: [],
             analysisTracks: [],
             parentId: saved?.parent_id ?? null,
