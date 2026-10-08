@@ -2285,7 +2285,7 @@ async def get_molecular_operation(
             await session.scalars(
                 select(MolecularOperationInput)
                 .where(MolecularOperationInput.operation_id == operation_id)
-                .order_by(MolecularOperationInput.ordinal, MolecularOperationInput.id)
+                .order_by(MolecularOperationInput.position, MolecularOperationInput.id)
             )
         ).all()
     )
@@ -2294,21 +2294,21 @@ async def get_molecular_operation(
             await session.scalars(
                 select(MolecularOperationOutput)
                 .where(MolecularOperationOutput.operation_id == operation_id)
-                .order_by(MolecularOperationOutput.ordinal, MolecularOperationOutput.id)
+                .order_by(MolecularOperationOutput.position, MolecularOperationOutput.id)
             )
         ).all()
     )
     return {
         "operation_id": operation.id,
-        "operation_type": operation.operation_type,
+        "operation_type": operation.operation_kind,
         "status": operation.status,
-        "request_fingerprint_sha256": operation.request_fingerprint_sha256,
+        "request_fingerprint_sha256": operation.request_fingerprint,
         "inputs": [
-            {"revision_id": item.revision_id, "role": item.role, "ordinal": item.ordinal}
+            {"revision_id": item.revision_id, "role": item.role, "ordinal": item.position}
             for item in inputs
         ],
         "outputs": [
-            {"revision_id": item.revision_id, "role": item.role, "ordinal": item.ordinal}
+            {"revision_id": item.revision_id, "role": item.role, "ordinal": item.position}
             for item in outputs
         ],
     }
