@@ -1,7 +1,7 @@
 {
   "baseline_source_commit": "1d41fb50300a4e574670f6a02a0345e597ac9ed4",
   "baseline_source_tree": "af85061039a5fafdcb828336f09ea6355713d1a9",
-  "content_sha256": "d7d90ada5f7fdbd0d45ef3da4c6848b83bf4a7c400278d3ac403f1483f7607c1",
+  "content_sha256": "42e97dd375dc7f0cbfefba2f94a0c40eff1e42106fe0124977e019e90c3d0743",
   "entries": [
     {
       "path": "schemas/ngs_molbio/domain-experiment-v2.schema.json",
@@ -290,6 +290,12 @@
       "schema_canonical_sha256": "e635cb513d08639dfc3238331074d2686d76ccdfc5dced7955d6370163a6099c",
       "schema_id": "bms.operation-parameters.molbio.restriction_digest.v1",
       "schema_sha256": "e797b571d5008e72f0f0833a8ba617a0876b48ef571e7ff636c3496e8217ba29"
+    },
+    {
+      "path": "schemas/ngs_molbio/molbio-restriction_digest-v2.schema.json",
+      "schema_canonical_sha256": "737f9e7478b3213e45e4fcd59c6bacc56dbc1ad0cb1537ba7827e59ab5150291",
+      "schema_id": "bms.operation-parameters.molbio.restriction_digest.v2",
+      "schema_sha256": "2a1b5f9027343c620190e76b9ad3a467ca4ba6d4aa29fd7f7179502e1418717f"
     },
     {
       "path": "schemas/ngs_molbio/molbio-sequence-alignment-v1.schema.json",
