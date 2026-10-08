@@ -12,11 +12,11 @@ def validate_md_completion(job: MDJobRecord) -> dict[str, Any]:
     return completion_barrier(job)
 
 
-def validate_and_finalize_md_job(job: MDJobRecord, session: Any) -> dict[str, Any]:
+async def validate_and_finalize_md_job(job: MDJobRecord, session: Any) -> dict[str, Any]:
     """Apply the MD-specific terminal barrier to the caller's current DB transaction."""
 
     snapshot = apply_completion_barrier(job)
-    run = session.get(MdRun, job.id)
+    run = await session.get(MdRun, job.id)
     if run is None:
         raise MDResultError("MD_COMPLETION_CONFLICT", "Authoritative MD run state is missing", 409)
     run.phase = "completed"
