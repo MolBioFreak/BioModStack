@@ -1747,7 +1747,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                             <div className="space-y-2 border-t border-[var(--border-primary)] pt-3">
                                 <div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">CLI parameter preview</div>
                                 <pre className="text-[11px] leading-5 whitespace-pre-wrap break-all bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded p-3 text-[var(--text-primary)] font-mono">
-nextflow run ngs.nf -profile nanopore_methylation \\
+nextflow run workflows/ngs/ont_fastq_qc.nf -profile ont_fastq_qc,apptainer \\
   {fastqCliPreview}
                                 </pre>
                             </div>

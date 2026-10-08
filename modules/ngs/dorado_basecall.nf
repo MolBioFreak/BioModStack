@@ -18,20 +18,54 @@ process DoradoBasecall {
     path "sequencing_summary.tsv", emit: summary, optional: true
 
     script:
-    def model = params.dorado_model ?: 'sup'
+    def shellQuote = { value -> "'" + value.toString().replace("'", "'\"'\"'") + "'" }
+    def model = shellQuote(params.dorado_model ?: 'sup')
     def normalizedModifiedBases = params.modified_bases?.toString()?.trim()
     if (normalizedModifiedBases == '6mA 5mC') {
         normalizedModifiedBases = '6mA 4mC_5mC'
     }
-    def modBases = normalizedModifiedBases && normalizedModifiedBases != 'none' ? "--modified-bases ${normalizedModifiedBases}" : ''
-    def minQscore = params.min_qscore ? "--min-qscore ${params.min_qscore}" : ''
+    def allowedModifiedBases = [
+        '6mA 4mC_5mC',
+        '6mA 5mC',
+        '6mA',
+        '5mC',
+        '5mC_5hmC',
+        '4mC_5mC',
+        '5mCG_5hmCG',
+        '5mCG',
+        '5hmCG',
+        'none',
+    ] as Set
+    if (normalizedModifiedBases && !allowedModifiedBases.contains(normalizedModifiedBases)) {
+        throw new IllegalArgumentException("Unsupported modified_bases preset: ${normalizedModifiedBases}")
+    }
+    def modBaseArgs = normalizedModifiedBases?.split(/\s+/)?.collect { shellQuote(it) }?.join(' ')
+    def modBases = normalizedModifiedBases && normalizedModifiedBases != 'none' ? "--modified-bases ${modBaseArgs}" : ''
+    def boundedInteger = { rawValue, String name, int minimum, int maximum ->
+        if (rawValue == null || !rawValue.toString().trim()) {
+            return null
+        }
+        def text = rawValue.toString().trim()
+        if (!(text ==~ /[0-9]+/)) {
+            throw new IllegalArgumentException("${name} must be an integer between ${minimum} and ${maximum}")
+        }
+        def parsed = text.toBigInteger()
+        if (parsed < minimum || parsed > maximum) {
+            throw new IllegalArgumentException("${name} must be an integer between ${minimum} and ${maximum}")
+        }
+        return parsed.toString()
+    }
+    def minQscoreValue = boundedInteger(params.min_qscore, 'min_qscore', 0, 100)
+    def minQscore = minQscoreValue != null ? "--min-qscore ${minQscoreValue}" : ''
     def trimAdapt = params.trim_adapters != false ? '' : '--no-trim'
     def emitSummary = params.emit_summary != false ? '--emit-summary' : ''
-    def batchSize = params.dorado_batch_size ? "--batchsize ${params.dorado_batch_size}" : ''
+    def batchSizeValue = boundedInteger(params.dorado_batch_size, 'dorado_batch_size', 1, 1000000)
+    def batchSize = batchSizeValue != null ? "--batchsize ${batchSizeValue}" : ''
     def doradoDevice = (params.dorado_device ?: 'cuda:0').toString().trim()
     if (!doradoDevice) {
         doradoDevice = 'cuda:0'
     }
+    def device = shellQuote(doradoDevice)
     """
     set -euo pipefail
 
@@ -46,14 +80,14 @@ process DoradoBasecall {
 
     dorado basecaller \\
         ${model} \\
-        ${pod5_dir} \\
+        "${pod5_dir}" \\
         --models-directory "\${DORADO_MODELS_DIR}" \\
         ${modBases} \\
         ${minQscore} \\
         ${trimAdapt} \\
         ${emitSummary} \\
         ${batchSize} \\
-        --device ${doradoDevice} \\
+        --device ${device} \\
         > calls.bam \\
         2> basecall.log
 
