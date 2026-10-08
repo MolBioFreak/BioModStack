@@ -804,9 +804,11 @@ class GPUOrchestrator:
                     
                     job_is_running = False
                     
-                    # Method 1: Check if job name appears in any process
-                    job_name_pattern = job.name.replace(' ', '.')  # Spaces might be different
-                    if job.name in all_processes or job_name_pattern in all_processes:
+                    # Method 1: Check if job ID appears in any process (Nextflow uses --job_id UUID)
+                    # Also check job name as fallback for non-Nextflow processes
+                    if job.id in all_processes:
+                        job_is_running = True
+                    elif job.name in all_processes or job.name.replace(' ', '.') in all_processes:
                         job_is_running = True
                     
                     # Method 2: Check if there's any activity on the job's assigned GPU
