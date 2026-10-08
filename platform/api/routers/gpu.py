@@ -181,6 +181,13 @@ _coolercontrol_modes_error: str = ""
 _coolercontrol_modes_cache_time: float = 0.0
 _COOLERCONTROL_MODES_CACHE_TTL_SECONDS = 30.0
 
+_fan_backend_auto_cache: Optional[str] = None
+_fan_backend_auto_cache_time: float = 0.0
+_FAN_BACKEND_AUTO_CACHE_TTL_SECONDS = 15.0
+
+_power_control_lock = threading.Lock()
+_fan_control_lock = threading.Lock()
+
 
 def _clamp_power_limit(gpu_index: int, watts: int) -> int:
     hw = HARDWARE_LIMITS[gpu_index]
@@ -379,12 +386,53 @@ def _clamp_fan_percent(value: int, min_percent: int = 30, max_percent: int = 100
 
 
 def _fan_control_backend() -> str:
-    raw = str(os.getenv("BMS_FAN_CONTROL_BACKEND", FAN_BACKEND_NVIDIA_SETTINGS)).strip().lower()
+    raw = str(os.getenv("BMS_FAN_CONTROL_BACKEND", "")).strip().lower()
     if raw in {"nvidia", "nvidia-settings", "nvidia_settings"}:
         return FAN_BACKEND_NVIDIA_SETTINGS
     if raw in {"coolercontrol", "cctv"}:
         return FAN_BACKEND_COOLERCONTROL
-    return FAN_BACKEND_NVIDIA_SETTINGS
+    return _auto_detect_fan_control_backend()
+
+
+def _auto_detect_fan_control_backend() -> str:
+    global _fan_backend_auto_cache, _fan_backend_auto_cache_time
+
+    now = time.monotonic()
+    if (
+        _fan_backend_auto_cache is not None
+        and (now - _fan_backend_auto_cache_time) < _FAN_BACKEND_AUTO_CACHE_TTL_SECONDS
+    ):
+        return _fan_backend_auto_cache
+
+    backend = FAN_BACKEND_NVIDIA_SETTINGS
+    cookie, cookie_error = _coolercontrol_login_cookie()
+    if cookie and not cookie_error:
+        backend = FAN_BACKEND_COOLERCONTROL
+
+    _fan_backend_auto_cache = backend
+    _fan_backend_auto_cache_time = now
+    return backend
+
+
+def _invalidate_fan_backend_auto_cache() -> None:
+    global _fan_backend_auto_cache, _fan_backend_auto_cache_time
+    _fan_backend_auto_cache = None
+    _fan_backend_auto_cache_time = 0.0
+
+
+def _nvidia_settings_write_capable() -> bool:
+    if os.geteuid() == 0:
+        return True
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", "true"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
 
 
 def _fan_control_display() -> str:
@@ -493,7 +541,14 @@ def _run_nvidia_settings_assign(args: List[str], timeout: int = 10) -> tuple[boo
             last_output = str(exc)
             continue
         output = (result.stdout or "") + (result.stderr or "")
-        if result.returncode == 0:
+        normalized_output = output.lower()
+        if (
+            result.returncode == 0
+            and "permission" not in normalized_output
+            and "operation not permitted" not in normalized_output
+            and "access denied" not in normalized_output
+            and "not authorized" not in normalized_output
+        ):
             return True, output.strip()
         last_output = output.strip()
     return False, last_output
@@ -1363,6 +1418,7 @@ def _fan_control_snapshot_nvidia_settings() -> Dict[str, Any]:
         }
 
     resolved_map, mapping_source = _resolve_fan_mapping(smi_map, settings_gpu_targets)
+    nvidia_write_capable = _nvidia_settings_write_capable()
     gpus: Dict[str, Any] = {}
     for gpu_idx in sorted(smi_map.keys()):
         smi_meta = smi_map[gpu_idx]
@@ -1378,12 +1434,23 @@ def _fan_control_snapshot_nvidia_settings() -> Dict[str, Any]:
         valid_min = [s["min_percent"] for s in fan_stats if isinstance(s.get("min_percent"), int)]
         valid_max = [s["max_percent"] for s in fan_stats if isinstance(s.get("max_percent"), int)]
 
-        profile = _fan_profiles.get(gpu_idx, {"mode": "auto", "target_percent": 35})
         warning: Optional[str] = None
         if settings_target is None:
             warning = "No nvidia-settings GPU target mapping for this GPU"
         elif not mapped_fans:
             warning = "No fan targets mapped; configure override mapping"
+
+        live_target = round(sum(valid_target) / len(valid_target)) if valid_target else None
+        live_current = round(sum(valid_current) / len(valid_current)) if valid_current else None
+        profile_mode = mode if mode in {"auto", "manual"} else "auto"
+        if profile_mode == "manual":
+            profile_target_percent = _clamp_fan_percent(
+                _safe_int(live_target if live_target is not None else live_current, 35)
+            )
+        else:
+            profile_target_percent = _clamp_fan_percent(
+                _safe_int(live_target if live_target is not None else 30, 30)
+            )
 
         gpus[str(gpu_idx)] = {
             "gpu_index": gpu_idx,
@@ -1393,14 +1460,14 @@ def _fan_control_snapshot_nvidia_settings() -> Dict[str, Any]:
             "fan_targets": mapped_fans,
             "fan_count": len(mapped_fans),
             "mode": mode or "unknown",
-            "target_percent": round(sum(valid_target) / len(valid_target)) if valid_target else None,
-            "current_percent": round(sum(valid_current) / len(valid_current)) if valid_current else None,
+            "target_percent": live_target,
+            "current_percent": live_current,
             "current_rpm": round(sum(valid_rpm) / len(valid_rpm)) if valid_rpm else None,
             "min_percent": min(valid_min) if valid_min else 30,
             "max_percent": max(valid_max) if valid_max else 100,
-            "profile_mode": profile.get("mode", "auto"),
-            "profile_target_percent": _clamp_fan_percent(_safe_int(profile.get("target_percent"), 35)),
-            "writable": settings_target is not None and len(mapped_fans) > 0,
+            "profile_mode": profile_mode,
+            "profile_target_percent": profile_target_percent,
+            "writable": settings_target is not None and len(mapped_fans) > 0 and nvidia_write_capable,
             "mapping_source": resolved.get("mapping_source") or mapping_source,
             "warning": warning,
             "fan_details": fan_stats,
@@ -1631,6 +1698,7 @@ def _invalidate_fan_control_cache() -> None:
     global _fan_control_cache, _fan_control_cache_time
     _fan_control_cache = None
     _fan_control_cache_time = 0.0
+    _invalidate_fan_backend_auto_cache()
 
 
 def _get_fan_control_snapshot(force_refresh: bool = False) -> Dict[str, Any]:
@@ -2368,7 +2436,7 @@ def set_gpu_power_limit(gpu_index: int, watts: int) -> bool:
 @router.get("/power-control")
 async def get_power_control():
     """Get current power control state."""
-    return _get_power_control_payload()
+    return await asyncio.to_thread(_get_power_control_payload)
 
 
 class PowerControlRequest(BaseModel):
@@ -2378,85 +2446,87 @@ class PowerControlRequest(BaseModel):
     toggle: Optional[bool] = None  # Toggle between saved limits and stock
 
 
+def _set_power_control_sync(request: PowerControlRequest) -> Dict[str, Any]:
+    global _current_limits, _saved_limits, _power_enabled
+
+    with _power_control_lock:
+        _invalidate_power_control_cache()
+        _refresh_power_state_from_hardware()
+        errors: List[str] = []
+        applied_count = 0
+
+        if request.toggle:
+            target_enabled = not _power_enabled
+            for gpu_idx, limits in HARDWARE_LIMITS.items():
+                target = _saved_limits[gpu_idx] if target_enabled else int(limits["default"])
+                if set_gpu_power_limit(gpu_idx, target):
+                    _current_limits[gpu_idx] = target
+                    applied_count += 1
+                else:
+                    errors.append(f"GPU {gpu_idx}")
+            _power_enabled = target_enabled if not errors else _derive_power_enabled_from_current()
+            message = f"Power limits {'enabled' if target_enabled else 'disabled (stock)'}"
+
+        elif request.preset:
+            for gpu_idx, limits in HARDWARE_LIMITS.items():
+                if request.preset == "eco":
+                    target = int(limits["eco"])
+                elif request.preset == "stock":
+                    target = int(limits["default"])
+                else:
+                    raise HTTPException(status_code=400, detail=f"Unknown preset: {request.preset}")
+
+                if set_gpu_power_limit(gpu_idx, target):
+                    _current_limits[gpu_idx] = target
+                    applied_count += 1
+                    if request.preset == "eco":
+                        _saved_limits[gpu_idx] = target
+                else:
+                    errors.append(f"GPU {gpu_idx}")
+            if request.preset == "eco":
+                _power_enabled = len(errors) == 0 or _derive_power_enabled_from_current()
+            elif request.preset == "stock":
+                _power_enabled = False if not errors else _derive_power_enabled_from_current()
+
+            message = f"Applied '{request.preset}' preset"
+
+        elif request.gpu_index is not None and request.limit_watts is not None:
+            if request.gpu_index not in HARDWARE_LIMITS:
+                raise HTTPException(status_code=400, detail=f"Unknown GPU index: {request.gpu_index}")
+
+            clamped = _clamp_power_limit(request.gpu_index, int(request.limit_watts))
+
+            if set_gpu_power_limit(request.gpu_index, clamped):
+                _current_limits[request.gpu_index] = clamped
+                _saved_limits[request.gpu_index] = clamped
+                _power_enabled = _derive_power_enabled_from_current()
+                applied_count += 1
+                message = f"GPU {request.gpu_index} set to {clamped}W"
+            else:
+                errors.append(f"GPU {request.gpu_index}")
+                message = f"Failed to set GPU {request.gpu_index}"
+        else:
+            raise HTTPException(status_code=400, detail="Must provide 'toggle', 'preset', or both 'gpu_index' and 'limit_watts'")
+
+        _refresh_power_state_from_hardware()
+        if applied_count > 0:
+            _save_power_state()
+        payload = _get_power_control_payload(force_refresh=True)
+
+        if errors:
+            message += f" (Failed: {', '.join(errors)})"
+
+        return {
+            "success": len(errors) == 0 and applied_count > 0,
+            "message": message,
+            **payload,
+        }
+
+
 @router.post("/power-control")
 async def set_power_control(request: PowerControlRequest):
     """Set power limits via preset, manual control, or toggle."""
-    global _current_limits, _saved_limits, _power_enabled
-
-    _invalidate_power_control_cache()
-    _refresh_power_state_from_hardware()
-    errors: List[str] = []
-    applied_count = 0
-    
-    if request.toggle:
-        # Toggle between saved limits and stock
-        target_enabled = not _power_enabled
-        for gpu_idx, limits in HARDWARE_LIMITS.items():
-            target = _saved_limits[gpu_idx] if target_enabled else int(limits["default"])
-            if set_gpu_power_limit(gpu_idx, target):
-                _current_limits[gpu_idx] = target
-                applied_count += 1
-            else:
-                errors.append(f"GPU {gpu_idx}")
-        _power_enabled = target_enabled if not errors else _derive_power_enabled_from_current()
-        message = f"Power limits {'enabled' if target_enabled else 'disabled (stock)'}"
-        
-    elif request.preset:
-        # Apply preset to all GPUs
-        for gpu_idx, limits in HARDWARE_LIMITS.items():
-            if request.preset == "eco":
-                target = int(limits["eco"])
-            elif request.preset == "stock":
-                target = int(limits["default"])
-            else:
-                raise HTTPException(status_code=400, detail=f"Unknown preset: {request.preset}")
-            
-            if set_gpu_power_limit(gpu_idx, target):
-                _current_limits[gpu_idx] = target
-                applied_count += 1
-                if request.preset == "eco":
-                    _saved_limits[gpu_idx] = target
-            else:
-                errors.append(f"GPU {gpu_idx}")
-        if request.preset == "eco":
-            _power_enabled = len(errors) == 0 or _derive_power_enabled_from_current()
-        elif request.preset == "stock":
-            _power_enabled = False if not errors else _derive_power_enabled_from_current()
-
-        message = f"Applied '{request.preset}' preset"
-        
-    elif request.gpu_index is not None and request.limit_watts is not None:
-        # Manual single-GPU control - also saves to _saved_limits
-        if request.gpu_index not in HARDWARE_LIMITS:
-            raise HTTPException(status_code=400, detail=f"Unknown GPU index: {request.gpu_index}")
-        
-        clamped = _clamp_power_limit(request.gpu_index, int(request.limit_watts))
-        
-        if set_gpu_power_limit(request.gpu_index, clamped):
-            _current_limits[request.gpu_index] = clamped
-            _saved_limits[request.gpu_index] = clamped  # Save for toggle memory
-            _power_enabled = _derive_power_enabled_from_current()
-            applied_count += 1
-            message = f"GPU {request.gpu_index} set to {clamped}W"
-        else:
-            errors.append(f"GPU {request.gpu_index}")
-            message = f"Failed to set GPU {request.gpu_index}"
-    else:
-        raise HTTPException(status_code=400, detail="Must provide 'toggle', 'preset', or both 'gpu_index' and 'limit_watts'")
-
-    _refresh_power_state_from_hardware()
-    if applied_count > 0:
-        _save_power_state()
-    payload = _get_power_control_payload(force_refresh=True)
-
-    if errors:
-        message += f" (Failed: {', '.join(errors)})"
-    
-    return {
-        "success": len(errors) == 0 and applied_count > 0,
-        "message": message,
-        **payload,
-    }
+    return await asyncio.to_thread(_set_power_control_sync, request)
 
 
 class FanControlRequest(BaseModel):
@@ -2472,12 +2542,10 @@ class FanMappingOverrideRequest(BaseModel):
 @router.get("/fan-control")
 async def get_fan_control():
     """Get per-GPU fan control status and mapping."""
-    return _get_fan_control_snapshot()
+    return await asyncio.to_thread(_get_fan_control_snapshot)
 
 
-@router.put("/fan-control/mapping")
-async def update_fan_control_mapping(request: FanMappingOverrideRequest):
-    """Persist explicit nvidia-smi GPU index -> fan target list overrides."""
+def _update_fan_control_mapping_sync(request: FanMappingOverrideRequest) -> Dict[str, Any]:
     global _fan_mapping_overrides
     if _fan_control_backend() == FAN_BACKEND_COOLERCONTROL:
         raise HTTPException(
@@ -2503,10 +2571,11 @@ async def update_fan_control_mapping(request: FanMappingOverrideRequest):
                 raise HTTPException(status_code=400, detail=f"Invalid fan target '{fan_target}' for GPU {gpu_idx}")
         normalized[gpu_idx] = sorted(set(parsed_fans))
 
-    _fan_mapping_overrides = normalized
-    _save_fan_state()
-    _invalidate_fan_control_cache()
-    snapshot = _get_fan_control_snapshot(force_refresh=True)
+    with _fan_control_lock:
+        _fan_mapping_overrides = normalized
+        _save_fan_state()
+        _invalidate_fan_control_cache()
+        snapshot = _get_fan_control_snapshot(force_refresh=True)
     return {
         "success": True,
         "message": "Updated fan target mapping overrides",
@@ -2514,133 +2583,174 @@ async def update_fan_control_mapping(request: FanMappingOverrideRequest):
     }
 
 
-@router.post("/fan-control")
-async def set_fan_control(request: FanControlRequest):
-    """Apply fan mode/speed for a single nvidia-smi GPU index using the configured backend."""
+@router.put("/fan-control/mapping")
+async def update_fan_control_mapping(request: FanMappingOverrideRequest):
+    """Persist explicit nvidia-smi GPU index -> fan target list overrides."""
+    return await asyncio.to_thread(_update_fan_control_mapping_sync, request)
+
+
+def _set_fan_control_sync(request: FanControlRequest) -> Dict[str, Any]:
     gpu_idx = int(request.gpu_index)
     if gpu_idx not in HARDWARE_LIMITS:
         valid = ",".join(str(idx) for idx in sorted(HARDWARE_LIMITS.keys()))
         raise HTTPException(status_code=400, detail=f"Unknown GPU index {gpu_idx}. Valid: {valid}")
 
-    snapshot = _get_fan_control_snapshot(force_refresh=True)
-    gpu_state = snapshot.get("gpus", {}).get(str(gpu_idx), {})
-    if not snapshot.get("supported"):
-        return {
-            "success": False,
-            "message": snapshot.get("message", "Fan control unsupported"),
-            "fan_control": snapshot,
-        }
-    if not gpu_state:
-        return {
-            "success": False,
-            "message": f"GPU {gpu_idx} not present in fan control snapshot",
-            "fan_control": snapshot,
-        }
+    with _fan_control_lock:
+        snapshot = _get_fan_control_snapshot(force_refresh=True)
+        gpu_state = snapshot.get("gpus", {}).get(str(gpu_idx), {})
+        if not snapshot.get("supported"):
+            return {
+                "success": False,
+                "message": snapshot.get("message", "Fan control unsupported"),
+                "fan_control": snapshot,
+            }
+        if not gpu_state:
+            return {
+                "success": False,
+                "message": f"GPU {gpu_idx} not present in fan control snapshot",
+                "fan_control": snapshot,
+            }
 
-    desired_mode = str(request.mode or gpu_state.get("profile_mode") or gpu_state.get("mode") or "auto").strip().lower()
-    if desired_mode not in {"auto", "manual"}:
-        raise HTTPException(status_code=400, detail="mode must be 'auto' or 'manual'")
+        desired_mode = str(request.mode or gpu_state.get("profile_mode") or gpu_state.get("mode") or "auto").strip().lower()
+        if desired_mode not in {"auto", "manual"}:
+            raise HTTPException(status_code=400, detail="mode must be 'auto' or 'manual'")
 
-    current_or_profile_target = _safe_int(
-        request.target_percent
-        if request.target_percent is not None
-        else (
-            gpu_state.get("profile_target_percent")
-            if gpu_state.get("profile_target_percent") is not None
-            else gpu_state.get("target_percent")
-        ),
-        35,
-    )
-    min_percent = _safe_int(gpu_state.get("min_percent"), 30)
-    max_percent = _safe_int(gpu_state.get("max_percent"), 100)
-    desired_target = _clamp_fan_percent(current_or_profile_target, min_percent=min_percent, max_percent=max_percent)
-
-    backend = str(snapshot.get("backend") or _fan_control_backend())
-    if backend == FAN_BACKEND_COOLERCONTROL:
-        device_uid = str(gpu_state.get("coolercontrol_device_uid") or "").strip()
-        channels = [str(ch) for ch in (gpu_state.get("coolercontrol_channels") or []) if str(ch).strip()]
-        mode_ok, mode_out = _apply_coolercontrol_gpu_setting(
-            device_uid=device_uid,
-            channels=channels,
-            desired_mode=desired_mode,
-            desired_target=desired_target,
+        current_or_profile_target = _safe_int(
+            request.target_percent
+            if request.target_percent is not None
+            else (
+                gpu_state.get("profile_target_percent")
+                if gpu_state.get("profile_target_percent") is not None
+                else gpu_state.get("target_percent")
+            ),
+            35,
         )
-        if mode_ok:
+        min_percent = _safe_int(gpu_state.get("min_percent"), 30)
+        max_percent = _safe_int(gpu_state.get("max_percent"), 100)
+        desired_target = _clamp_fan_percent(current_or_profile_target, min_percent=min_percent, max_percent=max_percent)
+
+        backend = str(snapshot.get("backend") or _fan_control_backend())
+        if backend == FAN_BACKEND_COOLERCONTROL:
+            device_uid = str(gpu_state.get("coolercontrol_device_uid") or "").strip()
+            channels = [str(ch) for ch in (gpu_state.get("coolercontrol_channels") or []) if str(ch).strip()]
+            mode_ok, mode_out = _apply_coolercontrol_gpu_setting(
+                device_uid=device_uid,
+                channels=channels,
+                desired_mode=desired_mode,
+                desired_target=desired_target,
+            )
+            _invalidate_fan_control_cache()
+            refreshed = _get_fan_control_snapshot(force_refresh=True)
+            refreshed_gpu = refreshed.get("gpus", {}).get(str(gpu_idx), {})
+            verified = bool(mode_ok)
+            if verified:
+                verified_mode = str(refreshed_gpu.get("mode") or "").strip().lower()
+                if desired_mode == "manual":
+                    live_target = refreshed_gpu.get("target_percent")
+                    verified = verified_mode == "manual" and isinstance(live_target, int) and abs(int(live_target) - int(desired_target)) <= 1
+                else:
+                    verified = verified_mode == "auto"
+            if verified:
+                _fan_profiles[gpu_idx] = {
+                    "mode": desired_mode,
+                    "target_percent": desired_target,
+                }
+                _save_fan_state()
+            if verified:
+                if desired_mode == "manual":
+                    message = (
+                        f"GPU {gpu_idx} ({device_uid}) set to manual {desired_target}% "
+                        f"across {len(channels)} channel(s)"
+                    )
+                else:
+                    message = (
+                        f"GPU {gpu_idx} ({device_uid}) restored to automatic/default control "
+                        f"across {len(channels)} channel(s)"
+                    )
+            else:
+                detail = mode_out or "post-write verification failed"
+                message = f"Failed to update CoolerControl fan setting for GPU {gpu_idx}: {detail}"
+            return {
+                "success": verified,
+                "message": message,
+                "fan_control": refreshed,
+            }
+
+        settings_target = gpu_state.get("settings_gpu_target")
+        fan_targets = [int(f) for f in gpu_state.get("fan_targets", [])]
+        if settings_target is None:
+            return {
+                "success": False,
+                "message": f"GPU {gpu_idx} has no nvidia-settings target mapping",
+                "fan_control": snapshot,
+            }
+        if desired_mode == "manual" and not fan_targets:
+            return {
+                "success": False,
+                "message": f"GPU {gpu_idx} has no mapped fan targets for manual control",
+                "fan_control": snapshot,
+            }
+
+        errors: List[str] = []
+        mode_ok, mode_out = _apply_gpu_fan_mode(int(settings_target), desired_mode)
+        if not mode_ok:
+            errors.append(f"mode assign failed: {mode_out or 'unknown error'}")
+
+        if mode_ok and desired_mode == "manual":
+            for fan_target in fan_targets:
+                fan_ok, fan_out = _apply_fan_target_percent(fan_target, desired_target)
+                if not fan_ok:
+                    errors.append(f"fan:{fan_target} assign failed: {fan_out or 'unknown error'}")
+
+        success = len(errors) == 0
+        _invalidate_fan_control_cache()
+        refreshed = _get_fan_control_snapshot(force_refresh=True)
+        refreshed_gpu = refreshed.get("gpus", {}).get(str(gpu_idx), {})
+        if success:
+            verified_mode = str(refreshed_gpu.get("mode") or "").strip().lower()
+            if desired_mode == "auto":
+                success = verified_mode == "auto"
+                if not success:
+                    errors.append(
+                        f"post-write verification failed: GPU {gpu_idx} remained in mode {verified_mode or 'unknown'}"
+                    )
+            else:
+                live_target = refreshed_gpu.get("target_percent")
+                success = (
+                    verified_mode == "manual"
+                    and isinstance(live_target, int)
+                    and abs(int(live_target) - int(desired_target)) <= 1
+                )
+                if not success:
+                    errors.append(
+                        "post-write verification failed: "
+                        f"mode={verified_mode or 'unknown'} target={live_target!r} expected={desired_target}"
+                    )
+        if success:
             _fan_profiles[gpu_idx] = {
                 "mode": desired_mode,
                 "target_percent": desired_target,
             }
             _save_fan_state()
-        _invalidate_fan_control_cache()
-        refreshed = _get_fan_control_snapshot(force_refresh=True)
-        if mode_ok:
-            if desired_mode == "manual":
-                message = (
-                    f"GPU {gpu_idx} ({device_uid}) set to manual {desired_target}% "
-                    f"across {len(channels)} channel(s)"
-                )
+        if success:
+            if desired_mode == "auto":
+                message = f"GPU {gpu_idx} fan control set to auto"
             else:
-                message = (
-                    f"GPU {gpu_idx} ({device_uid}) restored to automatic/default control "
-                    f"across {len(channels)} channel(s)"
-                )
+                message = f"GPU {gpu_idx} fan target set to {desired_target}%"
         else:
-            message = f"Failed to update CoolerControl fan setting for GPU {gpu_idx}: {mode_out or 'unknown error'}"
+            message = f"Failed to update GPU {gpu_idx} fan control: {' | '.join(errors)}"
+
         return {
-            "success": mode_ok,
+            "success": success,
             "message": message,
             "fan_control": refreshed,
         }
 
-    settings_target = gpu_state.get("settings_gpu_target")
-    fan_targets = [int(f) for f in gpu_state.get("fan_targets", [])]
-    if settings_target is None:
-        return {
-            "success": False,
-            "message": f"GPU {gpu_idx} has no nvidia-settings target mapping",
-            "fan_control": snapshot,
-        }
-    if desired_mode == "manual" and not fan_targets:
-        return {
-            "success": False,
-            "message": f"GPU {gpu_idx} has no mapped fan targets for manual control",
-            "fan_control": snapshot,
-        }
 
-    errors: List[str] = []
-    mode_ok, mode_out = _apply_gpu_fan_mode(int(settings_target), desired_mode)
-    if not mode_ok:
-        errors.append(f"mode assign failed: {mode_out or 'unknown error'}")
-
-    if mode_ok and desired_mode == "manual":
-        for fan_target in fan_targets:
-            fan_ok, fan_out = _apply_fan_target_percent(fan_target, desired_target)
-            if not fan_ok:
-                errors.append(f"fan:{fan_target} assign failed: {fan_out or 'unknown error'}")
-
-    success = len(errors) == 0
-    if success:
-        _fan_profiles[gpu_idx] = {
-            "mode": desired_mode,
-            "target_percent": desired_target,
-        }
-        _save_fan_state()
-
-    _invalidate_fan_control_cache()
-    refreshed = _get_fan_control_snapshot(force_refresh=True)
-    if success:
-        if desired_mode == "auto":
-            message = f"GPU {gpu_idx} fan control set to auto"
-        else:
-            message = f"GPU {gpu_idx} fan target set to {desired_target}%"
-    else:
-        message = f"Failed to update GPU {gpu_idx} fan control: {' | '.join(errors)}"
-
-    return {
-        "success": success,
-        "message": message,
-        "fan_control": refreshed,
-    }
+@router.post("/fan-control")
+async def set_fan_control(request: FanControlRequest):
+    """Apply fan mode/speed for a single nvidia-smi GPU index using the configured backend."""
+    return await asyncio.to_thread(_set_fan_control_sync, request)
 
 
 class SchedulerGlobalConfig(BaseModel):

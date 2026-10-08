@@ -18,6 +18,8 @@ import logging
 import math
 import os
 import re
+import shutil
+import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Any
@@ -30,10 +32,12 @@ from dataclasses import dataclass, replace
 
 logger = logging.getLogger(__name__)
 
+CODE_ROOT = Path(__file__).resolve().parents[3]
+
 from services.gpu_config import read_scheduler_config, write_scheduler_config
 from services.gpu_metadata import GPU_CAPABILITIES
 from services.gpu_stage_activity import job_uses_assigned_gpu
-from services.stage_review import has_stage_gate, nextflow_history_status
+from services.stage_review import has_stage_gate, nextflow_history_status, refresh_gate_payload
 
 
 @dataclass
@@ -228,6 +232,303 @@ def _read_successful_child_wait_result(work_dir: Optional[str]) -> Optional[Dict
         "completed": completed,
         "output_dirs": output_dirs,
         "mtime": child_outputs_path.stat().st_mtime,
+    }
+
+
+def _write_recovered_gate_snapshot(job: Any) -> None:
+    if not getattr(job, "output_dir", None):
+        return
+    awaiting_stage = getattr(job, "awaiting_stage", None)
+    awaiting_payload = getattr(job, "awaiting_payload", None)
+    if not awaiting_stage or not isinstance(awaiting_payload, dict):
+        return
+
+    gate_file = Path(job.output_dir) / "gates" / f"gate_{awaiting_stage}.json"
+    gate_file.parent.mkdir(parents=True, exist_ok=True)
+    gate_file.write_text(
+        json.dumps(
+            {
+                "awaiting_stage": awaiting_stage,
+                "awaiting_payload": awaiting_payload,
+                "written_at": datetime.utcnow().isoformat() + "Z",
+            },
+            indent=2,
+        )
+    )
+
+
+def _is_post_rfantibody_gate_requested(job: Any) -> bool:
+    params = getattr(job, "params", None)
+    if not isinstance(params, dict):
+        return False
+    if not (params.get("interactive_gating") or params.get("interactive_swa")):
+        return False
+    if bool(params.get("interactive_gate_continue")):
+        return False
+    stage = str(params.get("interactive_gate_stage") or "post_fampnn").strip().lower()
+    return stage == "post_rfantibody"
+
+
+def _should_screen_rfantibody_for_recovery(job: Any) -> bool:
+    params = getattr(job, "params", None)
+    if not isinstance(params, dict):
+        return False
+    if params.get("fampnn_collected_pdbs"):
+        return False
+    if _is_post_rfantibody_gate_requested(job):
+        return True
+    if params.get("enable_rfantibody_filter") is True:
+        return True
+    for key in (
+        "rfantibody_min_epitope_contacts",
+        "rfantibody_max_epitope_distance",
+        "rfantibody_min_target_contacts",
+        "rfantibody_max_target_distance",
+        "rfantibody_max_epitope_centroid_distance",
+    ):
+        if params.get(key) is not None:
+            return True
+    return False
+
+
+def _recover_rfantibody_screening_outputs(job: Any, raw_dir: Path) -> Optional[Path]:
+    params = getattr(job, "params", None)
+    output_dir = getattr(job, "output_dir", None)
+    if not isinstance(params, dict) or not output_dir:
+        return None
+    if not _should_screen_rfantibody_for_recovery(job):
+        return None
+
+    target_pdb = str(params.get("target_pdb") or "").strip()
+    if not target_pdb:
+        return None
+
+    parent_output = Path(output_dir)
+    run_dir = parent_output / "run" / "rfantibody_screen"
+    filtered_dir = parent_output / "collected" / "rfantibody_filtered"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    filtered_dir.mkdir(parents=True, exist_ok=True)
+
+    summary_path = run_dir / "screening_summary.json"
+    log_path = run_dir / "screen_recovery.log"
+    cmd = [
+        "python3",
+        str(CODE_ROOT / "scripts" / "screen_rfantibody_backbones.py"),
+        "--pdb-dir",
+        str(raw_dir),
+        "--output-dir",
+        str(filtered_dir),
+        "--summary-json",
+        str(summary_path),
+        "--epitope-residues",
+        str(params.get("epitope_residues") or ""),
+        "--antibody-chains",
+        str(params.get("antibody_chains") or ""),
+        "--reference-target-pdb",
+        target_pdb,
+        "--screen-reference-scope",
+        str(params.get("rfantibody_screen_reference_scope") or "cdr_loops"),
+    ]
+
+    target_chain = str(params.get("antigen_chains") or "").strip()
+    if target_chain:
+        cmd.extend(["--target-chain", target_chain])
+
+    for flag, param_key in (
+        ("--min-epitope-contacts", "rfantibody_min_epitope_contacts"),
+        ("--max-epitope-distance", "rfantibody_max_epitope_distance"),
+        ("--contact-distance-threshold", "rfantibody_contact_distance_threshold"),
+        ("--min-target-contacts", "rfantibody_min_target_contacts"),
+        ("--max-target-distance", "rfantibody_max_target_distance"),
+        ("--max-epitope-centroid-distance", "rfantibody_max_epitope_centroid_distance"),
+        ("--target-contact-distance-threshold", "rfantibody_target_contact_distance_threshold"),
+    ):
+        value = params.get(param_key)
+        if value is not None:
+            cmd.extend([flag, str(value)])
+
+    try:
+        completed = subprocess.run(
+            cmd,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        log_path.write_text(completed.stdout or "")
+    except Exception as exc:
+        logger.warning("RFantibody screen recovery failed for %s: %s", getattr(job, "name", "job"), exc)
+        return None
+
+    if completed.returncode != 0:
+        logger.warning(
+            "RFantibody screen recovery failed for %s with exit %s",
+            getattr(job, "name", "job"),
+            completed.returncode,
+        )
+        return None
+
+    summary_json = None
+    try:
+        if summary_path.exists():
+            summary_json = json.loads(summary_path.read_text())
+    except Exception:
+        summary_json = None
+
+    summary_csv = run_dir / "rfantibody_screening_summary.csv"
+    if summary_json and summary_json.get("summary_csv"):
+        try:
+            source_csv = Path(str(summary_json["summary_csv"]))
+            if source_csv.exists() and source_csv.resolve() != summary_csv.resolve():
+                shutil.copy2(source_csv, summary_csv)
+        except Exception:
+            pass
+
+    return filtered_dir
+
+
+def _recover_rfantibody_parent_after_child_wait(job: Any, child_wait_success: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Recover a parent antibody run that successfully finished WaitForChildren but
+    lost the launcher/API before CollectChildOutputs and the post-RF gate ran.
+    """
+    params = getattr(job, "params", None)
+    output_dir = getattr(job, "output_dir", None)
+    if not isinstance(params, dict) or not output_dir:
+        return None
+    if str(getattr(job, "mode", "")).strip() != "antibody_denovo_pipeline":
+        return None
+    if "rfantibody" in [str(stage) for stage in (getattr(job, "completed_stages", None) or [])]:
+        return None
+
+    parent_output = Path(output_dir)
+    collected_dir = parent_output / "collected" / "rfantibody"
+    raw_dir = parent_output / "collected" / "rfantibody_raw"
+    traj_dir = collected_dir / "traj"
+    for directory in (collected_dir, raw_dir, traj_dir):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    collected_pdbs: list[str] = []
+    collected_trbs: list[str] = []
+    collected_trajs: list[str] = []
+
+    output_dirs = child_wait_success.get("output_dirs") or []
+    for job_idx, child_output_dir in enumerate(output_dirs):
+        dir_path = Path(str(child_output_dir))
+        if not dir_path.exists():
+            continue
+
+        for subdir in ("pdb_files", "run/rfantibody/output", "run/rfantibody", "run/fampnn/results", ""):
+            search_path = dir_path / subdir if subdir else dir_path
+            if not search_path.exists():
+                continue
+
+            for pdb in search_path.glob("*.pdb"):
+                dest_name = f"job{job_idx}_{pdb.name}"
+                collected_dest = collected_dir / dest_name
+                raw_dest = raw_dir / dest_name
+                if not collected_dest.exists():
+                    shutil.copy2(pdb, collected_dest)
+                if not raw_dest.exists():
+                    shutil.copy2(pdb, raw_dest)
+                collected_pdbs.append(str(collected_dest))
+
+                trb = pdb.with_suffix(".trb")
+                if trb.exists():
+                    collected_trb_dest = collected_dir / f"job{job_idx}_{trb.name}"
+                    raw_trb_dest = raw_dir / f"job{job_idx}_{trb.name}"
+                    if not collected_trb_dest.exists():
+                        shutil.copy2(trb, collected_trb_dest)
+                    if not raw_trb_dest.exists():
+                        shutil.copy2(trb, raw_trb_dest)
+                    collected_trbs.append(str(collected_trb_dest))
+
+            traj_search = search_path / "traj"
+            if traj_search.exists():
+                for traj in traj_search.glob("*.pdb"):
+                    traj_dest = traj_dir / f"job{job_idx}_{traj.name}"
+                    if not traj_dest.exists():
+                        shutil.copy2(traj, traj_dest)
+                    collected_trajs.append(str(traj_dest))
+
+    # Make the recovery idempotent by re-listing final files from disk.
+    collected_pdbs = sorted(str(path) for path in collected_dir.glob("*.pdb"))
+    collected_trbs = sorted(str(path) for path in collected_dir.glob("*.trb"))
+    collected_trajs = sorted(str(path) for path in traj_dir.glob("*.pdb"))
+    raw_pdbs = sorted(str(path) for path in raw_dir.glob("*.pdb"))
+
+    if not collected_pdbs or not raw_pdbs:
+        return None
+
+    (collected_dir / "collection_manifest.json").write_text(
+        json.dumps(
+            {
+                "stage": "rfantibody",
+                "source_dirs": [str(path) for path in output_dirs],
+                "collected_pdbs": collected_pdbs,
+                "collected_trbs": collected_trbs,
+                "collected_trajectories": collected_trajs,
+                "count": len(collected_pdbs),
+                "recovered_after_child_wait": True,
+            },
+            indent=2,
+        )
+    )
+    (raw_dir / "rfantibody_stage_summary.json").write_text(
+        json.dumps(
+            {
+                "total_designs": len(raw_pdbs),
+                "recovered_after_child_wait": True,
+            },
+            indent=2,
+        )
+    )
+
+    completed = list(getattr(job, "completed_stages", None) or [])
+    if "rfantibody" not in completed:
+        completed.append("rfantibody")
+    job.completed_stages = completed
+
+    stage_outputs = dict(getattr(job, "stage_outputs", None) or {})
+    stage_outputs["rfantibody"] = [str(raw_dir)]
+    job.stage_outputs = stage_outputs
+
+    filtered_dir = _recover_rfantibody_screening_outputs(job, raw_dir)
+
+    opened_gate = False
+    if _is_post_rfantibody_gate_requested(job):
+        filtered_dir_text = str(filtered_dir) if filtered_dir and filtered_dir.exists() else str(parent_output / "collected" / "rfantibody_filtered")
+        payload = refresh_gate_payload(
+            {
+                "stage": "post_rfantibody",
+                "candidate_dir": filtered_dir_text if filtered_dir and filtered_dir.exists() else str(raw_dir),
+                "raw_dir": str(raw_dir),
+                "filtered_dir": filtered_dir_text,
+                "framework_type": str(params.get("framework_type") or ""),
+                "antibody_chains": str(params.get("antibody_chains") or ""),
+                "structure_validator": str(params.get("structure_validator") or ""),
+            },
+            job.output_dir,
+        )
+        job.awaiting_input = True
+        job.awaiting_stage = "post_rfantibody"
+        job.awaiting_payload = payload
+        job.status = "awaiting_input"
+        job.queue_status = "completed"
+        job.current_stage = "post_rfantibody"
+        job.stage_progress = None
+        job.error_message = None
+        job.completed_at = None
+        job.assigned_gpu = None
+        _write_recovered_gate_snapshot(job)
+        opened_gate = True
+
+    return {
+        "raw_dir": str(raw_dir),
+        "collected_dir": str(collected_dir),
+        "filtered_dir": str(filtered_dir) if filtered_dir else None,
+        "count": len(raw_pdbs),
+        "opened_gate": opened_gate,
     }
 
 
@@ -2035,10 +2336,12 @@ class GPUOrchestrator:
                                                 f"[COMPLETION] Ingested {created} designs "
                                                 f"for reconciled top-level job {job.name}"
                                             )
+                                    from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
                                     from services.nextflow import (
                                         maybe_trigger_batch_frustrampnn,
                                         maybe_trigger_mutation_seed_refinement,
                                     )
+                                    schedule_viewer_minimum_analyses_for_job(str(job.id))
                                     await maybe_trigger_batch_frustrampnn(job, session)
                                     await maybe_trigger_mutation_seed_refinement(job, session)
                                 except Exception as ingest_err:
@@ -2056,20 +2359,87 @@ class GPUOrchestrator:
                                         f"(no process found, age: {age_seconds:.0f}s)"
                                     )
                             elif interrupted_after_child_wait_reason:
-                                if job.status == "running":
-                                    job.status = "failed"
-                                job.queue_status = "failed"
-                                job.error_message = interrupted_after_child_wait_reason
-                                job.completed_at = datetime.utcnow()
-                                logger.warning(
-                                    f"[COMPLETION] {job.name} reconciled as interrupted after "
-                                    f"successful child aggregation (age: {age_seconds:.0f}s): "
-                                    f"{interrupted_after_child_wait_reason}"
-                                )
+                                recovered_state = None
+                                try:
+                                    recovered_state = _recover_rfantibody_parent_after_child_wait(job, child_wait_success)
+                                except Exception as recover_err:
+                                    logger.warning(
+                                        f"[COMPLETION] Failed to recover {job.name} after successful "
+                                        f"child aggregation: {recover_err}"
+                                    )
+
+                                if recovered_state and recovered_state.get("opened_gate"):
+                                    logger.warning(
+                                        f"[COMPLETION] {job.name} recovered after launcher/API interruption: "
+                                        f"restored {recovered_state['count']} RFantibody outputs and opened "
+                                        f"post_rfantibody gate from {recovered_state['raw_dir']}"
+                                    )
+                                elif recovered_state:
+                                    if job.status == "running":
+                                        job.status = "failed"
+                                    job.queue_status = "failed"
+                                    job.error_message = (
+                                        "Recovered completed RFantibody child outputs after launcher/API "
+                                        f"interruption in {job.stage_work_dir}; resume is recommended."
+                                    )
+                                    job.completed_at = datetime.utcnow()
+                                    logger.warning(
+                                        f"[COMPLETION] {job.name} recovered child outputs but still requires "
+                                        f"manual resume (age: {age_seconds:.0f}s): {job.error_message}"
+                                    )
+                                else:
+                                    if job.status == "running":
+                                        job.status = "failed"
+                                    job.queue_status = "failed"
+                                    job.error_message = interrupted_after_child_wait_reason
+                                    job.completed_at = datetime.utcnow()
+                                    logger.warning(
+                                        f"[COMPLETION] {job.name} reconciled as interrupted after "
+                                        f"successful child aggregation (age: {age_seconds:.0f}s): "
+                                        f"{interrupted_after_child_wait_reason}"
+                                    )
                             else:
                                 history_status = nextflow_history_status(job)
                                 gate_present = has_stage_gate(job)
-                                if history_status == "OK" or gate_present or job.awaiting_input:
+                                if history_status == "OK" and not gate_present and not job.awaiting_input:
+                                    job.status = "completed"
+                                    job.queue_status = "completed"
+                                    job.paused = False
+                                    job.assigned_gpu = None
+                                    job.current_stage = "Complete"
+                                    job.stage_progress = None
+                                    job.error_message = None
+                                    if job.completed_at is None:
+                                        job.completed_at = datetime.utcnow()
+
+                                    try:
+                                        if job.parent_job_id is None and job.output_dir:
+                                            existing_designs = (
+                                                await session.execute(
+                                                    select(func.count(Design.id)).where(Design.job_id == job.id)
+                                                )
+                                            ).scalar() or 0
+                                            if existing_designs == 0:
+                                                from services.result_ingester import ingest_job_results
+
+                                                created = await ingest_job_results(str(job.id), job.output_dir, session)
+                                                logger.info(
+                                                    f"[COMPLETION] Ingested {created} designs "
+                                                    f"for terminal OK job {job.name}"
+                                                )
+                                        from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
+
+                                        schedule_viewer_minimum_analyses_for_job(str(job.id))
+                                    except Exception as ingest_err:
+                                        logger.warning(
+                                            f"[COMPLETION] Terminal OK ingestion failed for {job.name}: {ingest_err}"
+                                        )
+
+                                    logger.info(
+                                        f"[COMPLETION] {job.name} reconciled as completed "
+                                        f"(no process found, age: {age_seconds:.0f}s, history_status=OK)"
+                                    )
+                                elif history_status == "OK" or gate_present or job.awaiting_input:
                                     job.status = "awaiting_input"
                                     job.queue_status = "completed"
                                     job.paused = False

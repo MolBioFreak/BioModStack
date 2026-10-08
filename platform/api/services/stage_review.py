@@ -210,6 +210,28 @@ def _review_design_id(job_id: str, stage: str, artifact_group: str, design_name:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, seed))
 
 
+def _review_structure_priority(path: Path) -> tuple[int, str]:
+    suffix = path.suffix.lower()
+    if suffix == ".pdb":
+        return (0, str(path))
+    if suffix == ".cif":
+        return (1, str(path))
+    return (2, str(path))
+
+
+def _dedupe_review_structures(expected_files: Iterable[tuple[str, Path]]) -> list[tuple[str, Path]]:
+    deduped: dict[tuple[str, str], tuple[str, Path]] = {}
+    for artifact_group, structure_path in expected_files:
+        key = (artifact_group, structure_path.stem)
+        current = deduped.get(key)
+        if current is None or _review_structure_priority(structure_path) < _review_structure_priority(current[1]):
+            deduped[key] = (artifact_group, structure_path)
+    return sorted(
+        deduped.values(),
+        key=lambda item: (item[0], item[1].stem, _review_structure_priority(item[1])),
+    )
+
+
 def list_preview_files(directory: Path | None, patterns: Iterable[str], limit: int = 25) -> list[str]:
     if not directory:
         return []
@@ -779,6 +801,7 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
         candidate_dir = resolve_review_path(repaired_payload.get("candidate_dir"), job.output_dir)
         expected_files = [("candidate", path) for path in (_iter_matching_files(candidate_dir, STRUCTURE_PATTERNS) if candidate_dir else [])]
 
+    expected_files = _dedupe_review_structures(expected_files)
     candidate_count = len(expected_files)
 
     existing_count = (

@@ -22,15 +22,17 @@ from services.analysis_registry import (
     JOB_CORRELATION_MATRIX_ANALYSIS,
     PAE_MATRIX_ANALYSIS,
     STRUCTURE_SUMMARY_ANALYSIS,
+    IPSAE_INTERFACE_ANALYSIS,
     get_analysis_definition,
     normalize_contact_map_params,
     normalize_job_scope_params,
     normalize_pae_matrix_params,
 )
+from services.analysis_autorun import _viewer_minimum_analysis_types
 from services.aligned_error_utils import load_structure_residue_records
 from services.analysis_subprocess import _extract_metric_pairs
 from services.analysis_runs import build_artifact_manifest_for_run, serialize_analysis_run
-from services.result_ingester import _validation_role_fields
+from services.result_ingester import _compute_validation_geometry_fields, _validation_role_fields
 
 
 def test_phase1_analysis_definitions_exist() -> None:
@@ -130,6 +132,64 @@ def test_generic_complex_jobs_infer_target_and_binder_chains() -> None:
         "detected_antibody_chains": "E",
         "detected_target_chain": "A",
     }
+
+
+def test_viewer_minimum_bundle_includes_expected_complex_antibody_analyses() -> None:
+    job = SimpleNamespace(model_id="boltz2", mode="complex", name="TdT nanobody")
+    design = SimpleNamespace(
+        aligned_error_path="/tmp/aligned_error.json",
+        aligned_error_format="json",
+        fampnn_psce=0.12,
+    )
+
+    assert set(_viewer_minimum_analysis_types(job, design)) == {
+        STRUCTURE_SUMMARY_ANALYSIS,
+        CHAIN_METRICS_ANALYSIS,
+        IPSAE_INTERFACE_ANALYSIS,
+        ANTIBODY_ANNOTATION_PACK_ANALYSIS,
+        FAMPNN_PSCE_PROFILE_ANALYSIS,
+    }
+
+
+def test_viewer_minimum_bundle_for_plain_monomer_stays_small() -> None:
+    job = SimpleNamespace(model_id="boltz2", mode="single", name="structure_prediction")
+    design = SimpleNamespace(
+        aligned_error_path=None,
+        aligned_error_format=None,
+        fampnn_psce=None,
+    )
+
+    assert _viewer_minimum_analysis_types(job, design) == [
+        STRUCTURE_SUMMARY_ANALYSIS,
+        CHAIN_METRICS_ANALYSIS,
+    ]
+
+
+def test_validation_geometry_without_epitope_only_persists_target_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "services.result_ingester.compute_contact_geometry_metrics",
+        lambda **_kwargs: {
+            "detected_antibody_chains": "B",
+            "detected_target_chain": "A",
+            "target_contact_count": 17,
+            "target_min_distance": 3.4,
+            "epitope_contact_count": 6,
+            "epitope_min_distance": 7.2,
+        },
+    )
+
+    metrics = _compute_validation_geometry_fields(
+        structure_path=Path("/tmp/demo.pdb"),
+        job_params={},
+        detected_antibody_chains="B",
+        detected_target_chain="A",
+        epitope_residues=None,
+    )
+
+    assert metrics["target_contact_count"] == 17
+    assert metrics["target_min_distance"] == 3.4
+    assert "epitope_contact_count" not in metrics
+    assert "epitope_min_distance" not in metrics
 
 
 def test_load_structure_residue_records_handles_cif_headers_with_trailing_spaces() -> None:

@@ -1593,6 +1593,55 @@ EOF
     """
 }
 
+process FinalizeTerminalAntibodyOutputs {
+    label 'process_low'
+
+    publishDir "${params.out_dir}", mode: 'copy', pattern: "terminal_closeout_report.json"
+
+    input:
+    val pdbs
+
+    output:
+    path "terminal_closeout_report.json", emit: report
+
+    script:
+    def pdbList = (pdbs instanceof Collection ? pdbs : (pdbs ? [pdbs] : []))
+        .collect { it?.toString() }
+        .findAll { it }
+        .join('\n')
+    """
+    #!/bin/bash
+    set -euo pipefail
+
+    cat > terminal_pdbs.list <<'EOF'
+${pdbList}
+EOF
+
+    TOTAL_PDBS=\$(grep -c . terminal_pdbs.list || true)
+
+    cat > terminal_closeout_report.json << EOF
+{
+    "job_id": "${params.job_id ?: 'unknown'}",
+    "job_name": "${params.job_name ?: 'antibody_batch'}",
+    "total_terminal_designs": \$TOTAL_PDBS,
+    "output_path": "${params.out_dir}",
+    "status": "complete"
+}
+EOF
+
+    if [ \$TOTAL_PDBS -gt 0 ]; then
+        echo "Triggering terminal result ingestion for parent job..."
+        python3 ${params.code_root}/scripts/result_ingester.py \\
+            --job_id "${params.job_id ?: 'unknown'}" \\
+            --results_dir "${params.out_dir}" \\
+            --api_url "${params.api_url}" \\
+            2>&1 | tee ingest.log || echo "Warning: Terminal ingestion had issues (non-fatal)"
+    fi
+
+    echo "Terminal antibody closeout complete: \$TOTAL_PDBS designs ready for analytics"
+    """
+}
+
 // Initialize missing parameters with defaults to suppress warnings
 if (!params.containsKey('framework_pdb')) params.framework_pdb = null
 if (!params.containsKey('run_id')) params.run_id = null
@@ -3086,4 +3135,13 @@ workflow {
         .map { meta, pdb -> pdb }
         .flatten()
         .collectFile(name: 'final_designs.txt', storeDir: params.out_dir) { it.name + '\n' }
+
+    if (params.run_structure_validation == false) {
+        FinalizeTerminalAntibodyOutputs(
+            ANTIBODY_DENOVO.out.designs
+                .map { meta, pdb -> pdb }
+                .flatten()
+                .collect()
+        )
+    }
 }

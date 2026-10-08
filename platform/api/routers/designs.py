@@ -112,10 +112,13 @@ async def _hydrate_review_job(session: AsyncSession, job: Optional[Job]) -> Opti
         changed = True
 
     if review_stage in REVIEWABLE_STAGES and bool(job.awaiting_input):
-        existing_design_count = await session.scalar(
-            select(func.count()).select_from(Design).where(Design.job_id == job.id)
+        existing_review_design_count = await session.scalar(
+            select(func.count()).select_from(Design).where(
+                Design.job_id == job.id,
+                Design.source_stage == review_stage,
+            )
         )
-        if not existing_design_count:
+        if not existing_review_design_count:
             await ensure_stage_review_rows(session, job)
             changed = True
 

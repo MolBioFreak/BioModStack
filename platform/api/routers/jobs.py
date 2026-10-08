@@ -666,6 +666,33 @@ def _repair_job_for_response(job: Job) -> bool:
             job.awaiting_stage = inferred_stage
             changed = True
 
+    if history_status == "OK" and not gate_present and not job.awaiting_input:
+        if job.status != JobStatus.COMPLETED.value:
+            job.status = JobStatus.COMPLETED.value
+            changed = True
+        if job.queue_status != "completed":
+            job.queue_status = "completed"
+            changed = True
+        if job.current_stage != "Complete":
+            job.current_stage = "Complete"
+            changed = True
+        if job.stage_progress is not None:
+            job.stage_progress = None
+            changed = True
+        if job.awaiting_stage is not None:
+            job.awaiting_stage = None
+            changed = True
+        if job.awaiting_payload:
+            job.awaiting_payload = {}
+            changed = True
+        if job.error_message:
+            job.error_message = None
+            changed = True
+        if not job.completed_at:
+            job.completed_at = datetime.utcnow()
+            changed = True
+        return changed
+
     stale_failed = str(job.error_message or "").startswith(
         "Reconciled as failed: no active process and no terminal .nextflow/history status"
     )
@@ -4795,6 +4822,14 @@ async def get_job(
 
     if job_changed:
         await session.commit()
+
+    if job.status in {JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value}:
+        try:
+            from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
+
+            schedule_viewer_minimum_analyses_for_job(str(job.id))
+        except Exception:
+            pass
     
     return JobResponse(
         id=job.id,

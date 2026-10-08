@@ -706,48 +706,14 @@ def _is_antibody_job(job) -> bool:
 
 async def maybe_auto_annotate_cdrs(job, session) -> None:
     """
-    Auto-run ANARCII CDR annotation after antibody jobs complete.
-    Runs in a background thread and updates the DB directly.
+    Backward-compatible wrapper for the newer viewer-minimum analysis autorun.
     """
-    if job.parent_job_id:
-        return
-    if not _is_antibody_job(job):
-        return
-    if getattr(job, "awaiting_input", False):
-        return
-    if str(getattr(job, "status", "") or "").strip().lower() != JobStatus.COMPLETED.value:
-        return
-    params = getattr(job, "params", None) if isinstance(getattr(job, "params", None), dict) else {}
-    if params.get("run_anarcii_post") is not True:
-        return
-
     try:
-        from database import Design, Job as JobModel
-        from sqlalchemy import select
-        from services.cdr_annotation_tasks import annotate_and_update_designs
+        from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
 
-        # Include child jobs (exploration mode)
-        child_result = await session.execute(select(JobModel.id).where(JobModel.parent_job_id == job.id))
-        child_job_ids = [row[0] for row in child_result.all()]
-        all_job_ids = [job.id] + child_job_ids
-
-        designs_result = await session.execute(
-            select(Design).where(Design.job_id.in_(all_job_ids))
-        )
-        designs = designs_result.scalars().all()
-        pdb_paths = [d.pdb_path for d in designs if d.pdb_path]
-        design_ids = [d.id for d in designs if d.pdb_path]
-
-        if not pdb_paths:
-            logger.info(f"[CDR AUTO] No PDBs found for job {job.id}, skipping ANARCII")
-            return
-
-        logger.info(f"[CDR AUTO] Starting ANARCII for {len(pdb_paths)} designs (job {job.id})")
-        asyncio.create_task(
-            annotate_and_update_designs(pdb_paths, design_ids, job_id=str(job.id))
-        )
+        schedule_viewer_minimum_analyses_for_job(str(job.id))
     except Exception as e:
-        logger.warning(f"[CDR AUTO] Failed to start ANARCII: {e}")
+        logger.warning(f"[CDR AUTO] Failed to schedule viewer-minimum analyses: {e}")
 
 
 async def maybe_trigger_batch_frustrampnn(job, session) -> None:
@@ -1861,7 +1827,9 @@ async def launch_nextflow_job(
                                 epitope_residues=epitope_residues
                             )
                             logger.info(f"Ingested {design_count} designs for job {job_id}")
-                            await maybe_auto_annotate_cdrs(job, session)
+                            from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
+
+                            schedule_viewer_minimum_analyses_for_job(str(job.id))
                             # BATCH-STAGE-GATE: Check if all sibling variants complete, trigger batch FrustraMPNN
                             await maybe_trigger_batch_frustrampnn(job, session)
                             await maybe_trigger_mutation_seed_refinement(job, session)
