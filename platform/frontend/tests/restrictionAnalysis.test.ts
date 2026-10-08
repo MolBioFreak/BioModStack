@@ -117,6 +117,13 @@ describe('restriction API boundary', () => {
         expect(parseRestrictionDigestSimulation(DIGEST).fragments[0]).toBe(DIGEST.fragments[0]);
     });
 
+    it('accepts distinct envelope and analysis result receipts', () => {
+        const value = clone(ANALYSIS);
+        value.result_sha256 = 'b'.repeat(64);
+        expect(parseRestrictionAnalysis(value).result_sha256).toBe('b'.repeat(64));
+        expect(parseRestrictionAnalysis(value).analysis.result_sha256).toBe(H);
+    });
+
     it('accepts occurrence ordinals scoped to each enzyme', () => {
         const value = clone(ANALYSIS);
         const other = clone(value.analysis.occurrences[0]);
@@ -230,7 +237,6 @@ describe('restriction API boundary', () => {
     ])('rejects %s', (_label, mutate) => expect(() => parseRestrictionAnalysis(mutate())).toThrow());
 
     it.each([
-        ['result hash mismatch', () => { const value = clone(ANALYSIS); value.result_sha256 = 'b'.repeat(64); return value; }],
         ['occurrence summary mismatch', () => { const value = clone(ANALYSIS); value.analysis.occurrences[0].canonical_name = 'EcoRI-inconsistent'; return value; }],
         ['duplicate occurrence ordinal', () => { const value = clone(ANALYSIS); const occurrence = clone(value.analysis.occurrences[0]); occurrence.occurrence_id = 'occ:2'; occurrence.double_strand_events = []; value.analysis.occurrences.push(occurrence); value.analysis.counts.recognition_site_count_definite = 2; value.analysis.enzyme_summaries[0].recognition_site_count_definite = 2; return value; }],
         ['duplicate event ordinal', () => { const value = clone(ANALYSIS); const event = clone(value.analysis.occurrences[0].double_strand_events[0]); event.contributor_group_id = 'cut:duplicate'; value.analysis.occurrences[0].double_strand_events.push(event); value.analysis.counts.double_strand_break_count = 2; value.analysis.enzyme_summaries[0].double_strand_break_count = 2; const group = clone(value.analysis.grouped_cleavages[0]); group.contributor_group_id = 'cut:duplicate'; value.analysis.grouped_cleavages.push(group); return value; }],
