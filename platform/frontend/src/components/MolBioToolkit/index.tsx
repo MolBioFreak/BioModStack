@@ -10,6 +10,8 @@ import { useState, useCallback, useMemo } from 'react';
 // Import OVE from ESM bundle (aliased via vite.config.ts)
 // Import OVE directly from workspace package
 import { Editor } from '@biomodstack/ove';
+import { Provider } from 'react-redux';
+import { store } from './store';
 // Import styles directly
 import '@biomodstack/ove/style.css';
 // Note: OVE CSS is loaded via link tag in index.html from /ove/ove.css
@@ -72,11 +74,13 @@ function OVEWrapper({ sequenceData, onSave }: OVEWrapperProps) {
 
     return (
         <div className="ove-editor-container w-full h-full">
-            <Editor
-                sequenceData={oveSequenceData}
-                onSave={onSave}
-                editorName="MolBioToolkitEditor"
-            />
+            <Provider store={store}>
+                <Editor
+                    sequenceData={oveSequenceData}
+                    onSave={onSave}
+                    editorName="MolBioToolkitEditor"
+                />
+            </Provider>
         </div>
     );
 }
