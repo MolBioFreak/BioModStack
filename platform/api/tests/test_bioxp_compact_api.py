@@ -49,7 +49,10 @@ EXPECTED = {
     ('GET', '/operator-controls/history'),
     ('GET', '/operator-controls/v2/methods/{method_id}'),
     ('GET', '/operator-controls/v2/receipts/{command_id}'),
+    ('GET', '/operator-controls/v2/requests/{key}'),
     ('GET', '/profile'),
+    ('GET', '/protocols/jobs'),
+    ('GET', '/protocols/jobs/{job_id}'),
     ('GET', '/status'),
     ('POST', '/camera/snapshot'),
     ('POST', '/camera/stream/start'),
@@ -69,6 +72,8 @@ EXPECTED = {
     ('POST', '/operator-controls/v2/interrupts/{action_id}'),
     ('POST', '/operator-controls/v2/methods'),
     ('POST', '/protocols/compile'),
+    ('POST', '/protocols/jobs/{job_id}/control'),
+    ('POST', '/protocols/jobs/{job_id}/review'),
     ('POST', '/protocols/submit'),
     ('PUT', '/profile'),
     ('PUT', '/settings/freshness'),
@@ -97,7 +102,7 @@ def _inventory() -> set[tuple[str, str]]:
 
 def test_compact_api_inventory_is_exact_and_bounded() -> None:
     assert _inventory() == EXPECTED
-    assert len(_inventory()) == 62
+    assert len(_inventory()) == 67
 
 
 def test_every_non_read_route_carries_the_global_containment_dependency() -> None:

@@ -38,6 +38,7 @@ import { BioXpHistoryReceiptCard, BioXpHistoryPager, useBioXpHistoryPagination }
 import { BioXpOperatorControlTabs } from './BioXpOperatorControlTabs';
 import { BioXpPipetteControlPanel } from './BioXpPipetteControlPanel';
 import { BioXpQuickDashboard } from './BioXpQuickDashboard';
+import { BioXpWorkflowControls } from './BioXpWorkflowControls';
 import { BioXpOperatorReports } from './BioXpOperatorReports';
 
 
@@ -283,6 +284,7 @@ export function BioXpCockpit() {
     }, [generation]);
     const [historyLimit, setHistoryLimit] = useState<8 | 25 | 50 | 100>(8);
     const [reportsOpen, setReportsOpen] = useState(false);
+    const [workflowOpen, setWorkflowOpen] = useState(false);
     const [advancedOpen, setAdvancedOpen] = useState(false);
     const [cameraOpen, setCameraOpen] = useState(true);
     const [pipettesOpen, setPipettesOpen] = useState(false);
@@ -1125,6 +1127,12 @@ export function BioXpCockpit() {
                     </div>
                 </dl>
             </section>
+
+            <details onToggle={event => { if (event.currentTarget.open) setWorkflowOpen(true); }}>
+                <summary className="cursor-pointer text-lg font-semibold">Prepared workflows</summary>
+                {workflowOpen && <BioXpWorkflowControls key={generation} generation={generation} connected={active}
+                    controlsEnabled={robotControlReady} />}
+            </details>
 
             <BioXpQuickDashboard
                 connected={displayConnected}
