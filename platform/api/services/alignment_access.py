@@ -125,12 +125,26 @@ async def rotate_alignment_authority_cas(
     job_id: str,
     previous: dict[str, Any],
     updated: dict[str, Any],
+    pooled_review_params: dict[str, Any] | None = None,
 ) -> bool:
+    # The additional state is exclusive to the validated pooled-review lane.
+    eligibility = [Job.status == "completed"]
+    if pooled_review_params is not None:
+        from services.ont_pooled_reference_assignment import ASSIGNMENT_MODE, ASSIGNMENT_WORKFLOW_ID
+        if (pooled_review_params.get("ont_workflow_id") != ASSIGNMENT_WORKFLOW_ID
+            or pooled_review_params.get("scientific_status") != "REVIEW"
+            or pooled_review_params.get("release_state") != "awaiting_operator_release"):
+            return False
+        eligibility = [
+            Job.status.in_(["completed", "awaiting_input"]),
+            Job.mode == ASSIGNMENT_MODE,
+            Job.params == pooled_review_params,
+        ]
     result = await session.execute(
         update(Job)
         .where(
             Job.id == job_id,
-            Job.status == "completed",
+            *eligibility,
             Job.model_id == "nanopore",
             Job.provenance == previous,
         )

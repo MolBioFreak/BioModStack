@@ -1,6 +1,8 @@
 """Versioned migrations for the global experiment/workspace SQLite store."""
 from __future__ import annotations
 
+from migrations import global_derived_resource_schema as derived_resources_schema
+
 import hashlib
 import json
 import re
@@ -55,7 +57,7 @@ MIGRATION_V20_VERSION = 20
 MIGRATION_V20_NAME = "domain_parent_global_revision_authority"
 MIGRATION_V21_VERSION = 21
 MIGRATION_V21_NAME = "project_workflow_setup_context_authority"
-LATEST_MIGRATION_VERSION = MIGRATION_V21_VERSION
+LATEST_MIGRATION_VERSION = derived_resources_schema.VERSION
 MIGRATION_V2_CHECKSUM = "db24d1ef056e560f10eb2fe9f8ef4dac0d4e4dbe90fd0a49efed88f0d111935c"
 MIGRATION_V3_CHECKSUM = "46f1a1d28a02334e87d628070e2bd9c6d78e158caa23d583951fdc582e7b11d2"
 MIGRATION_V4_CHECKSUM = "ec2966efee9129f8890019bee0d569de2cdf8d2a9fc4bb2e05138839880f375b"
@@ -2474,7 +2476,8 @@ _REQUIRED_SCHEMA_COLUMNS: dict[str, set[str]] = {
     "domain_connector_streams": {"domain_experiment_id", "binding_revision_id", "event_stream", "last_applied_stream_generation", "last_event_id", "last_payload_sha256", "updated_at"},
     "domain_connector_inbox": {"event_id", "source_store_id", "domain_experiment_id", "binding_revision_id", "state_revision_id", "event_type", "event_stream", "stream_generation", "source_generation", "payload_json", "payload_sha256", "envelope_json", "envelope_sha256", "disposition", "acknowledgement_json", "acknowledgement_sha256", "conflict_json", "conflict_sha256", "occurred_at", "received_at", "applied_at"},
     "domain_connector_conflicts": {"conflict_id", "domain_experiment_id", "binding_revision_id", "event_stream", "stream_generation", "event_id", "conflict_json", "conflict_sha256", "created_at"},
-    "resource_admission_policy": {"policy_id", "policy_version", "cpu_thread_limit", "dram_byte_limit", "lock_generation", "updated_at"},
+    "resource_admission_policy": {"policy_id", "policy_version", "cpu_thread_limit", "dram_byte_limit", "disk_byte_limit", "lock_generation", "updated_at"},
+    "derived_resource_reservations": {"reservation_id", "policy_id", "policy_version", "target_id", "machine_id", "owner", "token", "state", "cpu_threads", "dram_bytes", "disk_bytes", "storage_device", "storage_path", "receipt_json", "created_at", "updated_at", "release_reason"},
     "resource_admissions": {"admission_id", "workspace_id", "domain_experiment_id", "plan_id", "preparation_id", "run_attempt_id", "canonical_job_id", "state", "cpu_threads", "dram_bytes", "gpu_index", "gpu_uuid", "policy_source", "policy_version", "owner", "lease_token", "refusal_code", "refusal_reason", "release_reason", "recovery_evidence_json", "admitted_at", "queued_at", "released_at", "reconciled_at", "created_at", "updated_at"},
     "operational_receipts": {"receipt_id", "operation_kind", "workspace_id", "native_identity", "state", "receipt_json", "receipt_sha256", "source_revision", "occurred_at", "verified_at"},
     "workflow_plan_authority": {"workflow_id", "workspace_id", "domain_experiment_id", "expected_domain_revision_id", "capability_contract_json", "capability_contract_sha256", "created_at"},
@@ -2526,10 +2529,12 @@ def _accepted_migration_ledgers() -> tuple[list[tuple[int, str, str]], ...]:
     v19 = (MIGRATION_V19_VERSION, MIGRATION_V19_NAME, _migration_v19_checksum())
     v20 = (MIGRATION_V20_VERSION, MIGRATION_V20_NAME, _migration_v20_checksum())
     v21 = (MIGRATION_V21_VERSION, MIGRATION_V21_NAME, _migration_v21_checksum())
+    v22 = (derived_resources_schema.VERSION, derived_resources_schema.NAME,
+           hashlib.sha256(derived_resources_schema.SQL.encode("utf-8")).hexdigest())
     v1 = (LEGACY_MIGRATION_VERSION, LEGACY_MIGRATION_NAME, LEGACY_MIGRATION_CHECKSUM)
     return (
-        [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21],
-        [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21],
+        [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22],
+        [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22],
     )
 
 
@@ -2704,6 +2709,7 @@ def _expected_schema_definition_manifest(*, legacy_lineage: bool = False) -> dic
             _migration_v21_checksum(), "Project-owned editable workflow setup context authority",
             MIGRATION_V21_SQL,
         )
+        _apply_derived_resources_upgrade(expected)
         manifest = _schema_definition_manifest(expected)
         if legacy_lineage:
             for table_name, definition in _LEGACY_FINAL_TABLE_SQL.items():
@@ -3935,6 +3941,11 @@ def run_all(db_path: str | Path) -> None:
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
+        if any(rows == ledger[:-1] for ledger in _accepted_migration_ledgers()):
+            _apply_derived_resources_upgrade(connection)
+            rows = connection.execute(
+                "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
+            ).fetchall()
         if rows not in _accepted_migration_ledgers():
             raise RuntimeError(f"experiment migration ledger mismatch: {rows!r}")
         connection.execute(
@@ -4038,3 +4049,11 @@ __all__ = [
     "run_all",
     "health",
 ]
+
+
+def _apply_derived_resources_upgrade(connection):
+    _apply_additive_migration(
+        connection, derived_resources_schema.VERSION, derived_resources_schema.NAME,
+        hashlib.sha256(derived_resources_schema.SQL.encode("utf-8")).hexdigest(),
+        derived_resources_schema.DESCRIPTION, derived_resources_schema.SQL,
+    )

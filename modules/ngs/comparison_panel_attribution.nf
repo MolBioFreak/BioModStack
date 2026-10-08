@@ -23,8 +23,8 @@ process ComparisonPanelAttribution {
 
     script:
     def codeRoot = params.code_root ?: projectDir
-    def minMapq = (params.comparison_panel_min_mapq ?: 20) as Integer
-    def minScoreMargin = (params.comparison_panel_min_score_margin ?: 10) as Integer
+    def minMapq = (params.comparison_panel_min_mapq != null ? params.comparison_panel_min_mapq : 20) as Integer
+    def minScoreMargin = (params.comparison_panel_min_score_margin != null ? params.comparison_panel_min_score_margin : 10) as Integer
     """
     set -euo pipefail
     python3 '${codeRoot}/scripts/build_comparison_panel_attribution.py' \\
@@ -35,7 +35,7 @@ process ComparisonPanelAttribution {
       --source-fastq-artifact comparison_panel_source.fastq \\
       --expected-reference-artifact comparison_panel_expected_reference.fasta \\
       --combined-fasta comparison_panel.fasta --summary comparison_panel_prepare.json \\
-      --min-mapq ${minMapq} --min-score-margin ${minScoreMargin}
+      --minimap2-preset '${params.fastq_minimap2_preset ?: 'map-ont'}' --min-mapq ${minMapq} --min-score-margin ${minScoreMargin}
     minimap2 -ax '${params.fastq_minimap2_preset ?: 'map-ont'}' comparison_panel.fasta comparison_panel_normalized.fastq | \\
       samtools sort -o comparison_panel.bam
     samtools index comparison_panel.bam
@@ -47,6 +47,6 @@ process ComparisonPanelAttribution {
       --source-fastq-artifact comparison_panel_source.fastq \\
       --expected-reference-artifact comparison_panel_expected_reference.fasta \\
       --combined-fasta comparison_panel.fasta --panel-bam comparison_panel.bam \\
-      --samtools samtools --min-mapq ${minMapq} --min-score-margin ${minScoreMargin} --summary comparison_panel_summary.json
+      --preparation-summary comparison_panel_prepare.json --samtools samtools --minimap2-preset '${params.fastq_minimap2_preset ?: 'map-ont'}' --min-mapq ${minMapq} --min-score-margin ${minScoreMargin} --summary comparison_panel_summary.json
     """
 }

@@ -145,6 +145,67 @@ class PooledReferenceAssignmentRequest(BaseModel):
         return value
 
 
+class PooledReferenceRestoreRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
+
+    reference_set_manifest: str = Field(min_length=1, max_length=1000)
+
+
+async def restore_pooled_reference_set(
+    session: AsyncSession, *, reference_set_manifest: str, http_request: Any
+) -> dict[str, Any]:
+    """Resolve an owned frozen set, never infer identity from arbitrary JSON.
+
+    This is read-only. Callers must obtain new receipts for the returned exact
+    revisions through the existing MolBio receipt lane before a new submission.
+    """
+    row = (await session.execute(select(NgsReferenceSetManifest).where(
+        NgsReferenceSetManifest.manifest_path == reference_set_manifest,
+        NgsReferenceSetManifest.mode == REFERENCE_SET_MODE,
+        NgsReferenceSetManifest.target_workflow == ASSIGNMENT_WORKFLOW_ID,
+    ))).scalar_one_or_none()
+    if row is None:
+        raise PooledAssignmentError(
+            "Frozen reference is not a registered pooled assignment. Select its original owned reference set.",
+            status_code=404,
+        )
+    job = await session.get(Job, row.source_job_id)
+    if job is None or not alignment_access.request_is_authorized(http_request, job.id, job.provenance):
+        raise PooledAssignmentError(
+            "Access to the original pooled assignment is required. Recover its alignment access and retry restoration.",
+            status_code=403,
+        )
+    row, targets = await validate_pooled_reference_set_for_job(session, job)
+    return {
+        "reference_set_id": str(row.id),
+        "assignment_job_id": str(job.id),
+        "manifest_sha256": str(row.manifest_sha256),
+        "targets": [{
+            "target_id": str(target.target_id), "label": str(target.label),
+            "indistinguishable_group": target.indistinguishable_group,
+            "sequence_id": str(target.sequence_id), "revision_id": str(target.revision_id),
+            "revision_sha256": str(target.revision_sha256),
+        } for target in targets],
+    }
+
+
+async def validate_pooled_reference_set_for_job(
+    session: AsyncSession, job: Job,
+) -> tuple[NgsReferenceSetManifest, list[NgsPooledReferenceTarget]]:
+    """Validate persisted job/set identity and bytes; this does not grant access."""
+    row = await _manifest_row_for_job(session, str(job.id))
+    params = job.params or {}
+    binding = params.get("reference_set_binding") or {}
+    if (job.model_id != "nanopore" or job.mode != ASSIGNMENT_MODE
+        or params.get("ont_workflow_id") != ASSIGNMENT_WORKFLOW_ID
+        or params.get("reference_set_manifest") != row.manifest_path
+        or binding.get("reference_set_id") != row.id
+        or binding.get("manifest_sha256") != row.manifest_sha256):
+        raise PooledAssignmentError("Original assignment reference binding is inconsistent", status_code=409)
+    _, targets = await _read_manifest(session, row)
+    return row, targets
+
+
 class PooledAssignmentReleaseRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
 
@@ -1109,8 +1170,22 @@ async def _load_release_context(
         raise PooledAssignmentError("job is not a pooled ONT assignment", status_code=422)
     if job.status != JobStatus.COMPLETED.value:
         raise PooledAssignmentError("pooled assignment job is not completed", status_code=409)
-    manifest_row = await _manifest_row_for_job(session, assignment_job_id)
-    manifest, target_rows = await _read_manifest(session, manifest_row)
+    manifest_row, target_rows = await validate_pooled_reference_set_for_job(session, job)
+    return _validate_assignment_evidence(job, manifest_row, manifest_row.manifest_json, target_rows)
+
+
+def _validate_assignment_evidence(
+    job: Job,
+    manifest_row: NgsReferenceSetManifest,
+    manifest: Mapping[str, Any],
+    target_rows: Sequence[NgsPooledReferenceTarget],
+) -> dict[str, Any]:
+    """Read-only scientific evidence shared by terminal admission and release.
+
+    The caller validates the frozen store rows first. Job completion and
+    operator release are deliberately separate authorities; this function
+    neither requires nor manufactures either terminal status or a release.
+    """
     params = dict(job.params or {})
     if (
         params.get("reference_set_manifest_sha256") != manifest_row.manifest_sha256

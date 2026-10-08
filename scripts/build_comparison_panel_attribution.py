@@ -49,6 +49,23 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+
+def execution_identity(samtools: str, preset: str) -> dict[str, Any]:
+    code = Path(__file__).resolve().parents[1]
+    sources = {}
+    for name in ("scripts/build_comparison_panel_attribution.py", "modules/ngs/comparison_panel_attribution.nf"):
+        path = code / name
+        sources[name] = {"sha256": sha256_file(path), "size_bytes": path.stat().st_size}
+    tools = {}
+    for name, command in (("samtools", samtools), ("minimap2", "minimap2")):
+        resolved = shutil.which(command)
+        if resolved is None:
+            raise ValueError(f"comparison runtime executable unavailable: {name}")
+        path = Path(resolved).resolve(strict=True)
+        tools[name] = {"path": str(path), "sha256": sha256_file(path), "size_bytes": path.stat().st_size}
+    return {"executed_sources": sources, "tools": tools, "minimap2_preset": preset}
+
+
 def _single_fasta_record(path: Path) -> tuple[str, str]:
     """Parse one non-empty DNA FASTA record; concatenation is never implicit."""
     try:
@@ -364,6 +381,7 @@ def _summarize_sam(
     occurrence_map: Path | None = None,
     *,
     source_fastq_sha256: str | None = None,
+    sam_lines: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     """Classify every mapped occurrence exactly once, retaining competitors."""
     if occurrence_map is None:
@@ -386,8 +404,10 @@ def _summarize_sam(
     known_occurrences = set(occurrence["by_occurrence"])
     accepted: dict[str, list[tuple[str, int]]] = defaultdict(list)
     primary_counts: dict[str, int] = defaultdict(int)
-    result = subprocess.run([samtools, "view", str(bam)], text=True, capture_output=True, check=True)
-    for line_number, line in enumerate(result.stdout.splitlines(), start=1):
+    if sam_lines is None:
+        result = subprocess.run([samtools, "view", str(bam)], text=True, capture_output=True, check=True)
+        sam_lines = result.stdout.splitlines()
+    for line_number, line in enumerate(sam_lines, start=1):
         fields = line.split("\t")
         if len(fields) < 11:
             raise ValueError(f"samtools returned malformed SAM at line {line_number}")
@@ -498,6 +518,8 @@ def main() -> None:
     parser.add_argument("--combined-fasta", required=True, type=Path)
     parser.add_argument("--panel-bam", type=Path)
     parser.add_argument("--samtools", default="samtools")
+    parser.add_argument("--minimap2-preset", default="map-ont")
+    parser.add_argument("--preparation-summary", type=Path)
     parser.add_argument("--min-mapq", type=int, default=20)
     parser.add_argument("--min-score-margin", type=int, default=10)
     parser.add_argument("--summary", required=True, type=Path)
@@ -516,6 +538,13 @@ def main() -> None:
         if output.is_symlink():
             raise ValueError(f"comparison output must not be a symlink: {output.name}")
 
+    execution = execution_identity(args.samtools, args.minimap2_preset)
+    if args.panel_bam:
+        if args.preparation_summary is None:
+            raise ValueError("comparison completion needs its pre-alignment execution receipt")
+        prepared = json.loads(args.preparation_summary.read_text())
+        if prepared["execution"] != execution:
+            raise ValueError("comparison source/runtime changed during alignment")
     panel = load_panel_snapshot(args.snapshot)
     source_metadata = prepare_occurrences(args.fastq, normalized_fastq, occurrence_map)
     _copy_exact(args.fastq, source_artifact)
@@ -559,6 +588,7 @@ def main() -> None:
     map_path = occurrence_map.resolve().relative_to(root).as_posix()
     payload = {
         "schema": SUMMARY_SCHEMA,
+        "execution": execution,
         "status": "review_required" if args.panel_bam else "preparation_only",
         "min_mapq": args.min_mapq,
         "min_score_margin": args.min_score_margin,
@@ -595,6 +625,8 @@ def main() -> None:
         "unclassified_attribution": "none",
         "artifacts": artifacts,
     }
+    if execution_identity(args.samtools, args.minimap2_preset) != execution:
+        raise ValueError("comparison source/runtime changed during summary generation")
     _write_json(args.summary, payload)
 
 

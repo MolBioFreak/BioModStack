@@ -62,6 +62,7 @@ export default defineConfig({
             './tests/vitest/ngsWorkflowChooserMounted.test.tsx',
             './tests/vitest/ngsProjectPanelMounted.test.tsx',
             './tests/vitest/molBioProjectHubMounted.test.tsx',
+            './tests/vitest/ngsGenericHandoffMounted.test.tsx',
             './tests/vitest/ngsPayloadMounted.test.tsx',
             './tests/vitest/readAndSignalWorkbench.test.tsx',
             './tests/vitest/rawReadSortableWorkbench.test.tsx',

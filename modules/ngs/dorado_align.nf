@@ -58,6 +58,10 @@ process DoradoAlign {
     }
     """
     set -euo pipefail
+    source "${params.code_root ?: projectDir}/scripts/ngs_producer_identity.sh"
+    producer_sources=(modules/ngs/dorado_align.nf)
+    if ${emitPrimaryManifest}; then producer_sources+=(scripts/build_primary_alignment_session_manifest.sh); fi
+    bms_producer_begin "${params.code_root ?: projectDir}" "\${producer_sources[@]}" -- dorado samtools || exit 1
 
     # Nextflow may stage the input as a symlink to a caller-writable result.
     # Authenticate one task-local copy and consume only that copy so mutation
@@ -151,5 +155,6 @@ process DoradoAlign {
             qc_manifest.json \
             ${referenceTopologyArg}
     fi
+    bms_producer_finish >> align.log || exit 1
     """
 }

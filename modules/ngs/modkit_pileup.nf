@@ -18,42 +18,16 @@ process ValidateModifiedBaseBam {
     script:
     """
     set -euo pipefail
+    source "${params.code_root ?: projectDir}/scripts/ngs_producer_identity.sh"
+    bms_producer_begin "${params.code_root ?: projectDir}" modules/ngs/modkit_pileup.nf scripts/validate_modified_base_bam.py -- samtools python=/opt/igv-reports/bin/python || exit 1
 
     samtools quickcheck -v "${bam}"
     samtools idxstats "${bam}" >/dev/null
-    total_records=\$(samtools view -c "${bam}")
-    mapped_records=\$(samtools view -c -F 4 "${bam}")
-    tagged_records=\$(samtools view "${bam}" | awk -F '\t' '
-        {
-            has_mm = 0
-            has_ml = 0
-            for (i = 12; i <= NF; i++) {
-                if (\$i ~ /^MM:Z:[ACGTUN][+-][^,;]+,[0-9]+/) has_mm = 1
-                if (\$i ~ /^ML:B:[cCsSiI],[0-9]+(,[0-9]+)*\$/) has_ml = 1
-            }
-            if (has_mm && has_ml) c++
-        }
-        END { print c + 0 }
-    ')
-    {
-        echo "total_records=\${total_records}"
-        echo "mapped_records=\${mapped_records}"
-        echo "modified_base_tagged_records=\${tagged_records}"
-    } > modified_base_tag_check.log
-
-    if [[ "\${mapped_records}" -eq 0 ]]; then
-        echo "ERROR: BAM contains no mapped reads for modkit; reference alignment is required." >&2
-        exit 1
-    fi
-
-    if [[ "\${tagged_records}" -eq 0 ]]; then
-        echo "ERROR: BAM contains no meaningful paired MM/ML modified-base tags for modkit; operator review required." >&2
-        echo "Basecall POD5 with --modified-bases or provide a BAM containing non-empty MM/ML tags." >&2
-        exit 1
-    fi
+    /opt/igv-reports/bin/python "${params.code_root ?: projectDir}/scripts/validate_modified_base_bam.py" "${bam}" > modified_base_tag_check.log
 
     cp "${bam}" modified_base_input.bam
     cp "${bai}" modified_base_input.bam.bai
+    bms_producer_finish >> modified_base_tag_check.log || exit 1
     """
 }
 process ModkitPileup {
@@ -84,6 +58,14 @@ process ModkitPileup {
         filterThreshold = "--filter-threshold ${threshold.toPlainString()}"
     }
     """
+    set -euo pipefail
+    source "${params.code_root ?: projectDir}/scripts/ngs_producer_identity.sh"
+    bms_producer_begin "${params.code_root ?: projectDir}" modules/ngs/modkit_pileup.nf -- modkit || exit 1
+    test ! -e methylation.bed
+    bms_version="\$(modkit --version)"
+    bms_input="\$(sha256sum "${bam}" | cut -d ' ' -f1)"
+    bms_index="\$(sha256sum "${bai}" | cut -d ' ' -f1)"
+    bms_reference="\$(sha256sum "${reference}" | cut -d ' ' -f1)"
     modkit pileup \\
         "${bam}" \\
         methylation.bed \\
@@ -91,5 +73,17 @@ process ModkitPileup {
         ${filterThreshold} \\
         --threads ${task.cpus} \\
         2>&1 | tee pileup.log
+    test "\${bms_input}" = "\$(sha256sum "${bam}" | cut -d ' ' -f1)"
+    test "\${bms_index}" = "\$(sha256sum "${bai}" | cut -d ' ' -f1)"
+    test "\${bms_reference}" = "\$(sha256sum "${reference}" | cut -d ' ' -f1)"
+    {
+        echo "bms_modkit_version=\${bms_version}"
+        echo "bms_input_sha256=\${bms_input}"
+        echo "bms_index_sha256=\${bms_index}"
+        echo "bms_reference_sha256=\${bms_reference}"
+        echo "bms_filter_args=${filterThreshold}"
+        echo "bms_output_sha256=\$(sha256sum methylation.bed | cut -d ' ' -f1)"
+    } >> pileup.log
+    bms_producer_finish >> pileup.log || exit 1
     """
 }

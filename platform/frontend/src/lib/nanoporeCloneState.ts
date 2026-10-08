@@ -1,5 +1,24 @@
 import type { Job } from './api';
 
+export interface NanoporeNativeCloneBinding {
+    sequence_id: string;
+    revision_id: string;
+    revision_sha256: string;
+    reference_snapshot_sha256: string;
+    receipt_id: string;
+    receipt_schema: string;
+    binding_source: string;
+}
+
+export function readNanoporeNativeCloneBinding(value: unknown): NanoporeNativeCloneBinding | undefined {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const binding = value as Record<string, unknown>;
+    if (binding.receipt_schema !== 'bms.molbio.ngs-receipt.v2' || binding.binding_source !== 'server_consumed_receipt') return undefined;
+    if (!['sequence_id', 'revision_id', 'receipt_id'].every((key) => typeof binding[key] === 'string' && binding[key] !== '' && binding[key] === binding[key].trim())) return undefined;
+    if (!['revision_sha256', 'reference_snapshot_sha256'].every((key) => typeof binding[key] === 'string' && /^[a-f0-9]{64}$/.test(binding[key]))) return undefined;
+    return binding as unknown as NanoporeNativeCloneBinding;
+}
+
 export function normalizeNanoporeCloneState(job: Job | null): Record<string, unknown> | undefined {
     if (!job) return undefined;
     const p = job.params || {};
@@ -13,24 +32,42 @@ export function normalizeNanoporeCloneState(job: Job | null): Record<string, unk
         : legacyModel === 'hac' || legacyModel.includes('_hac@')
             ? 'hac'
             : 'sup';
-    const workflowId = String(p.ont_workflow_id || '');
-    const selectedWorkflow = workflowId === 'ont_construct_screening'
-        ? 'constructScreening'
-        : workflowId === 'ont_fastq_qc'
-            ? 'fastqQc'
-            : workflowId === 'wf_clone_validation' || p.run_assembly === true
-                ? 'clone'
-                : workflowId === 'ont_basecall_rna'
-                    ? 'rna'
-                    : workflowId === 'ont_methylation_analysis' || (p.modified_bases && p.modified_bases !== 'none')
-                        ? 'modified'
-                        : workflowId === 'ont_basecall_dna' && p.barcode_kit
-                            ? 'barcode'
-                            : workflowId === 'ont_basecall_dna' && p.dorado_basecall_mode === 'duplex'
-                                ? 'duplex'
-                                : (p.bam_path ? 'bamQc' : (p.fastq_path ? 'plasmidQc' : 'dna'));
+    // Canonical operation is authoritative; stage flags never choose a workflow.
+    const historicalModes: Record<string, string> = {
+        basecall_dna: 'ont_basecall_dna', basecall_rna: 'ont_basecall_rna',
+        plasmid_qc: 'ont_plasmid_qc', construct_screening: 'ont_construct_screening',
+        methylation_analysis: 'ont_methylation_analysis', fastq_qc: 'ont_fastq_qc',
+        pooled_reference_assignment: 'ont_pooled_reference_assignment',
+        'pooled-reference-assignment': 'ont_pooled_reference_assignment',
+        wf_clone: 'wf_clone_validation', clone_validation: 'wf_clone_validation',
+    };
+    const workflowId = String(p.ont_workflow_id || (Object.hasOwn(historicalModes, job.mode) ? historicalModes[job.mode] : job.mode) || '');
+    const workflows: Record<string, string> = {
+        ont_basecall_dna: 'dna', ont_basecall_rna: 'rna', ont_plasmid_qc: 'plasmidQc',
+        ont_construct_screening: 'constructScreening', ont_methylation_analysis: 'modified',
+        ont_fastq_qc: 'fastqQc', ont_pooled_reference_assignment: 'pooledAssignment',
+        wf_clone_validation: 'clone',
+    };
+    const selectedWorkflow = Object.hasOwn(workflows, workflowId) ? workflows[workflowId] : undefined;
+    const nativeBinding = readNanoporeNativeCloneBinding(p.molbio_revision_binding);
+    const cloneRefusal = p.molbio_revision_binding != null && !nativeBinding
+        ? 'Cannot reuse parameters: saved native reference binding is malformed.'
+        : !selectedWorkflow
+        ? `Cannot reuse parameters: unknown or missing workflow ${workflowId || '(missing)'}.`
+        : selectedWorkflow === 'pooledAssignment'
+            ? 'Cannot reuse pooled assignment parameters: the frozen reference set cannot be restored by this launcher. No substitute workflow was selected.'
+            : ((!['dna', 'rna'].includes(selectedWorkflow) || p.reference_fasta || p.molbio_ngs_receipt_id)
+                && !p.ngs_reference_revision_id && !nativeBinding)
+                ? 'Cannot reuse parameters: exact immutable reference authority is unavailable. A runtime reference path or consumed receipt cannot select a replacement reference.'
+                : !p.global_domain_experiment_id || !p.molbio_ngs_state_revision_id
+                    ? 'Cannot reuse parameters: saved exact Experiment context is unavailable.'
+                    : [p.pod5_dir, p.bam_path, p.fastq_path].filter(Boolean).length !== 1
+                        ? 'Cannot reuse parameters: saved primary input is missing or ambiguous.'
+                        : undefined;
     return {
         selectedWorkflow,
+        cloneRefusal,
+        molbioRevisionBinding: nativeBinding,
         ontWorkflowId: workflowId,
         jobName: job.name,
         pinnedGpus,

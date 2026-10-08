@@ -17,6 +17,7 @@ process RunCloneValidation {
     path "wf_clone_out", emit: out
     path "wf_clone.log", emit: log
     path "runtime_provenance.json", emit: runtime_provenance
+    path "execution_receipt.json", emit: execution_receipt
     path "wf_clone_out/wf-clone-validation-report.html", emit: report
     path "wf_clone_out/sample_status.txt", emit: sample_status
 
@@ -67,6 +68,7 @@ process RunCloneValidation {
     }
     def codeRoot = params.code_root ?: projectDir
     def validator = shellQuote("${codeRoot}/scripts/validate_wf_clone_runtime.py")
+    def executionRecorder = shellQuote("${codeRoot}/scripts/record_wf_clone_execution.py")
     def lock = shellQuote("${codeRoot}/config/ngs/wf_clone_validation_v1.8.4.lock.json")
     def wfCloneSingularityCache = '/mnt/BioModStack/apptainer/singularity_cache'
     def wfCloneNxfHome = '/mnt/BioModStack/nextflow/wf-clone'
@@ -86,8 +88,7 @@ process RunCloneValidation {
         --output runtime_provenance.json
 
     mkdir -p wf_clone_out
-    set +e
-    /usr/local/bin/nextflow -log wf_clone.log run /mnt/BioModStack/ngs/wf-clone-validation/v1.8.4-bms.1 \
+    CLONE_CMD=(/usr/local/bin/nextflow -log wf_clone.log run /mnt/BioModStack/ngs/wf-clone-validation/v1.8.4-bms.1 \
         -offline \
         --disable_ping \
         -profile singularity \
@@ -113,9 +114,13 @@ process RunCloneValidation {
         ${insertReferenceArg} \
         ${hostReferenceArg} \
         ${regionsBedfileArg} \
-        ${largeConstruct}
+        ${largeConstruct})
+    python3 ${executionRecorder} begin --receipt execution_receipt.json --runtime-provenance runtime_provenance.json --code-root ${shellQuote(codeRoot)} --workflow-id ${shellQuote(params.ont_workflow_id ?: "wf_clone_validation")} -- "\${CLONE_CMD[@]}"
+    set +e
+    "\${CLONE_CMD[@]}"
     wf_clone_rc=\$?
     set -e
+    python3 ${executionRecorder} finish --receipt execution_receipt.json --exit-code "\${wf_clone_rc}"
     if [[ \${wf_clone_rc} -ne 0 ]]; then
         printf 'wf-clone-validation failed (assembly_tool=%s, exit=%s)\n' "${assemblyTool}" "\${wf_clone_rc}" >&2
         exit "\${wf_clone_rc}"
@@ -201,5 +206,6 @@ process CloneValidationAdapter {
     } > alignment_stats.tsv
     printf 'breakpoint_status\tconfidence\tprimary_breakpoint_in_boundary_window\n' > dimer_breakpoint_call.tsv
     printf 'aligned_dimer_reads\tnon_boundary_split_reads\n' > dimer_secondary_summary.tsv
+    python3 ${adapter} --verify-sources adapter_manifest.json
     """
 }

@@ -34,7 +34,7 @@ from molbio_models import (
 )
 from molbio_ngs_models import MolBioNGSMemberReceipt
 from services.job_result_roots import resolve_persisted_job_result_root
-from services.ont_ngs_contract import get_ont_workflow_spec
+from services.ont_ngs_contract import CANONICAL_ONT_WORKFLOWS, ONT_WORKFLOW_ALIASES, get_ont_workflow_spec
 from services.ont_run_control import _valid_terminal_manifest
 from services.molbio_ngs_receipts import _snapshot_sequence
 from services.ngs_comparison_panels import _validated_panel_manifest
@@ -564,21 +564,109 @@ async def resolve_ont_instrument_run_receipt(
     )
 
 
+NGS_MODEL_IDS = frozenset({"nanopore", *CANONICAL_ONT_WORKFLOWS})
+NATIVE_NGS_RESULT_SCHEMA = "bms.ngs.native-scientific-result.v1"
+NATIVE_NGS_RESULT_IDENTITY = "native-scientific-result"
+
+
+def is_ngs_job_identity(job: Any) -> bool:
+    # Discovery compatibility only; receipt resolution proves authority separately.
+    model = str(job.model_id or "").strip().lower()
+    if model in NGS_MODEL_IDS:
+        return True
+    if model:
+        return False
+    params = job.params if isinstance(job.params, dict) else {}
+    workflow = str(params.get("ont_workflow_id") or params.get("workflow_id") or "").strip().lower()
+    supported = {*CANONICAL_ONT_WORKFLOWS, *ONT_WORKFLOW_ALIASES}
+    return workflow in supported or str(job.mode or "").strip().lower() in supported | {"nanopore_methylation"}
+
+
+def ngs_job_workflow_identity(job: Any) -> str:
+    # Normalize historical names without modifying persisted launch bytes.
+    if not is_ngs_job_identity(job):
+        raise ValueError("historical NGS identity is unsupported")
+    params = job.params if isinstance(job.params, dict) else {}
+    values = [params[key] for key in ("ont_workflow_id", "ont_request_workflow_id", "workflow_id") if params.get(key)]
+    model = str(job.model_id or "").strip().lower()
+    if model in CANONICAL_ONT_WORKFLOWS:
+        values.append(model)
+    if not values:
+        values = [job.mode]
+    identities = set()
+    for value in values:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("historical NGS workflow authority is unavailable")
+        normalized = value.strip().lower()
+        if normalized == "nanopore_methylation":
+            normalized = "ont_methylation_analysis"
+        try:
+            identities.add(get_ont_workflow_spec(normalized).workflow_id)
+        except KeyError as exc:
+            raise ValueError("historical NGS workflow authority is unsupported") from exc
+    if len(identities) != 1:
+        raise ValueError("historical NGS workflow identities conflict")
+    return identities.pop()
+
+
+def ngs_result_manifest_identities(job: Any) -> tuple[str, ...]:
+    # The native receipt is its own identity, never a fabricated QC file.
+    from services.ngs_native_alignment_sources import is_native
+
+    if not is_native(job):
+        return ("sequence-qc-manifest",)
+    receipt = job.provenance["result_integrity"]
+    artifacts = receipt.get("artifacts")
+    has_qc = isinstance(artifacts, list) and any(
+        isinstance(item, dict) and item.get("path") in {"qc_manifest.json", "fastq_qc/qc_manifest.json", "verification/qc_manifest.json"}
+        for item in artifacts
+    )
+    # Retain actual QC authority alongside native science when the producer emitted it.
+    return ("sequence-qc-manifest", NATIVE_NGS_RESULT_IDENTITY) if has_qc else (NATIVE_NGS_RESULT_IDENTITY,)
+
+
+def _native_ngs_result_receipt(job: Any) -> ExternalMemberReceipt:
+    from services.ngs_native_alignment_sources import artifact_descriptors, result_root
+    from services.ngs_alignment_sessions import _open_regular_file_no_symlinks
+
+    descriptors = artifact_descriptors(job)
+    if not descriptors:
+        raise ValueError("native NGS result has no accepted artifact authority")
+    # Reuse the native source owner and no-symlink reader, not a QC projection.
+    with result_root(job) as root:
+        for artifact in descriptors:
+            with _open_regular_file_no_symlinks(root / artifact["relative_path"]) as handle:
+                before = os.fstat(handle.fileno())
+                digest = hashlib.sha256()
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+                after = os.fstat(handle.fileno())
+                if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+                    raise ValueError("native NGS artifact changed during receipt verification")
+                if digest.hexdigest() != artifact["sha256"] or after.st_size != artifact["size_bytes"]:
+                    raise ValueError("native NGS result artifact differs from accepted authority")
+    return build_external_member_receipt(
+        source_store_id="core-ngs",
+        entity_kind="ngs_result_manifest",
+        entity_id=f"{job.id}:{NATIVE_NGS_RESULT_IDENTITY}",
+        source_generation_or_revision="result-manifest",
+        content_digest=descriptors[0]["source_manifest_sha256"],
+        source_schema=NATIVE_NGS_RESULT_SCHEMA,
+        availability="available",
+        reopen_destination=_reopen("ngs-job-evidence", job_id=job.id, manifest_identity=NATIVE_NGS_RESULT_IDENTITY),
+    )
+
+
 async def resolve_ngs_job_receipt(
     session: AsyncSession,
     *,
     job_id: str,
 ) -> ExternalMemberReceipt:
     job = await session.get(Job, job_id)
-    if job is None or job.model_id != "nanopore":
+    if job is None or not is_ngs_job_identity(job):
         raise KeyError("core NGS job identity was not found")
+    ngs_job_workflow_identity(job)
     params = job.params if isinstance(job.params, dict) else {}
-    workflow_id = params.get("ont_workflow_id")
-    if not isinstance(workflow_id, str) or not workflow_id:
-        raise ValueError("core NGS job lacks a canonical workflow identity")
-    workflow = get_ont_workflow_spec(workflow_id)
-    if workflow.workflow_id != workflow_id:
-        raise ValueError("core NGS job workflow identity is not canonical")
     launch = {
         "id": job.id,
         "name": job.name,
@@ -608,16 +696,20 @@ async def resolve_ngs_result_manifest_receipt(
     session: AsyncSession,
     *,
     job_id: str,
-    manifest_identity: str = "sequence-qc-manifest",
+    manifest_identity: str | None = None,
 ) -> ExternalMemberReceipt:
-    if manifest_identity != "sequence-qc-manifest":
+    if manifest_identity is not None and manifest_identity not in {"sequence-qc-manifest", NATIVE_NGS_RESULT_IDENTITY}:
         raise KeyError("NGS result manifest identity was not found")
     job = await session.get(Job, job_id)
-    if job is None or job.model_id != "nanopore":
+    if job is None or not is_ngs_job_identity(job):
         raise KeyError("core NGS job identity was not found")
+    workflow_id = ngs_job_workflow_identity(job)
+    if manifest_identity is None:
+        manifest_identity = ngs_result_manifest_identities(job)[0]
+    if manifest_identity == NATIVE_NGS_RESULT_IDENTITY:
+        from starlette.concurrency import run_in_threadpool
+        return await run_in_threadpool(_native_ngs_result_receipt, job)
     result_root = resolve_persisted_job_result_root(job)
-    params = job.params if isinstance(job.params, dict) else {}
-    workflow_id = params.get("ont_workflow_id") or params.get("ont_request_workflow_id") or params.get("workflow_id")
     if workflow_id == "ont_fastq_qc":
         manifest_path = find_canonical_fastq_manifest(result_root)
     else:
@@ -626,11 +718,6 @@ async def resolve_ngs_result_manifest_receipt(
         except SequenceQcManifestError as exc:
             raise ValueError("canonical sequence-QC manifest is unavailable") from exc
     _manifest_document, raw, _manifest_digest, _manifest_size = read_manifest_json_nofollow(manifest_path)
-    if not isinstance(workflow_id, str) or not workflow_id:
-        raise ValueError("core NGS job lacks a canonical workflow identity")
-    workflow = get_ont_workflow_spec(workflow_id)
-    if workflow.workflow_id != workflow_id:
-        raise ValueError("core NGS job workflow identity is not canonical")
     manifest = load_sequence_qc_manifest(
         manifest_path,
         raw_bytes=raw,

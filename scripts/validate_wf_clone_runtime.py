@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -82,6 +83,58 @@ def git(source: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+def validate_medaka_model(models: dict[str, Any], images: list[dict[str, str]], selected_model: str) -> dict[str, Any]:
+    # main.nf passes -m <basecaller>:consensus. In pinned Medaka 2.2.0
+    # medaka_consensus resolves that explicit selector before --bacteria; its
+    # automatic bacterial override is only entered when -m is absent.
+    expected = require_object(models, "medaka_consensus")
+    if expected.get("selector") != selected_model + ":consensus":
+        fail("MODEL_SELECTOR_MISMATCH", "locked Medaka selector differs from execution")
+    image = next((item for item in images if item["uri"] == expected.get("image_uri")), None)
+    if image is None:
+        fail("MODEL_IMAGE_MISSING", "polishing model is not bound to a locked image")
+    # Read literal source and bytes only: no medaka import, model load, download,
+    # or inference. The installed first model store precedes the writable home.
+    code = 'import ast, hashlib, json, pathlib, sys\npath = pathlib.Path(sys.argv[1])\nsource = path.parent.parent / "options.py"\nmodule = ast.parse(source.read_text())\nassignments = [node for node in module.body if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "basecaller_models" for target in node.targets)]\nif len(assignments) != 1:\n    raise ValueError("ambiguous pinned Medaka model mapping")\nmapping = ast.literal_eval(assignments[0].value)\nresolved = mapping[sys.argv[2]][0]\nif path.name != resolved + "_model_pt.tar.gz" or not path.is_file() or path.is_symlink():\n    raise ValueError("pinned Medaka model resolution mismatch")\ndigest = hashlib.sha256()\nwith path.open("rb") as handle:\n    for chunk in iter(lambda: handle.read(1048576), b""):\n        digest.update(chunk)\nprint(json.dumps({"resolved_model_id": resolved, "sha256": digest.hexdigest(), "size_bytes": path.stat().st_size}))\n'
+    try:
+        result = subprocess.run(["apptainer", "exec", "--containall", image["path"], "python", "-c", code,
+                                 expected["path"], selected_model], text=True, capture_output=True, check=True, timeout=60)
+        observed = json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        fail("MODEL_CONTENT_UNAVAILABLE", f"cannot authenticate installed polishing model: {exc}")
+    if observed != {key: expected[key] for key in ("resolved_model_id", "sha256", "size_bytes")}:
+        fail("MODEL_CONTENT_MISMATCH", "installed Medaka model bytes or source mapping differ from lock")
+    return {**expected, "image_sha256": image["sha256"], "selection_policy": "explicit_consensus_selector"}
+
+
+
+def source_closure(source: Path, tree: str) -> list[dict[str, Any]]:
+    # Local workflow, config and host-bindable workflow-glue imports execute
+    # outside the immutable SIF. Authenticate actual bytes against Git blobs;
+    # status alone can miss assume-unchanged/skip-worktree modifications.
+    entries = git(source, "ls-tree", "-r", "--full-tree", tree).splitlines()
+    records = []
+    for entry in entries:
+        metadata, relative = entry.split("\t", 1)
+        mode, kind, blob = metadata.split()
+        path = Path(relative)
+        if ("tests" in path.parts or not (path.suffix in {".nf", ".config", ".groovy", ".py"}
+                or path.parts[0] == "bin")):
+            continue
+        actual = source / path
+        if kind != "blob" or mode not in {"100644", "100755"} or actual.is_symlink():
+            fail("SOURCE_FILE_INVALID", f"unsafe executed source: {relative}")
+        payload = actual.read_bytes()
+        git_blob = hashlib.sha1(b"blob " + str(len(payload)).encode("ascii") + b"\0" + payload).hexdigest()
+        if git_blob != blob:
+            fail("SOURCE_FILE_MISMATCH", f"executed source differs from locked Git blob: {relative}")
+        records.append({"path": str(actual), "relative_path": relative,
+                        "sha256": hashlib.sha256(payload).hexdigest(), "size_bytes": len(payload)})
+    if not records:
+        fail("SOURCE_FILE_MISSING", "locked runtime has no executed source closure")
+    return records
+
+
 def validate_runtime(lock_path: Path, selected_model: str) -> dict[str, Any]:
     lock_path = lock_path.resolve()
     lock = load_object(lock_path)
@@ -146,6 +199,20 @@ def validate_runtime(lock_path: Path, selected_model: str) -> dict[str, Any]:
             f"Nextflow identity is version {found[0]} build {found[1]}, expected {expected_version} build {expected_build}",
         )
 
+    runtime_files = lock.get("runtime_files")
+    if not isinstance(runtime_files, list) or len(runtime_files) != 2:
+        fail("RUNTIME_FILES_MISSING", "lock must bind the Nextflow launcher and framework JAR")
+    for item in runtime_files:
+        path = Path(item["path"])
+        if (not path.is_file() or path.is_symlink() or path.stat().st_size != item["size_bytes"]
+                or sha256_file(path) != item["sha256"]):
+            fail("RUNTIME_FILE_MISMATCH", "Nextflow launcher/framework bytes differ from lock")
+    framework = Path(os.environ.get("NXF_HOME", str(Path.home() / ".nextflow"))) / "framework" / expected_version / f"nextflow-{expected_version}-one.jar"
+    if framework.resolve() != Path(runtime_files[1]["path"]):
+        fail("RUNTIME_FILE_MISMATCH", "Nextflow home resolves outside locked framework JAR")
+    if executable.resolve() != Path(runtime_files[0]["path"]):
+        fail("RUNTIME_FILE_MISMATCH", "Nextflow executable resolves outside locked launcher")
+
     containers = require_object(lock, "containers")
     cache_dir = resolve_lock_path(lock_path, require_string(containers, "cache_dir"))
     images = containers.get("images")
@@ -190,8 +257,11 @@ def validate_runtime(lock_path: Path, selected_model: str) -> dict[str, Any]:
         "compatibility_patch": {"path": str(patch_path), "sha256": actual_patch_sha},
         "nextflow": {"executable": str(executable), "version": expected_version, "build": expected_build},
         "images": validated_images,
+        "runtime_files": runtime_files,
+        "source_closure": source_closure(source, actual_tree),
         "selected_model_id": selected_model,
         "selected_model_path": str(selected_model_path),
+        "medaka_model": validate_medaka_model(models, validated_images, selected_model),
         "network_policy": "forbidden",
         "nxf_offline": True,
     }

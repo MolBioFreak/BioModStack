@@ -172,18 +172,22 @@ async def test_external_signal_alignment_completion_persists_primary_package_aut
             {"sha256": "5" * 64, "size_bytes": 15, "source_manifest_sha256": "c" * 64},
         ),
     )
-    presentation_calls: list[dict[str, Any]] = []
-    monkeypatch.setattr(
-        service.ngs_alignment_sessions,
-        "build_alignment_presentation",
-        lambda *_args, **kwargs: presentation_calls.append(kwargs) or {
-            "manifest": {"authority_sha256": "7" * 64},
-            "manifest_metadata": {"sha256": "8" * 64},
-        },
-    )
+    request_calls: list[dict[str, Any]] = []
+
+    async def fake_request(*_args, **kwargs):
+        request_calls.append(kwargs)
+        return [
+            {
+                "request_id": "ngs-presentation-" + "7" * 64,
+                "session_id": "1" * 24,
+                "source_authority_sha256": "8" * 64,
+            }
+        ]
+
+    monkeypatch.setattr(service, "_request_ready_alignment_presentations", fake_request)
     monkeypatch.setattr(service, "attach_resource_usage_receipt", lambda params, _receipt: dict(params))
 
-    result = await validator(job, resource_usage_receipt=None)
+    result = await validator(job, session=cast(Any, object()), resource_usage_receipt=None)
 
     assert result["artifact_set_sha256"] == job.provenance["result_integrity"]["artifact_set_sha256"]
     assert result["declared_artifact_count"] == 5
@@ -205,10 +209,10 @@ async def test_external_signal_alignment_completion_persists_primary_package_aut
             f"bms_results/{output_root.name}/qc_manifest.json",
         ]
     }
-    assert {call["session_id"] for call in presentation_calls} == {"1" * 24, "6" * 24}
-    assert all(call["job_id"] == job.id for call in presentation_calls)
-    assert all(call["cache_root"].name == ".alignment-presentations" for call in presentation_calls)
-    assert all(str(call["cache_root"]).startswith("/proc/self/fd/") for call in presentation_calls)
+    assert len(request_calls) == 1
+    assert request_calls[0]["job"] is job
+    assert str(request_calls[0]["pinned_result_root"]).startswith("/proc/self/fd/")
+    assert result["alignment_presentations"][0]["request_id"].startswith("ngs-presentation-")
 
 
 def test_package_builder_rejects_exact_five_field_duplicate_descriptors(
@@ -711,13 +715,14 @@ async def test_finalizer_persists_stage_mirrors_without_a_transient_all_stages_f
 
     monkeypatch.setattr(
         service,
-        "_materialize_ready_alignment_presentations",
+        "_request_ready_alignment_presentations",
         fake_materialize,
         raising=False,
     )
 
     integrity = await service.validate_and_prepare_ont_fastq_qc_completion(
         cast(Any, job),
+        session=cast(Any, object()),
         resource_usage_receipt={"complete": True, "receipt_sha256": "9" * 64},
     )
 
@@ -746,3 +751,165 @@ async def test_finalizer_persists_stage_mirrors_without_a_transient_all_stages_f
     assert materialization["package_artifact_set_sha256"] == integrity["artifact_set_sha256"]
     assert attached_receipts == [{"complete": True, "receipt_sha256": "9" * 64}]
     assert job.params["resource_usage_receipts"] == attached_receipts
+
+
+@pytest.mark.asyncio
+async def test_scientific_completion_inserts_idempotent_presentation_requests_without_building(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sqlalchemy import func, select
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from database import Base, Job, NgsAlignmentPresentationJob
+    from services import ont_ngs_completion as service
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'completion.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    job = Job(
+        id="job-completion",
+        name="NGS completion",
+        model_id="nanopore",
+        mode="analysis",
+        params={},
+        status="running",
+        queue_status="running",
+        provenance={"historical": {"preserved": True}},
+    )
+    monkeypatch.setattr(
+        service.ngs_alignment_sessions,
+        "build_alignment_sessions",
+        lambda *_args, **_kwargs: [
+            {
+                "mode": "primary",
+                "ready": True,
+                "session_id": "1" * 24,
+                "artifact_set_sha256": "2" * 64,
+                "alignment_pair_sha256": "3" * 64,
+            },
+            {
+                "mode": "dimer_candidates",
+                "ready": True,
+                "session_id": "4" * 24,
+                "artifact_set_sha256": "5" * 64,
+                "alignment_pair_sha256": "6" * 64,
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        service.ngs_alignment_sessions,
+        "resolve_session_alignment_bundle",
+        lambda *_args, **_kwargs: (
+            tmp_path / "aligned.bam",
+            {"sha256": "7" * 64, "size_bytes": 100, "source_manifest_sha256": "8" * 64},
+            tmp_path / "aligned.bam.bai",
+            {"sha256": "9" * 64, "size_bytes": 10, "source_manifest_sha256": "8" * 64},
+        ),
+    )
+    monkeypatch.setattr(
+        service.ngs_alignment_sessions,
+        "build_alignment_presentation",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("scientific completion must not build a presentation")
+        ),
+    )
+    try:
+        async with sessions() as session:
+            session.add(job)
+            await session.flush()
+            first = await service._request_ready_alignment_presentations(
+                session=session,
+                job=job,
+                pinned_result_root=tmp_path,
+                source_reference_sha256="a" * 64,
+                workflow_id="ont_fastq_qc",
+                input_mode="fastq",
+                package_artifact_set_sha256="b" * 64,
+            )
+            second = await service._request_ready_alignment_presentations(
+                session=session,
+                job=job,
+                pinned_result_root=tmp_path,
+                source_reference_sha256="a" * 64,
+                workflow_id="ont_fastq_qc",
+                input_mode="fastq",
+                package_artifact_set_sha256="b" * 64,
+            )
+            await session.commit()
+            count = await session.scalar(select(func.count()).select_from(NgsAlignmentPresentationJob))
+        assert first == second
+        assert len(first) == 2
+        assert count == 2
+        assert all(set(item) == {"request_id", "session_id", "source_authority_sha256"} for item in first)
+        assert job.status == "running"
+        assert job.queue_status == "running"
+        assert job.provenance == {"historical": {"preserved": True}}
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_completion_cas_loss_rolls_back_presentation_insert_and_preserves_winner(
+    tmp_path: Path,
+) -> None:
+    from sqlalchemy import select, update
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from database import Base, Job, NgsAlignmentPresentationJob
+    from services import nextflow
+    from services.ngs_alignment_presentation import request_presentation
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'completion-cas.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessions() as seed:
+            seed.add(Job(
+                id="job-cas", name="NGS", model_id="nanopore", mode="analysis",
+                params={}, provenance={}, status="running", queue_status="running",
+                paused=False, awaiting_input=False, awaiting_stage=None, awaiting_payload={},
+            ))
+            await seed.commit()
+
+        async with sessions() as completion:
+            job = await completion.get(Job, "job-cas")
+            assert job is not None
+            snapshot = nextflow.capture_terminal_job_publication_snapshot(job)
+            async with sessions() as winner:
+                await winner.execute(
+                    update(Job).where(Job.id == "job-cas").values(
+                        status="cancelled", queue_status="cancelled", error_message="operator",
+                    )
+                )
+                await winner.commit()
+
+            await request_presentation(
+                completion,
+                job_id="job-cas",
+                session_id="session-a",
+                mode="primary",
+                source_authority_sha256="a" * 64,
+                source_manifest_sha256="b" * 64,
+                source_artifact_set_sha256="c" * 64,
+                policy_version=4,
+            )
+            published = await nextflow.publish_terminal_job_changes_atomically(
+                completion,
+                job_id="job-cas",
+                snapshot=snapshot,
+                changes={"status": "completed", "queue_status": "completed"},
+            )
+            assert published == 0
+
+        async with sessions() as verify:
+            winning_job = await verify.get(Job, "job-cas")
+            presentations = list((await verify.execute(select(NgsAlignmentPresentationJob))).scalars())
+            assert winning_job is not None
+            assert (winning_job.status, winning_job.queue_status, winning_job.error_message) == (
+                "cancelled", "cancelled", "operator",
+            )
+            assert presentations == []
+    finally:
+        await engine.dispose()

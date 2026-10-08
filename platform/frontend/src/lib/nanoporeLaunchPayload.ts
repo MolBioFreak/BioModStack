@@ -18,7 +18,7 @@ export function buildNanoporeOperatorStageParams({
         || selectedWorkflow === 'bamQc'
         || selectedWorkflow === 'fastqQc'
         || ((selectedWorkflow === 'clone' || selectedWorkflow === 'constructScreening') && inputSource === 'fastq');
-    if (fastqQcApplies) params.run_fastq_qc = runFastqQc;
+    if (fastqQcApplies) params.run_fastq_qc = selectedWorkflow === 'fastqQc' || runFastqQc;
     if (selectedWorkflow === 'clone') params.run_assembly = true;
     if (selectedWorkflow === 'constructScreening') params.run_assembly = runAssembly;
     return params;

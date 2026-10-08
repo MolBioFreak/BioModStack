@@ -141,7 +141,7 @@ workflow ONT_METHYLATION_ANALYSIS {
         // Basic quickcheck/index/mapped-read validation always runs in preparation.
         def prepared_bam = BamPrepareBamForAnalysis.out.aligned
         if (has_reference) {
-            ValidateMappedBam(prepared_bam, Channel.of(reference_file))
+            ValidateMappedBam(prepared_bam, Channel.of(reference_file), BamPrepareBamForAnalysis.out.log)
             prepared_bam = ValidateMappedBam.out.aligned
         }
 

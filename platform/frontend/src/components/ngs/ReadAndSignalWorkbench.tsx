@@ -60,6 +60,10 @@ interface ReadAndSignalWorkbenchProps {
     currentLocus: AlignmentReadLocus | null;
     viewerSession: OntSignalViewerSession | null;
     igvState: OntSignalViewerIgvUpdateState;
+    selectedCatalogReadId?: string | null;
+    onSelectedReadChange?: (read: AlignmentRead) => void;
+    onReadIgv?: (read: AlignmentRead) => void;
+    onSelectionIntent?: () => (() => boolean);
     onViewerSessionChange: (session: OntSignalViewerSession) => void;
     onNavigateIgv: (contig: string, start: number, end: number, source: string) => void;
 }
@@ -138,6 +142,10 @@ export function ReadAndSignalWorkbench({
     igvState,
     onViewerSessionChange,
     onNavigateIgv,
+    selectedCatalogReadId,
+    onSelectedReadChange,
+    onReadIgv,
+    onSelectionIntent,
 }: ReadAndSignalWorkbenchProps) {
     const identityRef = useRef(0);
     const artifactRequestGenerationRef = useRef(0);
@@ -790,10 +798,33 @@ export function ReadAndSignalWorkbench({
         [eligibleReads, readFilterPreset, readSearch],
     );
 
+    const readSelectionRequest = useRef(0);
+    const currentReadId = useRef(readId); currentReadId.current = readId;
+    const selectionCallback = useRef(onSelectedReadChange); selectionCallback.current = onSelectedReadChange;
+    useEffect(() => {
+        if (!selectedCatalogReadId || !alignmentSession?.ready) return;
+        const controller = new AbortController();
+        const generation = identityRef.current;
+        const token = ++readSelectionRequest.current;
+        currentReadId.current = selectedCatalogReadId;
+        setReadId(selectedCatalogReadId); setSelectedRead(null);
+        void fetchAlignmentRead(alignmentJobId, alignmentSession.session_id, selectedCatalogReadId, { signal: controller.signal })
+            .then((read) => {
+                if (controller.signal.aborted || generation !== identityRef.current || token !== readSelectionRequest.current
+                    || currentReadId.current !== selectedCatalogReadId) return;
+                setSelectedRead(read);
+            }).catch((reason: unknown) => {
+                if (!controller.signal.aborted && generation === identityRef.current && token === readSelectionRequest.current) setError(message(reason));
+            });
+        return () => { controller.abort(); readSelectionRequest.current += 1; };
+    }, [selectedCatalogReadId, alignmentJobId, alignmentSession?.session_id]);
     const inspectExactRead = async () => {
-        const exact = readId.trim();
+        const exact = readId;
         if (!exact || !alignmentSession) return;
         const generation = identityRef.current;
+        const selectionRequest = ++readSelectionRequest.current;
+        const parentIsCurrent = onSelectionIntent?.() ?? (() => true);
+        const isCurrent = () => parentIsCurrent() && generation === identityRef.current && selectionRequest === readSelectionRequest.current && currentReadId.current === exact;
         setBusy(true);
         setError(null);
         try {
@@ -802,16 +833,17 @@ export function ReadAndSignalWorkbench({
                 start: integer(start) || undefined,
                 end: integer(end) || undefined,
             });
-            if (generation !== identityRef.current) return;
+            if (!isCurrent()) return;
             setSelectedRead(detail);
             setReadId(detail.read_id);
+            selectionCallback.current?.(detail);
         } catch (reason) {
-            if (generation === identityRef.current) {
+            if (isCurrent()) {
                 setSelectedRead(null);
                 setError(message(reason));
             }
         } finally {
-            if (generation === identityRef.current) setBusy(false);
+            if (isCurrent()) setBusy(false);
         }
     };
 
@@ -831,10 +863,7 @@ export function ReadAndSignalWorkbench({
             });
             if (generation !== identityRef.current) return;
             setEligibleReads(page.reads);
-            if (page.reads.length > 0 && !page.reads.some((item) => item.read_id === readId.trim())) {
-                setReadId(page.reads[0].read_id);
-                setSelectedRead(page.reads[0]);
-            }
+            // Loading a locus never replaces an explicit read selection.
         } catch (reason) {
             if (generation === identityRef.current) {
                 setEligibleReads([]);
@@ -846,12 +875,14 @@ export function ReadAndSignalWorkbench({
     };
 
     const moveRead = (delta: number) => {
+        readSelectionRequest.current += 1; setBusy(false);
         if (filteredEligibleReads.length === 0) return;
         const currentIndex = filteredEligibleReads.findIndex((item) => item.read_id === readId.trim());
         const nextIndex = Math.min(filteredEligibleReads.length - 1, Math.max(0, (currentIndex < 0 ? 0 : currentIndex) + delta));
         const next = filteredEligibleReads[nextIndex];
         setReadId(next.read_id);
         setSelectedRead(next);
+        selectionCallback.current?.(next);
     };
 
     const render = async () => {
@@ -963,8 +994,10 @@ export function ReadAndSignalWorkbench({
             setError('The selected read has no governed mapped locus.');
             return;
         }
-        const readEnd = selectedRead.start_1based + Math.max(1, selectedRead.length || 1) - 1;
-        onNavigateIgv(selectedRead.contig, selectedRead.start_1based, readEnd, 'selected raw-signal read');
+        const readEnd = selectedRead.alignment_end_1based;
+        if (readEnd == null || readEnd < selectedRead.start_1based) { setError("This read has no authoritative reference-consuming span."); return; }
+        if (!onReadIgv) { setError('Selected-read viewer ownership is unavailable.'); return; }
+        onReadIgv(selectedRead);
     };
 
     const openMappedLocus = () => {
@@ -1022,7 +1055,7 @@ export function ReadAndSignalWorkbench({
                     </div>
                     <div role="listbox" aria-label="Eligible reads" className="max-h-48 space-y-1 overflow-y-auto rounded border border-[var(--border-primary)] p-1">
                         {filteredEligibleReads.map((read) => (
-                            <button key={read.read_id} type="button" role="option" aria-selected={read.read_id === readId.trim()} onClick={() => { setReadId(read.read_id); setSelectedRead(read); }} className={`block w-full rounded px-2 py-1 text-left text-[10px] ${read.read_id === readId.trim() ? 'bg-sky-500/20 text-sky-100' : 'hover:bg-[var(--bg-secondary)]'}`}>
+                            <button key={read.read_id} type="button" role="option" aria-selected={read.read_id === readId.trim()} onClick={() => { readSelectionRequest.current += 1; setBusy(false); setReadId(read.read_id); setSelectedRead(read); selectionCallback.current?.(read); }} className={`block w-full rounded px-2 py-1 text-left text-[10px] ${read.read_id === readId.trim() ? 'bg-sky-500/20 text-sky-100' : 'hover:bg-[var(--bg-secondary)]'}`}>
                                 <span className="block font-medium">{formatAlignmentReadSummary(read)}</span>
                                 <span className="block truncate text-[var(--text-muted)]">{read.contig}:{read.start_1based} · {read.strand}</span>
                             </button>
@@ -1033,7 +1066,7 @@ export function ReadAndSignalWorkbench({
                     <details>
                         <summary className="cursor-pointer text-[10px] text-[var(--text-secondary)]">Exact read ID recovery</summary>
                         <div className="mt-1 grid grid-cols-[1fr_auto] gap-1">
-                            <input value={readId} onChange={(event) => setReadId(event.target.value)} placeholder="Exact read ID" className="min-w-0 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-xs font-mono" />
+                            <input value={readId} onChange={(event) => { readSelectionRequest.current += 1; setBusy(false); setSelectedRead(null); setReadId(event.target.value); }} placeholder="Exact read ID" className="min-w-0 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-xs font-mono" />
                             <button type="button" onClick={() => void inspectExactRead()} disabled={busy || !alignmentSession?.ready || !readId.trim()} className="rounded border border-[var(--border-primary)] px-2 py-1 text-[10px] disabled:opacity-40">Resolve</button>
                         </div>
                     </details>

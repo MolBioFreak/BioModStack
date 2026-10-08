@@ -84,6 +84,11 @@ from migrations.seal_ont_read_metric_receipt_immutability import (
     migrate as seal_ont_read_metric_receipt_immutability,
 )
 from migrations.add_remote_execution import migrate as migrate_remote_execution
+from migrations.add_ngs_alignment_presentation_jobs import (
+    migrate as migrate_ngs_alignment_presentation_jobs,
+)
+from migrations.add_ngs_alignment_derived_products import migrate as migrate_ngs_alignment_derived_products
+from migrations.add_native_alignment_viewer_sessions import migrate as migrate_native_alignment_viewer_sessions
 from run_migration import migrate as migrate_stage_tracking
 
 
@@ -160,6 +165,13 @@ MIGRATIONS: List[Migration] = [
         seal_ont_read_metric_receipt_immutability,
     ),
     Migration(45, "add_remote_execution", migrate_remote_execution),
+    Migration(
+        46,
+        "add_ngs_alignment_presentation_jobs",
+        migrate_ngs_alignment_presentation_jobs,
+    ),
+    Migration(47, "add_ngs_alignment_derived_products", migrate_ngs_alignment_derived_products),
+    Migration(48, "add_native_alignment_viewer_sessions", migrate_native_alignment_viewer_sessions),
 ]
 
 

@@ -7,8 +7,10 @@
  * Pattern follows OligoDesignerTemplate for consistency.
  */
 
+import { readNanoporeNativeCloneBinding } from '../lib/nanoporeCloneState';
 import { useEffect, useState, useMemo } from 'react';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { rotateAlignmentAccess } from '../lib/ngsAlignmentSession';
 import { useNavigate } from 'react-router-dom';
 import {
     commitMolBioSequenceImport,
@@ -23,6 +25,8 @@ import {
     issueMolBioNgsReceipt,
     previewMolBioSequenceImport,
     submitOntNgsJob,
+    fetchJobs,
+    restorePooledReferenceSet,
     submitPooledReferenceAssignment,
     type MolBioSequenceImportError,
     type MolBioSequenceImportPayload,
@@ -52,7 +56,14 @@ type AssemblyTool = 'flye' | 'canu';
 type FlyeReadQuality = 'nano-hq' | 'nano-corr' | 'nano-raw';
 type MinimapPreset = 'map-ont' | 'map-hifi' | 'map-pb' | 'sr';
 type InputSource = 'pod5' | 'bam' | 'fastq';
-type PathField = 'pod5Dir' | 'bamPath' | 'fastqPath';
+type CloneAuxiliaryPath = 'wf_clone_primers' | 'wf_clone_insert_reference' | 'wf_clone_host_reference' | 'wf_clone_regions_bedfile';
+type PathField = 'pod5Dir' | 'bamPath' | 'fastqPath' | CloneAuxiliaryPath;
+const CLONE_AUXILIARY_FILES: { field: CloneAuxiliaryPath; label: string; initialKey: string }[] = [
+    { field: 'wf_clone_primers', label: 'Primers file', initialKey: 'wfClonePrimers' },
+    { field: 'wf_clone_insert_reference', label: 'Insert reference file', initialKey: 'wfCloneInsertReference' },
+    { field: 'wf_clone_host_reference', label: 'Host reference file', initialKey: 'wfCloneHostReference' },
+    { field: 'wf_clone_regions_bedfile', label: 'Regions BED file', initialKey: 'wfCloneRegionsBedfile' },
+];
 type PathPickerMode = 'file' | 'directory';
 type ReferenceTab = 'managed' | 'paste' | 'create' | 'legacy';
 
@@ -652,17 +663,54 @@ interface PooledReferenceAssignmentPanelProps {
     fastqPath: string;
     sequences: NucleotideSequenceListItem[];
     onFastqBrowse: () => void;
+    initialValues?: Record<string, unknown>;
+    jobName: string;
+    pinnedGpus: number[];
 }
 
-function PooledReferenceAssignmentPanel({ fastqPath, sequences, onFastqBrowse }: PooledReferenceAssignmentPanelProps) {
+function PooledReferenceAssignmentPanel({ fastqPath, sequences, onFastqBrowse, initialValues, jobName, pinnedGpus }: PooledReferenceAssignmentPanelProps) {
     const queryClient = useQueryClient();
+    const manifestPath = initialValues?.referenceSetManifest as string | undefined;
+    const restoration = useQuery({
+        queryKey: ['restore-pooled-reference', manifestPath],
+        queryFn: async () => (await restorePooledReferenceSet(manifestPath!)).data,
+        enabled: Boolean(manifestPath), retry: false, staleTime: 0,
+    });
+    const [recoveryJobId, setRecoveryJobId] = useState('');
+    const [recoverySearch, setRecoverySearch] = useState('');
+    const [recoveryOffset, setRecoveryOffset] = useState(0);
+    const recoveryJobs = useQuery({
+        queryKey: ['pooled-recovery-jobs', recoverySearch, recoveryOffset],
+        queryFn: async () => (await fetchJobs({ model_id: 'nanopore', mode: 'pooled_reference_assignment',
+            q: recoverySearch || undefined, offset: recoveryOffset, limit: 100, summary: true })).data,
+        enabled: Boolean(manifestPath && restoration.isError), retry: false,
+    });
+    const recovery = useMutation({
+        mutationFn: async () => {
+            if (!recoveryJobId) throw new Error('Select the original pooled assignment.');
+            await rotateAlignmentAccess(recoveryJobId);
+            // The path still requires its own original-job capability. Selecting
+            // another job cannot authorize it or substitute that job's targets.
+            await restoration.refetch({ throwOnError: true });
+        },
+    });
     const [targets, setTargets] = useState<PooledTargetDraft[]>(() => [createPooledTarget(0), createPooledTarget(1)]);
-    const [minMapq, setMinMapq] = useState(20);
-    const [minAlignmentScoreMargin, setMinAlignmentScoreMargin] = useState(5);
+    // A frozen set is immutable in this handoff. Never substitute list defaults or current revisions.
+    const frozenTargets = restoration.data?.targets.map((target) => ({
+        id: target.target_id, targetId: target.target_id, label: target.label,
+        indistinguishableGroup: target.indistinguishable_group ?? '', sequenceId: target.sequence_id,
+        revisionId: target.revision_id, revisionSha256: target.revision_sha256,
+    }));
+    const effectiveTargets = manifestPath ? (frozenTargets ?? []) : targets;
+    const restorationBlocked = Boolean(manifestPath && (!restoration.data || restoration.isFetching || restoration.isError));
+    const [minMapq, setMinMapq] = useState((initialValues?.pooledAssignmentMinMapq as number | undefined) ?? 20);
+    const [minAlignmentScoreMargin, setMinAlignmentScoreMargin] = useState((initialValues?.pooledAssignmentMinAlignmentScoreMargin as number | undefined) ?? 10);
     const [message, setMessage] = useState('');
 
     const submitMutation = useMutation({
         mutationFn: async () => {
+            if (restorationBlocked) throw new Error('Restore the original frozen reference set before submitting.');
+            const targets = effectiveTargets;
             if (!fastqPath.trim()) throw new Error('Select a FASTQ input before submitting pooled assignment.');
             if (targets.length < 2 || targets.length > 96) throw new Error('Pooled assignment requires 2-96 targets.');
             const targetIds = targets.map((target) => target.targetId.trim());
@@ -672,13 +720,18 @@ function PooledReferenceAssignmentPanel({ fastqPath, sequences, onFastqBrowse }:
             if (targets.some((target) => !target.label.trim() || !target.sequenceId || !target.revisionId)) {
                 throw new Error('Every pooled target needs a label, saved sequence, and exact immutable revision.');
             }
-            if (!isIntegerInRange(minMapq, 0, 60) || !Number.isFinite(minAlignmentScoreMargin) || minAlignmentScoreMargin < 0) {
+            if (!isIntegerInRange(minMapq, 0, 60) || !isIntegerInRange(minAlignmentScoreMargin, 0, 1_000_000)) {
                 throw new Error('Pooled alignment thresholds are invalid.');
             }
 
             const receiptTargets = await Promise.all(targets.map(async (target) => {
                 const receiptResponse = await issueMolBioNgsReceipt(target.sequenceId, { revision_id: target.revisionId });
-                const receiptId = receiptResponse.data.receipt_id.trim();
+                const frozen = frozenTargets?.find((candidate) => candidate.targetId === target.targetId);
+                const receipt = receiptResponse.data;
+                if (manifestPath && (!frozen || receipt.sequence_id !== frozen.sequenceId || receipt.revision_id !== frozen.revisionId || receipt.revision_sha256 !== frozen.revisionSha256)) {
+                    throw new Error(`Fresh receipt for ${target.targetId} does not match the frozen revision. Restore the exact source revision; no replacement was submitted.`);
+                }
+                const receiptId = receipt.receipt_id.trim();
                 if (!receiptId) throw new Error(`No receipt was returned for ${target.targetId}.`);
                 return {
                     target_id: target.targetId.trim(),
@@ -694,6 +747,8 @@ function PooledReferenceAssignmentPanel({ fastqPath, sequences, onFastqBrowse }:
                 targets: receiptTargets,
                 min_mapq: minMapq,
                 min_alignment_score_margin: minAlignmentScoreMargin,
+                ...(jobName ? { name: jobName } : {}),
+                ...(pinnedGpus.length === 1 ? { pinned_gpu: pinnedGpus[0] } : {}),
             };
             return submitPooledReferenceAssignment(payload);
         },
@@ -714,31 +769,58 @@ function PooledReferenceAssignmentPanel({ fastqPath, sequences, onFastqBrowse }:
                 <span className="font-medium text-[var(--text-primary)]">FASTQ input</span>
                 <span className="font-mono">{fastqPath ? formatPathDisplay(fastqPath) : 'Not selected'}</span>
                 <button type="button" onClick={onFastqBrowse} className="rounded border border-[var(--border-primary)] px-2 py-1 text-[var(--text-primary)]">Browse FASTQ</button>
-                <span className="ml-auto">{targets.length}/96 targets</span>
+                <span className="ml-auto">{effectiveTargets.length}/96 targets</span>
             </div>
             <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                 <label className="text-xs text-[var(--text-secondary)]">Minimum MAPQ
                     <input type="number" min={0} max={60} value={minMapq} onChange={(event) => setMinMapq(coerceIntegerInput(event.target.value, 20, 0, 60))} className="mt-1 w-full rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1.5 text-sm text-[var(--text-primary)]" />
                 </label>
                 <label className="text-xs text-[var(--text-secondary)]">Minimum alignment score margin
-                    <input type="number" min={0} step="0.1" value={minAlignmentScoreMargin} onChange={(event) => setMinAlignmentScoreMargin(coerceNumberInput(event.target.value, 5, 0, 1000))} className="mt-1 w-full rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1.5 text-sm text-[var(--text-primary)]" />
+                    <input type="number" min={0} max={1000000} step={1} value={minAlignmentScoreMargin} onChange={(event) => setMinAlignmentScoreMargin(coerceIntegerInput(event.target.value, 10, 0, 1000000))} className="mt-1 w-full rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1.5 text-sm text-[var(--text-primary)]" />
                 </label>
             </div>
             <div className="overflow-x-auto rounded border border-[var(--border-primary)]">
                 <table className="w-full min-w-[1000px] text-left text-xs">
                     <thead className="bg-[var(--bg-tertiary)] uppercase tracking-wide text-[var(--text-secondary)]"><tr><th className="px-2 py-2">Stable target ID</th><th className="px-2 py-2">Label</th><th className="px-2 py-2">Indistinguishable group</th><th className="px-2 py-2">Exact saved revision</th><th className="px-2 py-2">Digest</th><th className="px-2 py-2">Row</th></tr></thead>
                     <tbody className="divide-y divide-[var(--border-primary)]">
-                        {targets.map((target) => (
+                        {manifestPath ? effectiveTargets.map((target) => (
+                            <tr key={target.id}><td>{target.targetId}</td><td>{target.label}</td><td>{target.indistinguishableGroup}</td><td>{target.sequenceId} / {target.revisionId}</td><td>{frozenTargets?.find((item) => item.id === target.id)?.revisionSha256}</td><td>Frozen</td></tr>
+                        )) : targets.map((target) => (
                             <PooledTargetRow key={target.id} target={target} sequences={sequences} onChange={(next) => setTargets((previous) => previous.map((candidate) => candidate.id === target.id ? next : candidate))} />
                         ))}
                     </tbody>
                 </table>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-                <button type="button" onClick={() => setTargets((previous) => previous.length < 96 ? [...previous, createPooledTarget(previous.length)] : previous)} disabled={targets.length >= 96} className="rounded border border-[var(--border-primary)] px-3 py-1.5 text-xs text-[var(--text-primary)] disabled:opacity-40">Add target</button>
-                <button type="button" onClick={() => setTargets((previous) => previous.length > 2 ? previous.slice(0, -1) : previous)} disabled={targets.length <= 2} className="rounded border border-[var(--border-primary)] px-3 py-1.5 text-xs text-[var(--text-secondary)] disabled:opacity-40">Remove last target</button>
-                <button type="button" onClick={() => submitMutation.mutate()} disabled={submitMutation.isPending} className="rounded bg-blue-600 px-3 py-1.5 text-xs text-white disabled:cursor-not-allowed disabled:opacity-40">{submitMutation.isPending ? 'Submitting pooled assignment…' : 'Submit pooled assignment'}</button>
-                {message && <span className="text-xs text-[var(--text-secondary)]">{message}</span>}
+                <button type="button" onClick={() => setTargets((previous) => previous.length < 96 ? [...previous, createPooledTarget(previous.length)] : previous)} disabled={Boolean(manifestPath) || targets.length >= 96} className="rounded border border-[var(--border-primary)] px-3 py-1.5 text-xs text-[var(--text-primary)] disabled:opacity-40">Add target</button>
+                <button type="button" onClick={() => setTargets((previous) => previous.length > 2 ? previous.slice(0, -1) : previous)} disabled={Boolean(manifestPath) || targets.length <= 2} className="rounded border border-[var(--border-primary)] px-3 py-1.5 text-xs text-[var(--text-secondary)] disabled:opacity-40">Remove last target</button>
+                <button type="button" onClick={() => submitMutation.mutate()} disabled={submitMutation.isPending || restorationBlocked || pinnedGpus.length > 1} className="rounded bg-blue-600 px-3 py-1.5 text-xs text-white disabled:cursor-not-allowed disabled:opacity-40">{submitMutation.isPending ? 'Submitting pooled assignment…' : 'Submit pooled assignment'}</button>
+                {manifestPath && <p>Frozen reference: {manifestPath}. {restoration.isFetching ? 'Restoring…' : ''}</p>}
+                {restoration.isError && <div className="w-full space-y-2">
+                    <p role="alert">{extractApiErrorMessage(restoration.error)}</p>
+                    <p>Select the original pooled job from Runs to recover access, then retry the same frozen manifest. Recovery requires authenticated application operator/admin authority; a file path is not authorization.</p>
+                    <input aria-label="Search pooled jobs" placeholder="Search original job name" value={recoverySearch}
+                        onChange={(event) => { setRecoverySearch(event.target.value); setRecoveryOffset(0); setRecoveryJobId(''); }} />
+                    <select aria-label="Original pooled assignment" value={recoveryJobId} disabled={recovery.isPending}
+                        onChange={(event) => setRecoveryJobId(event.target.value)}>
+                        <option value="">Select original pooled job…</option>
+                        {(recoveryJobs.data?.jobs ?? []).filter((job) => ['completed', 'awaiting_input'].includes(job.status)).map((job) => (
+                            <option key={job.id} value={job.id}>{job.name} · {job.id} · {job.status}</option>
+                        ))}
+                    </select>
+                    <button type="button" disabled={recoveryOffset === 0 || recoveryJobs.isFetching || recovery.isPending}
+                        onClick={() => { setRecoveryOffset((offset) => Math.max(0, offset - 100)); setRecoveryJobId(''); }}>Previous jobs</button>
+                    <button type="button" disabled={recoveryOffset + 100 >= (recoveryJobs.data?.total ?? 0) || recoveryJobs.isFetching || recovery.isPending}
+                        onClick={() => { setRecoveryOffset((offset) => offset + 100); setRecoveryJobId(''); }}>Next jobs</button>
+                    <button type="button" disabled={!recoveryJobId || recovery.isPending || restoration.isFetching}
+                        onClick={() => recovery.mutate()}>Recover access and retry restoration</button>
+                    <button type="button" disabled={recovery.isPending || restoration.isFetching}
+                        onClick={() => void restoration.refetch()}>Retry restoration</button>
+                    {recoveryJobs.isError && <p role="alert">{extractApiErrorMessage(recoveryJobs.error)}</p>}
+                    {recovery.isError && <p role="alert">{extractApiErrorMessage(recovery.error)}</p>}
+                </div>}
+                {pinnedGpus.length > 0 && <p>Pooled assignment GPU pin: {pinnedGpus.join(', ')}{pinnedGpus.length > 1 ? ' — select one GPU before submitting.' : ''}</p>}
+                {message && <span role="status" className="text-xs text-[var(--text-secondary)]">{message}</span>}
             </div>
         </section>
     );
@@ -747,7 +829,17 @@ function PooledReferenceAssignmentPanel({ fastqPath, sequences, onFastqBrowse }:
 // ============================================================================
 // Main Component
 // ============================================================================
-export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProps) {
+export function NanoporeTemplate(props: NanoporeTemplateProps) {
+    const context = useGlobalExperimentContext();
+    const saved = props.initialValues;
+    const contextMismatch = (saved?.globalDomainExperimentId && saved.globalDomainExperimentId !== context.selectedDomainExperiment?.domain_experiment_id)
+        || (saved?.molbioNgsStateRevisionId && saved.molbioNgsStateRevisionId !== context.stateRevisionId);
+    const refusal = saved?.cloneRefusal || (contextMismatch ? 'Cannot reuse parameters: saved Experiment context differs from the current context. Open the saved exact context before reusing this run.' : null);
+    if (refusal) return <section><p role="alert">{String(refusal)}</p><button type="button" onClick={props.onBack}>Back</button></section>;
+    return <NanoporeLaunchForm {...props} />;
+}
+
+function NanoporeLaunchForm({ onBack, initialValues }: NanoporeTemplateProps) {
     const experimentContext = useGlobalExperimentContext();
     const {
         workspaceId,
@@ -761,8 +853,14 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     // This is intentionally the URL/context-owned exact revision. Never replace it
     // with the global experiment ID or silently advance to a newer local head.
     const exactStateRevisionId = stateRevisionId;
+    const savedNativeBinding = readNanoporeNativeCloneBinding(initialValues?.molbioRevisionBinding);
     const [{ molbioSequenceId, molbioRevisionId }] = useState(() => {
-        const params = new URLSearchParams(window.location.search);
+        if (savedNativeBinding) return {
+            molbioSequenceId: savedNativeBinding.sequence_id,
+            molbioRevisionId: savedNativeBinding.revision_id,
+        };
+        // A clone owns its saved reference; an unrelated URL handoff is not authority.
+        const params = new URLSearchParams(initialValues?.ontWorkflowId ? '' : window.location.search);
         return {
             molbioSequenceId: params.get('molbio_sequence_id') || '',
             molbioRevisionId: params.get('molbio_revision_id') || '',
@@ -784,6 +882,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     // State: Core Configuration
     // ============================================================================
     const [jobName, setJobName] = useState(initialValues?.jobName as string || '');
+    const carriedReferencePath = initialValues?.genericHandoffParams && typeof initialValues.referenceFasta === 'string' ? initialValues.referenceFasta : '';
+    const [carriedReferenceImported, setCarriedReferenceImported] = useState(false);
+    const carriedReferencePending = Boolean(carriedReferencePath && !carriedReferenceImported);
     const [inputSource, setInputSource] = useState<InputSource>(initialValues?.inputSource as InputSource || 'pod5');
     const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowKey>(() => {
         if (typeof initialValues?.selectedWorkflow === 'string') return initialValues.selectedWorkflow as WorkflowKey;
@@ -827,6 +928,11 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             ? initialValues.ngsReferenceRevisionId
             : '',
     );
+    const [managedReferenceWasAutomatic, setManagedReferenceWasAutomatic] = useState(false);
+    const selectManagedReference = (revisionId: string) => {
+        setManagedReferenceWasAutomatic(false);
+        setSelectedManagedReferenceRevisionId(revisionId);
+    };
     const managedReferencesQuery = useQuery({
         queryKey: ['molbio-ngs-references', exactDomainExperimentId],
         queryFn: () => fetchMolBioNgsReferences(exactDomainExperimentId as string),
@@ -940,7 +1046,10 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const [assemblyApproxSize, setAssemblyApproxSize] = useState<number>(initialValues?.assemblyApproxSize as number || 7000);
     const [assemblyCoverage, setAssemblyCoverage] = useState<number>(initialValues?.assemblyCoverage as number || 60);
     const [assemblyTrimLength, setAssemblyTrimLength] = useState<number>(initialValues?.assemblyTrimLength as number || 0);
-    const [assemblyMinQuality, setAssemblyMinQuality] = useState<number>(initialValues?.assemblyMinQuality as number || 9);
+    const [assemblyMinQuality, setAssemblyMinQuality] = useState<number>((initialValues?.assemblyMinQuality as number | undefined) ?? 9);
+    const [cloneAuxiliaryPaths, setCloneAuxiliaryPaths] = useState<Record<CloneAuxiliaryPath, string>>(() => (
+        Object.fromEntries(CLONE_AUXILIARY_FILES.map(({ field, initialKey }) => [field, typeof initialValues?.[initialKey] === 'string' ? initialValues[initialKey] : ''])) as Record<CloneAuxiliaryPath, string>
+    ));
     const [wfCloneSample, setWfCloneSample] = useState(initialValues?.wfCloneSample as string || '');
     const [wfCloneLargeConstruct, setWfCloneLargeConstruct] = useState(initialValues?.wfCloneLargeConstruct === true);
     const [wfCloneFlyeQuality, setWfCloneFlyeQuality] = useState<FlyeReadQuality>(
@@ -1035,19 +1144,29 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         && exactStateReferenceRevisionIds.has(selectedManagedReference.revision.id),
     );
 
+    const requiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'bamQc' || selectedWorkflow === 'modified';
     useEffect(() => {
-        if (selectedManagedReferenceRevisionId || !exactStateRevisionQuery.isSuccess) return;
+        if (!requiresReference && managedReferenceWasAutomatic) {
+            setSelectedManagedReferenceRevisionId('');
+            setManagedReferenceWasAutomatic(false);
+            return;
+        }
+        if (carriedReferencePath || !requiresReference || selectedManagedReferenceRevisionId || !exactStateRevisionQuery.isSuccess) return;
         const firstStateBoundReference = managedReferenceOptions.find(({ revision }) => (
             exactStateReferenceRevisionIds.has(revision.id)
         ));
         if (firstStateBoundReference) {
             setSelectedManagedReferenceRevisionId(firstStateBoundReference.revision.id);
+            setManagedReferenceWasAutomatic(true);
         }
     }, [
         exactStateReferenceRevisionIds,
         exactStateRevisionQuery.isSuccess,
         managedReferenceOptions,
         selectedManagedReferenceRevisionId,
+        requiresReference,
+        managedReferenceWasAutomatic,
+        carriedReferencePath,
     ]);
 
     const hasValidFastqNumericControls = useMemo(() => (
@@ -1058,7 +1177,6 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         && isIntegerInRange(igvReportFlankingBp, 0, FASTQ_MAX_IGV_REPORT_FLANKING_BP)
     ), [expectedPlasmidSize, igvReportFlankingBp, igvReportMaxSites, igvTrackWindowBp, minFastqReadLength]);
 
-    const requiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'bamQc' || selectedWorkflow === 'modified';
     const exactStateMolecularRevisionKeys = useMemo(() => new Set(
         (exactStateRevisionQuery.data?.members ?? [])
             .filter((member) => member.entity_kind === 'molecular_revision')
@@ -1087,17 +1205,28 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const selectedMolbioSequence = molbioSequences.find((sequence) => sequence.id === selectedMolbioSequenceId) || null;
     const selectedMolbioRevision = molbioRevisions.find((revision) => revision.id === selectedMolbioRevisionId) || null;
     const usesMolBioReceiptLane = Boolean(selectedMolbioSequenceId);
+    const usesReference = requiresReference || usesMolBioReceiptLane || Boolean(selectedManagedReferenceRevisionId);
     const managedReferenceBlocker = useMemo(() => {
-        if (usesMolBioReceiptLane) return molbioRevisionPairError;
         if (!exactDomainExperimentId) return 'Select an exact NGS/MolBio Domain Experiment.';
         if (!exactStateRevisionId) return 'Select an exact local state revision.';
         if (!availability.canMutateDomain) return availability.reason;
+        if (savedNativeBinding) {
+            if (selectedMolbioSequenceId !== savedNativeBinding.sequence_id || selectedMolbioRevisionId !== savedNativeBinding.revision_id) return 'Cannot reuse parameters: saved native reference authority differs from the selected pair.';
+            if (exactStateRevisionQuery.isError) return 'The exact local state revision could not be loaded.';
+            if (!exactStateMolecularRevisionKeys.has(`${savedNativeBinding.sequence_id}:${savedNativeBinding.revision_id}`)) return 'The saved native revision is not a member of the exact selected local state revision.';
+        }
+        if (!usesReference) return null;
+        if (usesMolBioReceiptLane) return molbioRevisionPairError;
         if (managedReferencesQuery.isError) return 'Managed references could not be loaded.';
         if (exactStateRevisionQuery.isError) return 'The exact local state revision could not be loaded.';
         if (!selectedManagedReference) return 'Select an immutable managed reference revision.';
         if (!selectedReferenceIsExactStateMember) return 'The selected reference revision is not a member of the exact selected local state revision.';
         return null;
     }, [
+        savedNativeBinding,
+        selectedMolbioSequenceId,
+        selectedMolbioRevisionId,
+        exactStateMolecularRevisionKeys,
         availability.canMutateDomain,
         availability.reason,
         exactDomainExperimentId,
@@ -1108,9 +1237,11 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         selectedManagedReference,
         selectedReferenceIsExactStateMember,
         usesMolBioReceiptLane,
+        usesReference,
     ]);
     const methylationEnabled = modifiedBases !== 'none';
-    const canRunModkit = selectedWorkflow === 'modified' && methylationEnabled;
+    const canRunModkit = selectedWorkflow === 'modified'
+        && (inputSource === 'bam' || (inputSource === 'pod5' && methylationEnabled));
     const fastqQcSettingAvailable = selectedWorkflow === 'plasmidQc'
         || selectedWorkflow === 'bamQc'
         || selectedWorkflow === 'fastqQc'
@@ -1122,10 +1253,12 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         : inputSource === 'bam'
             ? Boolean(bamPath.trim())
             : Boolean(fastqPath.trim()) && hasValidFastqNumericControls;
-    const reviewReferenceReady = !requiresReference
+    const reviewReferenceReady = !usesReference
         || (usesMolBioReceiptLane ? Boolean(selectedMolbioSequenceId && selectedMolbioRevisionId) : Boolean(selectedManagedReference && selectedReferenceIsExactStateMember));
     const getSubmissionBlockers = (): string[] => {
         const blockers: string[] = [];
+        if (runModkit && !canRunModkit) blockers.push('Modkit requires methylation analysis with tagged BAM input or POD5 modified-base calling.');
+        if (carriedReferencePending) blockers.push('Import the carried reference path and attach its exact revision to the current scientific state before launch.');
         if (selectedWorkflow === 'pooledAssignment') blockers.push('Use the pooled assignment panel to submit this workflow.');
         if (!jobName.trim()) blockers.push('Enter a job name.');
         if (inputSource !== 'fastq' && pinnedGpus.length > 1) blockers.push('Select one GPU or Scheduler auto before submitting this NGS job.');
@@ -1138,7 +1271,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         if (inputSource === 'fastq' && !fastqPath.trim()) blockers.push('Please specify a FASTQ file path.');
         if (inputSource === 'fastq' && !['clone', 'plasmidQc', 'constructScreening', 'fastqQc', 'pooledAssignment'].includes(selectedWorkflow)) blockers.push('The selected workflow does not accept FASTQ input.');
         if (molbioRevisionPairError) blockers.push(molbioRevisionPairError);
-        if (!usesMolBioReceiptLane && managedReferenceBlocker) blockers.push(managedReferenceBlocker);
+        if (managedReferenceBlocker) blockers.push(managedReferenceBlocker);
         if (inputSource === 'fastq' && !hasValidFastqNumericControls) blockers.push('FASTQ QC numeric controls must be finite integers within the displayed bounds.');
         return [...new Set(blockers)];
     };
@@ -1166,7 +1299,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             ? 'ALIGNED READS'
             : 'ALREADY BASECALLED';
     const reviewModelLabel = inputSource === 'pod5' ? doradoModel.toUpperCase() : 'N/A';
-    const reviewGpuLabel = inputSource === 'fastq'
+    const reviewGpuLabel = inputSource === 'fastq' && selectedWorkflow !== 'pooledAssignment'
         ? 'CPU ONLY'
         : pinnedGpus.length === 1 ? `GPU ${pinnedGpus[0]}` : 'AUTO GPU';
     const reviewReferenceLabel = requiresReference ? (reviewReferenceReady ? 'REFERENCE READY' : 'REFERENCE REQUIRED') : 'REFERENCE OPTIONAL';
@@ -1198,7 +1331,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         },
         onSuccess: async (result) => {
             await refreshManagedReferences();
-            setSelectedManagedReferenceRevisionId(result.id);
+            selectManagedReference(result.id);
             setReferenceTab('managed');
             setReferenceLibraryNotice(`Created immutable managed reference revision ${result.id}. Select a state revision that includes it before launch.`);
         },
@@ -1226,10 +1359,11 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                 idempotency_key: crypto.randomUUID(),
             });
         },
-        onSuccess: async (result) => {
+        onSuccess: async (result, entry) => {
             await refreshManagedReferences();
-            setSelectedManagedReferenceRevisionId(result.id);
+            selectManagedReference(result.id);
             setReferenceTab('managed');
+            if (entry.source === 'path' && entry.path === carriedReferencePath) setCarriedReferenceImported(true);
             setReferenceLibraryNotice(`Imported untrusted browser hint as immutable managed reference revision ${result.id}. Select a state revision that includes it before launch.`);
         },
         onError: (err: unknown) => setReferenceLibraryNotice(extractApiErrorMessage(err)),
@@ -1243,12 +1377,21 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             let molbioNgsReceiptId = '';
             let comparisonPanelReceiptId = '';
 
+            if (carriedReferencePending) throw new Error('Import the carried reference before launch.');
+            if (managedReferenceBlocker) throw new Error(managedReferenceBlocker);
             if (molbioRevisionPairError) {
                 throw new Error(molbioRevisionPairError);
             }
             if (selectedMolbioSequenceId && selectedMolbioRevisionId) {
                 const receiptResponse = await issueMolBioNgsReceipt(selectedMolbioSequenceId, { revision_id: selectedMolbioRevisionId });
                 molbioNgsReceiptId = receiptResponse.data.receipt_id.trim();
+                if (savedNativeBinding && (
+                    molbioNgsReceiptId === savedNativeBinding.receipt_id
+                    || receiptResponse.data.sequence_id !== savedNativeBinding.sequence_id
+                    || receiptResponse.data.revision_id !== savedNativeBinding.revision_id
+                    || receiptResponse.data.revision_sha256 !== savedNativeBinding.revision_sha256
+                    || receiptResponse.data.reference_snapshot_sha256 !== savedNativeBinding.reference_snapshot_sha256
+                )) throw new Error('Fresh receipt does not match the saved immutable native reference authority.');
                 if (!molbioNgsReceiptId) throw new Error('The immutable MolBio handoff did not return a receipt.');
                 if (approvedComparisonPanelId) {
                     const panelResponse = await fetch(`/api/molbio/ngs-comparison-panels/${encodeURIComponent(approvedComparisonPanelId)}/receipts`, {
@@ -1260,7 +1403,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     comparisonPanelReceiptId = String(panelReceipt.receipt_id || '').trim();
                     if (!comparisonPanelReceiptId) throw new Error('The approved comparison panel did not return a receipt.');
                 }
-            } else {
+            } else if (usesReference) {
                 if (managedReferenceBlocker) throw new Error(managedReferenceBlocker);
                 if (!exactDomainExperimentId || !exactStateRevisionId || !selectedManagedReference) {
                     throw new Error('Exact Domain Experiment, state revision, and managed reference revision are required.');
@@ -1324,6 +1467,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         igv_report_flanking_bp: igvReportFlankingBp,
                     }),
                     ...((selectedWorkflow === 'clone' || (selectedWorkflow === 'constructScreening' && runAssembly)) && {
+                        ...Object.fromEntries(Object.entries(cloneAuxiliaryPaths).filter(([, value]) => value !== '')),
                         wf_clone_assembly_tool: assemblyTool,
                         wf_clone_approx_size: assemblyApproxSize,
                         wf_clone_assm_coverage: assemblyCoverage,
@@ -1348,7 +1492,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     }),
                     ...(runModkit && canRunModkit && modkitFilterThreshold != null && { modkit_filter_threshold: modkitFilterThreshold }),
                 },
-                ...(!molbioNgsReceiptId && exactDomainExperimentId && exactStateRevisionId && selectedManagedReference && {
+                ...(usesReference && !molbioNgsReceiptId && exactDomainExperimentId && exactStateRevisionId && selectedManagedReference && {
                     managed_reference: {
                         global_domain_experiment_id: exactDomainExperimentId,
                         molbio_ngs_state_revision_id: exactStateRevisionId,
@@ -1385,7 +1529,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const getPathFieldValue = (field: PathField): string => {
         if (field === 'pod5Dir') return pod5Dir;
         if (field === 'bamPath') return bamPath;
-        return fastqPath;
+        if (field === 'fastqPath') return fastqPath;
+        return cloneAuxiliaryPaths[field];
     };
 
     const setPathFieldValue = (field: PathField, value: string) => {
@@ -1399,7 +1544,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         }
         if (field === 'fastqPath') {
             setFastqPath(value);
+            return;
         }
+        setCloneAuxiliaryPaths((current) => ({ ...current, [field]: value }));
     };
 
     const openPathPicker = (next: PathPickerState) => {
@@ -1549,6 +1696,19 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                 </div>
             </div>
 
+            {initialValues?.genericHandoffParams != null && <section aria-label="Generic NGS handoff">
+                <p>Continued from the generic form. Your draft inputs and settings are retained below; review the native controls before submitting.</p>
+                <details><summary>Carried draft values</summary><dl>{Object.entries(initialValues.genericHandoffParams as Record<string, unknown>).map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{typeof value === 'object' ? JSON.stringify(value) : String(value)}</dd></div>)}</dl></details>
+                {carriedReferencePath && <div>
+                    <p>Carried reference path: {carriedReferencePath}. A path is an import hint, not immutable reference authority.</p>
+                    <button type="button" disabled={!exactDomainExperimentId || importLegacyReferenceMutation.isPending || carriedReferenceImported} onClick={() => {
+                        const timestamp = new Date().toISOString();
+                        importLegacyReferenceMutation.mutate({ id: crypto.randomUUID(), name: inferReferenceNameFromPath(carriedReferencePath) || 'Carried reference', source: 'path', path: carriedReferencePath, createdAt: timestamp, updatedAt: timestamp });
+                    }}>Import carried reference</button>
+                    {referenceLibraryNotice && <p role="status">{referenceLibraryNotice}</p>}
+                </div>}
+            </section>}
+
             {/* Operator-first workflow chooser: do not make users infer a workflow from low-level switches. */}
             <NanoporeWorkflowChooser
                 selectedWorkflow={selectedWorkflow}
@@ -1568,7 +1728,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         placeholder="my_nanopore_run"
                         className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-2 text-[var(--text-primary)]"
                     />
-                    {inputSource === 'fastq' ? (
+                    {inputSource === 'fastq' && selectedWorkflow !== 'pooledAssignment' ? (
                         <div className="mt-4 rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/60 px-3 py-2" data-testid="ngs-gpu-cpu-only">
                             <div className="text-sm font-medium text-[var(--text-secondary)]">GPU assignment</div>
                             <p className="mt-1 text-xs text-[var(--text-secondary)]">CPU only for FASTQ input. GPU pinning is not applicable.</p>
@@ -1724,6 +1884,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                 <h2 id="ngs-reference-heading" className={`${TASK_FLOW_LABEL} mb-3`}>2 · Reference / sample</h2>
                 {selectedWorkflow === 'pooledAssignment' ? (
                     <PooledReferenceAssignmentPanel
+                        initialValues={initialValues}
+                        jobName={jobName}
+                        pinnedGpus={pinnedGpus}
                         fastqPath={fastqPath}
                         sequences={molbioSequences}
                         onFastqBrowse={() => openPathPicker({ field: 'fastqPath', title: 'Select FASTQ File', mode: 'file', filter: 'fastq' })}
@@ -1811,7 +1974,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                 </div>
                 {usesMolBioReceiptLane ? <p className="rounded border border-cyan-500/40 bg-cyan-500/10 p-3 text-xs text-cyan-100">MolBio one-time receipt handoff is active for {selectedMolbioSequenceId}. Managed-reference authority cannot be mixed with this receipt/comparison-panel lane.</p> : managedReferenceBlocker ? <p role="alert" className="rounded border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-100">Managed launch disabled: {managedReferenceBlocker}</p> : null}
                 {referenceTab === 'managed' && <div className="space-y-2">
-                    <select value={selectedManagedReferenceRevisionId} onChange={(event) => setSelectedManagedReferenceRevisionId(event.target.value)} disabled={usesMolBioReceiptLane || managedReferencesQuery.isLoading} className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-2 text-sm disabled:opacity-50">
+                    <select value={selectedManagedReferenceRevisionId} onChange={(event) => selectManagedReference(event.target.value)} disabled={usesMolBioReceiptLane || managedReferencesQuery.isLoading} className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-2 text-sm disabled:opacity-50">
                         <option value="">Select immutable managed revision…</option>{managedReferenceOptions.map(({ resource, revision }) => <option key={revision.id} value={revision.id}>{resource.name} · rev {revision.revision_number} · {revision.id}{exactStateReferenceRevisionIds.has(revision.id) ? ' · selected-state member' : ' · not in selected state'}</option>)}
                     </select>{managedReferenceOptions.length === 0 && !managedReferencesQuery.isLoading && <p className="text-xs text-[var(--text-secondary)]">No managed references belong to this exact Domain Experiment.</p>}
                 </div>}
@@ -2079,18 +2242,19 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                     <label className="flex items-center gap-3 cursor-pointer">
                         <input
                             type="checkbox"
-                            checked={runFastqQc}
+                            checked={selectedWorkflow === 'fastqQc' || runFastqQc}
+                            disabled={selectedWorkflow === 'fastqQc'}
                             onChange={(e) => setRunFastqQc(e.target.checked)}
                             className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
                         />
                         <div>
                             <span className="text-sm text-[var(--text-primary)]">FASTQ plasmid QC</span>
-                            <p className="text-xs text-[var(--text-secondary)]">Runs the optional alignment, coverage, consensus, and multimer evidence stage when this input supports it.</p>
+                            <p className="text-xs text-[var(--text-secondary)]">{selectedWorkflow === 'fastqQc' ? 'Always on for ONT FASTQ QC; an immutable reference is required.' : 'Runs the optional alignment, coverage, consensus, and multimer evidence stage when this input supports it.'}</p>
                         </div>
                     </label>
                 )}
 
-                {inputSource === 'fastq' && runFastqQc && (
+                {inputSource === 'fastq' && (selectedWorkflow === 'fastqQc' || runFastqQc) && (
                     <div className="space-y-3 border-t border-[var(--border-primary)] pt-3">
                         <div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">FASTQ QC core controls</div>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -2267,7 +2431,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                 </div>
                             </div>
                         )}
-                        {inputSource === 'fastq' && runFastqQc && (
+                        {inputSource === 'fastq' && (selectedWorkflow === 'fastqQc' || runFastqQc) && (
                             <div className="space-y-3 border-t border-[var(--border-primary)] pt-3">
                                 <div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">IGV track/report tuning</div>
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -2349,6 +2513,16 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                             <div className="space-y-3 border-t border-[var(--border-primary)] pt-3">
                                 <div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">wf-clone-validation</div>
                                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                                    {CLONE_AUXILIARY_FILES.map(({ field, label }) => (
+                                        <div key={field} data-testid={field} className="text-xs text-[var(--text-secondary)]">
+                                            <div>{label} (optional)</div>
+                                            <div className="mt-1 flex items-center gap-2">
+                                                <span className="min-w-0 flex-1 break-all font-mono">{cloneAuxiliaryPaths[field] || 'No file selected'}</span>
+                                                <button type="button" aria-label={`Browse ${label}`} onClick={() => openPathPicker({ field, title: `Select ${label}`, mode: 'file', filter: 'unknown' })} className="rounded border border-[var(--border-primary)] px-2 py-1.5">Browse</button>
+                                                {cloneAuxiliaryPaths[field] && <button type="button" aria-label={`Clear ${label}`} onClick={() => setPathFieldValue(field, '')} className="rounded border border-[var(--border-primary)] px-2 py-1.5">Clear</button>}
+                                            </div>
+                                        </div>
+                                    ))}
                                     <label className="text-xs text-[var(--text-secondary)]">
                                         Assembly tool
                                         <select

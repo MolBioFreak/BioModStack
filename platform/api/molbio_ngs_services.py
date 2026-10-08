@@ -1069,6 +1069,7 @@ async def _validate_domain_owned_receipts(
         resolve_evidence_assessment_receipt,
     )
     from services.molbio_ngs_member_receipts import (  # noqa: PLC0415
+        is_ngs_job_identity,
         resolve_ngs_job_receipt,
         resolve_ngs_result_manifest_receipt,
         resolve_ont_instrument_run_receipt,
@@ -1161,7 +1162,7 @@ async def _validate_domain_owned_receipts(
                 params = job.params if job is not None and isinstance(job.params, dict) else {}
                 if (
                     job is None
-                    or job.model_id != "nanopore"
+                    or not is_ngs_job_identity(job)
                     or params.get("global_domain_experiment_id")
                     != global_domain_experiment_id
                 ):
@@ -1193,7 +1194,8 @@ async def _validate_domain_owned_receipts(
                     await resolve_ngs_job_receipt(core_session, job_id=job.id)
                     if entity_kind == "ngs_job"
                     else await resolve_ngs_result_manifest_receipt(
-                        core_session, job_id=job.id
+                        core_session, job_id=job.id,
+                        manifest_identity=str(authority["entity_id"]).removeprefix(f"{job.id}:"),
                     )
                 )
                 _require_resolved_receipt_authority(

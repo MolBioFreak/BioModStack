@@ -30,6 +30,30 @@ from routers import files as files_router  # noqa: E402
 from routers import ngs_alignment_sessions as ngs_routes  # noqa: E402
 
 
+class _ScalarResult:
+    def __init__(self, value: Any):
+        self._value = value
+
+    def scalar_one_or_none(self):
+        return self._value
+
+
+class _ObservationalPresentationSession:
+    def __init__(self, row: Any):
+        self.row = row
+        self.commits = 0
+        self.rollbacks = 0
+
+    async def execute(self, _statement: Any):
+        return _ScalarResult(self.row)
+
+    async def commit(self):
+        self.commits += 1
+
+    async def rollback(self):
+        self.rollbacks += 1
+
+
 @pytest.fixture(autouse=True)
 def _stable_derived_artifact_creation_authority(monkeypatch: pytest.MonkeyPatch):
     from services import ngs_alignment_sessions as service
@@ -208,7 +232,9 @@ def test_governed_ngs_openapi_has_exact_web6_components_and_status_maps() -> Non
         "OntNgsCapabilityRevocationSuccessV1",
         "OntNgsErrorV1",
         "BinaryArtifactResponse",
-        "OntAlignmentPresentationV1",
+        "OntPresentationPreparingV2",
+        "OntPresentationReadyV2",
+        "OntPresentationFailedV2",
         "OntAlignmentLocusSliceRequestV1",
         "OntAlignmentLocusSliceV1",
     } <= set(components)
@@ -235,6 +261,7 @@ def test_governed_ngs_openapi_has_exact_web6_components_and_status_maps() -> Non
         ("/api/jobs/{job_id}/reads", "get"): {"200", "400", "403", "404", "409"},
         ("/api/jobs/{job_id}/reads/{read_id}", "get"): {"200", "400", "403", "404", "409"},
         ("/api/jobs/{job_id}/alignment-sessions/{session_id}/presentation", "get"): {"200", "403", "404", "409"},
+        ("/api/jobs/{job_id}/alignment-sessions/{session_id}/presentation/retry", "post"): {"200", "403", "404", "409"},
         ("/api/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices", "post"): {"200", "400", "403", "404", "409"},
     }
     binary_statuses = {"200", "206", "304", "400", "403", "404", "409", "416"}
@@ -368,6 +395,441 @@ def _write_governed_alignment_fixture(path: Path, *, read_count: int = 12) -> tu
     return index, bam_sha, bam_size, bai_sha, bai_size
 
 
+def _write_v5_logical_read_fixture(path: Path) -> tuple[Path, str, int, str, int]:
+    from array import array
+    import pysam
+    from services import ngs_alignment_sessions as service
+
+    header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "plasmid", "LN": 1000}]}
+
+    def record(name: str, flag: int, start: int, *, mapq: int = 60) -> Any:
+        value = pysam.AlignedSegment()
+        value.query_name = name
+        value.query_sequence = "ACGT" * 10
+        value.flag = flag
+        value.reference_id = 0 if not flag & 4 else -1
+        value.reference_start = start if not flag & 4 else -1
+        value.mapping_quality = mapq
+        value.cigar = ((0, 40),) if not flag & 4 else None
+        value.query_qualities = pysam.qualitystring_to_array("I" * 40)
+        return value
+
+    mapped_id = "mapped /%: safe"
+    mapped = record(mapped_id, 0, 10)
+    mapped.set_tag("NM", 2, value_type="i")
+    mapped.set_tag("mv", array("b", [5, 1, 0, 1]))
+    mapped.set_tag("ts", 10, value_type="i")
+    mapped.set_tag("ns", 110, value_type="i")
+    records = [
+        mapped,
+        record(mapped_id, 0x800, 20, mapq=30),
+        record(mapped_id, 0x100, 30, mapq=20),
+        record("ambiguous", 0, 40),
+        record("ambiguous", 0, 50),
+        record("secondary-only", 0x100, 60),
+        record("supplementary-only", 0x800, 70),
+        record("outside/raw signal", 0, 80),
+        record("unmapped-only", 0x4, -1, mapq=0),
+        record(mapped_id, 0x800 | 0x4, -1, mapq=0),
+    ]
+    with pysam.AlignmentFile(path, "wb", header=header) as output:
+        for value in records:
+            output.write(value)
+    pysam.index(str(path))
+    index = Path(f"{path}.bai")
+    bam_sha, bam_size = service._sha256_file_and_size(path)
+    bai_sha, bai_size = service._sha256_file_and_size(index)
+    return index, bam_sha, bam_size, bai_sha, bai_size
+
+
+def test_v5_presentation_package_closes_catalog_locators_preview_and_response(
+    tmp_path: Path,
+) -> None:
+    import pyarrow.parquet as pq
+    import pysam
+    from routers import ngs_alignment_sessions as router
+    from services import ngs_alignment_sessions as service
+
+    source = tmp_path / "source.bam"
+    index, bam_sha, bam_size, bai_sha, bai_size = _write_v5_logical_read_fixture(source)
+    source_bam_before = source.read_bytes()
+    source_bai_before = index.read_bytes()
+    package = service.build_alignment_presentation(
+        source,
+        bam_sha256=bam_sha,
+        bam_size_bytes=bam_size,
+        index=index,
+        index_sha256=bai_sha,
+        index_size_bytes=bai_size,
+        source_manifest_sha256="a" * 64,
+        source_authority_sha256="b" * 64,
+        source_reference_sha256="c" * 64,
+        artifact_set_sha256="d" * 64,
+        alignment_pair_sha256="e" * 64,
+        source_alignment_relative_path="source.bam",
+        source_index_relative_path="source.bam.bai",
+        job_id="job-a",
+        session_id="1" * 24,
+        mode="primary",
+        cache_root=tmp_path / "cache",
+        target_reads=2,
+    )
+
+    package_root = package["manifest_path"].parent
+    assert {item.name for item in package_root.iterdir()} == {
+        "preview.bam",
+        "preview.bam.bai",
+        "full-source-primary.coverage.bedgraph",
+        "read-catalog.parquet",
+        "read-record-locators.parquet",
+        "presentation-manifest.json",
+    }
+    manifest = package["manifest"]
+    assert manifest["schema"] == "bms.ngs.alignment-presentation-manifest.v4"
+    assert manifest["policy"] == {
+        "id": "primary-read-presentation-v4",
+        "version": 4,
+        "target_reads": 2,
+        "max_preview_records": 20000,
+        "max_preview_bytes": 67108864,
+        "max_build_seconds": 120.0,
+        "max_catalog_bytes": 134217728,
+        "max_locator_bytes": 134217728,
+        "max_package_bytes": 402653184,
+        "max_temporary_bytes": 805306368,
+    }
+    assert manifest["source_logical_read_count"] == 6
+    assert manifest["source_alignment_record_count"] == 10
+    assert source.read_bytes() == source_bam_before
+    assert index.read_bytes() == source_bai_before
+
+    catalog_table = pq.read_table(package["catalog_path"])
+    locator_table = pq.read_table(package["locators_path"])
+    assert catalog_table.column_names == list(service.ALIGNMENT_READ_CATALOG_SCHEMA.names)
+    assert locator_table.column_names == list(service.ALIGNMENT_READ_LOCATOR_SCHEMA.names)
+    catalog = catalog_table.to_pylist()
+    locators = locator_table.to_pylist()
+    assert [row["read_id"] for row in catalog] == sorted(
+        (row["read_id"] for row in catalog), key=lambda value: value.encode("utf-8")
+    )
+    by_id = {row["read_id"]: row for row in catalog}
+    assert by_id["mapped /%: safe"]["alignment_state"] == "mapped_primary"
+    assert by_id["mapped /%: safe"]["source_record_count"] == 4
+    assert by_id["mapped /%: safe"]["mapped_primary_count"] == 1
+    assert by_id["mapped /%: safe"]["supplementary_count"] == 2
+    assert by_id["mapped /%: safe"]["mapped_supplementary_count"] == 1
+    assert by_id["mapped /%: safe"]["secondary_count"] == 1
+    assert by_id["mapped /%: safe"]["unmapped_count"] == 0
+    assert by_id["mapped /%: safe"]["dorado_tag_parse_valid"] is True
+    assert by_id["mapped /%: safe"]["dorado_tag_move_stride_samples"] == 5
+    assert by_id["mapped /%: safe"]["dorado_tag_emitted_bases"] == 2
+    assert by_id["mapped /%: safe"]["dorado_tag_start_sample"] == 10
+    assert by_id["mapped /%: safe"]["dorado_tag_end_sample"] == 110
+    assert by_id["unmapped-only"]["alignment_state"] == "unmapped"
+    assert by_id["ambiguous"]["alignment_state"] == "ambiguous_primary"
+    assert by_id["ambiguous"]["canonical_record_ordinal"] is None
+    assert by_id["secondary-only"]["alignment_state"] == "no_primary"
+    assert by_id["supplementary-only"]["alignment_state"] == "no_primary"
+    assert by_id["outside/raw signal"]["alignment_state"] == "mapped_primary"
+
+    assert [
+        (row["read_id"], row["source_record_ordinal"]) for row in locators
+    ] == sorted(
+        ((row["read_id"], row["source_record_ordinal"]) for row in locators),
+        key=lambda value: (value[0].encode("utf-8"), value[1]),
+    )
+    edge = next(row for row in locators if row["flags"] == 0x800 | 0x4)
+    assert edge["record_class"] == "supplementary"
+    assert len(edge["record_fingerprint_sha256"]) == 64
+    with pysam.AlignmentFile(source, "rb") as handle:
+        for locator in locators:
+            handle.seek(locator["bgzf_virtual_offset"])
+            reopened = next(handle)
+            assert service.alignment_record_fingerprint(reopened) == locator["record_fingerprint_sha256"]
+
+    with pysam.AlignmentFile(package["bam_path"], "rb") as preview:
+        preview_records = list(preview.fetch(until_eof=True))
+    preview_ids = {record.query_name for record in preview_records}
+    assert preview_ids == {row["read_id"] for row in catalog if row["in_preview"]}
+    assert all(not record.is_secondary and not record.is_unmapped for record in preview_records)
+    assert sum(record.is_supplementary for record in preview_records) == 1
+    assert manifest["selected_read_count"] == 2
+    assert manifest["selected_alignment_record_count"] == 3
+
+    response = router._presentation_response(
+        "job-a",
+        "1" * 24,
+        cast(Any, SimpleNamespace(id="presentation-1", mode="primary", state="ready")),
+        package,
+    )
+    validated = router.OntPresentationReadyV2.model_validate(response)
+    assert validated.catalog.logical_read_count == 6
+    assert validated.locators.record_count == 10
+
+
+def test_ready_presentation_route_serializes_an_actually_built_v4_package(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    result_root = tmp_path / "result"
+    result_root.mkdir()
+    source = result_root / "source.bam"
+    index, bam_sha, bam_size, bai_sha, bai_size = _write_v5_logical_read_fixture(source)
+    package = service.build_alignment_presentation(
+        source,
+        bam_sha256=bam_sha,
+        bam_size_bytes=bam_size,
+        index=index,
+        index_sha256=bai_sha,
+        index_size_bytes=bai_size,
+        source_manifest_sha256="a" * 64,
+        source_authority_sha256="b" * 64,
+        source_reference_sha256="c" * 64,
+        artifact_set_sha256="d" * 64,
+        alignment_pair_sha256="e" * 64,
+        source_alignment_relative_path="source.bam",
+        source_index_relative_path="source.bam.bai",
+        job_id="job-route",
+        session_id="3" * 24,
+        mode="primary",
+        cache_root=result_root / ".alignment-presentations",
+    )
+    row = SimpleNamespace(
+        id="presentation-route",
+        job_id="job-route",
+        session_id="3" * 24,
+        mode="primary",
+        state="ready",
+        error_code=None,
+        authority_sha256=package["manifest"]["authority_sha256"],
+        manifest_sha256=package["manifest_metadata"]["sha256"],
+    )
+    database = _ObservationalPresentationSession(row)
+
+    @asynccontextmanager
+    async def pinned(_job: Any):
+        yield result_root
+
+    monkeypatch.setattr(ngs_routes, "_validated_pinned_result_root", pinned)
+    app = _ngs_app()
+    app.include_router(ngs_routes.router, prefix="/api")
+    app.dependency_overrides[ngs_routes.require_alignment_job] = lambda: SimpleNamespace(
+        id="job-route", provenance={}
+    )
+    app.dependency_overrides[ngs_routes.get_session] = lambda: database
+
+    response = TestClient(app).get(
+        f"/api/jobs/job-route/alignment-sessions/{'3' * 24}/presentation"
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["schema"] == "bms.ngs.alignment-presentation.v2"
+    assert body["presentation_id"] == "presentation-route"
+    assert body["source"]["logical_read_count"] == 6
+    assert body["preview"]["selected_record_count"] == 3
+    assert body["catalog"]["content_sha256"] == package["catalog_metadata"]["sha256"]
+    assert body["locators"]["content_sha256"] == package["locators_metadata"]["sha256"]
+
+
+def test_alignment_record_fingerprint_distinguishes_cigar_and_typed_tags() -> None:
+    import pysam
+    from services import ngs_alignment_sessions as service
+
+    header = pysam.AlignmentHeader.from_dict({
+        "HD": {"VN": "1.6"}, "SQ": [{"SN": "plasmid", "LN": 1000}],
+    })
+
+    def record(cigar: tuple[tuple[int, int], ...], tag: int) -> Any:
+        value = pysam.AlignedSegment(header)
+        value.query_name = "same"
+        value.query_sequence = "A" * 40
+        value.query_qualities = pysam.qualitystring_to_array("I" * 40)
+        value.flag = 0
+        value.reference_id = 0
+        value.reference_start = 10
+        value.mapping_quality = 60
+        value.cigar = cigar
+        value.set_tag("NM", tag, value_type="i")
+        return value
+
+    first = record(((0, 40),), 1)
+    different_cigar = record(((0, 20), (1, 1), (0, 19)), 1)
+    different_tag = record(((0, 40),), 2)
+    assert len({
+        service.alignment_record_fingerprint(first),
+        service.alignment_record_fingerprint(different_cigar),
+        service.alignment_record_fingerprint(different_tag),
+    }) == 3
+
+
+def test_alignment_record_fingerprint_preserves_b_array_subtype_and_order() -> None:
+    from array import array
+
+    import pysam
+    from services import ngs_alignment_sessions as service
+
+    header = pysam.AlignmentHeader.from_dict({
+        "HD": {"VN": "1.6"}, "SQ": [{"SN": "plasmid", "LN": 1000}],
+    })
+
+    def record(values: array) -> Any:
+        value = pysam.AlignedSegment(header)
+        value.query_name = "same"
+        value.query_sequence = "AA"
+        value.query_qualities = pysam.qualitystring_to_array("II")
+        value.flag = 0
+        value.reference_id = 0
+        value.reference_start = 1
+        value.cigartuples = ((0, 2),)
+        value.set_tag("XA", values)
+        return value
+
+    signed = record(array("b", [1, 2]))
+    unsigned = record(array("B", [1, 2]))
+    reversed_values = record(array("b", [2, 1]))
+    assert len({
+        service.alignment_record_fingerprint(signed),
+        service.alignment_record_fingerprint(unsigned),
+        service.alignment_record_fingerprint(reversed_values),
+    }) == 3
+
+
+@pytest.mark.parametrize(
+    "tamper", ["manifest_authority", "locator_semantics", "catalog_scalar", "catalog_derivation", "membership_count"]
+)
+def test_adoption_rejects_rehashed_semantic_forgery(
+    tmp_path: Path, tamper: str,
+) -> None:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from services import ngs_alignment_sessions as service
+    from services.ngs_alignment_presentation_v5 import verify_package_against_source
+
+    source = tmp_path / "source.bam"
+    index, bam_sha, bam_size, bai_sha, bai_size = _write_v5_logical_read_fixture(source)
+    package = service.build_alignment_presentation(
+        source, bam_sha256=bam_sha, bam_size_bytes=bam_size, index=index,
+        index_sha256=bai_sha, index_size_bytes=bai_size, source_manifest_sha256="a" * 64,
+        source_authority_sha256="b" * 64, source_reference_sha256="c" * 64,
+        artifact_set_sha256="d" * 64, alignment_pair_sha256="e" * 64,
+        source_alignment_relative_path="source.bam", source_index_relative_path="source.bam.bai",
+        job_id="job-forgery", session_id="7" * 24, mode="primary",
+        cache_root=tmp_path / "cache", target_reads=2,
+    )
+    manifest_path = package["manifest_path"]
+    manifest = json.loads(manifest_path.read_text())
+    changed_path = None
+    changed_key = None
+    if tamper == "manifest_authority":
+        manifest["creation_revision"] = "f" * 40
+    elif tamper == "locator_semantics":
+        changed_path, changed_key = package["locators_path"], "locators"
+        table = pq.read_table(changed_path)
+        rows = table.to_pylist()
+        rows[0]["bgzf_virtual_offset"] += 1
+        pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), changed_path)
+    elif tamper in {"catalog_scalar", "catalog_derivation"}:
+        changed_path, changed_key = package["catalog_path"], "catalog"
+        table = pq.read_table(changed_path)
+        rows = table.to_pylist()
+        row = next(item for item in rows if item["alignment_state"] == "mapped_primary")
+        field = "mapq" if tamper == "catalog_scalar" else "dorado_tag_emitted_bases"
+        row[field] = int(row[field] or 0) + 1
+        pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), changed_path)
+    else:
+        manifest["selected_read_count"] += 1
+    if changed_path is not None and changed_key is not None:
+        digest, size = service._sha256_file_and_size(changed_path)
+        manifest["outputs"][changed_key].update({"sha256": digest, "size_bytes": size})
+        manifest[changed_key]["content_sha256"] = digest
+        manifest[changed_key]["size_bytes"] = size
+    manifest_path.write_bytes(rfc8785.dumps(manifest))
+    reloaded = service._load_derived_package(
+        manifest_path.parent,
+        expected_authority_sha256=package["manifest"]["authority_sha256"],
+    )
+    if tamper == "locator_semantics":
+        assert reloaded is not None
+    if reloaded is not None:
+        with pytest.raises(service.AlignmentPresentationFailure, match="semantic authority"):
+            verify_package_against_source(reloaded, source)
+
+
+def test_v5_publication_oserror_is_retryable_and_leaves_no_partial_package(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    source = tmp_path / "source.bam"
+    index, bam_sha, bam_size, bai_sha, bai_size = _write_governed_alignment_fixture(source)
+    original_rename = service.os.rename
+
+    def fail_publication(source_name: Any, destination_name: Any, **kwargs: Any):
+        if source_name == ".generation.tmp":
+            raise OSError("injected publication failure")
+        return original_rename(source_name, destination_name, **kwargs)
+
+    monkeypatch.setattr(service.os, "rename", fail_publication)
+    with pytest.raises(service.AlignmentPresentationFailure) as failure:
+        service.build_alignment_presentation(
+            source,
+            bam_sha256=bam_sha,
+            bam_size_bytes=bam_size,
+            index=index,
+            index_sha256=bai_sha,
+            index_size_bytes=bai_size,
+            source_manifest_sha256="a" * 64,
+            job_id="job-publication",
+            session_id="1" * 24,
+            mode="primary",
+            cache_root=tmp_path / "cache",
+            target_reads=2,
+        )
+    assert failure.value.code == "publication_failed"
+    assert failure.value.retryable is True
+    namespace = tmp_path / "cache" / "job-publication" / ("1" * 24)
+    assert {item.name for item in namespace.iterdir()} == {".generation.lock"}
+
+
+def test_v5_cooperative_abort_cleans_temporary_package_before_publication(
+    tmp_path: Path,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    source = tmp_path / "source.bam"
+    index, bam_sha, bam_size, bai_sha, bai_size = _write_governed_alignment_fixture(source)
+    checkpoints = 0
+
+    def abort() -> None:
+        nonlocal checkpoints
+        checkpoints += 1
+        if checkpoints >= 3:
+            raise RuntimeError("cooperative abort")
+
+    with pytest.raises(RuntimeError, match="cooperative abort"):
+        service.build_alignment_presentation(
+            source,
+            bam_sha256=bam_sha,
+            bam_size_bytes=bam_size,
+            index=index,
+            index_sha256=bai_sha,
+            index_size_bytes=bai_size,
+            source_manifest_sha256="a" * 64,
+            job_id="job-abort",
+            session_id="2" * 24,
+            mode="primary",
+            cache_root=tmp_path / "cache",
+            target_reads=2,
+            abort_check=abort,
+        )
+    namespace = tmp_path / "cache" / "job-abort" / ("2" * 24)
+    assert {item.name for item in namespace.iterdir()} == {".generation.lock"}
+
+
 def test_presentation_selects_unique_primary_reads_and_truthful_counts(tmp_path: Path) -> None:
     import pysam
     from services import ngs_alignment_sessions as service
@@ -394,11 +856,11 @@ def test_presentation_selects_unique_primary_reads_and_truthful_counts(tmp_path:
     with pysam.AlignmentFile(package["bam_path"], "rb") as preview:
         records = list(preview.fetch(until_eof=True))
     assert len({record.query_name for record in records}) == 5
-    assert all(not record.is_unmapped and not record.is_secondary and not record.is_supplementary for record in records)
+    assert all(not record.is_unmapped and not record.is_secondary for record in records)
     assert receipt["selected_read_count"] == 5
-    assert receipt["selected_alignment_record_count"] == len(records) == 5
-    assert receipt["source_primary_mapped_read_count"] == 12
-    assert receipt["source_primary_mapped_alignment_record_count"] == 12
+    assert receipt["selected_alignment_record_count"] == len(records)
+    assert receipt["catalog"]["mapped_primary_read_count"] == 12
+    assert receipt["coverage_primary_read_count"] == 12
     assert receipt["source_alignment_record_count"] == 17
     assert receipt["source_record_counts"] == {
         "mapped_primary": 12,
@@ -406,18 +868,17 @@ def test_presentation_selects_unique_primary_reads_and_truthful_counts(tmp_path:
         "supplementary": 3,
         "unmapped": 1,
     }
-    assert receipt["selection_unit"] == "unique mapped primary read ID"
-    assert receipt["inclusion_rules"] == ["mapped", "primary", "query_name present"]
-    assert receipt["exclusion_rules"] == ["secondary", "supplementary", "unmapped", "missing query_name"]
+    assert receipt["selected_alignment_record_count"] == sum(
+        1 + row["mapped_supplementary_count"]
+        for row in __import__("pyarrow.parquet", fromlist=["read_table"])
+        .read_table(package["catalog_path"])
+        .to_pylist()
+        if row["in_preview"]
+    )
 
-    from routers import ngs_alignment_sessions as router
-    response = router._presentation_response("job-a", "1" * 24, package)
-    validated = router.OntAlignmentPresentationV1.model_validate(response)
-    base = f"/api/jobs/job-a/alignment-sessions/{'1' * 24}/presentation/{receipt['authority_sha256']}"
-    assert validated.preview.bam.url == f"{base}/bam"
-    assert validated.preview.bam.kind == "alignment_preview"
-    assert validated.coverage.artifact.url == f"{base}/coverage"
-    assert validated.manifest.mime_type == "application/json"
+    assert package["bam_metadata"]["kind"] == "alignment_preview"
+    assert package["coverage_metadata"]["kind"] == "full_source_primary_coverage"
+    assert package["manifest_metadata"]["mime_type"] == "application/json"
 
 
 def test_presentation_byte_ceiling_reduces_selection_deterministically(tmp_path: Path) -> None:
@@ -434,7 +895,7 @@ def test_presentation_byte_ceiling_reduces_selection_deterministically(tmp_path:
     first = service.build_alignment_presentation(source, cache_root=tmp_path / "cache-a", **common)
     second = service.build_alignment_presentation(source, cache_root=tmp_path / "cache-b", **common)
     assert first["manifest"]["selected_read_count"] < 30
-    assert first["manifest"]["output_byte_ceiling"] == 250
+    assert first["manifest"]["policy"]["max_preview_bytes"] == 250
     assert first["bam_metadata"]["size_bytes"] <= 250
     assert first["manifest"]["selected_read_set_sha256"] == second["manifest"]["selected_read_set_sha256"]
 
@@ -455,6 +916,110 @@ def test_bounded_bam_writer_never_exceeds_kernel_file_limit(tmp_path: Path) -> N
             label="test derivative",
         )
     assert output.stat().st_size <= 100
+
+
+@pytest.mark.parametrize("mode", ["abort", "deadline"])
+def test_bounded_bam_writer_abort_and_deadline_quiesce_process_tree_and_remove_partial_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    output = tmp_path / "bounded.bam"
+    late = Path(f"{output}.late")
+    script = """
+import os,subprocess,sys,time
+output_path=sys.argv[2]
+late_path=output_path+'.late'
+subprocess.Popen([sys.executable, '-c', 'import pathlib,sys,time; time.sleep(0.2); pathlib.Path(sys.argv[1]).write_bytes(b\"late\")', late_path])
+with open(output_path, 'wb') as output:
+    while True:
+        output.write(b'x' * 4096)
+        output.flush()
+        os.fsync(output.fileno())
+        time.sleep(0.005)
+"""
+    monkeypatch.setattr(service, "_BOUNDED_BAM_WRITER", script)
+
+    class ExpectedAbort(RuntimeError):
+        pass
+
+    def abort() -> None:
+        if output.exists() and output.stat().st_size:
+            raise ExpectedAbort("ownership revoked")
+
+    expected = ExpectedAbort if mode == "abort" else service._AlignmentDerivativeTimeout
+    with pytest.raises(expected):
+        service._write_bam_for_ids_bounded(
+            output,
+            tmp_path / "unused-source.bam",
+            ["read-a"],
+            byte_limit=10_000_000,
+            deadline=time.monotonic() + (2 if mode == "abort" else 0.05),
+            label="test derivative",
+            abort_check=abort if mode == "abort" else None,
+        )
+    assert not output.exists()
+    time.sleep(0.3)
+    assert not output.exists()
+    assert not late.exists()
+
+
+def test_fresh_v4_build_does_not_reopen_every_locator_after_locked_source_derivation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import ngs_alignment_sessions as service
+    from services import ngs_alignment_presentation_v5 as v4
+
+    source = tmp_path / "source.bam"
+    index, bam_sha, bam_size, bai_sha, bai_size = _write_governed_alignment_fixture(source)
+    monkeypatch.setattr(
+        v4,
+        "_verify_locators",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("fresh construction performed a redundant locator source pass")
+        ),
+    )
+
+    package = service.build_alignment_presentation(
+        source, bam_sha256=bam_sha, bam_size_bytes=bam_size, index=index,
+        index_sha256=bai_sha, index_size_bytes=bai_size, source_manifest_sha256="9" * 64,
+        job_id="job-no-third-pass", session_id="8" * 24, mode="primary",
+        cache_root=tmp_path / "cache", target_reads=2,
+    )
+
+    assert package["manifest"]["source_alignment_record_count"] == 17
+
+
+@pytest.mark.parametrize("stage", ["preview", "index"])
+def test_v5_preview_and_index_deadline_exhaustion_are_typed_build_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    source = tmp_path / "source.bam"
+    index, bam_sha, bam_size, bai_sha, bai_size = _write_governed_alignment_fixture(source)
+
+    def timeout(*_args: Any, **_kwargs: Any) -> Any:
+        raise service._AlignmentDerivativeTimeout("alignment presentation time limit exceeded")
+
+    monkeypatch.setattr(
+        service,
+        "_write_bam_for_ids_bounded" if stage == "preview" else "_index_bam_with_deadline",
+        timeout,
+    )
+    with pytest.raises(service.AlignmentPresentationFailure) as failure:
+        service.build_alignment_presentation(
+            source, bam_sha256=bam_sha, bam_size_bytes=bam_size, index=index,
+            index_sha256=bai_sha, index_size_bytes=bai_size, source_manifest_sha256="8" * 64,
+            job_id=f"job-{stage}-timeout", session_id="6" * 24, mode="primary",
+            cache_root=tmp_path / "cache", target_reads=2,
+        )
+    assert failure.value.code == "build_timeout"
 
 
 def test_presentation_namespace_bounds_entries_and_cleans_crash_residue(tmp_path: Path) -> None:
@@ -545,10 +1110,9 @@ def test_presentation_coverage_uses_all_source_primary_records(tmp_path: Path) -
         target_reads=1, max_output_bytes=1_000_000,
     )
     coverage = package["coverage_path"].read_text(encoding="utf-8")
-    assert package["manifest"]["coverage_semantics"] == "mean primary mapped alignment depth from full source"
     assert package["manifest"]["coverage_bin_width"] >= 1
     assert "plasmid\t" in coverage
-    assert package["manifest"]["source_primary_mapped_alignment_record_count"] == 12
+    assert package["manifest"]["coverage_primary_read_count"] == 12
 
 
 def test_cached_presentation_resolution_does_not_open_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -921,8 +1485,11 @@ async def test_presentation_get_path_never_materializes_a_missing_package(
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("HTTP request tried to prepare presentation")),
     )
 
+    row = SimpleNamespace(
+        state="ready", authority_sha256="7" * 64, manifest_sha256="8" * 64,
+    )
     with pytest.raises(service.AlignmentSessionError, match="not prepared"):
-        await router._prepare_presentation("job-a", "1" * 24, job)
+        await router._prepare_presentation("job-a", "1" * 24, cast(Any, job), cast(Any, row))
 
 
 def test_presentation_publication_rejects_symlinked_authority_root(
@@ -4229,3 +4796,337 @@ def test_dorado_move_metrics_require_complete_legal_signal_bounds() -> None:
         "dorado_emission_rate_bases_per_second": None,
         "samples_per_aligned_reference_base": None,
     }
+
+
+@pytest.mark.parametrize(
+    ("stored_state", "expected_state", "extra"),
+    [
+        ("requested", "preparing", {}),
+        ("running", "preparing", {}),
+        (
+            "failed",
+            "failed",
+            {
+                "code": "resource_limit",
+                "message": "Reads unavailable. Retry from Diagnostics.",
+            },
+        ),
+    ],
+)
+def test_presentation_get_is_observational_for_nonready_durable_states(
+    stored_state: str,
+    expected_state: str,
+    extra: dict[str, Any],
+) -> None:
+    row = SimpleNamespace(
+        id="presentation-1",
+        job_id="job-a",
+        session_id="session-a",
+        mode="primary",
+        state=stored_state,
+        error_code="resource_limit" if stored_state == "failed" else None,
+        authority_sha256=None,
+        manifest_sha256=None,
+    )
+    database = _ObservationalPresentationSession(row)
+    app = _ngs_app()
+    app.include_router(ngs_routes.router, prefix="/api")
+    app.dependency_overrides[ngs_routes.require_alignment_job] = lambda: SimpleNamespace(id="job-a")
+    app.dependency_overrides[ngs_routes.get_session] = lambda: database
+
+    response = TestClient(app).get(
+        "/api/jobs/job-a/alignment-sessions/session-a/presentation"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "schema": "bms.ngs.alignment-presentation.v2",
+        "job_id": "job-a",
+        "session_id": "session-a",
+        "mode": "primary",
+        "state": expected_state,
+        **extra,
+    }
+    assert database.commits == 0
+    assert database.rollbacks == 0
+
+
+def test_presentation_get_uses_ready_row_authority_not_job_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    row = SimpleNamespace(
+        id="presentation-1",
+        job_id="job-a",
+        session_id="session-a",
+        mode="primary",
+        state="ready",
+        error_code=None,
+        authority_sha256="d" * 64,
+        manifest_sha256="e" * 64,
+    )
+    database = _ObservationalPresentationSession(row)
+    artifact = {
+        "kind": "artifact",
+        "sha256": "1" * 64,
+        "size_bytes": 12,
+        "mime_type": "application/octet-stream",
+    }
+    manifest = {
+        "authority_sha256": "d" * 64,
+        "mode": "primary",
+        "package_manifest_sha256": "2" * 64,
+        "artifact_set_sha256": "3" * 64,
+        "source_alignment_sha256": "4" * 64,
+        "source_alignment_size_bytes": 100,
+        "source_index_sha256": "5" * 64,
+        "source_index_size_bytes": 10,
+        "source_logical_read_count": 9,
+        "source_alignment_record_count": 11,
+        "policy": {
+            "id": "primary-read-presentation-v4",
+            "version": 4,
+            "target_reads": 8,
+            "max_preview_records": 16,
+            "max_preview_bytes": 1024,
+            "max_build_seconds": 120.0,
+        },
+        "selected_read_count": 8,
+        "selected_alignment_record_count": 9,
+        "selected_read_set_sha256": "6" * 64,
+        "preview_complete_to_target": True,
+        "catalog": {
+            "schema": "bms.ngs.read-catalog.v1",
+            "logical_read_count": 9,
+            "mapped_primary_read_count": 8,
+            "unmapped_read_count": 1,
+            "ambiguous_primary_read_count": 0,
+            "no_primary_read_count": 1,
+            "content_sha256": "7" * 64,
+            "size_bytes": 200,
+        },
+        "locators": {
+            "schema": "bms.ngs.read-record-locators.v1",
+            "record_count": 11,
+            "content_sha256": "8" * 64,
+            "size_bytes": 300,
+        },
+        "coverage_primary_read_count": 8,
+    }
+    package = {
+        "manifest": manifest,
+        "bam_metadata": dict(artifact),
+        "index_metadata": dict(artifact),
+        "coverage_metadata": dict(artifact),
+        "manifest_metadata": dict(artifact),
+    }
+
+    @asynccontextmanager
+    async def pinned(_job: Any):
+        yield tmp_path
+
+    monkeypatch.setattr(ngs_routes, "_validated_pinned_result_root", pinned)
+    monkeypatch.setattr(
+        ngs_routes.service,
+        "resolve_cached_alignment_presentation",
+        lambda *_args, **kwargs: package
+        if kwargs["expected_authority_sha256"] == row.authority_sha256
+        and kwargs["expected_manifest_sha256"] == row.manifest_sha256
+        else pytest.fail("ready row authority was not used"),
+    )
+    app = _ngs_app()
+    app.include_router(ngs_routes.router, prefix="/api")
+    app.dependency_overrides[ngs_routes.require_alignment_job] = lambda: SimpleNamespace(
+        id="job-a", provenance={}
+    )
+    app.dependency_overrides[ngs_routes.get_session] = lambda: database
+
+    response = TestClient(app).get(
+        "/api/jobs/job-a/alignment-sessions/session-a/presentation"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["schema"] == "bms.ngs.alignment-presentation.v2"
+    assert body["state"] == "ready"
+    assert body["presentation_id"] == "presentation-1"
+    assert body["source"]["logical_read_count"] == 9
+    assert body["catalog"]["schema"] == "bms.ngs.read-catalog.v1"
+    assert body["locators"]["record_count"] == 11
+    assert database.commits == 0
+
+
+def test_presentation_retry_requires_authorized_job_scope() -> None:
+    app = _ngs_app()
+    app.include_router(ngs_routes.router, prefix="/api")
+
+    async def denied():
+        raise ngs_routes.OntNgsRouteError(
+            status_code=403,
+            code="NGS_PRINCIPAL_DENIED",
+            message="Project operator authority is required.",
+            job_id="job-a",
+            resource="result",
+        )
+
+    app.dependency_overrides[ngs_routes.require_alignment_job] = denied
+    response = TestClient(app).post(
+        "/api/jobs/job-a/alignment-sessions/session-a/presentation/retry"
+    )
+    assert response.status_code == 403
+    assert response.json()["code"] == "NGS_PRINCIPAL_DENIED"
+
+
+def test_presentation_retry_rejects_read_only_principal_through_real_authorization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import alignment_access
+
+    token = "read-only-presentation-capability"
+    job = SimpleNamespace(
+        id="job-a",
+        model_id="nanopore",
+        params={"ont_workflow_id": "external_signal_alignment", "ont_input_mode": "bam"},
+        provenance={
+            alignment_access.PROVENANCE_DIGEST_KEY: alignment_access.token_sha256(token),
+        },
+    )
+
+    class JobSession:
+        async def execute(self, _statement: Any):
+            return _ScalarResult(job)
+
+    app = _ngs_app()
+
+    @app.middleware("http")
+    async def read_principal(request: Any, call_next: Any):
+        request.state.authenticated_principal = {"id": "reader-a", "roles": ["viewer"]}
+        return await call_next(request)
+
+    app.include_router(ngs_routes.router, prefix="/api")
+    app.dependency_overrides[ngs_routes.get_session] = lambda: JobSession()
+    app.dependency_overrides[ngs_routes.get_molbio_ngs_session] = lambda: object()
+    app.dependency_overrides[ngs_routes.get_experiment_session] = lambda: object()
+    monkeypatch.setenv("BMS_RUNTIME_MODE", "dev")
+    client = TestClient(app, client=("127.0.0.1", 40000))
+    client.cookies.set(alignment_access.cookie_name("job-a"), token)
+
+    response = client.post(
+        "/api/jobs/job-a/alignment-sessions/session-a/presentation/retry"
+    )
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "NGS_PRINCIPAL_DENIED"
+
+
+@pytest.mark.parametrize(
+    ("state", "expected_status", "expected_state", "expected_code"),
+    [
+        ("failed", 200, "preparing", None),
+        ("requested", 200, "preparing", None),
+        ("running", 200, "preparing", None),
+        ("ready", 409, None, "NGS_PRESENTATION_ALREADY_READY"),
+    ],
+)
+def test_presentation_retry_route_is_current_source_checked_and_replay_idempotent(
+    monkeypatch: pytest.MonkeyPatch,
+    state: str,
+    expected_status: int,
+    expected_state: str | None,
+    expected_code: str | None,
+) -> None:
+    row = SimpleNamespace(
+        id="presentation-1",
+        job_id="job-a",
+        session_id="session-a",
+        mode="primary",
+        state=state,
+        error_code=None,
+        source_authority_sha256="a" * 64,
+        authority_sha256="d" * 64 if state == "ready" else None,
+        manifest_sha256="e" * 64 if state == "ready" else None,
+    )
+    database = _ObservationalPresentationSession(row)
+    retries: list[str] = []
+    resolutions: list[str] = []
+
+    async def current(_job: Any, candidate: Any) -> str:
+        resolutions.append(candidate.state)
+        return candidate.source_authority_sha256
+
+    async def retry(_session: Any, request_id: str, **_kwargs: Any):
+        retries.append(request_id)
+        if state == "ready":
+            raise ngs_routes.presentation_lifecycle.PresentationAlreadyReady()
+        if state == "failed":
+            row.state = "requested"
+        return row
+
+    monkeypatch.setattr(ngs_routes, "_resolve_current_presentation_source", current, raising=False)
+    monkeypatch.setattr(ngs_routes, "_mutation_principal", lambda _request: "operator-a")
+    monkeypatch.setattr(ngs_routes.presentation_lifecycle, "retry_failed_presentation", retry)
+    app = _ngs_app()
+    app.include_router(ngs_routes.router, prefix="/api")
+    app.dependency_overrides[ngs_routes.require_alignment_job] = lambda: SimpleNamespace(id="job-a")
+    app.dependency_overrides[ngs_routes.get_session] = lambda: database
+
+    response = TestClient(app).post(
+        "/api/jobs/job-a/alignment-sessions/session-a/presentation/retry"
+    )
+
+    assert response.status_code == expected_status
+    assert retries == (["presentation-1"] if state == "failed" else [])
+    assert resolutions == (["failed"] if state == "failed" else [])
+    if expected_code is not None:
+        assert response.json()["code"] == expected_code
+    else:
+        assert response.json()["state"] == expected_state
+
+
+def test_presentation_errors_validate_through_model_and_openapi_with_presentation_resource() -> None:
+    payload = {
+        "schema": "bms.ngs.error.v1",
+        "code": "NGS_PRESENTATION_SOURCE_STALE",
+        "message": "The presentation source is no longer current.",
+        "job_id": "job-a",
+        "resource": "presentation",
+        "retryable": False,
+    }
+    assert ngs_routes.OntNgsErrorV1.model_validate(payload).resource == "presentation"
+    app = _ngs_app()
+    app.include_router(ngs_routes.router, prefix="/api")
+    schema = app.openapi()["components"]["schemas"]["OntNgsErrorV1"]
+    assert "presentation" in schema["properties"]["resource"]["enum"]
+
+
+def test_presentation_retry_cas_conflict_returns_typed_409_not_500(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = SimpleNamespace(
+        id="presentation-1", job_id="job-a", session_id="session-a", mode="primary",
+        state="failed", error_code="source_invalid", source_authority_sha256="a" * 64,
+        authority_sha256=None, manifest_sha256=None,
+    )
+    database = _ObservationalPresentationSession(row)
+
+    async def retry(*_args: Any, **_kwargs: Any):
+        raise ngs_routes.presentation_lifecycle.PresentationClaimLost("lost")
+
+    async def current(_job: Any, candidate: Any) -> str:
+        return candidate.source_authority_sha256
+
+    monkeypatch.setattr(ngs_routes, "_mutation_principal", lambda _request: "operator-a")
+    monkeypatch.setattr(
+        ngs_routes, "_resolve_current_presentation_source", current,
+    )
+    monkeypatch.setattr(ngs_routes.presentation_lifecycle, "retry_failed_presentation", retry)
+    app = _ngs_app()
+    app.include_router(ngs_routes.router, prefix="/api")
+    app.dependency_overrides[ngs_routes.require_alignment_job] = lambda: SimpleNamespace(id="job-a")
+    app.dependency_overrides[ngs_routes.get_session] = lambda: database
+
+    response = TestClient(app, raise_server_exceptions=False).post(
+        "/api/jobs/job-a/alignment-sessions/session-a/presentation/retry"
+    )
+    assert response.status_code == 409
+    assert ngs_routes.OntNgsErrorV1.model_validate(response.json()).code == "NGS_AUTHORITY_CONFLICT"

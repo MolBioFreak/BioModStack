@@ -309,11 +309,13 @@ def _validate_chemistry(lock: dict[str, Any], molecule: str, inventory: dict[str
         raise ValueError("mixed POD5 run IDs are not accepted in one production basecall unit")
 
 
-def _validate_pairs(path: Path, root: Path, read_ids: set[str]) -> dict[str, Any]:
+def _validate_pairs(path: Path, root: Path, read_ids: set[str] | None, *, raw_bytes: bytes | None = None) -> dict[str, Any]:
     path = _confined_file(path, root, "duplex pairs file")
     pairs: list[tuple[str, str]] = []
     used: set[str] = set()
-    for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    # Completion reuses exact preflight-bound bytes; POD5 membership was checked at preflight.
+    snapshot = path.read_bytes() if raw_bytes is None else raw_bytes
+    for number, raw in enumerate(snapshot.decode("utf-8").splitlines(), 1):
         line = raw.strip()
         if not line:
             continue
@@ -322,22 +324,46 @@ def _validate_pairs(path: Path, root: Path, read_ids: set[str]) -> dict[str, Any
             raise ValueError(f"invalid duplex pairs row {number}")
         if columns[0] == columns[1] or any(item in used for item in columns):
             raise ValueError(f"duplicate/contradictory duplex pair at row {number}")
-        if not set(columns) <= read_ids:
+        if read_ids is not None and not set(columns) <= read_ids:
             raise ValueError(f"duplex pairs row {number} references absent POD5 read IDs")
         used.update(columns)
         pairs.append((columns[0], columns[1]))
     if not pairs:
         raise ValueError("duplex pairs file contains no pairs")
+    # Dorado 1.3.1 (7c84b01), torch_utils/duplex_utils.cpp:12-35:
+    # getline + !eof drops an unterminated final row; substr uses byte offsets
+    # and a literal space, with complement length 2*delimiter-1. Compare maps,
+    # not counts, against the exact bytes sent upstream. No normalization.
+    native_pairs: dict[bytes, bytes] = {}
+    for cell in snapshot.split(b"\n")[:-1]:
+        delimiter = cell.find(b" ")
+        if delimiter == -1:
+            # string::npos + 1 wraps to zero; its length exceeds the cell.
+            template, complement = cell, cell
+        else:
+            template = cell[:delimiter]
+            complement = cell[delimiter + 1:]
+            if delimiter > 0:  # At zero the unsigned length wraps, taking all.
+                complement = complement[:2 * delimiter - 1]
+        native_pairs[template] = complement
+    if native_pairs != {a.encode("utf-8"): b.encode("utf-8") for a, b in pairs}:
+        raise ValueError(
+            "pinned Dorado 1.3.1 pair mapping differs from the selected duplex pairs; "
+            "use one literal space between POD5 read IDs, LF after every row "
+            "(including the last), and no blank rows or surrounding whitespace; "
+            "complement byte length must not exceed twice template byte length minus one"
+        )
     return {
         "path": str(path),
         "relative_path": path.relative_to(root).as_posix(),
-        "sha256": _sha256(path),
+        "sha256": hashlib.sha256(snapshot).hexdigest(),
         "pair_count": len(pairs),
         "read_count": len(used),
     }
 
 
-def _validate_sample_sheet(path: Path, root: Path, barcode_kit: str, inventory: dict[str, Any]) -> dict[str, Any]:
+def _validate_sample_sheet(path: Path, root: Path, barcode_kit: str, inventory: dict[str, Any],
+                           *, raw_bytes: bytes | None = None) -> dict[str, Any]:
     path = _confined_file(path, root, "sample sheet")
     # Dorado 1.3.1 is not an RFC-4180 CSV parser: it performs a literal comma
     # split, preserves field bytes, and requires every row to have the same
@@ -346,7 +372,8 @@ def _validate_sample_sheet(path: Path, root: Path, barcode_kit: str, inventory: 
     # differently (quotes, surrounding whitespace, duplicate headers, or
     # ragged rows).
     try:
-        raw_sheet = path.read_bytes().decode("utf-8")
+        sheet_bytes = path.read_bytes() if raw_bytes is None else raw_bytes
+        raw_sheet = sheet_bytes.decode("utf-8")
     except (OSError, UnicodeError) as exc:
         raise ValueError("sample sheet is unreadable or not UTF-8") from exc
     if "\x00" in raw_sheet or '"' in raw_sheet:
@@ -414,7 +441,7 @@ def _validate_sample_sheet(path: Path, root: Path, barcode_kit: str, inventory: 
     return {
         "path": str(path),
         "relative_path": path.relative_to(root).as_posix(),
-        "sha256": _sha256(path),
+        "sha256": hashlib.sha256(sheet_bytes).hexdigest(),
         "rows": len(rows),
         "barcodes": sorted(barcodes),
         "assignments": sorted(assignments, key=lambda item: item["barcode"]),

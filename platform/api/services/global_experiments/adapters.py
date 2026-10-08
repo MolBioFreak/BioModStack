@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 from urllib.parse import parse_qs, urlencode
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import (
@@ -75,6 +75,11 @@ from services.sequence_qc_manifest import SequenceQcManifestError, load_sequence
 from services.ont_run_control import TERMINAL_RUN_STATES, _valid_terminal_manifest
 from services.job_result_roots import resolve_persisted_job_result_root
 from services.molbio_ngs_member_receipts import (
+    NGS_MODEL_IDS,
+    NATIVE_NGS_RESULT_SCHEMA,
+    is_ngs_job_identity,
+    ngs_job_workflow_identity,
+    ngs_result_manifest_identities,
     ExternalMemberReceipt,
     resolve_approved_comparison_panel_receipt,
     resolve_molecular_operation_receipt,
@@ -3055,6 +3060,20 @@ class ExactOntObservationAdapter:
         )
 
 
+def _ngs_discovery_metadata(job: Any) -> dict[str, Any]:
+    try:
+        workflow_id = ngs_job_workflow_identity(job)
+    except ValueError as exc:
+        return {"workflow_id": None, "compatibility": "unverifiable", "compatibility_reason": str(exc)}
+    return {"workflow_id": workflow_id, "compatibility": "requires_verification",
+            "compatibility_reason": "Exact persisted native receipt and Domain ownership must be verified before attachment."}
+
+
+def _ngs_discovery_statement():
+    model = func.lower(func.trim(Job.model_id))
+    return select(Job).where(or_(model.in_(NGS_MODEL_IDS), Job.model_id.is_(None), model == ""))
+
+
 class ExactNgsJobAdapter:
     adapter_id = "bms.ngs.job-reference.adapter.v1"
     adapter_version = 1
@@ -3070,12 +3089,12 @@ class ExactNgsJobAdapter:
 
     async def search(self, core_session: AsyncSession, *, query: str, limit: int) -> list[EntityProjection]:
         normalized = _search_inputs(query, limit)
-        statement = select(Job).where(Job.model_id == "nanopore")
+        statement = _ngs_discovery_statement()
         if normalized:
             pattern = f"%{normalized}%"
             statement = statement.where(or_(Job.id.ilike(pattern), Job.name.ilike(pattern)))
         rows = list((await core_session.scalars(statement.order_by(Job.created_at.desc()).limit(limit))).all())
-        return [EntityProjection(row.id, self.entity_kind, _bounded_label(row.name, row.id), str(row.status), {"workflow_id": (row.params or {}).get("ont_workflow_id")}) for row in rows]
+        return [EntityProjection(row.id, self.entity_kind, _bounded_label(row.name, row.id), str(row.status), _ngs_discovery_metadata(row)) for row in rows if is_ngs_job_identity(row)]
 
     async def verify(self, core_session: AsyncSession, entity_id: str) -> dict[str, Any]:
         if not entity_id or len(entity_id) > 160:
@@ -3087,34 +3106,32 @@ class ExactNgsJobAdapter:
         params = job.params if isinstance(job.params, dict) else {}
         claimed_domain_id = params.get("global_domain_experiment_id")
         state_id = params.get("molbio_ngs_state_revision_id")
-        if not isinstance(claimed_domain_id, str) or not claimed_domain_id:
-            raise AdapterError("source_contract_invalid", "NGS Job lacks exact Domain ownership")
-        if not isinstance(state_id, str) or not state_id:
-            raise AdapterError("source_contract_invalid", "NGS Job lacks exact scientific-state revision authority")
         async with self._domain_sessions() as domain_session:
             domain_id, native_receipt_id = await _exact_local_member_authority(
                 domain_session, member=member
             )
-            if claimed_domain_id != domain_id:
-                raise AdapterError(
-                    "source_contract_invalid",
-                    "NGS Job claimed Domain diverges from persisted member-receipt ownership",
-                )
-            state_member = await _resolve_exact_member(resolve_state_revision_receipt(
-                domain_session,
-                global_domain_experiment_id=domain_id,
-                state_revision_id=state_id,
-            ))
-        lineage = []
-        lineage.append({
-            "relation": "uses_input", "entity_kind": "ngs_molbio_state_revision",
-            "entity_id": urlencode({"global_domain_experiment_id": domain_id, "state_revision_id": state_id}),
-            "receipt_content_digest": state_member.content_digest,
-        })
+            if claimed_domain_id is not None and claimed_domain_id != domain_id:
+                raise AdapterError("source_contract_invalid", "NGS Job claimed Domain diverges from persisted member-receipt ownership")
+            lineage = []
+            if state_id is not None:
+                if not isinstance(state_id, str) or not state_id:
+                    raise AdapterError("source_contract_invalid", "NGS Job scientific-state revision identity is invalid")
+                state_member = await _resolve_exact_member(resolve_state_revision_receipt(
+                    domain_session,
+                    global_domain_experiment_id=domain_id,
+                    state_revision_id=state_id,
+                ))
+                lineage.append({
+                    "relation": "uses_input", "entity_kind": "ngs_molbio_state_revision",
+                    "entity_id": urlencode({"global_domain_experiment_id": domain_id, "state_revision_id": state_id}),
+                    "receipt_content_digest": state_member.content_digest,
+                })
+            # Sole persisted membership proves historical ownership, not an
+            # invented launch-state lineage when the launch pointer is absent.
         return _exact_member_receipt(
             self, requested_entity_id=entity_id, member=member,
             reopen_uri=_query_uri("/ngs", job_id=entity_id),
-            metadata={"job_id": entity_id, "job_status": str(job.status), "workflow_id": params.get("ont_workflow_id"), "global_domain_experiment_id": domain_id, "native_member_receipt_id": native_receipt_id, "native_lineage": lineage, "result_contract_id": "ngs_job_launch_v1"},
+            metadata={"job_id": entity_id, "job_status": str(job.status), "workflow_id": ngs_job_workflow_identity(job), "global_domain_experiment_id": domain_id, "native_member_receipt_id": native_receipt_id, "native_lineage": lineage, "launch_state_authority": "verified" if state_id is not None else "historical_unavailable", "result_contract_id": "ngs_job_launch_v1"},
         )
 
 
@@ -3126,6 +3143,7 @@ class ExactNgsResultManifestAdapter:
     domain_kind = "ngs_molbio"
     store_id = "core-ngs"
     source_schemas = frozenset({
+        NATIVE_NGS_RESULT_SCHEMA,
         "biomodstack.construct_verification.v2",
         "sequence_qc.manifest.v1",
         "bms.sequence-qc.manifest.v1",
@@ -3138,12 +3156,16 @@ class ExactNgsResultManifestAdapter:
 
     async def search(self, core_session: AsyncSession, *, query: str, limit: int) -> list[EntityProjection]:
         normalized = _search_inputs(query, limit)
-        statement = select(Job).where(Job.model_id == "nanopore")
+        statement = _ngs_discovery_statement()
         if normalized:
             pattern = f"%{normalized}%"
             statement = statement.where(or_(Job.id.ilike(pattern), Job.name.ilike(pattern)))
         rows = list((await core_session.scalars(statement.order_by(Job.created_at.desc()).limit(limit))).all())
-        return [EntityProjection(urlencode({"job_id": row.id, "manifest_identity": "sequence-qc-manifest"}), self.entity_kind, _bounded_label(row.name, row.id), str(row.status), {"job_id": row.id, "manifest_identity": "sequence-qc-manifest"}) for row in rows]
+        return [EntityProjection(
+            urlencode({"job_id": row.id, "manifest_identity": identity}), self.entity_kind,
+            _bounded_label(row.name, row.id), str(row.status),
+            {"job_id": row.id, "manifest_identity": identity, **_ngs_discovery_metadata(row)},
+        ) for row in rows if is_ngs_job_identity(row) for identity in ngs_result_manifest_identities(row)]
 
     async def verify(self, core_session: AsyncSession, entity_id: str) -> dict[str, Any]:
         identity = _parse_composite_identity(entity_id, ("job_id", "manifest_identity"))
@@ -3154,13 +3176,11 @@ class ExactNgsResultManifestAdapter:
             raise AdapterError("entity_not_found", "NGS result owner Job does not exist")
         params = job.params if isinstance(job.params, dict) else {}
         claimed_domain_id = params.get("global_domain_experiment_id")
-        if not isinstance(claimed_domain_id, str) or not claimed_domain_id:
-            raise AdapterError("source_contract_invalid", "NGS result owner Job lacks exact Domain ownership")
         async with self._domain_sessions() as domain_session:
             domain_id, native_receipt_id = await _exact_local_member_authority(
                 domain_session, member=member
             )
-        if claimed_domain_id != domain_id:
+        if claimed_domain_id is not None and claimed_domain_id != domain_id:
             raise AdapterError(
                 "source_contract_invalid",
                 "NGS result owner Job claimed Domain diverges from persisted manifest-receipt ownership",

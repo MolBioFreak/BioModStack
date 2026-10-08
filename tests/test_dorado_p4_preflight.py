@@ -362,6 +362,99 @@ def test_asset_verification_detects_tampered_model(tmp_path: Path) -> None:
         module.verify_model_identity(model, model_dir)
 
 
+# Literal load_pairs_file body from nanoporetech/dorado
+# 7c84b01de1e46d4c5b2d5208fc430f27579a6c22,
+# dorado/torch_utils/duplex_utils.cpp:12-35. Isolated standard-library harness;
+# no Dorado inference, GPU, network, or installed runtime is involved.
+NATIVE_PAIRS_FUNCTION = r'''std::map<std::string, std::string> load_pairs_file(const std::string& pairs_file_path) {
+    std::ifstream dataFile;
+    dataFile.open(pairs_file_path);
+
+    std::map<std::string, std::string> template_complement_map;
+
+    if (!dataFile.is_open()) {
+        throw std::runtime_error("Pairs file does not exist.");
+    }
+    std::string cell;
+
+    std::getline(dataFile, cell);
+    while (!dataFile.eof()) {
+        char delim = ' ';
+        auto delim_pos = cell.find(delim);
+
+        std::string t = cell.substr(0, delim_pos);
+        std::string c = cell.substr(delim_pos + 1, delim_pos * 2 - 1);
+        template_complement_map[t] = c;
+
+        std::getline(dataFile, cell);
+    }
+    return template_complement_map;
+}'''
+
+
+@pytest.fixture
+def native_pairs_parser(tmp_path_factory):
+    import subprocess
+    directory = tmp_path_factory.mktemp('native-pairs-parser')
+    source = directory / 'pairs.cpp'
+    source.write_text(
+        '#include <fstream>\n#include <map>\n#include <string>\n#include <stdexcept>\n#include <iostream>\n'
+        + NATIVE_PAIRS_FUNCTION + r'''
+int main(int argc, char** argv) {
+    for (const auto& p : load_pairs_file(argv[1])) {
+        std::cout << p.first << '\0' << p.second << '\0';
+    }
+}
+''')
+    binary = directory / 'pairs'
+    subprocess.run(['c++', '-std=c++17', str(source), '-o', str(binary)], check=True)
+
+    def parse(path):
+        fields = subprocess.check_output([str(binary), str(path)]).split(b'\0')[:-1]
+        return dict(zip(fields[::2], fields[1::2]))
+    return parse
+
+
+@pytest.mark.parametrize('raw, expected', [
+    (b'template complement\n', {b'template': b'complement'}),
+    (b'template complement\nother partner\n', {b'template': b'complement', b'other': b'partner'}),
+    (b'template,complement\n', None),
+    (b'template\tcomplement\n', None),
+    (b'template  complement\n', None),
+    (b'template complement\r\n', None),
+    (b'template complement', None),
+    (b'template complement\nother partner', None),
+    (b' template complement\n', None),
+    (b'template complement \n', None),
+    (b'\ntemplate complement\n', None),
+    (b'template complement\n\n', None),
+    (b'template complement\rother partner\r', None),
+    (b'a long-complement\n', None),  # Native substr length is 2*delimiter-1.
+    ('é long\n'.encode(), None),  # C++ delimiter offset is bytes, not Unicode characters.
+    (b'abcde abcdefghi\r\n', {b'abcde': b'abcdefghi'}),  # Native truncation discards CR.
+])
+def test_pairs_admission_matches_pinned_native_map(tmp_path, native_pairs_parser, raw, expected):
+    import hashlib
+    pairs = tmp_path / 'pairs.txt'
+    pairs.write_bytes(raw)
+    admitted = dict(tuple(line.replace(',', ' ').split()) for line in raw.decode().splitlines() if line.strip())
+    admitted_bytes = {a.encode(): b.encode() for a, b in admitted.items()}
+    actual = native_pairs_parser(pairs)
+    module = _load_module()
+    if expected is None:
+        assert actual != admitted_bytes
+        with pytest.raises(ValueError, match='pinned Dorado.*pair mapping'):
+            module._validate_pairs(pairs, tmp_path, set(admitted) | set(admitted.values()))
+        with pytest.raises(ValueError, match='pinned Dorado.*pair mapping'):
+            module._validate_pairs(pairs, tmp_path, None, raw_bytes=raw)
+    else:
+        assert actual == expected == admitted_bytes
+        receipt = module._validate_pairs(pairs, tmp_path, set(admitted) | set(admitted.values()))
+        assert receipt['pair_count'] == len(expected)
+        assert receipt['sha256'] == hashlib.sha256(raw).hexdigest()
+        assert pairs.read_bytes() == raw
+
+
 def test_min_qscore_zero_is_preserved_and_out_of_range_fails() -> None:
     module = _load_module()
     payload = _preflight(module, FIXTURES / "barcode", min_qscore=0)

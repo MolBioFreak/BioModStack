@@ -2,6 +2,39 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { normalizeNanoporeCloneState } from '../src/lib/nanoporeCloneState';
 
+const workflowCases = [
+    ['ont_basecall_dna', 'dna'], ['ont_basecall_rna', 'rna'],
+    ['ont_plasmid_qc', 'plasmidQc'], ['ont_construct_screening', 'constructScreening'],
+    ['ont_methylation_analysis', 'modified'], ['ont_fastq_qc', 'fastqQc'],
+    ['ont_pooled_reference_assignment', 'pooledAssignment'], ['wf_clone_validation', 'clone'],
+] as const;
+
+for (const [workflowId, selectedWorkflow] of workflowCases) {
+    test(`canonical clone operation wins over stage heuristics: ${workflowId}`, () => {
+        const restored = normalizeNanoporeCloneState({ name: 'source', mode: 'basecall_dna', params: {
+            ont_workflow_id: workflowId, pod5_dir: '/data/pod5', run_assembly: true,
+            global_domain_experiment_id: 'domain-1', molbio_ngs_state_revision_id: 'state-1', ngs_reference_revision_id: 'ref-1',
+        } } as never);
+        assert.equal(restored?.selectedWorkflow, selectedWorkflow);
+        assert.equal(restored?.ontWorkflowId, workflowId);
+        assert.equal(restored?.inputSource, 'pod5');
+        assert.equal(restored?.ngsReferenceRevisionId, 'ref-1');
+        if (workflowId === 'ont_pooled_reference_assignment') assert.match(String(restored?.cloneRefusal), /frozen reference set/i);
+    });
+}
+
+for (const params of [{ ont_workflow_id: 'unknown', run_assembly: true }, { fastq_path: '/data/reads.fastq' }]) {
+    test(`clone refuses unknown operation rather than inferring science: ${JSON.stringify(params)}`, () => {
+        const restored = normalizeNanoporeCloneState({ name: 'unknown', params } as never);
+        assert.match(String(restored?.cloneRefusal), /workflow/i);
+        assert.equal(restored?.selectedWorkflow, undefined);
+    });
+}
+
+test('known historical mode is sufficient workflow authority', () => {
+    assert.equal(normalizeNanoporeCloneState({ mode: 'plasmid_qc', params: { pod5_dir: '/data/pod5' } } as never)?.selectedWorkflow, 'plasmidQc');
+});
+
 test('P4 clone restores exact user selections rather than resolved model identities', () => {
     const restored = normalizeNanoporeCloneState({
         id: 'p4-source',

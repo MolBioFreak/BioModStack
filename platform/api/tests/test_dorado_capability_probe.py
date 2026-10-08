@@ -68,3 +68,14 @@ def test_probe_rejects_unsupported_option(tmp_path: Path) -> None:
         text=True,
     )
     assert completed.returncode == 1
+
+
+def test_probe_does_not_treat_option_prefix_as_capability(tmp_path: Path) -> None:
+    fake = tmp_path / "dorado"
+    fake.write_text("#!/bin/sh\nprintf '%s\\n' '  --emit-summary-extra  Not the summary option'\n")
+    fake.chmod(0o755)
+    completed = subprocess.run(
+        ["bash", str(PROBE), str(fake), "basecaller", "--emit-summary"],
+        check=False, capture_output=True, text=True,
+    )
+    assert completed.returncode == 1

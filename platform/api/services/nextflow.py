@@ -127,6 +127,32 @@ async def publish_terminal_job_changes(
     return int(result.rowcount or 0)
 
 
+async def publish_terminal_job_changes_atomically(
+    session: Any,
+    *,
+    job_id: str,
+    snapshot: dict[str, Any],
+    changes: dict[str, Any],
+) -> int:
+    """Roll back every completion-side write when terminal publication loses its CAS."""
+
+    published = await publish_terminal_job_changes(
+        session, job_id=job_id, snapshot=snapshot, changes=changes,
+    )
+    pending = session.info.get("ngs_derived_catalog_intents", {}).pop(job_id, {})
+    if not published:
+        await session.rollback()
+    elif changes.get("status") == "completed" and pending:
+        # Intent admission occurs only after scientific terminal CAS ownership,
+        # in the same transaction. Never construct derived artifacts here.
+        from services.ngs_alignment_derived_products import request_catalog, request_default_preview
+
+        for source in pending.values():
+            catalog = await request_catalog(session, source)
+            await request_default_preview(session, catalog)
+    return published
+
+
 def _parse_gpu_authority(raw_value: Any) -> int:
     if isinstance(raw_value, int) and not isinstance(raw_value, bool):
         value = raw_value
@@ -1977,9 +2003,39 @@ async def unlock_child_inference_jobs(msa_job_id: str, manifest_path: str) -> No
 
 
 
+async def _validate_ont_terminal_completion(job, receipt_factory, session) -> bool:
+    """Dispatch native ONT barriers before the shared guarded terminal publication."""
+    from services.ont_ngs_completion import (
+        ont_completion_lane,
+        validate_and_prepare_ont_native_basecall_completion,
+        validate_and_prepare_ont_signal_alignment_completion,
+    )
+
+    if job.model_id == "nanopore" and job.mode == "pooled_reference_assignment":
+        from services.ont_ngs_native_pooled import validate_and_prepare_pooled_completion
+        await validate_and_prepare_pooled_completion(job, session)
+        # The enclosing terminal CAS remains the sole publication owner.
+        # Scientific REVIEW does not grant an operator release or child job.
+        return True
+    lane = ont_completion_lane(job)
+    if lane == "fastq_qc":
+        await _validate_ont_fastq_qc_terminal_completion(job, receipt_factory, session)
+    elif lane == "external_signal_alignment":
+        await validate_and_prepare_ont_signal_alignment_completion(
+            job, session=session,
+            resource_usage_receipt=receipt_factory() if receipt_factory is not None else None,
+        )
+    elif lane in {"native_basecall", "native_methylation", "native_pod5_alignment_only", "native_plasmid"}:
+        await validate_and_prepare_ont_native_basecall_completion(job, session=session)
+    else:
+        return False
+    return True
+
+
 async def _validate_ont_fastq_qc_terminal_completion(
     job: Any,
     terminal_resource_receipt_factory: Optional[Callable[[], Dict[str, Any]]],
+    session: Any,
 ) -> Dict[str, Any]:
     """Bind producer resource evidence through the production completion validator."""
 
@@ -1990,6 +2046,7 @@ async def _validate_ont_fastq_qc_terminal_completion(
     resource_usage_receipt = terminal_resource_receipt_factory()
     return await validate_and_prepare_ont_fastq_qc_completion(
         job,
+        session=session,
         resource_usage_receipt=resource_usage_receipt,
     )
 
@@ -2873,42 +2930,15 @@ async def launch_nextflow_job(
                             is_md_parent = (
                                 job.model_id == "molecular_dynamics" and job.mode == "simulate"
                             )
-                            from services.ont_ngs_completion import (
-                                is_ont_fastq_qc_job,
-                                is_ont_signal_alignment_job,
-                                validate_and_prepare_ont_signal_alignment_completion,
-                            )
-
                             if is_md_parent:
                                 from services.md.completion import validate_and_finalize_md_job
 
                                 await validate_and_finalize_md_job(job, session)
                                 logger.info("Validated the immutable MD completion generation for job %s", job_id)
-                            elif is_ont_fastq_qc_job(job):
-                                integrity = await _validate_ont_fastq_qc_terminal_completion(
-                                    job,
-                                    terminal_resource_receipt_factory,
-                                )
-                                logger.info(
-                                    "Validated ONT FASTQ-QC result package for job %s (%s declared artifacts)",
-                                    job_id,
-                                    integrity["declared_artifact_count"],
-                                )
-                            elif is_ont_signal_alignment_job(job):
-                                integrity = await validate_and_prepare_ont_signal_alignment_completion(
-                                    job,
-                                    resource_usage_receipt=(
-                                        terminal_resource_receipt_factory()
-                                        if terminal_resource_receipt_factory is not None
-                                        else None
-                                    ),
-                                )
-                                logger.info(
-                                    "Validated external ONT signal-alignment result package for job %s "
-                                    "(%s declared artifacts)",
-                                    job_id,
-                                    integrity["declared_artifact_count"],
-                                )
+                            elif await _validate_ont_terminal_completion(
+                                job, terminal_resource_receipt_factory, session,
+                            ):
+                                logger.info("Validated native ONT completion barrier for job %s", job_id)
                             else:
                                 from services.result_state_integrity import finalize_successful_job
 
@@ -3029,28 +3059,29 @@ async def launch_nextflow_job(
                     # SQL, then conditionally publish only to an active row so
                     # autoflush/direct commit cannot resurrect operator state.
                     session.expunge(job)
-                    published_rowcount = await publish_terminal_job_changes(
+                    published_rowcount = await publish_terminal_job_changes_atomically(
                         session,
                         job_id=job_id,
                         snapshot=terminal_snapshot,
                         changes=changes,
                     )
-                    if published_rowcount and terminalizing_cm_failure:
-                        from services.conformational_mapping.persistence import (
-                            terminalize_failed_request_for_job,
-                        )
-                        from services.rfd3_local_redesign import (
-                            terminalize_failed_request_for_job as terminalize_failed_rfd3_request_for_job,
-                        )
+                    if published_rowcount:
+                        if terminalizing_cm_failure:
+                            from services.conformational_mapping.persistence import (
+                                terminalize_failed_request_for_job,
+                            )
+                            from services.rfd3_local_redesign import (
+                                terminalize_failed_request_for_job as terminalize_failed_rfd3_request_for_job,
+                            )
 
-                        await terminalize_failed_request_for_job(session, job_id=job_id)
-                        await terminalize_failed_rfd3_request_for_job(
-                            session,
-                            job_id=job_id,
-                            exit_code=exit_code,
-                        )
-                    await session.commit()
-                    if not published_rowcount:
+                            await terminalize_failed_request_for_job(session, job_id=job_id)
+                            await terminalize_failed_rfd3_request_for_job(
+                                session,
+                                job_id=job_id,
+                                exit_code=exit_code,
+                            )
+                        await session.commit()
+                    else:
                         logger.info("Skipped stale Nextflow terminal publication for job %s", job_id)
                     if md_analysis_parent_id:
                         # Reconcile only after the guarded child publication.  The

@@ -731,6 +731,7 @@ class ExperimentResourceAdmissionPolicy(ExperimentBase):
     policy_version = Column(String(64), nullable=False)
     cpu_thread_limit = Column(Integer, nullable=False)
     dram_byte_limit = Column(Integer, nullable=False)
+    disk_byte_limit = Column(Integer, nullable=True)
     lock_generation = Column(Integer, nullable=False, default=0)
     updated_at = Column(String(64), nullable=False, default=_timestamp)
 

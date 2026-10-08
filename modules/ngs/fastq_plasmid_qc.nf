@@ -77,6 +77,8 @@ process FastqPlasmidQC {
     def inputModeArg = shellQuote(inputMode)
     """
     set -euo pipefail
+    source "${params.code_root ?: projectDir}/scripts/ngs_producer_identity.sh"
+    bms_producer_begin "${params.code_root ?: projectDir}" modules/ngs/fastq_plasmid_qc.nf scripts/build_fastq_igv_tracks.py scripts/build_fastq_support_tables.py scripts/build_small_igv_report_inputs.py scripts/validate_standalone_igv_report.py scripts/build_construct_verification_input.py scripts/build_sequence_qc_manifest.py -- python3 samtools create_report || exit 1
 
     if ! command -v samtools >/dev/null 2>&1; then
         echo "CRITICAL_FAILURE: SAMTOOLS_RUNTIME_UNAVAILABLE" >&2
@@ -471,6 +473,8 @@ process FastqPlasmidQC {
         --consensus-method samtools_consensus \\
         --out-dir construct_verification_input
 
+    bms_producer_finish >> fastq_qc.log || exit 1
+
     "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/build_sequence_qc_manifest.py" \\
         --out qc_manifest.json \\
         --job-id "${manifestJobId}" \\
@@ -507,5 +511,6 @@ process FastqPlasmidQC {
         --igv-report igv_report.html \\
         --igv-report-log igv_report.log \\
         --log fastq_qc.log
+    bms_producer_finish >/dev/null || exit 1
     """
 }

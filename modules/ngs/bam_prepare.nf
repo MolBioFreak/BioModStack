@@ -23,6 +23,8 @@ process PrepareBamForAnalysis {
     }
     """
     set -euo pipefail
+    source "${params.code_root ?: projectDir}/scripts/ngs_producer_identity.sh"
+    bms_producer_begin "${params.code_root ?: projectDir}" modules/ngs/bam_prepare.nf -- samtools || exit 1
 
     # Authenticate one task-local regular-file copy and consume only that copy.
     # The staged input may be a symlink to caller-writable storage.
@@ -66,20 +68,26 @@ process PrepareBamForAnalysis {
         echo "source_sha256_before=\${source_sha256_before}"
         echo "source_sha256_after=\${source_sha256_after}"
         echo "source_immutable=true"
+        echo "preparation_schema=bms.ngs.bam-preparation.v1"
+        echo "prepared_bam_sha256=\$(sha256sum aligned.bam | cut -d ' ' -f1)"
+        echo "prepared_bai_sha256=\$(sha256sum aligned.bam.bai | cut -d ' ' -f1)"
         echo "bam_min_mapq=${bamMinMapq}"
         echo "input_records=\${input_records}"
         echo "output_records=\${output_records}"
         echo "mapped_records=\${mapped_records}"
     } >> bam_prepare.log
+    bms_producer_finish >> bam_prepare.log || exit 1
     """
 }
 process ValidateMappedBam {
     label 'dorado_cpu'
+    publishDir "${params.out_dir}/align", mode: 'copy', pattern: 'bam_mapped_check.log'
     tag "bam_mapped_check"
 
     input:
     tuple path(bam, stageAs: 'validated-source.bam'), path(bai, stageAs: 'validated-source.bam.bai')
     path reference, stageAs: 'expected-reference.fasta'
+    path preparation_receipt, stageAs: 'source-preparation.log'
 
     output:
     tuple path("aligned.bam"), path("aligned.bam.bai"), emit: aligned
@@ -96,7 +104,41 @@ process ValidateMappedBam {
     }
     """
     set -euo pipefail
+    source "${params.code_root ?: projectDir}/scripts/ngs_producer_identity.sh"
+    bms_producer_begin "${params.code_root ?: projectDir}" modules/ngs/bam_prepare.nf -- samtools || exit 1
 
+    # The preparation receipt authenticates the transformation, not the reference.
+    # Only server-authorized declarations may supply missing-M5 reference identity.
+    receipt_field() {
+        awk -F '=' -v key="\$1" '
+            \$1 == key { count++; value = substr(\$0, length(key) + 2) }
+            END { if (count != 1) exit 1; print value }
+        ' "${preparation_receipt}"
+    }
+    preparation_receipt_sha256=\$(sha256sum "${preparation_receipt}" | cut -d ' ' -f1)
+    preparation_schema=\$(receipt_field preparation_schema)
+    original_bam_sha256=\$(receipt_field source_sha256_before)
+    original_bam_sha256_after=\$(receipt_field source_sha256_after)
+    source_immutable=\$(receipt_field source_immutable)
+    prepared_bam_sha256=\$(receipt_field prepared_bam_sha256)
+    prepared_bai_sha256=\$(receipt_field prepared_bai_sha256)
+    actual_prepared_bam_sha256=\$(sha256sum "${bam}" | cut -d ' ' -f1)
+    actual_prepared_bai_sha256=\$(sha256sum "${bai}" | cut -d ' ' -f1)
+    if [[ "\${preparation_schema}" != "bms.ngs.bam-preparation.v1" ||
+          ! "\${original_bam_sha256}" =~ ^[0-9a-f]{64}\$ ||
+          "\${source_immutable}" != "true" ||
+          "\${original_bam_sha256}" != "\${original_bam_sha256_after}" ||
+          "\${prepared_bam_sha256}" != "\${actual_prepared_bam_sha256}" ||
+          "\${prepared_bai_sha256}" != "\${actual_prepared_bai_sha256}" ]]; then
+        echo "ERROR: original/prepared BAM provenance receipt mismatch." >&2
+        exit 1
+    fi
+    if [[ -n "${declaredSourceSha256}" && "${declaredSourceSha256}" != "\${original_bam_sha256}" ]]; then
+        echo "ERROR: bam_source_sha256 does not match the original BAM in the preparation receipt." >&2
+        exit 1
+    fi
+
+    reference_fasta_sha256=\$(sha256sum "${reference}" | cut -d ' ' -f1)
     total_reads=\$(samtools view -c "${bam}")
     mapped_reads=\$(samtools view -c -F 4 "${bam}")
     samtools quickcheck -v "${bam}" 2> bam_mapped_check.log
@@ -152,11 +194,8 @@ process ValidateMappedBam {
             echo "ERROR: mapped BAM contigs lack @SQ M5; trusted bam_reference_sha256 and bam_source_sha256 provenance are both required." >&2
             exit 1
         fi
-        actual_source_sha256=\$(sha256sum "${bam}" | cut -d ' ' -f1)
-        if [[ "${declaredSourceSha256}" != "\${actual_source_sha256}" ]]; then
-            echo "ERROR: bam_source_sha256 does not match the exact BAM object being validated." >&2
-            exit 1
-        fi
+        # The trusted source declaration refers to the ORIGINAL bytes. The
+        # prepared object is independently bound above by the producer receipt.
         expected_reference_sha256=\$(awk '!/^>/ { gsub(/[[:space:]]/, ""); printf "%s", toupper(\$0) }' "${reference}" \\
             | sha256sum | cut -d ' ' -f1)
         if [[ "${declaredReferenceSha256}" != "\${expected_reference_sha256}" ]]; then
@@ -165,19 +204,35 @@ process ValidateMappedBam {
         fi
         {
             echo "reference_identity=trusted_source_bam_and_reference_sha256"
-            echo "validated_bam_sha256=\${actual_source_sha256}"
+            echo "validated_bam_sha256=\${prepared_bam_sha256}"
             echo "validated_reference_sha256=\${expected_reference_sha256}"
         } >> bam_mapped_check.log
     else
         echo "reference_identity=bam_sq_m5" >> bam_mapped_check.log
     fi
     {
+        echo "validated_reference_fasta_sha256=\${reference_fasta_sha256}"
+        echo "preparation_schema=\${preparation_schema}"
+        echo "preparation_receipt_sha256=\${preparation_receipt_sha256}"
+        echo "original_bam_sha256=\${original_bam_sha256}"
+        echo "prepared_bam_sha256=\${prepared_bam_sha256}"
+        echo "prepared_bai_sha256=\${prepared_bai_sha256}"
         echo "total_reads=\${total_reads}"
         echo "mapped_reads=\${mapped_reads}"
     } >> bam_mapped_check.log
 
     cp "${bam}" aligned.bam
     cp "${bai}" aligned.bam.bai
+    if [[ "\$(sha256sum aligned.bam | cut -d ' ' -f1)" != "\${prepared_bam_sha256}" ||
+          "\$(sha256sum aligned.bam.bai | cut -d ' ' -f1)" != "\${prepared_bai_sha256}" ||
+          "\$(sha256sum "${bam}" | cut -d ' ' -f1)" != "\${prepared_bam_sha256}" ||
+          "\$(sha256sum "${bai}" | cut -d ' ' -f1)" != "\${prepared_bai_sha256}" ||
+          "\$(sha256sum "${preparation_receipt}" | cut -d ' ' -f1)" != "\${preparation_receipt_sha256}" ||
+          "\$(sha256sum "${reference}" | cut -d ' ' -f1)" != "\${reference_fasta_sha256}" ]]; then
+        echo "ERROR: prepared BAM provenance changed during reference validation." >&2
+        exit 1
+    fi
+    bms_producer_finish >> bam_mapped_check.log || exit 1
     """
 }
 process BamToFastqForQC {
@@ -195,6 +250,8 @@ process BamToFastqForQC {
     script:
     """
     set -euo pipefail
+    source "${params.code_root ?: projectDir}/scripts/ngs_producer_identity.sh"
+    bms_producer_begin "${params.code_root ?: projectDir}" modules/ngs/bam_prepare.nf -- samtools || exit 1
 
     samtools fastq -@ ${task.cpus} "${bam}" > reads_for_qc.fastq 2> bam_to_fastq_for_qc.log
     read_count=\$(awk 'NR % 4 == 1 {c++} END {print c + 0}' reads_for_qc.fastq)
@@ -203,6 +260,7 @@ process BamToFastqForQC {
         echo "ERROR: BAM-to-FASTQ conversion produced zero reads." >&2
         exit 1
     fi
+    bms_producer_finish >> bam_to_fastq_for_qc.log || exit 1
     """
 }
 process PrepareReferenceForIGV {
@@ -221,8 +279,11 @@ process PrepareReferenceForIGV {
     script:
     """
     set -euo pipefail
+    source "${params.code_root ?: projectDir}/scripts/ngs_producer_identity.sh"
+    bms_producer_begin "${params.code_root ?: projectDir}" modules/ngs/bam_prepare.nf -- samtools || exit 1
     cp "${reference}" reference.fasta
     samtools faidx reference.fasta > /dev/null 2>&1
     echo "Prepared reference.fasta and reference.fasta.fai for IGV" > reference_prepare.log
+    bms_producer_finish >> reference_prepare.log || exit 1
     """
 }

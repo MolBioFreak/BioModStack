@@ -537,8 +537,9 @@ def _project_hub_molecular_href(
     domain_id: str,
     state_revision_id: str,
     sequence_id: str,
+    revision_id: str,
 ) -> str:
-    """Open the stable sequence at its latest editable server head."""
+    """Reopen the attached immutable revision, never the mutable head."""
     return "/designer?" + urlencode({
         "workspace_id": project_id,
         "global_experiment_id": experiment_id,
@@ -546,6 +547,7 @@ def _project_hub_molecular_href(
         "state_revision_id": state_revision_id,
         "section": "plasmids",
         "molbio_sequence_id": sequence_id,
+        "molbio_revision_id": revision_id,
     })
 
 
@@ -661,11 +663,12 @@ async def project_hub(
     for receipt in molecular_receipts:
         attached_revision = attached_revisions.get(receipt.entity_id)
         document = molecular_documents.get(attached_revision.document_id) if attached_revision is not None else None
-        revision = (
+        revision = attached_revision
+        current_revision = (
             current_revisions.get(document.current_revision_id)
             if document is not None and document.current_revision_id
             else None
-        ) or attached_revision
+        )
         if revision is None or not isinstance(revision.snapshot, dict):
             try:
                 destination = json.loads(receipt.reopen_destination)
@@ -687,7 +690,7 @@ async def project_hub(
                 "organism_host_context": None, "project_tags": [], "project_notes": "",
                 "reopen_href": _project_hub_molecular_href(
                     project_id=project_id, experiment_id=experiment_id, domain_id=domain_id,
-                    state_revision_id=selected.id, sequence_id=sequence_id,
+                    state_revision_id=selected.id, sequence_id=sequence_id, revision_id=receipt.entity_id,
                 ),
                 "map_segments": [],
             })
@@ -722,7 +725,7 @@ async def project_hub(
             "receipt_id": receipt.receipt_id,
             "receipt_sha256": receipt.receipt_sha256,
             "content_digest": receipt.content_digest,
-            "current_content_sha256": revision.content_sha256,
+            "current_content_sha256": current_revision.content_sha256 if current_revision is not None else None,
             "source_store_id": receipt.source_store_id,
             "schema_name": receipt.schema_name,
             "revision_number": revision.revision_number,
@@ -749,6 +752,7 @@ async def project_hub(
                 domain_id=domain_id,
                 state_revision_id=selected.id,
                 sequence_id=sequence_id,
+                revision_id=revision.id,
             ),
             "map_segments": map_segments,
         })

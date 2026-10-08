@@ -627,10 +627,17 @@ class ViewerSignalStateUpdate(ClosedModel):
     comparison_review_id: str | None = None
 
 
+class AlignmentOnlySignalState(ClosedModel):
+    """Alignment-only views have no signal operation authority."""
+    pass
+
+
 class ViewerSessionCreate(ClosedModel):
-    dataset_id: str
-    run_id: str
-    observed_generation: int = Field(ge=1)
+    authority_kind: Literal["managed_signal", "native_alignment"] = "managed_signal"
+    alignment_source_authority_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    dataset_id: str | None = None
+    run_id: str | None = None
+    observed_generation: int | None = Field(default=None, ge=1)
     alignment_job_id: str | None = None
     alignment_session_id: str | None = None
     reference_revision_id: str | None = None
@@ -639,7 +646,19 @@ class ViewerSessionCreate(ClosedModel):
     locus_end: int | None = Field(default=None, ge=1)
     selected_read_id: str | None = None
     igv_state: ViewerIgvStateUpdate
-    signal_state: ViewerSignalStateUpdate
+    signal_state: ViewerSignalStateUpdate | AlignmentOnlySignalState
+
+    @model_validator(mode="after")
+    def exact_authority_kind(self):
+        if self.authority_kind == "native_alignment":
+            if (any(value is not None for value in (self.dataset_id, self.run_id, self.observed_generation))
+                    or not self.alignment_job_id or not self.alignment_session_id or not self.alignment_source_authority_sha256
+                    or not isinstance(self.signal_state, AlignmentOnlySignalState)):
+                raise ValueError("native alignment authority requires a source assertion and no signal acquisition")
+        elif (not self.dataset_id or not self.run_id or self.observed_generation is None
+                or self.alignment_source_authority_sha256 is not None or not isinstance(self.signal_state, ViewerSignalStateUpdate)):
+            raise ValueError("managed signal authority requires an exact dataset and run generation")
+        return self
 
 
 class ViewerSessionUpdate(ClosedModel):
@@ -649,7 +668,7 @@ class ViewerSessionUpdate(ClosedModel):
     locus_end: int | None = Field(default=None, ge=1)
     selected_read_id: str | None = None
     igv_state: ViewerIgvStateUpdate
-    signal_state: ViewerSignalStateUpdate
+    signal_state: ViewerSignalStateUpdate | AlignmentOnlySignalState
 
 
 class CapabilityModeResponse(ClosedModel):
@@ -922,11 +941,23 @@ class ViewerSignalStateResponse(ClosedModel):
     comparison_review_id: str | None = None
 
 
+class ViewerAlignmentReference(ClosedModel):
+    contig: str
+    length_bp: int = Field(ge=1)
+    topology: Literal["linear", "circular"]
+    normalized_sequence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    fasta_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    fai_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class ViewerSessionResponse(ClosedModel):
     viewer_session_id: str
-    dataset_id: str
-    run_id: str
-    observed_generation: int
+    authority_kind: Literal["managed_signal", "native_alignment"]
+    alignment_source_authority_sha256: str | None
+    alignment_reference: ViewerAlignmentReference | None
+    dataset_id: str | None
+    run_id: str | None
+    observed_generation: int | None
     alignment_job_id: str | None
     alignment_session_id: str | None
     reference_revision_id: str | None
@@ -1287,7 +1318,7 @@ async def create_viewer_session(request: ViewerSessionCreate, session: AsyncSess
 @router.get("/viewer-sessions/{viewer_session_id}", response_model=ViewerSessionResponse, response_model_exclude_unset=True)
 async def get_viewer_session(viewer_session_id: str, session: AsyncSession = Depends(get_session)) -> ViewerSessionResponse:
     try: return ViewerSessionResponse.model_validate(await service.get_viewer_session(session, viewer_session_id))
-    except KeyError as exc: raise _error(exc) from exc
+    except (KeyError, service.OntSignalError) as exc: raise _error(exc) from exc
 
 
 @router.patch("/viewer-sessions/{viewer_session_id}", response_model=ViewerSessionResponse, response_model_exclude_unset=True)

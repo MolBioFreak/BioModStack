@@ -21,15 +21,21 @@ import sys
 import tempfile
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import weakref
 from collections import OrderedDict
 from contextlib import contextmanager
 from functools import cmp_to_key, lru_cache, wraps
 from pathlib import Path
-from typing import Any, BinaryIO, Iterator, Mapping, cast
+from typing import Any, BinaryIO, Callable, Iterator, Mapping, cast
 
 import rfc8785
 import pysam
+from services.ngs_alignment_presentation_v5 import (
+    CATALOG_SCHEMA as ALIGNMENT_READ_CATALOG_SCHEMA,
+    LOCATOR_SCHEMA as ALIGNMENT_READ_LOCATOR_SCHEMA,
+    alignment_record_fingerprint,
+)
 
 from paths import get_analysis_cache_dir, get_results_dir
 from services.ont_ngs_contract import DORADO_LOCK_PATH
@@ -45,20 +51,17 @@ MAX_SEQUENCE_PAGE = 20
 MAX_READ_CURSOR = 9_999
 MAX_READ_SCAN = 10_000
 MAX_SORTABLE_READ_CURSOR_BYTES = 1024
-ALIGNMENT_PREVIEW_TARGET_READS = 2_000
-ALIGNMENT_PREVIEW_POLICY = "primary-read-presentation-v3"
-ALIGNMENT_PRESENTATION_POLICY_VERSION = 3
-ALIGNMENT_PREVIEW_MAX_BYTES = 32 * 1024 * 1024
+ALIGNMENT_PREVIEW_TARGET_READS = 5_000
+ALIGNMENT_PREVIEW_POLICY = "primary-read-presentation-v4"
+ALIGNMENT_PRESENTATION_POLICY_VERSION = 4
+ALIGNMENT_PREVIEW_MAX_BYTES = 64 * 1024 * 1024
 ALIGNMENT_PREVIEW_INDEX_MAX_BYTES = 8 * 1024 * 1024
 ALIGNMENT_COVERAGE_MAX_BYTES = 4 * 1024 * 1024
 ALIGNMENT_PRESENTATION_MANIFEST_MAX_BYTES = 1024 * 1024
-ALIGNMENT_PRESENTATION_ENTRY_MAX_BYTES = (
-    ALIGNMENT_PREVIEW_MAX_BYTES
-    + ALIGNMENT_PREVIEW_INDEX_MAX_BYTES
-    + ALIGNMENT_COVERAGE_MAX_BYTES
-    + ALIGNMENT_PRESENTATION_MANIFEST_MAX_BYTES
-)
-ALIGNMENT_PRESENTATION_WORK_MAX_BYTES = 256 * 1024 * 1024
+ALIGNMENT_CATALOG_MAX_BYTES = 128 * 1024 * 1024
+ALIGNMENT_LOCATOR_MAX_BYTES = 128 * 1024 * 1024
+ALIGNMENT_PRESENTATION_ENTRY_MAX_BYTES = 384 * 1024 * 1024
+ALIGNMENT_PRESENTATION_WORK_MAX_BYTES = 768 * 1024 * 1024
 ALIGNMENT_PRESENTATION_CACHE_MAX_ENTRIES = 2
 ALIGNMENT_PRESENTATION_CACHE_MAX_BYTES = max(
     2 * ALIGNMENT_PRESENTATION_ENTRY_MAX_BYTES,
@@ -110,7 +113,7 @@ LINKED_REPORT_ROLES = frozenset(
 SESSION_MODES = frozenset({"primary", "dimer_candidates"})
 MANIFEST_SCHEMA = "sequence_qc.manifest.v1"
 MANIFEST_SCHEMA_VERSION = 2
-SNAPSHOT_CACHE_MAX_BYTES = 2 * 1024 * 1024 * 1024
+# Snapshot byte capacity is reserved by the GLOBAL target resource owner.
 SNAPSHOT_CACHE_MAX_ENTRIES = 64
 SNAPSHOT_CHUNK_BYTES = 1024 * 1024
 _snapshot_cache_lock = threading.RLock()
@@ -119,7 +122,13 @@ _snapshot_cache_owner: tempfile.TemporaryDirectory[str] | None = None
 _snapshot_cache_dir: Path | None = None
 _snapshot_cache: OrderedDict[str, int] = OrderedDict()
 _snapshot_cache_leases: dict[str, int] = {}
+_snapshot_receipts: dict[str, _SnapshotReceipt] = {}
+_snapshot_invalid: set[str] = set()
 _snapshot_cache_bytes = 0
+_snapshot_allocations: dict[str, Any] = {}
+_snapshot_native: dict[str, tuple[int, Any]] = {}
+_snapshot_storage_locks: dict[str, int] = {}
+_snapshot_sources: dict[tuple[str, str], tuple[int, int, int, int, int]] = {}
 _snapshot_inflight: set[str] = set()
 _snapshot_inflight_bytes = 0
 
@@ -128,27 +137,221 @@ class AlignmentSessionError(ValueError):
     """Raised when a requested session or artifact is unsafe or unavailable."""
 
 
+class AlignmentPresentationFailure(AlignmentSessionError):
+    """Closed worker-facing presentation failure classification."""
+
+    CODES = frozenset({
+        "source_invalid", "resource_limit", "build_timeout", "infrastructure_failed",
+        "publication_failed", "integrity_mismatch",
+    })
+
+    def __init__(self, code: str, *, retryable: bool = False, message: str | None = None):
+        if code not in self.CODES:
+            raise ValueError("unknown presentation failure code")
+        super().__init__(message or code)
+        self.code = code
+        self.retryable = retryable
+
+
 class _AlignmentDerivativeByteLimit(AlignmentSessionError):
     """Raised when the kernel-enforced derivative file limit is reached."""
 
 
+class _AlignmentDerivativeTimeout(AlignmentSessionError):
+    """Raised when a bounded derivative subprocess exhausts its global deadline."""
+
+
+@dataclass(frozen=True)
+class _SnapshotReceipt:
+    identity: tuple[int, int, int, int, int]
+    chunks: tuple[bytes, ...]
+    # One optional semantic result, owned by this cache generation. Weak peer
+    # ownership avoids retaining evicted chunk receipts or native allocations.
+    semantic_validation: list = field(default_factory=list, compare=False, repr=False)
+
+
+def _snapshot_file_identity(handle: BinaryIO) -> tuple[int, int, int, int, int]:
+    info = os.fstat(handle.fileno())
+    if not stat.S_ISREG(info.st_mode):
+        raise AlignmentSessionError("snapshot integrity: non-regular file")
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
 class _SnapshotLease:
-    def __init__(self, handle: BinaryIO, digest: str) -> None:
+    """Receipt-bound reader; verify the actual returned bytes, not just metadata.
+
+    Chunk digests are retained in application memory only after the complete
+    import matches the native receipt. They are not trusted sidecar files.
+    Each read verifies complete touched chunks before exposing their immutable
+    bytes, including unaligned ranges. A write after verification cannot alter
+    bytes already yielded. Metadata additionally invalidates replaced/modified
+    cache objects, but is not the cryptographic integrity mechanism.
+
+    Python readers use portable chunk verification. Descriptor-only native
+    consumers receive a separately admitted, kernel-sealed memory image, never
+    the mutable disk descriptor. This optional adapter requires memfd sealing;
+    unsupported platforms fail explicitly rather than downgrade byte integrity.
+    """
+    def __init__(self, handle: BinaryIO, digest: str, receipt: _SnapshotReceipt) -> None:
         self._handle = handle
         self._digest = digest
+        self._receipt = receipt
         self._closed = False
+        self._position = 0
+
+    def _invalidate(self) -> None:
+        with _snapshot_cache_condition:
+            _snapshot_invalid.add(self._digest)
+            _mark_snapshot_invalid(self._digest)
+        raise AlignmentSessionError("snapshot integrity mismatch")
+
+    def _check(self) -> None:
+        if self._closed:
+            raise ValueError("I/O operation on closed snapshot")
+        with _snapshot_cache_condition:
+            invalid = self._digest in _snapshot_invalid
+        if invalid or _snapshot_file_identity(self._handle) != self._receipt.identity:
+            self._invalidate()
 
     def read(self, size: int = -1) -> bytes:
-        return self._handle.read(size)
+        self._check()
+        total = self._receipt.identity[2]
+        end = total if size is None or size < 0 else min(total, self._position + size)
+        parts = []
+        while self._position < end:
+            index, offset = divmod(self._position, SNAPSHOT_CHUNK_BYTES)
+            block_start = index * SNAPSHOT_CHUNK_BYTES
+            block_size = min(SNAPSHOT_CHUNK_BYTES, total - block_start)
+            block = os.pread(self._handle.fileno(), block_size, block_start)
+            if (len(block) != block_size
+                    or hashlib.sha256(block).digest() != self._receipt.chunks[index]):
+                self._invalidate()
+            length = min(len(block) - offset, end - self._position)
+            parts.append(block[offset:offset + length])
+            self._position += length
+        self._check()
+        return b"".join(parts)
+
+    def readable(self) -> bool:
+        return not self._closed
+
+    def seekable(self) -> bool:
+        return not self._closed
+
+    def writable(self) -> bool:
+        return False
+
+    def readinto(self, buffer) -> int:
+        block = self.read(len(buffer))
+        buffer[:len(block)] = block
+        return len(block)
+
+    def tell(self) -> int:
+        self._check()
+        return self._position
 
     def seek(self, offset: int, whence: int = 0) -> int:
-        return self._handle.seek(offset, whence)
+        self._check()
+        if whence not in (os.SEEK_SET, os.SEEK_CUR, os.SEEK_END):
+            raise ValueError("invalid whence")
+        position = offset + (0 if whence == os.SEEK_SET else
+                             self._position if whence == os.SEEK_CUR else self._receipt.identity[2])
+        if position < 0:
+            raise ValueError("negative seek position")
+        self._position = position
+        return position
+
+    def has_verified_semantics(self, key: str, peer) -> bool:
+        self._check()
+        peer._check()
+        with _snapshot_cache_condition:
+            saved = self._receipt.semantic_validation
+            return bool(saved and saved[0] == key and saved[1]() is peer._receipt)
+
+    def remember_verified_semantics(self, key: str, peer) -> None:
+        # Call only after semantic validation through these exact leased bytes.
+        self._check()
+        peer._check()
+        with _snapshot_cache_condition:
+            self._receipt.semantic_validation[:] = [key, weakref.ref(peer._receipt)]
 
     def fileno(self) -> int:
-        return self._handle.fileno()
+        self._check()
+        with _snapshot_cache_condition:
+            existing = _snapshot_native.get(self._digest)
+            if existing is not None:
+                return existing[0]
+            import fcntl
+            from services import global_resource_admission as resources
+            if not hasattr(os, "memfd_create") or not all(hasattr(fcntl, name) for name in
+                    ("F_ADD_SEALS", "F_GET_SEALS", "F_SEAL_WRITE", "F_SEAL_GROW", "F_SEAL_SHRINK", "F_SEAL_SEAL")):
+                raise AlignmentSessionError("native reader capacity unavailable: kernel file sealing unsupported")
+            allocation = None
+            descriptor = None
+            position = self._position
+            try:
+                allocation = resources.reserve(owner="artifact-native:" + self._digest,
+                    storage_root=_snapshot_cache_directory(), cpu_threads=1,
+                    dram_bytes=self._receipt.identity[2] + 2 * SNAPSHOT_CHUNK_BYTES, disk_bytes=0)
+                descriptor = os.memfd_create("bms-verified-artifact", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+                self.seek(0)
+                while True:
+                    block = self.read(SNAPSHOT_CHUNK_BYTES)
+                    if not block:
+                        break
+                    pending = memoryview(block)
+                    while pending:
+                        written = os.write(descriptor, pending)
+                        if written <= 0:
+                            raise OSError("native snapshot short write")
+                        pending = pending[written:]
+                seals = fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL
+                fcntl.fcntl(descriptor, fcntl.F_ADD_SEALS, seals)
+                if fcntl.fcntl(descriptor, fcntl.F_GET_SEALS) & seals != seals:
+                    raise AlignmentSessionError("verified native reader sealing failed")
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                allocation.retain(disk_bytes=0, dram_bytes=self._receipt.identity[2])
+                _snapshot_native[self._digest] = (descriptor, allocation)
+                return descriptor
+            except resources.ResourceCapacityUnavailable as exc:
+                raise AlignmentSessionError("native snapshot capacity unavailable") from exc
+            except OSError as exc:
+                raise AlignmentSessionError("native snapshot capacity unavailable: sealed image could not be created") from exc
+            finally:
+                self._position = position
+                if self._digest not in _snapshot_native:
+                    if descriptor is not None:
+                        os.close(descriptor)
+                    if allocation is not None:
+                        allocation.release(storage_removed=True)
+
+    def readline(self, size: int = -1) -> bytes:
+        # Verify at chunk granularity, not once per character. Preserve the
+        # normal binary-file newline and bounded-read semantics.
+        parts = []
+        remaining = size
+        while remaining != 0:
+            amount = SNAPSHOT_CHUNK_BYTES if remaining < 0 else min(SNAPSHOT_CHUNK_BYTES, remaining)
+            block = self.read(amount)
+            if not block:
+                break
+            newline = block.find(b"\n")
+            used = len(block) if newline < 0 else newline + 1
+            parts.append(block[:used])
+            if used < len(block):
+                self.seek(used - len(block), os.SEEK_CUR)
+            if remaining > 0:
+                remaining -= used
+            if newline >= 0:
+                break
+        return b"".join(parts)
 
     def __iter__(self):
-        return iter(self._handle)
+        while True:
+            line = self.readline()
+            if not line:
+                return
+            yield line
 
     @property
     def closed(self) -> bool:
@@ -167,6 +370,8 @@ class _SnapshotLease:
                     _snapshot_cache_leases.pop(self._digest, None)
                 else:
                     _snapshot_cache_leases[self._digest] = leases - 1
+                if self._digest in _snapshot_invalid and leases <= 1:
+                    _discard_cached_snapshot_locked(self._digest)
                 _snapshot_cache_condition.notify_all()
 
     def __enter__(self) -> _SnapshotLease:
@@ -251,44 +456,153 @@ def _open_directory_descriptor_no_symlinks(path: Path) -> int:
 
 
 def _snapshot_cache_directory() -> Path:
-    global _snapshot_cache_owner, _snapshot_cache_dir
+    global _snapshot_cache_dir
     with _snapshot_cache_condition:
         if _snapshot_cache_dir is None:
-            _snapshot_cache_owner = tempfile.TemporaryDirectory(prefix="bms-alignment-snapshots-")
-            _snapshot_cache_dir = Path(_snapshot_cache_owner.name)
-            _snapshot_cache_dir.chmod(0o700)
+            directory = get_results_dir() / ".verified-file-cache"
+            directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+            descriptor = _open_directory_descriptor_no_symlinks(directory)
+            os.close(descriptor)
+            _snapshot_cache_dir = directory
         return _snapshot_cache_dir
+
+
+def _snapshot_storage_path(digest: str) -> Path:
+    return _snapshot_cache_directory() / digest / "data"
+
+
+def _mark_snapshot_invalid(digest: str) -> None:
+    # Durable failure tombstone: subsequent requests cannot silently reimport.
+    directory = _snapshot_cache_directory() / digest
+    fd = os.open(directory / "invalid", os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    directory_fd = _open_directory_descriptor_no_symlinks(directory)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def recover_verified_cache(*, retry_digest: str | None = None) -> None:
+    """Explicit restart cleanup; no GET-time repair or automatic integrity retry.
+
+    The per-object lock is held for the entire process cache lifetime, including
+    native readers. Shared cross-process leases preserve the original disk
+    charge until exclusive eviction proves every reader has quiesced.
+    """
+    import fcntl
+    from services import global_resource_admission as resources
+    root = _snapshot_cache_directory()
+    if retry_digest is not None and re.fullmatch(r"[0-9a-f]{64}", retry_digest) is None:
+        raise ValueError("invalid cache retry identity")
+    with _snapshot_cache_condition:
+        if retry_digest in _snapshot_inflight:
+            raise AlignmentSessionError("snapshot cache capacity unavailable: import in progress")
+        if retry_digest in _snapshot_cache:
+            if _snapshot_cache_leases.get(retry_digest, 0):
+                raise AlignmentSessionError("snapshot cache capacity unavailable: active readers")
+            _snapshot_invalid.discard(retry_digest)
+            _discard_cached_snapshot_locked(retry_digest)
+        directories = (root / retry_digest,) if retry_digest is not None else root.iterdir()
+        for directory in directories:
+            if not directory.exists():
+                continue
+            if re.fullmatch(r"query-[0-9a-f]{32}", directory.name):
+                resources.remove_quiescent_storage(directory, owner="scientific-artifact-query")
+                continue
+            digest = directory.name
+            if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+                continue
+            fd = os.open(root / ("." + digest + ".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+            try:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    if retry_digest == digest:
+                        raise AlignmentSessionError("snapshot cache capacity unavailable: active readers")
+                    continue
+                with open_presentation_authority_root(directory, create=False) as owned:
+                    if retry_digest == digest:
+                        (owned / "data").unlink(missing_ok=True)
+                        (owned / "invalid").unlink(missing_ok=True)
+                        _snapshot_invalid.discard(digest)
+                        for source_key in tuple(_snapshot_sources):
+                            if source_key[0] == digest:
+                                del _snapshot_sources[source_key]
+                    for name in os.listdir(owned):
+                        if name.startswith("import-"):
+                            (owned / name).unlink()
+                    os.fsync(int(owned.name))
+                resources.reconcile_quiescent_storage(directory)
+            finally:
+                os.close(fd)
 
 
 def _discard_cached_snapshot_locked(digest: str) -> None:
     global _snapshot_cache_bytes
-    if _snapshot_cache_leases.get(digest, 0) > 0:
+    if _snapshot_cache_leases.get(digest, 0) > 0 or digest in _snapshot_invalid:
         return
     discarded_size = _snapshot_cache.pop(digest, None)
     if discarded_size is not None:
         _snapshot_cache_bytes = max(0, _snapshot_cache_bytes - discarded_size)
     _snapshot_cache_leases.pop(digest, None)
-    if _snapshot_cache_dir is not None:
-        (_snapshot_cache_dir / digest).unlink(missing_ok=True)
+    _snapshot_receipts.pop(digest, None)
+    _snapshot_invalid.discard(digest)
+    import fcntl
+    from services import global_resource_admission as resources
+    descriptor = _snapshot_storage_locks.pop(digest, None)
+    exclusive = False
+    try:
+        if descriptor is not None:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                exclusive = True
+            except BlockingIOError:
+                pass
+        if exclusive:
+            _snapshot_storage_path(digest).unlink(missing_ok=True)
+        native = _snapshot_native.pop(digest, None)
+        if native is not None:
+            native_descriptor, native_allocation = native
+            os.close(native_descriptor)
+            native_allocation.release(storage_removed=True)
+        allocation = _snapshot_allocations.pop(digest, None)
+        if allocation is not None:
+            allocation.release(storage_removed=exclusive)
+        if exclusive:
+            resources.reconcile_quiescent_storage(_snapshot_cache_directory() / digest)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def _cached_snapshot_locked(expected_sha256: str, expected_size: int) -> BinaryIO | None:
     cached_size = _snapshot_cache.get(expected_sha256)
     if cached_size != expected_size or _snapshot_cache_dir is None:
         return None
-    cache_path = _snapshot_cache_dir / expected_sha256
+    cache_path = _snapshot_storage_path(expected_sha256)
+    receipt = _snapshot_receipts.get(expected_sha256)
+    snapshot = None
     try:
         snapshot = _open_regular_file_no_symlinks(cache_path)
-    except AlignmentSessionError:
+        if (expected_sha256 in _snapshot_invalid or (cache_path.parent / "invalid").exists() or receipt is None
+                or _snapshot_file_identity(snapshot) != receipt.identity):
+            raise AlignmentSessionError("snapshot integrity mismatch")
+    except (AlignmentSessionError, OSError) as exc:
+        if snapshot is not None:
+            snapshot.close()
+        _snapshot_invalid.add(expected_sha256)
+        _mark_snapshot_invalid(expected_sha256)
         _discard_cached_snapshot_locked(expected_sha256)
-        return None
-    if os.fstat(snapshot.fileno()).st_size != expected_size:
-        snapshot.close()
-        _discard_cached_snapshot_locked(expected_sha256)
-        return None
+        # Do not silently replace a corrupt accepted object on this request.
+        raise AlignmentSessionError("snapshot integrity mismatch") from exc
     _snapshot_cache.move_to_end(expected_sha256)
     _snapshot_cache_leases[expected_sha256] = _snapshot_cache_leases.get(expected_sha256, 0) + 1
-    return cast(BinaryIO, _SnapshotLease(snapshot, expected_sha256))
+    return cast(BinaryIO, _SnapshotLease(snapshot, expected_sha256, receipt))
+
 
 
 def _cached_snapshot(expected_sha256: str, expected_size: int) -> BinaryIO | None:
@@ -298,17 +612,47 @@ def _cached_snapshot(expected_sha256: str, expected_size: int) -> BinaryIO | Non
 
 def _evict_for_reservation_locked(required_size: int) -> bool:
     while (
-        _snapshot_cache_bytes + _snapshot_inflight_bytes + required_size > SNAPSHOT_CACHE_MAX_BYTES
-        or len(_snapshot_cache) + len(_snapshot_inflight) >= SNAPSHOT_CACHE_MAX_ENTRIES
+        len(_snapshot_cache) + len(_snapshot_inflight) >= SNAPSHOT_CACHE_MAX_ENTRIES
     ):
         evictable = next(
-            (digest for digest in _snapshot_cache if _snapshot_cache_leases.get(digest, 0) == 0),
+            (digest for digest in _snapshot_cache if _snapshot_cache_leases.get(digest, 0) == 0 and digest not in _snapshot_invalid),
             None,
         )
         if evictable is None:
             return False
         _discard_cached_snapshot_locked(evictable)
     return True
+
+
+def _evict_quiescent_disk_snapshot(exclude: str) -> bool:
+    """Reclaim one restart-surviving cache object, never an active reader.
+
+    Only a registered cache-owned namespace may be removed. Corrupt objects
+    retain their failure tombstone until explicit retry, and lock files are
+    never removed or replaced.
+    """
+    import fcntl
+    from services import global_resource_admission as resources
+    root = _snapshot_cache_directory()
+    for directory in root.iterdir():
+        digest = directory.name
+        if digest == exclude or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            continue
+        descriptor = os.open(root / ("." + digest + ".lock"),
+            os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        try:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                continue
+            with open_presentation_authority_root(directory, create=False) as owned:
+                if (owned / "invalid").exists():
+                    continue
+            if resources.remove_quiescent_storage(directory, owner="artifact-snapshot:" + digest):
+                return True
+        finally:
+            os.close(descriptor)
+    return False
 
 
 def _reserve_snapshot(digest: str, size: int) -> BinaryIO | None:
@@ -321,43 +665,128 @@ def _reserve_snapshot(digest: str, size: int) -> BinaryIO | None:
             if digest in _snapshot_inflight:
                 _snapshot_cache_condition.wait()
                 continue
-            if _evict_for_reservation_locked(size):
-                _snapshot_inflight.add(digest)
-                _snapshot_inflight_bytes += size
-                return None
-            raise AlignmentSessionError("snapshot cache capacity unavailable")
+            if not _evict_for_reservation_locked(size):
+                raise AlignmentSessionError("snapshot cache capacity unavailable")
+            from services import global_resource_admission as resources
+            import fcntl
+            root = _snapshot_cache_directory()
+            owned = root / digest
+            descriptor = os.open(root / ("." + digest + ".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+            try:
+                if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                    raise AlignmentSessionError("unsafe cache ownership lock")
+                exclusive = True
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    exclusive = False
+                    # Existing verified bytes may be adopted with a shared
+                    # lease. An in-progress publisher still holds EX and blocks
+                    # this path. RAM is per process; disk stays charged once.
+                    fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                with open_presentation_authority_root(owned, create=exclusive) as directory:
+                    if (directory / "invalid").exists():
+                        raise AlignmentSessionError("snapshot integrity mismatch: explicit cache retry required")
+                    if not exclusive and not (directory / "data").is_file():
+                        raise AlignmentSessionError("snapshot cache capacity unavailable: publication in progress")
+                    if any(name.startswith("import-") for name in os.listdir(directory)):
+                        raise AlignmentSessionError("snapshot cache capacity unavailable: explicit restart cleanup required")
+            except BaseException as exc:
+                os.close(descriptor)
+                if isinstance(exc, BlockingIOError):
+                    raise AlignmentSessionError("snapshot cache capacity unavailable: object owned by another process") from exc
+                raise
+            # RAM covers chunk receipts plus bounded import/read buffers. It is
+            # charged for idle entries too, rather than treating cache as free.
+            ram = 4 * SNAPSHOT_CHUNK_BYTES + ((size + SNAPSHOT_CHUNK_BYTES - 1) // SNAPSHOT_CHUNK_BYTES) * 128
+            try:
+                allocation = resources.reserve(owner="artifact-snapshot:" + digest,
+                    storage_root=_snapshot_cache_directory(),
+                    owned_path=_snapshot_cache_directory() / digest, cpu_threads=1,
+                    dram_bytes=ram, disk_bytes=size if exclusive else 0, adopt_quiescent=exclusive)
+            except resources.ResourceCapacityUnavailable as exc:
+                os.close(descriptor)
+                victim = next((key for key in _snapshot_cache
+                               if _snapshot_cache_leases.get(key, 0) == 0 and key not in _snapshot_invalid), None)
+                if victim is not None:
+                    _discard_cached_snapshot_locked(victim)
+                    continue
+                if _evict_quiescent_disk_snapshot(digest):
+                    continue
+                raise AlignmentSessionError("snapshot cache capacity unavailable") from exc
+            except BaseException:
+                os.close(descriptor)
+                raise
+            _snapshot_storage_locks[digest] = descriptor
+            _snapshot_allocations[digest] = allocation
+            _snapshot_inflight.add(digest)
+            _snapshot_inflight_bytes += size
+            return None
 def _release_snapshot_reservation(digest: str, size: int) -> None:
     global _snapshot_inflight_bytes
     with _snapshot_cache_condition:
         if digest in _snapshot_inflight:
             _snapshot_inflight.remove(digest)
             _snapshot_inflight_bytes = max(0, _snapshot_inflight_bytes - size)
+            allocation = _snapshot_allocations.pop(digest, None)
+            if allocation is not None:
+                from services import global_resource_admission as resources
+                allocation.release(storage_removed=resources.owned_storage_bytes(_snapshot_cache_directory() / digest) == 0)
+            descriptor = _snapshot_storage_locks.pop(digest, None)
+            if descriptor is not None:
+                os.close(descriptor)
         _snapshot_cache_condition.notify_all()
 
 
-def _publish_snapshot(snapshot: BinaryIO, snapshot_path: Path, digest: str, size: int) -> BinaryIO:
+def _publish_snapshot(snapshot: BinaryIO, snapshot_path: Path, digest: str, size: int,
+                      chunks: tuple[bytes, ...], *, adopted: bool = False) -> BinaryIO:
     global _snapshot_cache_bytes, _snapshot_inflight_bytes
     with _snapshot_cache_condition:
         cache_dir = _snapshot_cache_directory()
-        cache_path = cache_dir / digest
-        os.chmod(snapshot_path, 0o400)
-        os.replace(snapshot_path, cache_path)
+        cache_path = _snapshot_storage_path(digest)
+        if not adopted:
+            os.chmod(snapshot_path, 0o400)
+        imported_identity = _snapshot_file_identity(snapshot)
+        if not adopted:
+            os.replace(snapshot_path, cache_path)
+        directory_fd = _open_directory_descriptor_no_symlinks(cache_path.parent)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
         snapshot.close()
         try:
             readonly_snapshot = _open_regular_file_no_symlinks(cache_path)
+            if _snapshot_file_identity(readonly_snapshot)[:3] != imported_identity[:3]:
+                readonly_snapshot.close()
+                raise AlignmentSessionError("snapshot publication identity mismatch")
         except Exception:
-            cache_path.unlink(missing_ok=True)
+            if not adopted:
+                cache_path.unlink(missing_ok=True)
             raise
         replaced_size = _snapshot_cache.pop(digest, None)
         if replaced_size is not None:
             _snapshot_cache_bytes -= replaced_size
+        allocation = _snapshot_allocations[digest]
+        try:
+            allocation.retain(disk_bytes=allocation.disk_bytes, dram_bytes=allocation.dram_bytes)
+        except Exception:
+            readonly_snapshot.close()
+            if not adopted:
+                cache_path.unlink(missing_ok=True)
+            raise
+        import fcntl
+        fcntl.flock(_snapshot_storage_locks[digest], fcntl.LOCK_SH)
+        receipt = _SnapshotReceipt(_snapshot_file_identity(readonly_snapshot), chunks)
+        _snapshot_receipts[digest] = receipt
+        _snapshot_invalid.discard(digest)
         _snapshot_cache[digest] = size
         _snapshot_cache_bytes += size
         _snapshot_cache_leases[digest] = 1
         _snapshot_inflight.discard(digest)
         _snapshot_inflight_bytes = max(0, _snapshot_inflight_bytes - size)
         _snapshot_cache_condition.notify_all()
-        return cast(BinaryIO, _SnapshotLease(readonly_snapshot, digest))
+        return cast(BinaryIO, _SnapshotLease(readonly_snapshot, digest, receipt))
 
 
 def verify_current_artifact_bytes(
@@ -388,6 +817,103 @@ def verify_current_artifact_bytes(
         source.close()
 
 
+def _check_snapshot_source(path: Path, digest: str, size: int, *, allocation=None) -> None:
+    """Fail closed on source replacement/modification without warm full hashing.
+
+    Each newly encountered source path is verified once in this process. The
+    cache remains receipt-bound independently; source metadata is only a change
+    fence, never the integrity proof for bytes returned to a reader.
+    """
+    from services import global_resource_admission as resources
+    with _open_regular_file_no_symlinks(path) as source:
+        key = (digest, str(Path(path).resolve(strict=True)))
+        before = _snapshot_file_identity(source)
+        with _snapshot_cache_condition:
+            known = _snapshot_sources.get(key)
+        if known is not None:
+            if before != known:
+                raise AlignmentSessionError("source artifact integrity changed; explicit retry required")
+            return
+        if before[2] != size:
+            raise AlignmentSessionError("source artifact integrity size mismatch")
+        try:
+            from contextlib import nullcontext
+            admission = nullcontext(allocation) if allocation is not None else resources.derived_work(
+                owner="artifact-source-verification:" + digest,
+                storage_root=_snapshot_cache_directory(), cpu_threads=1,
+                dram_bytes=2 * SNAPSHOT_CHUNK_BYTES, disk_bytes=0)
+            with admission:
+                actual = hashlib.sha256()
+                copied = 0
+                while copied <= size:
+                    block = source.read(min(SNAPSHOT_CHUNK_BYTES, size + 1 - copied))
+                    if not block:
+                        break
+                    copied += len(block)
+                    actual.update(block)
+                if (copied != size or actual.hexdigest() != digest
+                        or before != _snapshot_file_identity(source)):
+                    raise AlignmentSessionError("source artifact integrity digest mismatch")
+        except resources.ResourceCapacityUnavailable as exc:
+            raise AlignmentSessionError("source verification capacity unavailable") from exc
+        with _snapshot_cache_condition:
+            previous = _snapshot_sources.setdefault(key, before)
+            if previous != before:
+                raise AlignmentSessionError("source artifact integrity changed during verification")
+
+
+def retry_verified_artifact_cache(path: Path, *, expected_size: int, expected_sha256: str) -> None:
+    """Explicit source-bound recovery; callers must authorize the owning receipt.
+
+    Fully verify the original before deleting a reconstructible cache generation.
+    Never adopt a new digest or retry a scientific operation.
+    """
+    if expected_size < 0 or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
+        raise AlignmentSessionError("artifact integrity metadata is invalid")
+    from services import global_resource_admission as resources
+    try:
+        with resources.derived_work(owner="artifact-cache-retry:" + expected_sha256,
+                storage_root=_snapshot_cache_directory(), cpu_threads=1,
+                dram_bytes=2 * SNAPSHOT_CHUNK_BYTES, disk_bytes=0):
+            with _open_regular_file_no_symlinks(path) as source:
+                before = _snapshot_file_identity(source)
+                digest = hashlib.sha256()
+                size = 0
+                while size <= expected_size:
+                    block = source.read(min(SNAPSHOT_CHUNK_BYTES, expected_size + 1 - size))
+                    if not block:
+                        break
+                    size += len(block)
+                    digest.update(block)
+                if (size != expected_size or digest.hexdigest() != expected_sha256
+                        or before != _snapshot_file_identity(source)):
+                    raise AlignmentSessionError("source artifact integrity mismatch; cache retry rejected")
+    except resources.ResourceCapacityUnavailable as exc:
+        raise AlignmentSessionError("cache retry capacity unavailable") from exc
+    recover_verified_cache(retry_digest=expected_sha256)
+    with open_verified_artifact_snapshot(path, expected_size=expected_size,
+            expected_sha256=expected_sha256):
+        pass
+
+
+@contextmanager
+def verified_parquet_dataset(handle):
+    """Repeatable Arrow scans over verified callbacks, not mutable descriptors.
+
+    Arrow PythonFile wraps read/seek/tell in PyReadableFile. File fragments
+    accept this NativeFile directly; no pathname reopen, memfd or full table
+    materialization is needed. The caller keeps the receipt lease alive until
+    every consuming query closes. Disable speculative file-wide prebuffering.
+    """
+    import pyarrow as pa
+    import pyarrow.dataset as ds
+    with pa.PythonFile(handle, mode="r") as source:
+        options = ds.ParquetFragmentScanOptions(pre_buffer=False, use_buffered_stream=True)
+        format = ds.ParquetFileFormat(default_fragment_scan_options=options)
+        fragment = format.make_fragment(source)
+        yield ds.FileSystemDataset([fragment], fragment.physical_schema, format)
+
+
 def open_verified_artifact_snapshot(
     path: Path,
     *,
@@ -397,25 +923,55 @@ def open_verified_artifact_snapshot(
     """Return a private exact-byte snapshot bound to the declared digest."""
     if expected_size < 0 or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
         raise AlignmentSessionError("artifact integrity metadata is invalid")
-    if expected_size > SNAPSHOT_CACHE_MAX_BYTES:
-        raise AlignmentSessionError("artifact exceeds snapshot limit")
     cached = _reserve_snapshot(expected_sha256, expected_size)
     if cached is not None:
-        return cached
+        try:
+            _check_snapshot_source(path, expected_sha256, expected_size)
+            return cached
+        except BaseException:
+            cached.close()
+            raise
 
     source: BinaryIO | None = None
     temporary: BinaryIO | None = None
     temporary_path: Path | None = None
     reservation_active = True
     try:
+        cache_dir = _snapshot_cache_directory() / expected_sha256
+        existing = _snapshot_storage_path(expected_sha256)
+        if existing.exists() or existing.is_symlink():
+            _check_snapshot_source(path, expected_sha256, expected_size,
+                                   allocation=_snapshot_allocations[expected_sha256])
+            # Restart adoption re-verifies bytes against the native receipt;
+            # no sidecar or timestamp is trusted as digest authority.
+            with _open_regular_file_no_symlinks(existing) as adopted:
+                before = _snapshot_file_identity(adopted)
+                digest = hashlib.sha256()
+                chunks = []
+                copied = 0
+                while copied <= expected_size:
+                    block = adopted.read(min(SNAPSHOT_CHUNK_BYTES, expected_size + 1 - copied))
+                    if not block:
+                        break
+                    copied += len(block)
+                    digest.update(block)
+                    chunks.append(hashlib.sha256(block).digest())
+                if (before != _snapshot_file_identity(adopted) or copied != expected_size
+                        or digest.hexdigest() != expected_sha256):
+                    _mark_snapshot_invalid(expected_sha256)
+                    raise AlignmentSessionError("snapshot integrity mismatch: restart adoption rejected")
+                result = _publish_snapshot(adopted, existing, expected_sha256, expected_size, tuple(chunks), adopted=True)
+                reservation_active = False
+                return result
         source = _open_regular_file_no_symlinks(path)
-        cache_dir = _snapshot_cache_directory()
-        temporary_file = tempfile.NamedTemporaryFile(mode="w+b", dir=cache_dir, delete=False)
+        temporary_file = tempfile.NamedTemporaryFile(mode="w+b", prefix="import-", dir=cache_dir, delete=False)
         temporary = cast(BinaryIO, temporary_file)
         temporary_path = Path(temporary_file.name)
         digest = hashlib.sha256()
+        chunks: list[bytes] = []
         copied = 0
-        if os.fstat(source.fileno()).st_size != expected_size:
+        source_identity = _snapshot_file_identity(source)
+        if source_identity[2] != expected_size:
             raise AlignmentSessionError("artifact integrity size mismatch")
         while copied <= expected_size:
             chunk = source.read(min(SNAPSHOT_CHUNK_BYTES, expected_size + 1 - copied))
@@ -423,22 +979,31 @@ def open_verified_artifact_snapshot(
                 break
             copied += len(chunk)
             digest.update(chunk)
+            chunks.append(hashlib.sha256(chunk).digest())
             temporary.write(chunk)
-        if copied != expected_size or digest.hexdigest() != expected_sha256:
+        if (_snapshot_file_identity(source) != source_identity
+                or copied != expected_size or digest.hexdigest() != expected_sha256):
             raise AlignmentSessionError("artifact integrity digest mismatch")
+        with _snapshot_cache_condition:
+            source_key = (expected_sha256, str(Path(path).resolve(strict=True)))
+            previous = _snapshot_sources.setdefault(source_key, source_identity)
+            if previous != source_identity:
+                raise AlignmentSessionError("source artifact integrity changed during import")
         temporary.flush()
         os.fsync(temporary.fileno())
         temporary.seek(0)
-        snapshot = _publish_snapshot(temporary, temporary_path, expected_sha256, expected_size)
+        snapshot = _publish_snapshot(temporary, temporary_path, expected_sha256, expected_size, tuple(chunks))
         reservation_active = False
         temporary = None
         temporary_path = None
         return snapshot
-    except Exception:
+    except Exception as exc:
         if temporary is not None:
             temporary.close()
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
+        if isinstance(exc, OSError) and exc.errno in {28, 122}:
+            raise AlignmentSessionError("snapshot cache capacity unavailable") from exc
         raise
     finally:
         if source is not None:
@@ -2334,6 +2899,25 @@ def _path_descriptor_fds(*paths: Path | None) -> tuple[int, ...]:
     return tuple(sorted(descriptors))
 
 
+def _terminate_subprocess_tree(process: subprocess.Popen[Any]) -> None:
+    """Terminate a dedicated subprocess session and wait until it is quiescent."""
+
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        process.communicate(timeout=0.2)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.communicate()
+
+
 def _write_bam_for_ids_bounded(
     path: Path,
     source_path: Path,
@@ -2347,18 +2931,22 @@ def _write_bam_for_ids_bounded(
     start: int | None = None,
     end: int | None = None,
     include_supplementary: bool = False,
+    abort_check: Callable[[], None] | None = None,
 ) -> int:
+    checkpoint = abort_check or (lambda: None)
+    checkpoint()
     remaining = deadline - time.monotonic()
     if remaining <= 0:
-        raise AlignmentSessionError(f"{label} time limit exceeded")
+        raise _AlignmentDerivativeTimeout(f"{label} time limit exceeded")
     ids_path = path.parent / ".selected-read-ids.json"
     ids_bytes = rfc8785.dumps(ids)
     if len(ids_bytes) > ALIGNMENT_SELECTED_IDS_MAX_BYTES:
         raise AlignmentSessionError(f"{label} selected read identities exceed the byte limit")
     ids_path.write_bytes(ids_bytes)
     path.unlink(missing_ok=True)
+    process: subprocess.Popen[str] | None = None
     try:
-        result = subprocess.run(
+        process = subprocess.Popen(
             [
                 sys.executable,
                 "-c",
@@ -2373,14 +2961,26 @@ def _write_bam_for_ids_bounded(
                 "1" if include_supplementary else "0",
                 str(byte_limit),
             ],
-            check=False,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=remaining,
             pass_fds=_path_descriptor_fds(source_path, index_path, path, ids_path),
+            start_new_session=True,
         )
-    except subprocess.TimeoutExpired as exc:
-        raise AlignmentSessionError(f"{label} time limit exceeded") from exc
+        while process.poll() is None:
+            try:
+                checkpoint()
+            except BaseException:
+                _terminate_subprocess_tree(process)
+                path.unlink(missing_ok=True)
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _terminate_subprocess_tree(process)
+                path.unlink(missing_ok=True)
+                raise _AlignmentDerivativeTimeout(f"{label} time limit exceeded")
+            time.sleep(min(0.01, remaining))
+        stdout, stderr = process.communicate()
     except OSError as exc:
         raise AlignmentSessionError(f"{label} BAM generation failed") from exc
     finally:
@@ -2388,18 +2988,18 @@ def _write_bam_for_ids_bounded(
     observed_size = path.stat().st_size if path.exists() else 0
     byte_limited = (
         observed_size >= byte_limit
-        or "File too large" in result.stderr
-        or result.returncode == -signal.SIGXFSZ
+        or "File too large" in stderr
+        or process.returncode == -signal.SIGXFSZ
     )
-    if result.returncode != 0:
+    if process.returncode != 0:
         if byte_limited:
             raise _AlignmentDerivativeByteLimit(f"{label} byte ceiling exceeded")
-        detail = result.stderr.strip() or result.stdout.strip() or "unknown error"
+        detail = stderr.strip() or stdout.strip() or "unknown error"
         raise AlignmentSessionError(f"{label} BAM generation failed: {detail}")
     if observed_size > byte_limit:
         raise _AlignmentDerivativeByteLimit(f"{label} byte ceiling exceeded")
     try:
-        return int(result.stdout.strip())
+        return int(stdout.strip())
     except ValueError as exc:
         raise AlignmentSessionError(f"{label} BAM generation returned an invalid receipt") from exc
 
@@ -2410,14 +3010,18 @@ def _index_bam_with_deadline(
     deadline: float,
     label: str,
     byte_limit: int | None = None,
+    ownership_fds: tuple[int, ...] = (),
 ) -> None:
     remaining = deadline - time.monotonic()
     if remaining <= 0:
-        raise AlignmentSessionError(f"{label} time limit exceeded")
+        raise _AlignmentDerivativeTimeout(f"{label} time limit exceeded")
     parts = path.parts
     pass_fds: tuple[int, ...] = ()
     if len(parts) >= 5 and parts[1:4] == ("proc", "self", "fd") and parts[4].isdigit():
         pass_fds = (int(parts[4]),)
+    # Descendants retain the same flock open-file description. If a caller dies
+    # during indexing, restart cleanup cannot remove its still-live workspace.
+    pass_fds = tuple(dict.fromkeys((*pass_fds, *ownership_fds)))
     try:
         result = subprocess.run(
             [
@@ -2439,7 +3043,7 @@ def _index_bam_with_deadline(
             pass_fds=pass_fds,
         )
     except subprocess.TimeoutExpired as exc:
-        raise AlignmentSessionError(f"{label} time limit exceeded") from exc
+        raise _AlignmentDerivativeTimeout(f"{label} time limit exceeded") from exc
     except OSError as exc:
         raise AlignmentSessionError(f"{label} indexing failed") from exc
     index_path = Path(f"{path}.bai")
@@ -2591,7 +3195,10 @@ def _pin_presentation_root(*, create: bool):
                     if not isinstance(authority_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", authority_sha256) is None:
                         raise AlignmentSessionError("presentation package authority is invalid")
                     result_root = requested / job_id / session_id / authority_sha256
-                    for key in ("bam_path", "index_path", "coverage_path", "manifest_path"):
+                    for key in (
+                        "bam_path", "index_path", "coverage_path", "catalog_path",
+                        "locators_path", "manifest_path",
+                    ):
                         path = result.get(key)
                         if isinstance(path, Path):
                             result[key] = result_root / path.name
@@ -2713,10 +3320,12 @@ def _presentation_entry_size(candidate: Path) -> int | None:
     if candidate.is_symlink() or not candidate.is_dir():
         return None
     expected = {
-        "alignment-preview.bam",
-        "alignment-preview.bam.bai",
-        "full-source-primary-coverage.bedgraph",
-        "manifest.json",
+        "preview.bam",
+        "preview.bam.bai",
+        "full-source-primary.coverage.bedgraph",
+        "read-catalog.parquet",
+        "read-record-locators.parquet",
+        "presentation-manifest.json",
     }
     size = 0
     observed: set[str] = set()
@@ -2771,7 +3380,7 @@ def _cleanup_presentation_namespace(
             protected_size += size
             protected_count += 1
             continue
-        manifest = candidate / "manifest.json"
+        manifest = candidate / "presentation-manifest.json"
         mtime = manifest.stat().st_mtime_ns if manifest.is_file() else candidate.stat().st_mtime_ns
         entries.append((mtime, candidate.name, size))
     total = protected_size + reserve_bytes + sum(item[2] for item in entries)
@@ -2799,7 +3408,7 @@ def _presentation_names_for_manifest(namespace: Path, manifest_sha256: str | Non
     for candidate in namespace.iterdir():
         if re.fullmatch(r"[0-9a-f]{64}", candidate.name) is None:
             continue
-        manifest = candidate / "manifest.json"
+        manifest = candidate / "presentation-manifest.json"
         if manifest.is_file() and not manifest.is_symlink():
             try:
                 if hashlib.sha256(manifest.read_bytes()).hexdigest() == manifest_sha256:
@@ -2814,14 +3423,30 @@ def _load_derived_package(
     *,
     expected_authority_sha256: str | None = None,
     expected_manifest_sha256: str | None = None,
+    abort_check: Callable[[], None] | None = None,
 ) -> dict[str, Any] | None:
-    manifest_path = directory / "manifest.json"
+    import pyarrow.parquet as pq
+
+    checkpoint = abort_check or (lambda: None)
+    checkpoint()
+
+    manifest_path = directory / "presentation-manifest.json"
     paths = {
-        "bam": directory / "alignment-preview.bam",
-        "index": directory / "alignment-preview.bam.bai",
-        "coverage": directory / "full-source-primary-coverage.bedgraph",
+        "bam": directory / "preview.bam",
+        "index": directory / "preview.bam.bai",
+        "coverage": directory / "full-source-primary.coverage.bedgraph",
+        "catalog": directory / "read-catalog.parquet",
+        "locators": directory / "read-record-locators.parquet",
     }
-    if not manifest_path.is_file() or manifest_path.is_symlink():
+    if (
+        not manifest_path.is_file()
+        or manifest_path.is_symlink()
+        or {item.name for item in directory.iterdir()} != {
+            "preview.bam", "preview.bam.bai", "full-source-primary.coverage.bedgraph",
+            "read-catalog.parquet", "read-record-locators.parquet",
+            "presentation-manifest.json",
+        }
+    ):
         return None
     try:
         manifest_bytes = manifest_path.read_bytes()
@@ -2829,7 +3454,16 @@ def _load_derived_package(
         if expected_manifest_sha256 is not None and manifest_digest != expected_manifest_sha256:
             return None
         manifest = json.loads(manifest_bytes)
-        if manifest.get("schema") != "bms.ngs.alignment-presentation-manifest.v3":
+        if manifest.get("schema") != "bms.ngs.alignment-presentation-manifest.v4":
+            return None
+        if manifest.get("inventory") != [
+            "preview.bam",
+            "preview.bam.bai",
+            "full-source-primary.coverage.bedgraph",
+            "read-catalog.parquet",
+            "read-record-locators.parquet",
+            "presentation-manifest.json",
+        ] or set(manifest.get("outputs", {})) != set(paths):
             return None
         authority = manifest.get("authority")
         if not isinstance(authority, dict):
@@ -2838,18 +3472,37 @@ def _load_derived_package(
         directory_authority = expected_authority_sha256 or directory.name
         if manifest.get("authority_sha256") != authority_digest or directory_authority != authority_digest:
             return None
+        policy = manifest.get("policy")
+        if (
+            not isinstance(policy, dict)
+            or policy.get("id") != ALIGNMENT_PREVIEW_POLICY
+            or policy.get("version") != ALIGNMENT_PRESENTATION_POLICY_VERSION
+            or policy.get("max_preview_records") != ALIGNMENT_PREVIEW_MAX_RECORDS
+            or policy.get("max_catalog_bytes") != ALIGNMENT_CATALOG_MAX_BYTES
+            or policy.get("max_locator_bytes") != ALIGNMENT_LOCATOR_MAX_BYTES
+            or policy.get("max_package_bytes") != ALIGNMENT_PRESENTATION_ENTRY_MAX_BYTES
+            or policy.get("max_temporary_bytes") != ALIGNMENT_PRESENTATION_WORK_MAX_BYTES
+        ):
+            return None
         metadata = {}
         for key, path in paths.items():
+            checkpoint()
             if not path.is_file() or path.is_symlink():
                 return None
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             size = path.stat().st_size
             declared = manifest["outputs"][key]
-            if declared != {"sha256": digest, "size_bytes": size}:
+            if declared != {"filename": path.name, "sha256": digest, "size_bytes": size}:
                 return None
             metadata[key] = _derived_metadata(
                 path,
-                {"bam": "alignment_preview", "index": "alignment_preview_index", "coverage": "full_source_primary_coverage"}[key],
+                {
+                    "bam": "alignment_preview",
+                    "index": "alignment_preview_index",
+                    "coverage": "full_source_primary_coverage",
+                    "catalog": "alignment_read_catalog",
+                    "locators": "alignment_read_record_locators",
+                }[key],
                 manifest["source_manifest_sha256"],
                 digest=digest, size=size,
             )
@@ -2858,10 +3511,129 @@ def _load_derived_package(
                 "source_index_sha256": manifest["source_index_sha256"],
                 "policy": ALIGNMENT_PREVIEW_POLICY,
             })
+        catalog_table = pq.read_table(paths["catalog"])
+        locator_table = pq.read_table(paths["locators"])
+        if catalog_table.schema != ALIGNMENT_READ_CATALOG_SCHEMA or locator_table.schema != ALIGNMENT_READ_LOCATOR_SCHEMA:
+            return None
+        catalog_rows = catalog_table.to_pylist()
+        locator_rows = locator_table.to_pylist()
+        if (
+            [row["read_id"].encode("utf-8") for row in catalog_rows]
+            != sorted(row["read_id"].encode("utf-8") for row in catalog_rows)
+            or [(row["read_id"].encode("utf-8"), row["source_record_ordinal"]) for row in locator_rows]
+            != sorted((row["read_id"].encode("utf-8"), row["source_record_ordinal"]) for row in locator_rows)
+            or len({row["read_id"] for row in catalog_rows}) != len(catalog_rows)
+            or len(catalog_rows) != manifest["source_logical_read_count"]
+            or len(locator_rows) != manifest["source_alignment_record_count"]
+        ):
+            return None
+        locator_counts: dict[str, dict[str, int]] = {}
+        for row in locator_rows:
+            checkpoint()
+            read_counts = locator_counts.setdefault(
+                row["read_id"],
+                {"primary": 0, "supplementary": 0, "mapped_supplementary": 0,
+                 "secondary": 0, "unmapped": 0},
+            )
+            record_class = row["record_class"]
+            if record_class not in {"primary", "supplementary", "secondary", "unmapped"}:
+                return None
+            read_counts[record_class] += 1
+            read_counts["mapped_supplementary"] += int(
+                record_class == "supplementary" and not (row["flags"] & 0x4)
+            )
+            if re.fullmatch(r"[0-9a-f]{64}", row["record_fingerprint_sha256"]) is None:
+                return None
+        selected_catalog = {row["read_id"]: row for row in catalog_rows if row["in_preview"]}
+        state_counts = {
+            state: sum(row["alignment_state"] == state for row in catalog_rows)
+            for state in ("mapped_primary", "unmapped", "ambiguous_primary", "no_primary")
+        }
+        for row in catalog_rows:
+            checkpoint()
+            counts = locator_counts.get(row["read_id"])
+            expected_state = (
+                "mapped_primary" if row["mapped_primary_count"] == 1
+                else "ambiguous_primary" if row["mapped_primary_count"] > 1
+                else "unmapped" if row["unmapped_count"] > 0
+                else "no_primary"
+            )
+            canonical_ordinal = row["canonical_record_ordinal"]
+            canonical_rows = [
+                locator for locator in locator_rows
+                if locator["read_id"] == row["read_id"]
+                and locator["source_record_ordinal"] == canonical_ordinal
+            ] if canonical_ordinal is not None else []
+            if (
+                counts is None
+                or row["source_record_count"] != sum(counts[key] for key in ("primary", "supplementary", "secondary", "unmapped"))
+                or row["mapped_primary_count"] != counts["primary"]
+                or row["supplementary_count"] != counts["supplementary"]
+                or row["mapped_supplementary_count"] != counts["mapped_supplementary"]
+                or row["secondary_count"] != counts["secondary"]
+                or row["unmapped_count"] != counts["unmapped"]
+                or row["alignment_state"] != expected_state
+                or row["in_preview"] and expected_state != "mapped_primary"
+                or (expected_state in {"mapped_primary", "unmapped"}) != (len(canonical_rows) == 1)
+                or canonical_rows and canonical_rows[0]["record_class"] != (
+                    "primary" if expected_state == "mapped_primary" else "unmapped"
+                )
+                or (not row["dorado_tag_parse_valid"] and any(
+                    row[field] is not None for field in (
+                        "dorado_tag_move_stride_samples", "dorado_tag_emitted_bases",
+                        "dorado_tag_start_sample", "dorado_tag_end_sample",
+                    )
+                ))
+            ):
+                return None
+        preview_counts: dict[str, dict[str, int]] = {}
+        with pysam.AlignmentFile(paths["bam"], "rb", index_filename=str(paths["index"])) as preview:
+            for record in preview.fetch(until_eof=True):
+                checkpoint()
+                if not record.query_name or record.is_secondary or record.is_unmapped:
+                    return None
+                count = preview_counts.setdefault(record.query_name, {"primary": 0, "supplementary": 0})
+                count["supplementary" if record.is_supplementary else "primary"] += 1
+        if set(preview_counts) != set(selected_catalog):
+            return None
+        if any(
+            preview_counts[read_id] != {
+                "primary": 1,
+                "supplementary": int(row["mapped_supplementary_count"]),
+            }
+            for read_id, row in selected_catalog.items()
+        ):
+            return None
+        if (
+            manifest["selected_read_count"] != len(selected_catalog)
+            or manifest["selected_alignment_record_count"] != sum(
+                sum(count.values()) for count in preview_counts.values()
+            )
+            or manifest["selected_read_set_sha256"] != _selected_set_digest(list(selected_catalog))
+            or manifest["catalog"]["content_sha256"] != metadata["catalog"]["sha256"]
+            or manifest["catalog"]["size_bytes"] != metadata["catalog"]["size_bytes"]
+            or manifest["catalog"]["logical_read_count"] != len(catalog_rows)
+            or manifest["catalog"]["mapped_primary_read_count"] != state_counts["mapped_primary"]
+            or manifest["catalog"]["unmapped_read_count"] != state_counts["unmapped"]
+            or manifest["catalog"]["ambiguous_primary_read_count"] != state_counts["ambiguous_primary"]
+            or manifest["catalog"]["no_primary_read_count"] != state_counts["no_primary"]
+            or manifest["locators"]["content_sha256"] != metadata["locators"]["sha256"]
+            or manifest["locators"]["size_bytes"] != metadata["locators"]["size_bytes"]
+            or manifest["locators"]["record_count"] != len(locator_rows)
+            or manifest["source_record_counts"] != {
+                "mapped_primary": sum(counts["primary"] for counts in locator_counts.values()),
+                "supplementary": sum(counts["supplementary"] for counts in locator_counts.values()),
+                "secondary": sum(counts["secondary"] for counts in locator_counts.values()),
+                "unmapped": sum(counts["unmapped"] for counts in locator_counts.values()),
+            }
+        ):
+            return None
         return {
             "bam_path": paths["bam"], "bam_metadata": metadata["bam"],
             "index_path": paths["index"], "index_metadata": metadata["index"],
             "coverage_path": paths["coverage"], "coverage_metadata": metadata["coverage"],
+            "catalog_path": paths["catalog"], "catalog_metadata": metadata["catalog"],
+            "locators_path": paths["locators"], "locators_metadata": metadata["locators"],
             "manifest_path": manifest_path,
             "manifest_metadata": _derived_metadata(
                 manifest_path, "alignment_presentation_manifest", manifest["source_manifest_sha256"],
@@ -2908,6 +3680,56 @@ def resolve_cached_alignment_presentation(
     return package
 
 
+@_pin_presentation_root(create=False)
+def adopt_cached_alignment_presentation(
+    job_id: str,
+    session_id: str,
+    *,
+    cache_root: Path,
+    source_authority_sha256: str,
+    source_manifest_sha256: str,
+    source_artifact_set_sha256: str,
+    policy_version: int,
+    abort_check: Callable[[], None] | None = None,
+    presentation_namespace_root: Path | None = None,
+) -> dict[str, Any] | None:
+    """Validate and adopt one exact unreferenced post-rename package."""
+
+    namespace = presentation_namespace_root
+    if namespace is None:
+        raise AlignmentSessionError("presentation namespace is not pinned")
+    matches: list[dict[str, Any]] = []
+    for candidate in namespace.iterdir():
+        if abort_check is not None:
+            abort_check()
+        if re.fullmatch(r"[0-9a-f]{64}", candidate.name) is None:
+            continue
+        if candidate.is_symlink() or not candidate.is_dir():
+            continue
+        with open_presentation_authority_root(candidate, create=False) as pinned_candidate:
+            package = _load_derived_package(
+                pinned_candidate, expected_authority_sha256=candidate.name,
+                abort_check=abort_check,
+            )
+        manifest = package.get("manifest") if isinstance(package, dict) else None
+        policy = manifest.get("policy") if isinstance(manifest, dict) else None
+        if (
+            isinstance(package, dict)
+            and isinstance(manifest, dict)
+            and manifest.get("job_id") == job_id
+            and manifest.get("session_id") == session_id
+            and manifest.get("source_authority_sha256") == source_authority_sha256
+            and manifest.get("source_manifest_sha256") == source_manifest_sha256
+            and manifest.get("artifact_set_sha256") == source_artifact_set_sha256
+            and isinstance(policy, dict)
+            and policy.get("version") == policy_version
+        ):
+            matches.append(package)
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
 def _serialize_alignment_presentation_generation(function: Any) -> Any:
     @wraps(function)
     def wrapped(*args: Any, **kwargs: Any) -> Any:
@@ -2935,6 +3757,8 @@ def build_alignment_presentation(
     index_sha256: str, index_size_bytes: int, source_manifest_sha256: str,
     job_id: str, session_id: str, mode: str, cache_root: Path | None = None,
     artifact_set_sha256: str | None = None, alignment_pair_sha256: str | None = None,
+    source_authority_sha256: str | None = None,
+    source_reference_sha256: str | None = None,
     source_alignment_relative_path: str | None = None,
     source_index_relative_path: str | None = None,
     expected_manifest_sha256: str | None = None,
@@ -2943,379 +3767,38 @@ def build_alignment_presentation(
     max_output_bytes: int = ALIGNMENT_PREVIEW_MAX_BYTES,
     max_coverage_bins: int = ALIGNMENT_COVERAGE_MAX_BINS,
     max_seconds: float = ALIGNMENT_PRESENTATION_MAX_SECONDS,
+    abort_check: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
-    if (
-        target_reads < 1 or target_reads > 10_000
-        or max_output_bytes < 1 or max_output_bytes > ALIGNMENT_PREVIEW_MAX_BYTES
-        or max_coverage_bins < 1 or max_coverage_bins > ALIGNMENT_COVERAGE_MAX_BINS
-        or not math.isfinite(max_seconds) or max_seconds <= 0
-        or max_seconds > ALIGNMENT_PRESENTATION_MAX_SECONDS
-    ):
-        raise AlignmentSessionError("alignment presentation policy is invalid")
-    if re.fullmatch(r"[0-9a-f]{64}", source_manifest_sha256) is None or mode not in SESSION_MODES:
-        raise AlignmentSessionError("alignment presentation authority is invalid")
-    if not isinstance(source_alignment_relative_path, str) or not isinstance(source_index_relative_path, str):
-        raise AlignmentSessionError("alignment presentation source paths are unavailable")
-    creation_revision, creation_source_tree = _creation_authority()
-    admitted_source_identity = source_stat_identity(bam)
-    admitted_index_identity = source_stat_identity(index)
-    authority = {
-        "schema": "bms.ngs.alignment-presentation-authority.v3", "job_id": job_id,
-        "session_id": session_id, "mode": mode, "source_manifest_sha256": source_manifest_sha256,
-        "source_alignment_sha256": bam_sha256, "source_alignment_size_bytes": bam_size_bytes,
-        "source_index_sha256": index_sha256, "source_index_size_bytes": index_size_bytes,
-        "source_alignment_relative_path": source_alignment_relative_path,
-        "source_index_relative_path": source_index_relative_path,
-        "source_identity": _canonical_stat_identity(admitted_source_identity),
-        "source_index_identity": _canonical_stat_identity(admitted_index_identity),
-        "artifact_set_sha256": artifact_set_sha256, "alignment_pair_sha256": alignment_pair_sha256,
-        "creation_revision": creation_revision, "creation_source_tree": creation_source_tree,
-        "policy": {"id": ALIGNMENT_PREVIEW_POLICY, "version": ALIGNMENT_PRESENTATION_POLICY_VERSION,
-                   "target_reads": target_reads, "max_preview_bytes": max_output_bytes,
-                   "max_coverage_bins": max_coverage_bins, "max_seconds": max_seconds},
-    }
-    cache_key = hashlib.sha256(rfc8785.dumps(authority)).hexdigest()
-    root_parent = _presentation_root(cache_root, bam)
-    namespace = presentation_namespace_root or (root_parent / job_id / session_id)
-    destination = namespace / cache_key
-    namespace_parts = namespace.parts
-    if not (len(namespace_parts) == 5 and namespace_parts[1:4] == ("proc", "self", "fd") and namespace_parts[4].isdigit()):
-        raise AlignmentSessionError("presentation namespace is not pinned")
-    lock_fd = os.open(
-        ".generation.lock",
-        os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW,
-        0o640,
-        dir_fd=int(namespace_parts[4]),
+    from services.ngs_alignment_presentation_v5 import build_alignment_presentation_v5
+
+    if presentation_namespace_root is None or cache_root is None:
+        raise AlignmentSessionError("presentation roots are not pinned")
+    return build_alignment_presentation_v5(
+        bam,
+        bam_sha256=bam_sha256,
+        bam_size_bytes=bam_size_bytes,
+        index=index,
+        index_sha256=index_sha256,
+        index_size_bytes=index_size_bytes,
+        source_manifest_sha256=source_manifest_sha256,
+        job_id=job_id,
+        session_id=session_id,
+        mode=mode,
+        cache_root=cache_root,
+        artifact_set_sha256=artifact_set_sha256,
+        alignment_pair_sha256=alignment_pair_sha256,
+        source_authority_sha256=source_authority_sha256,
+        source_reference_sha256=source_reference_sha256,
+        source_alignment_relative_path=source_alignment_relative_path or "",
+        source_index_relative_path=source_index_relative_path or "",
+        expected_manifest_sha256=expected_manifest_sha256,
+        presentation_namespace_root=presentation_namespace_root,
+        target_reads=target_reads,
+        max_output_bytes=max_output_bytes,
+        max_coverage_bins=max_coverage_bins,
+        max_seconds=max_seconds,
+        abort_check=abort_check,
     )
-    with os.fdopen(lock_fd, "a+b") as producer_lock:
-        try:
-            fcntl.flock(producer_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise AlignmentSessionError("alignment presentation generation is already in progress") from exc
-        namespace_fd = int(namespace_parts[4])
-        protected_names = _presentation_names_for_manifest(namespace, expected_manifest_sha256)
-        _cleanup_presentation_namespace(
-            namespace,
-            namespace_fd,
-            protected_names=protected_names,
-        )
-        if destination.exists() or destination.is_symlink():
-            if expected_manifest_sha256 is not None:
-                if destination.is_symlink():
-                    raise AlignmentSessionError("alignment presentation destination is unsafe")
-                with open_presentation_authority_root(destination, create=False) as pinned_destination:
-                    cached = _load_derived_package(
-                        pinned_destination,
-                        expected_authority_sha256=cache_key,
-                        expected_manifest_sha256=expected_manifest_sha256,
-                    )
-                if cached is not None and cached["manifest"].get("authority_sha256") == cache_key:
-                    _cleanup_presentation_namespace(
-                        namespace,
-                        namespace_fd,
-                        active=destination,
-                        protected_names=protected_names,
-                    )
-                    return cached
-                raise AlignmentSessionError("alignment presentation manifest authority is invalid")
-            _remove_locus_transient(namespace_fd, cache_key)
-        _cleanup_presentation_namespace(
-            namespace,
-            namespace_fd,
-            protected_names=protected_names,
-            reserve_bytes=ALIGNMENT_PRESENTATION_WORK_MAX_BYTES,
-            reserve_entries=1,
-        )
-        os.mkdir(".generation.tmp", mode=0o750, dir_fd=namespace_fd)
-        temporary = namespace / ".generation.tmp"
-        source_handle = index_handle = None
-        candidate_db: sqlite3.Connection | None = None
-        deadline = time.monotonic() + max_seconds
-        try:
-            source_handle = _open_regular_file_no_symlinks(bam)
-            source_identity = _verify_descriptor(source_handle, bam_size_bytes, bam_sha256)
-            index_handle = _open_regular_file_no_symlinks(index)
-            index_identity = _verify_descriptor(index_handle, index_size_bytes, index_sha256)
-            if source_identity != admitted_source_identity or index_identity != admitted_index_identity:
-                raise AlignmentSessionError("alignment presentation source changed during materialization")
-            candidate_db_path = temporary / "preview-candidates.sqlite3"
-            candidate_db = sqlite3.connect(candidate_db_path)
-            candidate_db.execute("PRAGMA page_size=4096")
-            candidate_db.execute(
-                f"PRAGMA max_page_count={ALIGNMENT_PRESENTATION_WORK_MAX_BYTES // 4096}"
-            )
-            candidate_db.execute("PRAGMA journal_mode=OFF")
-            candidate_db.execute("PRAGMA synchronous=OFF")
-            candidate_db.execute("PRAGMA temp_store=FILE")
-            candidate_db.execute("PRAGMA cache_size=-8192")
-            candidate_db.execute(
-                "CREATE TABLE candidates (read_id TEXT PRIMARY KEY, contig TEXT NOT NULL, "
-                "tile INTEGER NOT NULL, strand TEXT NOT NULL, rank TEXT NOT NULL) WITHOUT ROWID"
-            )
-            candidate_db.execute(
-                "CREATE INDEX candidate_stratum_rank ON candidates (contig, tile, strand, rank, read_id)"
-            )
-            with pysam.AlignmentFile(_descriptor_path(source_handle.fileno()), "rb") as source:
-                header = source.header.to_dict()
-                references = list(zip(source.references, source.lengths, strict=True))
-                bin_width = max(1, math.ceil(sum(length for _name, length in references) / max_coverage_bins))
-                tile_widths = {name: max(1, math.ceil(length / 64)) for name, length in references}
-                coverage = {name: [0] * math.ceil(length / bin_width) for name, length in references}
-                source_records = source_alignment_records = forward = reverse = 0
-                source_record_counts = {
-                    "mapped_primary": 0, "secondary": 0,
-                    "supplementary": 0, "unmapped": 0,
-                }
-                flag_counts: dict[str, int] = {}
-                source_contig_counts: dict[str, int] = {}
-                source_strand_counts = {"forward": 0, "reverse": 0}
-                for read in source.fetch(until_eof=True):
-                    if time.monotonic() > deadline:
-                        raise AlignmentSessionError("alignment presentation time limit exceeded")
-                    source_alignment_records += 1
-                    if read.is_unmapped:
-                        source_record_counts["unmapped"] += 1
-                        continue
-                    if read.is_secondary:
-                        source_record_counts["secondary"] += 1
-                        continue
-                    if read.is_supplementary:
-                        source_record_counts["supplementary"] += 1
-                        continue
-                    source_record_counts["mapped_primary"] += 1
-                    if not read.query_name:
-                        continue
-                    source_records += 1
-                    strand = "reverse" if read.is_reverse else "forward"
-                    forward += int(not read.is_reverse)
-                    reverse += int(read.is_reverse)
-                    source_strand_counts[strand] += 1
-                    flag_counts[str(read.flag)] = flag_counts.get(str(read.flag), 0) + 1
-                    contig = source.get_reference_name(read.reference_id)
-                    source_contig_counts[contig] = source_contig_counts.get(contig, 0) + 1
-                    candidate_db.execute(
-                        "INSERT OR IGNORE INTO candidates(read_id, contig, tile, strand, rank) VALUES (?, ?, ?, ?, ?)",
-                        (
-                            read.query_name,
-                            contig,
-                            max(0, read.reference_start) // tile_widths[contig],
-                            strand,
-                            _rank_read(bam_sha256, read.query_name),
-                        ),
-                    )
-                    for block_start, block_end in read.get_blocks():
-                        first_bin = block_start // bin_width
-                        last_bin = (block_end - 1) // bin_width
-                        for bin_index in range(first_bin, last_bin + 1):
-                            left = max(block_start, bin_index * bin_width)
-                            right = min(block_end, (bin_index + 1) * bin_width)
-                            coverage[contig][bin_index] += max(0, right - left)
-            candidate_db.commit()
-            stratum_counts = {
-                (str(contig), int(tile), str(strand)): int(count)
-                for contig, tile, strand, count in candidate_db.execute(
-                    "SELECT contig, tile, strand, COUNT(*) FROM candidates "
-                    "GROUP BY contig, tile, strand ORDER BY contig, tile, strand"
-                )
-            }
-            source_primary_read_count = sum(stratum_counts.values())
-            strata = sorted(stratum_counts)
-            quotas = {stratum: 0 for stratum in strata}
-            if target_reads >= len(strata):
-                quotas = {stratum: 1 for stratum in strata}
-                remaining = target_reads - len(strata)
-            else:
-                remaining = target_reads
-            capacities = {stratum: stratum_counts[stratum] - quotas[stratum] for stratum in strata}
-            total_capacity = sum(capacities.values())
-            shares = []
-            if remaining and total_capacity:
-                for stratum in strata:
-                    exact = remaining * capacities[stratum] / total_capacity
-                    whole = math.floor(exact)
-                    quotas[stratum] += whole
-                    shares.append((exact - whole, stratum))
-                leftover = remaining - sum(math.floor(remaining * capacities[s] / total_capacity) for s in strata)
-                for _fraction, stratum in sorted(shares, key=lambda item: (-item[0], item[1]))[:leftover]:
-                    quotas[stratum] += 1
-            selected_ids_set: set[str] = set()
-            selected_strata: dict[str, tuple[str, int, str]] = {}
-            for stratum in strata:
-                contig, tile, strand = stratum
-                for (read_id,) in candidate_db.execute(
-                    "SELECT read_id FROM candidates WHERE contig = ? AND tile = ? AND strand = ? "
-                    "ORDER BY rank, read_id LIMIT ?",
-                    (contig, tile, strand, quotas[stratum]),
-                ):
-                    selected_ids_set.add(str(read_id))
-                    selected_strata[str(read_id)] = stratum
-            candidate_db.close()
-            candidate_db = None
-            candidate_db_path.unlink()
-            selected: dict[str, list[Any]] = {read_id: [] for read_id in selected_ids_set}
-            selected_record_total = 0
-            source_handle.seek(0)
-            with pysam.AlignmentFile(_descriptor_path(source_handle.fileno()), "rb") as source:
-                for read in source.fetch(until_eof=True):
-                    if time.monotonic() > deadline:
-                        raise AlignmentSessionError("alignment presentation time limit exceeded")
-                    if (
-                        read.query_name in selected and not read.is_unmapped
-                        and not read.is_secondary and not read.is_supplementary
-                    ):
-                        selected[read.query_name].append(read)
-                        selected_record_total += 1
-                        if selected_record_total > ALIGNMENT_PREVIEW_MAX_RECORDS:
-                            evicted = max(
-                                (read_id for read_id, records in selected.items() if records),
-                                key=lambda value: _rank_read(bam_sha256, value),
-                            )
-                            selected_record_total -= len(selected[evicted])
-                            selected.pop(evicted)
-            coverage_path = temporary / "full-source-primary-coverage.bedgraph"
-            with coverage_path.open("w", encoding="utf-8", newline="\n") as output:
-                for contig, length in references:
-                    for bin_index, aligned_bases in enumerate(coverage[contig]):
-                        if aligned_bases:
-                            start = bin_index * bin_width
-                            end = min(length, start + bin_width)
-                            output.write(f"{contig}\t{start}\t{end}\t{aligned_bases / (end - start):.6f}\n")
-            if coverage_path.stat().st_size > ALIGNMENT_COVERAGE_MAX_BYTES:
-                raise AlignmentSessionError("alignment presentation coverage byte ceiling exceeded")
-            retained_ids = sorted(selected, key=lambda value: _rank_read(bam_sha256, value))
-            preview_path = temporary / "alignment-preview.bam"
-            while True:
-                try:
-                    selected_record_count = _write_bam_for_ids_bounded(
-                        preview_path,
-                        Path(_descriptor_path(source_handle.fileno())),
-                        retained_ids,
-                        byte_limit=max_output_bytes,
-                        deadline=deadline,
-                        label="alignment presentation",
-                    )
-                    break
-                except _AlignmentDerivativeByteLimit:
-                    if not retained_ids:
-                        raise AlignmentSessionError("alignment preview byte ceiling is too small")
-                    retained_ids.pop()
-            if time.monotonic() > deadline:
-                raise AlignmentSessionError("alignment presentation time limit exceeded")
-            _index_bam_with_deadline(
-                preview_path,
-                deadline=deadline,
-                label="alignment presentation",
-                byte_limit=ALIGNMENT_PREVIEW_INDEX_MAX_BYTES,
-            )
-            preview_index = Path(f"{preview_path}.bai")
-            if preview_index.stat().st_size > ALIGNMENT_PREVIEW_INDEX_MAX_BYTES:
-                raise AlignmentSessionError("alignment presentation index byte ceiling exceeded")
-            outputs = {}
-            for key, path in (("bam", preview_path), ("index", preview_index), ("coverage", coverage_path)):
-                digest, size = _sha256_file_and_size(path)
-                outputs[key] = {"sha256": digest, "size_bytes": size}
-            selected_forward = sum(not record.is_reverse for read_id in retained_ids for record in selected[read_id])
-            selected_reverse = sum(record.is_reverse for read_id in retained_ids for record in selected[read_id])
-            selected_contig_counts: dict[str, int] = {}
-            selected_stratum_counts: dict[str, int] = {}
-            for read_id in retained_ids:
-                contig, tile, strand = selected_strata[read_id]
-                selected_contig_counts[contig] = selected_contig_counts.get(contig, 0) + 1
-                key = f"{contig}:{tile}:{strand}"
-                selected_stratum_counts[key] = selected_stratum_counts.get(key, 0) + 1
-            unrepresented = [
-                f"{contig}:{tile}:{strand}" for contig, tile, strand in strata
-                if selected_stratum_counts.get(f"{contig}:{tile}:{strand}", 0) == 0
-            ]
-            manifest = {
-                "schema": "bms.ngs.alignment-presentation-manifest.v3", "authority_sha256": cache_key,
-                "authority": authority,
-                "job_id": job_id, "session_id": session_id, "mode": mode,
-                "source_manifest_sha256": source_manifest_sha256,
-                "package_manifest_sha256": source_manifest_sha256,
-                "artifact_set_sha256": artifact_set_sha256,
-                "alignment_pair_sha256": alignment_pair_sha256,
-                "creation_revision": creation_revision, "creation_source_tree": creation_source_tree,
-                "source_alignment_sha256": bam_sha256, "source_alignment_size_bytes": bam_size_bytes,
-                "source_index_sha256": index_sha256, "source_index_size_bytes": index_size_bytes,
-                "source_alignment_relative_path": source_alignment_relative_path,
-                "source_index_relative_path": source_index_relative_path,
-                "source_identity": _canonical_stat_identity(source_identity),
-                "source_index_identity": _canonical_stat_identity(index_identity),
-                "policy": authority["policy"],
-                "generation_limits": {"max_seconds": max_seconds, "max_concurrent_generations": 1},
-                "runtime": {"pysam_version": pysam.__version__},
-                "selected_read_set_sha256": _selected_set_digest(retained_ids),
-                "selection_unit": "unique mapped primary read ID",
-                "inclusion_rules": ["mapped", "primary", "query_name present"],
-                "exclusion_rules": ["secondary", "supplementary", "unmapped", "missing query_name"],
-                "selected_read_count": len(retained_ids),
-                "selected_alignment_record_count": selected_record_count,
-                "selected_record_counts": {
-                    "mapped_primary": selected_record_count, "secondary": 0,
-                    "supplementary": 0, "unmapped": 0,
-                },
-                "source_alignment_record_count": source_alignment_records,
-                "source_record_counts": source_record_counts,
-                "source_primary_mapped_read_count": source_primary_read_count,
-                "source_primary_mapped_alignment_record_count": source_records,
-                "source_strand_counts": {"forward": forward, "reverse": reverse},
-                "selected_strand_counts": {"forward": selected_forward, "reverse": selected_reverse},
-                "source_flag_counts": flag_counts, "coverage_bin_width": bin_width,
-                "coverage_semantics": "mean primary mapped alignment depth from full source",
-                "tile_policy": {"id": "reference-tile-strand-largest-remainder", "version": 1,
-                                "tiles_per_contig": 64, "tile_widths_bp": tile_widths},
-                "source_contig_counts": source_contig_counts,
-                "selected_contig_counts": selected_contig_counts,
-                "selected_stratum_counts": selected_stratum_counts,
-                "unrepresented_strata": unrepresented,
-                "output_byte_ceiling": max_output_bytes, "outputs": outputs,
-            }
-            manifest_bytes = rfc8785.dumps(manifest)
-            if len(manifest_bytes) > ALIGNMENT_PRESENTATION_MANIFEST_MAX_BYTES:
-                raise AlignmentSessionError("alignment presentation manifest byte ceiling exceeded")
-            package_size = len(manifest_bytes) + sum(item["size_bytes"] for item in outputs.values())
-            if package_size > ALIGNMENT_PRESENTATION_ENTRY_MAX_BYTES:
-                raise AlignmentSessionError("alignment presentation package byte ceiling exceeded")
-            manifest_handle = (temporary / "manifest.json").open("wb")
-            try:
-                manifest_handle.write(manifest_bytes)
-                manifest_handle.flush()
-                os.fsync(manifest_handle.fileno())
-            finally:
-                manifest_handle.close()
-            os.rename(".generation.tmp", cache_key, src_dir_fd=namespace_fd, dst_dir_fd=namespace_fd)
-            directory_fd = os.dup(namespace_fd)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
-        except Exception as exc:
-            _remove_locus_transient(namespace_fd, ".generation.tmp")
-            if isinstance(exc, AlignmentSessionError):
-                raise
-            raise AlignmentSessionError(f"alignment presentation generation failed: {exc}") from exc
-        finally:
-            if candidate_db is not None:
-                candidate_db.close()
-            if index_handle is not None:
-                index_handle.close()
-            if source_handle is not None:
-                source_handle.close()
-        with open_presentation_authority_root(destination, create=False) as pinned_destination:
-            package = _load_derived_package(
-                pinned_destination,
-                expected_authority_sha256=cache_key,
-            )
-        if package is None:
-            raise AlignmentSessionError("alignment presentation failed integrity validation")
-        _cleanup_presentation_namespace(
-            namespace,
-            namespace_fd,
-            active=destination,
-            protected_names=protected_names,
-        )
-        return package
 
 
 def build_alignment_preview(
