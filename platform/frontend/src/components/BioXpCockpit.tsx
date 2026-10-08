@@ -158,7 +158,15 @@ const AXES: readonly AxisControls[] = [
 
 let fallbackIdempotencySequence = 0;
 const nextIdempotencyKey = (prefix: string): string => {
-    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+    try {
+        if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+    } catch { /* Try the supported entropy alternative if UUID generation fails. */ }
+    try {
+        if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+            const bytes = crypto.getRandomValues(new Uint8Array(16));
+            return `${prefix}-${Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')}`;
+        }
+    } catch { /* Preserve the existing fallback, including addressed Stop transport. */ }
     fallbackIdempotencySequence += 1;
     return `${prefix}-${fallbackIdempotencySequence}`;
 };
