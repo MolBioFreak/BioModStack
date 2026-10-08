@@ -168,11 +168,14 @@ async def test_full_attach_bootstraps_transfers_and_verifies_before_ready(
             incoming = Path(storage.root) / 'incoming' / entry.sha256
             incoming.write_bytes(entry.source.read_bytes())
             storage.ingest(dict(sha256=entry.sha256, size_bytes=entry.size_bytes), incoming)
-    async def probe(*args): return {'gpus': ['fixture gpu']}
+    async def probe(*args): return {'gpus': [f'{index}, GPU-fixture-{index}, NVIDIA GeForce RTX 5060 Ti, 16311'
+                                            for index in range(4)]}
     monkeypatch.setattr(targets, 'capture_host_key', capture)
     monkeypatch.setattr(targets, 'persist_host_key', noop)
     monkeypatch.setattr(targets, 'run_remote', run)
     monkeypatch.setattr(targets, 'probe_readiness', probe)
+    monkeypatch.setattr('services.gpu_config.read_scheduler_config',
+                        lambda: {'global': {'target_vram_fill': 0.9, 'vram_safety_margin_mb': 2048}})
     monkeypatch.setattr(mi, 'helper_call', helper)
     monkeypatch.setattr(cache, '_cache_artifacts', push)
     started = await targets.begin_activation(session, ExecutionTargetActivateRequest(
@@ -193,6 +196,20 @@ async def test_full_attach_bootstraps_transfers_and_verifies_before_ready(
         assert binding['environment']['NXF_VER'] == version
         assert Path(binding['paths']['jar']).is_file()
         assert result.capabilities['critical_runtime']['state'] == 'verified'
+        # Readiness publishes the worker's observed per-device capacity, so a
+        # 4 x 16 GB worker is not presented as able to host every heavy model.
+        capability = result.capabilities['device_capability']
+        assert capability['schema'] == 'bms.target-device-capability.v1'
+        assert capability['source'] == 'readiness_probe'
+        assert [device['index'] for device in capability['devices']] == [0, 1, 2, 3]
+        assert capability['per_device_memory_total_mb'] == 16311
+        assert capability['per_device_admissible_idle_mb'] == 12631
+        assert capability['heavy_model_fits'] is False
+        scheduling = result.capabilities['scheduling']
+        assert scheduling['new_work_ready'] is True
+        assert scheduling['not_ready_reason'] is None
+        assert scheduling['inventory_fresh'] is True
+        assert scheduling['device_capability'] == capability
 
 
 @pytest.mark.asyncio

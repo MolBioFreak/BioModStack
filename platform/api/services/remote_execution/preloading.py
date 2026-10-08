@@ -97,7 +97,9 @@ def admission_clause(target):
         (ExecutionTarget.id == target.id) & ExecutionTarget.active.is_(True)
         & (ExecutionTarget.state == "ready") & ExecutionTarget.leased_job_id.is_(None)
         & preload_idle_clause()
-        & ~select(ExecutionTarget.id).where(ExecutionTarget.state == "probing").exists()
+        # This worker must not be mid-setup; another target's probing row is
+        # never a reason to withhold its own cache work.
+        & (ExecutionTarget.state != "probing")
         & (ExecutionTarget.host == target.host) & (ExecutionTarget.port == target.port)
         & (ExecutionTarget.username == target.username) & (ExecutionTarget.remote_root == target.remote_root)
         & (ExecutionTarget.host_key_sha256 == target.host_key_sha256)

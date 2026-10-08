@@ -20,6 +20,10 @@ from .transport import RemoteConnection, RemoteConnectionError, RemoteExecutionT
 ESTABLISHMENT_SECONDS = 30.0
 INTERVAL = 10.0
 FRESH_SECONDS = 20.0
+# A failed sample must not age a healthy source: the next attempt is scheduled
+# strictly inside the freshness window, so staleness keeps describing a producer
+# that stopped making progress rather than one waiting out its own retry.
+RETRY_DELAY_CEILING_SECONDS = FRESH_SECONDS / 2.0
 HISTORY_SECONDS = 3600
 PROBE = Path(__file__).with_name('telemetry_probe.py').read_bytes()
 
@@ -142,7 +146,8 @@ class RemoteTelemetry:
         sample['sequence'] = self.sequence
         entry['history'].append((self.sequence, observed, sample))
         self._prune(entry, time.monotonic())
-        entry['due'] = time.monotonic() + min(60, INTERVAL * 2 ** min(entry['failures'], 3))
+        entry['due'] = time.monotonic() + min(RETRY_DELAY_CEILING_SECONDS,
+                                              INTERVAL * 2 ** min(entry['failures'], 3))
 
     async def run(self, session_factory, stop):
         from .targets import telemetry_eligible

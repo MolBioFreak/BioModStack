@@ -312,6 +312,34 @@ async def test_pending_return_without_lease_allows_preload_and_detach(store, rem
 
 
 @pytest.mark.asyncio
+async def test_probing_worker_does_not_block_another_targets_preload(store):
+    """The mid-setup exclusion belongs to that worker, not to the whole fleet."""
+    async with store() as s:
+        s.add(ExecutionTarget(id='vast:2', provider='vast', provider_instance_id='2',
+            active=False, state='probing', host='host-2', port=22, username='root', host_key_sha256='d'*64,
+            provider_metadata={'setup': {'phase': 'installing', 'message': 'Installing missing worker tools',
+                                         'started_at': datetime.utcnow().isoformat()},
+                               'inventory': {'status': 'complete', 'present': True, 'running': True,
+                                             'checked_at': datetime.utcnow().isoformat()}}))
+        await s.commit()
+    async def prewarm(**kw):
+        return {'source_revision': 'a'*40, 'source_tree': 'b'*40}
+    controller = p.PreloadController(store, prewarm=prewarm)
+    async with store() as s:
+        admitted = await controller.start(s, 'vast:1', PreloadRequest(job_id='recipe'))
+        assert admitted.preload.phase == 'checking'
+    await settle(controller)
+    async with store() as s:
+        assert (await s.get(ExecutionTarget, 'vast:1')).provider_metadata['preload']['phase'] == 'source_download_ready'
+        probing = await s.get(ExecutionTarget, 'vast:2')
+        assert probing.state == 'probing'
+        assert 'preload' not in (probing.provider_metadata or {})
+    async with store() as s:
+        with pytest.raises(ExecutionTargetError, match='Preload requires an idle attached worker'):
+            await controller.start(s, 'vast:2', PreloadRequest(job_id='recipe'))
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('change', ['attempt', 'job_terminal', 'remote_terminal', 'progress_terminal', 'lease'])
 async def test_job_progress_rejects_delayed_callback_after_db_race(store, change):
     from sqlalchemy import update

@@ -263,7 +263,11 @@ describe('remote execution operator surfaces', () => {
                 expect(container.textContent).toContain(phase);
                 expect(container.textContent).toContain(message);
                 expect(attach()?.disabled).toBe(true);
-                expect(container.textContent).not.toContain('Vast · Remote A6000');
+                // The worker mid-setup stays visible with its reason, unselectable.
+                const placement = [...container.querySelectorAll('button')]
+                    .find(button => button.textContent?.startsWith('Vast · Remote A6000'))!;
+                expect(placement.disabled).toBe(true);
+                expect(placement.getAttribute('title')).toContain(message);
                 expect(window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBeNull();
             }
             target = { ...target, state: 'ready', active: true, setup: { phase: 'ready', message: 'Worker runtime verified' } };
@@ -294,7 +298,13 @@ describe('remote execution operator surfaces', () => {
             await act(async () => root.render(<QueryClientProvider client={client}><InfraLiveTelemetry variant="dashboard" /></QueryClientProvider>));
             await act(async () => { await vi.advanceTimersByTimeAsync(20); });
             expect(container.textContent).toContain('Copying runtime bundle');
-            expect([...container.querySelectorAll('button')].find((button) => button.textContent === 'Attaching…')?.disabled).toBe(true);
+            // A setup attempt owns this worker: the API refuses both controls, and
+            // the card names the attempt instead of claiming the browser is attaching.
+            expect(container.textContent).toContain('Setup attempt in progress');
+            const probingAttach = [...container.querySelectorAll('button')]
+                .find((button) => button.textContent === 'Attach worker');
+            expect(probingAttach?.disabled).toBe(true);
+            expect(probingAttach?.getAttribute('title')).toContain('Setup attempt in progress');
             target = { ...target, state: 'unavailable', setup: { phase: 'failed', message: 'Runtime verification failed: Apptainer unavailable' } };
             await act(async () => { await vi.advanceTimersByTimeAsync(5_020); });
             expect(container.textContent).toContain('Runtime verification failed: Apptainer unavailable');
@@ -507,6 +517,87 @@ describe('remote execution operator surfaces', () => {
         expect(container.textContent).toContain('Ready');
         expect(container.textContent).toContain('Remote analytics available');
         expect(container.textContent).toContain('Detach');
+
+        await act(async () => root.unmount());
+        client.clear();
+    });
+
+    it('renders the API admission and capability facts instead of a bare Ready', async () => {
+        const deviceCapability = {
+            schema: 'bms.target-device-capability.v1', source: 'readiness_probe',
+            observed_at: '2026-09-17T02:41:29Z',
+            devices: [0, 1, 2, 3].map(index => ({ index, name: 'NVIDIA GeForce RTX 5060 Ti', memory_total_mb: 16311 })),
+            per_device_memory_total_mb: 16311,
+            per_device_admissible_idle_mb: 12631,
+            heavy_model_per_device_mb: {
+                minimum_mb: 5000, minimum_model: 'rfdiffusion',
+                maximum_mb: 22000, maximum_model: 'esmfold2',
+            },
+            heavy_model_fits: false,
+        };
+        const limitedWorker = {
+            ...readyTarget,
+            id: 'vast:1234', provider_instance_id: '1234', name: 'Remote 16GB',
+            capabilities: {
+                gpu_count: 4, gpu_name: 'NVIDIA GeForce RTX 5060 Ti',
+                scheduling: {
+                    policy: 'exclusive_target', max_concurrent_root_attempts: 1,
+                    new_work_ready: true, inventory_fresh: true, leased_job_id: null,
+                    preload_active: false, provider_present: true, provider_running: true,
+                    not_ready_reason: null, device_capability: deviceCapability,
+                },
+            },
+        };
+        const staleInventoryWorker = {
+            ...limitedWorker,
+            id: 'vast:5678', provider_instance_id: '5678', name: 'Remote stale',
+            capabilities: {
+                ...limitedWorker.capabilities,
+                scheduling: {
+                    ...limitedWorker.capabilities.scheduling,
+                    new_work_ready: false, inventory_fresh: false,
+                    not_ready_reason: 'Provider inventory is stale or unavailable',
+                },
+            },
+        };
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+        client.setQueryData(['execution-targets'], response([limitedWorker, staleInventoryWorker]));
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+
+        await act(async () => {
+            root.render(<QueryClientProvider client={client}><InfraLiveTelemetry variant="dashboard" /><ExecutionTargetPicker /></QueryClientProvider>);
+            await Promise.resolve();
+        });
+
+        const workers = container.querySelector('[aria-label="Vast workers"]')!;
+        expect(workers).toBeTruthy();
+        // A worker that cannot take new work is never shown as ready.
+        const staleRow = [...workers.children].find(row => row.textContent?.includes('Remote stale'))!;
+        expect(staleRow.textContent).toContain('Provider inventory is stale or unavailable');
+        expect(staleRow.textContent).not.toContain('Ready');
+        expect(staleRow.textContent).not.toContain('Remote analytics available');
+        // A ready worker reports its observed per-device capacity and its limit.
+        const readyRow = [...workers.children].find(row => row.textContent?.includes('Remote 16GB'))!;
+        expect(readyRow.textContent).toContain('Ready');
+        expect(readyRow.textContent).toContain('Remote analytics available');
+        expect(readyRow.textContent).toContain('16311 MB per device');
+        expect(readyRow.textContent).toContain('12631 MB admissible');
+        expect(readyRow.textContent).toContain(
+            'Heavy models reserve 5000–22000 MB per device (esmfold2 needs 22000 MB); this worker admits 12631 MB');
+
+        // The picker keeps both API-visible rows: the stale one disabled with its reason.
+        expect(container.textContent).toContain('Vast · Remote stale');
+        const staleButton = [...container.querySelectorAll('button')]
+            .find(button => button.textContent?.includes('Vast · Remote stale'))!;
+        expect(staleButton.disabled).toBe(true);
+        expect(staleButton.getAttribute('title')).toBe('Provider inventory is stale or unavailable');
+        const readyButton = [...container.querySelectorAll('button')]
+            .find(button => button.textContent?.startsWith('Vast · Remote 16GB'))!;
+        expect(readyButton.disabled).toBe(false);
+        await act(async () => readyButton.click());
+        expect(container.textContent).toContain('4 × NVIDIA GeForce RTX 5060 Ti · 16311 MB per device · 12631 MB admissible');
 
         await act(async () => root.unmount());
         client.clear();

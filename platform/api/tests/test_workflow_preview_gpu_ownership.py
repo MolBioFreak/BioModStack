@@ -213,3 +213,94 @@ async def test_real_launcher_retains_admitted_neurosnap_backend(lifecycle_store,
             for key, value in scientific_request().items():
                 assert observed[0][key] == value
             assert job.error_message == 'offline stop before scientific execution'
+
+
+READINESS_4X_16311 = [f'{index}, GPU-fixture-{index}, NVIDIA GeForce RTX 5060 Ti, 16311' for index in range(4)]
+HEAVY_RANGE = {'minimum_mb': 5000, 'minimum_model': 'rfdiffusion',
+               'maximum_mb': 22000, 'maximum_model': 'esmfold2'}
+
+
+def test_worker_capability_fact_publishes_observed_capacity_and_keeps_unknown_null():
+    from services.remote_execution import targets
+    fact = targets.device_capability_fact(
+        {'gpu_count': 4, 'gpu_name': 'NVIDIA GeForce RTX 5060 Ti', 'gpu_vram_mb': 16311,
+         'readiness': {'gpus': list(READINESS_4X_16311)}},
+        envelope={'target_vram_fill': 0.9, 'safety_margin_mb': 2048}, heavy_range_mb=HEAVY_RANGE)
+    assert fact['schema'] == 'bms.target-device-capability.v1'
+    assert fact['source'] == 'readiness_probe'
+    assert [device['index'] for device in fact['devices']] == [0, 1, 2, 3]
+    assert {device['name'] for device in fact['devices']} == {'NVIDIA GeForce RTX 5060 Ti'}
+    assert fact['per_device_memory_total_mb'] == 16311
+    assert fact['per_device_admissible_idle_mb'] == 12631     # floor(16311 * 0.9) - 2048
+    # A 4 x 16 GB worker is ready but cannot admit an ESMFold2-class request.
+    assert fact['heavy_model_fits'] is False
+    # An unobserved worker stays null instead of becoming a capacity or a verdict.
+    unobserved = targets.device_capability_fact(
+        {'gpu_count': 4, 'gpu_name': 'RTX 5090'}, envelope={'target_vram_fill': 0.9, 'safety_margin_mb': 2048},
+        heavy_range_mb=HEAVY_RANGE)
+    assert unobserved['source'] == 'provider_reported'
+    assert unobserved['per_device_memory_total_mb'] is None
+    assert unobserved['per_device_admissible_idle_mb'] is None
+    assert unobserved['heavy_model_fits'] is None
+    assert targets.parse_readiness_devices({'gpus': ['fixture gpu']}) == []
+
+
+@pytest.mark.asyncio
+async def test_published_capability_is_served_and_refuses_no_fitting_plan(admission, tmp_path, monkeypatch):
+    """The API publishes the worker's capacity fact; admission still uses its own clauses."""
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+    from database import ExecutionTarget, get_session
+    from routers.execution_targets import router as execution_targets_router
+    from routers import jobs as jobs_router
+    from services.remote_execution import targets
+
+    client, factory = admission
+    fact = targets.device_capability_fact(
+        {'gpu_count': 4, 'gpu_name': 'NVIDIA GeForce RTX 5060 Ti', 'gpu_vram_mb': 16311,
+         'readiness': {'gpus': list(READINESS_4X_16311)}},
+        envelope={'target_vram_fill': 0.9, 'safety_margin_mb': 2048}, heavy_range_mb=HEAVY_RANGE)
+    async with factory() as session:
+        target = await session.get(ExecutionTarget, 'vast:one')
+        target.capabilities = {**dict(target.capabilities or {}), 'readiness': {'gpus': list(READINESS_4X_16311)},
+                               'device_capability': fact}
+        await session.commit()
+
+    reader = FastAPI()
+    reader.include_router(execution_targets_router, prefix='/api/execution-targets')
+    async def dependency():
+        async with factory() as session:
+            yield session
+    reader.dependency_overrides[get_session] = dependency
+    async with AsyncClient(transport=ASGITransport(app=reader), base_url='http://fixture') as api_reader:
+        response = await api_reader.get('/api/execution-targets')
+    assert response.status_code == 200, response.text
+    rows = {row['id']: row for row in response.json()}
+    assert set(rows) == {'vast:one', 'vast:two'}
+    scheduling = rows['vast:one']['capabilities']['scheduling']
+    assert scheduling['new_work_ready'] is True
+    assert scheduling['not_ready_reason'] is None
+    assert scheduling['inventory_fresh'] is True
+    assert scheduling['provider_present'] is True and scheduling['provider_running'] is True
+    capability = scheduling['device_capability']
+    assert capability['source'] == 'readiness_probe'
+    assert capability['per_device_memory_total_mb'] == 16311
+    assert capability['per_device_admissible_idle_mb'] == 12631
+    assert capability['heavy_model_fits'] is False
+
+    # The advisory fact refuses nothing: a request that fits is still created.
+    weights = tmp_path / 'fixture-weights'
+    (weights / 'checkpoint').mkdir(parents=True)
+    (weights / 'checkpoint/protenix-v2.pt').write_bytes(b'offline admission fixture; not model weights')
+    monkeypatch.setattr(jobs_router, '_resolve_protenix_weights_dir', lambda params: weights)
+    credential = tmp_path / 'neurosnap-offline-fixture'
+    credential.write_text('not-a-real-credential-offline-fixture')
+    credential.chmod(0o600)
+    monkeypatch.setenv('BMS_NEUROSNAP_API_KEY_FILE', str(credential))
+    body = dict(name='capability admission', model_id='protenix', mode='predict',
+                execution_target_id='vast:one', params=scientific_request())
+    preview = await client.post('/jobs/execution-plan/preview', json=body)
+    assert preview.status_code == 200, preview.text
+    assert preview.json()['admissible'], preview.json()['blockers']
+    created = await client.post('/jobs', json={**body, 'execution_plan_approval': preview.json()['approval_digest']})
+    assert created.status_code == 201, created.text

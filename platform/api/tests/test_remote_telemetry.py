@@ -90,10 +90,44 @@ async def test_failure_classification_backoff_and_no_stale_success(monkeypatch, 
         value = store.read(worker)
         assert not value['available'] and value['gpus'] == []
         assert value['error'] == message and state['raw'] is None
-        assert 19 < state['due'] - time.monotonic() <= 60
+        # Repeated failure never schedules the retry at or beyond the window.
+        assert 0 < state['due'] - time.monotonic() <= mod.RETRY_DELAY_CEILING_SECONDS
     seq, stamp, sample = state['history'][-1]
     state['history'][-1] = (seq, stamp - 25, sample)
     assert store.read(worker)['error'] == message
+
+
+@pytest.mark.asyncio
+async def test_one_failed_sample_does_not_present_a_healthy_source_as_aged(monkeypatch):
+    """A failed sample names the failure; it must not age the observation."""
+    store = mod.RemoteTelemetry(); worker = target(); state = entry()
+    store.entries[mod.identity(worker)] = state
+    clock = [100.0]
+    monkeypatch.setattr(mod.time, 'monotonic', lambda: clock[0])
+    async def healthy(*args, **kwargs): return SimpleNamespace(stdout=json.dumps(fixture()))
+    monkeypatch.setattr(mod, 'run_remote', healthy)
+    await store.collect(worker, state)
+    # A normal interval plus the worst-case retry still fits inside the window.
+    assert mod.RETRY_DELAY_CEILING_SECONDS + mod.INTERVAL <= mod.FRESH_SECONDS
+    assert state['due'] - clock[0] <= mod.RETRY_DELAY_CEILING_SECONDS
+    readings = []
+    for offset in (1, 5, 9):
+        clock[0] = 100 + offset
+        readings.append(store.read(worker))
+    async def failing(*args, **kwargs): raise mod.RemoteConnectionError('fixture')
+    monkeypatch.setattr(mod, 'run_remote', failing)
+    clock[0] = 111.0
+    await store.collect(worker, state)
+    for offset in (12, 19):
+        clock[0] = 100 + offset
+        readings.append(store.read(worker))
+    assert [reading['available'] for reading in readings] == [True, True, True, False, False]
+    assert [reading.get('error') for reading in readings[:3]] == [None, None, None]
+    # The gap is attributed to the failed collection, never to an aged source.
+    assert [reading.get('error') for reading in readings[3:]] == [
+        'Remote SSH establishment failed or timed out'] * 2
+    assert all(reading.get('error') != 'Remote telemetry is stale' for reading in readings)
+    assert mod.FRESH_SECONDS == 20.0
 
 
 @pytest.mark.asyncio
@@ -175,7 +209,8 @@ async def test_background_singleflight_slow_failure_and_many_viewers(tmp_path, m
         await asyncio.sleep(0.01)
         state = next(iter(store.entries.values()))
         assert state['failures'] == 1
-        assert state['due'] - time.monotonic() > 15
+        assert 0 < state['due'] - time.monotonic() <= mod.RETRY_DELAY_CEILING_SECONDS
+        assert state['due'] - time.monotonic() < mod.FRESH_SECONDS
         async with factory() as session:
             value = await asyncio.wait_for(targets.active_remote_telemetry(session), 0.5)
         assert value['error'] == 'Remote collection failed or timed out'

@@ -81,3 +81,83 @@ async def test_remote_cycle_cp4_never_claims_one_gpu(workers, monkeypatch, case)
             assert job.queue_status == 'queued'
             assert job.remote_state == ('waiting_remote_gpu' if case in ('auto', 'one') else
                                         'waiting_remote_telemetry' if case == 'unavailable' else 'waiting_remote_capacity')
+            if case == 'capacity':
+                # The device's own facts, not the required floor, explain the refusal.
+                assert 'GPU 3' in job.error_message
+                assert 'MB admissible' in job.error_message
+                assert '6000 MB is required' in job.error_message
+
+
+async def capacity_case(workers, monkeypatch, *, total_mb, reservation_mb, used_mb=0):
+    """Drive one real scheduler cycle against fixture device telemetry."""
+    from services.remote_execution import targets
+    async with workers() as session:
+        await session.execute(update(Job).values(paused=True))
+        job = await session.get(Job, 'job-2')
+        job.paused = False
+        job.model_id, job.mode = 'esmfold2', 'predict'
+        job.params = {'sequence': 'ACDEFGHIKLMNPQRSTVWY', 'run_frustrampnn': False}
+        job.vram_estimate_mb = reservation_mb
+        target = await session.get(ExecutionTarget, 'vast:2')
+        target.capabilities = dict(gpu_count=4)
+        await session.commit()
+    monkeypatch.setattr(scheduler, 'read_scheduler_config', lambda: {'global': {'enabled': True}})
+    async def telemetry(target):
+        assert target.id == 'vast:2'
+        return dict(available=True, observed_at='fixture', gpus=[
+            dict(index=index, uuid=f'GPU-remote-{index}', name='NVIDIA GeForce RTX 5060 Ti',
+                 memory_total_mb=total_mb(index), memory_used_mb=used_mb)
+            for index in range(4)])
+    monkeypatch.setattr(targets, 'remote_target_telemetry', telemetry)
+    launched = []
+    async def launch(**kwargs):
+        launched.append(kwargs)
+    await scheduler.GPUOrchestrator(workers, lambda: [], launch)._process_cycle()
+    async with workers() as session:
+        return await session.get(Job, 'job-2'), await session.get(ExecutionTarget, 'vast:2'), launched
+
+
+@pytest.mark.asyncio
+async def test_capacity_refusal_reports_observed_device_capacity_not_a_constant_floor(workers, monkeypatch):
+    # The retained esmfold2 case: 4 x 16311 MB worker, 22088 MB reservation.
+    job, target, launched = await capacity_case(workers, monkeypatch,
+        total_mb=lambda index: 16311, reservation_mb=22088)
+    assert not launched and target.leased_job_id is None
+    assert job.queue_status == 'queued' and job.remote_state == 'waiting_remote_capacity'
+    message = job.error_message
+    assert 'vast:2' in message
+    assert '22088 MB per-device reservation' in message
+    # The observed candidate, with the arithmetic that refused it.
+    assert 'NVIDIA GeForce RTX 5060 Ti' in message
+    assert '16311 MB total' in message
+    assert '10185 MB admissible' in message
+    assert 'fill 0.75, margin 2048 MB' in message
+    # Never the requirement reported as if it were the worker's capacity.
+    assert '0 MB physical capacity' not in message
+    assert 'physical floor 0 MB' in message
+
+
+@pytest.mark.asyncio
+async def test_unobserved_vram_is_reported_and_never_admitted(workers, monkeypatch):
+    job, target, launched = await capacity_case(workers, monkeypatch,
+        total_mb=lambda index: None if index == 3 else 16311, reservation_mb=9000)
+    # Work that fits still runs, on the observed device.
+    assert len(launched) == 1
+    assignment = job.provenance['remote_execution_assignment']
+    assert assignment['gpu_indices'] == [0]
+    assert assignment['admission_snapshot']['devices'][0]['memory_total_mb'] == 16311
+    assert assignment['admission_snapshot']['devices'][0]['available_mb'] == 10185
+    assert target.leased_job_id == job.id
+    assert '9000' not in (job.error_message or '')
+
+
+@pytest.mark.asyncio
+async def test_no_observed_device_memory_is_refused_with_the_observation_named(workers, monkeypatch):
+    job, target, launched = await capacity_case(workers, monkeypatch,
+        total_mb=lambda index: None, reservation_mb=9000)
+    assert not launched and target.leased_job_id is None
+    assert job.remote_state == 'waiting_remote_capacity'
+    message = job.error_message
+    assert 'VRAM was not observed' in message
+    assert 'NVIDIA GeForce RTX 5060 Ti' in message
+    assert '9000 MB per-device reservation' in message

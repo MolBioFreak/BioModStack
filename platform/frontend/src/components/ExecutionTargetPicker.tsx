@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { WorkflowProvisionPanel } from './dashboard/IndependentProvisionPanel';
+import {
+    deviceCapacitySummary, deviceCapabilityWarning, newWorkReady, notReadyReason,
+} from '../lib/executionTargetFacts';
 
 import {
     EXECUTION_TARGET_STORAGE_KEY,
@@ -44,7 +47,7 @@ export function ExecutionTargetPicker({ value, onChange, disabled = false, workf
 
     const targets = targetsQuery.isError ? [] : (targetsQuery.data?.data ?? []);
     const readyTargets = useMemo(
-        () => targets.filter((target) => target.active && target.state === 'ready'),
+        () => targets.filter((target) => newWorkReady(target)),
         [targets],
     );
 
@@ -81,28 +84,42 @@ export function ExecutionTargetPicker({ value, onChange, disabled = false, workf
                 >
                     Local
                 </button>
-                {targets.filter(target => target.active).map((target) => (
-                    <button
-                        key={target.id}
-                        type="button"
-                        onClick={() => selectTarget(target.id)}
-                        aria-pressed={selectedTargetId === target.id}
-                        disabled={disabled || target.state !== 'ready'}
-                        title={target.state !== 'ready' ? target.last_error || target.setup?.message || 'Runtime not ready' : undefined}
-                        className={`rounded-lg border px-3 py-2 text-sm ${selectedTargetId === target.id
-                            ? 'border-emerald-400 bg-emerald-500/15 text-emerald-100'
-                            : 'border-slate-700 bg-slate-950 text-slate-300'}`}
-                    >
-                        Vast · {target.name ?? target.provider_instance_id}
-                        {target.state !== 'ready' && <span className="block text-xs">Runtime not ready: {target.last_error || target.setup?.message || 'Setup required'}</span>}
-                    </button>
-                ))}
+                {targets.map((target) => {
+                    const ready = newWorkReady(target);
+                    const reason = ready
+                        ? null
+                        : notReadyReason(target) || target.last_error || target.setup?.message || 'Runtime not ready';
+                    return (
+                        <button
+                            key={target.id}
+                            type="button"
+                            onClick={() => selectTarget(target.id)}
+                            aria-pressed={selectedTargetId === target.id}
+                            disabled={disabled || !ready}
+                            title={reason ?? undefined}
+                            className={`rounded-lg border px-3 py-2 text-sm ${selectedTargetId === target.id
+                                ? 'border-emerald-400 bg-emerald-500/15 text-emerald-100'
+                                : 'border-slate-700 bg-slate-950 text-slate-300'}`}
+                        >
+                            Vast · {target.name ?? target.provider_instance_id}
+                            {!ready && <span className="block text-xs">{reason}</span>}
+                        </button>
+                    );
+                })}
             </div>
 
             {selectedTargetId && (() => {
                 const selected = readyTargets.find((target) => target.id === selectedTargetId);
                 return selected ? (
-                    <p className="mt-3 text-xs text-slate-300">{String(selected.capabilities.gpu_count ?? '?')} × {String(selected.capabilities.gpu_name ?? 'GPU')}</p>
+                    <div className="mt-3 text-xs text-slate-300">
+                        <p>
+                            {String(selected.capabilities.gpu_count ?? '?')} × {String(selected.capabilities.gpu_name ?? 'GPU')}
+                            {deviceCapacitySummary(selected) ? ` · ${deviceCapacitySummary(selected)}` : ''}
+                        </p>
+                        {deviceCapabilityWarning(selected) && (
+                            <p role="status" className="mt-1 text-amber-300">{deviceCapabilityWarning(selected)}</p>
+                        )}
+                    </div>
                 ) : (
                     <p role="alert" className="mt-3 text-xs text-red-300">Selected worker {selectedTargetId} is unavailable. Choose Local or a ready worker, or wait for inventory recovery.</p>
                 );

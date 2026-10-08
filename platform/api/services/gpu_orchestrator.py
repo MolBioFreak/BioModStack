@@ -51,7 +51,7 @@ from services.execution_ownership import (
     show_unit_properties,
     unit_has_empty_cgroup,
 )
-from services.gpu_config import read_scheduler_config, mutate_scheduler_config
+from services.gpu_config import read_scheduler_config, mutate_scheduler_config, vram_envelope
 from services.gpu_metadata import GPU_CAPABILITIES
 from services.gpu_stage_activity import job_uses_assigned_gpu
 from services.resource_usage_evidence import (
@@ -290,6 +290,40 @@ HEAVY_MODELS = {
     'esmfold2_experimental',
 }
 PROTENIX_MODELS = {'protenix', 'protenix_esm', 'protenix_mini_esm'}
+
+
+def _observed_total_mb(row: Any) -> Optional[int]:
+    """Physical VRAM must be observed before it is admitted, never assumed.
+
+    Unknown or nonpositive totals are not a capacity of zero; they are an
+    absent observation and are reported as such instead of matching a floor.
+    """
+    if not isinstance(row, dict):
+        return None
+    total = row.get('memory_total_mb')
+    if isinstance(total, bool) or not isinstance(total, (int, float)) or total <= 0:
+        return None
+    return int(total)
+
+
+def heavy_model_per_device_range_mb() -> Optional[Dict[str, Any]]:
+    """Per-device reservation range across HEAVY_MODELS.
+
+    HEAVY_MODELS is applied on the local path only, so a remote worker's
+    observed capacity can otherwise look ready for a request it can never
+    host. Publishing this range makes that comparison a stated fact. None
+    means the profile table is unusable; no verdict is invented.
+    """
+    try:
+        floors = {model: int(VRAM_PROFILES[model]['base']) for model in HEAVY_MODELS if model in VRAM_PROFILES}
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not floors:
+        return None
+    minimum = min(floors, key=lambda model: (floors[model], model))
+    maximum = max(floors, key=lambda model: (floors[model], model))
+    return {"minimum_mb": floors[minimum], "minimum_model": minimum,
+            "maximum_mb": floors[maximum], "maximum_model": maximum}
 
 # Scheduler-side packing should follow observed live VRAM plus a modest surge
 # allowance, not reserve worst-case peak estimates for every running job.
@@ -2841,29 +2875,45 @@ class GPUOrchestrator:
                             for row in telemetry.get("gpus", [])
                             if isinstance(row, dict) and isinstance(row.get("index"), int)
                         }
-                        try:
-                            fill = max(
-                                0.05,
-                                min(0.99, float(config.get("global", {}).get("target_vram_fill", 0.75))),
-                            )
-                        except (TypeError, ValueError):
-                            fill = 0.75
-                        try:
-                            margin_mb = max(
-                                0,
-                                int(config.get("global", {}).get("vram_safety_margin_mb", 2048)),
-                            )
-                        except (TypeError, ValueError):
-                            margin_mb = 2048
+                        envelope = vram_envelope(config)
+                        fill, margin_mb = envelope["target_vram_fill"], envelope["safety_margin_mb"]
+
+                        def observed_device(index: int, row: dict[str, Any]) -> str:
+                            """Report the candidate's own facts, never the requirement as its capacity."""
+                            total_mb = _observed_total_mb(row)
+                            name = str(row.get("name") or "unnamed GPU")
+                            if total_mb is None:
+                                return (f"GPU {index} {name}: VRAM was not observed, so no "
+                                        f"{int(vram)} MB reservation is admissible")
+                            admissible_mb = max(0, int(total_mb * fill)
+                                                - int(row.get("memory_used_mb") or 0) - margin_mb)
+                            return (f"GPU {index} {name}: {total_mb} MB total, {admissible_mb} MB admissible "
+                                    f"(fill {fill}, margin {margin_mb} MB) against a {int(vram)} MB reservation")
+
+                        def eligibility(index: int, row: dict[str, Any]) -> Optional[int]:
+                            """Admissible capacity of a candidate device, or None when it is not one."""
+                            total_mb = _observed_total_mb(row)
+                            if total_mb is None or not (0 <= index < gpu_count) or not row.get("uuid"):
+                                return None
+                            if total_mb < minimum_gpu_memory_mb:
+                                return None
+                            return max(0, int(total_mb * fill) - int(row.get("memory_used_mb") or 0) - margin_mb)
+
                         if not requested_remote_gpus:
                             eligible = [index for index, row in telemetry_by_index.items()
-                                if 0 <= index < gpu_count and row.get("uuid")
-                                and int(row.get("memory_total_mb") or 0) >= minimum_gpu_memory_mb
-                                and max(0, int(int(row.get("memory_total_mb") or 0) * fill)
-                                        - int(row.get("memory_used_mb") or 0) - margin_mb) >= int(vram)]
+                                        if (capacity := eligibility(index, row)) is not None
+                                        and capacity >= int(vram)]
                             if not eligible:
+                                candidates = [observed_device(index, row)
+                                              for index, row in sorted(telemetry_by_index.items())
+                                              if 0 <= index < gpu_count]
                                 job.remote_state = "waiting_remote_capacity"
-                                job.error_message = f"No target GPU satisfies {minimum_gpu_memory_mb} MB physical capacity and {int(vram)} MB reservation"
+                                job.error_message = (
+                                    f"Target {target.id}: no observed GPU admits a {int(vram)} MB per-device "
+                                    f"reservation (physical floor {minimum_gpu_memory_mb} MB, fill {fill}, "
+                                    f"margin {margin_mb} MB). Observed: "
+                                    + ("; ".join(candidates) if candidates
+                                       else "no GPU was enumerated within the target inventory"))[:1500]
                                 continue
                             # Deterministic fit within this target's physical namespace.
                             requested_remote_gpus = [min(eligible, key=lambda index: (
@@ -2876,7 +2926,7 @@ class GPUOrchestrator:
                             if row is None:
                                 insufficient.append(f"GPU {gpu_id} is absent from live telemetry")
                                 continue
-                            total_mb = int(row.get("memory_total_mb") or 0)
+                            total_mb = _observed_total_mb(row) or 0
                             used_mb = int(row.get("memory_used_mb") or 0)
                             available_mb = max(0, int(total_mb * fill) - used_mb - margin_mb)
                             admitted_devices.append(
@@ -2890,11 +2940,21 @@ class GPUOrchestrator:
                                     "available_mb": available_mb,
                                 }
                             )
+                            name = str(row.get("name") or "unnamed GPU")
+                            if _observed_total_mb(row) is None:
+                                insufficient.append(
+                                    f"GPU {gpu_id} {name} has unobserved VRAM; "
+                                    f"{int(vram)} MB is required"
+                                )
+                                continue
                             if total_mb < minimum_gpu_memory_mb:
-                                insufficient.append(f"GPU {gpu_id} has {total_mb} MB physical capacity; {minimum_gpu_memory_mb} MB is required")
+                                insufficient.append(
+                                    f"GPU {gpu_id} {name} has {total_mb} MB physical capacity; "
+                                    f"{minimum_gpu_memory_mb} MB is required")
                             if available_mb < int(vram):
                                 insufficient.append(
-                                    f"GPU {gpu_id} has {available_mb} MB admissible; "
+                                    f"GPU {gpu_id} {name} has {available_mb} MB admissible "
+                                    f"(fill {fill}, margin {margin_mb} MB); "
                                     f"{int(vram)} MB is required"
                                 )
                         if insufficient:

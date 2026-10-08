@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { TimeSeriesPlot } from './telemetryMetricPlot';
 import { useTelemetryChartRefresh } from './useTelemetryChartRefresh';
+import {
+    deviceCapacitySummary, deviceCapabilityWarning, newWorkReady, notReadyReason,
+} from '../lib/executionTargetFacts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
     activateExecutionTarget,
@@ -1530,20 +1533,24 @@ export function InfraLiveTelemetry({
             {vastTargets.length > 0 && (
                 <div className="mb-4 space-y-2" aria-label="Vast workers">
                     {vastTargets.map((target) => {
-                        const isReady = target.active && target.state === 'ready';
-                        const isAttaching = target.state === 'probing'
-                            || (attachVastMutation.isPending && attachVastMutation.variables === target.provider_instance_id);
+                        const isReady = newWorkReady(target);
+                        const apiReason = notReadyReason(target);
+                        const clientAttaching = attachVastMutation.isPending
+                            && attachVastMutation.variables === target.provider_instance_id;
+                        const isAttaching = target.state === 'probing' || clientAttaching;
                         const stateLabel = isReady
                             ? 'Ready'
-                            : target.active ? 'Attached — runtime not ready'
-                            : isAttaching
-                                ? 'Checking readiness'
-                                : target.state === 'unavailable'
-                                    ? 'Unavailable'
-                                    : target.state === 'inactive'
-                                        ? 'Inactive'
-                                        : 'Discovered';
+                            : apiReason ?? (target.active ? 'Attached — runtime not ready'
+                                : isAttaching
+                                    ? 'Setup attempt in progress'
+                                    : target.state === 'unavailable'
+                                        ? 'Unavailable'
+                                        : target.state === 'inactive'
+                                            ? 'Inactive'
+                                            : 'Discovered');
                         const canAttach = !isReady && !isAttaching && Boolean(target.host && target.port);
+                        const setupBlockedReason = target.state === 'probing'
+                            ? apiReason ?? 'Setup attempt in progress on this worker' : null;
                         return (
                             <div
                                 key={target.id}
@@ -1560,9 +1567,13 @@ export function InfraLiveTelemetry({
                                     </div>
                                     <div className="mt-1 text-xs">
                                         {String(target.capabilities.gpu_count ?? '?')} × {String(target.capabilities.gpu_name ?? 'GPU')}
+                                        {deviceCapacitySummary(target) ? ` · ${deviceCapacitySummary(target)}` : ''}
                                         {target.pricing.hourly_rate != null ? ` · $${target.pricing.hourly_rate.toFixed(3)}/hr` : ''}
                                         {isReady ? ' · Remote analytics available' : ''}
                                     </div>
+                                    {deviceCapabilityWarning(target) && (
+                                        <div role="status" className="mt-1 text-xs text-amber-300">{deviceCapabilityWarning(target)}</div>
+                                    )}
                                     {target.setup && (
                                         <div role="status" className={`mt-1 text-xs ${target.setup.phase === 'failed' ? 'text-red-300' : 'text-[var(--text-muted)]'}`}>
                                             Setup · {target.setup.phase}: {target.setup.message}
@@ -1578,6 +1589,7 @@ export function InfraLiveTelemetry({
                                             type="button"
                                             onClick={() => detachVastMutation.mutate(target.id)}
                                             disabled={detachVastMutation.isPending || isAttaching}
+                                            title={isAttaching ? setupBlockedReason ?? 'Detach is refused while this worker is in setup' : undefined}
                                             className="shrink-0 whitespace-nowrap rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-200 disabled:opacity-50"
                                         >
                                             {detachVastMutation.isPending ? 'Detaching…' : 'Detach'}
@@ -1588,9 +1600,12 @@ export function InfraLiveTelemetry({
                                             type="button"
                                             onClick={() => attachVastMutation.mutate(target.provider_instance_id)}
                                             disabled={!canAttach || attachVastMutation.isPending}
+                                            title={!canAttach ? setupBlockedReason
+                                                ?? (target.host && target.port ? 'Attach is refused while this worker is in setup'
+                                                    : 'Worker has no SSH endpoint') : undefined}
                                             className="shrink-0 whitespace-nowrap rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-200 disabled:opacity-40"
                                         >
-                                            {isAttaching ? 'Attaching…' : target.active ? 'Retry setup' : 'Attach worker'}
+                                            {clientAttaching ? 'Attaching…' : target.active ? 'Retry setup' : 'Attach worker'}
                                         </button>
                                     )}
                                 </div>

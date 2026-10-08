@@ -58,6 +58,125 @@ def target_eligible(target: ExecutionTarget) -> bool:
                 and inventory.get("present") is True and inventory.get("running") is True)
 
 
+def admission_blocker(target: ExecutionTarget) -> str | None:
+    """Name the failing clause of new-work admission, in operator words.
+
+    This projects `target_eligible` plus the root-attempt lease; it never
+    replaces that predicate, and it refuses nothing by itself.
+    """
+    if target.leased_job_id:
+        return "Worker is leased to a running attempt"
+    if target.state == "probing":
+        return "Setup attempt in progress on this worker"
+    if not target.active:
+        return "Worker is not attached"
+    if target.state != "ready":
+        return f"Worker runtime is {target.state}"
+    if preload_active(target):
+        return "Worker is provisioning a preload"
+    inventory = (target.provider_metadata or {}).get("inventory", {})
+    if not inventory_fresh(target):
+        return "Provider inventory is stale or unavailable"
+    if inventory.get("present") is not True:
+        return "Worker is absent from the provider inventory"
+    if inventory.get("running") is not True:
+        return "Provider reports the instance is not running"
+    return None
+
+
+DEVICE_CAPABILITY_SCHEMA = "bms.target-device-capability.v1"
+
+
+def parse_readiness_devices(readiness: Any) -> list[dict[str, Any]]:
+    """Per-device facts from the worker's own readiness probe.
+
+    The probe stores nvidia-smi `index, uuid, name, memory.total` lines. A line
+    that does not carry all four fields is not a device observation, and an
+    unreadable total stays null instead of becoming a capacity.
+    """
+    if not isinstance(readiness, dict):
+        return []
+    devices = []
+    for line in readiness.get("gpus") or []:
+        if not isinstance(line, str):
+            continue
+        cells = [cell.strip() for cell in line.split(",")]
+        if len(cells) < 4 or not cells[0].isdigit():
+            continue
+        try:
+            total_mb = int(round(float(cells[-1])))
+        except (TypeError, ValueError):
+            total_mb = None
+        devices.append({"index": int(cells[0]), "uuid": cells[1] or None,
+                        "name": ", ".join(cells[2:-1]) or None, "memory_total_mb": total_mb})
+    return devices
+
+
+def scheduler_vram_envelope() -> dict[str, Any]:
+    """The fill/margin pair the scheduler itself applies; never a second policy."""
+    from services import gpu_config
+    try:
+        return gpu_config.vram_envelope()
+    except Exception:
+        return {"target_vram_fill": 0.75, "safety_margin_mb": 2048}
+
+
+def heavy_model_per_device_range() -> dict[str, Any] | None:
+    """Per-device reservation range across heavy models, or None."""
+    try:
+        from services.gpu_orchestrator import heavy_model_per_device_range_mb
+        return heavy_model_per_device_range_mb()
+    except Exception:
+        return None
+
+
+def device_capability_fact(capabilities: Any, *, envelope: dict[str, Any] | None = None,
+                           heavy_range_mb: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Observed per-device capacity of an attached worker, as a stated fact.
+
+    Readiness alone is not capability: a worker whose per-device admissible
+    memory is below a heavy-model reservation must not be presented as able to
+    host every request. `heavy_model_fits` is True only when this worker can
+    admit every model in HEAVY_MODELS; it is null when nothing was observed.
+    This is evidence for operators, never an admission gate.
+    """
+    observed = capabilities if isinstance(capabilities, dict) else {}
+    envelope = envelope if isinstance(envelope, dict) else scheduler_vram_envelope()
+    fill = float(envelope.get("target_vram_fill", 0.75))
+    margin_mb = max(0, int(envelope.get("safety_margin_mb", 2048)))
+    devices = parse_readiness_devices(observed.get("readiness"))
+    source = "readiness_probe"
+    if not devices:
+        # Provider-verified VRAM is still an observation, and is labelled as one.
+        source = "provider_reported"
+        try:
+            count = max(0, int(observed.get("gpu_count") or 0))
+            vram_mb = max(0, int(observed.get("gpu_vram_mb") or 0))
+        except (TypeError, ValueError):
+            count, vram_mb = 0, 0
+        devices = [{"index": index, "uuid": None, "name": observed.get("gpu_name"),
+                    "memory_total_mb": vram_mb or None} for index in range(min(count, 64))]
+    totals = [row["memory_total_mb"] for row in devices
+              if isinstance(row.get("memory_total_mb"), int) and row["memory_total_mb"] > 0]
+    smallest_device_mb = min(totals) if totals else None
+    admissible_mb = (max(0, int(smallest_device_mb * fill) - margin_mb)
+                     if smallest_device_mb is not None else None)
+    heavy_range = heavy_range_mb if isinstance(heavy_range_mb, dict) else heavy_model_per_device_range()
+    heaviest_mb = heavy_range.get("maximum_mb") if isinstance(heavy_range, dict) else None
+    return {
+        "schema": DEVICE_CAPABILITY_SCHEMA,
+        "source": source,
+        "observed_at": datetime.utcnow().isoformat(),
+        "devices": devices,
+        "vram_envelope": {"target_vram_fill": fill, "safety_margin_mb": margin_mb},
+        "per_device_memory_total_mb": smallest_device_mb,
+        "per_device_admissible_idle_mb": admissible_mb,
+        "heavy_model_per_device_mb": heavy_range,
+        "heavy_model_fits": ((admissible_mb >= int(heaviest_mb))
+                             if admissible_mb is not None and isinstance(heaviest_mb, int) else None),
+    }
+
+
 async def invalidate_vast_inventory(session: AsyncSession) -> None:
     """Invalidate current knowledge, never historical presence or attempt evidence."""
     global _empty_inventory_checked_at
@@ -144,6 +263,8 @@ def observed_artifact_inventory(target):
 
 
 def _target_response(target: ExecutionTarget) -> ExecutionTargetResponse:
+    capabilities = dict(target.capabilities or {})
+    inventory = (target.provider_metadata or {}).get("inventory", {})
     return ExecutionTargetResponse(
         artifact_inventory=observed_artifact_inventory(target),
         setup=(target.provider_metadata or {}).get("setup"),
@@ -163,11 +284,16 @@ def _target_response(target: ExecutionTarget) -> ExecutionTargetResponse:
         username=target.username,
         remote_root=str(target.remote_root),
         host_key_sha256=target.host_key_sha256,
-        capabilities={**dict(target.capabilities or {}), "scheduling": {
+        capabilities={**capabilities, "scheduling": {
             "policy": "exclusive_target", "max_concurrent_root_attempts": 1,
             "new_work_ready": target_eligible(target) and not target.leased_job_id,
             "inventory_fresh": inventory_fresh(target),
             "leased_job_id": target.leased_job_id,
+            "preload_active": preload_active(target),
+            "provider_present": inventory.get("present") is True,
+            "provider_running": inventory.get("running") is True,
+            "not_ready_reason": admission_blocker(target),
+            "device_capability": capabilities.get("device_capability"),
         }},
         pricing=dict(target.pricing or {}),
         last_error=target.last_error,
@@ -787,6 +913,8 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
                 "message": "Remote worker ready; analytics available", "updated_at": now.isoformat()}},
             host_key_sha256=fingerprint,
             capabilities={**dict(target.capabilities or {}), "readiness": probe,
+                          "device_capability": device_capability_fact(
+                              {**dict(target.capabilities or {}), "readiness": probe}),
                           "critical_runtime": critical_release.model_dump(mode="json"),
                           "critical_runtime_binding": binding},
         ).execution_options(synchronize_session=False)

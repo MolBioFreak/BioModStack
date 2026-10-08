@@ -69,6 +69,27 @@ def get_default_config() -> Dict[str, Any]:
     return copy.deepcopy(DEFAULT_SCHEDULER_CONFIG)
 
 
+def vram_envelope(config: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    """The single fill/margin pair every VRAM admission path applies.
+
+    Physical capacity and admissible capacity must be derived the same way by
+    the local scheduler, the remote branch and read-only capability
+    projections, so the operator never sees two different numbers.
+    """
+    if config is None:
+        config = read_scheduler_config()
+    global_config = config.get("global", {}) if isinstance(config, dict) else {}
+    try:
+        fill = max(0.05, min(0.99, float(global_config.get("target_vram_fill", 0.75))))
+    except (TypeError, ValueError):
+        fill = 0.75
+    try:
+        margin_mb = max(0, int(global_config.get("vram_safety_margin_mb", 2048)))
+    except (TypeError, ValueError):
+        margin_mb = 2048
+    return {"target_vram_fill": fill, "safety_margin_mb": margin_mb}
+
+
 def normalize_scheduler_config(config: Dict[str, Any]) -> Dict[str, Any]:
     """Merge persisted state with defaults and enforce mandatory safety caps."""
     merged = get_default_config()
