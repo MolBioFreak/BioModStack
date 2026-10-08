@@ -217,7 +217,6 @@ export function JobQueueTable({
                                             <div className="flex items-center justify-between">
                                                 <div className="flex items-center gap-2">
                                                     <span className="text-purple-400 w-4">{isExpanded ? '▼' : '▶'}</span>
-                                                    <span className="text-purple-400">📦</span>
                                                     <span className="text-white font-medium">{batchName}</span>
                                                     <span className="text-purple-300 text-sm">({batchJobs.length} sims)</span>
                                                 </div>
@@ -231,7 +230,7 @@ export function JobQueueTable({
                                                             onClick={(e) => e.stopPropagation()}
                                                             className="px-2 py-1 text-xs bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 rounded transition-colors"
                                                         >
-                                                            📊 Results
+                                                            Results
                                                         </Link>
                                                     )}
                                                 </div>
@@ -280,7 +279,7 @@ export function JobQueueTable({
                                                                         }`}
                                                                     title="Load in Quick Viewer"
                                                                 >
-                                                                    🔬 View
+                                                                    View
                                                                 </button>
                                                             )}
                                                         </div>
@@ -341,7 +340,7 @@ export function JobQueueTable({
                                                                     }`}
                                                                 title="Load in Quick Viewer"
                                                             >
-                                                                🔬 View
+                                                                View
                                                             </button>
                                                             {onClone && (
                                                                 <button
@@ -352,7 +351,7 @@ export function JobQueueTable({
                                                                     className="px-2 py-1 text-xs bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 hover:text-cyan-300 rounded transition-colors"
                                                                     title="Clone job parameters"
                                                                 >
-                                                                    📋 Clone
+                                                                    Clone
                                                                 </button>
                                                             )}
                                                         </>
@@ -389,7 +388,7 @@ export function JobQueueTable({
                                                                 }}
                                                                 className="px-2 py-1 text-xs bg-slate-500/20 text-slate-400 hover:bg-slate-500/30 hover:text-slate-300 rounded transition-colors"
                                                             >
-                                                                📋 Logs
+                                                                Logs
                                                             </button>
                                                             <button
                                                                 onClick={(e) => {
@@ -398,7 +397,7 @@ export function JobQueueTable({
                                                                 }}
                                                                 className="px-2 py-1 text-xs bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 hover:text-emerald-300 rounded transition-colors"
                                                             >
-                                                                ⏯ Resume
+                                                                Resume
                                                             </button>
                                                             <button
                                                                 onClick={(e) => {
@@ -407,7 +406,7 @@ export function JobQueueTable({
                                                                 }}
                                                                 className="px-2 py-1 text-xs bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 hover:text-yellow-300 rounded transition-colors"
                                                             >
-                                                                🔄 Retry
+                                                                Retry
                                                             </button>
                                                         </>
                                                     )}
@@ -422,7 +421,7 @@ export function JobQueueTable({
                                                             className="px-2 py-1 text-xs bg-red-900/40 text-red-300 hover:bg-red-700/50 hover:text-red-200 rounded transition-colors border border-red-700/50"
                                                             title="DEBUG: Permanently delete job and all data"
                                                         >
-                                                            🗑️ Delete
+                                                            Delete
                                                         </button>
                                                     )}
                                                 </div>
