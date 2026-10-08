@@ -20,16 +20,8 @@ class ActivateUsbForServiceCommand(_CommandBase):
     command: Literal["activate_usb_for_service"]
 
 
-class ConstructPipettesCommand(_CommandBase):
-    command: Literal["construct_pipettes"]
-
-
-class InitializeWithoutMotionCommand(_CommandBase):
-    command: Literal["initialize_without_motion"]
-
-
-class RunInitialCheckCommand(_CommandBase):
-    command: Literal["run_initial_check"]
+class InitializeOemEnvironmentCommand(_CommandBase):
+    command: Literal["initialize_oem_environment"]
     mode: Literal["live"]
     operator_ack: Literal["INITIALIZE"]
 
@@ -65,9 +57,7 @@ class RecoverRuntimeCommand(_CommandBase):
 CommandRequest: TypeAlias = Annotated[
     ActivateUsbForServiceCommand
     | CollectHardwareSnapshotCommand
-    | ConstructPipettesCommand
-    | InitializeWithoutMotionCommand
-    | RunInitialCheckCommand
+    | InitializeOemEnvironmentCommand
     | InitializeMotorsCommand
     | StartJobCommand
     | PauseJobCommand
