@@ -144,9 +144,9 @@ test('NGS runs polling covers every exact canonical NGS model with bounded pagin
     const api = readSource('src/lib/api.ts');
 
     assert.match(api, /model_id\?: string/u);
-    assert.match(ngsToolkit, /\['nanopore', 'ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation'\]/u);
-    assert.match(ngsToolkit, /model_id,/u);
-    assert.match(ngsToolkit, /limit: 500/u);
+    assert.match(api, /ngs_only\?: boolean/u);
+    assert.match(ngsToolkit, /fetchJobs\(\{ include_children: true, ngs_only: true, summary: true,/u);
+    assert.match(ngsToolkit, /limit: 100/u);
     assert.match(ngsToolkit, /offset/u);
     assert.doesNotMatch(ngsToolkit, /fetchJobs\(\{ include_children: true \}\)/u);
     assert.doesNotMatch(ngsToolkit, /refetchInterval: 5000/u);
@@ -258,7 +258,8 @@ test('NGS instrument panel renders only safe device truth and an intent status',
     assert.match(panel, /Flow cell: \{device\.flow_cell\.present \? 'present' : 'absent'\}/u);
     assert.match(panel, /No protocol option is currently available/u);
     assert.match(panel, /Preflight blockers/u);
-    assert.match(panel, /Intent \{lastRun\.id\} · \{lastRun\.status\}/u);
+    assert.match(panel, /\{run\.run_id\} · \{run\.status\} · generation \{run\.observed_generation\}/u);
+    assert.match(panel, /fetchOntInstrumentRunGeneration/u);
     assert.match(ontApi, /interface OntFlowCellInfo \{\s+present: boolean;/u);
     assert.match(ontApi, /output_summary: Record<'fastq' \| 'pod5' \| 'bam', number>/u);
     assert.doesNotMatch(ontApi, /fake_or_demo_device\?: boolean|is_ctc\?: boolean|channel_count\?: number|output_director(?:y|ies)|rpc_ports|connection_error/u);

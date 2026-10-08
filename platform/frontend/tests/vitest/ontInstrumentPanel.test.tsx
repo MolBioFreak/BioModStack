@@ -55,6 +55,9 @@ vi.mock('../../src/lib/api', async (importOriginal) => {
         fetchOntProtocolOptions: ont.fetchOptions,
         fetchMolBioNgsSamples: vi.fn().mockResolvedValue([]),
         fetchOntInstrumentRuns: vi.fn().mockResolvedValue([]),
+        // Intent lifecycle fixtures do not publish a generation or raw signal.
+        fetchOntInstrumentRunGeneration: vi.fn().mockRejectedValue(new Error('Run generation is not published yet.')),
+        fetchOntRawSignalCapabilities: vi.fn().mockRejectedValue(new Error('Raw signal is not published yet.')),
         fetchOntExternalPod5Candidates: vi.fn().mockResolvedValue({ candidates: [] }),
         createOntRunIntent: ont.createIntent,
         startOntRunIntent: ont.startIntent,

@@ -10,6 +10,8 @@ const pooled = vi.hoisted(() => ({
 }));
 
 vi.mock('../../src/lib/api', () => ({
+    fetchExecutionTargets: vi.fn(async () => ({ data: [] })),
+    EXECUTION_TARGET_STORAGE_KEY: 'bms.jobLauncher.executionTargetId',
     fetchPooledAssignmentManifest: pooled.fetchManifest,
     fetchPooledAssignmentTargets: pooled.fetchTargets,
     releasePooledAssignment: pooled.release,
@@ -147,7 +149,9 @@ describe('PooledAssignmentReviewPanel', () => {
         expect(container.textContent).toContain('sequence-a');
         expect(container.textContent).toContain('revision-a');
         expect(container.textContent).toContain('same-sequence-1');
-        expect(container.querySelectorAll('button').length).toBe(1);
+        expect(Array.from(container.querySelectorAll('button')).map((button) => button.textContent?.trim())).toEqual([
+            'Local', 'Release selected targets',
+        ]);
         const releaseButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Release selected targets')) as HTMLButtonElement;
         expect(releaseButton.disabled).toBe(true);
     });

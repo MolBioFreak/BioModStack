@@ -236,9 +236,9 @@ test('compact read labels stay persistent and generic aligned-read naming is abs
     const source = readFileSync(new URL('../src/components/NGSToolkit.tsx', import.meta.url), 'utf8');
     assert.doesNotMatch(source, /!igvReadsTrackLoaded[\s\S]{0,400}Primary-read preview/u);
     assert.doesNotMatch(source, /name:\s*['"]Aligned Reads['"]/u);
-    assert.match(source, /Load locus reads/u);
-    assert.match(source, /igvPresentationGenerationRef/u);
-    assert.match(source, /igvLocusSliceGenerationRef/u);
+    assert.match(source, /Complete reads and Detail do not require a preview/u);
+    assert.match(source, /catalog_authority_sha256 === selectedDerivedQuery\.data\.catalog\.authority_sha256/u);
+    assert.match(source, /preview_authority_sha256 === selectedDerivedQuery\.data\.preview\.authority_sha256/u);
     assert.match(source, /igvTrackOperationActiveRef/u);
     assert.match(source, /igvCurrentLocusRef\.current/u);
 });
@@ -645,7 +645,7 @@ test('NGS viewer opens compactly with primary controls and split scientific view
     assert.doesNotMatch(source.slice(viewOptionsStart, viewOptionsOpenEnd + 1), /\bopen=/u);
     assert.doesNotMatch(source.slice(viewOptionsEnd), /data-igv-optional-track-status/u);
     assert.doesNotMatch(source, /Missing optional tracks:/u);
-    assert.match(source, /Load locus reads/u);
+    assert.match(source, /Complete reads and Detail do not require a preview/u);
     assert.match(source, /lg:right-\[560px\]/u);
     assert.match(source, /lg:right-\[600px\]/u);
     assert.match(source, /igvInspectorOpen &&/u);

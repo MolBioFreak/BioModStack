@@ -145,16 +145,15 @@ vi.mock('../../src/components/useThemeColors', () => ({
 vi.mock('react-plotly.js', () => ({ default: () => <div data-testid="plotly-stub" /> }));
 vi.mock('../../src/components/NanoporeTemplate', () => ({ NanoporeTemplate: () => <div>Nanopore launcher</div> }));
 vi.mock('../../src/components/ngs/OntInstrumentPanel', () => ({ OntInstrumentPanel: () => <div>ONT instrument</div> }));
-vi.mock('../../src/components/ngs/RawReadInspector', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('../../src/components/ngs/RawReadInspector')>()),
-    RawReadInspector: ({ sessionId, onOpenRawSignal }: {
+vi.mock('../../src/components/ngs/AlignmentDerivedStatus', () => ({
+    AlignmentDerivedStatus: ({ sessionId, onReadAction }: {
         sessionId: string;
-        onOpenRawSignal?: (read: {
+        onReadAction?: (sessionId: string, read: {
             read_id: string;
             length: number;
             contig: string;
             start_1based: number;
-        }) => void;
+        }, action: 'signal') => void;
     }) => {
         renderMocks.rawInspectorRender(sessionId);
         if (sessionId === renderMocks.suspendedAlignmentSessionId && renderMocks.suspension) {
@@ -163,12 +162,12 @@ vi.mock('../../src/components/ngs/RawReadInspector', async (importOriginal) => (
         return (
             <div>
                 Raw read inspector
-                <button type="button" onClick={() => onOpenRawSignal?.({
+                <button type="button" onClick={() => onReadAction?.(sessionId, {
                     read_id: 'read-from-inspector',
                     length: 21,
                     contig: 'chr7',
                     start_1based: 510,
-                })}>Open raw signal for read</button>
+                }, 'signal')}>Open raw signal for read</button>
             </div>
         );
     },
@@ -497,6 +496,7 @@ const selectedRead: AlignmentRead = {
     mean_quality: 19.2,
     contig: 'chr7',
     start_1based: 510,
+    alignment_end_1based: 530,
     strand: '-',
     mapq: 60,
     cigar: '21M',
@@ -520,6 +520,7 @@ let container: HTMLDivElement;
 let root: Root;
 let onViewerSessionChange: ComponentProps<typeof ReadAndSignalWorkbench>['onViewerSessionChange'];
 let onNavigateIgv: ComponentProps<typeof ReadAndSignalWorkbench>['onNavigateIgv'];
+let onReadIgv: ComponentProps<typeof ReadAndSignalWorkbench>['onReadIgv'];
 const originalFetch = globalThis.fetch;
 const originalInnerWidth = window.innerWidth;
 
@@ -541,6 +542,7 @@ function baseProps(): ComponentProps<typeof ReadAndSignalWorkbench> {
         },
         onViewerSessionChange,
         onNavigateIgv,
+        onReadIgv,
     };
 }
 
@@ -665,6 +667,7 @@ beforeEach(() => {
 
     onViewerSessionChange = vi.fn();
     onNavigateIgv = vi.fn();
+    onReadIgv = vi.fn();
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -1166,7 +1169,7 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         expect(viewerContract).toContain('igv_state: OntSignalViewerIgvState;');
         expect(viewerContract).toContain('signal_state: OntSignalViewerSignalState;');
         expect(viewerContract).toContain('igv_state: OntSignalViewerIgvUpdateState;');
-        expect(viewerContract).toContain('signal_state: OntSignalViewerSignalUpdateState;');
+        expect(viewerContract).toContain('signal_state: OntSignalViewerSignalUpdateState | Record<string, never>;');
         expect(viewerContract).toContain("mode: OntSignalViewMode | 'raw_waveform' | 'ideal_comparison';");
         expect(viewerContract).toContain('render_params: OntSignalRenderParams;');
         expect(viewerContract).toContain('read_mapping_job_id: string | null;');
@@ -1981,6 +1984,14 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
             releaseSuspension();
             await Promise.resolve();
         });
+        // The catalog action explicitly selects its source session, superseding
+        // the suspended selection. Commit the operator's new selection before
+        // resolving the old session creation, so stale completion remains tested.
+        await act(async () => {
+            const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
+            setter?.call(sessionSelect, alternateSession.session_id);
+            sessionSelect?.dispatchEvent(new Event('change', { bubbles: true }));
+        });
         await waitUntil(() => expect(sessionSelect?.value).toBe(alternateSession.session_id));
         contextMocks.updateQueryParams.mockClear();
 
@@ -2204,7 +2215,7 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
     it('clears viewer session authority when inspecting another job', () => {
         const source = readFileSync(`${process.cwd()}/src/components/NGSToolkit.tsx`, 'utf8');
 
-        expect(source).toContain("onClick={() => updateQueryParams({ job_id: job.id, viewer_session_id: null })}");
+        expect(source).toContain("onClick={() => updateQueryParams({ job_id: job.id, viewer_session_id: null, native_member_receipt_id: null, member_receipt_sha256: null })}");
     });
 
     it('mounts job and alignment selection boundaries without reusing an incompatible viewer session', async () => {
@@ -2290,6 +2301,8 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         expect(contextMocks.updateQueryParams).toHaveBeenCalledWith({
             job_id: otherJob.id,
             viewer_session_id: null,
+            native_member_receipt_id: null,
+            member_receipt_sha256: null,
         });
 
         contextMocks.contextHref.mockClear();
@@ -2300,6 +2313,8 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
             section: 'analyses',
             job_id: otherJob.id,
             viewer_session_id: null,
+            native_member_receipt_id: null,
+            member_receipt_sha256: null,
         });
 
         client.clear();
@@ -2499,11 +2514,12 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
             );
             await Promise.resolve();
         });
-        await waitUntil(() => expect(input('Exact read ID')).not.toBeNull());
+        await waitUntil(() => expect(container.textContent).toContain('Requested viewer session could not be reopened. No replacement session was created.'));
         await settlePromises();
 
-        expect(input('Exact read ID').value).toBe('');
-        expect(contextMocks.updateQueryParams).toHaveBeenCalledWith({ viewer_session_id: null }, { replace: true });
+        expect(container.querySelector('input[placeholder="Exact read ID"]')).toBeNull();
+        expect(apiMocks.createViewerSession).not.toHaveBeenCalled();
+        expect(contextMocks.updateQueryParams).not.toHaveBeenCalled();
         client.clear();
     });
 
@@ -2737,7 +2753,8 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         expect(container.textContent).toContain('read-42 · chr7:510 · - · MAPQ 60');
 
         await act(async () => button('Locate read in IGV').click());
-        expect(onNavigateIgv).toHaveBeenCalledWith('chr7', 510, 530, 'selected raw-signal read');
+        expect(onReadIgv).toHaveBeenCalledWith(selectedRead);
+        expect(onNavigateIgv).not.toHaveBeenCalled();
 
         await act(async () => button('Open mapped locus in IGV').click());
         expect(onNavigateIgv).toHaveBeenCalledWith('chr7', 500, 560, 'signal view');

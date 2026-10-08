@@ -18,6 +18,16 @@ vi.mock('../../src/lib/api', async () => {
     const actual = await vi.importActual<typeof import('../../src/lib/api')>('../../src/lib/api');
     actual.api.defaults.adapter = async (config) => {
         if (config.method === 'post') mocks.requests.push({ url: config.url!, data: JSON.parse(config.data) });
+        const response = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config });
+        if (config.url?.endsWith('/settings-contract')) return response({ profile_fixed: {
+            wf_clone_basecaller_model: { value: 'dna_r10.4.1_e8.2_400bps_hac@v5.0.0', reason: 'Pinned clone profile.' },
+        } });
+        if (config.url?.endsWith('/preview')) {
+            const request = JSON.parse(config.data);
+            return response({ schema: 'bms.ont.launch-preview.v1', workflow_id: config.url.split('/').at(-2),
+                requested_settings: request, effective_request: { params: request.params },
+                blockers: [], warnings: [], preview_digest: 'c'.repeat(64) });
+        }
         return ({ data: config.url?.endsWith('/ngs-receipts') ? { receipt_id: 'fresh-receipt', sequence_id: config.url.split('/').at(-2), revision_id: JSON.parse(config.data).revision_id, revision_sha256: (JSON.parse(config.data).revision_id === 'rev-1' ? '1' : '2').repeat(64) } : config.url?.endsWith('/restore') ? {
         reference_set_id: 'frozen', assignment_job_id: 'owned', manifest_sha256: 'f'.repeat(64),
         targets: [1, 2].map((n) => ({ target_id: `frozen-${n}`, label: `Frozen ${n}`, sequence_id: `seq-${n}`, revision_id: `rev-${n}`, revision_sha256: String(n).repeat(64), indistinguishable_group: null })),
@@ -81,6 +91,7 @@ it.each(['hac', 'fast'])('real catalog visible quality %s survives generic → n
         expect([...container.querySelectorAll('button')].some((el) => el.style.borderColor && el.textContent?.toLowerCase().includes(quality === 'hac' ? 'high' : 'fast'))).toBe(true);
         expect(button('Review and submit')?.disabled).toBe(false);
         await act(async () => button('Review and submit')!.click()); await flush();
+        await confirmReviewedLaunch(container);
         expect(mocks.requests.at(-1)?.data.params.dorado_quality_mode).toBe(quality);
         expect(mocks.submitJob).not.toHaveBeenCalled();
     } finally { await act(async () => root.unmount()); client.clear(); container.remove(); }
@@ -108,6 +119,7 @@ it('saved plasmid draft → changed visible workflow → native construct-screen
         expect(JSON.parse(container.querySelector('output')!.textContent!).state.ngsHandoff.selectedWorkflow).toBe('constructScreening');
         expect(button('Review and submit')?.disabled).toBe(false);
         await act(async () => button('Review and submit')!.click()); await flush();
+        await confirmReviewedLaunch(container);
         expect(mocks.requests.at(-1)?.url).toBe('/api/ont/ngs/ont_construct_screening/submit');
         expect(mocks.requests.at(-1)?.data.params.ont_workflow_id).not.toBe('ont_plasmid_qc');
         expect(mocks.submitJob).not.toHaveBeenCalled();
@@ -134,6 +146,7 @@ it.each(['alias', 'conflict'])('real catalog saved quality %s distinguishes expl
         } else {
             expect(button('Review and submit')?.disabled).toBe(false);
             await act(async () => button('Review and submit')!.click()); await flush();
+            await confirmReviewedLaunch(container);
             expect(mocks.requests.at(-1)?.data.params.dorado_quality_mode).toBe('hac');
         }
     } finally { await act(async () => root.unmount()); client.clear(); container.remove(); }
@@ -143,6 +156,14 @@ function Destination() {
     const location = useLocation();
     const navigate = useNavigate();
     return <><output>{JSON.stringify({ search: location.search, state: location.state })}</output><button onClick={() => navigate('/ngs' + location.search, { state: { ngsHandoff: { ...location.state.ngsHandoff, jobName: 'replacement-draft', pooledAssignmentMinAlignmentScoreMargin: 17 } } })}>Replace handoff</button><NGSToolkit /></>;
+}
+async function confirmReviewedLaunch(container: HTMLElement) {
+    const button = [...container.querySelectorAll('button')].find((el) => el.textContent?.trim() === 'Confirm reviewed launch');
+    expect(button).toBeTruthy();
+    const preview = mocks.requests.at(-1)!;
+    expect(preview.url).toMatch(/\/preview$/);
+    await act(async () => button!.click()); await flush();
+    expect(mocks.requests.at(-1)?.data).toEqual({ ...preview.data, preview_digest: 'c'.repeat(64) });
 }
 const flush = async () => { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); }); };
 it.each([false, true])('hands the unsaved generic NGS draft to native launch visibly without generic submission (prepared=%s)', async (prepared) => {
@@ -192,6 +213,8 @@ it.each([false, true])('hands the unsaved generic NGS draft to native launch vis
 
 // Complete catalog defaults enter through JobSubmission, not a hand-written subset.
 // The API's pure contract functions are the oracle; no HTTP, jobs or database.
+// Use the preinstalled locked API environment without syncing/building dependencies
+// inside a frontend test (these suites must also run in an offline namespace).
 it.each([...catalog.modes.map((mode: { id: string }) => mode.id), 'return_dna', 'explicit_conflict'])(
     'real catalog default authority → native request: %s', async (variant) => {
     mocks.fetchModels.mockResolvedValue({ data: [catalog] });
@@ -225,13 +248,14 @@ it.each([...catalog.modes.map((mode: { id: string }) => mode.id), 'return_dna', 
         const submitLabel = mode === 'pooled_reference_assignment' ? 'Submit pooled assignment' : 'Review and submit';
         expect(button(submitLabel)?.disabled, container.textContent!).toBe(false);
         await act(async () => button(submitLabel)!.click()); await flush();
+        if (mode !== 'pooled_reference_assignment') await confirmReviewedLaunch(container);
         const request = mocks.requests.at(-1)!;
         const canonical = mode === 'clone_validation' ? 'wf_clone_validation' : `ont_${mode}`;
         if (mode === 'pooled_reference_assignment') {
             expect(request.url).toBe('/api/ont/ngs/pooled-reference-assignment/submit');
             expect(request.data).not.toHaveProperty('dorado_quality_mode');
             expect(request.data).not.toHaveProperty('ont_molecule_type');
-            const accepted = JSON.parse(execFileSync('uv', ['run', '--frozen', '--group', 'dev', 'python', '-c', `
+            const accepted = JSON.parse(execFileSync('uv', ['run', '--frozen', '--no-sync', '--group', 'dev', 'python', '-c', `
 import json, sys
 from services.ont_pooled_reference_assignment import PooledReferenceAssignmentRequest
 print(PooledReferenceAssignmentRequest.model_validate(json.load(sys.stdin)).model_dump_json())
@@ -242,7 +266,7 @@ print(PooledReferenceAssignmentRequest.model_validate(json.load(sys.stdin)).mode
         }
         expect(request.url).toBe(`/api/ont/ngs/${canonical}/submit`);
         if (mode === 'basecall_rna' || mode === 'basecall_dna') expect(request.data.params.ont_molecule_type).toBe(mode === 'basecall_rna' ? 'rna' : 'dna');
-        const normalized = JSON.parse(execFileSync('uv', ['run', '--frozen', '--group', 'dev', 'python', '-c', `
+        const normalized = JSON.parse(execFileSync('uv', ['run', '--frozen', '--no-sync', '--group', 'dev', 'python', '-c', `
 import json, sys
 from services.ont_ngs_contract import normalize_ont_launch_params, validate_ont_operator_params
 request = json.load(sys.stdin)

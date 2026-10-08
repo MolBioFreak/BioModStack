@@ -161,7 +161,7 @@ async function renderWorkspace(search?: string) {
     if (search) window.history.replaceState({}, '', `/designer?${search}`);
     await act(async () => {
         root.render(
-            <MemoryRouter>
+            <MemoryRouter key={window.location.href} initialEntries={[window.location.pathname + window.location.search]}>
                 <QueryClientProvider client={queryClient}>
                     <DomainExperimentWorkspace />
                 </QueryClientProvider>
@@ -423,7 +423,7 @@ describe('mounted MolBio project hub', () => {
 
         window.history.replaceState({}, '', '/designer?workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=activity');
         await act(async () => root.render(
-            <MemoryRouter>
+            <MemoryRouter key={window.location.href} initialEntries={[window.location.pathname + window.location.search]}>
                 <QueryClientProvider client={queryClient}><DomainExperimentWorkspace /></QueryClientProvider>
             </MemoryRouter>,
         ));

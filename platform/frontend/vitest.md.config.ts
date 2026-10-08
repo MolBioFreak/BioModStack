@@ -70,6 +70,7 @@ export default defineConfig({
             './tests/vitest/rawReadSortableWorkbench.test.tsx',
             './tests/vitest/ontSignalIdealComparison.test.tsx',
             './tests/vitest/ngsAlignmentAccessLifetimeMounted.test.tsx',
+            './tests/vitest/alignmentPresentationStatus.test.tsx',
             './tests/vitest/ontFastqQcResultPanel.test.tsx',
             './tests/vitest/domainWorkflowOperatorClosure.test.ts',
             './tests/vitest/molBioMobileToolbar.test.tsx',

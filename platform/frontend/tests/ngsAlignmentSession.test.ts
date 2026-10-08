@@ -239,21 +239,23 @@ test('detail scan exhaustion remains a distinct visible state', () => {
     assert.match(error.message, /absence is not proven/u);
 });
 
-test('typed backend scan truncation becomes the scientist-facing integrity state and rejects open envelopes', async () => {
-    const originalGet = api.get;
+test('indexed exact-read lookup preserves backend errors without inventing read absence', async () => {
+    const originalPost = api.post;
     const canonical = {
         schema: 'bms.ngs.error.v1', code: 'NGS_READ_SCAN_TRUNCATED',
         message: 'The bounded scan ended before absence could be proved.',
         job_id: 'job-a', resource: 'read', retryable: false,
     };
     let payload: unknown = canonical;
-    api.get = (async () => {
+    api.post = (async (url: string, request: unknown) => {
+        assert.equal(url, '/api/jobs/job-a/alignment-sessions/session-a/reads/lookup');
+        assert.deepEqual(request, { schema: 'bms.ngs.read-lookup-request.v2', read_id: 'read-a', include_sequence: true });
         throw { response: { status: 409, data: payload } };
-    }) as typeof api.get;
+    }) as typeof api.post;
     try {
         await assert.rejects(
             fetchAlignmentRead('job-a', 'session-a', 'read-a'),
-            (error: unknown) => isAlignmentReadScanTruncatedError(error),
+            (error: any) => error.response?.status === 409 && error.response.data === canonical,
         );
         for (const malformed of [
             { ...canonical, unexpected: true },
@@ -265,11 +267,11 @@ test('typed backend scan truncation becomes the scientist-facing integrity state
             payload = malformed;
             await assert.rejects(
                 fetchAlignmentRead('job-a', 'session-a', 'read-a'),
-                (error: unknown) => !isAlignmentReadScanTruncatedError(error),
+                (error: any) => error.response?.status === 409 && error.response.data === malformed,
             );
         }
     } finally {
-        api.get = originalGet;
+        api.post = originalPost;
     }
 });
 

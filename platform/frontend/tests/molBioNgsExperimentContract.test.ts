@@ -121,7 +121,8 @@ test('Nanopore launch uses immutable managed reference identity and full job det
     assert.doesNotMatch(nanopore, /params:\s*\{[\s\S]{0,300}reference_fasta:\s*effectiveReferencePath/);
     assert.match(nanopore, /untrusted import hints only/);
 
-    assert.match(ontRouter, /class OntManagedReferenceRequest\(BaseModel\)/);
+    assert.match(ontRouter, /class OntExperimentContext\(BaseModel\)/);
+    assert.match(ontRouter, /class OntManagedReferenceRequest\(OntExperimentContext\)/);
     assert.match(ontRouter, /managed_reference:\s*OntManagedReferenceRequest \| None/);
     assert.match(ontRouter, /resolve_managed_reference_for_launch/);
 

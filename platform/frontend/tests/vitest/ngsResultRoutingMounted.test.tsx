@@ -26,7 +26,18 @@ const contextMocks = vi.hoisted(() => ({
 vi.mock('../../src/lib/api', async (importOriginal) => ({
     ...(await importOriginal<typeof import('../../src/lib/api')>()),
     ...ngsApiMocks,
+    fetchExecutionTargets: vi.fn(async () => ({ data: [] })),
+    fetchNucleotideSequences: vi.fn(async () => ({ data: [] })),
+    fetchOntNgsSettingsContract: vi.fn(async () => ({ data: { profile_fixed: {
+        wf_clone_basecaller_model: { value: 'dna_r10.4.1_e8.2_400bps_hac@v5.0.0', reason: 'Pinned clone profile.' },
+    } } })),
+    api: { get: vi.fn(async (url: string) => {
+        const match = url.match(/^\/api\/jobs\/([^/]+)\/catalog-sessions$/);
+        if (!match) throw new Error(`Unexpected routing API request: ${url}`);
+        return { data: { schema: 'bms.ngs.native-catalog-sessions.v2', job_id: match[1], native: false, sessions: [], unavailable_reason: 'unsupported_source' } };
+    }) },
 }));
+vi.mock('../../src/components/useLiveGpuCatalog', () => ({ useLiveGpuCatalog: () => ({ gpuOptions: [] }) }));
 vi.mock('../../src/components/experiments/GlobalExperimentContext', () => ({
     useGlobalExperimentContext: () => ({
         workspaceId: null,
@@ -502,7 +513,7 @@ describe('completed NGS result routing', () => {
 it('lets a delayed validated saved view supply the missing job instead of a newer discovery default', async () => {
     let resolveView!: (value: unknown) => void;
     ngsApiMocks.fetchOntSignalViewerSession.mockReturnValue(new Promise((resolve) => { resolveView = resolve; }));
-    ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [{ id: 'newer', model_id: 'nanopore', status: 'completed' }], total: 1 } });
+    ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [{ id: 'newer', name: 'Newer FASTQ QC', model_id: 'nanopore', mode: 'ont_fastq_qc', status: 'completed', created_at: '2026-08-10T00:00:00Z', params: {} }], total: 1 } });
     ngsApiMocks.fetchFullJob.mockReturnValue(new Promise(() => undefined));
     await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/ngs?viewer_session_id=saved']}><NGSToolkit /></MemoryRouter></QueryClientProvider>));
     await waitUntil(() => expect(ngsApiMocks.fetchJobs).toHaveBeenCalled());
