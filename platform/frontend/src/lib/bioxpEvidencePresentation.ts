@@ -82,6 +82,11 @@ export function bioXpReceiptIsMoveTimeoutReport(receipt: unknown): boolean {
 }
 
 export function bioXpReceiptStatusText(receipt: unknown, fallback: string): string {
+    if (receipt != null && typeof receipt === 'object') {
+        const row = receipt as Record<string, unknown>;
+        if (row.status === 'completed' && row.command_sent === false && row.completion_class === 'oem_limit_rejected')
+            return 'No movement — existing OEM limit (request completed)';
+    }
     return bioXpReceiptIsMoveTimeoutReport(receipt) ? 'Move timeout reported' : fallback;
 }
 

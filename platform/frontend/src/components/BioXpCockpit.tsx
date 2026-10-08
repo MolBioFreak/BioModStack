@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useBioXpDocumentVisible } from './BioXpObservationVisibility';
 import { BioXpServiceRestart } from './BioXpServiceRestart';
 
@@ -45,8 +46,10 @@ import { BioXpWellPipettingPanel } from './BioXpWellPipettingPanel';
 import { BioXpWorkflowEditor } from './BioXpWorkflowEditor';
 import { BioXpLiveDeck } from './BioXpLiveDeck';
 import { deckStations, type BioXpDeckSelection } from '../lib/bioxpWorkflowDeck';
-import { BioXpAxisRow, BioXpAxisTelemetry, BioXpStepSlider } from './BioXpRobotPresentation';
+import { BioXpAxisRow, BioXpAxisTelemetry, BioXpStepSlider, BioXpStepPresets, repairManualJogDistances } from './BioXpRobotPresentation';
 import { BioXpStatusStrip } from './BioXpStatusStrip';
+import { RepairManualViewer, RepairManualFields } from './repairManualViewers';
+import { repairManualLatestRequest } from '../lib/repairManualFeedback';
 import './BioXpRobotControls.css';
 import { BioXpWorkflowControls } from './BioXpWorkflowControls';
 import { BioXpMovementFailureEvidence } from './BioXpMovementFailureEvidence';
@@ -545,7 +548,17 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     const interruptPending = (actionId: 'oem.x.stop' | 'oem.y.stop' | 'oem.z.stop' | 'oem.abort_all') => interruptMutation(actionId).isPending;
     const interruptAnyPending = interruptXStop.isPending || interruptYStop.isPending || interruptZStop.isPending || interruptAggregateAbort.isPending || componentStop.isPending;
     const busy = invokeOperatorAction.isPending || invokeLifecycleActionMutation.isPending || invokeYAction.isPending || invokeDeckAction.isPending || xyPending || interruptAnyPending || componentStop.isPending;
-    const latestOperatorReceipt = interruptAggregateAbort.data ?? interruptZStop.data ?? interruptYStop.data ?? interruptXStop.data ?? invokeDeckAction.data ?? invokeLifecycleActionMutation.data ?? invokeYAction.data ?? xyReceipt ?? invokeOperatorAction.data;
+    const feedbackQueryClient = useQueryClient();
+    const latestRequest = repairManualLatestRequest([
+        interruptAggregateAbort, interruptZStop, interruptYStop, interruptXStop,
+        invokeDeckAction, invokeLifecycleActionMutation, invokeYAction, invokeXYAction, invokeOperatorAction, componentStop,
+    ].filter(mutation => mutation.variables && ('request' in mutation.variables
+        ? mutation.variables.request.expected_connection_generation : mutation.variables.connectionGeneration) === generation)
+        .map(mutation => ({ ...mutation, requestOrder: feedbackQueryClient.getMutationCache().getAll()
+            .find(item => item.state.variables === mutation.variables)?.mutationId ?? mutation.submittedAt })));
+    const latestOperatorReceipt = latestRequest?.data;
+    const latestRequestAction = latestRequest?.variables && ('actionId' in latestRequest.variables
+        ? latestRequest.variables.actionId : 'request' in latestRequest.variables && 'action_id' in latestRequest.variables.request ? latestRequest.variables.request.action_id : 'command');
     const [settledLatest, setSettledLatest] = useState<string | null>(null);
     const latestReceiptQuery = useBioXpOperatorReceiptV2(latestOperatorReceipt?.command_id ?? null, generation, linkConnected && documentVisible && (operationalVisible || settledLatest !== (latestOperatorReceipt?.command_id ?? null)));
     useEffect(() => { if (latestReceiptQuery.data?.terminal) setSettledLatest(latestReceiptQuery.data.command_id); }, [latestReceiptQuery.data]);
@@ -1148,10 +1161,19 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
         const reported = displayTelemetry?.axes.find(item => item.axis === axis);
         return { min: reported?.min_steps, max: reported?.max_steps };
     };
+    const jogDistances = (axis: Axis | 'y') => {
+        const telemetry = displayTelemetry?.axes.find(item => item.axis === axis);
+        const position = axis === 'y' ? yAxisV2?.position_steps : axis === 'x' ? xPosition : axis === 'z' ? dashboard?.z_axis?.status?.position_steps : telemetry?.position_steps;
+        return repairManualJogDistances(position, telemetry?.min_steps, telemetry?.max_steps);
+    };
+    const jogSliderMax = (axis: Axis | 'y') => {
+        const hint = jogDistances(axis);
+        return hint ? Math.max(hint.negative, hint.positive) : undefined;
+    };
     const axisPresentation = (axis: Axis | 'y') => {
         const telemetry = displayTelemetry?.axes.find(item => item.axis === axis);
         return { reference: axis === 'x' ? xReference : axis === 'y' ? yAxisV2?.reference_state : axis === 'z' ? dashboard?.z_axis?.status?.reference : telemetry?.reference,
-            position: axis === 'x' ? xPosition : axis === 'y' ? yAxisV2?.position_steps : axis === 'z' ? dashboard?.z_axis?.status?.position_steps : telemetry?.position_steps };
+            position: axis === 'x' ? xPosition : axis === 'y' ? (yAxisV2?.position_reply_valid === false || yAxisV2?.position_source === 'oem_error_sentinel' || yAxisV2?.position_source === 'oem_cached' ? null : yAxisV2?.position_steps) : axis === 'z' ? dashboard?.z_axis?.status?.position_steps : telemetry?.position_steps };
     };
     return (
         <div className="bioxp-cockpit space-y-3 p-3 md:p-4" style={{ color: controlTab === 'live-deck' ? 'var(--text-primary)' : '#f1f5f9' }}>
@@ -1408,7 +1430,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
  controls={<><button type="button" disabled={yMutationDisabled('oem.y.move_steps')} title={yActionDisabledReason('oem.y.move_steps', 'Y relative move unavailable.')} onClick={() => invokeYMoveSteps(-Math.abs(yStepInput))} data-operation="move-negative" className="bx-button" aria-label="Move −">−</button>
 <button type="button" disabled={yMutationDisabled('oem.y.manual_panel_home')} title={yActionDisabledReason('oem.y.manual_panel_home', 'Y manual-panel home unavailable.')} onClick={() => invokeYHome('oem.y.manual_panel_home')} data-operation="home" className="bx-button" aria-label="Home">Home</button>
 <button type="button" disabled={yMutationDisabled('oem.y.move_steps')} title={yActionDisabledReason('oem.y.move_steps', 'Y relative move unavailable.')} onClick={() => invokeYMoveSteps(Math.abs(yStepInput))} data-operation="move-positive" className="bx-button" aria-label="Move +">+</button></>}
- relative={<><BioXpStepSlider label="Y relative steps" min={0} max={axisSliderBounds('y').max} value={yStepInput} onChange={setYStepInput} /><label className="bx-relative"><span className="bx-sr-only">Relative move steps</span><input type="number" min={0} max={BIOXP_Y_RELATIVE_MAX_STEPS} value={yStepInput} onChange={(event) => setYStepInput(Number(event.target.value))} className="mt-1 w-full rounded border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-tertiary))] p-2 font-mono text-sm" /></label>
+ relative={<><BioXpStepPresets axis="Y" onChange={setYStepInput} distances={jogDistances('y')} /><BioXpStepSlider label="Y relative steps" min={0} max={jogSliderMax('y')} value={yStepInput} onChange={setYStepInput} /><label className="bx-relative"><span className="bx-sr-only">Relative move steps</span><input type="number" min={0} max={BIOXP_Y_RELATIVE_MAX_STEPS} value={Number.isFinite(yStepInput) ? yStepInput : ''} onChange={(event) => setYStepInput(event.target.valueAsNumber)} className="mt-1 w-full rounded border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-tertiary))] p-2 font-mono text-sm" /></label>
 </>}
  absolute={<div className="bx-absolute" title="Y absolute requests return before motion stops."><BioXpStepSlider label="Y absolute target" min={axisSliderBounds('y').min} max={axisSliderBounds('y').max} value={yTargetInput} onChange={setYTargetInput} />                            <label className="block text-xs text-[var(--text-secondary)]"><span className="bx-sr-only">Absolute target (steps)</span><input type="number" min={BIOXP_Y_ABSOLUTE_MIN_STEPS} max={BIOXP_Y_ABSOLUTE_MAX_STEPS} value={Number.isFinite(yTargetInput) ? yTargetInput : ''} onChange={(event) => setYTargetInput(event.target.valueAsNumber)} className="mt-1 w-full rounded border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-tertiary))] p-2 font-mono text-sm" /></label>
 <button type="button" disabled={yMutationDisabled('oem.y.move_absolute')} title={yActionDisabledReason('oem.y.move_absolute', 'Y absolute move unavailable.')} onClick={() => invokeYMoveAbsolute(yTargetInput)} data-operation="absolute" className="bx-button" aria-label="Go absolute">Go</button></div>}
@@ -1416,24 +1438,32 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
  details={<>                            <p className="mt-2 text-[var(--text-secondary)]">Robot-owned Serial-206 Y authority. Controller completion and physical observation stay separate.</p>
                             <div className="mt-2 text-[var(--text-secondary)]">Board epoch: <span className="font-mono text-[var(--text-secondary)]">{yAxisV2?.active_board_epoch ?? '—'}</span> · Lifecycle: <span className="font-mono text-[var(--text-secondary)]">{yAxisV2?.lifecycle_state ?? '—'}</span></div>
                         <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
-                            <div className="rounded bg-[var(--surface-control,var(--bg-tertiary))] p-2"><dt className="text-[var(--text-secondary)]">Position</dt><dd className="font-mono">{yAxisV2?.position_steps ?? '—'}</dd><dd className={yAxisV2?.position_reply_valid ? 'text-[var(--text-secondary)]' : 'text-[var(--text-secondary)]'}>{yAxisV2 ? `${yAxisV2.position_reply_valid ? 'Valid' : 'Invalid'} reply · status ${yAxisV2.position_status_code ?? 'not reported'}` : 'Reply unavailable'}</dd></div>
+                            <div className="rounded bg-[var(--surface-control,var(--bg-tertiary))] p-2"><dt className="text-[var(--text-secondary)]">Position</dt><dd className="font-mono">{axisPresentation('y').position ?? '—'}</dd><dd className={yAxisV2?.position_reply_valid ? 'text-[var(--text-secondary)]' : 'text-[var(--text-secondary)]'}>{yAxisV2 ? `${yAxisV2.position_reply_valid === true ? 'Valid' : yAxisV2.position_reply_valid === false ? 'Invalid' : 'Unknown'} reply · status ${yAxisV2.position_status_code ?? 'not reported'}` : 'Reply unavailable'}</dd></div>
                             <div className="rounded bg-[var(--surface-control,var(--bg-tertiary))] p-2"><dt className="text-[var(--text-secondary)]">Reference</dt><dd className="font-mono">{yAxisV2?.reference_state ?? '—'}</dd></div>
-                            <div className="rounded bg-[var(--surface-control,var(--bg-tertiary))] p-2"><dt className="text-[var(--text-secondary)]">Speed</dt><dd className="font-mono">{yAxisV2?.speed_steps_s ?? '—'}</dd><dd className={yAxisV2?.speed_reply_valid ? 'text-[var(--text-secondary)]' : 'text-[var(--text-secondary)]'}>{yAxisV2 ? `${yAxisV2.speed_reply_valid ? 'Valid' : 'Invalid'} reply · status ${yAxisV2.speed_status_code ?? 'not reported'}` : 'Reply unavailable'}</dd></div>
-                            <div className="rounded bg-[var(--surface-control,var(--bg-tertiary))] p-2"><dt className="text-[var(--text-secondary)]">Home switch</dt><dd className="font-mono">{yAxisV2?.left_switch_raw ?? '—'}</dd><dd className={yAxisV2?.left_switch_reply_valid ? 'text-[var(--text-secondary)]' : 'text-[var(--text-secondary)]'}>{yAxisV2 ? `${yAxisV2.left_switch_reply_valid ? 'Valid' : 'Invalid'} reply · status ${yAxisV2.left_switch_status_code ?? 'not reported'}` : 'Reply unavailable'}</dd></div>
-                            <div className="rounded bg-[var(--surface-control,var(--bg-tertiary))] p-2"><dt className="text-[var(--text-secondary)]">Profile</dt><dd className={yAxisV2?.profile_readback_valid ? 'text-[var(--text-secondary)]' : 'text-[var(--text-secondary)]'}>{yAxisV2 ? yAxisV2.profile_readback_valid ? 'Valid' : `Invalid${yAxisV2.profile_mismatches.length > 0 ? ` · ${yAxisV2.profile_mismatches.join('; ')}` : ''}` : '—'}</dd></div>
-                            <div className="rounded bg-[var(--surface-control,var(--bg-tertiary))] p-2"><dt className="text-[var(--text-secondary)]">Updated</dt><dd className="font-mono">{yAxisV2 ? new Date(yAxisV2.updated_at * 1000).toISOString() : '—'}</dd></div>
+                            <div className="rounded bg-[var(--surface-control,var(--bg-tertiary))] p-2"><dt className="text-[var(--text-secondary)]">Speed</dt><dd className="font-mono">{yAxisV2?.speed_steps_s ?? '—'}</dd><dd className={yAxisV2?.speed_reply_valid ? 'text-[var(--text-secondary)]' : 'text-[var(--text-secondary)]'}>{yAxisV2 ? `${yAxisV2.speed_reply_valid === true ? 'Valid' : yAxisV2.speed_reply_valid === false ? 'Invalid' : 'Unknown'} reply · status ${yAxisV2.speed_status_code ?? 'not reported'}` : 'Reply unavailable'}</dd></div>
+                            <div className="rounded bg-[var(--surface-control,var(--bg-tertiary))] p-2"><dt className="text-[var(--text-secondary)]">Home switch</dt><dd className="font-mono">{yAxisV2?.left_switch_raw ?? '—'}</dd><dd className={yAxisV2?.left_switch_reply_valid ? 'text-[var(--text-secondary)]' : 'text-[var(--text-secondary)]'}>{yAxisV2 ? `${yAxisV2.left_switch_reply_valid === true ? 'Valid' : yAxisV2.left_switch_reply_valid === false ? 'Invalid' : 'Unknown'} reply · status ${yAxisV2.left_switch_status_code ?? 'not reported'}` : 'Reply unavailable'}</dd></div>
+                            <div className="rounded bg-[var(--surface-control,var(--bg-tertiary))] p-2"><dt className="text-[var(--text-secondary)]">Profile</dt><dd className={yAxisV2?.profile_readback_valid ? 'text-[var(--text-secondary)]' : 'text-[var(--text-secondary)]'}>{yAxisV2 ? yAxisV2.profile_readback_valid === true ? 'Valid' : yAxisV2.profile_readback_valid == null ? 'Unknown' : `Invalid${yAxisV2.profile_mismatches.length > 0 ? ` · ${yAxisV2.profile_mismatches.join('; ')}` : ''}` : '—'}</dd></div>
+                            <div className="rounded bg-[var(--surface-control,var(--bg-tertiary))] p-2"><dt className="text-[var(--text-secondary)]">Authority updated (not sample time)</dt><dd className="font-mono">{yAxisV2 && yAxisV2.updated_at > 0 ? new Date(yAxisV2.updated_at * 1000).toISOString() : 'Not reported'}</dd></div>
+                            <div><dt>Prepared board epoch</dt><dd>{yAxisV2?.prepared_board_epoch ?? 'Not reported'}</dd></div>
+                            <div><dt>Origin (steps)</dt><dd>{yAxisV2?.origin_position_steps ?? 'Not reported'}</dd></div>
+                            <div><dt>Requested target (steps)</dt><dd>{yAxisV2?.requested_position_steps ?? 'Not reported'}</dd></div>
+                            <div><dt>Sample source / time</dt><dd>{yAxisV2?.position_source ?? 'Not reported'} / {yAxisV2?.position_observed_at == null ? 'Not reported' : new Date(yAxisV2.position_observed_at * 1000).toISOString()}</dd></div>
+                            <div><dt>Published coordinate limits (steps)</dt><dd>{axisSliderBounds('y').min ?? 'Not reported'} … {axisSliderBounds('y').max ?? 'Not reported'}</dd></div>
                             <div className="rounded bg-[var(--surface-control,var(--bg-tertiary))] p-2"><dt className="text-[var(--text-secondary)]">Physical proof</dt><dd className="font-mono text-[var(--text-secondary)]">{yAxisV2?.physical_position_verified ? 'observed' : 'not observed'}</dd></div>
                         </dl>
                         {yReceiptQuery.data && (
                             <details className="mt-2 text-xs">
                                 <summary className="cursor-pointer text-[var(--text-secondary)]">Y command details{yReceiptQuery.data.physical_effect_verified ? ' · physically observed' : ' · physical arrival not verified'}</summary>
+                            <div><strong>Requested values</strong><RepairManualFields data={yReceiptQuery.data.requested_values} /></div>
+                            <div><strong>Native effective values</strong><RepairManualFields data={yReceiptQuery.data.effective_values} /></div>
+                            <div><strong>Observed values (receipt, not live)</strong><RepairManualFields data={yReceiptQuery.data.observed_values} /></div>
                             <div className="mt-3 grid gap-2 text-xs lg:grid-cols-2">
                                 <div className="rounded border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-tertiary))] p-2"><strong>Completion</strong><p className="mt-1">class={yReceiptQuery.data.completion_class ?? 'not reported'} · terminal position={String(yReceiptQuery.data.observed_values?.terminal_position_steps ?? 'not reported')} · terminal speed={String(yReceiptQuery.data.observed_values?.terminal_speed_steps_s ?? 'not reported')} · discrepancy={String(yReceiptQuery.data.observed_values?.discrepancy_steps ?? 'not reported')}</p></div>
                                 <div className="rounded border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-tertiary))] p-2"><strong>Independent physical observation</strong><p className="mt-1">physical_effect_verified={String(yReceiptQuery.data.physical_effect_verified)}</p></div>
                             </div>
                             </details>
                         )}
-{yReceiptCommandId && yReceiptQuery.data?.status === 'completed' && yReceiptQuery.data.completion_class !== 'issued_pending' && !bioXpReceiptFailureText(yReceiptQuery.data) && <p className="mt-2 text-xs">Y request: completed</p>}
+{yReceiptCommandId && yReceiptQuery.data?.status === 'completed' && yReceiptQuery.data.completion_class !== 'issued_pending' && !bioXpReceiptFailureText(yReceiptQuery.data) && <p className="mt-2 text-xs">Y request: {bioXpReceiptStatusText(yReceiptQuery.data, 'completed')}</p>}
 <BioXpAxisTelemetry axis={displayTelemetry?.axes.find(item => item.axis === 'y')} /></>}
  notices={<>                        {submittedAxis === 'y' && <YOperatorError label="Y enqueue" error={currentYInvokeError} reconcileAmbiguousOutcome />}
                         <YOperatorError label="Y STOP" error={interruptYStop.error} />
@@ -1513,7 +1543,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                                     );
                                 })}
 </>}
- relative={axis !== 'door' ? <><BioXpStepSlider label={`${axis.toUpperCase()} relative steps`} min={1} max={axisSliderBounds(axis).max} value={manualSteps[axis]} onChange={value => setManualSteps(current => ({ ...current, [axis]: value }))} /><label className="bx-relative">
+ relative={axis !== 'door' ? <><BioXpStepPresets axis={axis.toUpperCase()} onChange={value => setManualSteps(current => ({ ...current, [axis]: value }))} distances={jogDistances(axis)} /><BioXpStepSlider label={`${axis.toUpperCase()} relative steps`} min={1} max={jogSliderMax(axis)} value={manualSteps[axis]} onChange={value => setManualSteps(current => ({ ...current, [axis]: value }))} /><label className="bx-relative">
                                         <span className="bx-sr-only">Relative move steps</span>
                                         <input
                                             type="number"
@@ -1682,6 +1712,8 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                 </>}
             </div>
             <section aria-label="Latest command" className="bx-ui bx-last"><strong>Last command</strong>
+                {latestRequest && <p role="status">{String(latestRequestAction)} · {latestRequest.status === 'pending' ? 'Submitting; awaiting robot receipt' : latestRequest.status === 'error' ? 'Request error; see addressed details' : 'Receipt received'}</p>}
+                {latestRequest?.error && <p role="alert">{bioXpErrorText(latestRequest.error)}</p>}
                 {invokeOperatorAction.error && (
                     <p role="alert" className="mt-3 whitespace-pre-wrap break-words text-sm text-[var(--text-secondary)]">{bioXpErrorText(invokeOperatorAction.error)}</p>
                 )}
@@ -1692,6 +1724,9 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                 {linkConnected && displayedLatestReceipt && (
                     <details className="mt-3 rounded border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-tertiary))] p-3">
                         <summary className="cursor-pointer text-sm font-semibold">Action receipt details · {bioXpReceiptStatusText(displayedLatestReceipt, displayedLatestReceipt.status)}</summary>
+                         <div><strong>Requested values</strong><RepairManualFields data={'requested_values' in displayedLatestReceipt ? displayedLatestReceipt.requested_values : 'canonical_inputs' in displayedLatestReceipt ? displayedLatestReceipt.canonical_inputs : undefined} /></div>
+                         <div><strong>Native effective values</strong><RepairManualFields data={'effective_values' in displayedLatestReceipt ? displayedLatestReceipt.effective_values : undefined} /></div>
+                         <div><strong>Observed values (receipt, not live)</strong><RepairManualFields data={'observed_values' in displayedLatestReceipt ? displayedLatestReceipt.observed_values : undefined} /></div>
                          <p>{displayedLatestReceipt.command_id} · {displayedLatestReceipt.completion_class ?? "completion not reported"} · physical effect verified={String(displayedLatestReceipt.physical_effect_verified)}</p>
                     </details>
                 )}
@@ -1739,18 +1774,10 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
 
 </details>
 <details className="bx-tools"><summary>Tools &amp; service</summary><div className="bx-tools-body">                <div className="mt-3 flex flex-wrap gap-2">
-                    <button
-                        type="button"
-                        disabled={!linkConnected || operatorActionForPath('/motion/oem/machine_config')?.enabled !== true || invokeOperatorAction.isPending}
-                        onClick={() => invokeOperatorPath('/motion/oem/machine_config', {})}
-                        className="bx-button"
-                    >Show axis settings</button>
-                    <button
-                        type="button"
-                        disabled={!linkConnected || operatorActionForPath('/motion/oem/position_table')?.enabled !== true || invokeOperatorAction.isPending}
-                        onClick={() => invokeOperatorPath('/motion/oem/position_table', {})}
-                        className="bx-button"
-                    >Show position table</button>
+                    <RepairManualViewer kind="settings" generation={generation} connected={linkConnected}
+                        disabled={!linkConnected || operatorActionForPath('/motion/oem/machine_config')?.enabled !== true || invokeOperatorAction.isPending} />
+                    <RepairManualViewer kind="position-table" generation={generation} connected={linkConnected}
+                        disabled={!linkConnected || operatorActionForPath('/motion/oem/position_table')?.enabled !== true || invokeOperatorAction.isPending} />
                 </div>
 <h3>Temperatures</h3><div>{!displayTelemetry?.temperatures.length && 'Not reported'}{displayTelemetry?.temperatures.map(sensor => <p key={sensor.sensor}>{sensor.label}: {sensor.available ? `${sensor.temperature_c ?? '—'} ${sensor.unit}` : 'Not reported'}</p>)}</div>            <details className="rounded-xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-tertiary))] p-4" open={advancedOpen} onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
                 <summary className="cursor-pointer text-lg font-semibold">Advanced Full Command Catalog</summary>
