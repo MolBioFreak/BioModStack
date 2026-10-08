@@ -146,3 +146,43 @@ def test_host_agent_protocol_options_route_returns_truthful_preflight(monkeypatc
         "basecalling_enabled": True,
         "fake_or_demo_devices": False,
     }
+
+
+
+def test_host_agent_position_refresh_and_restart_routes_are_explicit(monkeypatch) -> None:
+    import bms_host_agent  # noqa: PLC0415
+
+    monkeypatch.setattr(
+        bms_host_agent,
+        "refresh_ont_position",
+        lambda position: (200, {"action": "refresh", "position": {"position": position}, "fake_or_demo_devices": False}),
+    )
+    monkeypatch.setattr(
+        bms_host_agent,
+        "restart_ont_position",
+        lambda position, payload: (
+            501,
+            {
+                "detail": "BMS does not yet perform a MinKNOW/Mk1D instrument restart",
+                "position": position,
+                "fake_or_demo_devices": False,
+            },
+        ),
+    )
+
+    assert bms_host_agent.ont_post_route_payload("/ont/positions/MD-105428/refresh", {"confirm_refresh": True}) == (
+        200,
+        {
+            "action": "refresh",
+            "position": {"position": "MD-105428"},
+            "fake_or_demo_devices": False,
+        },
+    )
+    assert bms_host_agent.ont_post_route_payload("/ont/positions/MD-105428/restart", {"confirm_restart": True}) == (
+        501,
+        {
+            "detail": "BMS does not yet perform a MinKNOW/Mk1D instrument restart",
+            "position": "MD-105428",
+            "fake_or_demo_devices": False,
+        },
+    )

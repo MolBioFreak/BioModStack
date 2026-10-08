@@ -25,6 +25,24 @@ async def ont_position_protocol_options(
     )
 
 
+
+@router.post("/positions/{position}/refresh")
+async def ont_refresh_position_state(position: str) -> dict[str, Any]:
+    """Re-read MinKNOW state for a position without power-cycling the instrument."""
+    try:
+        return ont_run_control.refresh_position_state(position)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"unknown ONT position: {position}") from exc
+
+
+@router.post("/positions/{position}/restart")
+async def ont_restart_position(position: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Expose explicit restart contract; host-agent refuses until live semantics are validated."""
+    try:
+        return ont_run_control.restart_position(position, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
 @router.post("/positions/{position}/start")
 async def ont_start_instrument_run(position: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Start a real MinKNOW run through host-agent after explicit confirmation."""

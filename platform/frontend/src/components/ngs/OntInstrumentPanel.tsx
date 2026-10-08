@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import {
     fetchOntDeviceStatus,
+    fetchOntProtocolOptions,
+    refreshOntPosition,
     startOntInstrumentRun,
     stopOntInstrumentRun,
     type OntInstrumentRun,
@@ -89,10 +91,28 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
         () => devices.filter((device) => device.available_for_run && device.position),
         [devices],
     );
-    const selectedDevice = availableDevices.find((device) => device.position === selectedPosition) ?? availableDevices[0];
+    const selectedDevice = devices.find((device) => device.position === selectedPosition) ?? availableDevices[0] ?? devices[0];
     const selectedIsTestMode = Boolean(selectedDevice?.fake_or_demo_device);
     const minKnowStatus = isLoading ? 'checking' : statusLabel(data?.implementation_status);
     const visibleOutputLabels = OUTPUT_LABELS.filter(([key]) => outputs[key]).map(([, label]) => label);
+    const selectedPositionForQuery = selectedDevice?.fake_or_demo_device ? '' : selectedDevice?.position || '';
+    const protocolOptions = useQuery({
+        queryKey: ['ont-protocol-options', selectedPositionForQuery, kit],
+        queryFn: async () => (await fetchOntProtocolOptions(selectedPositionForQuery, kit)).data,
+        enabled: Boolean(selectedPositionForQuery),
+        refetchInterval: 10000,
+    });
+
+    const refreshPosition = useMutation({
+        mutationFn: async () => {
+            if (!selectedDevice?.position || selectedDevice.fake_or_demo_device) {
+                throw new Error('No real ONT position selected for refresh');
+            }
+            const response = await refreshOntPosition(selectedDevice.position);
+            return response.data;
+        },
+        onSuccess: () => void refetch(),
+    });
 
     const startRun = useMutation({
         mutationFn: async () => {
@@ -138,6 +158,8 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
     });
 
     const canStart = Boolean(selectedDevice?.available_for_run && kit.trim() && sampleId.trim() && !startRun.isPending);
+    const blockers = protocolOptions.data?.blockers ?? [];
+    const selectedOutputDirs = selectedDevice?.output_directories ?? protocolOptions.data?.output_directories ?? {};
 
     return (
         <section className="space-y-5 rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-5 shadow-lg shadow-black/10">
@@ -227,9 +249,8 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                                 <button
                                     key={device.position}
                                     type="button"
-                                    disabled={!device.available_for_run}
                                     onClick={() => setSelectedPosition(device.position)}
-                                    className={`rounded-xl border p-4 text-left transition disabled:opacity-60 ${isSelected ? 'border-cyan-400 bg-cyan-500/10' : 'border-[var(--border-primary)] bg-[var(--bg-secondary)] hover:border-cyan-500/50'}`}
+                                    className={`rounded-xl border p-4 text-left transition ${isSelected ? 'border-cyan-400 bg-cyan-500/10' : 'border-[var(--border-primary)] bg-[var(--bg-secondary)] hover:border-cyan-500/50'}`}
                                 >
                                     <div className="flex items-start justify-between gap-3">
                                         <div>
@@ -242,10 +263,15 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                                     </div>
                                     <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-[var(--text-secondary)]">
                                         <div>Flow cell: {device.flow_cell?.present ? 'present' : 'absent'}</div>
-                                        <div>Product: {device.flow_cell?.product_code || 'unknown'}</div>
+                                        <div>Config cell: {device.flow_cell?.is_ctc ? 'yes' : 'no/unknown'}</div>
+                                        <div>Product: {device.flow_cell?.product_code || device.flow_cell?.user_specified_product_code || 'unknown'}</div>
                                         <div>Sample rate: {device.flow_cell?.sample_rate ?? 'unknown'}</div>
+                                        <div>Channels: {device.flow_cell?.channel_count ?? device.device_info?.max_channel_count ?? 'unknown'}</div>
+                                        <div>Device state: {String(device.device_state?.device_state ?? device.state ?? 'unknown')}</div>
                                         <div>Running: {device.running ? 'yes' : 'no'}</div>
+                                        <div>Connector: {String(device.device_state?.flow_cell_connector ?? 'unknown')}</div>
                                     </div>
+                                    {device.connection_error ? <div className="mt-2 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-100">{device.connection_error}</div> : null}
                                 </button>
                             );
                         })}
@@ -257,6 +283,35 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                         <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Run setup</h3>
                         <p className="text-xs text-[var(--text-secondary)]">These values are sent with real starts and mirrored by fake starts.</p>
                     </div>
+                    {selectedDevice ? (
+                        <div className="space-y-2 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-secondary)]">
+                            <div className="font-semibold uppercase tracking-wide text-[var(--text-primary)]">Selected position truth</div>
+                            <div>Position: {selectedDevice.position}</div>
+                            <div>Flow-cell present: {selectedDevice.flow_cell?.present ? 'yes' : 'no'}</div>
+                            <div>Configuration test cell flag: {selectedDevice.flow_cell?.is_ctc ? 'yes' : 'no/unknown'}</div>
+                            <div>Acquisition: {String(selectedDevice.acquisition_status?.status ?? 'unknown')}</div>
+                            <div>Output reads dir: {selectedOutputDirs.reads || 'not reported'}</div>
+                            {blockers.length ? <div className="text-amber-100">Preflight blockers: {blockers.join(', ')}</div> : null}
+                            <div className="flex flex-wrap gap-2 pt-1">
+                                <button
+                                    type="button"
+                                    disabled={!selectedPositionForQuery || refreshPosition.isPending}
+                                    onClick={() => refreshPosition.mutate()}
+                                    className="rounded border border-cyan-500/40 px-2 py-1 text-cyan-100 disabled:opacity-50"
+                                >
+                                    Refresh/reconnect position
+                                </button>
+                                <button
+                                    type="button"
+                                    disabled
+                                    title="True Mk1D restart/power-cycle is not enabled until MinKNOW restart semantics are live-validated."
+                                    className="rounded border border-[var(--border-primary)] px-2 py-1 opacity-50"
+                                >
+                                    Restart instrument unavailable
+                                </button>
+                            </div>
+                        </div>
+                    ) : null}
                     <label className="block text-xs font-semibold text-[var(--text-secondary)]">
                         Sample ID
                         <input value={sampleId} onChange={(event) => setSampleId(event.target.value)} className="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)]" />
@@ -298,6 +353,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                     </div>
                     <div className="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-secondary)]">
                         Start packet: {selectedDevice?.position ?? 'no position'} · {kit || 'kit missing'} · {visibleOutputLabels.length ? visibleOutputLabels.join(', ') : 'no outputs selected'}
+                        {!canStart && !selectedIsTestMode ? <div className="mt-2 text-amber-100">Real start disabled until MinKNOW reports a present sequencing flow cell, idle position, kit/model, and output directory.</div> : null}
                     </div>
                     <div className="flex flex-wrap gap-2">
                         <button

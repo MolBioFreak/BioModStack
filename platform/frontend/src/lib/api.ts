@@ -2726,18 +2726,46 @@ export const togglePrimerFavorite = (id: string) =>
 // ============================================================
 export interface OntFlowCellInfo {
     present: boolean;
+    is_ctc?: boolean | null;
+    has_adapter?: boolean | null;
     flow_cell_id?: string | null;
+    user_specified_flow_cell_id?: string | null;
     product_code?: string | null;
+    user_specified_product_code?: string | null;
     sample_rate?: number | null;
+    channel_count?: number | null;
+    wells_per_channel?: number | null;
+    use_count?: number | null;
+    use_count_limit?: number | null;
+    adapter_id?: string | null;
+    barcode_kit?: string | null;
+}
+
+export interface OntDeviceInfo {
+    device_id?: string | null;
+    device_type?: string | null;
+    is_simulated?: boolean | null;
+    max_channel_count?: number | null;
+    max_wells_per_channel?: number | null;
+    can_set_temperature?: boolean | null;
+    digitisation?: number | null;
+    firmware_version?: Array<{ component: string; version: string }>;
 }
 
 export interface OntLiveDevice {
     position: string;
     device_type?: 'mk1b' | 'mk1d' | string | null;
     state?: string | null;
+    protocol_state?: string | null;
     running?: boolean;
     available_for_run?: boolean;
     flow_cell?: OntFlowCellInfo;
+    device_info?: OntDeviceInfo;
+    device_state?: Record<string, string | number | boolean | null | undefined>;
+    output_directories?: Record<string, string>;
+    acquisition_status?: Record<string, string | number | boolean | null | undefined>;
+    current_protocol?: Record<string, unknown> | null;
+    connection_error?: string | null;
     fake_or_demo_device?: boolean;
 }
 
@@ -2746,6 +2774,7 @@ export interface OntDeviceStatus {
     live_devices: OntLiveDevice[];
     fake_or_demo_devices: false;
     message?: string;
+    minknow?: Record<string, unknown>;
 }
 
 export interface OntInstrumentRun {
@@ -2772,6 +2801,12 @@ export const fetchOntDeviceStatus = () =>
 
 export const fetchOntProtocolOptions = (position: string, kit?: string) =>
     api.get<OntProtocolOptions>(`/api/ont/positions/${encodeURIComponent(position)}/protocol-options`, { params: { kit } });
+
+export const refreshOntPosition = (position: string) =>
+    api.post<{ action: string; detail: string; position: OntLiveDevice; fake_or_demo_devices: false }>(`/api/ont/positions/${encodeURIComponent(position)}/refresh`, { confirm_refresh: true });
+
+export const restartOntPosition = (position: string) =>
+    api.post<{ detail: string; position: string; fake_or_demo_devices: false }>(`/api/ont/positions/${encodeURIComponent(position)}/restart`, { confirm_restart: true });
 
 export const startOntInstrumentRun = (position: string, payload: Record<string, unknown>) =>
     api.post<OntInstrumentRun>(`/api/ont/positions/${encodeURIComponent(position)}/start`, payload);

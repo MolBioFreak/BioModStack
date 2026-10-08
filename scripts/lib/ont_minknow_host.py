@@ -60,6 +60,78 @@ def _string_or_none(value: Any) -> str | None:
     return text or None
 
 
+
+
+def _enum_name(obj: Any, field_name: str, value: Any) -> str | None:
+    """Best-effort protobuf enum label for MinKNOW MessageWrapper fields."""
+    if value is None:
+        return None
+    descriptor = _safe_get(obj, "DESCRIPTOR")
+    try:
+        field = descriptor.fields_by_name[field_name]
+        enum_value = field.enum_type.values_by_number.get(int(value))
+        return enum_value.name if enum_value is not None else None
+    except Exception:  # noqa: BLE001 - descriptor shapes vary by protobuf runtime
+        return None
+
+
+def _message_firmware_versions(device_info: Any) -> list[dict[str, str]]:
+    versions: list[dict[str, str]] = []
+    for item in _safe_get(device_info, "firmware_version", []) or []:
+        component = _string_or_none(_safe_get(item, "component"))
+        version = _string_or_none(_safe_get(item, "version"))
+        if component or version:
+            versions.append({"component": component or "", "version": version or ""})
+    return versions
+
+
+def normalize_device_info(device_info: Any) -> dict[str, Any]:
+    device_type = _safe_get(device_info, "device_type")
+    return {
+        "device_id": _string_or_none(_safe_get(device_info, "device_id")),
+        "device_type": _enum_name(device_info, "device_type", device_type) or _string_or_none(device_type),
+        "is_simulated": bool(_safe_get(device_info, "is_simulated", False)),
+        "max_channel_count": _safe_get(device_info, "max_channel_count"),
+        "max_wells_per_channel": _safe_get(device_info, "max_wells_per_channel"),
+        "can_set_temperature": bool(_safe_get(device_info, "can_set_temperature", False)),
+        "digitisation": _safe_get(device_info, "digitisation"),
+        "firmware_version": _message_firmware_versions(device_info),
+    }
+
+
+def normalize_device_state(device_state: Any) -> dict[str, Any]:
+    raw_state = _safe_get(device_state, "device_state")
+    connector = _safe_get(device_state, "flow_cell_connector")
+    return {
+        "device_state": _enum_name(device_state, "device_state", raw_state) or _string_or_none(raw_state),
+        "flow_cell_connector": _enum_name(device_state, "flow_cell_connector", connector) or _string_or_none(connector),
+    }
+
+
+def normalize_output_directories(output_dirs: Any) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    for key in ("output", "reads", "log"):
+        value = _string_or_none(_safe_get(output_dirs, key))
+        if value:
+            normalized[key] = value
+    return normalized
+
+
+def normalize_current_protocol(protocol_run: Any) -> dict[str, Any] | None:
+    if protocol_run is None:
+        return None
+    result: dict[str, Any] = {}
+    for key in ("run_id", "protocol_id", "phase", "state", "sample_id", "experiment_group"):
+        value = _safe_get(protocol_run, key)
+        if value is not None:
+            result[key] = _string_or_none(value) or value
+    return result or {"raw": str(protocol_run)}
+
+
+def normalize_acquisition_status(status: Any) -> dict[str, Any]:
+    raw = _safe_get(status, "status")
+    return {"status": _enum_name(status, "status", raw) or _string_or_none(raw)}
+
 def infer_ont_device_type(*, position_name: str | None, product_code: str | None, description: Any = None) -> str | None:
     haystack = " ".join(str(part).lower() for part in (position_name, product_code, description) if part is not None)
     if "mk1d" in haystack or "minion_mk1d" in haystack:
@@ -69,14 +141,22 @@ def infer_ont_device_type(*, position_name: str | None, product_code: str | None
     return None
 
 
-def normalize_flow_cell_info(flow_cell_info: Any) -> dict[str, Any]:
+def normalize_flow_cell_info(flow_cell_info: Any, *, sample_rate: Any = None) -> dict[str, Any]:
     return {
         "present": bool(_safe_get(flow_cell_info, "has_flow_cell", False)),
+        "is_ctc": bool(_safe_get(flow_cell_info, "is_ctc", False)),
+        "has_adapter": bool(_safe_get(flow_cell_info, "has_adapter", False)),
         "flow_cell_id": _string_or_none(_safe_get(flow_cell_info, "flow_cell_id")),
         "user_specified_flow_cell_id": _string_or_none(_safe_get(flow_cell_info, "user_specified_flow_cell_id")),
         "product_code": _string_or_none(_safe_get(flow_cell_info, "product_code")),
         "user_specified_product_code": _string_or_none(_safe_get(flow_cell_info, "user_specified_product_code")),
-        "sample_rate": _safe_get(flow_cell_info, "sample_rate"),
+        "sample_rate": _safe_get(flow_cell_info, "sample_rate", sample_rate),
+        "channel_count": _safe_get(flow_cell_info, "channel_count"),
+        "wells_per_channel": _safe_get(flow_cell_info, "wells_per_channel"),
+        "use_count": _safe_get(flow_cell_info, "use_count"),
+        "use_count_limit": _safe_get(flow_cell_info, "use_count_limit"),
+        "adapter_id": _string_or_none(_safe_get(flow_cell_info, "adapter_id")),
+        "barcode_kit": _string_or_none(_safe_get(flow_cell_info, "barcode_kit")),
     }
 
 
@@ -89,25 +169,48 @@ def normalize_position(position: Any) -> dict[str, Any]:
     secure_port = _safe_get(rpc_ports, "secure")
 
     flow_cell: dict[str, Any] = {"present": False}
+    device_info: dict[str, Any] = {}
+    device_state: dict[str, Any] = {}
+    output_directories: dict[str, str] = {}
+    acquisition_status: dict[str, Any] = {}
+    current_protocol: dict[str, Any] | None = None
     connection_error = None
     try:
         connection = position.connect()
-        flow_cell = normalize_flow_cell_info(connection.device.get_flow_cell_info())
+        sample_rate = _safe_get(connection.device.get_sample_rate(), "sample_rate")
+        flow_cell = normalize_flow_cell_info(connection.device.get_flow_cell_info(), sample_rate=sample_rate)
+        device_info = normalize_device_info(connection.device.get_device_info())
+        device_state = normalize_device_state(connection.device.get_device_state())
+        output_directories = normalize_output_directories(connection.instance.get_output_directories())
+        acquisition_status = normalize_acquisition_status(connection.acquisition.current_status())
+        try:
+            current_protocol = normalize_current_protocol(connection.protocol.get_current_protocol_run())
+        except Exception:  # noqa: BLE001 - no current protocol is a normal MinKNOW state
+            current_protocol = None
     except Exception as exc:  # noqa: BLE001 - MinKNOW/grpc exceptions vary by version
         connection_error = str(exc)
 
     product_code = flow_cell.get("user_specified_product_code") or flow_cell.get("product_code")
+    inferred_type = infer_ont_device_type(
+        position_name=position_name,
+        product_code=product_code,
+        description=description,
+    )
+    if inferred_type is None and str(device_info.get("device_type") or "").upper().endswith("MK1D"):
+        inferred_type = "mk1d"
     return {
         "position": position_name,
-        "device_type": infer_ont_device_type(
-            position_name=position_name,
-            product_code=product_code,
-            description=description,
-        ),
+        "device_type": inferred_type,
         "state": state,
         "running": running,
+        "protocol_state": _string_or_none(_safe_get(position, "protocol_state")),
         "available_for_run": bool((not running) and flow_cell.get("present") and not connection_error),
         "flow_cell": flow_cell,
+        "device_info": device_info,
+        "device_state": device_state,
+        "output_directories": output_directories,
+        "acquisition_status": acquisition_status,
+        "current_protocol": current_protocol,
         "rpc_ports": {"secure": secure_port} if secure_port is not None else {},
         "connection_error": connection_error,
     }
@@ -159,7 +262,7 @@ def protocol_options(
     devices = status.get("live_devices") if isinstance(status, dict) else []
     for device in devices or []:
         if str(device.get("position") or "") == str(position):
-            output_dirs = ((status.get("minknow") or {}).get("output_directories") or {}) if isinstance(status, dict) else {}
+            output_dirs = device.get("output_directories") or ((status.get("minknow") or {}).get("output_directories") or {}) if isinstance(status, dict) else {}
             return build_protocol_options_preflight(
                 position=device,
                 kit=kit,
@@ -180,6 +283,33 @@ def build_manager(config: MinknowHostConfig):
         client_private_key=config.client_key,
     )
 
+
+
+def refresh_position(position_name: str) -> tuple[int, dict[str, Any]]:
+    status = discover_status()
+    if status.get("implementation_status") != MINKNOW_STATUS_CONFIGURED:
+        return 503, {
+            "detail": "MinKNOW is not configured/reachable from the BMS host-agent",
+            "implementation_status": status.get("implementation_status"),
+            "fake_or_demo_devices": False,
+        }
+    for device in status.get("live_devices") or []:
+        if str(device.get("position") or "") == str(position_name):
+            return 200, {
+                "action": "refresh",
+                "detail": "Reopened the MinKNOW position connection and reread device/flow-cell state; this does not power-cycle the instrument.",
+                "position": device,
+                "fake_or_demo_devices": False,
+            }
+    return 404, {"detail": f"unknown ONT position: {position_name}", "fake_or_demo_devices": False}
+
+
+def restart_position(position_name: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    return 501, {
+        "detail": "BMS does not yet perform a MinKNOW/Mk1D instrument restart. Use refresh/reconnect for state reread; true restart/power-cycle needs live-validated MinKNOW semantics before enabling.",
+        "position": position_name,
+        "fake_or_demo_devices": False,
+    }
 
 def start_protocol(position: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     """Start a MinKNOW protocol for a position, or fail without fake run IDs.
@@ -226,10 +356,12 @@ def discover_status(
     try:
         manager = manager_factory(config)
         positions: Iterable[Any] = manager.flow_cell_positions()
+        live_devices = [normalize_position(position) for position in positions]
+        first_output_dirs = next((device.get("output_directories") for device in live_devices if device.get("output_directories")), {})
         return {
             "implementation_status": MINKNOW_STATUS_CONFIGURED,
-            "minknow": minknow,
-            "live_devices": [normalize_position(position) for position in positions],
+            "minknow": {**minknow, "output_directories": first_output_dirs},
+            "live_devices": live_devices,
             "fake_or_demo_devices": False,
             "message": "MinKNOW API reachable from BMS host-agent; live_devices reflects manager.flow_cell_positions().",
         }

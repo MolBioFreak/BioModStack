@@ -64,6 +64,22 @@ def build_start_preflight(
     }
 
 
+
+def refresh_position_state(position: str) -> dict[str, Any]:
+    host_payload = request_host_agent("POST", f"/ont/positions/{position}/refresh", {"confirm_refresh": True})
+    if not isinstance(host_payload, dict):
+        raise RuntimeError(f"host-agent returned non-object refresh payload: {host_payload!r}")
+    return host_payload
+
+
+def restart_position(position: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if not bool(payload.get("confirm_restart")):
+        raise ValueError("confirm_restart=true is required before requesting an ONT instrument restart")
+    host_payload = request_host_agent("POST", f"/ont/positions/{position}/restart", payload)
+    if not isinstance(host_payload, dict):
+        raise RuntimeError(f"host-agent returned non-object restart payload: {host_payload!r}")
+    return host_payload
+
 def start_instrument_run(position: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Start an ONT instrument run through the host-agent and record its BMS ID."""
     if not bool(payload.get("confirm_start")):
