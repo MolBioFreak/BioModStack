@@ -1,5 +1,9 @@
 # BioXP BMS current-control removal and OEM integration path — 2026-05-04
 
+> **SUPERSEDED AS THE CURRENT BMS CONTRACT (2026-07-18):** Retained as historical
+> planning evidence only. Do not restore its proxy/hardware routes. See
+> [BioXP Compact Control Plane](../BioXP_Compact_Control_Plane.md).
+
 ## Scope
 
 Christian asked for a repo-grounded removal path for the current BioXP robot controls in BioModStack, plus a full integration path for the new minimally functional robot-local OEM system.
@@ -167,7 +171,7 @@ Surfaces explicitly preserved:
 
 ## Current robot-local control inventory inspected
 
-Robot OpenAPI from `http://100.124.140.56:8123/openapi.json` currently exposes 97 paths.
+Robot OpenAPI from `http://[REDACTED-ROBOT-HOST]:8123/openapi.json` currently exposes 97 paths.
 
 Existing old-compatible routes still present on robot:
 

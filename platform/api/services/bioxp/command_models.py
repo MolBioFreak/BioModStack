@@ -1,0 +1,56 @@
+from __future__ import annotations
+
+from typing import Annotated, Literal, TypeAlias
+
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+
+
+class _CommandBase(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    expected_generation: int = Field(ge=1)
+    idempotency_key: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+class InitializeMotorsCommand(_CommandBase):
+    command: Literal["initialize_motors"]
+
+
+class StartJobCommand(_CommandBase):
+    command: Literal["start_job"]
+    job_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+class PauseJobCommand(_CommandBase):
+    command: Literal["pause_job"]
+    job_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+class ResumeJobCommand(_CommandBase):
+    command: Literal["resume_job"]
+    job_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+class StopJobCommand(_CommandBase):
+    command: Literal["stop_job"]
+    job_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+class RecoverRuntimeCommand(_CommandBase):
+    command: Literal["recover_runtime"]
+
+
+CommandRequest: TypeAlias = Annotated[
+    InitializeMotorsCommand
+    | StartJobCommand
+    | PauseJobCommand
+    | ResumeJobCommand
+    | StopJobCommand
+    | RecoverRuntimeCommand,
+    Field(discriminator="command"),
+]
+COMMAND_REQUEST_ADAPTER = TypeAdapter(CommandRequest)
+
+
+def parse_command_request(payload: object) -> CommandRequest:
+    return COMMAND_REQUEST_ADAPTER.validate_python(payload)

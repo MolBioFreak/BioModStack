@@ -8,11 +8,12 @@ import {
     isBmsFeatureVisible,
     normalizeBmsFeatureState,
     normalizeBmsFeatures,
+    resolveBmsFeatureQueryState,
 } from '../src/runtime/installFeatures.js';
 
-test('install features default to enabled for existing local installs', () => {
+test('optional hardware features default disabled until backend state is confirmed', () => {
     assert.deepEqual(DEFAULT_BMS_FEATURES, {
-        bioxp: true,
+        bioxp: false,
         stats_tools: true,
         assay_db: true,
     });
@@ -40,6 +41,15 @@ test('install feature normalization honors resolved backend flags without droppi
     });
     assert.equal(isBmsFeatureEnabled(features, 'bioxp'), false);
     assert.equal(isBmsFeatureEnabled(features, 'stats_tools'), true);
+});
+
+test('failed feature refresh discards cached positive BioXP state', () => {
+    const cached = normalizeBmsFeatureState({
+        features: { bioxp: true, stats_tools: true, assay_db: true },
+    });
+
+    assert.equal(resolveBmsFeatureQueryState(cached, false).features.bioxp, true);
+    assert.equal(resolveBmsFeatureQueryState(cached, true).features.bioxp, false);
 });
 
 test('dev feature flags hide developer-only install features until explicitly shown', () => {

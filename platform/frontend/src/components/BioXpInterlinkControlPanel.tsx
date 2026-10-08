@@ -1,307 +1,160 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+
 import {
-    useBioXpInterlinkConnect,
-    useBioXpInterlinkDiagnostics,
-    useBioXpInterlinkDisconnect,
-    useBioXpInterlinkLogs,
-    useBioXpInterlinkState,
-    useBioXpRobotReboot,
-    useBioXpRuntimeReset,
-    useForgetBioXpInterlinkSettings,
-    useSaveBioXpInterlinkSettings,
+    useBioXpProfile,
+    useBioXpStatus,
+    bioXpErrorText,
+    useConnectBioXp,
+    useDisconnectBioXp,
+    useForgetBioXpProfile,
+    useProbeBioXp,
+    useSaveBioXpProfile,
 } from '../lib/bioxpClient';
-import type { BioXpInterlinkSettings } from '../lib/bioxpClient';
-import { deriveBioXpInterlinkMenuStatus } from './bioxpInterlinkStatus';
+import { deriveBioXpStatus } from './bioxpInterlinkStatus';
 
-const getErrorMessage = (error: unknown) => {
-    if (error instanceof Error) return error.message;
-    if (typeof error === 'string') return error;
-    if (error && typeof error === 'object') return JSON.stringify(error);
-    return null;
-};
-
-const actionSummary = (data: unknown) => {
-    if (!data || typeof data !== 'object') return null;
-    const record = data as Record<string, UntypedApiValue>;
-    const commandResult = record.command_result as Record<string, UntypedApiValue> | undefined;
-    const pieces = [
-        record.action ? String(record.action).toUpperCase() : null,
-        typeof record.ok === 'boolean' ? `ok=${record.ok ? 'yes' : 'no'}` : null,
-        typeof record.supported === 'boolean' ? `supported=${record.supported ? 'yes' : 'no'}` : null,
-        typeof record.active === 'boolean' ? `active=${record.active ? 'yes' : 'no'}` : null,
-        typeof record.reachable === 'boolean' ? `reachable=${record.reachable ? 'yes' : 'no'}` : null,
-        typeof commandResult?.returncode === 'number' ? `rc=${commandResult.returncode}` : null,
-        record.reason ? String(record.reason) : null,
-        record.runtime_note ? String(record.runtime_note) : null,
-    ].filter(Boolean);
-    return pieces.length ? pieces.join(' | ') : JSON.stringify(data);
-};
-
-const maskEndpointForDisplay = (value?: string | null) => {
-    if (!value) return 'not configured';
-
-    const maskHost = (host: string) => {
-        const ipv4 = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-        if (ipv4) return `${ipv4[1]}.${ipv4[2]}.xxx.xxx`;
-        const parts = host.split('.').filter(Boolean);
-        if (parts.length > 2) return `${parts[0]}.…`;
-        if (host.length > 12) return `${host.slice(0, 6)}…${host.slice(-4)}`;
-        return host;
-    };
-
-    try {
-        const endpoint = new URL(value);
-        endpoint.hostname = maskHost(endpoint.hostname);
-        endpoint.username = '';
-        endpoint.password = '';
-        return endpoint.toString().replace(/\/$/, '');
-    } catch {
-        return value.replace(/(\d+\.\d+)\.\d+\.\d+(:\d+)?/g, '$1.xxx.xxx$2');
-    }
-};
+const toneClass = {
+    neutral: 'border-slate-600/60 bg-slate-800/80 text-slate-200',
+    warning: 'border-amber-500/50 bg-amber-500/10 text-amber-200',
+    danger: 'border-red-500/50 bg-red-500/10 text-red-200',
+    success: 'border-emerald-500/50 bg-emerald-500/10 text-emerald-200',
+} as const;
 
 export function BioXpInterlinkMenu() {
-    const [isOpen, setIsOpen] = useState(false);
-    const state = useBioXpInterlinkState(true, isOpen ? 5000 : 30000);
-    const saveSettings = useSaveBioXpInterlinkSettings();
-    const forgetSettings = useForgetBioXpInterlinkSettings();
-    const connect = useBioXpInterlinkConnect();
-    const disconnect = useBioXpInterlinkDisconnect();
-    const diagnostics = useBioXpInterlinkDiagnostics();
-    const logs = useBioXpInterlinkLogs();
-    const runtimeReset = useBioXpRuntimeReset();
-    const robotReboot = useBioXpRobotReboot();
-
-    const [settings, setSettings] = useState<BioXpInterlinkSettings>({
-        robot_api_url: '',
-        robot_ssh_host: 'robot',
-        connection_mode: 'direct_http',
-        display_name: 'BioXP3200',
-    });
-    const [latestAction, setLatestAction] = useState<unknown>(null);
+    const [open, setOpen] = useState(false);
+    const [displayName, setDisplayName] = useState('BioXP 3200');
+    const [apiUrl, setApiUrl] = useState('');
+    const [operatorToken, setOperatorToken] = useState('');
+    const [nowMs, setNowMs] = useState(() => Date.now());
+    const rootRef = useRef<HTMLDivElement>(null);
+    const statusQuery = useBioXpStatus(true);
+    const profileQuery = useBioXpProfile(open);
+    const saveProfile = useSaveBioXpProfile();
+    const forgetProfile = useForgetBioXpProfile();
+    const connect = useConnectBioXp();
+    const disconnect = useDisconnectBioXp();
+    const probe = useProbeBioXp();
 
     useEffect(() => {
-        const current = state.data;
-        if (!current) return;
-        setSettings((prev) => ({
-            robot_api_url: current.robot_api_url || current.recommended_url || prev.robot_api_url || '',
-            robot_ssh_host: current.robot_ssh_host || prev.robot_ssh_host || 'robot',
-            connection_mode: current.connection_mode || prev.connection_mode || 'direct_http',
-            display_name: current.display_name || prev.display_name || 'BioXP3200',
-        }));
-    }, [state.data]);
+        if (profileQuery.data?.display_name) setDisplayName(profileQuery.data.display_name);
+    }, [profileQuery.data?.display_name]);
 
-    const active = Boolean(state.data?.active);
-    const configured = Boolean(state.data?.configured);
-    const reachable = state.data?.reachable;
-    const interlinkStatus = deriveBioXpInterlinkMenuStatus({
-        active,
-        configured,
-        reachable,
-        lastProbeAt: state.data?.last_probe_at,
-        probeFailed: state.isError,
-        probeStale: state.data?.probe_stale === true,
-    });
-    const { indicatorClass, humanStatusLabel, reachabilityText } = interlinkStatus;
-    const endpointForDisplay = state.data?.active
-        ? state.data.robot_api_url
-        : state.data?.robot_api_url || settings.robot_api_url || state.data?.recommended_url;
+    useEffect(() => {
+        const timer = window.setInterval(() => setNowMs(Date.now()), 1_000);
+        return () => window.clearInterval(timer);
+    }, []);
 
-    const runAction = <T,>(call: (callbacks: { onSuccess: (data: T) => void; onError: (error: unknown) => void }) => void) => {
-        call({
-            onSuccess: (data) => setLatestAction(data),
-            onError: (error) => setLatestAction({ ok: false, error: getErrorMessage(error) ?? 'BioXP interlink action failed' }),
-        });
-    };
+    useEffect(() => {
+        const close = (event: MouseEvent) => {
+            if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+        };
+        document.addEventListener('mousedown', close);
+        return () => document.removeEventListener('mousedown', close);
+    }, []);
 
-    const errorMessage =
-        getErrorMessage(state.error) ||
-        getErrorMessage(saveSettings.error) ||
-        getErrorMessage(forgetSettings.error) ||
-        getErrorMessage(connect.error) ||
-        getErrorMessage(disconnect.error) ||
-        getErrorMessage(diagnostics.error) ||
-        getErrorMessage(logs.error) ||
-        getErrorMessage(runtimeReset.error) ||
-        getErrorMessage(robotReboot.error);
-
-    const busy =
-        saveSettings.isPending ||
-        forgetSettings.isPending ||
-        connect.isPending ||
-        disconnect.isPending ||
-        diagnostics.isPending ||
-        logs.isPending ||
-        runtimeReset.isPending ||
-        robotReboot.isPending;
+    const connection = statusQuery.isError ? undefined : statusQuery.data?.connection;
+    const derived = useMemo(
+        () => connection ? deriveBioXpStatus(connection, nowMs) : null,
+        [connection, nowMs],
+    );
+    const pending = saveProfile.isPending || forgetProfile.isPending
+        || connect.isPending || disconnect.isPending || probe.isPending;
+    const mutationError = saveProfile.error || forgetProfile.error
+        || connect.error || disconnect.error || probe.error;
 
     return (
-        <div className="relative" data-bms-bioxp-interlink-menu="true">
+        <div ref={rootRef} className="relative" data-bms-bioxp-interlink-menu="true">
             <button
                 type="button"
-                onClick={() => setIsOpen((value) => !value)}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all border bg-slate-800 text-slate-300 border-slate-700 hover:border-slate-500"
-                title="BioXP"
+                onClick={() => setOpen((value) => !value)}
+                className={`flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs ${
+                    derived ? toneClass[derived.tone] : toneClass.neutral
+                }`}
+                aria-expanded={open}
             >
-                <span className={`w-2 h-2 rounded-full ${indicatorClass}`} />
-                BioXP
+                BioXP {derived?.label ?? 'UNKNOWN'}
             </button>
 
-            {isOpen && (
-                <>
-                    <div className="fixed inset-0 z-40" data-bms-drag-scroll-ignore="true" onClick={() => setIsOpen(false)} />
-                    <div
-                        className="absolute right-0 top-full mt-2 w-[520px] max-w-[calc(100vw-1rem)] bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 p-3 space-y-3"
-                        data-bms-drag-scroll-ignore="true"
-                    >
-                        <div className="flex items-center justify-between border-b border-slate-700 pb-2">
-                            <p className="text-xs font-semibold text-slate-300 uppercase tracking-wider">BioXP</p>
-                            <button
-                                type="button"
-                                onClick={() => state.refetch()}
-                                disabled={state.isFetching || busy}
-                                className="px-2 py-1 text-xs rounded border border-slate-600 text-slate-300 hover:bg-slate-700 disabled:opacity-50"
-                            >
-                                Refresh
-                            </button>
+            {open && (
+                <div className="absolute right-0 z-50 mt-2 w-[390px] rounded-lg border border-slate-700 bg-slate-950 p-4 shadow-2xl">
+                    <div className="mb-3 flex items-center justify-between">
+                        <div>
+                            <p className="text-sm font-semibold text-white">BioXP Status</p>
+                            <p className="text-xs text-slate-400">Generation {connection?.generation ?? 0}</p>
                         </div>
-
-                        <div className="rounded border border-slate-700 bg-slate-900/40 p-2 text-[11px] text-slate-300">
-                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                                <span>Status: <span className="font-semibold text-slate-100">{humanStatusLabel}</span></span>
-                                <span className="text-slate-500">•</span>
-                                <span>{reachabilityText}</span>
-                            </div>
-                            <div className="mt-1 break-all font-mono text-slate-400">
-                                Endpoint: <span className="text-cyan-300">{maskEndpointForDisplay(endpointForDisplay)}</span>
-                            </div>
-                        </div>
-
-                        <details open={!configured} className="rounded border border-slate-700 bg-slate-900/40 p-3">
-                            <summary className="cursor-pointer text-[11px] font-semibold uppercase tracking-wider text-slate-300">
-                                Profile settings
-                            </summary>
-                            <div className="mt-3 space-y-2">
-                                <input
-                                    type="text"
-                                    value={settings.robot_api_url}
-                                    onChange={(event) => setSettings((prev) => ({ ...prev, robot_api_url: event.target.value }))}
-                                    placeholder={state.data?.recommended_url || 'Robot API URL'}
-                                    className="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-slate-200"
-                                />
-                                <div className="grid grid-cols-3 gap-2">
-                                    <input
-                                        type="text"
-                                        value={settings.robot_ssh_host || ''}
-                                        onChange={(event) => setSettings((prev) => ({ ...prev, robot_ssh_host: event.target.value }))}
-                                        placeholder="robot"
-                                        className="rounded border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-slate-200"
-                                    />
-                                    <input
-                                        type="text"
-                                        value={settings.connection_mode || ''}
-                                        onChange={(event) => setSettings((prev) => ({ ...prev, connection_mode: event.target.value }))}
-                                        placeholder="direct_http"
-                                        className="rounded border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-slate-200"
-                                    />
-                                    <input
-                                        type="text"
-                                        value={settings.display_name || ''}
-                                        onChange={(event) => setSettings((prev) => ({ ...prev, display_name: event.target.value }))}
-                                        placeholder="BioXP3200"
-                                        className="rounded border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-slate-200"
-                                    />
-                                </div>
-                                <div className="flex flex-wrap gap-2">
-                                    <button
-                                        type="button"
-                                        onClick={() => runAction((callbacks) => saveSettings.mutate(settings, callbacks))}
-                                        disabled={busy || !settings.robot_api_url.trim()}
-                                        className="px-3 py-2 text-xs font-semibold rounded border border-cyan-500/50 text-cyan-300 hover:bg-cyan-500/20 disabled:opacity-50"
-                                    >
-                                        Save settings
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => runAction((callbacks) => connect.mutate(settings, callbacks))}
-                                        disabled={busy || !settings.robot_api_url.trim()}
-                                        className="px-3 py-2 text-xs font-semibold rounded border border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
-                                    >
-                                        Connect
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => runAction((callbacks) => disconnect.mutate(undefined, callbacks))}
-                                        disabled={busy || !active}
-                                        className="px-3 py-2 text-xs font-semibold rounded border border-amber-500/50 text-amber-300 hover:bg-amber-500/20 disabled:opacity-50"
-                                    >
-                                        Disconnect
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => runAction((callbacks) => forgetSettings.mutate(undefined, callbacks))}
-                                        disabled={busy || !configured}
-                                        className="px-3 py-2 text-xs font-semibold rounded border border-rose-500/50 text-rose-300 hover:bg-rose-500/20 disabled:opacity-50"
-                                    >
-                                        Forget saved profile
-                                    </button>
-                                </div>
-                            </div>
-                        </details>
-
-                        <div className="grid grid-cols-2 gap-2">
-                            <button
-                                type="button"
-                                onClick={() => runAction((callbacks) => diagnostics.mutate({ probe: true }, callbacks))}
-                                disabled={busy}
-                                className="px-3 py-2 text-xs font-semibold rounded border border-slate-600 text-slate-300 hover:bg-slate-700 disabled:opacity-50"
-                            >
-                                Diagnostics
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => runAction((callbacks) => logs.mutate({ tail: 120 }, callbacks))}
-                                disabled={busy || !configured}
-                                className="px-3 py-2 text-xs font-semibold rounded border border-slate-600 text-slate-300 hover:bg-slate-700 disabled:opacity-50"
-                            >
-                                Robot logs
-                            </button>
-                        </div>
-
-                        <details className="rounded border border-amber-500/30 bg-amber-950/10 p-3">
-                            <summary className="cursor-pointer text-[11px] font-semibold uppercase tracking-wider text-amber-200">
-                                Advanced controls
-                            </summary>
-                            <div className="mt-3 grid grid-cols-2 gap-3">
-                                <button
-                                    type="button"
-                                    onClick={() => runAction((callbacks) => runtimeReset.mutate({ operator_ack: 'RESET BIOXP RUNTIME', tail: 120 }, callbacks))}
-                                    disabled={busy || !configured}
-                                    className="px-3 py-2 text-xs font-semibold rounded border border-amber-500/50 text-amber-200 hover:bg-amber-500/20 disabled:opacity-50"
-                                >
-                                    Restart runtime
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => runAction((callbacks) => robotReboot.mutate({ operator_ack: 'REBOOT ROBOT', tail: 120 }, callbacks))}
-                                    disabled={busy || !configured}
-                                    className="px-3 py-2 text-xs font-semibold rounded border border-rose-500/60 text-rose-200 hover:bg-rose-500/20 disabled:opacity-50"
-                                >
-                                    Reboot host
-                                </button>
-                            </div>
-                        </details>
-
-                        {Boolean(errorMessage || latestAction) && (
-                            <pre className={`max-h-48 overflow-auto rounded border p-2 text-[10px] whitespace-pre-wrap ${errorMessage ? 'border-rose-500/30 text-rose-300 bg-rose-500/5' : 'border-slate-700 text-slate-300 bg-slate-950/80'}`}>
-                                {errorMessage || actionSummary(latestAction) || JSON.stringify(latestAction, null, 2)}
-                            </pre>
-                        )}
+                        <span className={`rounded border px-2 py-1 text-[11px] ${
+                            derived ? toneClass[derived.tone] : toneClass.neutral
+                        }`}>{derived?.label ?? 'UNKNOWN'}</span>
                     </div>
-                </>
+                    <p className="mb-3 text-xs text-slate-300">{derived?.detail ?? 'Status is unavailable.'}</p>
+
+                    <dl className="mb-4 grid grid-cols-2 gap-2 text-xs">
+                        <dt className="text-slate-500">configured</dt><dd>{String(connection?.configured ?? false)}</dd>
+                        <dt className="text-slate-500">active</dt><dd>{String(connection?.active ?? false)}</dd>
+                        <dt className="text-slate-500">reachable</dt><dd>{String(connection?.reachable ?? 'UNKNOWN')}</dd>
+                        <dt className="text-slate-500">runtime_ready</dt><dd>{String(connection?.runtime_ready ?? 'UNKNOWN')}</dd>
+                        <dt className="text-slate-500">hardware_ready</dt><dd>{String(connection?.hardware_ready ?? 'UNKNOWN')}</dd>
+                        <dt className="text-slate-500">target</dt><dd>{connection?.target_url ?? 'not configured'}</dd>
+                    </dl>
+
+                    <div className="mb-4 rounded border border-slate-800 p-3">
+                        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Profile</p>
+                        <input
+                            type="password"
+                            value={operatorToken}
+                            onChange={(event) => setOperatorToken(event.target.value)}
+                            autoComplete="off"
+                            placeholder="Transient operator token"
+                            className="mb-2 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1.5 text-xs"
+                            aria-label="BioXP transient operator token"
+                        />
+                        <input
+                            value={displayName}
+                            onChange={(event) => setDisplayName(event.target.value)}
+                            className="mb-2 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1.5 text-xs"
+                            aria-label="BioXP profile display name"
+                        />
+                        <input
+                            value={apiUrl}
+                            onChange={(event) => setApiUrl(event.target.value)}
+                            placeholder="http://approved-host:8123"
+                            className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1.5 text-xs"
+                            aria-label="BioXP API URL"
+                        />
+                        <p className="mt-1 text-[11px] text-slate-500">Saved targets are masked on read; re-enter the URL to change it.</p>
+                        {profileQuery.data?.valid === false && (
+                            <p className="mt-2 text-xs text-red-300">
+                                Invalid saved profile: {profileQuery.data.detail ?? 'malformed profile'}
+                            </p>
+                        )}
+                        <div className="mt-2 flex gap-2">
+                            <button
+                                type="button"
+                                disabled={pending || !apiUrl.trim() || !operatorToken}
+                                onClick={() => saveProfile.mutate({
+                                    profile: { display_name: displayName, api_url: apiUrl },
+                                    token: operatorToken,
+                                })}
+                                className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-xs disabled:opacity-40"
+                            >Save</button>
+                            <button
+                                type="button"
+                                disabled={pending || !connection?.configured || !operatorToken}
+                                onClick={() => forgetProfile.mutate(operatorToken)}
+                                className="flex items-center gap-1 rounded border border-red-700 px-2 py-1 text-xs text-red-300 disabled:opacity-40"
+                            >Forget</button>
+                        </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                        <button type="button" disabled={pending || !operatorToken || !connection?.configured || connection?.active} onClick={() => connect.mutate(operatorToken)} className="flex items-center gap-1 rounded bg-emerald-700 px-2 py-1 text-xs disabled:opacity-40">Connect</button>
+                        <button type="button" disabled={pending || !operatorToken || !connection?.active} onClick={() => disconnect.mutate(operatorToken)} className="flex items-center gap-1 rounded bg-slate-700 px-2 py-1 text-xs disabled:opacity-40">Disconnect</button>
+                        <button type="button" disabled={pending || !operatorToken || !connection?.active} onClick={() => probe.mutate(operatorToken)} className="flex items-center gap-1 rounded bg-slate-700 px-2 py-1 text-xs disabled:opacity-40">Probe</button>
+                    </div>
+                    <p className="mt-3 text-[11px] text-slate-500">Connecting activates an API client only. It does not prove runtime readiness or hardware state.</p>
+                    {statusQuery.isError && <p className="mt-2 text-xs text-red-300">Status unavailable; cached readiness is suppressed.</p>}
+                    {mutationError && <p className="mt-2 text-xs text-red-300">{bioXpErrorText(mutationError)}</p>}
+                </div>
             )}
         </div>
     );
 }
-
-export default BioXpInterlinkMenu;

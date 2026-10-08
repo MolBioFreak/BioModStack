@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": ".test-dist",
+    "rootDir": ".",
+    "types": ["node"],
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": false,
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": ["tests/**/*.test.ts", "src/components/molecularDynamicsUiState.ts", "src/lib/latestAsyncResource.ts", "src/lib/queryPolling.ts", "src/types/**/*.d.ts"]
+}

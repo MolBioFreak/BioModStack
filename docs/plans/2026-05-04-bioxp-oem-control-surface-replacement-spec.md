@@ -1,5 +1,9 @@
 # BioXP OEM Control-Surface Replacement Implementation Plan
 
+> **SUPERSEDED AS THE CURRENT BMS CONTRACT (2026-07-18):** Retained as historical
+> planning evidence only. Do not restore its proxy/hardware routes. See
+> [BioXP Compact Control Plane](../BioXP_Compact_Control_Plane.md).
+
 > **For Hermes:** Use subagent-driven-development skill to implement this plan task-by-task after the user approves the tranche. Live hardware validation must stay supervised.
 
 **Goal:** Replace BioModStack's remaining generic/legacy BioXP motor/liquid-handler controls with a thin, truthful operator surface backed by the robot-local OEM-compatible BioXP runtime.
@@ -16,7 +20,7 @@
 
 - BMS backend has a thin BioXP proxy router: `platform/api/routers/bioxp.py`.
 - Linkage is persisted outside the repo through `BIOXP_LINKAGE_STATE_PATH` / BMS data root.
-- Recommended runtime URL resolves away from `robot` alias; in this lab the operator target should be `http://100.124.140.56:8123`.
+- Recommended runtime URL resolves away from `robot` alias; in this lab the operator target should be `http://[REDACTED-ROBOT-HOST]:8123`.
 - BMS already proxies several live routes:
   - `/api/bioxp/status` -> robot `/status`
   - `/api/bioxp/motion/power/status` -> robot `/motion/power/status`

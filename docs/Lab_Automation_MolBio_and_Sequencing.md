@@ -1,7 +1,7 @@
 # Lab Automation, Mol Bio, and Sequencing
 
 BioModStack is not limited to protein-design workflows. The live UI and API
-also expose sequence operations, nanopore analysis, and BioXP hardware control.
+also expose sequence operations, nanopore analysis, and the BioXP compact control plane.
 
 ## Molecular Biology Toolkit
 
@@ -79,36 +79,36 @@ Primary frontend client:
 - [platform/frontend/src/lib/bioxpClient.ts](../platform/frontend/src/lib/bioxpClient.ts)
 
 Primary backend router:
-- [platform/api/routers/bioxp.py](../platform/api/routers/bioxp.py)
+- [platform/api/routers/bioxp/](../platform/api/routers/bioxp/)
+
+Canonical current contract:
+- [BioXP Compact Control Plane](BioXP_Compact_Control_Plane.md)
 
 This is a BMS-linked cockpit for a robot-local BioXP runtime, not a generic
 cloud API and not a shell-based daemon supervisor.
 
 Current capabilities include:
 
-- runtime linkage and disconnect
-- linked-runtime reachability/status via the BioXP proxy
-- proxied hardware status for the currently exposed BMS BioXP route family
-- manual axis status and motion actions for `x`, `y`, `z`, `g`, and `door`
-- motion power and interlock preparation
-- camera device/control/stream handling
-- thermal and chiller control flows
-- latch and LED actions
-- protocol/operator surface integration through the BioXP cockpit
+- explicit profile save/forget with masked readback
+- process-local connect, disconnect, and bounded readiness probe
+- orthogonal configured/active/reachable/runtime/hardware/freshness evidence
+- deterministic offline protocol validation
+- persistent local jobs with append-only transition events
+- server-advertised typed command admission with default mappings disabled
+- emergency-stop delivery evidence without a physical-effect claim
 
 Current operational caveats:
 
-- BMS currently proxies the route families used by the cockpit and validation
-  for status, motion reference, liquid handling, camera stream state, vision,
-  and protocol execution; it is still a curated subset rather than a full mirror
-  of the robot-local BioXP API.
-- Historical notes that `/motion/reference/status` and `/liquid/*` were absent
-  from `/api/bioxp/*` are stale for current builds. Future capability notes
-  should be checked against live `/api/bioxp/capabilities` route parity before
-  being treated as current.
-- `/api/bioxp/status` and `/api/bioxp/daemon/status` can diverge transiently
-  during reconnect/recovery windows; treat that as control-plane status drift,
-  not as a standalone hardware verdict.
+- BMS exposes a bounded control plane, not an arbitrary robot proxy. The compact
+  API owns one saved profile, one process-local connection, local protocol
+  validation, persistent local job truth, bounded command admission, and
+  emergency-stop delivery evidence.
+- Startup always remains disconnected, even when a profile is saved. An operator
+  must explicitly connect, and stale or unknown readiness never authorizes a
+  normal command.
+- Normal OEM command mappings remain disabled until their online robot contract
+  is verified. Offline protocol validation does not claim compatibility or
+  executability.
 - Repeated camera/UVC control-query failures and the historical Novo USB/CAN
   reset pattern should be documented as unresolved transport/recovery
   instability. Software reconnect/reset behavior remains a major confounder, so
@@ -117,27 +117,27 @@ Current operational caveats:
 
 Runtime dependencies:
 
-- network reachability from BMS to the robot-local BioXP runtime URL
+- network reachability from BMS to the explicitly saved robot-local BioXP profile
 - a robot-local BioXP runtime supervised outside BMS (for example
   `bioxp-api.service`)
-- `BIOXP_*` environment variables only when overriding default linkage or
-  persistence behavior
+- an allowlisted host/CIDR and explicit operator credential before enabling
+  robot-facing mutations
 
 Important env vars:
 
-- `BIOXP_SERVER_URL`
-  optional seed/default linkage URL loaded by BMS on startup
-- `BIOXP_LINKAGE_STATE_PATH`
-  file path where BMS persists the operator-selected linkage URL
-- `BIOXP_SSH_HOST`
-  legacy variable name used only to derive the recommended default host in the
-  cockpit linkage UI
-- `BIOXP_DAEMON_PORT`
-  port used when constructing the recommended runtime URL (default `8123`)
+- `BMS_BIOXP_MUTATIONS_ENABLED`
+  defaults to `0`; robot-facing commands remain unavailable until explicitly enabled
+- `BMS_BIOXP_OPERATOR_TOKEN_FILE`
+  preferred credential source with strict precedence; an invalid configured file
+  fails closed without falling back to the environment token
+- `BMS_BIOXP_OPERATOR_TOKEN`
+  local fallback credential source; never commit or embed a real token
+- `BMS_BIOXP_ALLOWED_HOSTS` / `BMS_BIOXP_ALLOWED_CIDRS`
+  explicit target allowlists used when validating the saved profile
 
-Normal operation does not use BMS to start or stop the robot daemon. The
-compatibility maintenance endpoints remain disabled and return a conflict if
-called; use the robot-local service/runbook instead.
+Normal operation does not use BMS to start, stop, reset, reboot, shell into, or
+collect remote logs from the robot host. Those routes are absent; use the
+robot-local service/runbook instead.
 
 ## Workstation / System Operations
 

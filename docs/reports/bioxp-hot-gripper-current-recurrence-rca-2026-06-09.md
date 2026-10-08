@@ -18,8 +18,8 @@ No live robot motion was performed during this RCA. No POST/arming/current-write
 Read-only robot checks attempted after the report:
 
 ```text
-robot -> SSH timeout to 100.124.140.56:22
-molbiofreak@robot -> SSH timeout to 100.124.140.56:22
+robot -> SSH timeout to [REDACTED-ROBOT-HOST]:22
+molbiofreak@robot -> SSH timeout to [REDACTED-ROBOT-HOST]:22
 ```
 
 Therefore, this RCA cannot truthfully include fresh live readback of G param 6 / param 7 from the robot controller. The physical observation is treated as the primary evidence, and the exact current-register values remain unverified until robot access returns.

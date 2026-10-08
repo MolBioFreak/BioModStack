@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -34,8 +35,12 @@ def test_bioxp_api_routes_are_registered_when_feature_enabled(monkeypatch) -> No
     bms_main = _import_main_with_bioxp(True)
     paths = bms_main.app.openapi()["paths"]
 
-    assert "/api/bioxp/interlink/state" in paths
-    assert "/api/bioxp/capabilities" in paths
+    bioxp_paths = {path for path in paths if path.startswith("/api/bioxp")}
+    assert "/api/bioxp/status" in bioxp_paths
+    assert "/api/bioxp/profile" in bioxp_paths
+    assert "/api/bioxp/commands" in bioxp_paths
+    assert len(bioxp_paths) <= 15
+    assert not any("interlink" in path or "proxy" in path for path in bioxp_paths)
 
 
 def test_compose_runtime_passes_feature_flags_to_api_container() -> None:
@@ -47,3 +52,15 @@ def test_compose_runtime_passes_feature_flags_to_api_container() -> None:
         "BMS_FEATURE_ASSAY_DB: ${BMS_FEATURE_ASSAY_DB:-1}",
     ]:
         assert marker in compose_text
+
+
+def test_runtime_feature_response_does_not_advertise_unmounted_bioxp_router() -> None:
+    from routers.system import _effective_runtime_features
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(routes=[SimpleNamespace(path="/api/system/features")]),
+    )
+    effective = _effective_runtime_features(request, {"bioxp": True, "stats_tools": True})
+
+    assert effective["bioxp"] is False
+    assert effective["stats_tools"] is True

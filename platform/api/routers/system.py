@@ -20,9 +20,13 @@ for root in (REPO_ROOT, API_ROOT):
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
 
-from biomodstack_runtime_profile import install_profile_snapshot, save_install_profile
-from services.workflow_adapter import WorkflowAdapterRequestError, request_via_workflow_adapter, workflow_adapter_enabled
-from biomodstack_services import (
+from biomodstack_runtime_profile import install_profile_snapshot, save_install_profile  # noqa: E402
+from services.workflow_adapter import (  # noqa: E402
+    WorkflowAdapterRequestError,
+    request_via_workflow_adapter,
+    workflow_adapter_enabled,
+)
+from biomodstack_services import (  # noqa: E402
     CORE_RUNTIME_SERVICE,
     WORKFLOW_ADAPTER_SERVICE,
     ServiceManagerError,
@@ -38,8 +42,8 @@ from biomodstack_services import (
     stop_api,
     stop_all,
 )
-from paths import get_db_path, get_results_dir, get_work_dir
-from services import db_service, stats_tools
+from paths import get_db_path, get_results_dir, get_work_dir  # noqa: E402
+from services import db_service, stats_tools  # noqa: E402
 
 router = APIRouter(prefix="/system", tags=["system"])
 
@@ -411,13 +415,29 @@ async def get_install_profile(request: Request):
     return _install_profile_response()
 
 
+def _effective_runtime_features(request: Request, configured: Mapping[str, object]) -> dict[str, object]:
+    """Return only feature surfaces mounted in this running API process."""
+    effective = dict(configured)
+    if "bioxp" in effective:
+        effective["bioxp"] = any(
+            str(getattr(route, "path", "")).startswith("/api/bioxp")
+            for route in request.app.routes
+        )
+    return effective
+
+
 @router.get("/features")
 async def get_install_features(request: Request):
     _require_local_admin(request)
     snapshot = _install_profile_response()
     resolved = snapshot.get("resolved") if isinstance(snapshot, Mapping) else {}
     features = resolved.get("features") if isinstance(resolved, Mapping) else None
-    return {"features": features or {}, "dev_features": DEV_INSTALL_FEATURES}
+    configured = features if isinstance(features, Mapping) else {}
+    return {
+        "features": _effective_runtime_features(request, configured),
+        "configured_features": configured,
+        "dev_features": DEV_INSTALL_FEATURES,
+    }
 
 
 @router.put("/features")
@@ -435,7 +455,12 @@ async def put_install_features(request: Request, payload: InstallFeaturesPayload
     updated = _install_profile_response(saved_profile)
     resolved = updated.get("resolved") if isinstance(updated, Mapping) else {}
     features = resolved.get("features") if isinstance(resolved, Mapping) else None
-    return {"features": features or {}, "dev_features": DEV_INSTALL_FEATURES}
+    configured = features if isinstance(features, Mapping) else {}
+    return {
+        "features": _effective_runtime_features(request, configured),
+        "configured_features": configured,
+        "dev_features": DEV_INSTALL_FEATURES,
+    }
 
 
 @router.get("/runtime-ports")

@@ -3,7 +3,6 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 import crypto from 'node:crypto'
-import type { IncomingMessage } from 'node:http'
 import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'path'
@@ -146,6 +145,11 @@ export default defineConfig(({ mode }) => ({
     }
   },
   build: {
+    // Keep verification artifacts outside deployment-owned dist trees.
+    outDir: process.env.BMS_FRONTEND_BUILD_OUT_DIR?.trim()
+      ? path.resolve(__dirname, process.env.BMS_FRONTEND_BUILD_OUT_DIR)
+      : path.resolve(__dirname, 'dist'),
+    emptyOutDir: true,
     // After route-level splitting, the remaining intentionally-large chunks are
     // scientific vendor bundles (Molstar/Plotly/IGV), not the initial app shell.
     // Keep the budget below the former monolithic app chunk so regressions are
@@ -175,6 +179,10 @@ export default defineConfig(({ mode }) => ({
     // Prevent watching pipeline directories that can have millions of files
     watch: {
       ignored: [
+        '**/.artifacts/**',
+        '**/.test-dist/**',
+        '**/dist/**',
+        '**/tests/**',
         '**/work/**',
         '**/bms_results/**',
         '**/models/**',
@@ -183,18 +191,6 @@ export default defineConfig(({ mode }) => ({
       ]
     },
     proxy: {
-      // MJPEG stream: dedicated entry to prevent http-proxy from buffering
-      // the multipart/x-mixed-replace response (must precede generic /api)
-      '/api/bioxp/camera/mjpeg': {
-        target: devApiTarget,
-        changeOrigin: true,
-        configure: (proxy) => {
-          proxy.on('proxyRes', (proxyRes: IncomingMessage) => {
-            proxyRes.headers['x-accel-buffering'] = 'no';
-            proxyRes.headers['cache-control'] = 'no-cache, no-store, no-transform';
-          });
-        },
-      },
       // Proxy /api requests to backend server
       '/api': {
         target: devApiTarget,

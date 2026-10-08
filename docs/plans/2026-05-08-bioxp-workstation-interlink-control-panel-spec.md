@@ -1,5 +1,9 @@
 # BioXP Robot ↔ Workstation Interlink Control Panel Spec
 
+> **SUPERSEDED AS THE CURRENT BMS CONTRACT (2026-07-18):** Retained as historical
+> planning evidence only. Do not restore its SSH/systemd/reboot/interlink routes.
+> See [BioXP Compact Control Plane](../BioXP_Compact_Control_Plane.md).
+
 > **For Hermes:** Use subagent-driven-development skill to implement this plan task-by-task after Christian approves the scope.
 
 **Goal:** Add a top-right BMS control-panel button for explicit BioXP robot/workstation interlink setup, connect/disconnect, diagnostics, robot-local runtime reset, and full robot reboot while removing uncontrolled reset surfaces.

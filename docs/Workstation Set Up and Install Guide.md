@@ -253,23 +253,22 @@ data.
 
 ### BioXP robotics
 
-Requires network reachability from BMS to the robot-local BioXP runtime. In
-normal operation BMS stores a linkage URL and proxies the robot API over HTTP;
-it does not supervise the robot daemon from the cockpit.
+Requires network reachability from BMS to the explicitly saved robot-local BioXP
+profile. BMS starts disconnected and never restores an active connection after
+an API restart. The feature-gated top-bar menu owns profile save/forget and
+explicit connect/disconnect/probe actions. These actions require the mutation
+kill switch to be enabled and a transient operator token; only offline protocol
+compile remains available while mutations are disabled.
 
-The current BMS BioXP surface is a curated robot-local proxy, not a guarantee
-that every robot endpoint is mirrored. It currently includes linkage/status,
-reference-state, liquid-handling, motion/power, latch/LED, thermal/chiller,
-camera, vision, and protocol route families under `/api/bioxp/*` when linkage is
-configured.
+The current BMS BioXP surface is a compact control plane, not a robot API proxy.
+It exposes bounded profile, status, connection, local logs, offline protocol,
+local job, command-history, command-admission, and emergency-stop routes. Raw
+motion, liquid, thermal, camera, vision, SSH, systemd, reset, reboot, and remote
+log routes are absent.
 
-Before documenting a new robot capability as supported through BMS, verify route
-parity against both the BMS API and the robot-local runtime. The robot runtime
-can still expose additional non-cockpit endpoints, and BMS connection/status
-surfaces can disagree briefly during reconnect or recovery windows.
-`/api/bioxp/status` and `/api/bioxp/daemon/status` are both useful, but they are
-not identical signals and should not be collapsed into a single hardware-truth
-claim.
+Normal OEM command mappings are disabled until verified against the online robot
+contract. Offline compile and a locally persisted `submission_blocked` job do not
+prove robot compatibility, execution, or physical effect.
 
 Operationally, current camera/UVC failures and the historical Novo USB/CAN
 reset pattern should be described as unresolved transport/recovery instability,
@@ -277,10 +276,12 @@ not as a proven blanket hardware-failure diagnosis.
 
 Relevant env vars include:
 
-- `BIOXP_SERVER_URL`
-- `BIOXP_LINKAGE_STATE_PATH`
-- `BIOXP_SSH_HOST`
-- `BIOXP_DAEMON_PORT`
+- `BMS_FEATURE_BIOXP`
+- `BMS_BIOXP_MUTATIONS_ENABLED` (default `0`)
+- `BMS_BIOXP_OPERATOR_TOKEN_FILE` (strict precedence)
+- `BMS_BIOXP_OPERATOR_TOKEN` (local fallback only)
+- `BMS_BIOXP_ALLOWED_HOSTS`
+- `BMS_BIOXP_ALLOWED_CIDRS`
 
 ## Database and data roots
 
@@ -333,3 +334,4 @@ and workflow-specific caches have also been verified.
 - [Desktop Runtime and Shell Architecture](Desktop_Runtime_and_Shell_Architecture.md)
 - [Structure Design and Refinement](Structure_Design_and_Refinement.md)
 - [Lab Automation, Mol Bio, and Sequencing](Lab_Automation_MolBio_and_Sequencing.md)
+- [BioXP Compact Control Plane](BioXP_Compact_Control_Plane.md)

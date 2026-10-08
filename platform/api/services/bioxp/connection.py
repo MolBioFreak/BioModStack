@@ -1,0 +1,241 @@
+from __future__ import annotations
+
+import asyncio
+import secrets
+from collections.abc import Callable
+from datetime import datetime, timezone
+from typing import Any, Protocol
+from urllib.parse import urlsplit
+
+from .errors import ConnectionStateError, ProfileStoreError, TargetPolicyError
+from .models import BioXpProfile, BioXpSnapshot
+from .profile_store import BioXpProfileStore
+from .robot_client import BioXpRobotClient
+from .target_policy import BioXpTargetPolicy, ValidatedBioXpTarget
+
+
+class RobotClientProtocol(Protocol):
+    async def probe(self) -> dict[str, Any]: ...
+
+    async def request(
+        self,
+        route_name: str,
+        *,
+        json_data: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
+
+    async def close(self) -> None: ...
+
+
+ClientFactory = Callable[[ValidatedBioXpTarget], RobotClientProtocol]
+Clock = Callable[[], datetime]
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def mask_target_url(value: str) -> str:
+    parsed = urlsplit(value)
+    host = parsed.hostname or ""
+    if len(host) <= 4:
+        masked = "*" * len(host)
+    else:
+        masked = f"{host[:2]}***{host[-1:]}"
+    if ":" in host:
+        masked = f"[{masked}]"
+    return f"{parsed.scheme}://{masked}:{parsed.port}" if parsed.port else f"{parsed.scheme}://{masked}"
+
+
+class BioXpConnectionService:
+    """The sole owner of active target, generation, client, and observations."""
+
+    def __init__(
+        self,
+        profile_store: BioXpProfileStore,
+        target_policy: BioXpTargetPolicy,
+        *,
+        client_factory: ClientFactory | None = None,
+        freshness_budget_seconds: float = 30.0,
+        clock: Clock | None = None,
+        initial_generation: int | None = None,
+    ) -> None:
+        self.profile_store = profile_store
+        self.target_policy = target_policy
+        self.client_factory = client_factory or (lambda target: BioXpRobotClient(target))
+        self.freshness_budget_seconds = freshness_budget_seconds
+        self.clock = clock or _utcnow
+        self._transition_lock = asyncio.Lock()
+        self._client: RobotClientProtocol | None = None
+        self._active_target: ValidatedBioXpTarget | None = None
+        # Opaque per-process epoch: delayed requests from a previous process
+        # cannot match the first connection generation after restart.
+        self._generation = initial_generation if initial_generation is not None else max(1, secrets.randbits(40) << 12)
+        self._observed_at: datetime | None = None
+        self._last_reachable: bool | None = None
+        self._last_runtime_ready: bool | None = None
+        self._last_hardware_ready: bool | None = None
+        self._capabilities: tuple[str, ...] = ()
+        self._last_error: str | None = None
+        self._command_active = False
+
+    async def save_profile(self, profile: BioXpProfile) -> BioXpSnapshot:
+        canonical = self.target_policy.validate(profile.api_url)
+        normalized = profile.model_copy(update={"api_url": canonical.api_url})
+        async with self._transition_lock:
+            await self._deactivate_locked(increment=bool(self._client or self._active_target))
+            self.profile_store.save(normalized)
+        return self.snapshot()
+
+    async def forget_profile(self) -> BioXpSnapshot:
+        async with self._transition_lock:
+            await self._deactivate_locked(increment=True)
+            self.profile_store.forget()
+        return self.snapshot()
+
+    async def connect(self) -> BioXpSnapshot:
+        async with self._transition_lock:
+            profile = self.profile_store.load()
+            if profile is None:
+                raise ConnectionStateError("Save a BioXP saved profile before connecting")
+            try:
+                target = await self.target_policy.validate_for_connection(profile.api_url)
+            except TargetPolicyError as exc:
+                await self._deactivate_locked(increment=bool(self._client or self._active_target))
+                self._last_error = str(exc)
+                raise
+            if self._client is not None:
+                await self._client.close()
+            self._generation += 1
+            self._clear_observation()
+            self._active_target = target
+            self._client = self.client_factory(target)
+            await self._probe_locked()
+        return self.snapshot()
+
+    async def probe(self) -> BioXpSnapshot:
+        async with self._transition_lock:
+            if self._client is None or self._active_target is None:
+                raise ConnectionStateError("BioXP saved profile is not actively connected")
+            # Rebind only after every current DNS answer still passes policy.
+            try:
+                validated = await self.target_policy.validate_for_connection(self._active_target.api_url)
+            except TargetPolicyError as exc:
+                await self._deactivate_locked(increment=True)
+                self._last_error = str(exc)
+                raise
+            if validated != self._active_target:
+                await self._client.close()
+                self._client = self.client_factory(validated)
+                self._active_target = validated
+                self._generation += 1
+                self._clear_observation()
+            await self._probe_locked()
+        return self.snapshot()
+
+    async def _probe_locked(self) -> None:
+        assert self._client is not None
+        try:
+            payload = await self._client.probe()
+            self._last_reachable = True
+            self._last_runtime_ready = _optional_bool(payload, "runtime_ready", "runtime_available")
+            self._last_hardware_ready = _optional_bool(payload, "hardware_ready", "hardware_connected")
+            raw_capabilities = payload.get("capabilities")
+            self._capabilities = (
+                tuple(sorted({str(value) for value in raw_capabilities}))
+                if isinstance(raw_capabilities, (list, tuple, set))
+                else ()
+            )
+            self._last_error = None
+        except Exception as exc:
+            self._last_reachable = False
+            self._last_runtime_ready = None
+            self._last_hardware_ready = None
+            self._capabilities = ()
+            self._last_error = str(exc) or exc.__class__.__name__
+        self._observed_at = self.clock()
+
+    async def disconnect(self) -> BioXpSnapshot:
+        async with self._transition_lock:
+            await self._deactivate_locked(increment=True)
+        return self.snapshot()
+
+    async def close(self) -> None:
+        async with self._transition_lock:
+            await self._deactivate_locked(increment=False)
+
+    async def _deactivate_locked(self, *, increment: bool) -> None:
+        if self._client is not None:
+            await self._client.close()
+        self._client = None
+        self._active_target = None
+        if increment:
+            self._generation += 1
+        self._clear_observation()
+
+    def _clear_observation(self) -> None:
+        self._observed_at = None
+        self._last_reachable = None
+        self._last_runtime_ready = None
+        self._last_hardware_ready = None
+        self._capabilities = ()
+        self._last_error = None
+
+    def snapshot(self) -> BioXpSnapshot:
+        profile_error: str | None = None
+        try:
+            profile = self.profile_store.load()
+        except ProfileStoreError as exc:
+            profile = None
+            profile_error = str(exc)
+        now = self.clock()
+        fresh: bool | None = None
+        stale = False
+        if self._observed_at is not None:
+            age = max(0.0, (now - self._observed_at).total_seconds())
+            fresh = age <= self.freshness_budget_seconds
+            stale = not fresh
+        expose_observation = fresh is True
+        return BioXpSnapshot(
+            configured=profile is not None or self.profile_store.exists(),
+            display_name=profile.display_name if profile else None,
+            masked_target=mask_target_url(profile.api_url) if profile else None,
+            active=self._active_target is not None,
+            generation=self._generation,
+            reachable=self._last_reachable if expose_observation else None,
+            runtime_ready=self._last_runtime_ready if expose_observation else None,
+            hardware_ready=self._last_hardware_ready if expose_observation else None,
+            capabilities=self._capabilities,
+            observed_at=self._observed_at,
+            freshness_budget_seconds=self.freshness_budget_seconds,
+            observation_fresh=fresh,
+            observation_stale=stale,
+            last_observed_reachable=self._last_reachable,
+            last_observed_runtime_ready=self._last_runtime_ready,
+            last_observed_hardware_ready=self._last_hardware_ready,
+            last_error=profile_error or self._last_error,
+            command_active=self._command_active,
+        )
+
+    @property
+    def active_client(self) -> RobotClientProtocol | None:
+        return self._client
+
+    @property
+    def generation(self) -> int:
+        return self._generation
+
+    def load_profile(self) -> BioXpProfile | None:
+        return self.profile_store.load()
+
+    def set_command_active(self, active: bool) -> None:
+        self._command_active = active
+
+
+def _optional_bool(payload: dict[str, Any], *keys: str) -> bool | None:
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, bool):
+            return value
+    return None
