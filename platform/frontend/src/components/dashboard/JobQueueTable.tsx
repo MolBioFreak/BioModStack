@@ -446,7 +446,7 @@ export function JobQueueTable({
                                 ? 'cancelled'
                                 : 'completed';
                 const isExpanded = expandedBatches.has(batchId);
-                const ngsBatch = batchJobs.length > 0 && batchJobs.every(isNgsJob);
+                const ngsBatch = batchJobs.some(isNgsJob);
 
                 rows.push(
                     <tr
@@ -730,7 +730,7 @@ export function JobQueueTable({
                                         ? 'cancelled'
                                         : 'completed';
                         const isExpanded = expandedBatches.has(item.batchId);
-                        const ngsBatch = batchJobs.length > 0 && batchJobs.every(isNgsJob);
+                        const ngsBatch = batchJobs.some(isNgsJob);
 
                         return (
                             <section key={`batch-mobile-${item.batchId}`} className="rounded-xl border border-accent/30 bg-accent/10 p-3">

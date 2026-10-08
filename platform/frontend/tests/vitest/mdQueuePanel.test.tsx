@@ -202,6 +202,56 @@ describe('MD queue integration in the dashboard job queue', () => {
         await act(async () => root.unmount());
     });
 
+    it.each([false, true])('suppresses generic batch results for mixed NGS batches on %s layouts', async (mobileView) => {
+        Object.defineProperty(window, 'matchMedia', {
+            configurable: true,
+            value: () => ({ matches: mobileView, media: '(max-width: 767px)', onchange: null,
+                addEventListener: () => undefined, removeEventListener: () => undefined,
+                addListener: () => undefined, removeListener: () => undefined, dispatchEvent: () => false }),
+        });
+        const jobs = [
+            {
+                id: 'mixed-ngs-1', name: 'Mixed batch_NGS run', status: 'completed' as const, model_id: 'nanopore', mode: 'ont_fastq_qc',
+                params: {}, created_at: '2026-08-11T09:00:00Z', design_count: 0, output_dir: '/tmp/mixed-ngs',
+                batch_id: 'mixed-batch-1', batch_name: 'Mixed batch',
+            },
+            {
+                id: 'mixed-protein-1', name: 'Mixed batch_Protein run', status: 'completed' as const, model_id: 'boltz', mode: 'structure_prediction',
+                params: {}, created_at: '2026-08-11T09:01:00Z', design_count: 1, output_dir: '/tmp/mixed-protein',
+                batch_id: 'mixed-batch-1', batch_name: 'Mixed batch',
+            },
+        ];
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        await act(async () => {
+            root.render(
+                <MemoryRouter initialEntries={['/dashboard?workspace_id=w1&global_experiment_id=g1&domain_experiment_id=d1&state_revision=9']}>
+                    <JobQueueTable jobs={jobs} loading={false} onCancel={() => undefined} onResubmit={() => undefined}
+                        onResume={() => undefined} onViewLogs={() => undefined} onViewQuick={() => undefined} quickViewJobId={null} />
+                </MemoryRouter>,
+            );
+            await Promise.resolve();
+        });
+
+        expect(container.querySelector('a[href^="/results?batch_id="]')).toBeNull();
+        if (mobileView) {
+            const toggle = [...container.querySelectorAll('button')].find((button) => button.textContent?.includes('Mixed batch'));
+            await act(async () => {
+                toggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                await Promise.resolve();
+            });
+        } else {
+            const batchRow = [...container.querySelectorAll('tr')].find((row) => row.textContent?.includes('Mixed batch'));
+            await act(async () => {
+                batchRow?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                await Promise.resolve();
+            });
+        }
+        expect(container.querySelector('a[href*="job_id=mixed-ngs-1"]')).toBeTruthy();
+        await act(async () => root.unmount());
+    });
+
     it('keeps completed NGS jobs out of the generic Quick Viewer', async () => {
         const ngsJob = {
             id: 'ngs-completed-1', name: 'Completed NGS', status: 'completed',
