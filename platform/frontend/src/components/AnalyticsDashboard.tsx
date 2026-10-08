@@ -816,18 +816,28 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
                     const chainRegions: { start: number; end: number; name: string; color: string }[] = [];
 
                     if (chainMetrics && Object.keys(chainMetrics).length > 0) {
+                        // First compute total residues from chainMetrics
+                        const totalFullResidues = Object.entries(chainMetrics)
+                            .filter(([, m]) => m.type !== 'ligand')
+                            .reduce((sum, [, m]) => sum + m.length, 0);
+
+                        // Scale factor: ratio of PAE matrix size to total residues
+                        // This handles downsampling (e.g., 1000 residues -> 200 matrix)
+                        const scaleFactor = totalFullResidues > 0 ? paeMatrix.size / totalFullResidues : 1;
+
                         let cumPos = 0;
                         Object.entries(chainMetrics)
                             .filter(([, m]) => m.type !== 'ligand')
                             .sort(([a], [b]) => a.localeCompare(b))
                             .forEach(([chainId, metric], index) => {
+                                const scaledLength = Math.round(metric.length * scaleFactor);
                                 chainRegions.push({
                                     start: cumPos,
-                                    end: cumPos + metric.length,
+                                    end: cumPos + scaledLength,
                                     name: chainId,
                                     color: chainColors[index % chainColors.length]
                                 });
-                                cumPos += metric.length;
+                                cumPos += scaledLength;
                             });
                     }
 
