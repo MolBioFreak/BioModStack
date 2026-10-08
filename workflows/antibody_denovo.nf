@@ -176,19 +176,47 @@ workflow ANTIBODY_DENOVO {
     // ---------------------------------------------------------------------------
     log.info("Step 1: Generating CDR backbones with RFantibody...")
 
-    // Prepare input for RFantibody
-    // New interface: tuple(meta, target_pdb, hotspot_residues), framework_pdb
-    rfantibody_input = target_pdb_ch.map { meta, pdb ->
-        // epitope_residues comes from workflow input (e.g., "A45,A46,A52")
-        def hotspots = epitope_residues ?: ""
-        [meta, pdb, hotspots]
-    }
-    
     // Framework PDB - if user provided custom framework, use it; otherwise use placeholder
     // The placeholder triggers preset selection in the process script
     // Use safe path resolution to avoid Channel.value() DSL2 error with undefined params
     def framework_path = params.framework_pdb ? file(params.framework_pdb) : file("${projectDir}/lib/NO_FRAMEWORK")
     framework_for_rfantibody = Channel.value(framework_path)
+    
+    // Multi-GPU parallelism for RFantibody
+    // Parse available GPUs from pinned_gpus param (e.g., "0,2" -> [0, 2])
+    def available_gpus = []
+    if (params.pinned_gpus) {
+        available_gpus = params.pinned_gpus.toString().split(',').collect { it.trim().toInteger() }
+    } else if (params.gpu_id != null) {
+        available_gpus = [params.gpu_id.toInteger()]
+    } else {
+        available_gpus = [0] // Default to GPU 0
+    }
+    
+    def total_designs = params.rfantibody_num_designs ?: 10
+    def num_gpus = available_gpus.size()
+    def designs_per_gpu = (total_designs / num_gpus).intValue()
+    def remainder = total_designs % num_gpus
+    
+    log.info("  Multi-GPU mode: Splitting ${total_designs} designs across ${num_gpus} GPU(s): ${available_gpus}")
+    
+    // Create parallel job channels for each GPU
+    // Each gets a portion of the total designs
+    rfantibody_parallel_inputs = Channel.from(available_gpus).map { gpu_id ->
+        def idx = available_gpus.indexOf(gpu_id)
+        def designs_for_this_gpu = designs_per_gpu + (idx < remainder ? 1 : 0)
+        log.info("    GPU ${gpu_id}: ${designs_for_this_gpu} designs")
+        [gpu_id, designs_for_this_gpu]
+    }
+    
+    // Prepare input for RFantibody with GPU assignment
+    // Combine target PDB with each GPU assignment
+    rfantibody_input = target_pdb_ch.combine(rfantibody_parallel_inputs).map { meta, pdb, gpu_id, designs_count ->
+        def hotspots = epitope_residues ?: ""
+        // Create unique meta for each GPU split
+        def split_meta = [id: "${meta.id}_gpu${gpu_id}"]
+        [split_meta, pdb, hotspots, gpu_id, designs_count]
+    }
 
     RFANTIBODY(rfantibody_input, framework_for_rfantibody)
     
@@ -206,7 +234,13 @@ workflow ANTIBODY_DENOVO {
         }
     }
 
-    backbone_designs = RFANTIBODY.out.designs
+    // Collect backbone designs from all parallel GPU runs
+    // Normalize meta.id by removing GPU suffix for downstream stages
+    backbone_designs = RFANTIBODY.out.designs.map { meta, files ->
+        def base_id = meta.id.replaceAll(/_gpu\d+$/, '')
+        def unified_meta = [id: base_id]
+        [unified_meta, files]
+    }
 
     // Step 2: CDR Sequence Design (Cross-Validation Mode)
     // ---------------------------------------------------------------------------
@@ -233,14 +267,32 @@ workflow ANTIBODY_DENOVO {
         }
         PrepFAMPNN(fampnn_prep_input)
 
-        // RunFAMPNN expects [batch_id, pdbs, csv], analysis_chain_id
+        // RunFAMPNN expects [batch_id, pdbs, csv, gpu_id], analysis_chain_id
         // Collect all PDB outputs and the CSV into a single batch tuple
-        fampnn_pdbs_collected = PrepFAMPNN.out.pdbs.toList()
+        fampnn_pdbs_collected = PrepFAMPNN.out.pdbs.flatten().toList()
         fampnn_csv_file = PrepFAMPNN.out.csv.first()
         
+        // Multi-GPU parallelism for FAMPNN
+        // Split PDBs across available GPUs
+        log.info("  Multi-GPU mode: Splitting FAMPNN across ${available_gpus.size()} GPU(s)")
+        
+        // Create GPU channel for FAMPNN (reuse available_gpus from RFantibody section)
+        fampnn_gpu_ch = Channel.from(available_gpus)
+        
+        // Split PDbs into chunks for each GPU
         fampnn_run_input = fampnn_pdbs_collected
             .merge(fampnn_csv_file)
-            .map { pdbs, csv -> [1, pdbs, csv] }
+            .combine(fampnn_gpu_ch)
+            .map { pdbs, csv, gpu_id ->
+                def gpu_list = available_gpus
+                def idx = gpu_list.indexOf(gpu_id)
+                def chunk_size = (pdbs.size() / gpu_list.size()).intValue()
+                def start = idx * chunk_size
+                def end = (idx == gpu_list.size() - 1) ? pdbs.size() : (idx + 1) * chunk_size
+                def pdb_subset = pdbs.subList(start, end)
+                log.info("    GPU ${gpu_id}: ${pdb_subset.size()} PDBs (${start}-${end-1})")
+                [idx, pdb_subset, csv, gpu_id]
+            }
 
         RunFAMPNN(fampnn_run_input, params.analysis_chain_id ?: "all_chains")
 
@@ -257,12 +309,40 @@ workflow ANTIBODY_DENOVO {
             }
         }
 
-        // Fix: Map to [meta, pdbs] - Drop JSONs to prevent downstream PrepBoltz error
-        // Use a generic meta ID or derive from inputs if possible, but for batch it's tricky
-        // Here we just use a placeholder since the detailed meta isn't preserved in this branch structure perfectly yet
-        fampnn_seqs = RunFAMPNN.out.pdbs_jsons.map { pdbs, jsons ->
-             def meta = [id: "fampnn_designs"]
-             [meta, pdbs]
+        // ═══════════════════════════════════════════════════════════════════
+        // FILTER: Pre-Boltz Filtering
+        // Reject low-quality FAMPNN sequences before expensive Boltz validation
+        // This is the highest-impact filter for compute savings
+        // ═══════════════════════════════════════════════════════════════════
+        def filterEnabled = params.enable_fampnn_filter != false && 
+                           (params.fampnn_max_psce != null || params.fampnn_max_residue_psce != null)
+        
+        if (filterEnabled) {
+            def filterDesc = []
+            if (params.fampnn_max_psce != null) filterDesc << "max avg PSCE: ${params.fampnn_max_psce}"
+            if (params.fampnn_max_residue_psce != null) filterDesc << "max residue PSCE: ${params.fampnn_max_residue_psce}"
+            log.info("  Filtering FAMPNN designs (${filterDesc.join(', ')})...")
+            
+            FilterFAMPNN(RunFAMPNN.out.pdbs_jsons)
+            
+            // Report filter results
+            FilterFAMPNN.out.pdbs.subscribe { pdbs ->
+                def count = pdbs instanceof List ? pdbs.size() : 1
+                log.info("  FilterFAMPNN: ${count} designs passed filter")
+            }
+            
+            // Use filtered outputs for downstream (discard JSONs, Boltz doesn't need them)
+            fampnn_seqs = FilterFAMPNN.out.pdbs.map { pdbs ->
+                def meta = [id: "fampnn_designs"]
+                [meta, pdbs]
+            }
+        } else {
+            log.info("  FAMPNN filtering disabled (enable with fampnn_max_psce or fampnn_max_residue_psce)")
+            // Pass through unfiltered - drop JSONs to prevent downstream PrepBoltz error
+            fampnn_seqs = RunFAMPNN.out.pdbs_jsons.map { pdbs, jsons ->
+                def meta = [id: "fampnn_designs"]
+                [meta, pdbs]
+            }
         }
     }
 

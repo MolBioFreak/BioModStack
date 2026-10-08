@@ -579,13 +579,17 @@ workflow {
                 .set { mega_csv }
 
             // GPU-aware batching for RunFAMPNN
+            // rebatchGPU returns [batch_id, files] tuples
             Utils
                 .rebatchGPU(PrepFAMPNN.out.pdbs, params.gpus)
                 .set { fampnn_pdbs }
 
-            // Add CSV path to PDB channel
+            // Add CSV path and GPU ID to PDB channel
+            // Use default GPU 0 for legacy mode, or parse from pinned_gpus
+            def default_gpu = params.pinned_gpus ? params.pinned_gpus.toString().split(',')[0].trim().toInteger() : (params.gpu_id ?: 0)
             fampnn_pdbs
                 .combine(mega_csv)
+                .map { batch_id, pdbs, csv -> [batch_id, pdbs, csv, default_gpu] }
                 .set { fampnn_input }
 
             if (params.rfd_mode in ['binder_denovo', 'binder_foldconditioning', 'binder_motifscaffolding', 'binder_partialdiffusion']) {

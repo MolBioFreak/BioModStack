@@ -7,21 +7,23 @@ process RFANTIBODY {
      * 
      * Follows official RFantibody documentation:
      * https://github.com/RosettaCommons/RFantibody
+     * 
+     * Supports multi-GPU parallelism via per-process gpu_id input
      */
-    tag "${meta.id}"
+    tag "${meta.id}_gpu${gpu_id}"
     label 'process_gpu'
     container 'apptainer/rfantibody.sif'
 
     // Mount entire RFantibody repo from host (includes src, scripts, weights, examples)
     // Container now supports RTX 5090 (Blackwell) via compiled DGL
-    // Use params.gpu_id from orchestrator for GPU assignment
-    containerOptions "--nv --env CUDA_DEVICE_ORDER=PCI_BUS_ID --env CUDA_VISIBLE_DEVICES=${params.gpu_id} --bind /mnt/BioModStack/weights/rfantibody/rfantibody_repo:/opt/RFantibody --writable-tmpfs"
+    // Use gpu_id input for per-process GPU assignment (enables multi-GPU parallel execution)
+    containerOptions "--nv --env CUDA_DEVICE_ORDER=PCI_BUS_ID --env CUDA_VISIBLE_DEVICES=${gpu_id} --bind /mnt/BioModStack/weights/rfantibody/rfantibody_repo:/opt/RFantibody --writable-tmpfs"
 
     publishDir "${params.out_dir}/run/rfantibody", mode: 'copy', pattern: "*.log"
     publishDir "${params.out_dir}/run/rfantibody", mode: 'copy', pattern: "output/*.pdb"
 
     input:
-    tuple val(meta), path(target_pdb), val(hotspot_residues)
+    tuple val(meta), path(target_pdb), val(hotspot_residues), val(gpu_id), val(num_designs_for_this_gpu)
     path framework_pdb
 
     output:
@@ -44,8 +46,8 @@ process RFANTIBODY {
         : "[H1:7-10,H2:6-8,H3:5-15,L1:8-13,L2:7,L3:9-11]"
     def design_loops = params.rfantibody_design_loops ?: defaultLoops
 
-    // Number of designs
-    def num_designs = params.rfantibody_num_designs ?: 10
+    // Number of designs - use per-GPU allocation from input (supports multi-GPU splitting)
+    def num_designs = num_designs_for_this_gpu ?: params.rfantibody_num_designs ?: 10
 
     // Quality parameters for diffusion process
     def diffusion_steps = params.rfantibody_diffusion_steps ?: 50      // 20-200, higher = better quality

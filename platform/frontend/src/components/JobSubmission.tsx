@@ -721,36 +721,36 @@ export function JobSubmission() {
                                             <div
                                                 key={template.id}
                                                 onClick={() => setSelectedTemplateId(template.id)}
-                                                className={`cursor-pointer p-5 rounded-xl border transition-all ${selectedTemplateId === template.id
-                                                    ? 'bg-slate-800 border-blue-500 shadow-lg shadow-blue-500/10'
-                                                    : 'bg-slate-800/30 border-slate-700 hover:border-slate-600'
+                                                className={`cursor-pointer p-6 rounded-2xl border-2 transition-all flex-1 min-w-[280px] ${selectedTemplateId === template.id
+                                                    ? 'bg-gradient-to-br from-slate-800 to-slate-900 border-blue-500 shadow-xl shadow-blue-500/20 scale-[1.02]'
+                                                    : 'bg-gradient-to-br from-slate-800/50 to-slate-900/50 border-slate-600 hover:border-slate-500 hover:shadow-lg hover:scale-[1.01]'
                                                     }`}
                                             >
-                                                <div className="flex items-start gap-3 mb-3">
+                                                <div className="flex items-center gap-4 mb-4">
                                                     <div
-                                                        className="w-10 h-10 rounded-lg flex items-center justify-center text-lg"
-                                                        style={{ backgroundColor: `${template.color}20`, color: template.color }}
+                                                        className="w-14 h-14 rounded-xl flex items-center justify-center text-xl font-bold shadow-lg"
+                                                        style={{ backgroundColor: `${template.color}30`, color: template.color, boxShadow: `0 4px 14px ${template.color}30` }}
                                                     >
                                                         {template.icon === 'target' ? 'TG' :
                                                             template.icon === 'flask' ? 'AB' :
                                                                 template.icon === 'dna' ? 'MU' :
                                                                     template.icon === 'microscope' ? 'SP' :
-                                                                        template.icon === 'pill' ? 'LB' : 'WF'}
+                                                                        template.icon === 'pill' ? 'BG' : 'WF'}
                                                     </div>
                                                     <div>
-                                                        <h3 className="font-semibold text-slate-200">{template.name}</h3>
-                                                        <p className="text-xs text-slate-500 line-clamp-2">{template.description}</p>
+                                                        <h3 className="font-bold text-lg text-white">{template.name}</h3>
                                                     </div>
                                                 </div>
+                                                <p className="text-sm text-slate-400 mb-4 line-clamp-2">{template.description}</p>
                                                 {/* Stage Pipeline Diagram */}
-                                                <div className="flex items-center gap-1 mt-3">
+                                                <div className="flex items-center gap-1 flex-wrap">
                                                     {template.stages.map((stage: any, idx: number) => (
                                                         <div key={idx} className="flex items-center">
-                                                            <div className="bg-slate-700/50 px-2 py-1 rounded text-[10px] text-slate-300 whitespace-nowrap">
+                                                            <div className="bg-slate-700/70 px-3 py-1.5 rounded-lg text-xs text-slate-200 whitespace-nowrap font-medium">
                                                                 {stage.tool}
                                                             </div>
                                                             {idx < template.stages.length - 1 && (
-                                                                <span className="text-slate-600 mx-1">→</span>
+                                                                <span className="text-slate-500 mx-1.5 text-lg">→</span>
                                                             )}
                                                         </div>
                                                     ))}

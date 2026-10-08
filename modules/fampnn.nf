@@ -40,11 +40,15 @@ process RunFAMPNN {
     label 'FAMPNN'
     label 'gpu_light'
     // FAMPNN is lightweight, prefer 5060 Ti
+    // Supports multi-GPU parallelism via per-process gpu_id input
 
+    // Use gpu_id for per-process GPU assignment (enables multi-GPU parallel execution)
+    containerOptions "--nv --env CUDA_DEVICE_ORDER=PCI_BUS_ID --env CUDA_VISIBLE_DEVICES=${gpu_id}"
+    
     publishDir "${params.out_dir}/run/fampnn", mode: 'copy', pattern: "*.log"
 
     input:
-    tuple val(batch_id), path(pdbs), path(csv)
+    tuple val(batch_id), path(pdbs), path(csv), val(gpu_id)
     val analysis_chain_id
 
     output:
@@ -107,15 +111,15 @@ process FilterFAMPNN {
     path ("filter_fampnn_${task.index}.log"), emit: logs
 
     script:
-    // Only pass parameters if filter values are provided
-    def fampnnParam = Utils.formatFilterParams(params, "fampnn", ["max_psce"])
+    // Build filter parameters - both avg and max residue PSCE
+    def fampnnParam = Utils.formatFilterParams(params, "fampnn", ["max_psce", "max_residue_psce"])
 
     """    
-    python /scripts/filter_fampnn.py \
-        --jsons ./ \
-        --pdbs ./ \
-        ${fampnnParam} \
-        --output-dir filtered_output \
+    python /scripts/filter_fampnn.py \\
+        --jsons ./ \\
+        --pdbs ./ \\
+        ${fampnnParam} \\
+        --output-dir filtered_output \\
         2>&1 | tee filter_fampnn_${task.index}.log
     """
 }

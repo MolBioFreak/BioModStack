@@ -301,6 +301,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     fampnn_temperature: qualitySettings.fampnn_temperature,
                     fampnn_num_steps: qualitySettings.fampnn_num_steps,
                     fampnn_psce_threshold: qualitySettings.fampnn_psce_threshold,
+                    // Pre-Boltz filtering (saves compute)
+                    fampnn_max_psce: qualitySettings.fampnn_max_psce,
+                    fampnn_max_residue_psce: qualitySettings.fampnn_max_residue_psce,
                 }
             };
 
