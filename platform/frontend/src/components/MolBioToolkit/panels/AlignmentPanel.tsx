@@ -352,6 +352,43 @@ export function AlignmentPanel({
                 </p>
             </div>
 
+            <details className="rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-xs leading-5 text-slate-400">
+                <summary className="cursor-pointer font-semibold text-slate-300">Methods and documentation</summary>
+                <div className="mt-3 space-y-2">
+                    <p>
+                        BMS computes pairwise sequence alignments with Biopython <code>Bio.Align.PairwiseAligner</code>.
+                        Local uses PairwiseAligner local mode for the best internal span. Global uses PairwiseAligner global mode for an end-to-end comparison.
+                    </p>
+                    <p>
+                        Placement is a BMS configuration, not a named Biopython algorithm: it uses global mode with terminal gap-open and gap-extension scores set to zero so a query can float within the reference.
+                    </p>
+                    <p>
+                        Forward aligns the query as entered; reverse aligns its reverse complement. Auto compares the forward query and its reverse complement and returns the better-scoring candidate. Circular local and placement searches can cross the reference origin; global alignment remains end-to-end.
+                    </p>
+                    <p>
+                        The score controls set PairwiseAligner match, mismatch, gap-open, and gap-extension values. Defaults are Match 2.0, mismatch -1.0, gap open -6.0, and gap extend -1.0. Origin-spanning selections cannot be used as a scalar-offset selection reference; align the whole circular construct or rotate its origin first.
+                    </p>
+                    <p className="flex flex-wrap gap-x-3 gap-y-1">
+                        <a
+                            href="https://biopython.org/docs/latest/api/Bio.Align.html#Bio.Align.PairwiseAligner"
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-cyan-300 underline decoration-cyan-700 underline-offset-2 hover:text-cyan-200"
+                        >
+                            Biopython PairwiseAligner API
+                        </a>
+                        <a
+                            href="https://biopython.org/docs/latest/Tutorial/chapter_pairwise.html"
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-cyan-300 underline decoration-cyan-700 underline-offset-2 hover:text-cyan-200"
+                        >
+                            Biopython pairwise alignment tutorial
+                        </a>
+                    </p>
+                </div>
+            </details>
+
             <div className="space-y-3 rounded-xl border border-slate-700 bg-slate-900/50 p-3">
                 <div className="grid gap-2 sm:grid-cols-2">
                     <label className="space-y-1">
