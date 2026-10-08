@@ -312,6 +312,11 @@ async def pause_running_md_run(
         idempotency_key=idempotency_key,
     )
     await session.flush()
+    # Persist checkpointing intent and release SQLite's writer lock before the
+    # external Nextflow cancellation/receipt wait.  The guarded finalization
+    # below opens a new transaction; failures intentionally leave the durable
+    # run in checkpointing for reconciliation or idempotent operator recovery.
+    await session.commit()
 
     for replica in replicas:
         if replica.state in {"completed", "paused"}:

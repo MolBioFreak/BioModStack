@@ -101,9 +101,17 @@ async def test_pause_running_md_run_stops_worker_and_persists_exact_checkpoint(s
     await session.commit()
 
     cancelled: list[str] = []
+    concurrent_write_succeeded: list[bool] = []
 
     async def cancel(run_id: str) -> bool:
         cancelled.append(run_id)
+        maker = async_sessionmaker(session.bind, expire_on_commit=False)
+        async with maker() as concurrent:
+            concurrent_child = await concurrent.get(Job, child.id)
+            assert concurrent_child is not None
+            concurrent_child.error_message = "pause-wait-write-probe"
+            await concurrent.commit()
+            concurrent_write_succeeded.append(True)
 
         async def publish_current_receipt() -> None:
             await asyncio.sleep(0.05)
@@ -119,6 +127,7 @@ async def test_pause_running_md_run_stops_worker_and_persists_exact_checkpoint(s
     await session.commit()
 
     assert cancelled == ["4242"]
+    assert concurrent_write_succeeded == [True]
     assert paused.phase == "paused" and paused.controls_blocked is False
     assert replica.state == "paused" and segment.state == "paused"
     assert child.status == "paused" and child.queue_status == "paused"
