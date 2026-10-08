@@ -23,7 +23,7 @@ include { Compress as CompressAF2 } from './modules/compress'
 include { Compress as CompressBoltz } from './modules/compress'
 include { MergeUncroppedTarget } from './modules/merge_uncropped_target.nf'
 include { BoltzFromSequence } from './modules/structure_prediction.nf'
-include { BoltzFromComplex } from './modules/structure_prediction.nf'
+include { PrepareComplexWithMSA ; BoltzFromComplex } from './modules/structure_prediction.nf'
 include { RF3FromSequence } from './modules/structure_prediction.nf'
 include { structure_prediction_wf } from './modules/structure_prediction.nf'
 include { OpenMMRelaxation ; OpenMMScore } from './modules/openmm.nf'
@@ -174,12 +174,12 @@ workflow {
             ? channel.fromPath(params.scaffold_pdb)
             : (params.rfdpoly_input_pdb
                 ? channel.fromPath(params.rfdpoly_input_pdb)
-                : channel.of(file("${projectDir}/NO_FILE")))
+                : channel.of(file("${params.code_root}/NO_FILE")))
 
         // Prepare target PDB channel (optional, for protein-binding aptamer mode)
         def target_pdb = params.target_pdb 
             ? channel.fromPath(params.target_pdb)
-            : channel.of(file("${projectDir}/NO_FILE"))
+            : channel.of(file("${params.code_root}/NO_FILE"))
 
         OLIGO_DESIGNER(
             channel.of(params.design_id ?: 'oligo_design'),
@@ -222,7 +222,7 @@ workflow {
         // Use framework from params or dummy file for default
         def framework_for_rfantibody = params.framework_pdb
             ? file(params.framework_pdb)
-            : file("${projectDir}/lib/NO_FRAMEWORK")
+            : file("${params.code_root}/lib/NO_FRAMEWORK")
 
         RFANTIBODY(rfantibody_input, framework_for_rfantibody)
 
@@ -254,7 +254,7 @@ workflow {
         println("* Processing ${pdb_list.size()} PDBs")
 
         // Prepare FAMPNN input - PrepFAMPNN expects tuple [pdbs, jsons]
-        fampnn_prep_input = Channel.of(tuple(pdb_list, file("${projectDir}/lib/NO_JSON")))
+        fampnn_prep_input = Channel.of(tuple(pdb_list, file("${params.code_root}/lib/NO_JSON")))
 
         PrepFAMPNN(fampnn_prep_input)
 
@@ -498,17 +498,18 @@ workflow {
 
         // Create parallel job channels (like structure_prediction workflow)
         def job_indices = Channel.from(0..<numParallelJobs)
-        def msa_file = params.msa_path ? file(params.msa_path) : file("${projectDir}/NO_MSA")
+        def msa_file = params.msa_path ? file(params.msa_path) : file("${params.code_root}/NO_MSA")
         def complex_ch = job_indices.map { idx ->
             def jobName = numParallelJobs > 1 ? "${complex_name}_job${idx}" : complex_name
             tuple(jobName, complex_json, msa_file)
         }
-        BoltzFromComplex(complex_ch)
+        PrepareComplexWithMSA(complex_ch)
+        BoltzFromComplex(PrepareComplexWithMSA.out.prepared)
 
         BoltzFromComplex.out.pdbs
             .flatten()
             .collect()
-            .ifEmpty(file("${projectDir}/lib/placeholder.pdb"))
+            .ifEmpty(file("${params.code_root}/lib/placeholder.pdb"))
             .set { final_pdbs }
 
         // Optional post-run FrustraMPNN QC for complex prediction
@@ -663,7 +664,7 @@ workflow {
                 [
                     params.rfd_mode,
                     params.rfd_contigs ?: '[100-100]',
-                    params.rfd_input_pdb ? file(params.rfd_input_pdb) : file("${projectDir}/lib/NO_FILE"),
+                    params.rfd_input_pdb ? file(params.rfd_input_pdb) : file("${params.code_root}/lib/NO_FILE"),
                     params.rfd_hotspots ?: '',
                     params.rfd_num_designs,
                     0,
@@ -691,7 +692,7 @@ workflow {
                 FilterRFD3.out.structures_metadata
                     .flatten()
                     .collect()
-                    .ifEmpty(file("${projectDir}/lib/placeholder.pdb"))
+                    .ifEmpty(file("${params.code_root}/lib/placeholder.pdb"))
                     .set { final_pdbs }
             }
             else {
@@ -730,7 +731,7 @@ workflow {
                 FilterRFD.out.pdbs_jsons
                     .flatten()
                     .collect()
-                    .ifEmpty(file("${projectDir}/lib/placeholder.pdb"))
+                    .ifEmpty(file("${params.code_root}/lib/placeholder.pdb"))
                     .set { final_pdbs }
             }
             else {
@@ -762,10 +763,10 @@ workflow {
             params.boltzgen_cdr_h1_length ?: '5-8',
             params.boltzgen_cdr_h2_length ?: '6-10',
             params.boltzgen_cdr_h3_length ?: '12-18',
-            params.boltzgen_input_pdb ? file(params.boltzgen_input_pdb) : file("${projectDir}/lib/NO_INPUT_PDB"),
-            params.boltzgen_ligand_pdb ? file(params.boltzgen_ligand_pdb) : file("${projectDir}/lib/NO_LIGAND_PDB"),
-            params.boltzgen_dna_structure ? file(params.boltzgen_dna_structure) : file("${projectDir}/lib/NO_DNA_STRUCT"),
-            params.boltzgen_target_pdb_path ? file(params.boltzgen_target_pdb_path) : file("${projectDir}/lib/NO_TARGET_PDB"),
+            params.boltzgen_input_pdb ? file(params.boltzgen_input_pdb) : file("${params.code_root}/lib/NO_INPUT_PDB"),
+            params.boltzgen_ligand_pdb ? file(params.boltzgen_ligand_pdb) : file("${params.code_root}/lib/NO_LIGAND_PDB"),
+            params.boltzgen_dna_structure ? file(params.boltzgen_dna_structure) : file("${params.code_root}/lib/NO_DNA_STRUCT"),
+            params.boltzgen_target_pdb_path ? file(params.boltzgen_target_pdb_path) : file("${params.code_root}/lib/NO_TARGET_PDB"),
         )
 
         // =========================================================================
@@ -778,7 +779,7 @@ workflow {
         if (use_orchestrator) {
             println("BoltzGen PARALLEL MODE: Spawning ${Math.ceil(params.boltzgen_num_designs / params.boltzgen_designs_per_job)} child jobs")
 
-            def target_pdb = params.boltzgen_target_pdb_path ? file(params.boltzgen_target_pdb_path) : file("${projectDir}/lib/NO_TARGET_PDB")
+            def target_pdb = params.boltzgen_target_pdb_path ? file(params.boltzgen_target_pdb_path) : file("${params.code_root}/lib/NO_TARGET_PDB")
 
             // Spawn child jobs via API
             SpawnBoltzGenJobs(
@@ -812,7 +813,7 @@ workflow {
             CollectBoltzGenOutputs.out.pdbs
                 .flatten()
                 .collect()
-                .ifEmpty(file("${projectDir}/lib/placeholder.pdb"))
+                .ifEmpty(file("${params.code_root}/lib/placeholder.pdb"))
                 .set { final_pdbs }
 
             // Set empty channels for downstream
@@ -835,7 +836,7 @@ workflow {
                 FilterBoltzGen.out.pdbs
                     .flatten()
                     .collect()
-                    .ifEmpty(file("${projectDir}/lib/placeholder.pdb"))
+                    .ifEmpty(file("${params.code_root}/lib/placeholder.pdb"))
                     .set { final_pdbs }
 
                 // Set other channels to empty/defaults to avoid errors
@@ -1270,7 +1271,7 @@ workflow {
         analysis_input_pdbs
             .flatten()
             .collect()
-            .ifEmpty(file("${projectDir}/lib/placeholder.pdb"))
+            .ifEmpty(file("${params.code_root}/lib/placeholder.pdb"))
             .set { final_pdbs }
     }
     else {
@@ -1282,13 +1283,13 @@ workflow {
     channel.topic('metadata_ch_fold')
         .flatten()
         .collectFile(name: "metadata_fold.jsonl", newLine: true)
-        .ifEmpty { file("${projectDir}/lib/empty-meta-fold.jsonl") }
+        .ifEmpty { file("${params.code_root}/lib/empty-meta-fold.jsonl") }
         .set { metadata_fold }
     // Channel for metadata with both fold_id and seq_id
     channel.topic('metadata_ch_fold_seq')
         .flatten()
         .collectFile(name: "metadata_fold_seq.jsonl", newLine: true)
-        .ifEmpty { file("${projectDir}/lib/empty-meta-seq.jsonl") }
+        .ifEmpty { file("${params.code_root}/lib/empty-meta-seq.jsonl") }
         .set { metadata_fold_seq }
 
     // Combine Metadata into CSV
@@ -1371,7 +1372,7 @@ def collectInputFiles(params) {
     }
     if (params.rfd_mode in ['monomer_denovo', 'monomer_foldcond']) {
         // Add 'placeholder' PDB file, since RFdiffusion requires xyz coordinates
-        inputs << file("${projectDir}/lib/placeholder.pdb")
+        inputs << file("${params.code_root}/lib/placeholder.pdb")
     }
     if (params.rfd_mode in ['binder_foldcond', 'monomer_foldcond']) {
         if (params.rfd_scaffold_dir) {

@@ -17,7 +17,15 @@ logger = logging.getLogger(__name__)
 # Track running processes
 _running_processes: Dict[str, subprocess.Popen] = {}
 
-from paths import get_code_root, get_db_path
+from paths import (
+    get_code_root,
+    get_db_path,
+    get_data_root,
+    get_weights_root,
+    get_rfd_models_dir,
+    get_colabfold_db,
+    get_msa_cache_dir,
+)
 
 # Project root (parent of platform directory)
 PROJECT_ROOT = get_code_root()
@@ -397,6 +405,11 @@ async def launch_msa_batch_job(
     
     # Get sequences JSON and GPU ID
     sequences_json = params.get('sequences_json', '[]')
+    if isinstance(sequences_json, (list, dict)):
+        import json as _json
+        sequences_json = _json.dumps(sequences_json)
+    elif not isinstance(sequences_json, str):
+        sequences_json = '[]'
     raw_gpu_id = params.get('gpu_id', 0)
     try:
         gpu_id = int(raw_gpu_id)
@@ -404,6 +417,12 @@ async def launch_msa_batch_job(
         gpu_id = 0
     reference_sequence = params.get('reference_sequence', '')
     force_refresh = params.get('msa_force_refresh', False)
+    msa_use_gpu_raw = params.get('msa_use_gpu', True)
+    if isinstance(msa_use_gpu_raw, str):
+        msa_use_gpu = msa_use_gpu_raw.strip().lower() not in {"0", "false", "no", "off"}
+    else:
+        msa_use_gpu = bool(msa_use_gpu_raw)
+    msa_max_seqs = params.get('msa_max_seqs')
     
     # Build batch_msa.py command
     from paths import get_colabfold_db, get_msa_cache_dir
@@ -422,6 +441,10 @@ async def launch_msa_batch_job(
         cmd.extend(["--reference_sequence", reference_sequence])
     if force_refresh:
         cmd.append("--force_refresh")
+    if msa_use_gpu is False:
+        cmd.append("--cpu-only")
+    if msa_max_seqs is not None:
+        cmd.extend(["--max-seqs", str(msa_max_seqs)])
     
     logger.info(f"[MSA BATCH] Command: {' '.join(cmd[:6])}...")
     
@@ -892,6 +915,35 @@ def build_nextflow_command(
     if model_id == 'boltzgen':
         profile = "boltzgen,workstation_ryzen7960x"
 
+    # Resolve runtime roots explicitly so Nextflow doesn't fall back to stale defaults.
+    explicit_data_root = params.get("data_root")
+    if not explicit_data_root:
+        env_data_root = os.getenv("BMS_DATA")
+        if env_data_root:
+            explicit_data_root = env_data_root
+        else:
+            out_path = Path(output_dir).expanduser()
+            for candidate in [out_path] + list(out_path.parents):
+                if candidate.name == "bms_results":
+                    explicit_data_root = str(candidate.parent)
+                    break
+    if not explicit_data_root:
+        explicit_data_root = str(get_data_root())
+
+    explicit_code_root = params.get("code_root") or os.getenv("BMS_HOME") or str(get_code_root())
+    explicit_weights_root = params.get("weights_root") or os.getenv("BMS_WEIGHTS") or str(get_weights_root())
+    explicit_msa_db = params.get("msa_local_db") or os.getenv("BMS_COLABFOLD_DB") or str(get_colabfold_db())
+    explicit_msa_cache = params.get("msa_cache_dir") or os.getenv("BMS_MSA_CACHE") or str(get_msa_cache_dir())
+    explicit_container_dir = (
+        params.get("container_dir")
+        or os.getenv("BMS_CONTAINER_DIR")
+        or str(Path(explicit_data_root) / "apptainer")
+    )
+    explicit_rfd_models = params.get("rfd_models") or os.getenv("BMS_RFD_MODELS") or str(get_rfd_models_dir())
+    explicit_af2_models = params.get("af2_models") or os.getenv("BMS_AF2_MODELS") or str(Path(explicit_weights_root) / "alphafold" / "params")
+    explicit_boltz_models = params.get("boltz_models") or os.getenv("BMS_BOLTZ_MODELS") or str(Path(explicit_weights_root) / "boltz")
+    explicit_alphafold_params = params.get("alphafold_params") or str(Path(explicit_weights_root) / "alphafold" / "params")
+
     
     # Base command
     # Base command logic with Resumption support
@@ -915,6 +967,63 @@ def build_nextflow_command(
     # Add job_id for spawn-wait-collect tracking
     if job_id:
         cmd.extend(["--job_id", job_id])
+
+    # Force core path params so moved data/model drives are always honored.
+    # Only apply defaults when caller didn't explicitly provide a value.
+    explicit_path_defaults = {
+        "code_root": explicit_code_root,
+        "data_root": explicit_data_root,
+        "weights_root": explicit_weights_root,
+        "msa_local_db": explicit_msa_db,
+        "msa_cache_dir": explicit_msa_cache,
+        "container_dir": explicit_container_dir,
+        "rfd_models": explicit_rfd_models,
+        "af2_models": explicit_af2_models,
+        "boltz_models": explicit_boltz_models,
+        "alphafold_params": explicit_alphafold_params,
+    }
+    for key, value in explicit_path_defaults.items():
+        if params.get(key) in (None, ""):
+            cmd.extend([f"--{key}", str(value)])
+
+    # Inject scheduler-backed MSA GPU policy defaults when caller did not
+    # explicitly specify them. This keeps MSA routing aligned with the GPU
+    # scheduler UI and avoids accidental spillover onto folding GPUs.
+    try:
+        from services.gpu_config import read_scheduler_config
+
+        scheduler_cfg = read_scheduler_config() or {}
+        global_cfg = scheduler_cfg.get("global", {}) if isinstance(scheduler_cfg, dict) else {}
+        overrides_cfg = scheduler_cfg.get("overrides", {}) if isinstance(scheduler_cfg, dict) else {}
+
+        if params.get("msa_preferred_gpus") in (None, ""):
+            raw_preferred = global_cfg.get("msa_preferred_gpu_ids")
+            preferred_ids = []
+            if isinstance(raw_preferred, list):
+                for gpu_id in raw_preferred:
+                    try:
+                        preferred_ids.append(int(gpu_id))
+                    except (TypeError, ValueError):
+                        continue
+            if preferred_ids:
+                params["msa_preferred_gpus"] = sorted(set(preferred_ids))
+                logger.info(f"[MSA] Injected preferred GPUs from scheduler config: {params['msa_preferred_gpus']}")
+
+        if params.get("msa_excluded_gpus") in (None, ""):
+            excluded_ids = []
+            if isinstance(overrides_cfg, dict):
+                for gpu_key, override in overrides_cfg.items():
+                    if not isinstance(override, dict) or not override.get("disabled", False):
+                        continue
+                    try:
+                        excluded_ids.append(int(gpu_key))
+                    except (TypeError, ValueError):
+                        continue
+            if excluded_ids:
+                params["msa_excluded_gpus"] = sorted(set(excluded_ids))
+                logger.info(f"[MSA] Injected excluded GPUs from scheduler config: {params['msa_excluded_gpus']}")
+    except Exception as exc:
+        logger.warning(f"[MSA] Could not load scheduler GPU policy defaults: {exc}")
     
     # Map model-specific params to Nextflow params
     param_mapping = {
@@ -983,6 +1092,10 @@ def build_nextflow_command(
         'msa_min_depth_warning': 'msa_min_depth_warning',
         'msa_min_depth_fail': 'msa_min_depth_fail',
         'msa_force_refresh': 'msa_force_refresh',
+        'msa_gpu_server_mode': 'msa_gpu_server_mode',
+        'msa_gpu_server_wait_timeout': 'msa_gpu_server_wait_timeout',
+        'msa_gpu_server_db_load_mode': 'msa_gpu_server_db_load_mode',
+        'msa_gpu_server_startup_wait': 'msa_gpu_server_startup_wait',
     }
     
     # Handle complex_components specially - write JSON file for BoltzFromComplex process

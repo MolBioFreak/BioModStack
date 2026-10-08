@@ -26,7 +26,7 @@ workflow ANTIBODY_CHILD {
     
     main:
     // Prepare MSA file (use provided or generate if needed)
-    def msa_file = msa_path ? file(msa_path) : file("${projectDir}/lib/NO_MSA")
+    def msa_file = msa_path ? file(msa_path) : file("${params.code_root}/lib/NO_MSA")
     
     // Convert input paths to file objects if they aren't already
     def pdb_files = pdb_paths.collect { file(it) }

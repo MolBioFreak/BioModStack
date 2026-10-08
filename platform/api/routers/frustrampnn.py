@@ -13,12 +13,13 @@ import json
 from pathlib import Path
 from typing import Optional
 import logging
+from paths import get_container_path
 
 router = APIRouter(prefix="/api/frustrampnn", tags=["frustrampnn"])
 logger = logging.getLogger(__name__)
 
 # Container and weights paths
-CONTAINER = Path.home() / "biomodstack/biomodstack/apptainer/frustrampnn.sif"
+CONTAINER = get_container_path("frustrampnn.sif")
 CHECKPOINT = "/opt/frustrampnn_weights/megascale.ckpt"
 
 # Official thresholds from FrustraMPNN constants.py

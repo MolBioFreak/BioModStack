@@ -35,7 +35,7 @@ workflow FAMPNN_CHILD {
         def gpu_id_val = params.gpu_id ?: 0
         
         // Prepare FAMPNN input - PrepFAMPNN expects tuple [pdbs, jsons]
-        def fampnn_prep_input = Channel.of(tuple(pdb_list, file("${projectDir}/lib/NO_JSON")))
+        def fampnn_prep_input = Channel.of(tuple(pdb_list, file("${params.code_root}/lib/NO_JSON")))
         
         PrepFAMPNN(fampnn_prep_input)
         

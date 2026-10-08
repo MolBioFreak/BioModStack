@@ -25,6 +25,14 @@ process GenerateLocalMSA {
     def cacheDir = params.msa_cache_dir
     def threads = params.msa_threads ?: 32
     def useGpu = params.msa_use_gpu != false ? "" : "--cpu-only"
+    def gpuMode = params.msa_gpu_mode ?: "auto"
+    def gpuThreshold = params.msa_gpu_threshold ?: 80
+    def preferredGpus = params.msa_preferred_gpus ? "--preferred-gpus \"${params.msa_preferred_gpus}\"" : ""
+    def excludedGpus = params.msa_excluded_gpus ? "--excluded-gpus \"${params.msa_excluded_gpus}\"" : ""
+    def gpuServerMode = params.msa_gpu_server_mode ?: "persistent"
+    def gpuServerWaitTimeout = params.msa_gpu_server_wait_timeout ?: 120
+    def gpuServerDbLoadMode = params.msa_gpu_server_db_load_mode ?: 0
+    def gpuServerStartupWait = params.msa_gpu_server_startup_wait ?: 1.0
     def refSeq = params.msa_reference_sequence ? "--reference-sequence \"${params.msa_reference_sequence}\"" : ""
     def forceRefresh = params.msa_force_refresh ? "--force_refresh" : ""
     // MSA Quality Preset (Maximum/Balanced/Fast) - default: balanced for speed+quality
@@ -32,6 +40,7 @@ process GenerateLocalMSA {
     // MSA Quality Parameters (can override preset)
     def evalue = params.msa_evalue ? "--evalue ${params.msa_evalue}" : ""
     def sensitivity = params.msa_sensitivity ? "--sensitivity ${params.msa_sensitivity}" : ""
+    def maxSeqs = params.msa_max_seqs ? "--max-seqs ${params.msa_max_seqs}" : ""
     def minSeqId = params.msa_min_seq_id ? "--min-seq-id ${params.msa_min_seq_id}" : ""
     def minCoverage = params.msa_min_coverage ? "--min-coverage ${params.msa_min_coverage}" : ""
     def taxonList = params.msa_taxon_list ? "--taxon-list \"${params.msa_taxon_list}\"" : ""
@@ -42,21 +51,30 @@ process GenerateLocalMSA {
     def useEnv = params.msa_use_env != null ? "--use-env ${params.msa_use_env ? 1 : 0}" : ""
     def numIterations = params.msa_num_iterations ? "--num-iterations ${params.msa_num_iterations}" : ""
     """
-    python3 ${projectDir}/scripts/run_local_msa.py \\
+    python3 ${params.code_root}/scripts/run_local_msa.py \\
         --sequence "${sequence}" \\
         --name "${sequence_name}" \\
         --out_dir . \\
         --db_path ${dbPath} \\
         --cache_dir ${cacheDir} \\
         --threads ${threads} \\
+        --gpu-mode ${gpuMode} \\
+        --gpu-threshold ${gpuThreshold} \\
+        --gpu-server-mode ${gpuServerMode} \\
+        --gpu-server-wait-timeout ${gpuServerWaitTimeout} \\
+        --gpu-server-db-load-mode ${gpuServerDbLoadMode} \\
+        --gpu-server-startup-wait ${gpuServerStartupWait} \\
         --preset ${msaPreset} \\
         --min-depth-warning ${minDepthWarning} \\
         --min-depth-fail ${minDepthFail} \\
         ${useGpu} \\
+        ${preferredGpus} \\
+        ${excludedGpus} \\
         ${refSeq} \\
         ${forceRefresh} \\
         ${evalue} \\
         ${sensitivity} \\
+        ${maxSeqs} \\
         ${minSeqId} \\
         ${minCoverage} \\
         ${taxonList} \\
@@ -89,18 +107,18 @@ process BatchMSAGeneration {
     script:
     def dbPath = params.msa_local_db
     def cacheDir = params.msa_cache_dir
-    def maxParallel = params.msa_max_parallel ?: 4
     def refSeqArg = reference_sequence ? "--reference_sequence '${reference_sequence}'" : ""
     def forceRefresh = params.msa_force_refresh ? "--force_refresh" : ""
+    def maxSeqsArg = params.msa_max_seqs ? "--max-seqs ${params.msa_max_seqs}" : ""
     """
-    python3 ${projectDir}/scripts/batch_msa.py \\
+    python3 ${params.code_root}/scripts/batch_msa.py \\
         --sequences '${sequences_json}' \\
         --output_dir . \\
         --db_path ${dbPath} \\
         --cache_dir ${cacheDir} \\
-        --max_parallel ${maxParallel} \\
         ${refSeqArg} \\
         ${forceRefresh} \\
+        ${maxSeqsArg} \\
         2>&1 | tee batch_msa.log
     """
 }
@@ -397,40 +415,34 @@ PYEOF
     """
 }
 
-// Boltz with Complex Definition (Multi-chain + Ligands)
-// Accepts a JSON file defining the complex components
-process BoltzFromComplex {
-    label 'Boltz'
-    label 'gpu'
+// Complex prep stage: generate chain-level MSAs and Boltz YAML on host/runtime CPU label.
+// This decouples MSA scheduling from Boltz folding GPU assignment.
+process PrepareComplexWithMSA {
+    label 'CPU'
     publishDir "${params.out_dir}/run/boltz_complex", mode: 'copy', pattern: "*.log"
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.cif", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.json", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "msa/*.a3m"
 
     input:
     tuple val(complex_name), path(complex_json), path(msa_files)
 
     output:
-    path "predictions/*.pdb", emit: pdbs, optional: true
-    path "predictions/*.cif", emit: cifs, optional: true
-    path "predictions/*.json", emit: jsons, optional: true
+    tuple val(complex_name), path("yamls/${complex_name}.yaml"), path("msa"), emit: prepared
     path "msa/*.a3m", emit: msa, optional: true
     path "*.log"
 
     script:
-    def recycling = params.boltz_recycling_steps ?: 3
-    def sampling = params.boltz_sampling_steps ?: 50
-    def numSamples = params.boltz_diffusion_samples ?: params.boltz_num_samples ?: 1
     def msaDbPath = params.msa_local_db
     def msaCacheDir = params.msa_cache_dir
     def msaThreads = params.msa_threads ?: 32
+    def msaUseGpuEnabled = params.msa_use_gpu != false ? "true" : "false"
     def msaForceRefresh = params.msa_force_refresh ? "true" : "false"
     def useMsa = params.boltz_use_msa == null || params.boltz_use_msa.toString() == 'true'
     // MSA Quality Parameters - default: balanced for speed+quality
     def msaPreset = params.msa_preset ?: "balanced"
     def msaTaxonList = params.msa_taxon_list ?: ""
-    def msaEvalue = params.msa_evalue ?: "0.001"
+    // Keep empty by default so run_local_msa.py preset controls e-value.
+    def msaEvalue = params.msa_evalue ?: ""
+    def msaMaxSeqs = params.msa_max_seqs ?: ""
     def msaMinSeqId = params.msa_min_seq_id ?: ""
     def msaMinCoverage = params.msa_min_coverage ?: ""
     def msaMinDepthWarning = params.msa_min_depth_warning ?: 100
@@ -439,18 +451,23 @@ process BoltzFromComplex {
     def msaUseExpand = params.msa_use_expand != null ? params.msa_use_expand : ""
     def msaUseEnv = params.msa_use_env != null ? params.msa_use_env : ""
     def msaNumIterations = params.msa_num_iterations ?: ""
+    // GPU policy for MSA so folding workloads can retain priority
+    def msaGpuMode = params.msa_gpu_mode ?: "auto"
+    def msaGpuThreshold = params.msa_gpu_threshold ?: 80
+    def msaPreferredGpus = params.msa_preferred_gpus ?: ""
+    def msaExcludedGpus = params.msa_excluded_gpus ?: ""
+    def msaGpuServerMode = params.msa_gpu_server_mode ?: "persistent"
+    def msaGpuServerWaitTimeout = params.msa_gpu_server_wait_timeout ?: 120
+    def msaGpuServerDbLoadMode = params.msa_gpu_server_db_load_mode ?: 0
+    def msaGpuServerStartupWait = params.msa_gpu_server_startup_wait ?: 1.0
     """
-    set -o pipefail  # Propagate exit codes through pipes (fixes | tee masking failures)
+    set -o pipefail
     
-    mkdir -p tmp yamls predictions msa
-    export NUMBA_CACHE_DIR=tmp
-    export XDG_CONFIG_HOME=tmp
-    export TRITON_CACHE_DIR=tmp
-    export HOME=tmp
+    mkdir -p yamls msa
     
     # Convert JSON complex definition to Boltz-2 YAML format
     # AND generate local MSA for each protein chain
-    python3 << 'PYEOF'
+    python3 << 'PYEOF' 2>&1 | tee prep_complex_${complex_name}.log
 import json
 import yaml
 import subprocess
@@ -466,6 +483,7 @@ binder_chain = None
 msa_db_path = "${msaDbPath}"
 cache_dir = "${msaCacheDir}"
 msa_threads = int("${msaThreads}")
+msa_use_gpu_enabled = "${msaUseGpuEnabled}" == "true"
 use_msa = "${useMsa}" == "true"
 force_refresh = "${msaForceRefresh}" == "true"
 complex_name = "${complex_name}"
@@ -473,6 +491,7 @@ complex_name = "${complex_name}"
 msa_preset = "${msaPreset}"
 msa_taxon_list = "${msaTaxonList}"
 msa_evalue = "${msaEvalue}"
+msa_max_seqs = "${msaMaxSeqs}"
 msa_min_seq_id = "${msaMinSeqId}"
 msa_min_coverage = "${msaMinCoverage}"
 msa_min_depth_warning = "${msaMinDepthWarning}"
@@ -481,6 +500,14 @@ msa_min_depth_fail = "${msaMinDepthFail}"
 msa_use_expand = "${msaUseExpand}"
 msa_use_env = "${msaUseEnv}"
 msa_num_iterations = "${msaNumIterations}"
+msa_gpu_mode = "${msaGpuMode}"
+msa_gpu_threshold = int("${msaGpuThreshold}")
+msa_preferred_gpus = "${msaPreferredGpus}"
+msa_excluded_gpus = "${msaExcludedGpus}"
+msa_gpu_server_mode = "${msaGpuServerMode}"
+msa_gpu_server_wait_timeout = "${msaGpuServerWaitTimeout}"
+msa_gpu_server_db_load_mode = "${msaGpuServerDbLoadMode}"
+msa_gpu_server_startup_wait = "${msaGpuServerStartupWait}"
 msa_fallback_path = "${msa_files}"
 fallback_msa = None
 try:
@@ -518,26 +545,33 @@ for comp in complex_def.get("components", []):
                 chain_id = comp_id[0] if isinstance(comp_id, list) else comp_id
                 msa_dir = "msa"
                 msa_file = f"msa/{complex_name}_{chain_id}.a3m"
-                # Get reference sequence if set (for mutagenesis - all variants share WT MSA)
+                # Optional shared reference sequence for cache key reuse (mutagenesis support)
                 ref_seq = comp.get("reference_sequence") or os.environ.get("MSA_REFERENCE_SEQUENCE", "")
-                ref_seq_arg = f"--reference-sequence '{ref_seq}'" if ref_seq else ""
                 
                 print(f"Generating local MSA for chain {chain_id} using run_local_msa.py...")
                 try:
-                    # Use run_local_msa.py which has:
-                    # 1. File-based locking to serialize parallel jobs
-                    # 2. Cache checking to avoid redundant MSA generation
-                    # 3. GPU/CPU auto-detection
                     cmd = [
-                        "python3", "${projectDir}/scripts/run_local_msa.py",
+                        "python3", "${params.code_root}/scripts/run_local_msa.py",
                         "--sequence", sequence,
                         "--name", f"{complex_name}_{chain_id}",
                         "--out_dir", msa_dir,
                         "--db_path", msa_db_path,
                         "--cache_dir", cache_dir,
                         "--threads", str(msa_threads),
-                        "--preset", msa_preset
+                        "--preset", msa_preset,
+                        "--gpu-mode", msa_gpu_mode,
+                        "--gpu-threshold", str(msa_gpu_threshold),
+                        "--gpu-server-mode", msa_gpu_server_mode,
+                        "--gpu-server-wait-timeout", msa_gpu_server_wait_timeout,
+                        "--gpu-server-db-load-mode", msa_gpu_server_db_load_mode,
+                        "--gpu-server-startup-wait", msa_gpu_server_startup_wait,
                     ]
+                    if msa_preferred_gpus:
+                        cmd.extend(["--preferred-gpus", msa_preferred_gpus])
+                    if msa_excluded_gpus:
+                        cmd.extend(["--excluded-gpus", msa_excluded_gpus])
+                    if not msa_use_gpu_enabled:
+                        cmd.append("--cpu-only")
                     if ref_seq:
                         cmd.extend(["--reference-sequence", ref_seq])
                     if force_refresh:
@@ -547,6 +581,8 @@ for comp in complex_def.get("components", []):
                         cmd.extend(["--taxon-list", msa_taxon_list])
                     if msa_evalue:
                         cmd.extend(["--evalue", msa_evalue])
+                    if msa_max_seqs:
+                        cmd.extend(["--max-seqs", msa_max_seqs])
                     if msa_min_seq_id:
                         cmd.extend(["--min-seq-id", msa_min_seq_id])
                     if msa_min_coverage:
@@ -561,11 +597,9 @@ for comp in complex_def.get("components", []):
                     if msa_num_iterations:
                         cmd.extend(["--num-iterations", msa_num_iterations])
                     
-                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+                    result = subprocess.run(cmd, text=True, timeout=900)
                     if result.returncode != 0:
-                        print(f"MSA generation stderr: {result.stderr}")
                         raise RuntimeError(f"MSA script failed with code {result.returncode}")
-                    print(result.stdout)
                     
                     if Path(msa_file).exists():
                         msa_resolved = str(Path(msa_file).resolve())
@@ -642,23 +676,37 @@ for comp in complex_def.get("components", []):
                 print(f"Generating MSA for peptide chain {chain_id} ({len(peptide_seq)} aa)...")
                 try:
                     cmd = [
-                        "python3", "${projectDir}/scripts/run_local_msa.py",
+                        "python3", "${params.code_root}/scripts/run_local_msa.py",
                         "--sequence", peptide_seq,
                         "--name", f"{complex_name}_{chain_id}",
                         "--out_dir", "msa",
                         "--db_path", msa_db_path,
                         "--cache_dir", cache_dir,
                         "--threads", str(msa_threads),
-                        "--preset", msa_preset
+                        "--preset", msa_preset,
+                        "--gpu-mode", msa_gpu_mode,
+                        "--gpu-threshold", str(msa_gpu_threshold),
+                        "--gpu-server-mode", msa_gpu_server_mode,
+                        "--gpu-server-wait-timeout", msa_gpu_server_wait_timeout,
+                        "--gpu-server-db-load-mode", msa_gpu_server_db_load_mode,
+                        "--gpu-server-startup-wait", msa_gpu_server_startup_wait,
                     ]
+                    if msa_preferred_gpus:
+                        cmd.extend(["--preferred-gpus", msa_preferred_gpus])
+                    if msa_excluded_gpus:
+                        cmd.extend(["--excluded-gpus", msa_excluded_gpus])
+                    if not msa_use_gpu_enabled:
+                        cmd.append("--cpu-only")
                     # Add quality overrides if set
+                    if msa_max_seqs:
+                        cmd.extend(["--max-seqs", msa_max_seqs])
                     if msa_use_expand:
                         cmd.extend(["--use-expand", "1" if msa_use_expand == "true" else "0"])
                     if msa_use_env:
                         cmd.extend(["--use-env", "1" if msa_use_env == "true" else "0"])
                     if msa_num_iterations:
                         cmd.extend(["--num-iterations", msa_num_iterations])
-                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+                    result = subprocess.run(cmd, text=True, timeout=900)
                     if result.returncode == 0 and Path(msa_file).exists():
                         msa_resolved = str(Path(msa_file).resolve())
                         entry["protein"]["msa"] = msa_resolved
@@ -666,7 +714,7 @@ for comp in complex_def.get("components", []):
                         print(f"Generated peptide MSA: {msa_file}")
                     else:
                         # MSA failed - fall back to empty
-                        print(f"Peptide MSA generation returned no results, using single-sequence mode")
+                        print("Peptide MSA generation returned no results, using single-sequence mode")
                         entry["protein"]["msa"] = "empty"
                 except Exception as e:
                     print(f"Peptide MSA generation failed: {e}, using single-sequence mode")
@@ -681,12 +729,56 @@ for comp in complex_def.get("components", []):
 if binder_chain:
     boltz_yaml["properties"] = [{"binder": [binder_chain] if isinstance(binder_chain, str) else binder_chain}]
 
-with open(f"yamls/${complex_name}.yaml", "w") as f:
+yaml_path = f"yamls/{complex_name}.yaml"
+with open(yaml_path, "w") as f:
     yaml.dump(boltz_yaml, f, default_flow_style=False)
 print(yaml.dump(boltz_yaml, default_flow_style=False))
+print(f"Prepared complex YAML: {yaml_path}")
 PYEOF
-    
-    # Run Boltz-2 prediction (NO --use_msa_server - MSA is pre-computed!)
+
+    if [ ! -f "yamls/${complex_name}.yaml" ]; then
+        echo "ERROR: Failed to prepare complex YAML for ${complex_name}"
+        exit 1
+    fi
+    """
+}
+
+// Boltz folding stage: consumes prepared YAML + precomputed MSAs.
+process BoltzFromComplex {
+    label 'Boltz'
+    label 'gpu'
+    publishDir "${params.out_dir}/run/boltz_complex", mode: 'copy', pattern: "*.log"
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.cif", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.json", saveAs: { filename -> filename.split('/')[-1] }
+
+    input:
+    tuple val(complex_name), path(complex_yaml), path(msa_dir)
+
+    output:
+    path "predictions/*.pdb", emit: pdbs, optional: true
+    path "predictions/*.cif", emit: cifs, optional: true
+    path "predictions/*.json", emit: jsons, optional: true
+    path "*.log"
+
+    script:
+    def recycling = params.boltz_recycling_steps ?: 3
+    def sampling = params.boltz_sampling_steps ?: 50
+    def numSamples = params.boltz_diffusion_samples ?: params.boltz_num_samples ?: 1
+    """
+    set -o pipefail
+
+    mkdir -p tmp yamls predictions msa
+    export NUMBA_CACHE_DIR=tmp
+    export XDG_CONFIG_HOME=tmp
+    export TRITON_CACHE_DIR=tmp
+    export HOME=tmp
+
+    cp -L "${complex_yaml}" "yamls/${complex_name}.yaml"
+    if [ -d "${msa_dir}" ]; then
+        cp -L "${msa_dir}"/*.a3m msa/ 2>/dev/null || true
+    fi
+
     boltz predict \\
         ./yamls/ \\
         --output_format pdb \\
@@ -701,7 +793,7 @@ PYEOF
         --cache /boltzcache \\
         ${params.boltz_extra_config ?: ''} \\
         2>&1 | tee boltz_complex_${complex_name}.log
-    
+
     for dir in boltz_results_yamls/predictions/*/; do
         for model_file in \${dir}/*.pdb \${dir}/*.cif; do
             if [ -f "\${model_file}" ]; then cp "\${model_file}" predictions/; fi
@@ -711,11 +803,7 @@ PYEOF
         done
         cp "\${dir}"/affinity_*.json predictions/ 2>/dev/null || :
     done
-    
-    # ═══════════════════════════════════════════════════════════════════════════
-    # OUTPUT VALIDATION: Fail if no structure files were produced
-    # Catches silent Boltz failures (e.g., CCD errors, input parsing errors)
-    # ═══════════════════════════════════════════════════════════════════════════
+
     if [ -z "\$(ls predictions/*.pdb predictions/*.cif 2>/dev/null)" ]; then
         echo "ERROR: Boltz produced no output files. Check log for errors."
         echo "Common causes: CCD component not found, malformed YAML, GPU OOM"
@@ -908,7 +996,7 @@ workflow structure_prediction_wf {
         }
 
         if (pred_method == 'rf3' || pred_method == 'both') {
-            def dummy_msa = file("${projectDir}/NO_MSA")
+            def dummy_msa = file("${params.code_root}/NO_MSA")
             def inputs_no_msa = input_ch.map { seq, name -> tuple(seq, name, dummy_msa) }
             RF3FromSequence(inputs_no_msa)
             structures = structures.mix(RF3FromSequence.out.pdbs, RF3FromSequence.out.cifs)

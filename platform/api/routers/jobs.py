@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.exc import OperationalError
 from typing import Optional, List
+from copy import deepcopy
 import asyncio
 import uuid
 import os
@@ -267,6 +268,8 @@ async def create_job(
                 'sequences_json': json_lib.dumps(sequences_for_msa),
                 'reference_sequence': job_data.params.get('msa_reference_sequence'),
                 'msa_force_refresh': job_data.params.get('msa_force_refresh', False),
+                'msa_use_gpu': job_data.params.get('msa_use_gpu', True),
+                'msa_max_seqs': job_data.params.get('msa_max_seqs'),
                 # BATCH-STAGE-GATE: Store FrustraMPNN flag for post-batch execution
                 'run_frustrampnn_batch': job_data.params.get('run_frustrampnn', False),
             },
@@ -618,12 +621,19 @@ async def resubmit_job(
     output_dir = str(get_results_dir() / f"{new_name}_{timestamp}")
     os.makedirs(output_dir, exist_ok=True)
     
+    resubmit_params = deepcopy(original_job.params) if isinstance(original_job.params, dict) else {}
+    if resubmit_params.get("msa_force_refresh") is True:
+        # Resubmits should reuse cache by default unless user explicitly
+        # starts a fresh job with force-refresh enabled.
+        resubmit_params["msa_force_refresh"] = False
+        logger.info(f"[RESUBMIT] Cleared msa_force_refresh for resubmitted job {job_id}")
+
     new_job = Job(
         id=str(uuid.uuid4()),
         name=new_name,
         model_id=original_job.model_id,
         mode=original_job.mode,
-        params=original_job.params or {},
+        params=resubmit_params,
         status=JobStatus.QUEUED.value,
         created_at=datetime.utcnow(),
         output_dir=output_dir,
