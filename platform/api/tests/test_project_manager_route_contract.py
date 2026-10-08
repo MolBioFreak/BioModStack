@@ -20,6 +20,35 @@ def test_domain_activity_uses_the_frozen_singular_route() -> None:
     assert "/api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}/activities" not in paths
 
 
+def test_project_workflow_setup_routes_and_create_contract_are_registered() -> None:
+    paths = {route.path for route in project_manager.router.routes if isinstance(route, APIRoute)}
+    assert {
+        "/api/projects/{project_id}/workflow-setups",
+        "/api/projects/{project_id}/workflow-setups/{setup_context_id}",
+        "/api/projects/{project_id}/workflow-setups/{setup_context_id}/draft",
+        "/api/projects/{project_id}/workflow-setups/{setup_context_id}/prepare-launch",
+    } <= paths
+    model = getattr(project_manager, "WorkflowSetupCreateRequest", None)
+    assert model is not None
+    payload = model.model_validate({
+        "schema": "bms.project-workflow-setup.create.v1",
+        "relationship_kind": "primary",
+        "experiment_name": "Fold target",
+        "experiment_objective": "Predict structure",
+        "domain_kind": "protein_in_silico",
+        "capability_id": "protein.structure_prediction.esmfold2",
+    })
+    assert payload.schema_id == "bms.project-workflow-setup.create.v1"
+    with pytest.raises(ValueError):
+        model.model_validate({
+            "relationship_kind": "primary",
+            "experiment_name": "Fold target",
+            "experiment_objective": "Predict structure",
+            "domain_kind": "protein_in_silico",
+            "capability_id": "protein.structure_prediction.esmfold2",
+        })
+
+
 def test_protein_domain_exposes_each_accepted_structure_predictor() -> None:
     revision = SimpleNamespace(canonical_payload=json.dumps({
         "domain_kind": "protein_in_silico",

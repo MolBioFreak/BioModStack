@@ -22,6 +22,7 @@ from experiment_models import (
     ExperimentRunAttempt,
     ExperimentWorkflowPreparation,
     ExperimentWorkflowRun,
+    ExperimentWorkflowSetupContext,
 )
 from experiment_services import (
     NotFound,
@@ -31,6 +32,7 @@ from experiment_services import (
     sha256_text,
 )
 from services.global_experiments.result_surfaces import result_surface_for_receipt
+from services.protein_project_capabilities import protein_capability_record
 
 
 MAX_TREE_NODES = 1_000
@@ -1873,6 +1875,60 @@ async def build_project_manager_read_model(
     )
     page_context_keys = [node["node_key"] for node in context_map_nodes]
 
+    setup_rows = list(
+        (
+            await session.scalars(
+                select(ExperimentWorkflowSetupContext)
+                .where(ExperimentWorkflowSetupContext.project_id == project_id)
+                .order_by(
+                    ExperimentWorkflowSetupContext.updated_at.desc(),
+                    ExperimentWorkflowSetupContext.setup_context_id.desc(),
+                )
+                .limit(MAX_TREE_NODES + 1)
+            )
+        ).all()
+    )
+    if len(setup_rows) > MAX_TREE_NODES:
+        raise ValidationFailure("Project workflow setup task list exceeds the supported bound")
+    workflow_heads_by_id = {head.aggregate_id: head for head in workflows}
+    latest_run_by_workflow: dict[str, dict[str, Any]] = {}
+    for run_item in run_items:
+        latest_run_by_workflow.setdefault(str(run_item["workflow_id"]), run_item)
+    task_items: list[dict[str, Any]] = []
+    for setup in setup_rows:
+        global_head = globals_by_id.get(setup.global_experiment_id)
+        workflow_head = workflow_heads_by_id.get(setup.workflow_id)
+        if global_head is None or workflow_head is None:
+            raise ValidationFailure("Project workflow setup task ownership is incomplete")
+        capability = protein_capability_record(setup.capability_id)
+        latest_run = latest_run_by_workflow.get(setup.workflow_id)
+        actions: list[str] = []
+        if setup.lifecycle_state == "open":
+            actions = ["resume", "edit", "delete"]
+            if setup.validation_state == "ready":
+                actions.append("prepare_launch")
+        elif setup.lifecycle_state == "submitted":
+            actions = ["resume", "open_launch"]
+            if latest_run is not None:
+                actions.extend(action for action in latest_run["available_actions"] if action not in actions)
+        task_items.append(
+            {
+                "setup_context_id": setup.setup_context_id,
+                "global_experiment_id": setup.global_experiment_id,
+                "experiment_name": global_head.display_name,
+                "workflow_id": setup.workflow_id,
+                "workflow_name": workflow_head.display_name,
+                "relationship_kind": setup.relationship_kind,
+                "workflow_label": str(capability["label"]),
+                "setup_state": setup.lifecycle_state,
+                "validation_state": setup.validation_state,
+                "latest_run_state": latest_run["normalized_state"] if latest_run is not None else None,
+                "result_count": len(latest_run["output_receipt_ids"]) if latest_run is not None else 0,
+                "reopen_route": f"/projects/{project_id}/workflow-setups/{setup.setup_context_id}",
+                "allowed_actions": actions,
+            }
+        )
+
     return {
         "schema": "bms.project-manager.read-model.v1",
         "subject_id": project_id,
@@ -1922,6 +1978,7 @@ async def build_project_manager_read_model(
             "activity": {"items": activity_items, "next_cursor": activity_next_cursor},
         },
         "project": _head_summary(project, project_payload),
+        "tasks": task_items,
         "tree": {"nodes": tree_nodes},
         "map": {
             "focus_node_key": _key("global_experiment", focus.aggregate_id)
