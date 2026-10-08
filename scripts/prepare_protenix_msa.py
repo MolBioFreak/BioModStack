@@ -1,25 +1,10 @@
 #!/usr/bin/env python3
-"""Prepare Protenix-compatible MSA paths before inference.
+"""Consume controller-prepared, supplied, or existing cached Protenix MSAs.
 
-This script resolves MSA inputs up front so Protenix does not need to enter its
-internal web-service polling path during `protenix pred`.
-
-Backends:
-- auto: use ColabFold API-compatible Protenix conversion for small jobs,
-  otherwise use local BMS MSA generation per protein chain.
-- colabfold_api: use Protenix's built-in ColabFold-compatible request parser to
-  generate pairing/non_pairing A3Ms.
-- local: use BioModStack local MSA generation and attach per-chain unpaired
-  MSAs plus query-only pairing placeholders.
-
-Cache policy: every protein chain is checked against the shared MSA cache
-(sequence SHA-256 key) before backend selection. A full cache hit skips MSA
-generation entirely and makes the requested backend irrelevant (reported as
-backend "cache"). API-fetched MSAs are persisted into the shared cache so
-later identical runs short-circuit; existing cache entries are never
-overwritten.
+The CLI never starts a provider search. Both API providers are prepared on BMS
+through the shared controller service before inference. Missing inputs fail
+closed. Legacy conversion helpers remain importable for compatibility callers.
 """
-
 from __future__ import annotations
 
 import argparse
@@ -692,7 +677,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input_json", required=True, help="Input Protenix JSON")
     parser.add_argument("--output_json", required=True, help="Output JSON with MSA paths")
     parser.add_argument("--out_dir", required=True, help="Working directory for MSA artifacts")
-    parser.add_argument("--backend", default="auto", choices=["auto", "colabfold_api", "local"], help="MSA backend")
+    parser.add_argument("--backend", default="auto", choices=["auto", "colabfold_api", "neurosnap_api", "local"], help="MSA backend")
     parser.add_argument("--colabfold-api-host", default=DEFAULT_COLABFOLD_API_HOST, help="ColabFold API host")
     parser.add_argument("--db-path", default=os.getenv("BMS_COLABFOLD_DB") or "", help="Local ColabFold DB path")
     parser.add_argument("--cache-dir", default=os.getenv("BMS_MSA_CACHE") or "", help="MSA cache directory")
@@ -722,7 +707,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    choose_backend(args.backend, {}, 1, 1, 1)
+    # Prepared artifacts are provider-independent data, not a worker search.
+    if not args.prepared_inputs:
+        choose_backend(args.backend, {}, 1, 1, 1)
     input_json = Path(args.input_json).expanduser().resolve()
     output_json = Path(args.output_json).expanduser().resolve()
     out_dir = Path(args.out_dir).expanduser().resolve()
@@ -747,6 +734,8 @@ def main() -> None:
 
     hydrated_from_cache = 0
     if getattr(args, 'prepared_inputs', ''):
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
         from biomodstack_msa_handoff import hydrate_prepared_protenix_task
         payload = hydrate_prepared_protenix_task(payload, Path(args.prepared_inputs), args.prepared_sha256)
         dump_json(output_json, payload)
@@ -777,115 +766,10 @@ def main() -> None:
         print(str(output_json), flush=True)
         return
 
-    if getattr(args, "cache_only", False):
-        raise RuntimeError("MSA cache-only miss; search is not permitted")
-
-    backend = choose_backend(
-        requested=args.backend,
-        stats=stats,
-        max_tasks=max(1, args.small_max_tasks),
-        max_chains=max(1, args.small_max_protein_chains),
-        max_residues=max(1, args.small_max_total_residues),
+    raise RuntimeError(
+        "Missing controller-prepared MSA inputs. Provider preparation must finish "
+        "on BMS before inference; worker search is forbidden."
     )
-    print(f"[prepare_protenix_msa] Selected backend: {backend}", flush=True)
-
-    local_msa_runtime_contract: Dict[str, Any] | None = None
-    if backend == "colabfold_api":
-        # Preserve partially hydrated and user-supplied chains in API input.
-        hydrated_input = out_dir / "hydrated-input.json"
-        dump_json(hydrated_input, payload)
-        prepared = prepare_with_colabfold_api(
-            input_json=hydrated_input,
-            output_json=output_json,
-            work_dir=out_dir,
-            host=args.colabfold_api_host,
-        )
-        if args.cache_dir:
-            persisted = cache_colabfold_results(load_json(Path(prepared)), args.cache_dir)
-            if persisted:
-                print(
-                    f"[prepare_protenix_msa] Persisted {persisted} API-fetched MSAs into shared cache",
-                    flush=True,
-                )
-    else:
-        if not args.db_path:
-            raise ValueError("Local Protenix MSA preparation requires --db-path")
-        if not args.cache_dir:
-            raise ValueError("Local Protenix MSA preparation requires --cache-dir")
-
-        local_msa_runtime_contract = resolve_protenix_local_gpu_server_mode(args.gpu_server_mode)
-        requested_gpu_server_mode = local_msa_runtime_contract["requested_gpu_server_mode"]
-        resolved_gpu_server_mode = local_msa_runtime_contract["effective_gpu_server_mode"]
-        if requested_gpu_server_mode != resolved_gpu_server_mode:
-            print(
-                "[prepare_protenix_msa] Forcing gpu-server-mode=off for local Protenix MSA to avoid persistent gpuserver handshake stalls.",
-                flush=True,
-            )
-
-        runtime = inspect_mmseqs_runtime(
-            db_path=args.db_path,
-            cache_dir=args.cache_dir,
-            cpu_only=bool(args.cpu_only),
-            gpu_mode=str(args.gpu_mode or "auto"),
-            gpu_threshold=int(args.gpu_threshold),
-            preferred_gpus=parse_gpu_csv(args.preferred_gpus),
-            excluded_gpus=parse_gpu_csv(args.excluded_gpus),
-            gpu_server_mode=resolved_gpu_server_mode,
-            gpu_server_wait_timeout=int(args.gpu_server_wait_timeout),
-            gpu_server_db_load_mode=int(args.gpu_server_db_load_mode),
-            gpu_server_startup_wait=float(args.gpu_server_startup_wait),
-            verbose=True,
-        )
-        if runtime.get("selected_gpu_id") is not None:
-            local_msa_runtime_contract["selected_gpu_id"] = runtime.get("selected_gpu_id")
-        if not bool(runtime.get("use_gpu_mmseqs")) and not bool(args.allow_cpu_fallback):
-            failure_message = str(
-                runtime.get("failure_message")
-                or runtime.get("summary_message")
-                or "GPU MMseqs unavailable"
-            )
-            raise RuntimeError(
-                f"{failure_message}. Local Protenix MSA will not continue on CPU without explicit approval."
-            )
-        prepared = prepare_with_local_msa(
-            payload=payload,
-            output_json=output_json,
-            work_dir=out_dir,
-            db_path=args.db_path,
-            cache_dir=args.cache_dir,
-            threads=args.threads,
-            preset=args.preset,
-            cpu_only=bool(args.cpu_only),
-            gpu_mode=str(args.gpu_mode or "auto"),
-            gpu_threshold=int(args.gpu_threshold),
-            preferred_gpus=args.preferred_gpus,
-            excluded_gpus=args.excluded_gpus,
-            gpu_server_mode=resolved_gpu_server_mode,
-            gpu_server_wait_timeout=int(args.gpu_server_wait_timeout),
-            gpu_server_db_load_mode=int(args.gpu_server_db_load_mode),
-            gpu_server_startup_wait=float(args.gpu_server_startup_wait),
-            allow_cpu_fallback=bool(args.allow_cpu_fallback),
-            local_msa_timeout_seconds=int(args.local_msa_timeout_seconds),
-            selected_gpu_id=runtime.get("selected_gpu_id"),
-            cache_only=bool(args.cache_only),
-            binder_chain_ids=[token.strip() for token in str(args.binder_chain_ids or "").split(",") if token.strip()],
-            binder_max_unpaired_rows=(int(args.binder_max_unpaired_msa_rows) if int(args.binder_max_unpaired_msa_rows) > 0 else None),
-            binder_min_residue_coverage_fraction=float(args.binder_min_residue_coverage),
-        )
-
-    if args.report_json:
-        prepared_payload = load_json(Path(prepared))
-        write_msa_report(
-            Path(args.report_json).expanduser().resolve(),
-            prepared_payload,
-            backend,
-            stats,
-            local_msa_runtime_contract=local_msa_runtime_contract if backend == "local" else None,
-        )
-
-    print(f"[prepare_protenix_msa] Prepared input JSON: {prepared}", flush=True)
-    print(str(prepared), flush=True)
-
 
 if __name__ == "__main__":
     main()
