@@ -17,7 +17,7 @@ if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
 from database import Base, Design, Job
-from routers.designs import _build_plotly_chart_suggestions, _build_plotly_metric_metadata, _build_plotly_metrics
+from routers.designs import _build_plotly_chart_suggestions, _build_plotly_metric_metadata, _build_plotly_metrics, _collect_plotly_metrics
 from services import result_ingester
 from services.result_ingester import ingest_job_results
 
@@ -418,6 +418,22 @@ async def test_confornets_ingests_native_confidence_evaluation_diversity_and_lan
         suggestion_ids = {suggestion["id"] for suggestion in suggestions}
         assert "confornets_reference_confidence" in suggestion_ids
         assert "confornets_sample_landscape" in suggestion_ids
+
+        response = await _collect_plotly_metrics(
+            "job-confornets-analytics",
+            include_children=False,
+            requested_design_ids=None,
+            limit=100,
+            offset=0,
+            session=session,
+        )
+        assert "confornets_min_reference_rmsd" in response.metric_keys
+        assert response.metric_metadata["confornets_min_reference_rmsd"].label == "Nearest staged-reference Cα RMSD"
+        assert response.metric_metadata["confornets_pairwise_mean_rmsd"].semantics == "post_hoc_sample_space_diversity"
+        assert {suggestion.id for suggestion in response.chart_suggestions} >= {
+            "confornets_reference_confidence",
+            "confornets_sample_landscape",
+        }
 
     await engine.dispose()
 

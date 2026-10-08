@@ -1811,11 +1811,14 @@ async def _collect_plotly_metrics(
             )
         )
 
+    sorted_metric_keys = sorted(metric_keys)
     return PlotlyMetricsResponse(
         job_id=job_id,
-        metric_keys=sorted(metric_keys),
+        metric_keys=sorted_metric_keys,
         points=points,
         total=int(total),
+        metric_metadata=_build_plotly_metric_metadata(sorted_metric_keys),
+        chart_suggestions=_build_plotly_chart_suggestions(sorted_metric_keys),
     )
 
 
