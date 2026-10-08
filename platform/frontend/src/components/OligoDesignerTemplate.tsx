@@ -728,7 +728,7 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                                             setSelectedRcsbEntry({ id: scaffold.id, title: scaffold.name, type: scaffold.type });
                                             setScaffoldPdbUrl(`https://files.rcsb.org/download/${scaffold.id}.pdb`);
                                             setDesignApproach('scaffold');
-                                            setScaffoldPdbPath(`rcsb://${scaffold.id}`);
+                                            setScaffoldPdbPath(`https://files.rcsb.org/download/${scaffold.id}.pdb`);
                                         }}
                                         className={`p-2 text-left rounded border transition-all ${selectedRcsbEntry?.id === scaffold.id
                                             ? 'border-purple-500 bg-purple-500/10'
@@ -756,7 +756,7 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                                             setSelectedRcsbEntry({ id: pdbId, title: `PDB ${pdbId}`, type: 'Unknown' });
                                             setScaffoldPdbUrl(`https://files.rcsb.org/download/${pdbId}.pdb`);
                                             setDesignApproach('scaffold');
-                                            setScaffoldPdbPath(`rcsb://${pdbId}`);
+                                            setScaffoldPdbPath(`https://files.rcsb.org/download/${pdbId}.pdb`);
                                         }
                                     }
                                 }}
