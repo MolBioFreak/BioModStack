@@ -758,17 +758,38 @@ class ChemistryCatalog:
             )
 
         states = profile["states"]
-        if not states["installed"] or not states["asset_probe_success"] or not states["operator_enabled"]:
+        qualification_ids = {
+            item.strip()
+            for item in os.environ.get("BMS_MD_QUALIFICATION_PROFILE_IDS", "").split(",")
+            if item.strip()
+        }
+        qualification_allowed = bool(
+            os.environ.get("BMS_RUNTIME_MODE", "").strip().lower() in {"dev", "development", "test"}
+            and len(qualification_ids) <= 8
+            and all(PROFILE_ID_PATTERN.fullmatch(item) for item in qualification_ids)
+            and profile["id"] in qualification_ids
+            and profile.get("inventory_class") == "candidate"
+            and profile.get("legacy") is False
+            and profile.get("automatic_preparation") is True
+            and states["installed"]
+            and states["asset_probe_success"]
+            and states["runtime_validated"]
+        )
+        if not qualification_allowed and (
+            not states["installed"] or not states["asset_probe_success"] or not states["operator_enabled"]
+        ):
             raise ChemistryProfileSelectionError(
                 "MD_CHEMISTRY_PROFILE_UNAVAILABLE",
                 f"Chemistry profile {profile['id']} is unavailable in the deployed runtime.",
             )
-        if not states["runtime_validated"] or not states["scientifically_validated"]:
+        if not qualification_allowed and (
+            not states["runtime_validated"] or not states["scientifically_validated"]
+        ):
             raise ChemistryProfileSelectionError(
                 "MD_CHEMISTRY_PROFILE_NOT_VALIDATED",
                 f"Chemistry profile {profile['id']} has not passed all scoped validation gates.",
             )
-        if not states["selectable"]:
+        if not qualification_allowed and not states["selectable"]:
             raise ChemistryProfileSelectionError(
                 "MD_CHEMISTRY_PROFILE_UNAVAILABLE",
                 f"Chemistry profile {profile['id']} is not selectable.",
