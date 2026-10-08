@@ -75,7 +75,7 @@ params:
 
   - name: boltz_diffusion_samples
     type: integer
-    description: Number of diffusion samples for structure generation
+    description: Number of final ranked candidate structures to generate from the same input
     required: false
     default: 1
     minimum: 1
@@ -83,7 +83,7 @@ params:
 
   - name: boltz_max_parallel_samples
     type: integer
-    description: Maximum number of Boltz samples to predict in parallel within a job (lower reduces VRAM spikes)
+    description: Denoiser-forward chunk limit for already-requested Boltz diffusion samples; lower can reduce neural-network VRAM spikes but is not full job-level serialization
     required: false
     default: 1
     minimum: 1

@@ -7,7 +7,10 @@ from dram_vram_tile_probe import (
     _detect_gpu_specs,
     assign_tiles_weighted,
     estimate_pair_tile_bytes,
+    fake_pair_state,
+    fake_reference_pair_update,
     plan_square_tiles,
+    run_single_gpu_context_spill_simulation,
 )
 
 
@@ -50,6 +53,54 @@ def test_weighted_assignment_gives_larger_worker_more_tiles() -> None:
     assert set(assignments) == {0, 1}
     assert len(assignments[0]) > len(assignments[1])
     assert len(assignments[0]) + len(assignments[1]) == len(tiles)
+
+
+def test_single_gpu_context_spill_matches_reference_for_4_and_16_logical_shards() -> None:
+    initial = fake_pair_state(sequence_length=8)
+    reference = fake_reference_pair_update(initial, phases=2, compute_steps_per_lease=3)
+
+    four_shard_run = run_single_gpu_context_spill_simulation(
+        sequence_length=8,
+        tile_tokens=4,
+        phases=2,
+        compute_steps_per_lease=3,
+        gpu_id=0,
+        initial_state=initial,
+    )
+    sixteen_shard_run = run_single_gpu_context_spill_simulation(
+        sequence_length=8,
+        tile_tokens=2,
+        phases=2,
+        compute_steps_per_lease=3,
+        gpu_id=0,
+        initial_state=initial,
+    )
+
+    assert four_shard_run["final_state"] == reference
+    assert sixteen_shard_run["final_state"] == reference
+    assert four_shard_run["manifest"]["logical_tile_count"] == 4
+    assert sixteen_shard_run["manifest"]["logical_tile_count"] == 16
+    assert four_shard_run["manifest"]["worker_count"] == 1
+    assert sixteen_shard_run["manifest"]["worker_count"] == 1
+
+
+def test_single_gpu_context_spill_manifest_proves_window_smaller_than_full_state() -> None:
+    result = run_single_gpu_context_spill_simulation(
+        sequence_length=16,
+        tile_tokens=4,
+        phases=1,
+        compute_steps_per_lease=2,
+        gpu_id=0,
+    )
+
+    manifest = result["manifest"]
+    assert manifest["backend"] == "single-gpu-dram-context-spill-sim"
+    assert manifest["state_residency"] == "dram_between_leases"
+    assert manifest["full_state_allocated_in_vram"] is False
+    assert manifest["logical_tile_count"] == 16
+    assert manifest["peak_device_window_bytes"] < manifest["full_state_bytes"]
+    assert manifest["leases"][0]["lifecycle"] == ["load", "compute", "writeback", "release"]
+    assert {lease["gpu_id"] for lease in manifest["leases"]} == {0}
 
 
 def test_detect_gpu_specs_prefers_torch_cuda_ordinals(monkeypatch) -> None:
