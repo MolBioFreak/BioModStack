@@ -412,6 +412,46 @@ def _validate_outputs(
     return report
 
 
+_TRAJECTORY_FRAME = re.compile(
+    r"^Reading frame\s+(?P<frame>\d+)\s+time\s+(?P<time>-?\d+(?:\.\d+)?)\s*$",
+    re.MULTILINE,
+)
+
+
+def _build_trajectory_frame_map(
+    *, trajectory_report: str, trajectory_sha256: str, replica_index: int,
+    timestep_fs: float,
+) -> dict[str, Any]:
+    if timestep_fs <= 0:
+        raise ValueError("production timestep_fs must be positive")
+    frames: list[dict[str, Any]] = []
+    previous_time = -1.0
+    for display_frame, match in enumerate(_TRAJECTORY_FRAME.finditer(trajectory_report)):
+        source_frame = int(match.group("frame"))
+        time_ps = float(match.group("time"))
+        if source_frame != display_frame or time_ps < 0 or (display_frame and time_ps <= previous_time):
+            raise ValueError("GROMACS trajectory frame receipt is noncontiguous or nonmonotonic")
+        raw_step = time_ps * 1000.0 / timestep_fs
+        step = round(raw_step)
+        if abs(raw_step - step) > 1e-6:
+            raise ValueError("GROMACS trajectory time does not map to an exact integration step")
+        frames.append({
+            "display_frame": display_frame,
+            "source_frame": source_frame,
+            "time_ps": time_ps,
+            "step": step,
+        })
+        previous_time = time_ps
+    if not frames:
+        raise ValueError("GROMACS trajectory frame receipt is empty")
+    return {
+        "schema": "bms.md.trajectory-frame-map.v1",
+        "replica": replica_index,
+        "trajectory_sha256": trajectory_sha256,
+        "frames": frames,
+    }
+
+
 def run_gromacs_job(
     config_path: Path,
     output_dir: Path,
@@ -522,6 +562,19 @@ def run_gromacs_job(
         gmx_binary=gmx_binary,
         ledger=ledger,
     )
+    trajectory_sha256 = hashlib.sha256(trajectory.read_bytes()).hexdigest()
+    production_config = config["stages"]["production"]
+    timestep_fs = float(production_config.get("timestep_fs", 2.0))
+    trajectory_frame_map = output_dir / "analysis" / "trajectory-frame-map.json"
+    frame_map_payload = _build_trajectory_frame_map(
+        trajectory_report=(output_dir / "analysis" / "trajectory_check.command.log").read_text(
+            encoding="utf-8", errors="replace",
+        ),
+        trajectory_sha256=trajectory_sha256,
+        replica_index=replica_index,
+        timestep_fs=timestep_fs,
+    )
+    _atomic_json(trajectory_frame_map, frame_map_payload)
     representative_structure = output_dir / "production" / "production-final.pdb"
     (output_dir / "analysis").mkdir(parents=True, exist_ok=True)
     representative_is_valid = False
@@ -556,6 +609,7 @@ def run_gromacs_job(
             "coordinates": coordinates,
             "run_input": production.with_suffix(".tpr"),
             "trajectory": trajectory,
+            "trajectory_frame_map": trajectory_frame_map,
             "atom_order_manifest": atom_order_manifest,
             "representative_structure": representative_structure,
             "checkpoint": checkpoint,
@@ -578,17 +632,19 @@ def run_gromacs_job(
     manifest["artifacts"]["trajectory"].update({
         "semantic_role": "analysis_trajectory", "atom_order_identity": atom_order_identity,
     })
+    manifest["artifacts"]["trajectory_frame_map"].update({
+        "semantic_role": "trajectory_frame_map",
+        "source_trajectory_sha256": trajectory_sha256,
+    })
     manifest["artifacts"]["atom_order_manifest"].update({
         "semantic_role": "atom_order_manifest", "atom_order_identity": atom_order_identity,
     })
-    production_config = config["stages"]["production"]
-    production_steps = int(production_config["steps"])
-    output_interval = int(production_config["trajectory_interval_steps"])
+    final_frame = frame_map_payload["frames"][-1]
     manifest["artifacts"]["representative_structure"].update({
         "semantic_role": "representative_structure",
         "selection_method": "completed_production_final_coordinates",
-        "source_frame": production_steps // output_interval - 1 if production_steps % output_interval == 0 else None,
-        "time_ps": production_steps * 0.002,
+        "source_frame": final_frame["source_frame"],
+        "time_ps": final_frame["time_ps"],
         "source_trajectory_sha256": manifest["artifacts"]["trajectory"]["sha256"],
     })
     manifest_path = output_dir / "manifest.json"
