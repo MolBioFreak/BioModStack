@@ -453,6 +453,8 @@ export interface CachedArtifactReceipt {
 }
 
 export interface ProvisionPreview {
+    dependencies?: Array<{ name: string; kind: string; sha256: string | null; size_bytes: number | null }>;
+    estimates_complete?: boolean;
     destination?: { target_id: string; remote_root: string } | null;
     effective_params?: Record<string, unknown> | null;
     plan_sha256?: string | null;
