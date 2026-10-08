@@ -266,6 +266,10 @@ ROBOT_LOCAL_EXPECTED_ROUTES: Dict[str, bool] = {
     "/motion/oem/movement_readiness/comparison": True,
     "/motion/oem/shadow_readback": True,
     "/motion/oem/shadow_readback/capture": True,
+    "/motion/gripper/status": True,
+    "/motion/gripper/restore_idle_current": True,
+    "/motion/gripper/clear": True,
+    "/motion/gripper/home": True,
     "/motion/range/status": True,
     "/motion/interlock/prepare": True,
     "/motion/interlock/override": True,
@@ -1989,6 +1993,53 @@ async def led_pct(request: Request):
 @router.post("/led/rgb")
 async def led_rgb(request: Request):
     return await proxy_request("POST", "/led/rgb", await request.json())
+
+@router.get("/motion/gripper/status")
+async def gripper_status():
+    payload = await proxy_request("GET", "/motion/gripper/status", timeout=20.0)
+    if isinstance(payload, dict):
+        payload = dict(payload)
+        payload.setdefault("bms_role", "thin_proxy_only")
+    return payload
+
+
+@router.post("/motion/gripper/restore_idle_current")
+async def gripper_restore_idle_current(request: Request):
+    payload = request if isinstance(request, dict) else await _request_json_or_empty(request)
+    response = await proxy_request("POST", "/motion/gripper/restore_idle_current", payload, timeout=20.0)
+    if isinstance(response, dict):
+        response = dict(response)
+        response.setdefault("bms_role", "thin_proxy_only")
+    return response
+
+
+@router.post("/motion/gripper/clear")
+async def gripper_clear(request: Request):
+    payload = request if isinstance(request, dict) else await _request_json_or_empty(request)
+    try:
+        timeout_s = float(payload.get("timeout_s", 15.0))
+    except (TypeError, ValueError):
+        timeout_s = 15.0
+    response = await proxy_request("POST", "/motion/gripper/clear", payload, timeout=min(max(timeout_s + 20.0, 30.0), 140.0))
+    if isinstance(response, dict):
+        response = dict(response)
+        response.setdefault("bms_role", "thin_proxy_only")
+    return response
+
+
+@router.post("/motion/gripper/home")
+async def gripper_home(request: Request):
+    payload = request if isinstance(request, dict) else await _request_json_or_empty(request)
+    try:
+        timeout_s = float(payload.get("timeout_s", 15.0))
+    except (TypeError, ValueError):
+        timeout_s = 15.0
+    response = await proxy_request("POST", "/motion/gripper/home", payload, timeout=min(max(timeout_s + 20.0, 30.0), 140.0))
+    if isinstance(response, dict):
+        response = dict(response)
+        response.setdefault("bms_role", "thin_proxy_only")
+    return response
+
 
 @router.post("/motion/axis/relative")
 async def move_axis_relative(request: Request):
