@@ -80,7 +80,7 @@ test('downloads use content-addressed CM request-scoped API identities', () => {
 test('launcher exposes state-conditioned FrustraMPNN comparison as an explicit typed payload option', () => {
     const launcher = source('conformationalMapping/ConformationalMappingLauncher.tsx');
     const api = source('conformationalMapping/conformationalMappingApi.ts');
-    assert.match(launcher, /State-conditioned FrustraMPNN comparison target/);
+    assert.match(launcher, /State-landscape comparison/);
     assert.match(launcher, /payload\.state_landscape_comparison/);
     assert.match(api, /state_landscape_comparison\?:/);
 });
@@ -94,8 +94,9 @@ test('launcher can register a pasted canonical protein sequence into the existin
     assert.match(launcher, /source_kind === 'protein_sequence'/);
     assert.match(launcher, /update\('sequenceId', source\.source_id\)/);
     assert.match(launcher, /RCSB PDB tie-in/);
-    assert.match(launcher, /registerCmRcsbMmcif/);
-    assert.match(launcher, /Register raw mmCIF/);
+    assert.match(launcher, /Search RCSB/);
+    assert.match(launcher, /Register selected RCSB mmCIF/);
+    assert.match(launcher, /searchCmRcsb/);
     assert.match(api, /registerCmRcsbMmcif/);
     assert.match(api, /sources\/rcsb/);
 });
@@ -115,6 +116,17 @@ test('normal external import is mmCIF-only with server-derived snapshot authorit
         /if \(form\.backend === 'external_import'\) \{\s*payload\.registered_snapshot_id/,
     );
     assert.doesNotMatch(launcher, /form\.snapshotId\) errors\.push\('Select the matching ordered complete-complex snapshot bundle/);
+});
+
+test('server-owned policy and singular external artifact contracts stay out of editable launcher state', () => {
+    const launcher = source('conformationalMapping/ConformationalMappingLauncher.tsx');
+    const state = source('jobSubmissionTemplateState.ts');
+    const template = readFileSync(resolve(process.cwd(), '../api/config/templates/conformational_mapping.yaml'), 'utf8');
+    assert.match(launcher, /registered_artifact_id/);
+    assert.doesNotMatch(launcher, /form\.analysis/);
+    assert.doesNotMatch(state, /analysis_policy|chain_id:|test_case_id:|benchmark_name:/);
+    assert.match(template, /registered_artifact_id/);
+    assert.doesNotMatch(template, /registered_artifact_ids|name: analysis_policy/);
 });
 
 test('launcher is a full-width card-grid run workspace with one backend authority', () => {

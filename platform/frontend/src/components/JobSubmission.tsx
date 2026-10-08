@@ -659,7 +659,6 @@ const getCompactTemplateDescription = (template: UntypedApiValue): string => {
         case 'boltz_cp_experimental':
             return 'Experimental Fold-CP path for large Boltz-2 folds.';
         case 'confornets_experimental':
-            return 'Experimental conformational mapping; ConforNets backend first.';
         case 'conformational_mapping':
             return 'Complete-complex Protenix v2 ensembles, canonical ConforNets/import alternatives, residue mapping, FrustraMPNN landscapes, and support-ranked comparison.';
         case 'esmfold2':
@@ -681,7 +680,7 @@ const getCompactModelDescription = (model: UntypedApiValue): string => {
         case 'boltz_cp_experimental':
             return 'Experimental Fold-CP large-protein path.';
         case 'confornets_experimental':
-            return 'Experimental monomer conformational mapping.';
+            return 'Canonical conformational mapping workflow.';
         case 'esmfold2':
         case 'esmfold2_experimental':
             return 'Local all-atom protein and complex folding.';
@@ -705,14 +704,15 @@ export function JobSubmission() {
     const urlTemplate = searchParams.get('template');
     const initialTemplateId = urlTemplate === 'protein_local_redesign'
         ? 'protein_modification_experimental'
-        : urlTemplate;
+        : urlTemplate === 'confornets_experimental' ? 'conformational_mapping' : urlTemplate;
     const [selectedTemplateId, setSelectedTemplateIdInternal] = useState<string | null>(initialTemplateId);
 
     // Wrapper to sync state with URL
     const setSelectedTemplateId = useCallback((id: string | null) => {
-        setSelectedTemplateIdInternal(id);
-        if (id) {
-            setSearchParams({ template: id }, { replace: true });
+        const canonicalId = id === 'confornets_experimental' ? 'conformational_mapping' : id;
+        setSelectedTemplateIdInternal(canonicalId);
+        if (canonicalId) {
+            setSearchParams({ template: canonicalId }, { replace: true });
         } else {
             setSearchParams({}, { replace: true });
         }
@@ -893,6 +893,7 @@ export function JobSubmission() {
         protein_cad_experimental: 'protein_modification_experimental',
         boltz_cp_experimental: 'boltz_cp_experimental',
         conformational_mapping: 'conformational_mapping',
+        confornets_experimental: 'conformational_mapping',
         esmfold2: 'structure_prediction',
         esmfold2_experimental: 'structure_prediction',
     };
@@ -975,7 +976,8 @@ export function JobSubmission() {
     );
 
     const routeUserTemplate = (template: UntypedApiValue) => {
-        const apiTemplateId = typeof template.base_template_id === 'string' ? template.base_template_id : null;
+        const rawApiTemplateId = typeof template.base_template_id === 'string' ? template.base_template_id : null;
+        const apiTemplateId = rawApiTemplateId === 'confornets_experimental' ? 'conformational_mapping' : rawApiTemplateId;
         const matchedApiTemplate = apiTemplateId
             ? visibleApiTemplates.find((candidate: UntypedApiValue) => candidate.id === apiTemplateId)
             : null;
@@ -1000,7 +1002,7 @@ export function JobSubmission() {
         }
 
         const dedicatedTemplateId =
-            (isDedicatedLauncherTemplate(template.base_template_id) && template.base_template_id) ||
+            (isDedicatedLauncherTemplate(apiTemplateId) && apiTemplateId) ||
             (template.model_id ? dedicatedTemplateByModelId[template.model_id] : null);
 
         if (dedicatedTemplateId) {
@@ -1162,7 +1164,7 @@ export function JobSubmission() {
 
 
         if (template.id === 'boltz_cp_experimental') return 'CP';
-        if (template.id === 'confornets_experimental') return 'CN';
+        if (template.id === 'confornets_experimental') return 'CM';
         if (template.id === 'conformational_mapping') return 'CM';
 
         return template.icon === 'target' ? 'TG'
@@ -1709,10 +1711,6 @@ export function JobSubmission() {
                                     onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
                                 />
-                            ) : selectedTemplateId === 'confornets_experimental' ? (
-                                <div className="rounded-xl border border-slate-700 bg-slate-900/40 px-4 py-3 text-sm text-slate-400">
-                                    Conformational Mapping selected. Configure the workflow below.
-                                </div>
                             ) : selectedTemplateId === 'conformational_mapping' ? (
                                 <ConformationalMappingLauncher
                                     key={`conformational_mapping:${dedicatedTemplateVersion}`}

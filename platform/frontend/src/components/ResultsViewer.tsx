@@ -5017,7 +5017,7 @@ export function ResultsViewer() {
         .map((designId) => orderedDesigns.find((design) => design.id === designId))
         .filter((design): design is Design => Boolean(design));
 
-    if (activeJob?.model_id === 'conformational_mapping') {
+    if (activeJob?.model_id === 'conformational_mapping' || activeJob?.model_id === 'confornets_experimental') {
         return <ConformationalMappingViewer requestId={activeJob.id} title={activeJob.name} />;
     }
     if (activeJob && frustraMpnnSurfaceAvailable && resultSurface === 'frustrampnn') {
