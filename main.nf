@@ -637,40 +637,7 @@ workflow {
             }
         }
         else {
-            log.warn("DEPRECATION WARNING: diffusion_method='rfd' is deprecated. Consider using 'rfd3' (RFdiffusion3) instead.")
-            def rfdCommand = buildLegacyRfdCommand(params)
-            log.info("RFdiffusion command: ${rfdCommand} inference.num_designs=${batch_size}")
-
-            def inputFiles = collectInputFiles(params)
-            inputFiles.each { inputFile ->
-                "rsync -r ${inputFile} ${inputsDir}/.".execute()
-            }
-
-            RFDiffusionWorkflow(
-                rfdCommand,
-                params.rfd_num_designs,
-                batch_size,
-                params.rfd_mode,
-                inputFiles,
-            )
-
-            RFDiffusionWorkflow.out.pdbs_jsons.set { rfd_pdbs_jsons }
-            CompressRFD("rfd", rfd_pdbs_jsons.flatten().collect())
-
-            rebatchTuples(rfd_pdbs_jsons, 200)
-                .set { rfd_tuples }
-            FilterRFD(rfd_tuples)
-
-            if (params.run_rfd_only) {
-                FilterRFD.out.pdbs_jsons
-                    .flatten()
-                    .collect()
-                    .ifEmpty(file("${params.code_root}/lib/placeholder.pdb"))
-                    .set { final_pdbs }
-            }
-            else {
-                FilterRFD.out.pdbs_jsons.set { filt_rfd_pdbs_jsons }
-            }
+            error("diffusion_method='rfd' has been retired from tracked BioModStack repo state. Use diffusion_method='rfd3' instead.")
         }
     }
     else if (params.diffusion_method == "boltzgen") {
@@ -1304,11 +1271,4 @@ def countPdbFiles(inputChannel) {
             }.size()
         }
         .ifEmpty(0)
-}
-
-def buildLegacyRfdCommand(params) {
-    def loader = new groovy.lang.GroovyClassLoader()
-    def paramsClass = loader.parseClass(new File("${params.code_root}/lib/RFDiffusionParams.groovy"))
-    def instance = paramsClass.getConstructor(Map).newInstance(params as Map)
-    return instance.generateCommandString()
 }
