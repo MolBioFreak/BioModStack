@@ -709,6 +709,7 @@ export function MolBioToolkitV2() {
                                         selection={selection}
                                         windowSize={Math.max(20, Math.min(100, Math.floor(sequenceData.sequence.length / 50)))}
                                         height={120}
+                                        colorPalette={colorPalette}
                                     />
                                 )}
 
