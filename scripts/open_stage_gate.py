@@ -124,9 +124,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Open an interactive stage gate")
     parser.add_argument("--job_id", required=True)
     parser.add_argument("--stage", required=True)
-    parser.add_argument("--candidate_dir", required=True)
+    parser.add_argument("--candidate_dir", default="")
     parser.add_argument("--raw_dir", default="")
     parser.add_argument("--filtered_dir", default="")
+    parser.add_argument("--payload_json", default="")
     parser.add_argument("--framework_type", default="")
     parser.add_argument("--antibody_chains", default="")
     parser.add_argument("--structure_validator", default="")
@@ -134,19 +135,19 @@ def main() -> int:
     parser.add_argument("--output", default="gate.json")
     args = parser.parse_args()
 
-    candidate_dir = Path(args.candidate_dir).expanduser().resolve()
+    candidate_dir = Path(args.candidate_dir).expanduser().resolve() if args.candidate_dir else None
     raw_dir = Path(args.raw_dir).expanduser().resolve() if args.raw_dir else None
     filtered_dir = Path(args.filtered_dir).expanduser().resolve() if args.filtered_dir else None
 
     structure_patterns = ["*.pdb", "*.cif"]
     metric_patterns = ["*.json", "*.csv", "*.tsv"]
     payload = {
-        "candidate_dir": normalize_path(str(candidate_dir)),
-        "candidate_count": count_files(candidate_dir, structure_patterns),
-        "candidate_preview": list_preview_files(candidate_dir, structure_patterns),
+        "candidate_dir": normalize_path(str(candidate_dir)) if candidate_dir else None,
+        "candidate_count": count_files(candidate_dir, structure_patterns) if candidate_dir else None,
+        "candidate_preview": list_preview_files(candidate_dir, structure_patterns) if candidate_dir else [],
         "candidate_backbone_summary": summarize_backbones(candidate_dir, structure_patterns),
-        "metric_count": count_files(candidate_dir, metric_patterns),
-        "metric_preview": list_preview_files(candidate_dir, metric_patterns),
+        "metric_count": count_files(candidate_dir, metric_patterns) if candidate_dir else None,
+        "metric_preview": list_preview_files(candidate_dir, metric_patterns) if candidate_dir else [],
         "raw_dir": normalize_path(str(raw_dir)) if raw_dir else None,
         "raw_candidate_count": count_files(raw_dir, structure_patterns) if raw_dir else None,
         "raw_backbone_summary": summarize_backbones(raw_dir, structure_patterns) if raw_dir else None,
@@ -160,6 +161,12 @@ def main() -> int:
         "antibody_chains": args.antibody_chains or None,
         "structure_validator": args.structure_validator or None,
     }
+    if args.payload_json:
+        payload_path = Path(args.payload_json).expanduser().resolve()
+        extra_payload = json.loads(payload_path.read_text(encoding="utf-8"))
+        if not isinstance(extra_payload, dict):
+            raise ValueError(f"Expected JSON object in {payload_path}")
+        payload.update(extra_payload)
 
     response = requests.post(
         f"{args.api_url}/api/jobs/{args.job_id}/stage-gates/{args.stage}/open",

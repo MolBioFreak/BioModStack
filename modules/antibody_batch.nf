@@ -7,6 +7,7 @@ process BatchBoltzValidation {
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "predictions/*.pdb"
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "predictions/*.cif"
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "predictions/*.json"
+    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "predictions/*.npz"
     publishDir "${params.out_dir}/run/boltz", mode: 'copy', pattern: "*.log"
 
     input:
@@ -17,6 +18,7 @@ process BatchBoltzValidation {
     output:
     path "predictions/*.pdb", emit: pdbs
     path "predictions/*.json", emit: scores
+    path "predictions/*.npz", emit: aligned_error, optional: true
     path "boltz_batch.log"
 
     script:
@@ -72,6 +74,7 @@ process BatchBoltzValidation {
 
     boltz_pdb_count=0
     boltz_json_count=0
+    boltz_npz_count=0
     for dir in "\${boltz_dirs[@]}"; do
         [ -d "\$dir" ] || continue
         name="\$(basename "\$dir")"
@@ -93,13 +96,23 @@ process BatchBoltzValidation {
             cp "\$json_src" "\${name}_boltzpred.json"
             boltz_json_count=\$((boltz_json_count + 1))
         fi
+
+        npz_src="\$dir/pae_\${name}_model_0.npz"
+        if [ -f "\$npz_src" ]; then
+            cp "\$npz_src" "\${name}_boltzpred.pae.npz"
+            boltz_npz_count=\$((boltz_npz_count + 1))
+        fi
     done
 
     if [ "\$boltz_pdb_count" -eq 0 ]; then
         echo "[BatchBoltzValidation] ERROR: No Boltz PDB predictions were copied for RMSD alignment" >&2
         exit 1
     fi
-    echo "[BatchBoltzValidation] Prepared \$boltz_pdb_count Boltz PDBs and \$boltz_json_count confidence JSONs for alignment"
+    echo "[BatchBoltzValidation] Prepared \$boltz_pdb_count Boltz PDBs, \$boltz_json_count confidence JSONs, and \$boltz_npz_count PAE NPZs for alignment"
+    if [ "\$boltz_npz_count" -eq 0 ] || [ "\$boltz_npz_count" -lt "\$boltz_pdb_count" ]; then
+        echo "[BatchBoltzValidation] ERROR: Missing Boltz PAE NPZ sidecars; strict ipSAE requires one raw aligned-error artifact per prediction" >&2
+        exit 1
+    fi
 
     # We need access to the original un-repacked templates to calculate RMSD
     # The originals are in 'pdbs' (the input chunk).
@@ -173,6 +186,7 @@ process BatchProtenixValidation {
     def enable_fusion = (params.protenix_enable_fusion == true || params.protenix_enable_fusion == 'true' || params.protenix_enable_fusion == null)
     def use_msa = (params.protenix_use_msa == true || params.protenix_use_msa == 'true' || params.protenix_use_msa == null)
     def msa_backend = params.protenix_msa_backend ?: 'auto'
+    def msa_allow_cpu_fallback = (params.protenix_allow_cpu_msa_fallback == true || params.protenix_allow_cpu_msa_fallback == 'true')
     def normalizeGpuCsv = { raw ->
         if (raw == null) return ''
         if (raw instanceof Collection) {
@@ -187,6 +201,7 @@ process BatchProtenixValidation {
     def msa_preferred_gpu_csv = normalizeGpuCsv(params.msa_preferred_gpus)
     def msa_excluded_gpu_csv = normalizeGpuCsv(params.msa_excluded_gpus)
     def msa_cpu_only_flag = (params.msa_use_gpu == false || params.msa_use_gpu == 'false') ? '--cpu-only' : ''
+    def msa_allow_cpu_fallback_flag = msa_allow_cpu_fallback ? '--allow-cpu-fallback' : ''
     def model_aliases = [
         'protenix_esm_20241211_v0.2.1': 'protenix_mini_esm_v0.5.0',
         'protenix_base_20241211_v0.2.1': 'protenix_base_default_v1.0.0'
@@ -221,8 +236,8 @@ process BatchProtenixValidation {
     export PIP_NO_USER=1
     mkdir -p "\$PROTENIX_ROOT_DIR/common" "\$PROTENIX_ROOT_DIR/checkpoint" "\$PROTENIX_ROOT_DIR/triton" "\$PROTENIX_ROOT_DIR/matplotlib"
 
-    if ! command -v protenix &> /dev/null; then
-        echo "[BatchProtenixValidation] ERROR: protenix CLI not found in container image" >&2
+    if ! command -v python3 &> /dev/null; then
+        echo "[BatchProtenixValidation] ERROR: python3 not found in container image" >&2
         exit 127
     fi
 
@@ -274,11 +289,12 @@ process BatchProtenixValidation {
             --gpu-server-wait-timeout ${params.msa_gpu_server_wait_timeout ?: 120} \\
             --gpu-server-db-load-mode ${params.msa_gpu_server_db_load_mode ?: 0} \\
             --gpu-server-startup-wait ${params.msa_gpu_server_startup_wait ?: 1.0} \\
+            ${msa_allow_cpu_fallback_flag} \\
             2>&1 | tee protenix_msa_prep.log
         PROTENIX_INPUT_JSON="prepared_input.json"
     fi
 
-    protenix pred \\
+    python3 ${params.code_root}/scripts/run_protenix_inference.py \\
         --input "\$PROTENIX_INPUT_JSON" \\
         --out_dir raw_predictions/ \\
         --model_name ${effective_model} \\
@@ -293,12 +309,12 @@ process BatchProtenixValidation {
         2>&1 | tee protenix_batch.log
 
     raw_cif_count=\$(find raw_predictions -type f -name '*.cif' | wc -l)
-    raw_json_count=\$(find raw_predictions -type f -name '*_summary_confidence_sample_*.json' | wc -l)
-    if [ "\$raw_cif_count" -eq 0 ] || [ "\$raw_json_count" -eq 0 ]; then
-        echo "[BatchProtenixValidation] ERROR: Protenix produced no CIF/summary JSON outputs" >&2
+    raw_summary_json_count=\$(find raw_predictions -type f -name '*_summary_confidence_sample_*.json' | wc -l)
+    raw_full_json_count=\$(find raw_predictions -type f -name '*full_data*.json' | wc -l)
+    if [ "\$raw_cif_count" -eq 0 ] || [ "\$raw_summary_json_count" -eq 0 ] || [ "\$raw_full_json_count" -eq 0 ]; then
+        echo "[BatchProtenixValidation] ERROR: Protenix produced no CIF/summary/full-data outputs; strict ipSAE requires raw aligned-error artifacts" >&2
         exit 1
     fi
-
     python3 ${params.code_root}/scripts/align_protenix.py \\
         --design_dir ./original_designs \\
         --protenix_dir ./raw_predictions \\

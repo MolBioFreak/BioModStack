@@ -7,24 +7,8 @@
  */
 
 import { useEffect, useRef, useState, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { api } from '../lib/api';
-
-interface PAEData {
-    design_id: string;
-    design_name: string;
-    pae_matrix: number[][];
-    size: number;
-    chain_boundaries?: { chain_id: string; start: number; end: number }[];
-}
-
-interface ChainMetric {
-    type: string;
-    length: number;
-    avg_plddt?: number | null;
-    plddt?: number[] | null;
-    residue_numbers?: number[] | null;
-}
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { fetchDesignAnalysis, triggerDesignAnalysis, type ChainMetric, type PAEData, type PersistedAnalysisRun } from '../lib/api';
 
 interface PAEHeatmapProps {
     designId: string;
@@ -32,9 +16,6 @@ interface PAEHeatmapProps {
     height?: number;
     chainMetrics?: Record<string, ChainMetric>;
 }
-
-const fetchPAEData = (designId: string) =>
-    api.get<PAEData>(`/api/designs/${designId}/pae`);
 
 // Green gradient for PAE (low = dark green, high = white)
 const getPAEColor = (value: number, maxValue: number = 30): string => {
@@ -50,22 +31,56 @@ const getPAEColor = (value: number, maxValue: number = 30): string => {
 };
 
 export function PAEHeatmap({ designId, width = 400, height = 400, chainMetrics }: PAEHeatmapProps) {
+    const queryClient = useQueryClient();
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [hoveredCell, setHoveredCell] = useState<{ i: number; j: number; value: number; chainI?: string; chainJ?: string } | null>(null);
 
-    const { data: paeData, isLoading, error } = useQuery({
-        queryKey: ['pae', designId],
-        queryFn: () => fetchPAEData(designId),
+    const { data: paeRun } = useQuery({
+        queryKey: ['design-analysis', 'pae_matrix', designId],
+        queryFn: () => fetchDesignAnalysis<PAEData>(designId, 'pae_matrix', { max_size: 200 }).then((response) => response.data),
         enabled: !!designId,
+        refetchInterval: (query) => {
+            const status = (query.state.data as PersistedAnalysisRun<PAEData> | null | undefined)?.status;
+            return status === 'queued' || status === 'running' ? 1500 : false;
+        },
+    });
+    const pae = paeRun?.status === 'completed' ? (paeRun.result as PAEData | null) : null;
+    const paeBusy = paeRun?.status === 'queued' || paeRun?.status === 'running';
+    const paeStatusCopy = paeRun?.status === 'completed'
+        ? 'Cached'
+        : paeRun?.status === 'running'
+            ? 'Running'
+            : paeRun?.status === 'queued'
+                ? 'Queued'
+                : paeRun?.status === 'failed'
+                    ? 'Failed'
+                    : 'Not computed';
+    const runPaeMatrix = useMutation({
+        mutationFn: async () => {
+            const response = await triggerDesignAnalysis<PAEData>(designId, 'pae_matrix', { max_size: 200 });
+            return response.data;
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['design-analysis', 'pae_matrix', designId] });
+        },
     });
 
-    const pae = paeData?.data;
+    const { data: chainMetricsRun } = useQuery({
+        queryKey: ['design-analysis', 'chain_metrics', designId],
+        queryFn: () => fetchDesignAnalysis<Record<string, ChainMetric>>(designId, 'chain_metrics').then((response) => response.data),
+        enabled: !!designId && !chainMetrics,
+    });
+    const effectiveChainMetrics = chainMetrics ?? (
+        chainMetricsRun?.status === 'completed'
+            ? (chainMetricsRun.result as Record<string, ChainMetric> | null)
+            : null
+    );
 
     // Compute chain boundaries from chainMetrics
     const chainBoundaries = useMemo(() => {
-        if (!chainMetrics) return [];
+        if (!effectiveChainMetrics) return [];
 
-        const chains = Object.entries(chainMetrics)
+        const chains = Object.entries(effectiveChainMetrics)
             .filter(([, m]) => m.type !== 'ligand')
             .sort(([idA], [idB]) => idA.localeCompare(idB));
 
@@ -75,15 +90,15 @@ export function PAEHeatmap({ designId, width = 400, height = 400, chainMetrics }
             cumulative += metric.length;
             return { chain_id: chainId, start, end: cumulative, length: metric.length };
         });
-    }, [chainMetrics]);
+    }, [effectiveChainMetrics]);
 
     // Total residues from chain metrics
     const totalResidues = useMemo(() => {
-        if (!chainMetrics) return 0;
-        return Object.values(chainMetrics)
+        if (!effectiveChainMetrics) return 0;
+        return Object.values(effectiveChainMetrics)
             .filter(m => m.type !== 'ligand')
             .reduce((sum, m) => sum + m.length, 0);
-    }, [chainMetrics]);
+    }, [effectiveChainMetrics]);
 
     // Map position to chain
     const getChainForPosition = (pos: number): string | undefined => {
@@ -215,25 +230,39 @@ export function PAEHeatmap({ designId, width = 400, height = 400, chainMetrics }
         }
     };
 
-    if (isLoading) {
+    if (paeBusy) {
         return (
             <div className="flex items-center justify-center bg-slate-800/50 rounded-lg" style={{ width, height }}>
                 <div className="flex flex-col items-center gap-2">
                     <div className="w-8 h-8 border-2 border-green-500 border-t-transparent rounded-full animate-spin" />
-                    <span className="text-xs text-slate-400">Loading PAE data...</span>
+                    <span className="text-xs text-slate-400">{paeRun?.status === 'queued' ? 'Queued PAE analysis...' : 'Running PAE analysis...'}</span>
                 </div>
             </div>
         );
     }
 
-    if (error || !pae) {
+    if (!pae) {
         return (
             <div className="flex flex-col items-center justify-center bg-slate-800/50 rounded-lg text-slate-500" style={{ width, height }}>
                 <svg className="w-12 h-12 mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5z M4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6z" />
                 </svg>
-                <span className="text-sm">No PAE data available</span>
-                <span className="text-xs mt-1 opacity-70">Select a design with confidence data</span>
+                <span className="text-sm">No cached PAE data available</span>
+                <span className="mt-1 text-[10px] uppercase tracking-wider opacity-70">{paeStatusCopy}</span>
+                <button
+                    type="button"
+                    onClick={() => runPaeMatrix.mutate()}
+                    disabled={runPaeMatrix.isPending}
+                    className={`mt-3 rounded border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider transition-colors ${runPaeMatrix.isPending
+                        ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
+                        : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
+                        }`}
+                >
+                    {runPaeMatrix.isPending ? 'Starting…' : 'Run PAE'}
+                </button>
+                {paeRun?.error_message && (
+                    <span className="mt-2 px-4 text-center text-[10px] text-rose-300">Last error: {paeRun.error_message}</span>
+                )}
             </div>
         );
     }
@@ -333,4 +362,3 @@ export function PAEHeatmap({ designId, width = 400, height = 400, chainMetrics }
         </div>
     );
 }
-

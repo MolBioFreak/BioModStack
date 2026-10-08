@@ -156,15 +156,41 @@ async def disconnect_linkage():
 @router.get("/daemon/status")
 async def daemon_status():
     """Check if the uvicorn process is actually healthy on the remote host."""
-    probe = await _daemon_probe()
-    return {
-        "running": probe["healthy"],
-        "healthy": probe["healthy"],
-        "stale_process": bool(probe["detail"]) and not probe["healthy"],
-        "host": ROBOT_SSH_HOST,
-        "port": ROBOT_DAEMON_PORT,
-        "detail": probe["detail"],
-    }
+    try:
+        probe = await _daemon_probe()
+        return {
+            "running": probe["healthy"],
+            "healthy": probe["healthy"],
+            "stale_process": bool(probe["detail"]) and not probe["healthy"],
+            "host": ROBOT_SSH_HOST,
+            "port": ROBOT_DAEMON_PORT,
+            "detail": probe["detail"],
+            "inferred_via_proxy": False,
+            "probe_error": None,
+        }
+    except HTTPException as exc:
+        try:
+            payload = await proxy_request("GET", "/status", timeout=10.0)
+            if isinstance(payload, dict) and payload.get("hardware_connected"):
+                detail = "SSH daemon probe unavailable; inferred running from live BioXP proxy status."
+                if exc.detail:
+                    detail = f"{detail} Probe error: {exc.detail}"
+                return {
+                    "running": True,
+                    "healthy": True,
+                    "stale_process": False,
+                    "host": ROBOT_SSH_HOST,
+                    "port": ROBOT_DAEMON_PORT,
+                    "detail": detail,
+                    "inferred_via_proxy": True,
+                    "probe_error": {
+                        "status_code": exc.status_code,
+                        "detail": exc.detail,
+                    },
+                }
+        except HTTPException:
+            pass
+        raise
 
 @router.post("/daemon/start")
 async def daemon_start():
@@ -377,6 +403,10 @@ async def motion_power_enable():
 @router.post("/motion/power/diag")
 async def motion_power_diag():
     return await proxy_request("POST", "/motion/power/diag", timeout=55.0)
+
+@router.post("/motion/arm/strict_startup")
+async def motion_arm_strict_startup(request: Request):
+    return await proxy_request("POST", "/motion/arm/strict_startup", await request.json(), timeout=190.0)
 
 @router.post("/motion/hard_reset")
 async def motion_hard_reset(request: Request):

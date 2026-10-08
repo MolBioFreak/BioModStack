@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { submitJob, uploadFile, extractChain, annotateFrameworkCdrs, downloadSabdabFramework, launchAntibodyIteration, launchManualMutagenesis, type CDRAnnotationResponse } from '../lib/api';
+import { submitJob, uploadFile, extractChain, annotateFrameworkCdrs, downloadSabdabFramework, launchAntibodyIteration, launchManualMutagenesis, type CDRAnnotationResponse, type RfScreeningScope } from '../lib/api';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { getModelByNumber, parsePDBFile, type Chain, type ParsedPDB } from '../utils/pdbUtils';
 import { EpitopeSelector } from './EpitopeSelector';
 import EpitopeMolstarViewer from './EpitopeMolstarViewer';
 import { TargetAntigenSelector } from './TargetAntigenSelector';
 import { DesignModeSelector } from './DesignModeSelector';
-import { QualitySettingsPanel, PRESETS, type QualitySettings, type QualityPreset } from './QualitySettingsPanel';
+import { QualitySettingsPanel, PRESETS, type QualitySettings, type QualityPreset, type PPIFlowStageMode, type PPIFlowRegionMode } from './QualitySettingsPanel';
 import { TemplateManagerModal } from './TemplateManagerModal';
 import { FrameworkBrowser, type SelectedFramework } from './FrameworkBrowser';
 import { FrameworkEditor, type FrameworkEditorState } from './FrameworkEditor';
@@ -33,6 +33,9 @@ type SeqDesigner = 'none' | 'fampnn' | 'antifold' | 'proteinmpnn';
 type RefinementPreset = 'full_loop' | 'fampnn_only' | 'validation_only' | 'ppiflow_only' | 'manual_mutagenesis' | 'custom';
 type MutagenesisMethod = 'explicit_substitutions' | 'cdr_indels';
 type MutagenesisLaunchMode = 'seeded_refinement' | 'exact_evaluation';
+
+const normalizeRfScreeningScope = (value: unknown): RfScreeningScope =>
+    value === 'whole_antibody' ? 'whole_antibody' : 'cdr_loops';
 
 const DEFAULT_RFA_LOOP_LENGTH_RANGES: Record<string, LoopLengthRange> = {
     H1: { min: 7, max: 10 },
@@ -81,6 +84,42 @@ const parseLoopLengthRanges = (raw: unknown): Record<string, LoopLengthRange> =>
     }
 
     return parsed;
+};
+
+const normalizeLoopScopeInput = (raw: string | null | undefined): string | undefined => {
+    if (!raw) return undefined;
+    const loops = raw
+        .replace(/[\[\]]/g, '')
+        .split(/[\s,;|]+/)
+        .map((value) => value.trim().toUpperCase())
+        .filter(Boolean);
+    return loops.length > 0 ? Array.from(new Set(loops)).join(',') : undefined;
+};
+
+const normalizePpiFlowRegionMode = (raw: unknown): PPIFlowRegionMode => {
+    const normalized = String(raw || '').trim().toLowerCase();
+    if (normalized === 'all_cdrs') return 'all_cdrs';
+    if (normalized === 'framework_only' || normalized === 'framework') return 'framework_only';
+    if (normalized === 'all_antibody' || normalized === 'whole_antibody' || normalized === 'full_antibody') return 'all_antibody';
+    return 'selected_cdrs';
+};
+
+const buildManualCdrPositionsByLoop = (definitions: CDRDefinition[]): Record<string, number[]> | undefined => {
+    const byLoop: Record<string, number[]> = {};
+    definitions.forEach((definition) => {
+        const loopId = String(definition.id || '').trim().toUpperCase();
+        if (!loopId) return;
+        const residues = Array.from(definition.residues || [])
+            .map((token) => {
+                const match = String(token).trim().toUpperCase();
+                const parsed = match.slice(1);
+                return /^\d+$/.test(parsed) ? Number(parsed) : null;
+            })
+            .filter((value): value is number => Number.isFinite(value));
+        if (!residues.length) return;
+        byLoop[loopId] = Array.from(new Set(residues)).sort((a, b) => a - b);
+    });
+    return Object.keys(byLoop).length > 0 ? byLoop : undefined;
 };
 
 const themedPanelStyle: React.CSSProperties = {
@@ -280,6 +319,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [enableRfantibodyFilter, setEnableRfantibodyFilter] = useState<boolean>(
         isRefinementMode ? false : initialValues?.enable_rfantibody_filter === true
     );
+    const [rfantibodyScreenReferenceScope, setRfantibodyScreenReferenceScope] = useState<RfScreeningScope>(
+        normalizeRfScreeningScope(initialValues?.rfantibody_screen_reference_scope)
+    );
     const [rfantibodyMinEpitopeContacts, setRfantibodyMinEpitopeContacts] = useState<number>(
         Number.isFinite(Number(initialValues?.rfantibody_min_epitope_contacts))
             ? Math.max(0, Number(initialValues?.rfantibody_min_epitope_contacts))
@@ -315,6 +357,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             ? Math.max(0, Number(initialValues?.rfantibody_target_contact_distance_threshold))
             : 12
     );
+    const rfantibodyScopeLabel = rfantibodyScreenReferenceScope === 'whole_antibody' ? 'whole-antibody' : 'CDR-loop';
     // Manual CDR definitions (for custom loop positions)
     const [manualCDRDefinitions, setManualCDRDefinitions] = useState<CDRDefinition[]>([]);
     const [showCDREditor, setShowCDREditor] = useState(false);
@@ -324,6 +367,19 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [qualitySettings, setQualitySettings] = useState<QualitySettings>(() => mergeQualitySettingsFromParams(initialValues));
     const resolvedFampnnCheckpoint = qualitySettings.fampnn_checkpoint.trim() || PRESETS.balanced.fampnn_checkpoint;
     const resolvedPpiFlowCheckpoint = qualitySettings.ppiflow_checkpoint.trim() || PRESETS.balanced.ppiflow_checkpoint;
+    const selectedLoopList = Array.from(selectedCDRLoops).sort();
+    const ppiflowStageMode = (qualitySettings.ppiflow_stage_mode || (qualitySettings.run_maturation ? 'post_fampnn' : 'off')) as PPIFlowStageMode;
+    const runPpiFlowBackboneRefine = ppiflowStageMode === 'post_rfantibody' || ppiflowStageMode === 'both';
+    const runPpiFlowMaturation = ppiflowStageMode === 'post_fampnn' || ppiflowStageMode === 'both';
+    const anyPpiFlowStageEnabled = runPpiFlowBackboneRefine || runPpiFlowMaturation;
+    const ppiflowBackboneRegionMode = normalizePpiFlowRegionMode(qualitySettings.ppiflow_backbone_region_mode);
+    const ppiflowMaturationRegionMode = normalizePpiFlowRegionMode(qualitySettings.ppiflow_maturation_region_mode);
+    const effectivePpiFlowBackboneLoopScope = ppiflowBackboneRegionMode === 'selected_cdrs'
+        ? (normalizeLoopScopeInput(qualitySettings.ppiflow_backbone_loop_scope) || selectedLoopList.join(','))
+        : undefined;
+    const effectivePpiFlowMaturationLoopScope = ppiflowMaturationRegionMode === 'selected_cdrs'
+        ? (normalizeLoopScopeInput(qualitySettings.ppiflow_maturation_loop_scope) || selectedLoopList.join(','))
+        : undefined;
 
     // Physics refinement settings (OpenMM)
     const [physicsSettings, setPhysicsSettings] = useState<PhysicsRefinementSettings>(PHYSICS_DEFAULTS);
@@ -650,7 +706,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             setSeqDesigner('fampnn');
             setRunStructureValidation(false);
             setRunFrustrampnn(false);
-            setQualitySettings((current) => ({ ...current, run_maturation: false }));
+            setQualitySettings((current) => ({ ...current, run_maturation: false, ppiflow_stage_mode: 'off' }));
             setInteractiveWorkflow(true);
             setInteractiveGateStage('post_fampnn');
             return;
@@ -659,7 +715,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             setSeqDesigner('none');
             setRunStructureValidation(true);
             setRunFrustrampnn(false);
-            setQualitySettings((current) => ({ ...current, run_maturation: false }));
+            setQualitySettings((current) => ({ ...current, run_maturation: false, ppiflow_stage_mode: 'off' }));
             setInteractiveWorkflow(true);
             setInteractiveGateStage('post_structure_validation');
             return;
@@ -668,7 +724,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             setSeqDesigner('none');
             setRunStructureValidation(false);
             setRunFrustrampnn(false);
-            setQualitySettings((current) => ({ ...current, run_maturation: true }));
+            setQualitySettings((current) => {
+                const nextStageMode = current.ppiflow_stage_mode !== 'off' ? current.ppiflow_stage_mode : 'post_rfantibody';
+                return {
+                    ...current,
+                    ppiflow_stage_mode: nextStageMode,
+                    run_maturation: nextStageMode === 'post_fampnn' || nextStageMode === 'both',
+                };
+            });
             setInteractiveWorkflow(false);
         }
     };
@@ -1033,13 +1096,15 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         const fampnnCheckpointSpecified = Boolean(
             qualitySettings.fampnn_checkpoint_path.trim() || resolvedFampnnCheckpoint.trim()
         );
-        const needsFampnnCheckpoint = seqDesigner === 'fampnn' || qualitySettings.run_maturation;
+        const needsFampnnCheckpoint =
+            seqDesigner === 'fampnn' ||
+            (runPpiFlowMaturation && qualitySettings.maturation_redesign_enabled !== false);
         if (needsFampnnCheckpoint && !fampnnCheckpointSpecified) {
             alert('Please choose FAMPNN weights or provide a checkpoint path before submitting.');
             return;
         }
 
-        if (isRefinementMode && !useManualMutagenesis && !runSequenceDesign && !qualitySettings.run_maturation && !runStructureValidation && !runFrustrampnn) {
+        if (isRefinementMode && !useManualMutagenesis && !runSequenceDesign && !anyPpiFlowStageEnabled && !runStructureValidation && !runFrustrampnn) {
             alert('Enable at least one refinement stage before launching.');
             return;
         }
@@ -1096,7 +1161,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             // Determine pipeline steps
             const pipelineSteps = [isRefinementMode ? 'selected_inputs' : 'rfantibody'];
             if (runSequenceDesign) pipelineSteps.push(seqDesigner);
-            if (qualitySettings.run_maturation) pipelineSteps.push('ppiflow');
+            if (runPpiFlowBackboneRefine) pipelineSteps.push('ppiflow_backbone_refine');
+            if (runPpiFlowMaturation) pipelineSteps.push('ppiflow_maturation');
             if (useAntiberty) pipelineSteps.push('antiberty');
             if (useThermoMPNN) pipelineSteps.push('thermompnn');
             if (runStructureValidation) pipelineSteps.push(structureValidator === 'protenix' ? 'protenix' : 'boltz2');
@@ -1144,6 +1210,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 if (frameworkType === 'nanobody') return loopId.startsWith('H');
                 return true;
             });
+            const manualCdrPositionsByLoop = buildManualCdrPositionsByLoop(manualCDRDefinitions);
             const rfantibodyLoopLengthSpec = rfantibodyLoopLengthMode === 'custom_ranges' && applicableLoops.length > 0
                 ? `[${applicableLoops.map((loopId) => {
                     const range = rfantibodyLoopLengthRanges[loopId] || DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId];
@@ -1217,6 +1284,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     rfantibody_loop_length_mode: rfantibodyLoopLengthMode,
                     rfantibody_loop_length_ranges: rfantibodyLoopLengthSpec,
                     enable_rfantibody_filter: enableRfantibodyFilter,
+                    rfantibody_screen_reference_scope: rfantibodyScreenReferenceScope,
                     rfantibody_min_epitope_contacts: enableRfantibodyFilter ? rfantibodyMinEpitopeContacts : undefined,
                     rfantibody_max_epitope_distance: enableRfantibodyFilter ? rfantibodyMaxEpitopeDistance : undefined,
                     rfantibody_min_target_contacts: enableRfantibodyFilter ? rfantibodyMinTargetContacts : undefined,
@@ -1281,10 +1349,23 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     lock_target_chains: qualitySettings.lock_target_chains,
                     lock_antibody_framework: qualitySettings.lock_antibody_framework,
                     fampnn_constraint_mode: seqDesigner === 'fampnn' ? fampnnConstraintMode : undefined,
-                    // PPIFlow maturation settings
-                    run_maturation: qualitySettings.run_maturation,
-                    run_post_validation_maturation: qualitySettings.run_maturation,
-                    run_post_boltz_maturation: qualitySettings.run_maturation,
+                    // PPIFlow settings
+                    run_ppiflow_backbone_refine: runPpiFlowBackboneRefine,
+                    run_ppiflow_maturation: runPpiFlowMaturation,
+                    run_maturation: runPpiFlowMaturation,
+                    ppiflow_stage_mode: ppiflowStageMode,
+                    ppiflow_backbone_region_mode: ppiflowBackboneRegionMode,
+                    ppiflow_maturation_region_mode: ppiflowMaturationRegionMode,
+                    ppiflow_backbone_loop_scope: effectivePpiFlowBackboneLoopScope || undefined,
+                    ppiflow_maturation_loop_scope: effectivePpiFlowMaturationLoopScope || undefined,
+                    ppiflow_selected_loops: runPpiFlowBackboneRefine
+                        ? (effectivePpiFlowBackboneLoopScope || undefined)
+                        : runPpiFlowMaturation
+                            ? (effectivePpiFlowMaturationLoopScope || undefined)
+                            : undefined,
+                    cdr_positions_by_loop: manualCdrPositionsByLoop,
+                    run_post_validation_maturation: false,
+                    run_post_boltz_maturation: false,
                     ppiflow_start_t: qualitySettings.ppiflow_start_t,
                     ppiflow_samples_per_target: qualitySettings.ppiflow_samples_per_target,
                     ppiflow_retry_limit: qualitySettings.ppiflow_retry_limit,
@@ -1360,6 +1441,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 const refinementOverrides = { ...jobData.params } as Record<string, any>;
                 for (const key of [
                     'enable_rfantibody_filter',
+                    'rfantibody_screen_reference_scope',
                     'rfantibody_min_epitope_contacts',
                     'rfantibody_max_epitope_distance',
                     'rfantibody_min_target_contacts',
@@ -1370,6 +1452,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 ]) {
                     delete refinementOverrides[key];
                 }
+                refinementOverrides.rfantibody_screen_reference_scope = rfantibodyScreenReferenceScope;
                 if (enableRfantibodyFilter) {
                     refinementOverrides.enable_rfantibody_filter = true;
                     refinementOverrides.rfantibody_min_epitope_contacts = rfantibodyMinEpitopeContacts;
@@ -1575,9 +1658,15 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             },
                             {
                                 title: 'PPIFlow',
-                                detail: qualitySettings.run_maturation ? 'Maturation loop enabled' : 'Optional maturation loop',
-                                accent: qualitySettings.run_maturation ? 'var(--accent-secondary)' : undefined,
-                                muted: !qualitySettings.run_maturation,
+                                detail: !anyPpiFlowStageEnabled
+                                    ? 'Optional backbone refinement or maturation'
+                                    : runPpiFlowBackboneRefine && runPpiFlowMaturation
+                                        ? 'Backbone refinement + post-FA-MPNN maturation'
+                                        : runPpiFlowBackboneRefine
+                                            ? 'Backbone refinement after RFantibody'
+                                            : 'Maturation after FA-MPNN',
+                                accent: anyPpiFlowStageEnabled ? 'var(--accent-secondary)' : undefined,
+                                muted: !anyPpiFlowStageEnabled,
                                 optional: true,
                             },
                             {
@@ -1713,21 +1802,35 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
                         <label className="rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-xs text-slate-300">
                             <div className="flex items-center justify-between gap-3">
-                                <span>PPIFlow maturation</span>
-                                <input
-                                    type="checkbox"
-                                    checked={qualitySettings.run_maturation}
-                                    onChange={(e) => {
-                                        setRefinementPreset('custom');
-                                        setUseManualMutagenesis(false);
-                                        setQualitySettings((current) => ({ ...current, run_maturation: e.target.checked }));
-                                    }}
-                                    className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500 focus:ring-indigo-500"
-                                />
+                                <span>PPIFlow stage</span>
                             </div>
+                            <select
+                                value={ppiflowStageMode}
+                                onChange={(e) => {
+                                    const next = e.target.value as PPIFlowStageMode;
+                                    setRefinementPreset('custom');
+                                    setUseManualMutagenesis(false);
+                                    setQualitySettings((current) => ({
+                                        ...current,
+                                        ppiflow_stage_mode: next,
+                                        run_maturation: next === 'post_fampnn' || next === 'both',
+                                    }));
+                                }}
+                                className="mt-2 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-200"
+                            >
+                                <option value="off">Off</option>
+                                <option value="post_rfantibody">Backbone refine after RFantibody</option>
+                                <option value="post_fampnn">Maturation after FA-MPNN</option>
+                                <option value="both">Run both stages</option>
+                            </select>
                             <div className="mt-2 text-[11px] text-slate-500">
-                                Uses selected structures directly when sequence redesign is off.
+                                Sequence-free backbone refinement runs before FA-MPNN. Maturation runs after FA-MPNN on sequenced candidates.
                             </div>
+                            {anyPpiFlowStageEnabled && (
+                                <div className="mt-2 text-[11px] text-teal-300">
+                                    Orchestrated child jobs • {qualitySettings.maturation_designs_per_job} PDB{qualitySettings.maturation_designs_per_job === 1 ? '' : 's'} per PPIFlow child
+                                </div>
+                            )}
                         </label>
 
                         <label className="rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-xs text-slate-300">
@@ -2911,9 +3014,24 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 />
                             </label>
 
+                            <label className="text-xs text-slate-500">
+                                Screening reference scope
+                                <select
+                                    value={rfantibodyScreenReferenceScope}
+                                    onChange={(e) => setRfantibodyScreenReferenceScope(normalizeRfScreeningScope(e.target.value))}
+                                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                                >
+                                    <option value="cdr_loops">CDR loops</option>
+                                    <option value="whole_antibody">Whole antibody</option>
+                                </select>
+                                <span className="mt-1 block text-[11px] text-slate-500">
+                                    Headline screening metrics and review defaults will follow the selected reference. Use `CDR loops` as the default screen, then switch to `Whole antibody` when you want to inspect framework-mediated nanobody engagement.
+                                </span>
+                            </label>
+
                             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                                 <label className="text-xs text-slate-500">
-                                    Min epitope contacts
+                                    Min {rfantibodyScopeLabel} epitope contacts
                                     <input
                                         type="number"
                                         min={0}
@@ -2925,7 +3043,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     />
                                 </label>
                                 <label className="text-xs text-slate-500">
-                                    Max epitope distance (A)
+                                    Max {rfantibodyScopeLabel} epitope distance (A)
                                     <input
                                         type="number"
                                         min={0}
@@ -2937,7 +3055,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     />
                                 </label>
                                 <label className="text-xs text-slate-500">
-                                    Min whole-target contacts
+                                    Min {rfantibodyScopeLabel} target contacts
                                     <input
                                         type="number"
                                         min={0}
@@ -2949,7 +3067,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     />
                                 </label>
                                 <label className="text-xs text-slate-500">
-                                    Max whole-target distance (A)
+                                    Max {rfantibodyScopeLabel} target distance (A)
                                     <input
                                         type="number"
                                         min={0}
@@ -2961,7 +3079,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     />
                                 </label>
                                 <label className="text-xs text-slate-500">
-                                    Max epitope centroid distance (A)
+                                    Max {rfantibodyScopeLabel} epitope centroid distance (A)
                                     <input
                                         type="number"
                                         min={0}
@@ -2976,7 +3094,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
                             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                                 <label className="text-xs text-slate-500">
-                                    Epitope contact cutoff (A)
+                                    {rfantibodyScopeLabel} epitope contact cutoff (A)
                                     <input
                                         type="number"
                                         min={0}
@@ -2988,7 +3106,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     />
                                 </label>
                                 <label className="text-xs text-slate-500">
-                                    Whole-target contact cutoff (A)
+                                    {rfantibodyScopeLabel} target contact cutoff (A)
                                     <input
                                         type="number"
                                         min={0}
@@ -3002,7 +3120,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             </div>
 
                             <p className="text-xs text-slate-500">
-                                Recommended coarse screen: at least `1` epitope contact within `8 A`, minimum epitope distance below `20 A`, at least `3` loose whole-target contacts within `12 A`, and epitope centroid distance below `40 A`. This is meant to reject obviously detached or badly placed backbones, not to rank binders. If you pause at RFantibody review, screening summaries are still generated even when automatic filtering is off.
+                                Recommended coarse screen: at least `1` epitope contact within `8 A`, minimum epitope distance below `20 A`, at least `3` loose target contacts within `12 A`, and epitope centroid distance below `40 A`. Use `CDR loops` for the default triage lens. Switch to `Whole antibody` when framework engagement should count explicitly. If you pause at RFantibody review, screening summaries are still generated even when automatic filtering is off.
                             </p>
                         </div>
                     )}
@@ -3380,6 +3498,39 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 : "Orchestrator: Spawn child jobs that go through GPU queue"}
                         </p>
 
+                        {anyPpiFlowStageEnabled && (
+                            <div className="mb-4 rounded-lg border border-teal-500/20 bg-teal-500/5 p-4">
+                                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                                    <div>
+                                        <div className="text-sm font-medium text-teal-200">PPIFlow Child-Job Chunking</div>
+                                        <p className="mt-1 text-xs text-slate-400">
+                                            Both PPIFlow backbone refinement and PPIFlow maturation run through orchestrated child jobs, independent of the RFantibody/FAMPNN parallel mode above.
+                                            This setting controls how many input PDBs each PPIFlow child processes serially on its assigned GPU.
+                                        </p>
+                                    </div>
+                                    <div className="min-w-[260px] lg:max-w-sm">
+                                        <label className="text-xs text-slate-500">PDBs per PPIFlow job</label>
+                                        <input
+                                            type="range"
+                                            min="1"
+                                            max="20"
+                                            value={qualitySettings.maturation_designs_per_job}
+                                            onChange={(e) => setQualitySettings((current) => ({
+                                                ...current,
+                                                maturation_designs_per_job: parseInt(e.target.value),
+                                            }))}
+                                            className="mt-2 w-full accent-teal-500"
+                                        />
+                                        <div className="mt-1 flex items-center justify-between text-xs text-slate-400">
+                                            <span>1</span>
+                                            <span className="font-medium text-teal-200">{qualitySettings.maturation_designs_per_job}</span>
+                                            <span>20</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
                         {parallelMode === 'full_orchestrator' && (
                             <div className="grid grid-cols-2 gap-4 mt-3">
                                 <div>
@@ -3535,7 +3686,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         // When skipping, require the skip paths
                         (!isRefinementMode && skipRFantibody && !rfantibodyInputPdbs.trim()) ||
                         (!isRefinementMode && skipFampnn && !fampnnCollectedPdbs.trim()) ||
-                        (isRefinementMode && !useManualMutagenesis && seqDesigner === 'none' && !qualitySettings.run_maturation && !runStructureValidation && !runFrustrampnn)
+                        (isRefinementMode && !useManualMutagenesis && seqDesigner === 'none' && !anyPpiFlowStageEnabled && !runStructureValidation && !runFrustrampnn)
                     }
                     className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-medium rounded-lg transition-colors flex items-center gap-2"
                 >
@@ -3632,6 +3783,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         if (!isRefinementMode && typeof p.enable_rfantibody_filter === 'boolean') {
                             setEnableRfantibodyFilter(p.enable_rfantibody_filter);
                             loaded.push('enable_rfantibody_filter');
+                        }
+                        if (!isRefinementMode && p.rfantibody_screen_reference_scope !== undefined) {
+                            setRfantibodyScreenReferenceScope(normalizeRfScreeningScope(p.rfantibody_screen_reference_scope));
+                            loaded.push('rfantibody_screen_reference_scope');
                         }
                         if (!isRefinementMode && p.rfantibody_min_epitope_contacts !== undefined) {
                             setRfantibodyMinEpitopeContacts(Math.max(0, Number(p.rfantibody_min_epitope_contacts) || 0));
@@ -3759,8 +3914,16 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     fampnn_checkpoint_path: qualitySettings.fampnn_checkpoint_path,
                     lock_target_chains: qualitySettings.lock_target_chains,
                     lock_antibody_framework: qualitySettings.lock_antibody_framework,
-                    run_post_validation_maturation: qualitySettings.run_maturation,
-                    run_post_boltz_maturation: qualitySettings.run_maturation,
+                    run_ppiflow_backbone_refine: runPpiFlowBackboneRefine,
+                    run_ppiflow_maturation: runPpiFlowMaturation,
+                    run_maturation: runPpiFlowMaturation,
+                    ppiflow_stage_mode: ppiflowStageMode,
+                    ppiflow_backbone_region_mode: ppiflowBackboneRegionMode,
+                    ppiflow_maturation_region_mode: ppiflowMaturationRegionMode,
+                    ppiflow_backbone_loop_scope: effectivePpiFlowBackboneLoopScope || undefined,
+                    ppiflow_maturation_loop_scope: effectivePpiFlowMaturationLoopScope || undefined,
+                    run_post_validation_maturation: false,
+                    run_post_boltz_maturation: false,
                     run_frustrampnn: runFrustrampnn,
                     run_anarcii_post: runAnarciiPost,
                     anarcii_include_children: anarciiIncludeChildren,
@@ -3792,6 +3955,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             .join(',')}]`
                         : undefined,
                     enable_rfantibody_filter: enableRfantibodyFilter,
+                    rfantibody_screen_reference_scope: rfantibodyScreenReferenceScope,
                     rfantibody_min_epitope_contacts: rfantibodyMinEpitopeContacts,
                     rfantibody_max_epitope_distance: rfantibodyMaxEpitopeDistance,
                     rfantibody_min_target_contacts: rfantibodyMinTargetContacts,

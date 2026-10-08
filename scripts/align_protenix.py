@@ -37,6 +37,14 @@ def setup_logging() -> logging.Logger:
 logger = setup_logging()
 
 
+def copy_optional_file(src: Path, dst: Path) -> bool:
+    if not src.exists():
+        return False
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+    return True
+
+
 def get_chain_ids(structure) -> list[str]:
     chain_ids = []
     seen = set()
@@ -196,6 +204,27 @@ def parse_design_name(json_file: Path) -> tuple[str, Path]:
     return design_name, cif_files[0]
 
 
+def find_full_data_sidecar(summary_json: Path) -> Path | None:
+    candidates: list[Path] = []
+    if "_summary_confidence_sample_" in summary_json.name:
+        candidates.append(summary_json.with_name(summary_json.name.replace("_summary_confidence_sample_", "_full_data_sample_")))
+    stem = summary_json.stem
+    candidates.extend([
+        summary_json.with_name(f"{stem}_full_data.json"),
+        summary_json.with_name(f"full_data_{stem}.json"),
+        summary_json.parent / "full_data.json",
+    ])
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def align_structure(args):
     design_path, json_path, output_dir, design_type, binder_chains_arg, target_chains_arg, geometry_mode, strict_target_rmsd = args
 
@@ -240,16 +269,24 @@ def align_structure(args):
                     out_pdb = output_dir / f"{design_name}.pdb"
                     out_cif = output_dir / f"{design_name}.cif"
                     out_json = output_dir / json_path.name
+                    full_data_path = find_full_data_sidecar(json_path)
+                    if full_data_path is None:
+                        raise FileNotFoundError(f"Protenix full-data confidence JSON not found for {json_path.name}")
+                    out_full_data = output_dir / full_data_path.name
                     io = PDBIO()
                     io.set_structure(mobile_structure)
                     io.save(str(out_pdb))
                     shutil.copy2(cif_path, out_cif)
+                    if not copy_optional_file(full_data_path, out_full_data):
+                        raise FileNotFoundError(f"Protenix full-data confidence JSON could not be copied for {json_path.name}: {full_data_path}")
                     with json_path.open("r") as handle:
                         metrics = json.load(handle)
                     metrics.update(rmsd_data)
                     metrics["validator"] = "protenix"
                     metrics["aligned_pdb"] = out_pdb.name
                     metrics["source_cif"] = out_cif.name
+                    metrics["aligned_error_artifact"] = out_full_data.name
+                    metrics["aligned_error_format"] = "protenix_full_json"
                     with out_json.open("w") as handle:
                         json.dump(metrics, handle, indent=2)
                     return design_name, None
@@ -303,11 +340,17 @@ def align_structure(args):
         out_pdb = output_dir / f"{design_name}.pdb"
         out_cif = output_dir / f"{design_name}.cif"
         out_json = output_dir / json_path.name
+        full_data_path = find_full_data_sidecar(json_path)
+        if full_data_path is None:
+            raise FileNotFoundError(f"Protenix full-data confidence JSON not found for {json_path.name}")
+        out_full_data = output_dir / full_data_path.name
 
         io = PDBIO()
         io.set_structure(mobile_structure)
         io.save(str(out_pdb))
         shutil.copy2(cif_path, out_cif)
+        if not copy_optional_file(full_data_path, out_full_data):
+            raise FileNotFoundError(f"Protenix full-data confidence JSON could not be copied for {json_path.name}: {full_data_path}")
 
         with json_path.open("r") as handle:
             metrics = json.load(handle)
@@ -318,6 +361,8 @@ def align_structure(args):
         metrics["validation_geometry_mode"] = geometry_mode
         metrics["target_anchor_enabled"] = geometry_mode == "anchored"
         metrics["target_anchor_strict"] = strict_target_rmsd is not None
+        metrics["aligned_error_artifact"] = out_full_data.name
+        metrics["aligned_error_format"] = "protenix_full_json"
 
         with out_json.open("w") as handle:
             json.dump(metrics, handle, indent=2)

@@ -63,8 +63,9 @@ export interface QualitySettings {
     lock_target_chains: boolean;
     lock_antibody_framework: boolean;
 
-    // PPIFlow maturation (interface rotamer enrichment + partial flow)
+    // PPIFlow stage control (backbone refinement and/or post-sequence maturation)
     run_maturation: boolean;
+    ppiflow_stage_mode: PPIFlowStageMode;
     ppiflow_start_t: number;
     ppiflow_samples_per_target: number;
     ppiflow_retry_limit: number;
@@ -85,6 +86,10 @@ export interface QualitySettings {
     ppiflow_antigen_chain: string;
     ppiflow_heavy_chain: string;
     ppiflow_light_chain: string;
+    ppiflow_backbone_region_mode: PPIFlowRegionMode;
+    ppiflow_maturation_region_mode: PPIFlowRegionMode;
+    ppiflow_backbone_loop_scope: string;
+    ppiflow_maturation_loop_scope: string;
 
     // Pre-Boltz filtering (saves compute by rejecting low-quality designs before expensive validation)
     fampnn_max_psce: number | null;           // Max avg PSCE score to pass to Boltz (null = no filter)
@@ -113,6 +118,8 @@ export interface QualitySettings {
 }
 
 export type QualityPreset = 'speed' | 'balanced' | 'quality' | 'maximum';
+export type PPIFlowStageMode = 'off' | 'post_rfantibody' | 'post_fampnn' | 'both';
+export type PPIFlowRegionMode = 'selected_cdrs' | 'all_cdrs' | 'framework_only' | 'all_antibody';
 
 const normalizeProtenixModel = (model?: string) => {
     if (!model) return 'protenix_base_20250630_v1.0.0';
@@ -224,6 +231,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         fampnn_psce_threshold: 0.4,
         // PPIFlow maturation (off for speed)
         run_maturation: false,
+        ppiflow_stage_mode: 'off',
         ppiflow_start_t: 0.5,
         ppiflow_samples_per_target: 3,
         ppiflow_retry_limit: 10,
@@ -244,6 +252,10 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         ppiflow_antigen_chain: '',
         ppiflow_heavy_chain: '',
         ppiflow_light_chain: '',
+        ppiflow_backbone_region_mode: 'selected_cdrs',
+        ppiflow_maturation_region_mode: 'selected_cdrs',
+        ppiflow_backbone_loop_scope: '',
+        ppiflow_maturation_loop_scope: '',
         lock_target_chains: true,
         lock_antibody_framework: true,
         // Pre-Boltz filter (null = disabled for speed mode, let everything through)
@@ -310,6 +322,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         fampnn_psce_threshold: 0.3,
         // PPIFlow maturation (off for balanced)
         run_maturation: false,
+        ppiflow_stage_mode: 'off',
         ppiflow_start_t: 0.5,
         ppiflow_samples_per_target: 3,
         ppiflow_retry_limit: 10,
@@ -330,14 +343,18 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         ppiflow_antigen_chain: '',
         ppiflow_heavy_chain: '',
         ppiflow_light_chain: '',
+        ppiflow_backbone_region_mode: 'selected_cdrs',
+        ppiflow_maturation_region_mode: 'selected_cdrs',
+        ppiflow_backbone_loop_scope: '',
+        ppiflow_maturation_loop_scope: '',
         lock_target_chains: true,
         lock_antibody_framework: true,
-        // Pre-Boltz filter: moderate filtering to save compute
-        fampnn_max_psce: 2.5,
-        fampnn_max_residue_psce: 5.0,
-        // ThermoMPNN: enabled for balanced mode
+        // Pre-Boltz filter: off by default, opt in manually
+        fampnn_max_psce: null,
+        fampnn_max_residue_psce: null,
+        // ThermoMPNN: score-only by default if enabled later
         run_thermompnn: false,
-        thermompnn_max_ddg: 5.0,  // kcal/mol, higher = more destabilizing
+        thermompnn_max_ddg: null,
         // AF2 Backprop (disabled by default)
         run_af2_backprop: false,
         af2_backprop_soft_iters: 100,
@@ -396,6 +413,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         fampnn_psce_threshold: 0.2,
         // PPIFlow maturation (enabled for quality)
         run_maturation: true,
+        ppiflow_stage_mode: 'post_fampnn',
         ppiflow_start_t: 0.8,
         ppiflow_samples_per_target: 5,
         ppiflow_retry_limit: 10,
@@ -404,26 +422,30 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         ppiflow_checkpoint_path: '',
         maturation_anchor_threshold: -6.0,
         maturation_anchor_distance_cutoff: 8.0,
-        maturation_min_improvement: -2.0,
+        maturation_min_improvement: 0.0,
         maturation_redesign_temp: 0.05,
         maturation_redesign_steps: 300,
         maturation_design_mode: 'inherit',
         maturation_designs_per_job: 4,
-        maturation_filter_percentile: 20,
+        maturation_filter_percentile: 0,
         maturation_redesign_enabled: true,
         maturation_redesign_top_n: 0,
         ppiflow_checkpoint: DEFAULT_PPIFLOW_CHECKPOINT,
         ppiflow_antigen_chain: '',
         ppiflow_heavy_chain: '',
         ppiflow_light_chain: '',
+        ppiflow_backbone_region_mode: 'selected_cdrs',
+        ppiflow_maturation_region_mode: 'selected_cdrs',
+        ppiflow_backbone_loop_scope: '',
+        ppiflow_maturation_loop_scope: '',
         lock_target_chains: true,
         lock_antibody_framework: true,
-        // Pre-Boltz filter: stricter filtering for quality runs
-        fampnn_max_psce: 2.0,
-        fampnn_max_residue_psce: 4.0,
-        // ThermoMPNN: stricter for quality runs
+        // Pre-Boltz filter: off by default, opt in manually
+        fampnn_max_psce: null,
+        fampnn_max_residue_psce: null,
+        // ThermoMPNN: score-only by default if enabled later
         run_thermompnn: false,
-        thermompnn_max_ddg: 3.0,
+        thermompnn_max_ddg: null,
         // AF2 Backprop (disabled by default, can be enabled for better hit rate)
         run_af2_backprop: false,
         af2_backprop_soft_iters: 100,
@@ -436,9 +458,9 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         af2_backprop_loss_plddt: 0.1,
         af2_backprop_loss_pae: 0.2,
         af2_backprop_loss_contact: 0.4,
-        // Post-Boltz validation filtering (moderate thresholds)
-        boltz_max_binder_rmsd: 2.5,
-        boltz_min_ptm_interface: 0.5,
+        // Post-Boltz validation filtering: off by default, opt in manually
+        boltz_max_binder_rmsd: null,
+        boltz_min_ptm_interface: null,
     },
     maximum: {
         msa_preset: 'maximum',
@@ -482,6 +504,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         fampnn_psce_threshold: 0.15,
         // PPIFlow maturation (enabled for maximum)
         run_maturation: true,
+        ppiflow_stage_mode: 'post_fampnn',
         ppiflow_start_t: 0.9,
         ppiflow_samples_per_target: 8,
         ppiflow_retry_limit: 10,
@@ -490,26 +513,30 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         ppiflow_checkpoint_path: '',
         maturation_anchor_threshold: -7.0,
         maturation_anchor_distance_cutoff: 8.0,
-        maturation_min_improvement: -2.5,
+        maturation_min_improvement: 0.0,
         maturation_redesign_temp: 0.01,
         maturation_redesign_steps: 500,
         maturation_design_mode: 'inherit',
         maturation_designs_per_job: 4,
-        maturation_filter_percentile: 10,
+        maturation_filter_percentile: 0,
         maturation_redesign_enabled: true,
         maturation_redesign_top_n: 0,
         ppiflow_checkpoint: DEFAULT_PPIFLOW_CHECKPOINT,
         ppiflow_antigen_chain: '',
         ppiflow_heavy_chain: '',
         ppiflow_light_chain: '',
+        ppiflow_backbone_region_mode: 'selected_cdrs',
+        ppiflow_maturation_region_mode: 'selected_cdrs',
+        ppiflow_backbone_loop_scope: '',
+        ppiflow_maturation_loop_scope: '',
         lock_target_chains: true,
         lock_antibody_framework: true,
-        // Pre-Boltz filter: strictest filtering for maximum quality
-        fampnn_max_psce: 1.5,
-        fampnn_max_residue_psce: 3.0,
-        // ThermoMPNN: strictest for maximum quality
+        // Pre-Boltz filter: off by default, opt in manually
+        fampnn_max_psce: null,
+        fampnn_max_residue_psce: null,
+        // ThermoMPNN: score-only by default if enabled later
         run_thermompnn: false,
-        thermompnn_max_ddg: 2.0,
+        thermompnn_max_ddg: null,
         // AF2 Backprop: enabled for maximum quality runs
         run_af2_backprop: false,
         af2_backprop_soft_iters: 150,
@@ -522,9 +549,9 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         af2_backprop_loss_plddt: 0.1,
         af2_backprop_loss_pae: 0.3,
         af2_backprop_loss_contact: 0.3,
-        // Post-Boltz validation filtering (strict for maximum quality)
-        boltz_max_binder_rmsd: 2.0,
-        boltz_min_ptm_interface: 0.6,
+        // Post-Boltz validation filtering: off by default, opt in manually
+        boltz_max_binder_rmsd: null,
+        boltz_min_ptm_interface: null,
     },
 };
 
@@ -583,11 +610,27 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
         }
     }, [overridesEnabled, overrideEnabled]);
 
+    const stageMode = settings.ppiflow_stage_mode || (settings.run_maturation ? 'post_fampnn' : 'off');
+    const stageModeLabel: Record<PPIFlowStageMode, string> = {
+        off: 'Off',
+        post_rfantibody: 'Post RF backbone refine',
+        post_fampnn: 'Post FA-MPNN maturation',
+        both: 'Both stages',
+    };
+    const updateStageMode = (next: PPIFlowStageMode) => {
+        updateSettings({
+            ppiflow_stage_mode: next,
+            run_maturation: next === 'post_fampnn' || next === 'both',
+        });
+    };
+    const backboneStageEnabled = stageMode === 'post_rfantibody' || stageMode === 'both';
+    const maturationStageEnabled = stageMode === 'post_fampnn' || stageMode === 'both';
+
     return (
         <div className="space-y-4">
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 text-sm font-medium text-teal-400">
-                    PPIFlow Maturation
+                    PPIFlow Stage Control
                     <a
                         href="https://github.com/Mingchenchen/PPIFlow"
                         target="_blank"
@@ -597,27 +640,40 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                         GitHub
                     </a>
                 </div>
-                <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                        type="checkbox"
-                        checked={settings.run_maturation}
-                        onChange={(e) => updateSetting('run_maturation', e.target.checked)}
-                        className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-teal-600 focus:ring-teal-500"
-                    />
-                    <span className="text-sm text-slate-300">Enable</span>
-                </label>
             </div>
             <p className="text-[11px] text-slate-500">
-                Quality presets adjust these settings automatically. Higher quality increases sampling and refinement.
+                Backbone refinement runs before sequence design. Maturation runs after FA-MPNN. Leave loop scopes blank to inherit the workflow-selected CDR set.
             </p>
 
-            {!settings.run_maturation && (
+            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                {([
+                    ['off', 'Off'],
+                    ['post_rfantibody', 'Post RF'],
+                    ['post_fampnn', 'Post FA-MPNN'],
+                    ['both', 'Both'],
+                ] as Array<[PPIFlowStageMode, string]>).map(([value, label]) => (
+                    <button
+                        key={value}
+                        type="button"
+                        onClick={() => updateStageMode(value)}
+                        className={`rounded-lg border px-3 py-2 text-xs transition-colors ${stageMode === value
+                            ? 'border-teal-400 bg-teal-500/15 text-teal-100'
+                            : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-600'
+                            }`}
+                    >
+                        <div className="font-medium">{label}</div>
+                        <div className="mt-0.5 text-[10px] text-slate-500">{stageModeLabel[value]}</div>
+                    </button>
+                ))}
+            </div>
+
+            {stageMode === 'off' && (
                 <div className="text-[10px] text-slate-600">
-                    Enable PPIFlow to reveal the full maturation controls.
+                    Select a PPIFlow stage to reveal the full refinement controls.
                 </div>
             )}
 
-            {settings.run_maturation && (
+            {stageMode !== 'off' && (
                 <div className="space-y-4">
                     <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -1053,6 +1109,82 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                     </p>
                 </div>
             </div>
+
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                {backboneStageEnabled && (
+                    <div>
+                        <label className="block text-xs text-slate-500 mb-1">
+                            Backbone refine region
+                        </label>
+                        <select
+                            value={settings.ppiflow_backbone_region_mode}
+                            onChange={(e) => updateSetting('ppiflow_backbone_region_mode', e.target.value as PPIFlowRegionMode)}
+                            className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300"
+                        >
+                            <option value="selected_cdrs">Selected CDRs</option>
+                            <option value="all_cdrs">All CDRs</option>
+                            <option value="framework_only">Framework Only</option>
+                            <option value="all_antibody">Whole Antibody</option>
+                        </select>
+                        {settings.ppiflow_backbone_region_mode === 'selected_cdrs' && (
+                            <>
+                                <input
+                                    type="text"
+                                    value={settings.ppiflow_backbone_loop_scope}
+                                    onChange={(e) => updateSetting('ppiflow_backbone_loop_scope', e.target.value.toUpperCase())}
+                                    placeholder="H1,H2,H3"
+                                    className="mt-2 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300 font-mono"
+                                />
+                                <p className="text-[10px] text-slate-600 mt-1">
+                                    Comma-separated loop IDs for partial flow after RFantibody. Blank inherits the workflow-selected loop set.
+                                </p>
+                            </>
+                        )}
+                        {settings.ppiflow_backbone_region_mode !== 'selected_cdrs' && (
+                            <p className="text-[10px] text-slate-600 mt-1">
+                                Partial flow follows this antibody region directly and does not depend on sequence-design loop settings.
+                            </p>
+                        )}
+                    </div>
+                )}
+
+                {maturationStageEnabled && (
+                    <div>
+                        <label className="block text-xs text-slate-500 mb-1">
+                            Maturation region
+                        </label>
+                        <select
+                            value={settings.ppiflow_maturation_region_mode}
+                            onChange={(e) => updateSetting('ppiflow_maturation_region_mode', e.target.value as PPIFlowRegionMode)}
+                            className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300"
+                        >
+                            <option value="selected_cdrs">Selected CDRs</option>
+                            <option value="all_cdrs">All CDRs</option>
+                            <option value="framework_only">Framework Only</option>
+                            <option value="all_antibody">Whole Antibody</option>
+                        </select>
+                        {settings.ppiflow_maturation_region_mode === 'selected_cdrs' && (
+                            <>
+                                <input
+                                    type="text"
+                                    value={settings.ppiflow_maturation_loop_scope}
+                                    onChange={(e) => updateSetting('ppiflow_maturation_loop_scope', e.target.value.toUpperCase())}
+                                    placeholder="H1,H2,H3"
+                                    className="mt-2 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300 font-mono"
+                                />
+                                <p className="text-[10px] text-slate-600 mt-1">
+                                    Comma-separated loop IDs for partial flow after FA-MPNN. Blank inherits the workflow-selected loop set.
+                                </p>
+                            </>
+                        )}
+                        {settings.ppiflow_maturation_region_mode !== 'selected_cdrs' && (
+                            <p className="text-[10px] text-slate-600 mt-1">
+                                Partial flow follows this antibody region directly. Redesign settings remain independent.
+                            </p>
+                        )}
+                    </div>
+                )}
+            </div>
             </div>
             )}
         </div>
@@ -1082,6 +1214,8 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
             lock_antibody_framework: settings.lock_antibody_framework,
             boltz_anchor_target: settings.boltz_anchor_target,
             boltz_anchor_strict: settings.boltz_anchor_strict,
+            ppiflow_backbone_loop_scope: settings.ppiflow_backbone_loop_scope,
+            ppiflow_maturation_loop_scope: settings.ppiflow_maturation_loop_scope,
             protenix_use_template: settings.protenix_use_template,
             protenix_anchor_target: settings.protenix_anchor_target,
             protenix_anchor_strict: settings.protenix_anchor_strict,

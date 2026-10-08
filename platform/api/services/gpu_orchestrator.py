@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 from services.gpu_config import read_scheduler_config, write_scheduler_config
 from services.gpu_metadata import GPU_CAPABILITIES
+from services.gpu_stage_activity import job_uses_assigned_gpu
 from services.stage_review import has_stage_gate, nextflow_history_status
 
 
@@ -454,7 +455,7 @@ def collect_live_vram_by_job(running_jobs: List[Any], gpu_stats: List[Any]) -> D
     """
     runnable = [
         job for job in running_jobs
-        if getattr(job, "queue_status", None) == "running" and getattr(job, "assigned_gpu", None) is not None
+        if getattr(job, "queue_status", None) == "running" and job_uses_assigned_gpu(job)
     ]
     if not runnable:
         return {}
@@ -1195,7 +1196,7 @@ def build_queue_scheduler_diagnostics(
         effective_model = _effective_job_model_type(running_job)
         running_by_model[effective_model] = running_by_model.get(effective_model, 0) + 1
         assigned_gpu = getattr(running_job, "assigned_gpu", None)
-        if assigned_gpu is not None:
+        if assigned_gpu is not None and job_uses_assigned_gpu(running_job):
             running_jobs_per_gpu[assigned_gpu] = running_jobs_per_gpu.get(assigned_gpu, 0) + 1
             started_at = getattr(running_job, "started_at", None)
             if isinstance(started_at, datetime):
@@ -1218,7 +1219,7 @@ def build_queue_scheduler_diagnostics(
     reservation_shortfall_by_gpu: Dict[int, int] = {}
     for running_job in running_jobs:
         gpu_idx = getattr(running_job, "assigned_gpu", None)
-        if gpu_idx is None:
+        if gpu_idx is None or not job_uses_assigned_gpu(running_job):
             continue
         live_vram = live_vram_by_job.get(running_job.id)
         reservation = _running_job_reservation_mb(running_job, live_vram)
@@ -1677,7 +1678,7 @@ class GPUOrchestrator:
             for rj in running_jobs:
                 effective_model = _effective_job_model_type(rj)
                 running_by_model[effective_model] = running_by_model.get(effective_model, 0) + 1
-                if rj.assigned_gpu is not None:
+                if rj.assigned_gpu is not None and job_uses_assigned_gpu(rj):
                     running_jobs_per_gpu[rj.assigned_gpu] = running_jobs_per_gpu.get(rj.assigned_gpu, 0) + 1
                     started_at = getattr(rj, "started_at", None)
                     if isinstance(started_at, datetime):
@@ -1694,7 +1695,7 @@ class GPUOrchestrator:
             reservation_shortfall_by_gpu: Dict[int, int] = {}
             for rj in running_jobs:
                 gpu_idx = rj.assigned_gpu
-                if gpu_idx is None:
+                if gpu_idx is None or not job_uses_assigned_gpu(rj):
                     continue
                 live_vram = live_vram_by_job.get(rj.id)
                 reservation = _running_job_reservation_mb(rj, live_vram)

@@ -20,7 +20,10 @@ if str(SCRIPTS_ROOT) not in sys.path:
 from routers.jobs import (
     _dedupe_child_attempts,
     _ensure_job_resume_identity,
+    _normalize_output_dir_reference,
+    _plan_output_dir_cleanup,
     _reconcile_child_jobs_from_history,
+    _resume_defaults_from_awaiting_payload,
 )
 from services.stage_review import (
     _compute_antibody_ca_rog,
@@ -257,6 +260,69 @@ def test_nextflow_history_status_for_run_dir_matches_current_attempt() -> None:
         assert nextflow_history_status_for_run_dir(tmpdir, old_job_id) == "ERR"
 
 
+def test_plan_output_dir_cleanup_preserves_shared_resume_directory() -> None:
+    shared = "/mnt/BioModStack/bms_results/RBX1 beta large_20260314_235055"
+    unique = "/mnt/BioModStack/bms_results/RBX1 beta large_resumed_refinement_20260315_234903"
+
+    deletable, preserved = _plan_output_dir_cleanup(
+        [shared, unique, shared],
+        {
+            _normalize_output_dir_reference(shared): [
+                {
+                    "job_id": "64e9555b-fe58-41ba-afe2-21e6579c56e6",
+                    "job_name": "RBX1 beta large_resumed",
+                    "field": "output_dir",
+                }
+            ]
+        },
+    )
+
+    assert deletable == [_normalize_output_dir_reference(unique)]
+    assert preserved == [
+        {
+            "path": _normalize_output_dir_reference(shared),
+            "referenced_by": [
+                {
+                    "job_id": "64e9555b-fe58-41ba-afe2-21e6579c56e6",
+                    "job_name": "RBX1 beta large_resumed",
+                    "field": "output_dir",
+                }
+            ],
+        }
+    ]
+
+
+def test_plan_output_dir_cleanup_preserves_shared_child_directory_once() -> None:
+    shared_child = "/mnt/BioModStack/bms_results/antibody_batch - RFA 1/10_20260314_235105"
+
+    deletable, preserved = _plan_output_dir_cleanup(
+        [shared_child, shared_child],
+        {
+            _normalize_output_dir_reference(shared_child): [
+                {
+                    "job_id": "599fe24b-ca54-4562-8d3a-2a1b3988ffb8",
+                    "job_name": "RBX1_beta_large - RFA 1/10",
+                    "field": "child_output_dir",
+                }
+            ]
+        },
+    )
+
+    assert deletable == []
+    assert preserved == [
+        {
+            "path": _normalize_output_dir_reference(shared_child),
+            "referenced_by": [
+                {
+                    "job_id": "599fe24b-ca54-4562-8d3a-2a1b3988ffb8",
+                    "job_name": "RBX1_beta_large - RFA 1/10",
+                    "field": "child_output_dir",
+                }
+            ],
+        }
+    ]
+
+
 def test_reconcile_child_jobs_ignores_stale_err_for_previous_attempt() -> None:
     old_job_id = "11111111-1111-1111-1111-111111111111"
     current_job_id = "22222222-2222-2222-2222-222222222222"
@@ -345,3 +411,19 @@ def test_compute_antibody_ca_rog_uses_antibody_chain_subset() -> None:
         assert math.isclose(rog, math.sqrt(8.0 / 3.0), rel_tol=1e-6)
         assert _rfantibody_rog_refresh_required(str(pdb_path), "H") is True
         assert _rfantibody_rog_refresh_required(None, "H") is False
+
+
+def test_resume_defaults_from_awaiting_payload_extracts_direct_continue_settings() -> None:
+    overrides, from_stage, name_suffix = _resume_defaults_from_awaiting_payload(
+        {
+            "resume_param_overrides": {
+                "protenix_allow_cpu_msa_fallback": True,
+            },
+            "resume_from_stage": "structure_validation",
+            "resume_name_suffix": "continued",
+        }
+    )
+
+    assert overrides == {"protenix_allow_cpu_msa_fallback": True}
+    assert from_stage == "structure_validation"
+    assert name_suffix == "continued"

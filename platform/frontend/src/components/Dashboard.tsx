@@ -181,6 +181,10 @@ export function Dashboard() {
     });
 
     const handleResume = (job: Job) => {
+        if (job.status === 'awaiting_input' && job.awaiting_payload?.resume_direct) {
+            resumeMutation.mutate({ jobId: job.id });
+            return;
+        }
         if (job.status === 'awaiting_input') {
             handleResumeWithSettings(job);
             return;

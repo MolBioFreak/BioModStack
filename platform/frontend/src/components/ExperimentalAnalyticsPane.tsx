@@ -6,10 +6,25 @@
  */
 
 import { useState, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Data, Layout } from 'plotly.js';
-import { fetchAAComposition, fetchCDRLogos, fetchContactMap, fetchChainPairIptm, fetchDesignResidueMetrics, fetchPAEData, fetchChainMetrics, fetchDesignPlotlyMetrics, type ChainMetric } from '../lib/api';
+import {
+    fetchChainPairIptm,
+    fetchDesignAnalysis,
+    fetchDesignPlotlyMetrics,
+    fetchDesignResidueMetrics,
+    fetchJobAnalysis,
+    triggerDesignAnalysis,
+    triggerJobAnalysis,
+    type AACompositionResponse,
+    type CDRAnalysisResponse,
+    type ChainMetric,
+    type ContactMapData,
+    type CorrelationMatrix,
+    type PAEData,
+    type PersistedAnalysisRun,
+} from '../lib/api';
 
 interface Design {
     id: string;
@@ -116,6 +131,7 @@ const PRESET_ANALYSES = [
 ] as const;
 
 export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }: ExperimentalAnalyticsPaneProps) {
+    const queryClient = useQueryClient();
     const analyticsDesigns = useMemo(
         () => (designs.length > MAX_ANALYTICS_DESIGNS ? designs.slice(0, MAX_ANALYTICS_DESIGNS) : designs),
         [designs],
@@ -131,21 +147,85 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
     const [showCustom, setShowCustom] = useState(false);
     const [selectedCDR, setSelectedCDR] = useState<string>('CDR-H3');
     const [selectedDesignId, setSelectedDesignId] = useState<string | null>(designs[0]?.id || null);
+    const jobAnalysisScope = useMemo(
+        () => ({ include_children: true, design_ids: analyticsDesignIds }),
+        [analyticsDesignIds],
+    );
 
-    // Fetch server-side data for AA composition and sequence logos
-    const { data: aaComposition, isLoading: aaLoading } = useQuery({
-        queryKey: ['aa-composition', jobId],
-        queryFn: () => jobId ? fetchAAComposition(jobId).then(r => r.data) : null,
+    const { data: aaCompositionRun } = useQuery({
+        queryKey: ['job-analysis', 'job_aa_composition', jobId, analyticsDesignIdsKey],
+        queryFn: () => jobId ? fetchJobAnalysis<AACompositionResponse>(jobId, 'job_aa_composition', jobAnalysisScope).then(r => r.data) : null,
         enabled: !!jobId && selectedPreset === 'aa_composition',
         staleTime: 60000,
+        refetchInterval: (query) => {
+            const status = (query.state.data as PersistedAnalysisRun<AACompositionResponse> | null | undefined)?.status;
+            return status === 'queued' || status === 'running' ? 1500 : false;
+        },
     });
+    const aaComposition = aaCompositionRun?.status === 'completed' ? (aaCompositionRun.result as AACompositionResponse | null) : null;
+    const runAaComposition = useMutation({
+        mutationFn: async () => {
+            if (!jobId) throw new Error('No job selected');
+            const response = await triggerJobAnalysis<AACompositionResponse>(jobId, 'job_aa_composition', jobAnalysisScope);
+            return response.data;
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['job-analysis', 'job_aa_composition', jobId, analyticsDesignIdsKey] });
+        },
+    });
+    const aaLoading = runAaComposition.isPending
+        || aaCompositionRun?.status === 'queued'
+        || aaCompositionRun?.status === 'running';
 
-    const { data: cdrLogos, isLoading: logosLoading } = useQuery({
-        queryKey: ['cdr-logos', jobId],
-        queryFn: () => jobId ? fetchCDRLogos(jobId).then(r => r.data) : null,
+    const { data: cdrLogosRun } = useQuery({
+        queryKey: ['job-analysis', 'job_cdr_logo_pack', jobId, analyticsDesignIdsKey],
+        queryFn: () => jobId ? fetchJobAnalysis<CDRAnalysisResponse>(jobId, 'job_cdr_logo_pack', jobAnalysisScope).then(r => r.data) : null,
         enabled: !!jobId && selectedPreset === 'sequence_logo',
         staleTime: 60000,
+        refetchInterval: (query) => {
+            const status = (query.state.data as PersistedAnalysisRun<CDRAnalysisResponse> | null | undefined)?.status;
+            return status === 'queued' || status === 'running' ? 1500 : false;
+        },
     });
+    const cdrLogos = cdrLogosRun?.status === 'completed' ? (cdrLogosRun.result as CDRAnalysisResponse | null) : null;
+    const runCdrLogos = useMutation({
+        mutationFn: async () => {
+            if (!jobId) throw new Error('No job selected');
+            const response = await triggerJobAnalysis<CDRAnalysisResponse>(jobId, 'job_cdr_logo_pack', jobAnalysisScope);
+            return response.data;
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['job-analysis', 'job_cdr_logo_pack', jobId, analyticsDesignIdsKey] });
+        },
+    });
+    const logosLoading = runCdrLogos.isPending
+        || cdrLogosRun?.status === 'queued'
+        || cdrLogosRun?.status === 'running';
+
+    const { data: correlationRun } = useQuery({
+        queryKey: ['job-analysis', 'job_correlation_matrix', jobId, analyticsDesignIdsKey],
+        queryFn: () => jobId ? fetchJobAnalysis<CorrelationMatrix>(jobId, 'job_correlation_matrix', jobAnalysisScope).then(r => r.data) : null,
+        enabled: !!jobId && selectedPreset === 'correlation_matrix',
+        staleTime: 60000,
+        refetchInterval: (query) => {
+            const status = (query.state.data as PersistedAnalysisRun<CorrelationMatrix> | null | undefined)?.status;
+            return status === 'queued' || status === 'running' ? 1500 : false;
+        },
+    });
+    const correlationData = correlationRun?.status === 'completed' ? (correlationRun.result as CorrelationMatrix | null) : null;
+    const runCorrelationMatrix = useMutation({
+        mutationFn: async () => {
+            if (!jobId) throw new Error('No job selected');
+            const response = await triggerJobAnalysis<CorrelationMatrix>(jobId, 'job_correlation_matrix', jobAnalysisScope);
+            return response.data;
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['job-analysis', 'job_correlation_matrix', jobId, analyticsDesignIdsKey] });
+        },
+    });
+    const correlationLoading = runCorrelationMatrix.isPending
+        || correlationRun?.status === 'queued'
+        || correlationRun?.status === 'running';
 
     // Phase 3a: Fetch per-residue pLDDT for selected design
     const { data: residueData, isLoading: residueLoading } = useQuery({
@@ -156,12 +236,31 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
     });
 
     // Phase 3a: Fetch contact map for selected design
-    const { data: contactMapData, isLoading: contactMapLoading } = useQuery({
-        queryKey: ['contact-map', selectedDesignId],
-        queryFn: () => selectedDesignId ? fetchContactMap(selectedDesignId, 300).then(r => r.data) : null,
+    const { data: contactMapRun } = useQuery({
+        queryKey: ['design-analysis', 'contact_map', selectedDesignId],
+        queryFn: () => selectedDesignId ? fetchDesignAnalysis<ContactMapData>(selectedDesignId, 'contact_map', { max_size: 300 }).then(r => r.data) : null,
         enabled: !!selectedDesignId && selectedPreset === 'contact_map',
-        staleTime: 60000,
+        refetchInterval: (query) => {
+            const status = (query.state.data as PersistedAnalysisRun<ContactMapData> | null | undefined)?.status;
+            return status === 'queued' || status === 'running' ? 1500 : false;
+        },
     });
+    const contactMapData = contactMapRun?.status === 'completed' ? (contactMapRun.result as ContactMapData | null) : null;
+    const runContactMap = useMutation({
+        mutationFn: async () => {
+            if (!selectedDesignId) {
+                throw new Error('No design selected');
+            }
+            const response = await triggerDesignAnalysis<ContactMapData>(selectedDesignId, 'contact_map', { max_size: 300 });
+            return response.data;
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['design-analysis', 'contact_map', selectedDesignId] });
+        },
+    });
+    const contactMapLoading = runContactMap.isPending
+        || contactMapRun?.status === 'queued'
+        || contactMapRun?.status === 'running';
 
     // Phase 3a: Fetch chain-pair iPTM for selected design
     const { data: chainIptmData, isLoading: chainIptmLoading } = useQuery({
@@ -172,20 +271,55 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
     });
 
     // Phase 3a: Fetch PAE matrix for selected design
-    const { data: paeData, isLoading: paeLoading } = useQuery({
-        queryKey: ['pae-data', selectedDesignId],
-        queryFn: () => selectedDesignId ? fetchPAEData(selectedDesignId).then(r => r.data) : null,
+    const { data: paeRun } = useQuery({
+        queryKey: ['design-analysis', 'pae_matrix', selectedDesignId],
+        queryFn: () => selectedDesignId ? fetchDesignAnalysis<PAEData>(selectedDesignId, 'pae_matrix', { max_size: 200 }).then(r => r.data) : null,
         enabled: !!selectedDesignId && selectedPreset === 'pae_heatmap',
         staleTime: 60000,
+        refetchInterval: (query) => {
+            const status = (query.state.data as PersistedAnalysisRun<PAEData> | null | undefined)?.status;
+            return status === 'queued' || status === 'running' ? 1500 : false;
+        },
     });
+    const paeData = paeRun?.status === 'completed' ? (paeRun.result as PAEData | null) : null;
+    const runPaeMatrix = useMutation({
+        mutationFn: async () => {
+            if (!selectedDesignId) throw new Error('No design selected');
+            const response = await triggerDesignAnalysis<PAEData>(selectedDesignId, 'pae_matrix', { max_size: 200 });
+            return response.data;
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['design-analysis', 'pae_matrix', selectedDesignId] });
+        },
+    });
+    const paeLoading = runPaeMatrix.isPending
+        || paeRun?.status === 'queued'
+        || paeRun?.status === 'running';
 
-    // Phase 3a: Fetch chain-by-chain metrics for selected design
-    const { data: chainMetricsData, isLoading: chainMetricsLoading } = useQuery({
-        queryKey: ['chain-metrics', selectedDesignId],
-        queryFn: () => selectedDesignId ? fetchChainMetrics(selectedDesignId).then(r => r.data) : null,
+    const { data: chainMetricsRun } = useQuery({
+        queryKey: ['design-analysis', 'chain_metrics', selectedDesignId],
+        queryFn: () => selectedDesignId ? fetchDesignAnalysis<Record<string, ChainMetric>>(selectedDesignId, 'chain_metrics').then(r => r.data) : null,
         enabled: !!selectedDesignId && selectedPreset === 'chain_plddt',
         staleTime: 60000,
+        refetchInterval: (query) => {
+            const status = (query.state.data as PersistedAnalysisRun<Record<string, ChainMetric>> | null | undefined)?.status;
+            return status === 'queued' || status === 'running' ? 1500 : false;
+        },
     });
+    const chainMetricsData = chainMetricsRun?.status === 'completed' ? (chainMetricsRun.result as Record<string, ChainMetric> | null) : null;
+    const runChainMetrics = useMutation({
+        mutationFn: async () => {
+            if (!selectedDesignId) throw new Error('No design selected');
+            const response = await triggerDesignAnalysis<Record<string, ChainMetric>>(selectedDesignId, 'chain_metrics');
+            return response.data;
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['design-analysis', 'chain_metrics', selectedDesignId] });
+        },
+    });
+    const chainMetricsLoading = runChainMetrics.isPending
+        || chainMetricsRun?.status === 'queued'
+        || chainMetricsRun?.status === 'running';
 
     // Flattened numeric metrics for Plotly (includes raw confidence_metrics summaries)
     const { data: plotlyMetricsData } = useQuery({
@@ -470,58 +604,6 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
             },
         }];
     }, [designs, xAxis, yAxis, zAxis, colorBy, markerSize, selectedPreset]);
-
-    // Correlation matrix data
-    const correlationData = useMemo(() => {
-        if (selectedPreset !== 'correlation_matrix') return null;
-
-        // Select metrics with enough data
-        const metricsToCorrelate = NUMERIC_METRICS.filter(m => extractValues(m.key).length > 5);
-        const n = metricsToCorrelate.length;
-
-        if (n < 2) return null;
-
-        // Build data matrix
-        const dataMatrix: number[][] = metricsToCorrelate.map(m => extractValues(m.key));
-
-        // Compute correlation matrix
-        const corrMatrix: number[][] = [];
-        for (let i = 0; i < n; i++) {
-            corrMatrix[i] = [];
-            for (let j = 0; j < n; j++) {
-                corrMatrix[i][j] = pearsonCorrelation(dataMatrix[i], dataMatrix[j]);
-            }
-        }
-
-        return {
-            matrix: corrMatrix,
-            labels: metricsToCorrelate.map(m => m.label),
-        };
-    }, [designs, selectedPreset]);
-
-    // Simple Pearson correlation
-    function pearsonCorrelation(x: number[], y: number[]): number {
-        const n = Math.min(x.length, y.length);
-        if (n < 2) return 0;
-
-        const xSlice = x.slice(0, n);
-        const ySlice = y.slice(0, n);
-
-        const xMean = xSlice.reduce((a, b) => a + b, 0) / n;
-        const yMean = ySlice.reduce((a, b) => a + b, 0) / n;
-
-        let num = 0, denomX = 0, denomY = 0;
-        for (let i = 0; i < n; i++) {
-            const dx = xSlice[i] - xMean;
-            const dy = ySlice[i] - yMean;
-            num += dx * dy;
-            denomX += dx * dx;
-            denomY += dy * dy;
-        }
-
-        const denom = Math.sqrt(denomX * denomY);
-        return denom === 0 ? 0 : num / denom;
-    }
 
     // Parallel coordinates data - shows all designs across multiple metrics
     const parallelCoordsData = useMemo((): Data[] => {
@@ -852,13 +934,17 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                         </div>
                     )
                 ) : selectedPreset === 'correlation_matrix' ? (
-                    correlationData ? (
+                    correlationLoading ? (
+                        <div className="h-[500px] flex items-center justify-center text-slate-400">
+                            Building cached correlation matrix...
+                        </div>
+                    ) : correlationData ? (
                         <Plot
                             data={[{
                                 type: 'heatmap',
                                 z: correlationData.matrix,
-                                x: correlationData.labels,
-                                y: correlationData.labels,
+                                x: correlationData.metrics,
+                                y: correlationData.metrics,
                                 colorscale: 'RdBu',
                                 zmid: 0,
                                 zmin: -1,
@@ -879,8 +965,24 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                             style={{ width: '100%', height: '600px' }}
                         />
                     ) : (
-                        <div className="h-[500px] flex items-center justify-center text-slate-500">
-                            Not enough data for correlation matrix (need at least 2 metrics with 5+ data points)
+                        <div className="h-[500px] flex flex-col items-center justify-center gap-3 text-slate-500 px-6 text-center">
+                            <div>Correlation analysis is now on-demand and persisted for the current design set.</div>
+                            <button
+                                type="button"
+                                onClick={() => runCorrelationMatrix.mutate()}
+                                disabled={runCorrelationMatrix.isPending}
+                                className={`rounded-lg border px-4 py-2 text-sm font-semibold transition-colors ${runCorrelationMatrix.isPending
+                                    ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
+                                    : 'border-violet-500/40 bg-violet-500/10 text-violet-300 hover:bg-violet-500/20'
+                                    }`}
+                            >
+                                {runCorrelationMatrix.isPending ? 'Starting…' : 'Run Correlation Matrix'}
+                            </button>
+                            {correlationRun?.error_message && (
+                                <div className="max-w-lg text-center text-sm text-rose-300">
+                                    Last error: {correlationRun.error_message}
+                                </div>
+                            )}
                         </div>
                     )
                 ) : PRESET_ANALYSES.find(p => p.id === selectedPreset)?.type === 'histogram' ? (
@@ -1005,7 +1107,7 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                 ) : selectedPreset === 'aa_composition' ? (
                     aaLoading ? (
                         <div className="h-[500px] flex items-center justify-center text-slate-400">
-                            Loading amino acid composition...
+                            Building cached amino acid composition...
                         </div>
                     ) : aaComposition && aaComposition.overall.length > 0 ? (
                         <Plot
@@ -1041,14 +1143,30 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                             style={{ width: '100%', height: '500px' }}
                         />
                     ) : (
-                        <div className="h-[500px] flex items-center justify-center text-slate-500">
-                            No CDR sequence data available (requires antibody designs with annotated CDRs)
+                        <div className="h-[500px] flex flex-col items-center justify-center gap-3 text-slate-500 px-6 text-center">
+                            <div>AA composition is now on-demand and persisted for the current design set.</div>
+                            <button
+                                type="button"
+                                onClick={() => runAaComposition.mutate()}
+                                disabled={runAaComposition.isPending}
+                                className={`rounded-lg border px-4 py-2 text-sm font-semibold transition-colors ${runAaComposition.isPending
+                                    ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
+                                    : 'border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20'
+                                    }`}
+                            >
+                                {runAaComposition.isPending ? 'Starting…' : 'Run AA Composition'}
+                            </button>
+                            {aaCompositionRun?.error_message && (
+                                <div className="max-w-lg text-center text-sm text-rose-300">
+                                    Last error: {aaCompositionRun.error_message}
+                                </div>
+                            )}
                         </div>
                     )
                 ) : selectedPreset === 'sequence_logo' ? (
                     logosLoading ? (
                         <div className="h-[500px] flex items-center justify-center text-slate-400">
-                            Loading sequence logo data...
+                            Building cached sequence logo pack...
                         </div>
                     ) : cdrLogos && cdrLogos.logos.length > 0 ? (
                         (() => {
@@ -1124,8 +1242,24 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                             );
                         })()
                     ) : (
-                        <div className="h-[500px] flex items-center justify-center text-slate-500">
-                            No CDR sequence data available (requires antibody designs with annotated CDRs)
+                        <div className="h-[500px] flex flex-col items-center justify-center gap-3 text-slate-500 px-6 text-center">
+                            <div>Sequence-logo analysis is now on-demand and persisted for the current design set.</div>
+                            <button
+                                type="button"
+                                onClick={() => runCdrLogos.mutate()}
+                                disabled={runCdrLogos.isPending}
+                                className={`rounded-lg border px-4 py-2 text-sm font-semibold transition-colors ${runCdrLogos.isPending
+                                    ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
+                                    : 'border-blue-500/40 bg-blue-500/10 text-blue-300 hover:bg-blue-500/20'
+                                    }`}
+                            >
+                                {runCdrLogos.isPending ? 'Starting…' : 'Run Sequence Logos'}
+                            </button>
+                            {cdrLogosRun?.error_message && (
+                                <div className="max-w-lg text-center text-sm text-rose-300">
+                                    Last error: {cdrLogosRun.error_message}
+                                </div>
+                            )}
                         </div>
                     )
                 ) : selectedPreset === 'residue_plddt' ? (
@@ -1207,7 +1341,7 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                         </div>
                         {chainMetricsLoading ? (
                             <div className="h-[550px] flex items-center justify-center text-slate-400">
-                                Loading chain metrics...
+                                {chainMetricsRun?.status === 'queued' ? 'Queued chain-metrics analysis...' : 'Computing chain metrics...'}
                             </div>
                         ) : chainMetricsData && Object.keys(chainMetricsData).length > 0 ? (
                             <Plot
@@ -1299,8 +1433,24 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                                 style={{ width: '100%', height: '550px' }}
                             />
                         ) : (
-                            <div className="h-[550px] flex items-center justify-center text-slate-500">
-                                No chain metrics available for selected design
+                            <div className="h-[550px] flex flex-col items-center justify-center gap-3 text-slate-500 px-6 text-center">
+                                <div>Chain metrics are now on-demand and persisted.</div>
+                                <button
+                                    type="button"
+                                    onClick={() => runChainMetrics.mutate()}
+                                    disabled={!selectedDesignId || runChainMetrics.isPending}
+                                    className={`rounded-lg border px-4 py-2 text-sm font-semibold transition-colors ${runChainMetrics.isPending
+                                        ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
+                                        : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
+                                        }`}
+                                >
+                                    {runChainMetrics.isPending ? 'Starting…' : 'Run Chain Metrics'}
+                                </button>
+                                {chainMetricsRun?.error_message && (
+                                    <div className="max-w-lg text-center text-sm text-rose-300">
+                                        Last error: {chainMetricsRun.error_message}
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>
@@ -1323,7 +1473,7 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                         </div>
                         {paeLoading ? (
                             <div className="h-[550px] flex items-center justify-center text-slate-400">
-                                Loading PAE matrix...
+                                {paeRun?.status === 'queued' ? 'Queued PAE analysis...' : 'Computing PAE matrix...'}
                             </div>
                         ) : paeData ? (
                             <Plot
@@ -1356,8 +1506,24 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                                 style={{ width: '100%', height: '550px' }}
                             />
                         ) : (
-                            <div className="h-[550px] flex items-center justify-center text-slate-500">
-                                No PAE data available for selected design
+                            <div className="h-[550px] flex flex-col items-center justify-center gap-3 text-slate-500 px-6 text-center">
+                                <div>PAE analysis is now on-demand and persisted.</div>
+                                <button
+                                    type="button"
+                                    onClick={() => runPaeMatrix.mutate()}
+                                    disabled={!selectedDesignId || runPaeMatrix.isPending}
+                                    className={`rounded-lg border px-4 py-2 text-sm font-semibold transition-colors ${runPaeMatrix.isPending
+                                        ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
+                                        : 'border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-300 hover:bg-fuchsia-500/20'
+                                        }`}
+                                >
+                                    {runPaeMatrix.isPending ? 'Starting…' : 'Run PAE Matrix'}
+                                </button>
+                                {paeRun?.error_message && (
+                                    <div className="max-w-lg text-center text-sm text-rose-300">
+                                        Last error: {paeRun.error_message}
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>
@@ -1376,11 +1542,7 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                                 ))}
                             </select>
                         </div>
-                        {contactMapLoading ? (
-                            <div className="h-[550px] flex items-center justify-center text-slate-400">
-                                Computing contact map...
-                            </div>
-                        ) : contactMapData ? (
+                        {contactMapData ? (
                             <Plot
                                 data={[{
                                     type: 'heatmap',
@@ -1406,9 +1568,29 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                                 config={{ responsive: true, displayModeBar: true, toImageButtonOptions: { format: 'svg', filename: `contact_map_${contactMapData.design_name}` } }}
                                 style={{ width: '100%', height: '550px' }}
                             />
+                        ) : contactMapLoading ? (
+                            <div className="h-[550px] flex items-center justify-center text-slate-400">
+                                {contactMapRun?.status === 'queued' ? 'Queued contact-map analysis...' : 'Computing contact map...'}
+                            </div>
                         ) : (
-                            <div className="h-[550px] flex items-center justify-center text-slate-500">
-                                No structure data available for contact map
+                            <div className="h-[550px] flex flex-col items-center justify-center gap-3 text-slate-500">
+                                <div>Contact-map analysis is now on-demand and persisted.</div>
+                                <button
+                                    type="button"
+                                    onClick={() => runContactMap.mutate()}
+                                    disabled={!selectedDesignId || runContactMap.isPending}
+                                    className={`rounded-lg border px-4 py-2 text-sm font-semibold transition-colors ${runContactMap.isPending
+                                        ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
+                                        : 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20'
+                                        }`}
+                                >
+                                    {runContactMap.isPending ? 'Starting…' : 'Run Contact Map'}
+                                </button>
+                                {contactMapRun?.error_message && (
+                                    <div className="max-w-lg text-center text-sm text-rose-300">
+                                        Last error: {contactMapRun.error_message}
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>

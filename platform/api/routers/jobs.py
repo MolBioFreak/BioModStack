@@ -59,6 +59,7 @@ DEFAULT_PPIFLOW_CHECKPOINT = "nanobody"
 UUID_SUFFIX_RE = re.compile(
     r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
 )
+PRESERVED_GATE_PAYLOAD_KEYS = ("review_filter_sets",)
 
 
 def _coerce_positive_int(value: Any) -> Optional[int]:
@@ -89,6 +90,35 @@ def _coerce_nonempty_text(value: Any) -> Optional[str]:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _merge_preserved_gate_payload(
+    gate_payload: Optional[Dict[str, Any]],
+    existing_payload: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    merged = dict(gate_payload or {})
+    existing = existing_payload if isinstance(existing_payload, dict) else {}
+    for key in PRESERVED_GATE_PAYLOAD_KEYS:
+        if key in merged:
+            continue
+        preserved_value = existing.get(key)
+        if isinstance(preserved_value, list) and preserved_value:
+            merged[key] = preserved_value
+    return merged
+
+
+def _write_gate_snapshot(job: Job) -> None:
+    if not job.awaiting_stage or not isinstance(job.awaiting_payload, dict):
+        return
+    gate_file = gate_file_for_stage(job)
+    if gate_file is None:
+        return
+    gate_file.parent.mkdir(parents=True, exist_ok=True)
+    gate_file.write_text(json.dumps({
+        "awaiting_stage": job.awaiting_stage,
+        "awaiting_payload": job.awaiting_payload,
+        "written_at": datetime.utcnow().isoformat() + "Z",
+    }, indent=2))
 
 
 def _job_uses_child_batches(model_id: str, mode: str, params: dict) -> bool:
@@ -306,6 +336,28 @@ class DeleteReviewFilterSetResponse(BaseModel):
     filter_sets: List[SavedReviewFilterSet]
 
 
+def _resume_defaults_from_awaiting_payload(payload: Optional[Dict[str, Any]]) -> tuple[dict[str, Any], Optional[str], Optional[str]]:
+    payload_dict = payload if isinstance(payload, dict) else {}
+
+    param_overrides = payload_dict.get("resume_param_overrides")
+    if not isinstance(param_overrides, dict):
+        param_overrides = {}
+
+    from_stage = payload_dict.get("resume_from_stage")
+    if isinstance(from_stage, str):
+        from_stage = from_stage.strip() or None
+    else:
+        from_stage = None
+
+    name_suffix = payload_dict.get("resume_name_suffix")
+    if isinstance(name_suffix, str):
+        name_suffix = name_suffix.strip() or None
+    else:
+        name_suffix = None
+
+    return dict(param_overrides), from_stage, name_suffix
+
+
 class AntibodyCdrIndelConfig(BaseModel):
     """Configuration for viewer-launched CDR indel rounds."""
     loop_ids: List[str] = Field(default_factory=list)
@@ -388,6 +440,83 @@ def resolve_output_dir(output_dir: str) -> Optional[Path]:
     return get_data_root() / output_dir
 
 
+def _normalize_output_dir_reference(value: Any) -> Optional[str]:
+    text = _coerce_nonempty_text(value)
+    if not text:
+        return None
+
+    output_path = resolve_output_dir(text)
+    if output_path is None:
+        return None
+
+    try:
+        return str(output_path.expanduser().resolve(strict=False))
+    except TypeError:
+        return str(output_path.expanduser().resolve())
+
+
+async def _load_remaining_output_dir_refs(
+    session: AsyncSession,
+    excluded_job_ids: set[str],
+) -> Dict[str, List[Dict[str, str]]]:
+    rows = (
+        await session.execute(
+            select(Job.id, Job.name, Job.output_dir, Job.child_output_dir)
+        )
+    ).all()
+
+    refs: Dict[str, List[Dict[str, str]]] = {}
+    for job_id, job_name, output_dir, child_output_dir in rows:
+        if str(job_id) in excluded_job_ids:
+            continue
+
+        for field_name, raw_path in (
+            ("output_dir", output_dir),
+            ("child_output_dir", child_output_dir),
+        ):
+            normalized = _normalize_output_dir_reference(raw_path)
+            if not normalized:
+                continue
+            refs.setdefault(normalized, []).append(
+                {
+                    "job_id": str(job_id),
+                    "job_name": str(job_name or ""),
+                    "field": field_name,
+                }
+            )
+
+    return refs
+
+
+def _plan_output_dir_cleanup(
+    candidate_dirs: List[str | None],
+    remaining_refs: Dict[str, List[Dict[str, str]]],
+) -> tuple[List[str], List[Dict[str, Any]]]:
+    deletable: List[str] = []
+    preserved: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for candidate in candidate_dirs:
+        normalized = _normalize_output_dir_reference(candidate)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+
+        refs = remaining_refs.get(normalized, [])
+        if refs:
+            preserved.append(
+                {
+                    "path": normalized,
+                    "referenced_by": refs,
+                }
+            )
+            continue
+
+        deletable.append(normalized)
+
+    return deletable, preserved
+
+
 def count_structure_files(output_dir: str) -> int:
     """Count PDB and CIF structure files in a job output directory."""
     try:
@@ -422,6 +551,7 @@ def _repair_job_for_response(job: Job) -> bool:
     changed = False
 
     gate_stage, gate_payload = load_review_gate_snapshot(job.output_dir, job.awaiting_stage)
+    gate_payload = _merge_preserved_gate_payload(gate_payload, job.awaiting_payload or {})
     if gate_stage and job.awaiting_stage != gate_stage:
         job.awaiting_stage = gate_stage
         changed = True
@@ -588,7 +718,9 @@ def _normalize_antibody_job_params(params: Optional[Dict[str, Any]]) -> Dict[str
 
     ppiflow_checkpoint = str(normalized.get("ppiflow_checkpoint") or "").strip()
     if not ppiflow_checkpoint and (
-        _to_bool(normalized.get("run_maturation"))
+        _to_bool(normalized.get("run_ppiflow_backbone_refine"))
+        or _to_bool(normalized.get("run_ppiflow_maturation"))
+        or _to_bool(normalized.get("run_maturation"))
         or _to_bool(normalized.get("run_post_validation_maturation"))
         or _to_bool(normalized.get("run_post_boltz_maturation"))
     ):
@@ -602,6 +734,41 @@ def _normalize_antibody_job_params(params: Optional[Dict[str, Any]]) -> Dict[str
         if normalized_gate_stage not in {"post_rfantibody", "post_fampnn", "post_structure_validation"}:
             normalized_gate_stage = "post_fampnn"
         normalized["interactive_gate_stage"] = normalized_gate_stage
+
+    if "rfantibody_screen_reference_scope" in normalized:
+        screen_scope = str(normalized.get("rfantibody_screen_reference_scope") or "").strip().lower()
+        if screen_scope in {"whole", "full", "framework", "framework_inclusive", "whole_antibody"}:
+            normalized["rfantibody_screen_reference_scope"] = "whole_antibody"
+        else:
+            normalized["rfantibody_screen_reference_scope"] = "cdr_loops"
+
+    if "ppiflow_stage_mode" in normalized:
+        normalized["ppiflow_stage_mode"] = str(normalized.get("ppiflow_stage_mode") or "").strip().lower() or None
+        if normalized["ppiflow_stage_mode"] in {"post_rfantibody", "backbone_refine"}:
+            normalized["run_ppiflow_backbone_refine"] = True
+        elif normalized["ppiflow_stage_mode"] in {"post_fampnn", "maturation"}:
+            normalized["run_ppiflow_maturation"] = True
+            normalized["run_maturation"] = True
+        elif normalized["ppiflow_stage_mode"] == "both":
+            normalized["run_ppiflow_backbone_refine"] = True
+            normalized["run_ppiflow_maturation"] = True
+            normalized["run_maturation"] = True
+    if "ppiflow_stage_target" in normalized:
+        normalized["ppiflow_stage_target"] = str(normalized.get("ppiflow_stage_target") or "").strip().lower() or None
+    for key in ("ppiflow_backbone_region_mode", "ppiflow_maturation_region_mode", "ppiflow_region_mode"):
+        if key in normalized:
+            value = str(normalized.get(key) or "").strip().lower()
+            if value in {"framework", "framework_only"}:
+                value = "framework_only"
+            elif value in {"all_antibody", "whole_antibody", "full_antibody"}:
+                value = "all_antibody"
+            elif value == "all_cdrs":
+                value = "all_cdrs"
+            else:
+                value = "selected_cdrs"
+            normalized[key] = value
+    if "selected_loop_scope" in normalized:
+        normalized["selected_loop_scope"] = _normalize_selected_loop_scope(normalized.get("selected_loop_scope"))
 
     return normalized
 
@@ -732,6 +899,143 @@ def _dedupe_preserve_order(values: List[str]) -> List[str]:
         seen.add(value)
         out.append(value)
     return out
+
+
+def _normalize_stage_family(value: Any) -> Optional[str]:
+    text = _coerce_nonempty_text(value)
+    if not text:
+        return None
+    return text.strip().lower()
+
+
+def _normalize_selected_loop_scope(raw_value: Any) -> Optional[Dict[str, Any]]:
+    if raw_value is None:
+        return None
+
+    if isinstance(raw_value, dict):
+        cleaned: Dict[str, Any] = {}
+        for key, value in raw_value.items():
+            if value in (None, "", [], {}, ()):
+                continue
+            cleaned[key] = value
+        return cleaned or None
+
+    if isinstance(raw_value, (list, tuple, set)):
+        loops = _dedupe_preserve_order(
+            [str(item).strip().upper() for item in raw_value if str(item).strip()]
+        )
+        return {"selected_loops": loops} if loops else None
+
+    if isinstance(raw_value, str):
+        text = raw_value.strip()
+        if not text:
+            return None
+        if any(sep in text for sep in {",", ";", " ", "|"}):
+            loops = _dedupe_preserve_order(
+                [part.strip().upper() for part in re.split(r"[,\s;|]+", text) if part.strip()]
+            )
+            if loops:
+                return {"selected_loops": loops}
+        return {"value": text}
+
+    return {"value": raw_value}
+
+
+def _build_selected_loop_scope(params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not isinstance(params, dict):
+        return None
+
+    scope: Dict[str, Any] = {}
+    for key in (
+        "interactive_gate_stage",
+        "rfantibody_screen_reference_scope",
+        "antibody_design_mode",
+        "ppiflow_stage_mode",
+        "ppiflow_region_mode",
+        "ppiflow_backbone_region_mode",
+        "ppiflow_maturation_region_mode",
+        "iteration_action",
+        "stage_family",
+        "stage_mode",
+        "selection_source_type",
+    ):
+        value = params.get(key)
+        if value not in (None, "", [], {}, ()):
+            scope[key] = value
+
+    for key in (
+        "ppiflow_selected_loops",
+        "ppiflow_backbone_loop_scope",
+        "ppiflow_maturation_loop_scope",
+        "selected_loops",
+        "loop_ids",
+        "selected_residues",
+        "antibody_design_loops",
+    ):
+        normalized = _normalize_selected_loop_scope(params.get(key))
+        if normalized:
+            scope[key] = normalized
+
+    if params.get("cdr_positions_by_loop") not in (None, "", [], {}, ()):
+        scope["cdr_positions_by_loop"] = params.get("cdr_positions_by_loop")
+
+    return scope or None
+
+
+def _derive_iteration_stage_metadata(action: str, params: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+    action_normalized = (action or "").strip().lower()
+    explicit_stage_family = _normalize_stage_family(params.get("stage_family"))
+    explicit_stage_mode = _normalize_stage_family(params.get("stage_mode"))
+    explicit_ppiflow_mode = _normalize_stage_family(params.get("ppiflow_stage_mode"))
+
+    if explicit_stage_family or explicit_stage_mode:
+        return explicit_stage_family, explicit_stage_mode
+    if explicit_ppiflow_mode:
+        return "ppiflow", explicit_ppiflow_mode
+
+    if action_normalized == "ppiflow_backbone_refine":
+        return "ppiflow", "backbone_refine"
+    if action_normalized == "ppiflow_maturation":
+        return "ppiflow", "maturation"
+    if action_normalized == "fampnn_redesign":
+        return "fampnn", "redesign"
+    if action_normalized in {"validate_boltz2", "validate_protenix"}:
+        return "validation", action_normalized.replace("validate_", "")
+    if action_normalized == "frustrampnn":
+        return "frustrampnn", "screening"
+    if action_normalized == "ui_refinement":
+        gate_stage = _normalize_stage_family(params.get("interactive_gate_stage"))
+        return "refinement", gate_stage or "interactive"
+    if action_normalized in {"cdr_indel_round", "mutation_seeded_refinement", "mutation_seed_build", "manual_mutagenesis_round"}:
+        return "mutation", action_normalized
+    return _normalize_stage_family(params.get("child_stage")), action_normalized or None
+
+
+def _derive_job_stage_tags(model_id: str, mode: str, params: Dict[str, Any], child_stage: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    if not isinstance(params, dict):
+        params = {}
+
+    action = _coerce_nonempty_text(params.get("iteration_action"))
+    if action:
+        family, stage_mode = _derive_iteration_stage_metadata(action, params)
+        if family or stage_mode:
+            return family, stage_mode
+
+    child_stage_normalized = _normalize_stage_family(child_stage)
+    if child_stage_normalized:
+        return child_stage_normalized, child_stage_normalized
+
+    mode_normalized = (mode or "").strip().lower()
+    model_normalized = (model_id or "").strip().lower()
+    if mode_normalized == "maturation_child":
+        return "ppiflow", "maturation"
+    if "fampnn" in model_normalized:
+        return "fampnn", mode_normalized or "sequence_design"
+    if model_normalized in {"protenix", "boltz2", "rf3"} and mode_normalized in {"predict", "complex"}:
+        return "validation", model_normalized
+    if "antibody" in mode_normalized or "antibody" in model_normalized:
+        return "antibody", mode_normalized or model_normalized
+    return None, None
 
 
 def _candidate_child_batch_aliases(
@@ -1047,6 +1351,16 @@ def _prune_iteration_params(base_params: Dict[str, Any]) -> Dict[str, Any]:
         "iteration_source_design_ids",
         "iteration_action",
         "iteration_selection_dir",
+        "lineage_root_job_id",
+        "stage_family",
+        "stage_mode",
+        "selection_source_type",
+        "selection_source_job_id",
+        "selection_dataset_name",
+        "selected_loop_scope",
+        "ppiflow_stage_mode",
+        "ppiflow_stage_target",
+        "ppiflow_selected_loops",
         "manual_mutation_fixed_positions_json",
         "manual_mutation_mode",
         "manual_mutation_method",
@@ -1455,6 +1769,25 @@ def _create_antibody_selection_dir(action: str) -> Path:
     return selection_dir
 
 
+def _link_selection_input(source_path: Path, dest_path: Path) -> str:
+    try:
+        rel_target = os.path.relpath(source_path, start=dest_path.parent)
+        os.symlink(rel_target, dest_path)
+        return "symlink"
+    except OSError as symlink_error:
+        try:
+            os.link(source_path, dest_path)
+            return "hardlink"
+        except OSError as hardlink_error:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Failed to materialize a reference-only selection set without copying data. "
+                    f"Symlink error: {symlink_error}. Hardlink error: {hardlink_error}."
+                ),
+            ) from hardlink_error
+
+
 def _write_seeded_refinement_metadata(
     selection_dir: Path,
     root_job: Job,
@@ -1633,10 +1966,7 @@ def _materialize_seed_selection_from_completed_designs(
     for idx, design in enumerate(designs, start=1):
         source_path = _resolve_design_structure_path(design.pdb_path)
         dest_path = selection_dir / f"{idx:03d}_{design.id}.pdb"
-        try:
-            os.symlink(source_path, dest_path)
-        except OSError:
-            shutil.copy2(source_path, dest_path)
+        link_mode = _link_selection_input(source_path, dest_path)
 
         design_job = design_job_map.get(design.job_id)
         params = design_job.params if design_job and isinstance(design_job.params, dict) else {}
@@ -1655,6 +1985,7 @@ def _materialize_seed_selection_from_completed_designs(
             "design_job_id": design.job_id,
             "source_pdb_path": str(source_path),
             "selection_pdb_path": str(dest_path),
+            "selection_entry_mode": link_mode,
             "mutation_variant": variant_meta,
         })
         if fixed_spec:
@@ -2177,10 +2508,7 @@ def _materialize_antibody_selection(
             )
 
         dest_path = selection_dir / f"{idx:03d}_{design.id}.pdb"
-        try:
-            os.symlink(source_path, dest_path)
-        except OSError:
-            shutil.copy2(source_path, dest_path)
+        link_mode = _link_selection_input(source_path, dest_path)
 
         manifest_items.append({
             "design_id": design.id,
@@ -2188,6 +2516,7 @@ def _materialize_antibody_selection(
             "design_job_id": design.job_id,
             "source_pdb_path": str(source_path),
             "selection_pdb_path": str(dest_path),
+            "selection_entry_mode": link_mode,
         })
 
     manifest = {
@@ -2219,7 +2548,7 @@ def _build_antibody_iteration_job(
                 "skip_rfantibody": True,
                 "fampnn_collected_pdbs": str(selection_dir),
                 "rfantibody_input_pdbs": None,
-                "seq_design_fampnn": True,
+                "seq_design_fampnn": False,
                 "seq_design_antifold": False,
                 "seq_design_proteinmpnn": False,
                 "run_structure_validation": True,
@@ -2263,18 +2592,48 @@ def _build_antibody_iteration_job(
                 "interactive_gate_stage": "post_structure_validation",
             },
         },
+        "ppiflow_backbone_refine": {
+            "suffix": "ppiflow_backbone_refine",
+            "params": {
+                "skip_rfantibody": True,
+                "rfantibody_input_pdbs": str(selection_dir),
+                "fampnn_collected_pdbs": None,
+                "seq_design_fampnn": False,
+                "seq_design_antifold": False,
+                "seq_design_proteinmpnn": False,
+                "run_structure_validation": False,
+                "run_ppiflow_backbone_refine": True,
+                "run_ppiflow_maturation": False,
+                "run_post_validation_maturation": False,
+                "run_post_boltz_maturation": False,
+                "run_maturation": False,
+                "run_frustrampnn": False,
+                "run_immunogenicity_scoring": False,
+                "run_thermompnn": False,
+                "run_stability_scoring": False,
+                "run_af2_backprop": False,
+                "openmm_enabled": False,
+                "interactive_swa": False,
+                "interactive_gating": False,
+                "interactive_gate_stage": "post_fampnn",
+                "ppiflow_stage_mode": "post_rfantibody",
+                "ppiflow_stage_target": "post_rfantibody",
+            },
+        },
         "ppiflow_maturation": {
             "suffix": "ppiflow_maturation",
             "params": {
                 "skip_rfantibody": True,
                 "fampnn_collected_pdbs": str(selection_dir),
                 "rfantibody_input_pdbs": None,
-                "seq_design_fampnn": True,
+                "seq_design_fampnn": False,
                 "seq_design_antifold": False,
                 "seq_design_proteinmpnn": False,
                 "run_structure_validation": False,
-                "run_post_validation_maturation": True,
-                "run_post_boltz_maturation": True,
+                "run_ppiflow_backbone_refine": False,
+                "run_ppiflow_maturation": True,
+                "run_post_validation_maturation": False,
+                "run_post_boltz_maturation": False,
                 "run_maturation": True,
                 "run_frustrampnn": False,
                 "run_immunogenicity_scoring": False,
@@ -2285,6 +2644,8 @@ def _build_antibody_iteration_job(
                 "interactive_swa": False,
                 "interactive_gating": False,
                 "interactive_gate_stage": "post_structure_validation",
+                "ppiflow_stage_mode": "post_fampnn",
+                "ppiflow_stage_target": "post_fampnn",
             },
         },
         "fampnn_redesign": {
@@ -2345,7 +2706,7 @@ def _build_antibody_iteration_job(
             status_code=422,
             detail=(
                 f"Unsupported antibody iteration action '{action}'. "
-                "Allowed: validate_boltz2, validate_protenix, ppiflow_maturation, fampnn_redesign, frustrampnn, cdr_indel_round, mutation_seeded_refinement, ui_refinement."
+                "Allowed: validate_boltz2, validate_protenix, ppiflow_backbone_refine, ppiflow_maturation, fampnn_redesign, frustrampnn, cdr_indel_round, mutation_seeded_refinement, ui_refinement."
             ),
         )
 
@@ -2367,16 +2728,35 @@ def _build_antibody_iteration_job(
                 
     launch_params.update(action_map[action]["params"])
 
+    stage_family, stage_mode = _derive_iteration_stage_metadata(action, launch_params)
+    launch_params.update({
+        "stage_family": stage_family,
+        "stage_mode": stage_mode,
+        "lineage_root_job_id": root_job.id,
+        "selection_source_job_id": source_job.id,
+        "selection_source_type": "saved_dataset" if saved_filter_set is not None else "selected_designs",
+        "selection_dataset_name": saved_filter_set.name if saved_filter_set is not None else None,
+        "selected_loop_scope": _build_selected_loop_scope(launch_params),
+        "ppiflow_selected_loops": launch_params.get("ppiflow_selected_loops"),
+    })
+
     for key in ["rfantibody_input_pdbs", "fampnn_collected_pdbs"]:
         if launch_params.get(key) is None:
             launch_params.pop(key, None)
 
     if param_overrides:
         launch_params.update(param_overrides)
+        stage_family, stage_mode = _derive_iteration_stage_metadata(action, launch_params)
+        launch_params.update({
+            "stage_family": stage_family,
+            "stage_mode": stage_mode,
+            "selected_loop_scope": _build_selected_loop_scope(launch_params),
+        })
 
     if action == "ui_refinement":
         refinement_screen_keys = {
             "enable_rfantibody_filter",
+            "rfantibody_screen_reference_scope",
             "rfantibody_min_epitope_contacts",
             "rfantibody_max_epitope_distance",
             "rfantibody_min_target_contacts",
@@ -3305,6 +3685,50 @@ async def create_job(
                     'msa_sequence_hash': hashlib.sha256(hash_source.encode()).hexdigest(),
                 }
 
+        provenance_lineage_root = _coerce_nonempty_text(
+            job_params.get("lineage_root_job_id")
+            or job_params.get("iteration_source_root_job_id")
+            or job_params.get("resume_root_job_id")
+            or job_data.parent_job_id
+            or job_id
+        )
+        provenance_stage_family, provenance_stage_mode = _derive_job_stage_tags(
+            job_data.model_id,
+            job_data.mode,
+            job_params if isinstance(job_params, dict) else {},
+            job_data.child_stage,
+        )
+        provenance_selection_scope = _build_selected_loop_scope(job_params if isinstance(job_params, dict) else {})
+        provenance_selection_source_type = _coerce_nonempty_text(
+            job_params.get("selection_source_type") if isinstance(job_params, dict) else None
+        )
+        provenance_selection_source_job_id = _coerce_nonempty_text(
+            job_params.get("selection_source_job_id")
+            if isinstance(job_params, dict)
+            else None
+        ) or _coerce_nonempty_text(
+            job_params.get("iteration_source_job_id") if isinstance(job_params, dict) else None
+        ) or _coerce_nonempty_text(job_data.parent_job_id)
+        provenance_selection_dataset_name = _coerce_nonempty_text(
+            job_params.get("selection_dataset_name") if isinstance(job_params, dict) else None
+        )
+        provenance_payload = {
+            "job_id": job_id,
+            "job_name": job_name,
+            "model_id": job_data.model_id,
+            "mode": job_data.mode,
+            "parent_job_id": job_data.parent_job_id,
+            "child_stage": job_data.child_stage,
+            "lineage_root_job_id": provenance_lineage_root,
+            "stage_family": provenance_stage_family,
+            "stage_mode": provenance_stage_mode,
+            "selection_source_type": provenance_selection_source_type,
+            "selection_source_job_id": provenance_selection_source_job_id,
+            "selection_dataset_name": provenance_selection_dataset_name,
+            "selected_loop_scope": provenance_selection_scope,
+            "iteration_action": job_params.get("iteration_action") if isinstance(job_params, dict) else None,
+        }
+
         os.makedirs(output_dir, exist_ok=True)
         
         # Determine queue status: if MSA job exists, this job waits for it
@@ -3333,6 +3757,14 @@ async def create_job(
             # Batch grouping for job sets
             batch_id=effective_batch_id,
             batch_name=effective_batch_name,
+            lineage_root_job_id=provenance_lineage_root,
+            stage_family=provenance_stage_family,
+            stage_mode=provenance_stage_mode,
+            selection_source_type=provenance_selection_source_type,
+            selection_source_job_id=provenance_selection_source_job_id,
+            selection_dataset_name=provenance_selection_dataset_name,
+            selected_loop_scope=provenance_selection_scope,
+            provenance=provenance_payload,
             # GPU Orchestrator fields
             queue_status=initial_queue_status,
             vram_estimate_mb=vram_estimate,
@@ -3470,6 +3902,16 @@ async def launch_antibody_iteration_from_designs(
             name_suffix=request.name_suffix,
             param_overrides=request.param_overrides,
         )
+    if isinstance(launch_request.params, dict):
+        launch_request.params.update({
+            "lineage_root_job_id": root_job.id,
+            "stage_family": launch_request.params.get("stage_family"),
+            "stage_mode": launch_request.params.get("stage_mode"),
+            "selection_source_type": "saved_dataset" if saved_filter_set is not None else "selected_designs",
+            "selection_source_job_id": source_job.id,
+            "selection_dataset_name": saved_filter_set.name if saved_filter_set is not None else None,
+            "selected_loop_scope": _build_selected_loop_scope(launch_request.params),
+        })
     launch_selection_dir = str(launch_request.params.get("iteration_selection_dir") or selection_dir)
     launched_job = await create_job(launch_request, background_tasks, session)
     selection_source_note = (
@@ -3680,6 +4122,25 @@ async def delete_job_permanently(
     for child in child_jobs:
         if child.output_dir:
             child_output_dirs.append(child.output_dir)
+
+    delete_job_ids = {job.id, *(str(child.id) for child in child_jobs)}
+    remaining_output_refs = await _load_remaining_output_dir_refs(session, delete_job_ids)
+    output_dirs_to_delete, preserved_output_dirs = _plan_output_dir_cleanup(
+        [output_dir, *child_output_dirs],
+        remaining_output_refs,
+    )
+
+    for preserved in preserved_output_dirs:
+        logger.warning(
+            "[DELETE] Preserving shared output dir %s because it is still referenced by %s",
+            preserved["path"],
+            ", ".join(
+                f"{ref['job_id']}:{ref['field']}"
+                for ref in preserved.get("referenced_by", [])
+            ) or "unknown jobs",
+        )
+
+    for child in child_jobs:
         # Delete child's designs
         await session.execute(
             Design.__table__.delete().where(Design.job_id == child.id)
@@ -3692,8 +4153,8 @@ async def delete_job_permanently(
     
     # Delete output directories
     deleted_paths = []
-    if output_dir:
-        output_path = resolve_output_dir(output_dir)
+    for raw_path in output_dirs_to_delete:
+        output_path = resolve_output_dir(raw_path)
         if output_path and output_path.exists():
             try:
                 shutil.rmtree(output_path)
@@ -3701,20 +4162,12 @@ async def delete_job_permanently(
             except Exception as e:
                 print(f"Warning: Failed to delete output dir {output_path}: {e}")
     
-    for child_dir in child_output_dirs:
-        child_path = resolve_output_dir(child_dir)
-        if child_path and child_path.exists():
-            try:
-                shutil.rmtree(child_path)
-                deleted_paths.append(str(child_path))
-            except Exception as e:
-                print(f"Warning: Failed to delete child output dir {child_path}: {e}")
-    
     return {
         "message": f"Job '{job_name}' permanently deleted",
         "job_id": job_id,
         "children_deleted": len(child_jobs),
-        "directories_deleted": deleted_paths
+        "directories_deleted": deleted_paths,
+        "directories_preserved": preserved_output_dirs,
     }
 
 
@@ -4056,6 +4509,7 @@ async def open_stage_gate(
     job.awaiting_stage = stage
     job.awaiting_payload = payload
     job.current_stage = stage
+    _write_gate_snapshot(job)
     await session.commit()
 
     logger.info("Job %s opened interactive gate '%s'", job_id, stage)
@@ -4123,6 +4577,7 @@ async def save_review_filter_set(
     filter_sets.insert(0, saved_entry)
     payload["review_filter_sets"] = filter_sets[:50]
     job.awaiting_payload = refresh_gate_payload(payload, job.output_dir)
+    _write_gate_snapshot(job)
     await session.commit()
 
     saved_models = [SavedReviewFilterSet.model_validate(entry) for entry in payload["review_filter_sets"]]
@@ -4155,6 +4610,7 @@ async def delete_review_filter_set(
 
     payload["review_filter_sets"] = next_sets
     job.awaiting_payload = refresh_gate_payload(payload, job.output_dir)
+    _write_gate_snapshot(job)
     await session.commit()
 
     return DeleteReviewFilterSetResponse(
@@ -4442,6 +4898,12 @@ async def get_job_stages(
 
         if params.get("run_maturation") is True:
             display_stages.append("maturation")
+            ppiflow_mode = str(params.get("ppiflow_stage_mode") or "").strip().lower()
+            iteration_action = str(params.get("iteration_action") or "").strip().lower()
+            if ppiflow_mode == "backbone_refine" or iteration_action == "ppiflow_backbone_refine":
+                display_stages.append("ppiflow_backbone_refine")
+            if ppiflow_mode == "maturation" or iteration_action == "ppiflow_maturation":
+                display_stages.append("ppiflow_maturation")
             
         # Validation stages
         if params.get("run_structure_validation") is not False:
@@ -4584,11 +5046,30 @@ async def resume_job(
 
     # Prevent callers from overriding resume control fields directly.
     reserved_resume_keys = {"resume_job_id", "resume_work_dir", "resume_source_dir", "resume_stage_work_dir"}
+    payload_resume_overrides: dict[str, Any] = {}
+    payload_resume_from_stage: Optional[str] = None
+    payload_name_suffix: Optional[str] = None
+    if job.awaiting_input:
+        payload_resume_overrides, payload_resume_from_stage, payload_name_suffix = _resume_defaults_from_awaiting_payload(
+            job.awaiting_payload
+        )
     param_overrides = {
         key: value
         for key, value in requested_overrides.items()
         if key not in reserved_resume_keys
     }
+    payload_resume_overrides = {
+        key: value
+        for key, value in payload_resume_overrides.items()
+        if key not in reserved_resume_keys
+    }
+    if not effective_from_stage and payload_resume_from_stage:
+        effective_from_stage = payload_resume_from_stage
+    if not requested_name_suffix and payload_name_suffix:
+        requested_name_suffix = payload_name_suffix
+    merged_resume_defaults = dict(payload_resume_overrides)
+    merged_resume_defaults.update(param_overrides)
+    param_overrides = merged_resume_defaults
 
     if job.awaiting_input:
         awaiting_payload = dict(job.awaiting_payload or {})
@@ -4597,14 +5078,17 @@ async def resume_job(
             param_overrides.setdefault("rfantibody_input_pdbs", candidate_dir)
         if candidate_dir and job.awaiting_stage == "post_fampnn":
             param_overrides.setdefault("fampnn_collected_pdbs", candidate_dir)
-        param_overrides.setdefault("interactive_gate_continue", True)
-        param_overrides.setdefault("interactive_swa", _to_bool((job.params or {}).get("interactive_swa")))
-        param_overrides.setdefault("interactive_gating", _to_bool((job.params or {}).get("interactive_gating")))
+        if job.awaiting_stage in {"post_rfantibody", "post_fampnn", "post_structure_validation"}:
+            param_overrides.setdefault("interactive_gate_continue", True)
+            param_overrides.setdefault("interactive_swa", _to_bool((job.params or {}).get("interactive_swa")))
+            param_overrides.setdefault("interactive_gating", _to_bool((job.params or {}).get("interactive_gating")))
         if not effective_from_stage and job.awaiting_stage == "post_rfantibody":
             effective_from_stage = "rfantibody"
         elif not effective_from_stage and job.awaiting_stage == "post_fampnn":
             effective_from_stage = "fampnn"
         elif not effective_from_stage and job.awaiting_stage == "post_structure_validation":
+            effective_from_stage = "structure_validation"
+        elif not effective_from_stage and job.awaiting_stage == "pre_protenix_msa":
             effective_from_stage = "structure_validation"
     
     # Determine work directory for resumption

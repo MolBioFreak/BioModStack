@@ -21,6 +21,7 @@ from database import Job, get_session
 from services.gpu_metadata import HARDWARE_LIMITS
 from services.gpu_config import read_scheduler_config
 from services.gpu_orchestrator import collect_live_vram_by_job, build_queue_scheduler_diagnostics
+from services.gpu_stage_activity import job_uses_assigned_gpu
 from services.job_control import (
     cancel_job_lineage,
     force_launch_job as force_launch_job_service,
@@ -124,7 +125,7 @@ def _get_process_cmdline(pid: int, cache: Dict[int, str]) -> str:
 
 
 def _collect_live_vram_by_job(jobs: List[Job]) -> Dict[str, int]:
-    running_jobs = [job for job in jobs if job.queue_status == "running" and job.assigned_gpu is not None]
+    running_jobs = [job for job in jobs if job.queue_status == "running" and job_uses_assigned_gpu(job)]
     if not running_jobs:
         return {}
     try:
@@ -185,11 +186,20 @@ def _infer_stage_work_dir(job: Job) -> Optional[str]:
         "waitforchildren": "waitforchildren",
         "waitforfampnnchildren": "waitforfampnnchildren",
         "waitformaturationchildren": "waitformaturationchildren",
+        "waitforppiflowbackbonechildren": "waitforppiflowbackbonechildren",
+        "waitforppiflowmaturationchildren": "waitforppiflowmaturationchildren",
         "spawnrfantibodyjobs": "spawnrfantibodyjobs",
         "spawnfampnnjobs": "spawnfampnnjobs",
         "spawnmaturationjobs": "spawnmaturationjobs",
+        "spawnppiflowbackbonejobs": "spawnppiflowbackbonejobs",
+        "spawnppiflowmaturationjobs": "spawnppiflowmaturationjobs",
         "spawnchildjobs": "spawnchildjobs",
         "waitandaggregatechildresults": "waitandaggregatechildresults",
+        "backbone_refine": "ppiflow",
+        "maturation": "ppiflow",
+        "ppiflow_backbone": "ppiflow",
+        "ppiflow_maturation": "ppiflow",
+        "ppiflow_post_validation": "ppiflow",
         "protenix": "protenix",
         "boltz2": "boltz",
     }
@@ -389,7 +399,7 @@ async def list_queue(
             queue_status=job.queue_status,
             paused=job.paused,
             pinned_gpu=job.pinned_gpu,
-            assigned_gpu=job.assigned_gpu,
+            assigned_gpu=job.assigned_gpu if job_uses_assigned_gpu(job) else None,
             priority=job.priority,
             vram_estimate_mb=job.vram_estimate_mb,
             sequence_length=job.sequence_length,
@@ -399,7 +409,7 @@ async def list_queue(
             max_retries=job.max_retries,
             created_at=job.created_at,
             started_at=job.started_at,
-            live_vram_mb=live_vram_by_job.get(job.id),
+            live_vram_mb=live_vram_by_job.get(job.id) if job_uses_assigned_gpu(job) else None,
             current_stage=job.current_stage,
             stage_progress=stage_progress_by_job.get(job.id, job.stage_progress),
             scheduler_required_mb=scheduler_diagnostics.get(job.id, {}).get("scheduler_required_mb"),

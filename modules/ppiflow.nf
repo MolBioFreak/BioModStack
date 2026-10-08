@@ -1,11 +1,15 @@
 process IdentifyAnchorResidues {
     label 'pyrosetta_tools'
+    publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "*_anchors.json"
+    publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "*_interface_score.json"
+    publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "*_ppiflow_positions.txt"
+    publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "*_cdr_positions.txt"
 
     input:
     tuple val(meta), path(complex_pdb)
 
     output:
-    tuple val(meta), path(complex_pdb), path("${meta.id}_anchors.json"), path("${meta.id}_cdr_positions.txt"), emit: anchor_inputs
+    tuple val(meta), path(complex_pdb), path("${meta.id}_anchors.json"), path("${meta.id}_ppiflow_positions.txt"), path("${meta.id}_cdr_positions.txt"), emit: anchor_inputs
     tuple val(meta), path("${meta.id}_interface_score.json"), emit: interface_scores
 
     script:
@@ -15,9 +19,21 @@ process IdentifyAnchorResidues {
     def antigenChains = params.antigen_chains ?: ''
     def energyThreshold = params.maturation_anchor_threshold ?: -5.0
     def distanceCutoff = params.maturation_anchor_distance_cutoff ?: 8.0
+    def regionMode = params.ppiflow_region_mode ?: 'selected_cdrs'
+    def selectedLoopsSpec = params.ppiflow_selected_loops ?: ''
+    def cdrPositionsByLoopJson = groovy.json.JsonOutput.toJson(params.get('cdr_positions_by_loop') ?: [:])
+    def manualCdrDefinitionsJson = groovy.json.JsonOutput.toJson(params.get('manual_cdr_definitions') ?: [])
     """
     PYTHON_BIN=\$(command -v python3 || command -v python)
     [ -n "\${PYTHON_BIN}" ] || { echo "[PPIFlow] ERROR: python interpreter not found" >&2; exit 127; }
+
+    cat > cdr_positions_by_loop.json <<'JSON'
+${cdrPositionsByLoopJson}
+JSON
+
+    cat > manual_cdr_definitions.json <<'JSON'
+${manualCdrDefinitionsJson}
+JSON
 
     "\${PYTHON_BIN}" "${params.code_root}/scripts/identify_anchors.py" \\
         --pdb "${complex_pdb}" \\
@@ -25,8 +41,13 @@ process IdentifyAnchorResidues {
         --antigen_chains "${antigenChains}" \\
         --energy_threshold ${energyThreshold} \\
         --distance_cutoff ${distanceCutoff} \\
+        --region_mode "${regionMode}" \\
+        --selected_loops "${selectedLoopsSpec}" \\
+        --cdr_positions_by_loop_json "cdr_positions_by_loop.json" \\
+        --manual_cdr_definitions_json "manual_cdr_definitions.json" \\
         --output_anchors "${meta.id}_anchors.json" \\
         --output_score "${meta.id}_interface_score.json" \\
+        --output_positions "${meta.id}_ppiflow_positions.txt" \\
         --output_cdr_positions "${meta.id}_cdr_positions.txt"
     """
 }
@@ -34,9 +55,10 @@ process IdentifyAnchorResidues {
 process RunPartialFlow {
     label 'gpu'
     label 'PPIFlow'
+    publishDir "${params.out_dir}/run/ppiflow/redesign_debug", mode: 'copy', pattern: "fixed_positions.txt"
 
     input:
-    tuple val(meta), path(complex_pdb), path(anchors_json), path(cdr_positions)
+    tuple val(meta), path(complex_pdb), path(anchors_json), path(ppiflow_positions)
 
     output:
     tuple val(meta), path("ppiflow_backbones/*.pdb"), emit: backbones
@@ -71,7 +93,7 @@ process RunPartialFlow {
         --output fixed_positions.txt
 
     fixedPositionsSpec=\$(tr -d '\\n' < fixed_positions.txt)
-    cdrPositionsSpec=\$(tr -d '\\n' < "${cdr_positions}")
+    cdrPositionsSpec=\$(tr -d '\\n' < "${ppiflow_positions}")
     hotspotsSpec="${params.epitope_residues ?: ''}"
 
     heavyChain="${heavyChain}"
@@ -301,6 +323,9 @@ PY
 
 process PrepMaturationRedesign {
     label 'pyrosetta_tools'
+    publishDir "${params.out_dir}/run/ppiflow/redesign_debug", mode: 'copy', pattern: "fixed_positions.txt"
+    publishDir "${params.out_dir}/run/ppiflow/redesign_debug", mode: 'copy', pattern: "mpnn_fixed_chains.json"
+    publishDir "${params.out_dir}/run/ppiflow/redesign_debug", mode: 'copy', pattern: "fampnn.csv"
 
     input:
     tuple val(meta), path(backbone_pdbs), path(anchors_json), path(cdr_positions), path(cdr_positions_by_loop)
@@ -314,6 +339,11 @@ process PrepMaturationRedesign {
     def antibodyChains = params.antibody_chains ?: defaultAntibodyChains
     def designModeRaw = params.maturation_design_mode ?: 'inherit'
     def designMode = designModeRaw == 'inherit' ? (params.antibody_design_mode ?: 'cdr_only') : designModeRaw
+    def selectedLoopsSpec = (params.ppiflow_region_mode ?: 'selected_cdrs').toString() == 'selected_cdrs'
+        ? (params.ppiflow_selected_loops ?: '')
+        : ''
+    def selectedLoopsArg = selectedLoopsSpec ? " --design_loops \"${selectedLoopsSpec}\"" : ""
+    def effectiveDesignMode = selectedLoopsSpec && designMode == 'cdr_only' ? 'cdr_selective' : designMode
     def protectTetrad = params.protect_vhh_tetrad != null ? params.protect_vhh_tetrad : true
     def extraFixedJson = params.manual_mutation_fixed_positions_json ? " \\\\\n        --extra_fixed_positions_json \\\"${params.manual_mutation_fixed_positions_json}\\\"" : ""
     """
@@ -339,8 +369,8 @@ process PrepMaturationRedesign {
         --input_dir "./" \\
         --out_fampnn "fampnn.csv" \\
         --out_mpnn "mpnn_fixed_chains.json" \\
-        --design_mode "${designMode}" \\
-        --protect_tetrad "${protectTetrad}" \\
+        --design_mode "${effectiveDesignMode}" \\
+        --protect_tetrad "${protectTetrad}"${selectedLoopsArg} \\
         --antibody_chains "${antibodyChains}" \\
         --lock_target_chains "${params.lock_target_chains != null ? params.lock_target_chains : true}" \\
         --lock_antibody_framework "${params.lock_antibody_framework != null ? params.lock_antibody_framework : true}" \\
@@ -431,7 +461,7 @@ process RunMaturationFAMPNN {
 
 process ScoreMaturationImprovement {
     label 'pyrosetta_tools'
-    publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "*maturation_score.json"
+    publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "scores/*_maturation_score.json", saveAs: { fn -> fn.replace('scores/', '') }
 
     input:
     tuple val(meta), path(original_pdb), path(matured_pdbs)
@@ -465,7 +495,7 @@ process ScoreMaturationImprovement {
 
 process ScorePartialFlowImprovement {
     label 'pyrosetta_tools'
-    publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "*partial_flow_score.json"
+    publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "scores/*_partial_flow_score.json", saveAs: { fn -> fn.replace('scores/', '') }
 
     input:
     tuple val(meta), path(original_pdb), path(matured_pdbs)
@@ -510,9 +540,13 @@ process FilterByMaturation {
     path ("filter_reports/*_maturation_filter.json"), emit: filter_reports
 
     script:
-    def minImprovement = params.maturation_min_improvement ?: -1.0
+    def rawMinImprovement = params.containsKey('maturation_min_improvement') ? params.maturation_min_improvement : null
+    def minImprovement = rawMinImprovement != null ? rawMinImprovement as Double : null
     def percentile = params.maturation_filter_percentile
-    def percentileArg = percentile != null && percentile > 0 ? "--percentile ${percentile}" : ""
+    def filterDisabled = (minImprovement == null || minImprovement >= 0.0) && !(percentile != null && percentile > 0)
+    def minImprovementArg = (!filterDisabled && minImprovement != null) ? "--min_improvement ${minImprovement}" : ""
+    def percentileArg = (!filterDisabled && percentile != null && percentile > 0) ? "--percentile ${percentile}" : ""
+    def disableFilterArg = filterDisabled ? "--disable_filter" : ""
     """
     PYTHON_BIN=\$(command -v python3 || command -v python)
     [ -n "\${PYTHON_BIN}" ] || { echo "[PPIFlow] ERROR: python interpreter not found" >&2; exit 127; }
@@ -556,8 +590,9 @@ with open("scores_manifest.json", "w") as f:
             --score_json "\${score_json}" \\
             --pdb_path "\$matured_pdb" \\
             --output_dir "filtered_output" \\
-            --min_improvement ${minImprovement} \\
+            ${minImprovementArg} \\
             ${percentileArg} \\
+            ${disableFilterArg} \\
             --scores_manifest "scores_manifest.json" \\
             --report_json "filter_reports/\${base_name}_maturation_filter.json"
     done

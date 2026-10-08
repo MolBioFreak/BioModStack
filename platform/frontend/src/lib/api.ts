@@ -25,6 +25,10 @@ export interface Job {
     batch_name?: string | null;
     // Parent-child relationship for exploration mode
     parent_job_id?: string | null;
+    lineage_root_job_id?: string | null;
+    stage_family?: string | null;
+    stage_mode?: string | null;
+    selected_loop_scope?: Record<string, unknown> | null;
     // GPU and timing info
     pinned_gpu?: number | null;  // User-specified GPU pin
     assigned_gpu?: number | null;
@@ -40,6 +44,7 @@ export interface Job {
     awaiting_stage?: string | null;
     awaiting_payload?: Record<string, any> | null;
     decision_history?: Array<Record<string, any>> | null;
+    selected_cdr_loops?: string[] | null;
 }
 
 // Log data for View Logs modal
@@ -184,6 +189,7 @@ export const fetchJobs = (params?: {
 }) => api.get<{ jobs: Job[]; total: number }>('/api/jobs', { params });
 export const fetchSystemStatus = () => api.get<SystemStatus>('/api/gpu/status');
 export const fetchJobById = (id: string) => api.get<Job>(`/api/jobs/${id}`);
+export const fetchDesignById = (id: string) => api.get<Design>(`/api/designs/${id}`);
 export const cancelJob = (id: string) => api.delete(`/api/jobs/${id}`);
 export const deleteJobPermanently = (id: string) => api.delete<{
     message: string;
@@ -252,6 +258,7 @@ export const submitJob = (jobData: Partial<Job>) => {
 export type AntibodyIterationAction =
     | 'validate_boltz2'
     | 'validate_protenix'
+    | 'ppiflow_backbone_refine'
     | 'ppiflow_maturation'
     | 'fampnn_redesign'
     | 'frustrampnn'
@@ -458,6 +465,55 @@ export const fetchPresetDirectories = () =>
     api.get<any[]>('/api/inputs/preset-directories');
 
 // Designs API
+export type RfScreeningScope = 'cdr_loops' | 'whole_antibody';
+
+export interface RfScopeHeadlineMetrics {
+    epitope_contact_count?: number | null;
+    epitope_min_distance?: number | null;
+    epitope_min_atom_distance?: number | null;
+    epitope_centroid_distance?: number | null;
+    target_contact_count?: number | null;
+    target_min_distance?: number | null;
+    target_min_atom_distance?: number | null;
+    target_centroid_distance?: number | null;
+}
+
+export interface RfLoopScreeningSummary {
+    requested_scope?: RfScreeningScope | string | null;
+    effective_scope?: RfScreeningScope | string | null;
+    fallback_reason?: string | null;
+    headline_metrics_by_scope?: Partial<Record<RfScreeningScope, RfScopeHeadlineMetrics>> | null;
+    redesign_candidate_loops?: string[] | null;
+    engaged_loops?: string[] | null;
+    detached_loops?: string[] | null;
+}
+
+export interface RfLoopMetric {
+    residue_count?: number | null;
+    epitope_contact_count?: number | null;
+    epitope_min_distance?: number | null;
+    epitope_min_atom_distance?: number | null;
+    epitope_centroid_distance?: number | null;
+    epitope_nearest_antibody_residue?: string | null;
+    epitope_nearest_target_residue?: string | null;
+    target_contact_count?: number | null;
+    target_min_distance?: number | null;
+    target_min_atom_distance?: number | null;
+    target_centroid_distance?: number | null;
+    target_nearest_antibody_residue?: string | null;
+    target_nearest_target_residue?: string | null;
+    engaged_epitope?: boolean | null;
+    engaged_target?: boolean | null;
+    redesign_candidate?: boolean | null;
+    screening_status?: string | null;
+    passes_reference_filters?: boolean | null;
+    screening_note?: string | null;
+}
+
+export type RfLoopMetrics = Record<string, RfLoopMetric | RfLoopScreeningSummary | unknown> & {
+    _screening?: RfLoopScreeningSummary;
+};
+
 export interface Design {
     id: string;
     job_id: string;
@@ -493,6 +549,7 @@ export interface Design {
     chains_ptm: Record<string, number> | number[] | null;
     pair_chains_iptm: Record<string, Record<string, number>> | number[][] | null;
     confidence_metrics: Record<string, unknown> | null;
+    ipsae: number | null;
     // Backbone grouping & epitope analysis
     backbone_id: number | null;
     epitope_contact_count: number | null;
@@ -521,7 +578,15 @@ export interface Design {
     screening_reason?: string | null;
     source_stage?: string | null;
     artifact_group?: string | null;
-    rfa_loop_metrics?: Record<string, unknown> | null;
+    stage_family?: string | null;
+    stage_mode?: string | null;
+    lineage_root_job_id?: string | null;
+    parent_design_id?: string | null;
+    origin_design_id?: string | null;
+    origin_job_id?: string | null;
+    origin_backbone_design_id?: string | null;
+    provenance?: Record<string, unknown> | null;
+    rfa_loop_metrics?: RfLoopMetrics | null;
     rfa_hotspot_metrics?: Record<string, unknown> | null;
     rfa_hotspot_covered_count?: number | null;
     rfa_hotspot_min_distance?: number | null;
@@ -587,6 +652,7 @@ export interface DesignFilters {
     plddt_min?: number;
     pae_max?: number;
     iptm_min?: number;
+    ipsae_min?: number;
     epitope_contacts_min?: number;
     target_contacts_min?: number;
     epitope_max_dist?: number;
@@ -642,6 +708,7 @@ export type DesignSortField =
     | 'affinity_score'
     | 'binder_probability'
     | 'fampnn_psce'
+    | 'ipsae'
     | 'rfa_hotspot_covered_count'
     | 'rfa_hotspot_min_distance'
     | 'rfa_hotspot_avg_min_distance'
@@ -840,11 +907,122 @@ export interface StructureComparison {
     rmsd_all_atom: number | null;
 }
 
+export interface IpsaeInterfacePairScore {
+    chain_1: string;
+    chain_2: string;
+    pair_type: string;
+    ipsae_d0res_asym: number | null;
+    ipsae_d0chn_asym: number | null;
+    ipsae_d0dom_asym: number | null;
+    ipsae_d0res_max: number | null;
+    ipsae_d0chn_max: number | null;
+    ipsae_d0dom_max: number | null;
+    iptm_d0chn_asym: number | null;
+    iptm_d0chn_max: number | null;
+    n0res: number | null;
+    n0chn: number | null;
+    n0dom: number | null;
+    d0res: number | null;
+    d0chn: number | null;
+    d0dom: number | null;
+    residue_label_asym: string | null;
+    residue_label_max: string | null;
+}
+
+export interface IpsaeInterfaceAnalysis {
+    ipsae: number | null;
+    ipsae_binder_to_target: number | null;
+    ipsae_target_to_binder: number | null;
+    ipsae_global_max: number | null;
+    ipsae_d0chn: number | null;
+    ipsae_d0dom: number | null;
+    ipsae_chain_pair: string | null;
+    ipsae_pair_type: string | null;
+    ipsae_n0res: number | null;
+    ipsae_n0chn: number | null;
+    ipsae_n0dom: number | null;
+    ipsae_selected_d0res: number | null;
+    ipsae_selected_d0chn: number | null;
+    ipsae_selected_d0dom: number | null;
+    ipsae_selected_residue: string | null;
+    pae_cutoff: number | null;
+    dist_cutoff: number | null;
+    pair_scores: IpsaeInterfacePairScore[];
+}
+
+export interface PersistedAnalysisRun<T = Record<string, unknown>> {
+    run_id: string | null;
+    analysis_type: string;
+    subject_kind: string;
+    subject_id: string;
+    status: 'missing' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'stale';
+    resource_class: string | null;
+    params: Record<string, unknown>;
+    cache_hit: boolean;
+    summary: Record<string, unknown> | null;
+    result: T | null;
+    error_message: string | null;
+    artifacts: Record<string, unknown>;
+    queued_at: string | null;
+    started_at: string | null;
+    completed_at: string | null;
+    last_accessed_at: string | null;
+}
+
+export interface JobAnalysisScopeParams {
+    include_children?: boolean;
+    design_ids?: string[];
+}
+
 export const fetchStructureAnalysis = (designId: string) =>
     api.get<StructureAnalysis>(`/api/designs/${designId}/structure-analysis`);
 
 export const fetchStructureComparison = (id1: string, id2: string) =>
     api.get<StructureComparison>(`/api/designs/${id1}/compare/${id2}`);
+
+export const fetchDesignAnalysis = <T = Record<string, unknown>>(
+    designId: string,
+    analysisType: string,
+    params?: Record<string, unknown>,
+) =>
+    api.get<PersistedAnalysisRun<T>>(`/api/designs/${designId}/analyses/${analysisType}`, { params });
+
+export const triggerDesignAnalysis = <T = Record<string, unknown>>(
+    designId: string,
+    analysisType: string,
+    params?: Record<string, unknown>,
+    forceRefresh: boolean = false,
+) =>
+    api.post<PersistedAnalysisRun<T>>(`/api/designs/${designId}/analyses/${analysisType}`, {
+        params: params || {},
+        force_refresh: forceRefresh,
+    });
+
+export const fetchJobAnalysis = <T = Record<string, unknown>>(
+    jobId: string,
+    analysisType: string,
+    params?: JobAnalysisScopeParams,
+) =>
+    api.get<PersistedAnalysisRun<T>>(`/api/jobs/${jobId}/analyses/${analysisType}`, {
+        params: {
+            include_children: params?.include_children,
+            design_ids: params?.design_ids?.join(','),
+        },
+    });
+
+export const triggerJobAnalysis = <T = Record<string, unknown>>(
+    jobId: string,
+    analysisType: string,
+    params?: JobAnalysisScopeParams,
+    forceRefresh: boolean = false,
+) =>
+    api.post<PersistedAnalysisRun<T>>(`/api/jobs/${jobId}/analyses/${analysisType}`, {
+        params: {
+            include_children: params?.include_children ?? true,
+            design_ids: params?.design_ids ?? [],
+        },
+        force_refresh: forceRefresh,
+    });
 
 // User Sequences API
 export interface UserSequence {
@@ -1178,10 +1356,23 @@ export interface AntibodyData {
         H1?: string; H2?: string; H3?: string;
         L1?: string; L2?: string; L3?: string;
     };
+    cdr_lengths?: {
+        H1?: number | null; H2?: number | null; H3?: number | null;
+        L1?: number | null; L2?: number | null; L3?: number | null;
+    };
+    binder_length?: number | null;
+    antibody_type?: string | null;
     humanness_score?: number;
     stability_data?: Record<string, Record<string, number>>; // chain -> pos -> ddG
     imgt_pdb_url?: string;
     detected_antibody_chains?: string | null;
+    framework_regions?: {
+        fr2_contacts?: string | null;
+        de_loop?: string | null;
+        fr3_contacts?: string | null;
+        fr4_contacts?: string | null;
+    };
+    binder_chains?: Record<string, string>;
     overlay_selections?: AntibodyOverlaySelection[];
 }
 
@@ -1312,6 +1503,8 @@ export interface PAEData {
     design_name: string;
     pae_matrix: number[][];  // 2D PAE matrix
     size: number;
+    source_mode?: string;
+    confidence_file?: string | null;
 }
 
 export const fetchPAEData = (designId: string) =>

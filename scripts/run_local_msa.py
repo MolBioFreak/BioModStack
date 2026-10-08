@@ -414,6 +414,18 @@ def parse_gpu_csv(csv_value: Optional[str]) -> Optional[List[int]]:
     return gpu_ids if gpu_ids else None
 
 
+def resolve_mmseqs_binaries(db_path: str | Path) -> tuple[Path, Path | None]:
+    """Resolve CPU and GPU MMseqs binaries from the configured DB root."""
+    db_root = Path(db_path)
+    mmseqs_cpu = db_root / "mmseqs" / "bin" / "mmseqs"
+    gpu_candidates = [
+        db_root / "mmseqs-gpu-blackwell" / "bin" / "mmseqs",
+        db_root / "mmseqs-gpu" / "bin" / "mmseqs",
+    ]
+    mmseqs_gpu = next((candidate for candidate in gpu_candidates if candidate.exists()), None)
+    return mmseqs_cpu, mmseqs_gpu
+
+
 def load_scheduler_gpu_policy(config_path: Optional[Path] = None) -> Dict[str, Optional[List[int]]]:
     """
     Load GPU policy from scheduler config (.gpu_config.json), if available.
@@ -832,6 +844,190 @@ def check_gpu_availability(
     except Exception as e:
         print(f"GPU detection failed: {e}", flush=True)
         return None
+
+
+def inspect_mmseqs_runtime(
+    *,
+    db_path: str | Path,
+    cache_dir: Optional[str],
+    use_gpu: bool | None = None,
+    gpu_id: int | None = None,
+    cpu_only: bool = False,
+    gpu_mode: str = "auto",
+    gpu_threshold: int = 80,
+    preferred_gpus: Optional[List[int]] = None,
+    excluded_gpus: Optional[List[int]] = None,
+    gpu_server_mode: str = "persistent",
+    gpu_server_wait_timeout: int = 120,
+    gpu_server_db_load_mode: int = 0,
+    gpu_server_startup_wait: float = 1.0,
+    verbose: bool = True,
+) -> Dict[str, Any]:
+    """Inspect whether this local MSA request will run on GPU or CPU."""
+    mmseqs_cpu, mmseqs_gpu = resolve_mmseqs_binaries(db_path)
+    db_root = Path(db_path)
+    uniref_db = db_root / "uniref30_2302_db"
+
+    normalized_gpu_mode = (gpu_mode or "auto").strip().lower()
+    if normalized_gpu_mode not in {"auto", "opportunistic", "required", "cpu"}:
+        raise ValueError(
+            f"Invalid gpu_mode='{gpu_mode}'. Choose from: auto, opportunistic, required, cpu"
+        )
+    normalized_gpu_server_mode = (gpu_server_mode or "persistent").strip().lower()
+    if normalized_gpu_server_mode not in {"auto", "required", "persistent", "off"}:
+        raise ValueError(
+            f"Invalid gpu_server_mode='{gpu_server_mode}'. Choose from: auto, required, persistent, off"
+        )
+
+    effective_gpu_server_wait_timeout = int(gpu_server_wait_timeout)
+    if (
+        normalized_gpu_mode in {"auto", "opportunistic"}
+        and effective_gpu_server_wait_timeout > 30
+    ):
+        effective_gpu_server_wait_timeout = 30
+        if verbose:
+            print(
+                "Capping gpuserver wait timeout to 30s for opportunistic/auto mode.",
+                flush=True,
+            )
+    if gpu_server_wait_timeout < -1:
+        raise ValueError("gpu_server_wait_timeout must be -1 (infinite), 0, or a positive integer")
+    if cpu_only:
+        normalized_gpu_mode = "cpu"
+    elif use_gpu is True and normalized_gpu_mode in {"auto", "opportunistic"}:
+        normalized_gpu_mode = "required"
+
+    scheduler_policy = load_scheduler_gpu_policy()
+    persisted_pinned_gpu_id = None
+    if gpu_id is None and preferred_gpus is None and not cpu_only:
+        persisted_pinned_gpu_id = read_persisted_msa_pinned_gpu_id(cache_dir)
+
+    effective_preferred_gpus = list(preferred_gpus) if preferred_gpus else None
+    effective_excluded_gpus = list(excluded_gpus) if excluded_gpus else None
+    ignored_pinned_gpu_id = None
+
+    if persisted_pinned_gpu_id is not None:
+        if effective_excluded_gpus and persisted_pinned_gpu_id in set(effective_excluded_gpus):
+            ignored_pinned_gpu_id = persisted_pinned_gpu_id
+            if verbose:
+                print(
+                    f"Ignoring persisted MSA GPU pin {persisted_pinned_gpu_id} because it is excluded by policy.",
+                    flush=True,
+                )
+            persisted_pinned_gpu_id = None
+        else:
+            effective_preferred_gpus = [persisted_pinned_gpu_id]
+            if verbose:
+                print(
+                    f"MSA GPU pin from persisted server settings: {persisted_pinned_gpu_id}",
+                    flush=True,
+                )
+    elif effective_preferred_gpus is None:
+        effective_preferred_gpus = scheduler_policy.get("preferred")
+
+    if effective_excluded_gpus is None:
+        effective_excluded_gpus = scheduler_policy.get("disabled")
+
+    if effective_preferred_gpus and verbose:
+        print(f"MSA GPU preferred list: {effective_preferred_gpus}", flush=True)
+    if effective_excluded_gpus and verbose:
+        print(f"MSA GPU excluded list: {effective_excluded_gpus}", flush=True)
+
+    reclaimed_gpuserver_instances = 0
+    if (
+        normalized_gpu_mode in {"auto", "opportunistic"}
+        and normalized_gpu_server_mode == "persistent"
+        and effective_preferred_gpus
+    ):
+        reclaimed_gpuserver_instances = reclaim_conflicting_gpuserver_instances(
+            target_db=uniref_db,
+            preferred_gpus=effective_preferred_gpus,
+            cache_dir=cache_dir,
+        )
+        if reclaimed_gpuserver_instances > 0 and verbose:
+            print(
+                f"Reclaimed {reclaimed_gpuserver_instances} conflicting gpuserver instance(s) before UniRef GPU selection.",
+                flush=True,
+            )
+
+    runtime: Dict[str, Any] = {
+        "status": "unknown",
+        "normalized_gpu_mode": normalized_gpu_mode,
+        "normalized_gpu_server_mode": normalized_gpu_server_mode,
+        "effective_gpu_server_wait_timeout": effective_gpu_server_wait_timeout,
+        "gpu_server_db_load_mode": int(gpu_server_db_load_mode),
+        "gpu_server_startup_wait": float(gpu_server_startup_wait),
+        "persisted_pinned_gpu_id": persisted_pinned_gpu_id,
+        "ignored_pinned_gpu_id": ignored_pinned_gpu_id,
+        "effective_preferred_gpus": list(effective_preferred_gpus) if effective_preferred_gpus else [],
+        "effective_excluded_gpus": list(effective_excluded_gpus) if effective_excluded_gpus else [],
+        "reclaimed_gpuserver_instances": reclaimed_gpuserver_instances,
+        "cpu_binary_path": str(mmseqs_cpu),
+        "gpu_binary_path": str(mmseqs_gpu) if mmseqs_gpu else None,
+        "gpu_binary_exists": bool(mmseqs_gpu),
+        "mmseqs_bin": str(mmseqs_cpu),
+        "selected_gpu_id": None,
+        "use_gpu_mmseqs": False,
+        "failure_reason": None,
+        "failure_message": None,
+        "summary_message": None,
+    }
+
+    if normalized_gpu_mode == "cpu":
+        runtime["status"] = "cpu_forced"
+        runtime["summary_message"] = "Using CPU mmseqs (forced)"
+        return runtime
+
+    if not mmseqs_gpu:
+        runtime["status"] = "gpu_binary_missing"
+        runtime["failure_reason"] = "gpu_binary_missing"
+        runtime["failure_message"] = (
+            "GPU MMseqs unavailable: no GPU binary found under "
+            f"{db_root} (expected mmseqs-gpu-blackwell/bin/mmseqs or mmseqs-gpu/bin/mmseqs)"
+        )
+        return runtime
+
+    selected_gpu_id = None
+    if gpu_id is not None:
+        selected_gpu_id = gpu_id
+    elif persisted_pinned_gpu_id is not None:
+        selected_gpu_id = persisted_pinned_gpu_id
+        if verbose:
+            print(
+                f"Using pinned MSA GPU {selected_gpu_id} from persisted server settings",
+                flush=True,
+            )
+    else:
+        selected_gpu_id = check_gpu_availability(
+            threshold=gpu_threshold,
+            preferred_gpus=effective_preferred_gpus,
+            excluded_gpus=effective_excluded_gpus,
+            allow_gpuserver_memory_override=(normalized_gpu_server_mode != "off"),
+            cache_dir=cache_dir,
+            preferred_gpuserver_target_db=uniref_db,
+        )
+
+    if selected_gpu_id is not None and effective_excluded_gpus and selected_gpu_id in set(effective_excluded_gpus):
+        runtime["status"] = "gpu_excluded"
+        runtime["failure_reason"] = "gpu_excluded"
+        runtime["failure_message"] = f"Selected gpu_id {selected_gpu_id} is excluded by policy"
+        runtime["selected_gpu_id"] = selected_gpu_id
+        return runtime
+
+    if selected_gpu_id is not None:
+        runtime["status"] = "gpu_ready"
+        runtime["selected_gpu_id"] = selected_gpu_id
+        runtime["use_gpu_mmseqs"] = True
+        runtime["mmseqs_bin"] = str(mmseqs_gpu)
+        runtime["summary_message"] = f"Using GPU mmseqs on device {selected_gpu_id}"
+        return runtime
+
+    runtime["status"] = "gpu_unavailable"
+    runtime["failure_reason"] = "gpu_unavailable"
+    runtime["failure_message"] = (
+        "GPU MMseqs unavailable: no eligible GPU is currently available under the active policy"
+    )
+    return runtime
 
 
 def run_mmseqs(mmseqs_bin: str, params: list, env: dict, capture_output: bool = True):
@@ -2039,6 +2235,7 @@ def run_colabfold_msa_workflow(
     gpu_server_wait_timeout: int = 120,
     gpu_server_db_load_mode: int = 0,
     gpu_server_startup_wait: float = 1.0,
+    disallow_cpu_fallback: bool = False,
     reference_sequence: str = None,
     # Preset and override parameters
     preset: str = "balanced",
@@ -2244,121 +2441,44 @@ def run_colabfold_msa_workflow(
         print(f"CACHE MISS: {seq_hash[:16]}... ({cache_profile}; running ColabFold workflow)", flush=True)
         
         # Database paths
-        mmseqs_cpu = db_path / "mmseqs" / "bin" / "mmseqs"
-        mmseqs_gpu = db_path / "mmseqs-gpu-blackwell" / "bin" / "mmseqs"
-        uniref_db = db_path / "uniref30_2302_db"
-        
-        # Determine which binary to use
-        selected_gpu_id = None
-        use_gpu_flag = False
-        normalized_gpu_mode = (gpu_mode or "auto").strip().lower()
-        if normalized_gpu_mode not in {"auto", "opportunistic", "required", "cpu"}:
-            raise ValueError(
-                f"Invalid gpu_mode='{gpu_mode}'. Choose from: auto, opportunistic, required, cpu"
-            )
-        normalized_gpu_server_mode = (gpu_server_mode or "persistent").strip().lower()
-        if normalized_gpu_server_mode not in {"auto", "required", "persistent", "off"}:
-            raise ValueError(
-                f"Invalid gpu_server_mode='{gpu_server_mode}'. Choose from: auto, required, persistent, off"
-            )
-        effective_gpu_server_wait_timeout = int(gpu_server_wait_timeout)
-        if (
-            normalized_gpu_mode in {"auto", "opportunistic"}
-            and effective_gpu_server_wait_timeout > 30
-        ):
-            effective_gpu_server_wait_timeout = 30
-            print(
-                "Capping gpuserver wait timeout to 30s for opportunistic/auto mode.",
-                flush=True,
-            )
-        if gpu_server_wait_timeout < -1:
-            raise ValueError("gpu_server_wait_timeout must be -1 (infinite), 0, or a positive integer")
-        if cpu_only:
-            normalized_gpu_mode = "cpu"
-        elif use_gpu is True and normalized_gpu_mode in {"auto", "opportunistic"}:
-            # Backward-compatibility: explicit --use-gpu means "required"
-            normalized_gpu_mode = "required"
+        mmseqs_cpu, _mmseqs_gpu = resolve_mmseqs_binaries(db_path)
 
-        scheduler_policy = load_scheduler_gpu_policy()
-        persisted_pinned_gpu_id = None
-        if gpu_id is None and preferred_gpus is None and not cpu_only:
-            persisted_pinned_gpu_id = read_persisted_msa_pinned_gpu_id(cache_dir)
-        effective_preferred_gpus = preferred_gpus
-        effective_excluded_gpus = excluded_gpus
+        runtime = inspect_mmseqs_runtime(
+            db_path=db_path,
+            cache_dir=cache_dir,
+            use_gpu=use_gpu,
+            gpu_id=gpu_id,
+            cpu_only=cpu_only,
+            gpu_mode=gpu_mode,
+            gpu_threshold=gpu_threshold,
+            preferred_gpus=preferred_gpus,
+            excluded_gpus=excluded_gpus,
+            gpu_server_mode=gpu_server_mode,
+            gpu_server_wait_timeout=gpu_server_wait_timeout,
+            gpu_server_db_load_mode=gpu_server_db_load_mode,
+            gpu_server_startup_wait=gpu_server_startup_wait,
+            verbose=True,
+        )
+        normalized_gpu_mode = runtime["normalized_gpu_mode"]
+        normalized_gpu_server_mode = runtime["normalized_gpu_server_mode"]
+        effective_gpu_server_wait_timeout = runtime["effective_gpu_server_wait_timeout"]
+        selected_gpu_id = runtime["selected_gpu_id"]
+        use_gpu_flag = bool(runtime["use_gpu_mmseqs"])
 
-        if persisted_pinned_gpu_id is not None:
-            effective_preferred_gpus = [persisted_pinned_gpu_id]
-            print(
-                f"MSA GPU pin from persisted server settings: {persisted_pinned_gpu_id}",
-                flush=True,
-            )
-        elif effective_preferred_gpus is None:
-            effective_preferred_gpus = scheduler_policy.get("preferred")
-        if effective_excluded_gpus is None:
-            effective_excluded_gpus = scheduler_policy.get("disabled")
-
-        if effective_preferred_gpus:
-            print(f"MSA GPU preferred list: {effective_preferred_gpus}", flush=True)
-        if effective_excluded_gpus:
-            print(f"MSA GPU excluded list: {effective_excluded_gpus}", flush=True)
-
-        # On low-VRAM preferred GPUs, stale/conflicting persistent gpuserver
-        # instances (e.g. EnvDB while we need UniRef) can force CPU fallback.
-        # Reclaim those before GPU selection for opportunistic/auto runs.
-        if (
-            normalized_gpu_mode in {"auto", "opportunistic"}
-            and normalized_gpu_server_mode == "persistent"
-            and effective_preferred_gpus
-        ):
-            reclaimed = reclaim_conflicting_gpuserver_instances(
-                target_db=uniref_db,
-                preferred_gpus=effective_preferred_gpus,
-                cache_dir=cache_dir,
-            )
-            if reclaimed > 0:
-                print(
-                    f"Reclaimed {reclaimed} conflicting gpuserver instance(s) before UniRef GPU selection.",
-                    flush=True,
-                )
-
-        if normalized_gpu_mode == "cpu":
-            mmseqs_bin = mmseqs_cpu
-            print("Using CPU mmseqs (forced)", flush=True)
-        elif mmseqs_gpu.exists():
-            if gpu_id is not None:
-                selected_gpu_id = gpu_id
-            elif persisted_pinned_gpu_id is not None:
-                selected_gpu_id = persisted_pinned_gpu_id
-                print(
-                    f"Using pinned MSA GPU {selected_gpu_id} from persisted server settings",
-                    flush=True,
-                )
-            else:
-                selected_gpu_id = check_gpu_availability(
-                    threshold=gpu_threshold,
-                    preferred_gpus=effective_preferred_gpus,
-                    excluded_gpus=effective_excluded_gpus,
-                    allow_gpuserver_memory_override=(normalized_gpu_server_mode != "off"),
-                    cache_dir=cache_dir,
-                    preferred_gpuserver_target_db=uniref_db,
-                )
-            if selected_gpu_id is not None and effective_excluded_gpus and selected_gpu_id in set(effective_excluded_gpus):
-                raise RuntimeError(f"Selected gpu_id {selected_gpu_id} is excluded by policy")
-            
-            if selected_gpu_id is not None:
-                mmseqs_bin = mmseqs_gpu
-                use_gpu_flag = True
-                print(f"Using GPU mmseqs on device {selected_gpu_id}", flush=True)
-            else:
-                if normalized_gpu_mode == "required":
-                    raise RuntimeError("GPU mode is 'required' but no eligible GPU is available")
-                mmseqs_bin = mmseqs_cpu
-                print("GPU unavailable or busy, falling back to CPU mmseqs", flush=True)
+        if runtime["status"] == "cpu_forced":
+            mmseqs_bin = Path(runtime["mmseqs_bin"])
+            print(runtime["summary_message"], flush=True)
+        elif use_gpu_flag:
+            mmseqs_bin = Path(runtime["mmseqs_bin"])
+            print(runtime["summary_message"], flush=True)
         else:
+            failure_message = str(runtime.get("failure_message") or "GPU MMseqs unavailable")
             if normalized_gpu_mode == "required":
-                raise RuntimeError(f"GPU mode is 'required' but GPU binary not found at: {mmseqs_gpu}")
+                raise RuntimeError(failure_message)
+            if disallow_cpu_fallback:
+                raise RuntimeError(f"{failure_message}. CPU fallback disabled for this run.")
             mmseqs_bin = mmseqs_cpu
-            print("GPU binary unavailable, using CPU mmseqs", flush=True)
+            print(f"{failure_message}. Falling back to CPU mmseqs.", flush=True)
 
         if not use_gpu_flag:
             normalized_gpu_server_mode = "off"
@@ -3104,6 +3224,8 @@ Quality Presets:
                         help="MMseqs db-load-mode for gpuserver-backed searches (default: 0)")
     parser.add_argument("--gpu-server-startup-wait", type=float, default=1.0,
                         help="Seconds to wait after starting gpuserver before first search")
+    parser.add_argument("--disallow-cpu-fallback", action="store_true",
+                        help="Fail instead of falling back to CPU MMseqs when GPU MMseqs is unavailable")
     parser.add_argument("--msa-provider", type=str, default="local",
                         choices=["local", "colabfold_api"],
                         help="MSA backend provider: local MMseqs2 or remote ColabFold API")
@@ -3175,6 +3297,7 @@ Quality Presets:
         gpu_server_wait_timeout=args.gpu_server_wait_timeout,
         gpu_server_db_load_mode=args.gpu_server_db_load_mode,
         gpu_server_startup_wait=args.gpu_server_startup_wait,
+        disallow_cpu_fallback=args.disallow_cpu_fallback,
         reference_sequence=args.reference_sequence,
         preset=args.preset,
         num_iterations=args.num_iterations,

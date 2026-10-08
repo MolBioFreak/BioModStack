@@ -13,7 +13,8 @@ import asyncio
 import logging
 
 from database import init_db, async_session
-from routers import jobs, gpu, files, models, templates, inputs, designs, analytics, user_sequences, user_templates, smiles_converter, queue, rcsb, nucleotide_sequences, system, frameworks, molbio_ops, msa, ribocentre, frustrampnn, bioxp
+from routers import jobs, gpu, files, models, templates, inputs, designs, analytics, user_sequences, user_templates, smiles_converter, queue, rcsb, nucleotide_sequences, system, frameworks, molbio_ops, msa, ribocentre, frustrampnn, bioxp, analyses
+from services.analysis_worker import AnalysisWorker
 from services.gpu_orchestrator import GPUOrchestrator
 from routers.gpu import get_gpu_stats
 
@@ -23,12 +24,14 @@ logger = logging.getLogger(__name__)
 
 # Global orchestrator instance
 _orchestrator: GPUOrchestrator = None
+_analysis_worker: AnalysisWorker = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize database and GPU orchestrator on startup."""
     global _orchestrator
+    global _analysis_worker
     
     # Initialize database
     await init_db()
@@ -60,10 +63,16 @@ async def lifespan(app: FastAPI):
         launch_nextflow_job_fn=orchestrator_launch_job,
         poll_interval=3.0
     )
+    _analysis_worker = AnalysisWorker(
+        db_session_factory=async_session,
+        poll_interval=2.0,
+    )
     
     # Start orchestrator in background
     await _orchestrator.start()
     logger.info("[STARTUP] GPU Orchestrator started")
+    await _analysis_worker.start()
+    logger.info("[STARTUP] Analysis worker started")
     
     yield
     
@@ -71,6 +80,9 @@ async def lifespan(app: FastAPI):
     if _orchestrator:
         await _orchestrator.stop()
         logger.info("[SHUTDOWN] GPU Orchestrator stopped")
+    if _analysis_worker:
+        await _analysis_worker.stop()
+        logger.info("[SHUTDOWN] Analysis worker stopped")
 
 
 app = FastAPI(
@@ -113,6 +125,7 @@ app.include_router(templates.router, prefix="/api/templates", tags=["templates"]
 app.include_router(inputs.router, prefix="/api/inputs", tags=["inputs"])
 app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
 app.include_router(designs.router, prefix="/api/designs", tags=["designs"])
+app.include_router(analyses.router, prefix="/api", tags=["analyses"])
 app.include_router(gpu.router, prefix="/api/gpu", tags=["gpu"])
 app.include_router(files.router, prefix="/api/files", tags=["files"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"])

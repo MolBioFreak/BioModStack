@@ -65,6 +65,17 @@ export function JobQueueTable({
     };
 
     const getDisplayDesignCount = (job: Job) => job.requested_design_count ?? job.design_count;
+    const getAwaitingPromptSummary = (job: Job) => {
+        if (job.status !== 'awaiting_input') return '';
+        const title = String(job.awaiting_payload?.title || '').trim();
+        const message = String(job.awaiting_payload?.message || '').trim();
+        return [title, message].filter(Boolean).join(': ');
+    };
+    const getAwaitingContinueLabel = (job: Job) => {
+        const label = String(job.awaiting_payload?.continue_label || '').trim();
+        return label || 'Continue';
+    };
+    const usesDirectAwaitingContinue = (job: Job) => Boolean(job.awaiting_payload?.resume_direct);
 
     const renderDesignCountCell = (job: Job) => {
         const displayCount = getDisplayDesignCount(job);
@@ -324,6 +335,7 @@ export function JobQueueTable({
                             } else {
                                 // Standalone job
                                 const job = item.job;
+                                const awaitingPrompt = getAwaitingPromptSummary(job);
                                 rows.push(
                                     <React.Fragment key={job.id}>
                                         <tr
@@ -337,6 +349,11 @@ export function JobQueueTable({
                                                         {job.name}
                                                     </div>
                                                     <StageProgress job={job} />
+                                                    {awaitingPrompt && (
+                                                        <div className="mt-1 max-w-3xl text-[11px] leading-snug text-amber-300">
+                                                            {awaitingPrompt}
+                                                        </div>
+                                                    )}
                                                 </div>
                                             </td>
                                             <td className="py-3 px-4">
@@ -416,7 +433,7 @@ export function JobQueueTable({
                                                             >
                                                                 Logs
                                                             </button>
-                                                            {onResumeWithSettings ? (
+                                                            {onResumeWithSettings && !usesDirectAwaitingContinue(job) ? (
                                                                 <button
                                                                     onClick={(e) => {
                                                                         e.stopPropagation();
@@ -424,7 +441,7 @@ export function JobQueueTable({
                                                                     }}
                                                                     className="px-2 py-1 text-xs bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 hover:text-amber-300 rounded transition-colors"
                                                                 >
-                                                                    Continue
+                                                                    {getAwaitingContinueLabel(job)}
                                                                 </button>
                                                             ) : (
                                                                 <button
@@ -434,7 +451,7 @@ export function JobQueueTable({
                                                                     }}
                                                                     className="px-2 py-1 text-xs bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 hover:text-amber-300 rounded transition-colors"
                                                                 >
-                                                                    Continue
+                                                                    {getAwaitingContinueLabel(job)}
                                                                 </button>
                                                             )}
                                                         </>
@@ -568,11 +585,26 @@ function StageProgress({ job }: { job: Job }) {
         const baseStages = job.all_stages && job.all_stages.length > 0
             ? [...job.all_stages]
             : getStages(job.mode);
-        if (job.params?.run_maturation && !baseStages.includes('maturation')) {
-            baseStages.splice(Math.min(2, baseStages.length), 0, 'maturation');
+        const ppiflowStageMode = String(job.params?.ppiflow_stage_mode || '').toLowerCase();
+        const hasBackbonePpiFlow =
+            job.params?.run_ppiflow_backbone_refine ||
+            ppiflowStageMode === 'post_rfantibody' ||
+            ppiflowStageMode === 'backbone_refine' ||
+            ppiflowStageMode === 'both';
+        const hasMaturationPpiFlow =
+            job.params?.run_ppiflow_maturation ||
+            job.params?.run_maturation ||
+            ppiflowStageMode === 'post_fampnn' ||
+            ppiflowStageMode === 'maturation' ||
+            ppiflowStageMode === 'both';
+        if (hasBackbonePpiFlow && !baseStages.includes('ppiflow_backbone')) {
+            baseStages.splice(Math.min(1, baseStages.length), 0, 'ppiflow_backbone');
         }
-        if ((job.params?.run_post_validation_maturation || job.params?.run_post_boltz_maturation) && !baseStages.includes('maturation_post_validation')) {
-            baseStages.push('maturation_post_validation');
+        if (hasMaturationPpiFlow && !baseStages.includes('ppiflow_maturation')) {
+            baseStages.splice(Math.min(3, baseStages.length), 0, 'ppiflow_maturation');
+        }
+        if ((job.params?.run_post_validation_maturation || job.params?.run_post_boltz_maturation) && !baseStages.includes('ppiflow_post_validation')) {
+            baseStages.push('ppiflow_post_validation');
         }
         if (job.awaiting_stage && !baseStages.includes(job.awaiting_stage)) {
             baseStages.push(job.awaiting_stage);
@@ -592,8 +624,12 @@ function StageProgress({ job }: { job: Job }) {
     const current =
         (rawCurrent === 'boltz2' || rawCurrent === 'protenix') && stages.includes('structure_validation')
             ? 'structure_validation'
-            : rawCurrent === 'maturation_post_boltz' && stages.includes('maturation_post_validation')
-                ? 'maturation_post_validation'
+            : (rawCurrent === 'maturation_post_boltz' || rawCurrent === 'maturation_post_validation') && stages.includes('ppiflow_post_validation')
+                ? 'ppiflow_post_validation'
+                : rawCurrent === 'backbone_refine' && stages.includes('ppiflow_backbone')
+                    ? 'ppiflow_backbone'
+                : rawCurrent === 'maturation' && stages.includes('ppiflow_maturation')
+                    ? 'ppiflow_maturation'
                 : rawCurrent;
 
     return (

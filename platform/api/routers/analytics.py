@@ -10,6 +10,7 @@ import numpy as np
 from pydantic import BaseModel
 
 from database import get_session, Job, Design
+from services.analysis_runs import get_matching_job_analysis_run, load_analysis_result
 from schemas import JobResponse
 
 router = APIRouter()
@@ -274,168 +275,108 @@ def pearson_r(x: List[float], y: List[float]) -> float:
 STANDARD_AAs = "ACDEFGHIKLMNPQRSTVWY"
 
 
+async def _get_cached_job_analysis_payload(
+    session: AsyncSession,
+    job: Job,
+    analysis_type: str,
+    *,
+    include_children: bool = True,
+    design_ids: Optional[list[str]] = None,
+) -> Any:
+    try:
+        run, _definition, _params, _cache_key = await get_matching_job_analysis_run(
+            session,
+            job,
+            analysis_type,
+            raw_params={
+                "include_children": include_children,
+                "design_ids": design_ids or [],
+            },
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"{analysis_type} not computed yet")
+    if run.status != "completed":
+        raise HTTPException(status_code=409, detail=f"{analysis_type} status is {run.status}")
+
+    payload = load_analysis_result(run)
+    if payload is None:
+        raise HTTPException(status_code=500, detail=f"Cached {analysis_type} payload is unavailable")
+    return payload
+
+
 @router.get("/job/{job_id}/correlation-matrix", response_model=CorrelationMatrix)
 async def get_correlation_matrix(
     job_id: str,
+    include_children: bool = Query(True, description="Include child-job designs in the analysis scope"),
+    design_ids: Optional[str] = Query(None, description="Comma-separated design ids to restrict the analysis scope"),
     session: AsyncSession = Depends(get_session)
 ):
-    """Compute pairwise Pearson correlations between all numeric metrics."""
-    query = select(Design).where(Design.job_id == job_id)
-    result = await session.execute(query)
-    designs = result.scalars().all()
-    
-    if not designs:
-        raise HTTPException(status_code=404, detail="Job not found or no designs")
-    
-    raw_metrics = extract_metrics(designs)
-    
-    # Filter metrics with at least 5 data points
-    valid_metrics = {k: v for k, v in raw_metrics.items() if len(v) >= 5}
-    metric_names = list(valid_metrics.keys())
-    n = len(metric_names)
-    
-    # Build correlation matrix
-    matrix = []
-    sample_sizes = []
-    
-    for i, m1 in enumerate(metric_names):
-        row = []
-        size_row = []
-        for j, m2 in enumerate(metric_names):
-            if i == j:
-                row.append(1.0)
-                size_row.append(len(valid_metrics[m1]))
-            else:
-                r = pearson_r(valid_metrics[m1], valid_metrics[m2])
-                row.append(round(r, 4) if not np.isnan(r) else 0.0)
-                size_row.append(min(len(valid_metrics[m1]), len(valid_metrics[m2])))
-        matrix.append(row)
-        sample_sizes.append(size_row)
-    
-    return CorrelationMatrix(
-        job_id=job_id,
-        metrics=metric_names,
-        matrix=matrix,
-        sample_sizes=sample_sizes
+    """Return cached pairwise Pearson correlations between numeric metrics."""
+    job = (await session.execute(select(Job).where(Job.id == job_id))).scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    design_scope = [part.strip() for part in (design_ids or "").split(",") if part.strip()]
+    payload = await _get_cached_job_analysis_payload(
+        session,
+        job,
+        "job_correlation_matrix",
+        include_children=include_children,
+        design_ids=design_scope,
     )
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="Cached correlation-matrix payload is unavailable")
+    return CorrelationMatrix.model_validate(payload)
 
 
 @router.get("/job/{job_id}/aa-composition", response_model=AACompositionResponse)
 async def get_aa_composition(
     job_id: str,
+    include_children: bool = Query(True, description="Include child-job designs in the analysis scope"),
+    design_ids: Optional[str] = Query(None, description="Comma-separated design ids to restrict the analysis scope"),
     session: AsyncSession = Depends(get_session)
 ):
-    """Compute amino acid composition from CDR sequences."""
-    query = select(Design).where(Design.job_id == job_id)
-    result = await session.execute(query)
-    designs = result.scalars().all()
-    
-    if not designs:
-        raise HTTPException(status_code=404, detail="Job not found or no designs")
-    
-    cdr_fields = ["cdr_h1", "cdr_h2", "cdr_h3", "cdr_l1", "cdr_l2", "cdr_l3"]
-    
-    overall_counts = {aa: 0 for aa in STANDARD_AAs}
-    cdr_compositions = []
-    
-    for cdr_name in cdr_fields:
-        cdr_counts = {aa: 0 for aa in STANDARD_AAs}
-        total = 0
-        
-        for d in designs:
-            seq = getattr(d, cdr_name, None)
-            if seq:
-                for aa in seq.upper():
-                    if aa in cdr_counts:
-                        cdr_counts[aa] += 1
-                        overall_counts[aa] += 1
-                        total += 1
-        
-        if total > 0:
-            cdr_compositions.append(CDRComposition(
-                cdr_name=cdr_name.upper().replace("_", "-"),
-                total_residues=total,
-                composition=[
-                    AACount(aa=aa, count=cnt, frequency=round(cnt / total, 4))
-                    for aa, cnt in sorted(cdr_counts.items()) if cnt > 0
-                ]
-            ))
-    
-    overall_total = sum(overall_counts.values())
-    overall_list = [
-        AACount(aa=aa, count=cnt, frequency=round(cnt / overall_total, 4) if overall_total > 0 else 0.0)
-        for aa, cnt in sorted(overall_counts.items()) if cnt > 0
-    ]
-    
-    return AACompositionResponse(
-        job_id=job_id,
-        overall=overall_list,
-        by_cdr=cdr_compositions
+    """Return cached amino acid composition from CDR sequences."""
+    job = (await session.execute(select(Job).where(Job.id == job_id))).scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    design_scope = [part.strip() for part in (design_ids or "").split(",") if part.strip()]
+    payload = await _get_cached_job_analysis_payload(
+        session,
+        job,
+        "job_aa_composition",
+        include_children=include_children,
+        design_ids=design_scope,
     )
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="Cached aa-composition payload is unavailable")
+    return AACompositionResponse.model_validate(payload)
 
 
 @router.get("/job/{job_id}/cdr-logos", response_model=CDRAnalysisResponse)
 async def get_cdr_sequence_logos(
     job_id: str,
+    include_children: bool = Query(True, description="Include child-job designs in the analysis scope"),
+    design_ids: Optional[str] = Query(None, description="Comma-separated design ids to restrict the analysis scope"),
     session: AsyncSession = Depends(get_session)
 ):
-    """Generate sequence logo data for CDR regions."""
-    query = select(Design).where(Design.job_id == job_id)
-    result = await session.execute(query)
-    designs = result.scalars().all()
-    
-    if not designs:
-        raise HTTPException(status_code=404, detail="Job not found or no designs")
-    
-    cdr_fields = ["cdr_h1", "cdr_h2", "cdr_h3", "cdr_l1", "cdr_l2", "cdr_l3"]
-    logos = []
-    
-    for cdr_name in cdr_fields:
-        sequences = []
-        for d in designs:
-            seq = getattr(d, cdr_name, None)
-            if seq and len(seq) > 0:
-                sequences.append(seq.upper())
-        
-        if len(sequences) < 2:
-            continue
-        
-        # Find modal length (most common CDR length)
-        lengths = [len(s) for s in sequences]
-        modal_length = max(set(lengths), key=lengths.count)
-        
-        # Filter to sequences of modal length
-        aligned = [s for s in sequences if len(s) == modal_length]
-        
-        if len(aligned) < 2:
-            continue
-        
-        # Calculate positional frequencies
-        positions = []
-        consensus = ""
-        
-        for pos in range(modal_length):
-            counts = {aa: 0 for aa in STANDARD_AAs}
-            for seq in aligned:
-                aa = seq[pos]
-                if aa in counts:
-                    counts[aa] += 1
-            
-            total = sum(counts.values())
-            freqs = {aa: round(cnt / total, 4) for aa, cnt in counts.items() if cnt > 0}
-            positions.append(PositionFrequency(position=pos + 1, frequencies=freqs))
-            
-            # Consensus is most frequent AA at this position
-            if freqs:
-                consensus += max(freqs, key=freqs.get)
-        
-        logos.append(SequenceLogoData(
-            cdr_name=cdr_name.upper().replace("_", "-"),
-            length=modal_length,
-            positions=positions,
-            consensus=consensus,
-            sequence_count=len(aligned)
-        ))
-    
-    return CDRAnalysisResponse(job_id=job_id, logos=logos)
+    """Return cached sequence logo data for CDR regions."""
+    job = (await session.execute(select(Job).where(Job.id == job_id))).scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
 
+    design_scope = [part.strip() for part in (design_ids or "").split(",") if part.strip()]
+    payload = await _get_cached_job_analysis_payload(
+        session,
+        job,
+        "job_cdr_logo_pack",
+        include_children=include_children,
+        design_ids=design_scope,
+    )
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="Cached cdr-logo payload is unavailable")
+    return CDRAnalysisResponse.model_validate(payload)

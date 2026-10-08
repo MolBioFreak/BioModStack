@@ -482,6 +482,13 @@ async def maybe_auto_annotate_cdrs(job, session) -> None:
         return
     if not _is_antibody_job(job):
         return
+    if getattr(job, "awaiting_input", False):
+        return
+    if str(getattr(job, "status", "") or "").strip().lower() != JobStatus.COMPLETED.value:
+        return
+    params = getattr(job, "params", None) if isinstance(getattr(job, "params", None), dict) else {}
+    if params.get("run_anarcii_post") is not True:
+        return
 
     try:
         from database import Design, Job as JobModel
@@ -1975,6 +1982,32 @@ def build_nextflow_command(
                 )
     except Exception as exc:
         logger.warning(f"[MSA] Could not load scheduler GPU policy defaults: {exc}")
+
+    try:
+        from services.anarcii_runtime import (
+            get_default_anarcii_mode,
+            resolve_anarcii_runtime,
+        )
+
+        requested_anarcii_mode = params.get("anarcii_execution_mode") or get_default_anarcii_mode()
+        anarcii_runtime = resolve_anarcii_runtime(
+            requested_mode=requested_anarcii_mode,
+            preferred_gpu=params.get("anarcii_gpu_id"),
+            excluded_gpu_ids=params.get("msa_excluded_gpus"),
+        )
+        params["anarcii_execution_mode"] = anarcii_runtime.mode
+        if anarcii_runtime.gpu_id is None:
+            params.pop("anarcii_gpu_id", None)
+        else:
+            params["anarcii_gpu_id"] = anarcii_runtime.gpu_id
+        logger.info(
+            "[ANARCII] Launch runtime=%s gpu=%s (%s)",
+            anarcii_runtime.mode,
+            anarcii_runtime.gpu_id,
+            anarcii_runtime.reason,
+        )
+    except Exception as exc:
+        logger.warning(f"[ANARCII] Could not resolve runtime defaults: {exc}")
     
     # Map model-specific params to Nextflow params
     param_mapping = {

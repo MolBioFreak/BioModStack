@@ -35,6 +35,10 @@ def get_results_dir() -> Path:
     return get_data_root() / "bms_results"
 
 
+def get_analysis_cache_dir() -> Path:
+    return get_data_root() / "analysis_cache"
+
+
 def get_work_dir() -> Path:
     return get_data_root() / "work"
 
@@ -135,6 +139,7 @@ def get_allowed_roots() -> dict[str, Path]:
     code_root = get_code_root()
     roots = {
         "bms_results": get_results_dir(),
+        "analysis_cache": get_analysis_cache_dir(),
         "benchmarkdata": code_root / "benchmarkdata",
         "lib": code_root / "lib",
         "rcsb": code_root / "rcsb",

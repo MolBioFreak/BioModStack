@@ -5,12 +5,10 @@ Provides endpoints for listing, filtering, and managing designs
 stored in the SQLite database after pipeline ingestion.
 """
 
-import asyncio
-import contextlib
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_, case
+from sqlalchemy import select, func, and_, case, inspect as sa_inspect
 from sqlalchemy.orm import load_only
 from typing import Optional, List, Dict, Any, Union
 from pydantic import BaseModel
@@ -20,6 +18,7 @@ import math
 
 from database import get_session, Design, Job
 from paths import to_allowed_relative
+from services.analysis_runs import get_matching_design_analysis_run, load_analysis_result
 from services.stage_review import REVIEWABLE_STAGES, ensure_stage_review_rows, load_review_gate_snapshot
 
 
@@ -31,6 +30,7 @@ _TWO_LETTER_ELEMENTS = {
     "SB", "TE", "CS", "BA", "LA", "CE", "PR", "ND", "SM", "EU", "GD", "TB", "DY", "HO", "ER",
     "TM", "YB", "LU", "HF", "TA", "RE", "OS", "IR", "PT", "AU", "HG", "TL", "PB", "BI",
 }
+_PRESERVED_REVIEW_PAYLOAD_KEYS = ("review_filter_sets",)
 
 
 def _guess_pdb_element(atom_name: str) -> str:
@@ -73,11 +73,27 @@ def _normalize_pdb_for_viewer(pdb_text: str) -> str:
     return "\n".join(normalized_lines) + "\n"
 
 
+def _merge_review_payload(
+    gate_payload: Optional[Dict[str, Any]],
+    existing_payload: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    merged = dict(gate_payload or {})
+    existing = existing_payload if isinstance(existing_payload, dict) else {}
+    for key in _PRESERVED_REVIEW_PAYLOAD_KEYS:
+        if key in merged:
+            continue
+        preserved_value = existing.get(key)
+        if isinstance(preserved_value, list) and preserved_value:
+            merged[key] = preserved_value
+    return merged
+
+
 async def _hydrate_review_job(session: AsyncSession, job: Optional[Job]) -> Optional[str]:
     if job is None:
         return None
 
     gate_stage, gate_payload = load_review_gate_snapshot(job.output_dir, job.awaiting_stage)
+    gate_payload = _merge_review_payload(gate_payload, job.awaiting_payload or {})
     review_stage = str(job.awaiting_stage or gate_stage or "").strip().lower()
     changed = False
 
@@ -161,6 +177,12 @@ class DesignResponse(BaseModel):
     chains_ptm: Optional[Union[Dict[str, float], List[float]]] = None  # {"0":0.76} or [0.76, ...]
     pair_chains_iptm: Optional[Union[Dict[str, Dict[str, float]], List[List[float]]]] = None  # matrix
     confidence_metrics: Optional[Dict[str, Any]] = None
+    ipsae: Optional[float] = None
+    ipsae_binder_to_target: Optional[float] = None
+    ipsae_target_to_binder: Optional[float] = None
+    ipsae_d0chn: Optional[float] = None
+    ipsae_d0dom: Optional[float] = None
+    ipsae_chain_pair: Optional[str] = None
     
     # Per-residue metrics (for charts)
     residue_plddt: Optional[List[float]] = None
@@ -185,6 +207,17 @@ class DesignResponse(BaseModel):
     # User annotations
     is_favorite: bool
     notes: Optional[str]
+
+    # Lineage / provenance
+    lineage_root_job_id: Optional[str] = None
+    parent_design_id: Optional[str] = None
+    origin_design_id: Optional[str] = None
+    origin_job_id: Optional[str] = None
+    origin_backbone_design_id: Optional[str] = None
+    stage_family: Optional[str] = None
+    stage_mode: Optional[str] = None
+    selected_loop_scope: Optional[Dict[str, Any]] = None
+    provenance: Optional[Dict[str, Any]] = None
     
     # Backbone grouping & epitope analysis
     backbone_id: Optional[int] = None
@@ -264,6 +297,7 @@ class DesignQueryRequest(BaseModel):
     plddt_min: Optional[float] = None
     pae_max: Optional[float] = None
     iptm_min: Optional[float] = None
+    ipsae_min: Optional[float] = None
     epitope_contacts_min: Optional[int] = None
     target_contacts_min: Optional[int] = None
     epitope_max_dist: Optional[float] = None
@@ -368,9 +402,161 @@ ANALYTICS_LOAD_ONLY_COLUMNS = (
     Design.maturation_delta_interface,
     Design.maturation_interface_score,
     Design.maturation_rmsd,
+    Design.lineage_root_job_id,
+    Design.parent_design_id,
+    Design.origin_design_id,
+    Design.origin_job_id,
+    Design.origin_backbone_design_id,
+    Design.stage_family,
+    Design.stage_mode,
+    Design.selected_loop_scope,
+    Design.provenance,
     Design.screening_reason,
     Design.has_clash,
     Design.confidence_metrics,
+)
+
+DESIGN_LIST_LOAD_ONLY_COLUMNS = (
+    Design.id,
+    Design.job_id,
+    Design.name,
+    Design.pdb_path,
+    Design.num_helices,
+    Design.num_strands,
+    Design.rog,
+    Design.rfd_rog,
+    Design.mpnn_score,
+    Design.fampnn_psce,
+    Design.plddt_overall,
+    Design.plddt_binder,
+    Design.plddt_target,
+    Design.pae_interaction,
+    Design.pae_overall,
+    Design.rmsd_overall,
+    Design.rmsd_binder,
+    Design.rmsd_target,
+    Design.conf_score,
+    Design.ptm,
+    Design.ligand_iptm,
+    Design.affinity_score,
+    Design.binder_probability,
+    Design.iptm,
+    Design.protein_iptm,
+    Design.complex_iplddt,
+    Design.complex_ipde,
+    Design.disorder,
+    Design.num_recycles,
+    Design.has_clash,
+    Design.ipsae,
+    Design.ipsae_binder_to_target,
+    Design.ipsae_target_to_binder,
+    Design.ipsae_d0chn,
+    Design.ipsae_d0dom,
+    Design.ipsae_chain_pair,
+    Design.binder_length,
+    Design.antibody_type,
+    Design.cdr_h1,
+    Design.cdr_h2,
+    Design.cdr_h3,
+    Design.cdr_l1,
+    Design.cdr_l2,
+    Design.cdr_l3,
+    Design.cdr_h1_length,
+    Design.cdr_h2_length,
+    Design.cdr_h3_length,
+    Design.cdr_l1_length,
+    Design.cdr_l2_length,
+    Design.cdr_l3_length,
+    Design.is_favorite,
+    Design.notes,
+    Design.backbone_id,
+    Design.epitope_contact_count,
+    Design.epitope_min_distance,
+    Design.epitope_min_atom_distance,
+    Design.epitope_nearest_antibody_residue,
+    Design.epitope_nearest_target_residue,
+    Design.epitope_nearest_antibody_atom,
+    Design.epitope_nearest_target_atom,
+    Design.epitope_mapping_mode,
+    Design.epitope_centroid_distance,
+    Design.target_contact_count,
+    Design.target_min_distance,
+    Design.target_min_atom_distance,
+    Design.target_nearest_antibody_residue,
+    Design.target_nearest_target_residue,
+    Design.target_nearest_antibody_atom,
+    Design.target_nearest_target_atom,
+    Design.target_centroid_distance,
+    Design.detected_antibody_chains,
+    Design.detected_target_chain,
+    Design.antibody_residue_count,
+    Design.target_residue_count,
+    Design.epitope_residue_count,
+    Design.passed_screen,
+    Design.screening_reason,
+    Design.source_stage,
+    Design.artifact_group,
+    Design.rfa_hotspot_covered_count,
+    Design.rfa_hotspot_min_distance,
+    Design.rfa_hotspot_avg_min_distance,
+    Design.rfa_runtime_seconds,
+    Design.rfa_device,
+    Design.rfa_diffusion_steps,
+    Design.rfa_noise_scale_ca,
+    Design.rfa_noise_scale_frame,
+    Design.rfa_guide_scale,
+    Design.rfa_plddt_initial,
+    Design.rfa_plddt_final,
+    Design.rfa_plddt_delta,
+    Design.fr2_contacts,
+    Design.de_loop,
+    Design.fr3_contacts,
+    Design.fr4_contacts,
+    Design.frustration_high_count,
+    Design.frustration_min_count,
+    Design.frustration_pct_high,
+    Design.maturation_delta_interface,
+    Design.maturation_interface_score,
+    Design.maturation_rmsd,
+    Design.lineage_root_job_id,
+    Design.parent_design_id,
+    Design.origin_design_id,
+    Design.origin_job_id,
+    Design.origin_backbone_design_id,
+    Design.stage_family,
+    Design.stage_mode,
+    Design.selected_loop_scope,
+    Design.provenance,
+    Design.created_at,
+)
+
+BACKBONE_SUMMARY_LOAD_ONLY_COLUMNS = (
+    Design.id,
+    Design.name,
+    Design.pdb_path,
+    Design.created_at,
+    Design.backbone_id,
+    Design.plddt_overall,
+    Design.iptm,
+    Design.ptm,
+    Design.pae_overall,
+    Design.target_contact_count,
+    Design.epitope_contact_count,
+    Design.target_min_distance,
+    Design.epitope_min_distance,
+    Design.cdr_h1_length,
+    Design.cdr_h2_length,
+    Design.cdr_h3_length,
+    Design.rfa_hotspot_covered_count,
+    Design.lineage_root_job_id,
+    Design.parent_design_id,
+    Design.origin_design_id,
+    Design.origin_job_id,
+    Design.origin_backbone_design_id,
+    Design.stage_family,
+    Design.stage_mode,
+    Design.selected_loop_scope,
+    Design.provenance,
 )
 
 
@@ -587,9 +773,45 @@ def _safe_allowed_relative(path_str: Optional[str]) -> Optional[str]:
 
 
 def _design_to_response(design: Design) -> DesignResponse:
-    data = DesignResponse.model_validate(design).model_dump()
-    data["frustration_csv_relpath"] = _safe_allowed_relative(design.frustration_csv_path)
+    state = sa_inspect(design)
+    unloaded = set(state.unloaded)
+    data: Dict[str, Any] = {}
+    for field_name in DesignResponse.model_fields.keys():
+        if field_name == "frustration_csv_relpath":
+            continue
+        if field_name in unloaded:
+            data[field_name] = None
+            continue
+        data[field_name] = getattr(design, field_name, None)
+    data["frustration_csv_relpath"] = None if "frustration_csv_path" in unloaded else _safe_allowed_relative(design.frustration_csv_path)
     return DesignResponse.model_validate(data)
+
+
+async def _get_cached_design_analysis_payload(
+    session: AsyncSession,
+    design: Design,
+    analysis_type: str,
+    raw_params: Optional[dict[str, Any]] = None,
+) -> Any:
+    try:
+        run, _definition, _params, _cache_key = await get_matching_design_analysis_run(
+            session,
+            design,
+            analysis_type,
+            raw_params=raw_params,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"{analysis_type} not computed yet")
+    if run.status != "completed":
+        raise HTTPException(status_code=409, detail=f"{analysis_type} status is {run.status}")
+
+    payload = load_analysis_result(run)
+    if payload is None:
+        raise HTTPException(status_code=500, detail=f"Cached {analysis_type} payload is unavailable")
+    return payload
 
 
 async def _collect_plotly_metrics(
@@ -664,6 +886,7 @@ async def list_designs(
     plddt_min: Optional[float] = Query(None, description="Minimum pLDDT score"),
     pae_max: Optional[float] = Query(None, description="Maximum pAE score"),
     iptm_min: Optional[float] = Query(None, description="Minimum iPTM score"),
+    ipsae_min: Optional[float] = Query(None, description="Minimum ipSAE score"),
     epitope_contacts_min: Optional[int] = Query(None, description="Minimum selected-epitope contact count"),
     target_contacts_min: Optional[int] = Query(None, description="Minimum whole-target contact count"),
     epitope_max_dist: Optional[float] = Query(None, description="Maximum nearest CA distance to selected epitope residues"),
@@ -718,6 +941,7 @@ async def list_designs(
         'plddt_target': Design.plddt_target,
         'name': Design.name,
         'iptm': Design.iptm,
+        'ipsae': Design.ipsae,
         'ptm': Design.ptm,
         'pae': Design.pae_overall,
         'pae_overall': Design.pae_overall,
@@ -763,9 +987,9 @@ async def list_designs(
     
     order_col = sort_field_map.get(sort_by, Design.created_at)
     if sort_desc:
-        query = select(Design).order_by(order_col.desc().nulls_last())
+        query = select(Design).options(load_only(*DESIGN_LIST_LOAD_ONLY_COLUMNS)).order_by(order_col.desc().nulls_last())
     else:
-        query = select(Design).order_by(order_col.asc().nulls_last())
+        query = select(Design).options(load_only(*DESIGN_LIST_LOAD_ONLY_COLUMNS)).order_by(order_col.asc().nulls_last())
     
     # Apply filters - handle include_children for job_id
     conditions = []
@@ -802,6 +1026,8 @@ async def list_designs(
         conditions.append(Design.pae_overall <= pae_max)
     if iptm_min is not None:
         conditions.append(Design.iptm >= iptm_min)
+    if ipsae_min is not None:
+        conditions.append(Design.ipsae >= ipsae_min)
     if epitope_contacts_min is not None:
         conditions.append(Design.epitope_contact_count >= epitope_contacts_min)
     if target_contacts_min is not None:
@@ -874,6 +1100,7 @@ async def query_designs(
         plddt_min=request.plddt_min,
         pae_max=request.pae_max,
         iptm_min=request.iptm_min,
+        ipsae_min=request.ipsae_min,
         epitope_contacts_min=request.epitope_contacts_min,
         target_contacts_min=request.target_contacts_min,
         epitope_max_dist=request.epitope_max_dist,
@@ -925,6 +1152,7 @@ async def get_backbone_summary(
 
     result = await session.execute(
         select(Design)
+        .options(load_only(*BACKBONE_SUMMARY_LOAD_ONLY_COLUMNS))
         .where(and_(*summary_conditions))
         .order_by(Design.created_at.asc())
     )
@@ -1141,20 +1369,16 @@ async def get_chain_metrics(design_id: str, session: AsyncSession = Depends(get_
     
     if not design:
         raise HTTPException(status_code=404, detail="Design not found")
-        
-    # Compute on-the-fly if not cached
-    if not design.chain_metrics and design.pdb_path:
-        try:
-            from services.structure_utils import get_per_chain_metrics
-            metrics = get_per_chain_metrics(design.pdb_path)
-            if metrics:
-                design.chain_metrics = metrics
-                await session.commit()
-        except Exception as e:
-            print(f"Failed to compute chain metrics: {e}")
-            # Don't fail the request, just return empty
-    
-    return design.chain_metrics or {}
+
+    payload = await _get_cached_design_analysis_payload(
+        session,
+        design,
+        "chain_metrics",
+        raw_params={},
+    )
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="Cached chain-metrics payload is unavailable")
+    return payload
 
 
 @router.post("/{design_id}/favorite")
@@ -1326,23 +1550,25 @@ async def get_structure_analysis(
     if not structure_path.exists():
         raise HTTPException(status_code=404, detail="Structure file not found on disk")
     
-    # Import Biotite utilities
     try:
-        from services.structure_utils import (
-            get_residue_count, get_chain_ids, 
-            compute_gyration_radius, get_secondary_structure
+        run, _definition, _params, _cache_key = await get_matching_design_analysis_run(
+            session,
+            design,
+            "structure_summary",
+            raw_params={},
         )
-    except ImportError:
-        raise HTTPException(status_code=500, detail="Structure analysis module not available")
-    
-    return StructureAnalysis(
-        design_id=design.id,
-        design_name=design.name,
-        residue_count=get_residue_count(structure_path),
-        chain_ids=[str(c) for c in get_chain_ids(structure_path)],
-        gyration_radius=compute_gyration_radius(structure_path),
-        secondary_structure=get_secondary_structure(structure_path)
-    )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if run is None:
+        raise HTTPException(status_code=404, detail="Structure analysis not computed yet")
+    if run.status != "completed":
+        raise HTTPException(status_code=409, detail=f"Structure analysis status is {run.status}")
+
+    payload = load_analysis_result(run)
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="Cached structure analysis payload is unavailable")
+    return StructureAnalysis.model_validate(payload)
 
 
 class StructureComparison(BaseModel):
@@ -1407,18 +1633,12 @@ class PAEData(BaseModel):
 @router.get("/{design_id}/pae", response_model=PAEData)
 async def get_pae_data(
     design_id: str,
+    max_size: int = Query(200, description="Maximum matrix dimension"),
     session: AsyncSession = Depends(get_session)
 ):
     """
-    Get PAE matrix data for heatmap visualization.
-    
-    Searches for confidence JSON files associated with the design's PDB path.
-    Supports multiple formats:
-    - *_confidences.json (RF3/Boltz2 format)
-    - confidence_*.json (Antibody/IgFold format)
+    Get cached PAE matrix data for heatmap visualization.
     """
-    import json
-    
     result = await session.execute(select(Design).where(Design.id == design_id))
     design = result.scalar_one_or_none()
     
@@ -1428,132 +1648,30 @@ async def get_pae_data(
     if not design.pdb_path:
         raise HTTPException(status_code=404, detail="No structure file for this design")
     
-    pdb_path = Path(design.pdb_path)
-    parent_dir = pdb_path.parent
-    design_stem = pdb_path.stem  # e.g., "antibody_job_1_seq_2_model_0"
-    
-    # Search for confidence files with multiple patterns
-    confidence_file = None
-    
-    # Pattern 1: *_confidences.json (RF3/Boltz2 format)
-    candidates = list(parent_dir.glob("*_confidences.json"))
-    if not candidates:
-        candidates = list(parent_dir.parent.glob("*_confidences.json"))
-    if candidates:
-        # Prefer file matching design name
-        for c in candidates:
-            if design_stem in c.stem:
-                confidence_file = c
-                break
-        if not confidence_file:
-            confidence_file = candidates[0]
-    
-    # Pattern 2: confidence_*.json (Antibody/IgFold format)
-    if not confidence_file:
-        candidates = list(parent_dir.glob(f"confidence_{design_stem}.json"))
-        if candidates:
-            confidence_file = candidates[0]
-        else:
-            # Try broader search
-            candidates = list(parent_dir.glob("confidence_*.json"))
-            for c in candidates:
-                if design_stem in c.stem:
-                    confidence_file = c
-                    break
-    
-    # Pattern 3: Check parent directory for antibody format
-    if not confidence_file:
-        candidates = list(parent_dir.parent.glob(f"confidence_{design_stem}.json"))
-        if candidates:
-            confidence_file = candidates[0]
-    
-    if not confidence_file:
-        # No confidence file found - try to generate pseudo-PAE from pLDDT
-        if design.residue_plddt and len(design.residue_plddt) > 0:
-            plddt = design.residue_plddt
-            size = len(plddt)
-            # Generate diagonal-weighted pseudo-PAE matrix
-            # High pLDDT = low PAE on diagonal, off-diagonal weighted by distance
-            pae_matrix = []
-            for i in range(size):
-                row = []
-                for j in range(size):
-                    # Convert pLDDT to PAE-like scale (0-30)
-                    avg_conf = (plddt[i] + plddt[j]) / 2
-                    base_pae = 30 * (1 - avg_conf / 100)  # Lower pLDDT = higher PAE
-                    # Add distance penalty for off-diagonal
-                    dist_penalty = min(abs(i - j) * 0.1, 10)
-                    row.append(min(base_pae + dist_penalty, 30))
-                pae_matrix.append(row)
-            
-            # Downsample if needed
-            if size > 200:
-                step = size // 200
-                pae_matrix = [[pae_matrix[i][j] for j in range(0, size, step)] for i in range(0, size, step)]
-                size = len(pae_matrix)
-            
-            return PAEData(
-                design_id=design.id,
-                design_name=design.name + " (estimated)",
-                pae_matrix=pae_matrix,
-                size=size
-            )
-        raise HTTPException(status_code=404, detail="No PAE data found for this design")
-    
-    # Read the confidence file
-    try:
-        with open(confidence_file, 'r') as f:
-            data = json.load(f)
-        
-        pae_matrix = data.get('pae')
-        
-        # If no PAE matrix, try to generate from pLDDT in file or design
-        if not pae_matrix:
-            plddt = data.get('plddt') or data.get('per_residue_plddt')
-            if not plddt and design.residue_plddt:
-                plddt = design.residue_plddt
-            
-            if plddt and len(plddt) > 0:
-                size = len(plddt)
-                pae_matrix = []
-                for i in range(size):
-                    row = []
-                    for j in range(size):
-                        avg_conf = (plddt[i] + plddt[j]) / 2
-                        base_pae = 30 * (1 - avg_conf / 100)
-                        dist_penalty = min(abs(i - j) * 0.1, 10)
-                        row.append(min(base_pae + dist_penalty, 30))
-                    pae_matrix.append(row)
-            else:
-                raise HTTPException(status_code=404, detail="PAE matrix not found in confidence file and cannot be estimated")
-        
-        # Downsample if too large (for rendering performance)
-        size = len(pae_matrix)
-        if size > 200:
-            step = size // 200
-            pae_matrix = [[pae_matrix[i][j] for j in range(0, size, step)] for i in range(0, size, step)]
-            size = len(pae_matrix)
-        
-        return PAEData(
-            design_id=design.id,
-            design_name=design.name,
-            pae_matrix=pae_matrix,
-            size=size
-        )
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=500, detail="Failed to parse confidence file as JSON")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read PAE data: {str(e)}")
+    payload = await _get_cached_design_analysis_payload(
+        session,
+        design,
+        "pae_matrix",
+        raw_params={"max_size": max_size},
+    )
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="Cached PAE payload is unavailable")
+    return PAEData.model_validate(payload)
 
 
 class AntibodyData(BaseModel):
     """Aggregate antibody metrics."""
     design_id: str
     cdrs: Dict[str, Optional[str]]
+    cdr_lengths: Dict[str, Optional[int]] = {}
+    binder_length: Optional[int] = None
+    antibody_type: Optional[str] = None
     humanness_score: Optional[float]
     stability_data: Optional[Dict[str, Any]]
     imgt_pdb_url: Optional[str]
     detected_antibody_chains: Optional[str] = None
+    framework_regions: Dict[str, Optional[str]] = {}
+    binder_chains: Dict[str, str] = {}
     overlay_selections: List[Dict[str, Union[str, int]]] = []
 
 
@@ -1616,101 +1734,22 @@ async def get_antibody_data(
     design_id: str,
     session: AsyncSession = Depends(get_session)
 ):
-    """Get antibody-specific data (CDRs, humanness, stability)."""
-    from services.cdr_annotator import annotate_pdb, extract_sequence_from_pdb, identify_binder_chains
-
+    """Get cached antibody-specific data (CDRs, overlays, stability)."""
     result = await session.execute(select(Design).where(Design.id == design_id))
     design = result.scalar_one_or_none()
     
     if not design:
         raise HTTPException(status_code=404, detail="Design not found")
 
-    has_annotation = any(
-        getattr(design, field)
-        for field in ("cdr_h1", "cdr_h2", "cdr_h3", "cdr_l1", "cdr_l2", "cdr_l3")
+    payload = await _get_cached_design_analysis_payload(
+        session,
+        design,
+        "antibody_annotation_pack",
+        raw_params={},
     )
-    annotation = None
-    if not has_annotation and design.pdb_path:
-        try:
-            annotation = await asyncio.to_thread(annotate_pdb, design.pdb_path)
-            if annotation:
-                design.antibody_type = annotation.antibody_type
-                design.binder_length = annotation.binder_length
-                design.cdr_h1 = annotation.cdr_h1
-                design.cdr_h2 = annotation.cdr_h2
-                design.cdr_h3 = annotation.cdr_h3
-                design.cdr_l1 = annotation.cdr_l1
-                design.cdr_l2 = annotation.cdr_l2
-                design.cdr_l3 = annotation.cdr_l3
-                design.cdr_h1_length = annotation.cdr_h1_length
-                design.cdr_h2_length = annotation.cdr_h2_length
-                design.cdr_h3_length = annotation.cdr_h3_length
-                design.cdr_l1_length = annotation.cdr_l1_length
-                design.cdr_l2_length = annotation.cdr_l2_length
-                design.cdr_l3_length = annotation.cdr_l3_length
-                design.fr2_contacts = annotation.fr2_contacts
-                design.de_loop = annotation.de_loop
-                design.fr3_contacts = annotation.fr3_contacts
-                design.fr4_contacts = annotation.fr4_contacts
-                await session.commit()
-        except Exception:
-            await session.rollback()
-
-    imgt_url = None
-    if design.pdb_path:
-        pdb_path = Path(design.pdb_path)
-        # Check for _imgt.pdb variant
-        # If original is "X.pdb", look for "X_imgt.pdb"
-        # If original is "X_imgt.pdb", we are good.
-        if "_imgt" in pdb_path.name:
-             imgt_url = f"/api/designs/{design.id}/pdb"
-        else:
-             imgt_chk = pdb_path.parent / f"{pdb_path.stem}_imgt.pdb"
-             if imgt_chk.exists():
-                 imgt_url = f"/api/designs/{design.id}/pdb-imgt"
-
-    binder_chains: Dict[str, str] = {}
-    overlay_selections: List[Dict[str, Union[str, int]]] = []
-    detected_antibody_chains = design.detected_antibody_chains
-    if design.pdb_path:
-        try:
-            sequences = await asyncio.to_thread(extract_sequence_from_pdb, design.pdb_path)
-            binder_chains = await asyncio.to_thread(identify_binder_chains, sequences, design.pdb_path)
-        except Exception:
-            binder_chains = {}
-
-        if binder_chains:
-            detected_chain_value = ",".join(binder_chains[chain_type] for chain_type in ("H", "L") if binder_chains.get(chain_type))
-            if detected_chain_value:
-                detected_antibody_chains = detected_chain_value
-                if design.detected_antibody_chains != detected_chain_value:
-                    design.detected_antibody_chains = detected_chain_value
-                    with contextlib.suppress(Exception):
-                        await session.commit()
-
-        if annotation is None and (imgt_url or binder_chains):
-            with contextlib.suppress(Exception):
-                annotation = await asyncio.to_thread(annotate_pdb, design.pdb_path, binder_chains or None)
-
-        overlay_selections = _build_antibody_overlay_selections(
-            design,
-            imgt_url=imgt_url,
-            annotation=annotation,
-            binder_chains=binder_chains,
-        )
-
-    return AntibodyData(
-        design_id=design.id,
-        cdrs={
-            "H1": design.cdr_h1, "H2": design.cdr_h2, "H3": design.cdr_h3,
-            "L1": design.cdr_l1, "L2": design.cdr_l2, "L3": design.cdr_l3
-        },
-        humanness_score=design.humanness_score,
-        stability_data=design.stability_data,
-        imgt_pdb_url=imgt_url,
-        detected_antibody_chains=detected_antibody_chains,
-        overlay_selections=overlay_selections,
-    )
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="Cached antibody payload is unavailable")
+    return AntibodyData.model_validate(payload)
 
 @router.get("/{design_id}/pdb-imgt")
 async def get_design_imgt_pdb(
@@ -1793,23 +1832,24 @@ async def get_contact_map(
         raise HTTPException(status_code=404, detail="Structure file not found on disk")
     
     try:
-        from services.structure_utils import compute_contact_map
-    except ImportError:
-        raise HTTPException(status_code=500, detail="Structure analysis module not available")
-    
-    distance_matrix, res_ids, chain_ids = compute_contact_map(structure_path, max_size=max_size)
-    
-    if distance_matrix is None:
-        raise HTTPException(status_code=404, detail="Could not compute contact map for this structure")
-    
-    return ContactMapData(
-        design_id=design.id,
-        design_name=design.name,
-        distance_matrix=distance_matrix,
-        residue_numbers=res_ids,
-        chain_ids=chain_ids,
-        size=len(distance_matrix)
-    )
+        run, _definition, _params, _cache_key = await get_matching_design_analysis_run(
+            session,
+            design,
+            "contact_map",
+            raw_params={"max_size": max_size},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if run is None:
+        raise HTTPException(status_code=404, detail="Contact map not computed yet")
+    if run.status != "completed":
+        raise HTTPException(status_code=409, detail=f"Contact map status is {run.status}")
+
+    payload = load_analysis_result(run)
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="Cached contact-map payload is unavailable")
+    return ContactMapData.model_validate(payload)
 
 
 class ChainPairIptmData(BaseModel):
