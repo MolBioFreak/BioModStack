@@ -167,10 +167,10 @@ export function EpitopeSelector({
 
                                 return (
                                     <div key={key} className="relative group">
-                                        {/* Position Marker (every 10) - shows sequential position */}
+                                        {/* Position Marker (every 10) - shows PDB residue number */}
                                         {showNumber && (
                                             <div className="absolute -top-4 left-1/2 -translate-x-1/2 text-[9px] text-slate-600 select-none">
-                                                {idx + 1}
+                                                {residue.resNum}
                                             </div>
                                         )}
 
