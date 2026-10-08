@@ -64,6 +64,9 @@ temp/
 
 # Large Data & Models
 models/
+!platform/api/config/models/
+platform/api/config/models/*
+!platform/api/config/models/nanopore.yaml
 apptainer/
 *.sif
 *.pt

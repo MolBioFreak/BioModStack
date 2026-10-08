@@ -1,0 +1,281 @@
+# Nanopore sequencing model configuration
+# ONT Dorado basecalling + optional modkit methylation analysis
+
+id: nanopore
+name: Nanopore Sequencing
+version: "1.0.0"
+category: sequence_analysis
+description: >
+  Oxford Nanopore analysis workflow supporting POD5 re-basecalling via Dorado,
+  direct tagged-BAM methylation summarization with modkit, and FASTQ multimer QC.
+container: dorado.sif
+
+ui_icon: waveform
+ui_color: "#0EA5E9"
+
+inputs:
+  - pod5
+  - bam
+  - fastq
+  - fasta
+outputs:
+  - bam
+  - bed
+  - tsv
+
+modes:
+  - id: methylation_analysis
+    name: Methylation Analysis
+    description: POD5/BAM methylation analysis plus optional FASTQ multimerization QC
+    params:
+      - pod5_dir
+      - bam_path
+      - fastq_path
+      - reference_fasta
+      - dorado_model
+      - dorado_device
+      - modified_bases
+      - min_qscore
+      - trim_adapters
+      - emit_summary
+      - dorado_batch_size
+      - run_modkit
+      - modkit_filter_threshold
+      - run_multimer_qc
+      - expected_plasmid_size
+      - enable_rotating_reference_frames
+      - rotation_scan_step_bp
+      - multimer_ratio_threshold
+      - min_fastq_read_length
+      - run_assembly
+      - wf_clone_workflow_dir
+      - wf_clone_source
+      - wf_clone_revision
+      - wf_clone_profile
+      - wf_clone_sample
+      - wf_clone_large_construct
+      - wf_clone_approx_size
+      - wf_clone_assm_coverage
+      - wf_clone_trim_length
+      - wf_clone_min_quality
+      - wf_clone_assembly_tool
+
+params:
+  - name: pod5_dir
+    type: directory
+    description: Directory containing POD5 raw signal files
+    required: false
+
+  - name: bam_path
+    type: file
+    description: Existing BAM input (MM/ML supported); unaligned BAMs should be paired with reference_fasta for alignment
+    required: false
+    file_type: bam
+
+  - name: fastq_path
+    type: file
+    description: FASTQ(.gz) input for read-length multimerization QC
+    required: false
+    file_type: fastq
+
+  - name: reference_fasta
+    type: file
+    description: Optional reference FASTA; required for BAM auto-alignment and modkit pileup BED output
+    required: false
+    file_type: fasta
+
+  - name: dorado_model
+    type: string
+    description: Dorado basecalling model preset
+    required: false
+    default: sup
+    enum:
+      - sup
+      - hac
+      - fast
+
+  - name: dorado_device
+    type: string
+    description: CUDA device selector passed to Dorado (e.g., cuda:0, cuda:all)
+    required: false
+    default: cuda:0
+
+  - name: modified_bases
+    type: string
+    description: Modified-base model selection
+    required: false
+    default: 6mA 4mC_5mC
+    enum:
+      - 6mA 4mC_5mC
+      - 6mA 5mC
+      - 6mA
+      - 5mC
+      - 5mC_5hmC
+      - 4mC_5mC
+      - 5mCG_5hmCG
+      - 5mCG
+      - 5hmCG
+      - none
+
+  - name: min_qscore
+    type: integer
+    description: Minimum read Q-score threshold
+    required: false
+    default: 10
+    minimum: 0
+    maximum: 30
+
+  - name: trim_adapters
+    type: boolean
+    description: Trim sequencing adapters during basecalling
+    required: false
+    default: true
+
+  - name: emit_summary
+    type: boolean
+    description: Emit sequencing summary TSV from Dorado
+    required: false
+    default: true
+
+  - name: dorado_batch_size
+    type: integer
+    description: Optional Dorado batch size override for GPU memory tuning
+    required: false
+    minimum: 1
+    maximum: 4096
+
+  - name: run_modkit
+    type: boolean
+    description: Run modkit pileup and summary outputs
+    required: false
+    default: true
+
+  - name: modkit_filter_threshold
+    type: number
+    description: Probability threshold for modkit filtering
+    required: false
+    default: 0.5
+    minimum: 0.0
+    maximum: 1.0
+
+  - name: run_multimer_qc
+    type: boolean
+    description: Run FASTQ read-length based multimerization QC
+    required: false
+    default: false
+
+  - name: expected_plasmid_size
+    type: integer
+    description: Expected monomer plasmid size (bp) for dimer/multimer detection
+    required: false
+    default: 7000
+    minimum: 1
+
+  - name: enable_rotating_reference_frames
+    type: boolean
+    description: Rotate circular reference origin during dimer hotspot scan to minimize linearization-boundary bias
+    required: false
+    default: true
+
+  - name: rotation_scan_step_bp
+    type: integer
+    description: Step size for rotating-origin scan (bp); 1 is most precise, larger values are faster
+    required: false
+    default: 1
+    minimum: 1
+
+  - name: multimer_ratio_threshold
+    type: number
+    description: Length ratio cutoff versus expected plasmid size for dimer candidates
+    required: false
+    default: 1.8
+    minimum: 1.0
+    maximum: 10.0
+
+  - name: min_fastq_read_length
+    type: integer
+    description: Ignore FASTQ reads shorter than this length for multimer QC
+    required: false
+    default: 0
+    minimum: 0
+
+  - name: run_assembly
+    type: boolean
+    description: Run EPI2ME wf-clone-validation assembly and construct QC
+    required: false
+    default: false
+
+  - name: wf_clone_workflow_dir
+    type: string
+    description: Optional local path to wf-clone-validation workflow assets
+    required: false
+
+  - name: wf_clone_source
+    type: string
+    description: EPI2ME workflow source for auto-pull fallback
+    required: false
+    default: epi2me-labs/wf-clone-validation
+
+  - name: wf_clone_revision
+    type: string
+    description: Workflow revision/tag for auto-pull
+    required: false
+    default: v1.8.3
+
+  - name: wf_clone_profile
+    type: string
+    description: Nested Nextflow profile string for wf-clone-validation
+    required: false
+    default: singularity
+
+  - name: wf_clone_sample
+    type: string
+    description: Optional sample name override for wf-clone-validation
+    required: false
+
+  - name: wf_clone_large_construct
+    type: boolean
+    description: Enable large construct mode in wf-clone-validation
+    required: false
+    default: false
+
+  - name: wf_clone_approx_size
+    type: integer
+    description: Approximate plasmid size (bp) for wf-clone-validation
+    required: false
+    default: 7000
+    minimum: 1
+
+  - name: wf_clone_assm_coverage
+    type: integer
+    description: Assembly downsampling coverage for wf-clone-validation
+    required: false
+    default: 60
+    minimum: 1
+
+  - name: wf_clone_trim_length
+    type: integer
+    description: Number of bases to trim from both read ends before assembly
+    required: false
+    default: 0
+    minimum: 0
+
+  - name: wf_clone_min_quality
+    type: integer
+    description: Minimum read quality threshold for wf-clone-validation
+    required: false
+    default: 9
+    minimum: 0
+    maximum: 60
+
+  - name: wf_clone_assembly_tool
+    type: string
+    description: Assembly backend to use for wf-clone-validation
+    required: false
+    default: flye
+    enum:
+      - flye
+      - canu
+
+enabled: true
+experimental: true
