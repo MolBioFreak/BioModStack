@@ -10,8 +10,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-
 from adjudicate_phase0_contracts import (
     AA_ORDER,
     admit_complex,
@@ -19,6 +17,8 @@ from adjudicate_phase0_contracts import (
     parser_defaults,
     validate_frustrampnn_contract_rows,
 )
+
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _sha256(path: Path) -> str:
@@ -63,7 +63,7 @@ def _derive_case(vector_id: str, observations_root: Path, repository_root: Path,
     if vector_id.startswith("P0-DEFAULTS-"):
         launcher = repository_root / "scripts/run_protenix_inference.py"
         defaults = parser_defaults(launcher)
-        meta = json.loads((observations_root / "runtime_inventory/protenix_layout_fresh_v3/run.meta.json").read_text(encoding="utf-8"))
+        meta = json.loads((observations_root / "runtime_inventory/protenix_layout_attempt2/run.meta.json").read_text(encoding="utf-8"))
         command = meta.get("command", [])
         def arg(name: str) -> str | None:
             try:
@@ -107,10 +107,14 @@ def _derive_case(vector_id: str, observations_root: Path, repository_root: Path,
         "twenty_ordered_finite_slots_per_residue": len(rows) == 400 and len(positions) == 20 and aa_complete and all_finite,
         "malformed_and_nonfinite_rejected": malformed_rejected,
     }
-    if vector_id == "P0-FRUSTRAMPNN-001": passed = frustra_checks["authenticated_runtime"]
-    elif vector_id == "P0-FRUSTRAMPNN-002": passed = frustra_checks["single_selected_chain"]
-    elif vector_id == "P0-FRUSTRAMPNN-003": passed = frustra_checks["twenty_ordered_finite_slots_per_residue"]
-    else: passed = frustra_checks["malformed_and_nonfinite_rejected"]
+    if vector_id == "P0-FRUSTRAMPNN-001":
+        passed = frustra_checks["authenticated_runtime"]
+    elif vector_id == "P0-FRUSTRAMPNN-002":
+        passed = frustra_checks["single_selected_chain"]
+    elif vector_id == "P0-FRUSTRAMPNN-003":
+        passed = frustra_checks["twenty_ordered_finite_slots_per_residue"]
+    else:
+        passed = frustra_checks["malformed_and_nonfinite_rejected"]
     return {
         "result": "PASS" if passed else "STOP",
         "actual": "authenticated_runtime_semantics" if passed else "runtime_semantics_failed",
@@ -162,7 +166,7 @@ def classify_contract_report(
     expected_artifact_paths.update({
         (repository_root / "scripts/probes/conformational_mapping/adjudicate_phase0_contracts.py").resolve(strict=True),
         (repository_root / "scripts/run_protenix_inference.py").resolve(strict=True),
-        (observations_root / "runtime_inventory/protenix_layout_fresh_v3/run.meta.json").resolve(strict=True),
+        (observations_root / "runtime_inventory/protenix_layout_attempt2/run.meta.json").resolve(strict=True),
         (observations_root / "runtime_inventory/frustrampnn_fresh/frustration.csv").resolve(strict=True),
         (observations_root / "runtime_inventory/frustrampnn_fresh/run.meta").resolve(strict=True),
         (observations_root / "runtime_inventory/frustrampnn_fresh/predict.log").resolve(strict=True),

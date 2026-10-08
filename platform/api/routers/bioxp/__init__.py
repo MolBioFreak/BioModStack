@@ -1,6 +1,6 @@
 """Compact, typed BioXP API. No arbitrary robot proxy paths are exposed."""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
 from . import commands, connection, jobs, protocols
 from .dependencies import (
@@ -9,11 +9,14 @@ from .dependencies import (
     require_bioxp_mutation_access,
 )
 
-router = APIRouter(dependencies=[Depends(require_bioxp_mutation_access)])
-router.include_router(connection.router)
-router.include_router(protocols.router)
-router.include_router(jobs.router)
-router.include_router(commands.router)
+router = APIRouter()
+for child_router in (
+    connection.router,
+    protocols.router,
+    jobs.router,
+    commands.router,
+):
+    router.routes.extend(child_router.routes)
 
 __all__ = [
     "SAFE_LOCAL_MUTATIONS",

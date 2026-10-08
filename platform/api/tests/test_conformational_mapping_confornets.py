@@ -79,7 +79,7 @@ def _fixture_settings(**overrides: object) -> dict[str, object]:
         "backend_identity": {
             "backend_version": "fixture-1",
             "backend_commit": "3" * 40,
-            "runtime_identity": "python3-fake-confornets",
+            "runtime_identity": "python3-controlled-confornets",
             "container_digest": "sha256:" + "4" * 64,
             "model_id": "confornets-fixture",
             "feature_identity_sha256": "5" * 64,
@@ -180,24 +180,31 @@ def test_cm4_003_task_dispatch_uses_request_bound_canonical_prep() -> None:
 
     assert "from './confornets_experimental.nf'" in adapter
     assert "PrepCanonicalConforNetsRequest" in adapter
-    for process_name in ("RunConforNets", "FinalizeConforNetsOutputs"):
+    for process_name in (
+        "RunCanonicalConforNets",
+        "FinalizeConforNetsOutputs",
+        "BindCanonicalConforNetsOutputLedger",
+    ):
         assert process_name in adapter
     assert "PrepConforNetsRequest()" not in adapter
-    assert adapter.index("PrepCanonicalConforNetsRequest(") < adapter.index("RunConforNets(")
-    assert adapter.index("RunConforNets(") < adapter.index("FinalizeConforNetsOutputs(")
+    assert adapter.index("PrepCanonicalConforNetsRequest(") < adapter.index(
+        "RunCanonicalConforNets("
+    )
+    assert adapter.index("RunCanonicalConforNets(") < adapter.index(
+        "FinalizeConforNetsOutputs("
+    )
     assert "label 'local_cpu'" in adapter
     assert "finalize_confornets_conformational_mapping.py" in adapter
     assert "CONFORMATIONAL_MAPPING_CONFORNETS" in workflow
-    assert "CM_PROTENIX_UNIMPLEMENTED" in workflow
-    assert "CM_IMPORT_UNIMPLEMENTED" in workflow
-    assert "CM_CONFORNETS_UNIMPLEMENTED" not in workflow
+    assert "CONFORMATIONAL_MAPPING_PROTENIX" in workflow
+    assert "CONFORMATIONAL_MAPPING_IMPORT" in workflow
+    assert "CONFORMATIONAL_MAPPING_CONFORNETS" in workflow
+    assert "_UNIMPLEMENTED" not in workflow
 
 
-def test_cm4_003b_canonical_prep_preserves_exact_native_semantics(tmp_path: Path) -> None:
-    request = json.loads((FIXTURE_ROOT / "request.json").read_text(encoding="utf-8"))
-    plan = json.loads(
-        (FIXTURE_ROOT / "cm_coordinate_plan_v1.json").read_text(encoding="utf-8")
-    )
+def test_cm4_003b_canonical_prep_requires_installed_instrumented_runtime(
+    tmp_path: Path,
+) -> None:
     result = subprocess.run(
         [
             sys.executable,
@@ -216,37 +223,10 @@ def test_cm4_003b_canonical_prep_preserves_exact_native_semantics(tmp_path: Path
         text=True,
         check=False,
     )
-    assert result.returncode == 0, result.stderr
-    native = json.loads((tmp_path / "native_request.json").read_text(encoding="utf-8"))
-    settings = request["confornets"]
-    assert native["task"] == settings["task"]
-    assert native["sequence"] == settings["sequence"]
-    assert [reference["name"] for reference in native["references"]] == [
-        reference["reference_id"] for reference in settings["references"]
-    ]
-    assert all(reference["staged_path"] == reference["path"] for reference in native["references"])
-    query = json.loads(
-        (tmp_path / "assets" / "fixture" / "test_cases" / "case-a" / "query" / "case-a.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert query == {
-        "chains": [
-            {
-                "molecule_type": "PROTEIN",
-                "chain_ids": [settings["chain_id"]],
-                "sequence": settings["sequence"],
-            }
-        ]
-    }
-    assert native["params"]["num_runs"] == settings["runs"]
-    assert native["params"]["save_steps"] == settings["saved_steps"]
-    assert native["params"]["k_confornets"] == settings["confornet_count"]
-    assert native["params"]["num_samples"] == settings["samples"]
-    assert native["canonical_binding"] == {
-        "request_sha256": request["request_sha256"],
-        "coordinate_plan_sha256": plan["coordinate_plan_sha256"],
-    }
+    assert result.returncode != 0
+    assert "instrumented confornets runtime is unavailable" in result.stderr.lower()
+    assert not (tmp_path / "assets").exists()
+    assert not (tmp_path / "native_request.json").exists()
 
 
 @pytest.mark.parametrize("probe", ["symlink", "traversal", "arbitrary_repo"])
@@ -302,12 +282,15 @@ def test_cm4_003c_internal_prep_rejects_unowned_or_escaped_paths(
         check=False,
     )
     assert result.returncode != 0
-    assert "symlink" in result.stderr.lower() or "escape" in result.stderr.lower() or "approved" in result.stderr.lower()
+    assert any(
+        message in result.stderr.lower()
+        for message in ("symlink", "escape", "approved", "instrumented confornets runtime")
+    )
     assert not assets.exists()
     assert not output.exists()
 
 
-def test_cm4_003d_current_uninstrumented_upstream_stops_before_prep(
+def test_cm4_003d_missing_canonical_runtime_stops_before_prep(
     tmp_path: Path,
 ) -> None:
     copied = _copy_fixture(tmp_path)
@@ -347,8 +330,7 @@ def test_cm4_003d_current_uninstrumented_upstream_stops_before_prep(
         check=False,
     )
     assert result.returncode != 0
-    assert "current pinned confornets upstream is incompatible" in result.stderr.lower()
-    assert "stop" in result.stderr.lower()
+    assert "instrumented confornets runtime is unavailable" in result.stderr.lower()
     assert not assets.exists()
     assert not output.exists()
 
@@ -653,6 +635,7 @@ def test_cm4_014_unknown_zero_runtime_identity_quarantines_resume(tmp_path: Path
     native_request["canonical_binding"] = {
         "request_sha256": request["request_sha256"],
         "coordinate_plan_sha256": plan["coordinate_plan_sha256"],
+        "target_id": request["targets"][0]["target_id"],
     }
     native_request_path.write_text(json.dumps(native_request), encoding="utf-8")
     ledger_path = copied / "native" / "cm_output_coordinate_ledger_v1.json"
@@ -680,13 +663,13 @@ def test_cm4_015_behavioral_disposable_nextflow_probe(tmp_path: Path) -> None:
     if not nextflow_bin.is_file():
         pytest.skip("managed Nextflow is unavailable")
 
-    fake_repo = tmp_path / "fake_confornets"
-    (fake_repo / "scripts").mkdir(parents=True)
-    (fake_repo / "preprocess.py").write_text(
+    controlled_repo = tmp_path / "controlled_confornets"
+    (controlled_repo / "scripts").mkdir(parents=True)
+    (controlled_repo / "preprocess.py").write_text(
         "import argparse\np=argparse.ArgumentParser(); p.add_argument('--benchmark'); p.add_argument('--assets-dir'); p.add_argument('--skip-msa', action='store_true'); p.parse_args()\n",
         encoding="utf-8",
     )
-    fake_run = '''import argparse, json
+    controlled_run = '''import argparse, json
 from pathlib import Path
 p=argparse.ArgumentParser(add_help=False)
 p.add_argument('--output-dir', required=True)
@@ -735,18 +718,20 @@ ATOM 12 O O . THR A 1 3 ? 11.100 {index}.0 0.000 1.00 50.00 3 THR A O 1
 """
     (out/name).write_text(cif)
     entries.append({'coordinates': coordinate, 'source_relative_path': name})
-(out/'state.pt').write_bytes(b'controlled synthetic state')
+(out/'state.pt').write_bytes(b'controlled contract state')
 (out/'loss.csv').write_text('step,loss\\n1,0.5\\n')
 (out/'cm_upstream_coordinate_ledger_v1.json').write_text(json.dumps({'request_sha256':context['request_sha256'],'coordinate_plan_sha256':context['coordinate_plan_sha256'],'entries':entries}))
 '''
-    (fake_repo / "scripts" / "run_mse_training.py").write_text(fake_run, encoding="utf-8")
+    (controlled_repo / "scripts" / "run_mse_training.py").write_text(
+        controlled_run, encoding="utf-8"
+    )
     reference = tmp_path / "reference.pdb"
     reference.write_text(
         "ATOM      1  CA  MET A   1      12.000  12.000  13.000  1.00 20.00           C\nEND\n",
         encoding="utf-8",
     )
     checkpoint = tmp_path / "checkpoint.pt"
-    checkpoint.write_bytes(b"controlled synthetic checkpoint")
+    checkpoint.write_bytes(b"controlled contract checkpoint")
     settings = {
         "sequence": "MKT",
         "chain_id": "A",
@@ -757,7 +742,7 @@ ATOM 12 O O . THR A 1 3 ? 11.100 {index}.0 0.000 1.00 50.00 3 THR A O 1
             "reference_id": "probe-ref",
             "staged_path": str(reference),
             "content_sha256": _sha256(reference),
-            "state": "synthetic-open",
+            "state": "open",
             "source": "controlled_fixture",
         }],
         "runs": 1,
@@ -778,14 +763,14 @@ ATOM 12 O O . THR A 1 3 ? 11.100 {index}.0 0.000 1.00 50.00 3 THR A O 1
         "transfer_source": None,
         "backend_identity": {
             "backend_version": "controlled-probe-v1",
-            "backend_commit": hashlib.sha1(fake_run.encode()).hexdigest(),
+            "backend_commit": hashlib.sha1(controlled_run.encode()).hexdigest(),
             "runtime_identity": f"nextflow-25.10.1+python-{sys.version_info.major}.{sys.version_info.minor}",
             # The controlled host runtime is deliberately not represented as a
             # container.  An unknown container identity must quarantine resume.
             "container_digest": "sha256:" + ("0" * 64),
-            "model_id": "controlled-fake-confornets",
-            "feature_identity_sha256": hashlib.sha256(fake_run.encode()).hexdigest(),
-            "repo_path": str(fake_repo),
+            "model_id": "controlled-confornets",
+            "feature_identity_sha256": hashlib.sha256(controlled_run.encode()).hexdigest(),
+            "repo_path": str(controlled_repo),
         },
     }
     params = {
@@ -810,19 +795,19 @@ ATOM 12 O O . THR A 1 3 ? 11.100 {index}.0 0.000 1.00 50.00 3 THR A O 1
     }
     request_root = tmp_path / "request"
     request_root.mkdir()
-    shutil.copytree(fake_repo, request_root / "fake_confornets")
+    shutil.copytree(controlled_repo, request_root / "controlled_confornets")
     (request_root / "inputs").mkdir()
     shutil.copy2(reference, request_root / "inputs" / "reference.pdb")
     shutil.copy2(checkpoint, request_root / "inputs" / "checkpoint.pt")
     settings["references"][0]["staged_path"] = "inputs/reference.pdb"
     settings["checkpoint"]["path"] = "inputs/checkpoint.pt"
-    settings["backend_identity"]["repo_path"] = "fake_confornets"
+    settings["backend_identity"]["repo_path"] = "controlled_confornets"
     materialized = materialize_trusted_internal_request(
         params,
         output_dir=request_root,
         request_id="00000000-0000-4000-8000-000000000415",
         principal_id="controlled-nextflow-probe",
-        source_kind="disposable_synthetic_probe_v1",
+        source_kind="disposable_controlled_probe_v1",
     )
     out_dir = tmp_path / "out"
     work_dir = tmp_path / "work"

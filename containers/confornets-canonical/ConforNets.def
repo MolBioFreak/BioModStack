@@ -1,0 +1,23 @@
+Bootstrap: localimage
+From: /mnt/BioModStack/apptainer/confornets.sif
+
+%files
+    patches/emit_coordinate_ledger.patch /opt/emit_coordinate_ledger.patch
+
+%post
+    cd /opt/confornets
+    test "$(git rev-parse HEAD)" = 4df561a1fbd0fd2b9c7a230fa62957a837d9f72d
+    git apply --check /opt/emit_coordinate_ledger.patch
+    git apply /opt/emit_coordinate_ledger.patch
+    python3 -m py_compile preprocess.py confornet/utils/io.py confornet/utils/cm_coordinate_ledger.py scripts/run_diversity.py scripts/run_mse_training.py scripts/run_transfer.py confornet/inference/diversity.py confornet/inference/mse_training.py
+    rm -f /opt/emit_coordinate_ledger.patch
+
+%labels
+    org.biomodstack.product "conformational_mapping"
+    org.biomodstack.upstream.commit "4df561a1fbd0fd2b9c7a230fa62957a837d9f72d"
+    org.biomodstack.legacy.base.sha256 "9c6757d087f8af2f1b8259964208ba915646c905f94a0a7fcb59c8a97b2210f3"
+    org.biomodstack.coordinate.contract "cm_upstream_coordinate_ledger_v1"
+
+%test
+    cd /opt/confornets
+    python3 -c "from confornet.utils.cm_coordinate_ledger import emit_coordinate"
