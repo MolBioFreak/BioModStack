@@ -14,12 +14,19 @@ def _clean(value: str | None, default: str) -> str:
     return cleaned
 
 
+def _utf16_code_units(value: str) -> int:
+    return len(value.encode("utf-16-le")) // 2
+
+
 def current_build_identity() -> dict[str, str]:
     revision = _clean(os.getenv("BMS_BUILD_SHA"), "unknown").lower()
     if not _FULL_GIT_SHA.fullmatch(revision):
         revision = "unknown"
+    build_id = _clean(os.getenv("BMS_BUILD_ID"), "development")
+    if _utf16_code_units(build_id) > 256:
+        build_id = "development"
     return {
         "revision": revision,
-        "build_id": _clean(os.getenv("BMS_BUILD_ID"), "development"),
+        "build_id": build_id,
         "build_time": _clean(os.getenv("BMS_BUILD_TIME"), "unknown"),
     }

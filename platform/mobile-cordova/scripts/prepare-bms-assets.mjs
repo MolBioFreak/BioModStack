@@ -545,8 +545,26 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
   const digestPattern = /^sha256:[0-9a-f]{64}$/;
   const containerIdPattern = /^[0-9a-f]{64}$/;
   const nonEmptyBounded = (value, limit = 512) => (
-    typeof value === 'string' && value.length > 0 && value.length <= limit
+    typeof value === 'string' && value.trim().length > 0 && value.length <= limit
   );
+  const validBuildTime = (value) => {
+    if (typeof value !== 'string') return false;
+    const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?Z$/.exec(value);
+    if (!match) return false;
+    const [, yearText, monthText, dayText, hourText, minuteText, secondText, fraction = ''] = match;
+    const [year, month, day, hour, minute, second] = [
+      yearText, monthText, dayText, hourText, minuteText, secondText,
+    ].map(Number);
+    if (year < 2000) return false;
+    const millisecond = Number((fraction + '000').slice(0, 3));
+    const parsed = new Date(Date.UTC(year, month - 1, day, hour, minute, second, millisecond));
+    return parsed.getUTCFullYear() === year
+      && parsed.getUTCMonth() === month - 1
+      && parsed.getUTCDate() === day
+      && parsed.getUTCHours() === hour
+      && parsed.getUTCMinutes() === minute
+      && parsed.getUTCSeconds() === second;
+  };
   const validContainerSet = (runtime, requiredNames, revision) => {
     if (
       !runtime
@@ -572,6 +590,115 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
         && nonEmptyBounded(container.cwd, 4096);
     });
   };
+  const sortedUniquePositiveIntegers = (value, allowEmpty = false) => {
+    if (!Array.isArray(value) || (!allowEmpty && value.length === 0)) return false;
+    if (!value.every((item) => Number.isInteger(item) && item > 0)) return false;
+    return value.every((item, index) => index === 0 || value[index - 1] < item);
+  };
+  const normalizeAbsolutePath = (value) => {
+    if (typeof value !== 'string' || !value.startsWith('/')) return null;
+    const parts = [];
+    for (const part of value.split('/')) {
+      if (!part || part === '.') continue;
+      if (part === '..') {
+        if (parts.length === 0) return null;
+        parts.pop();
+      } else parts.push(part);
+    }
+    return `/${parts.join('/')}`;
+  };
+  const validListenerClosure = (listener, port, bindAddresses) => {
+    if (
+      !listener
+      || listener.port !== port
+      || JSON.stringify(listener.bind_addresses) !== JSON.stringify(bindAddresses)
+      || !sortedUniquePositiveIntegers(listener.listener_inodes)
+      || !listener.listener_inode_owners
+      || typeof listener.listener_inode_owners !== 'object'
+      || Array.isArray(listener.listener_inode_owners)
+      || !Array.isArray(listener.listener_reports)
+      || listener.listener_reports.length === 0
+    ) return false;
+    const inodeKeys = Object.keys(listener.listener_inode_owners);
+    if (
+      inodeKeys.length !== listener.listener_inodes.length
+      || !listener.listener_inodes.every((inode) => Object.hasOwn(listener.listener_inode_owners, String(inode)))
+    ) return false;
+    const ownerPids = [...new Set(inodeKeys.flatMap((inode) => {
+      const owners = listener.listener_inode_owners[inode];
+      return sortedUniquePositiveIntegers(owners) ? owners : [NaN];
+    }))].sort((left, right) => left - right);
+    const reportPids = listener.listener_reports.map((report) => report?.pid).sort((left, right) => left - right);
+    return ownerPids.length > 0
+      && ownerPids.every(Number.isInteger)
+      && JSON.stringify(ownerPids) === JSON.stringify(reportPids)
+      && listener.listener_reports.every((report) => (
+        nonEmptyBounded(report?.cgroup, 4096)
+        && nonEmptyBounded(report?.cmdline, 4096)
+        && nonEmptyBounded(report?.executable, 4096)
+        && report.executable.startsWith('/')
+        && Array.isArray(report.argv)
+        && report.argv.length > 0
+      ));
+  };
+  const validContainerListener = (listener, runtime, containerName, port) => {
+    if (!validListenerClosure(listener, port, ['127.0.0.1'])) return false;
+    const container = runtime?.containers?.find((item) => item?.name === containerName);
+    if (
+      !container
+      || listener.container_name !== containerName
+      || listener.container_id !== container.container_id
+      || !sortedUniquePositiveIntegers(listener.container_listener_pids)
+      || !sortedUniquePositiveIntegers(listener.host_listener_pids)
+      || !sortedUniquePositiveIntegers(listener.container_host_pids)
+    ) return false;
+    const ownerPids = [...new Set(Object.values(listener.listener_inode_owners).flat())];
+    return listener.host_listener_pids.every((pid) => ownerPids.includes(pid))
+      && ownerPids.every((pid) => listener.container_host_pids.includes(pid))
+      && listener.listener_reports.every((report) => report.cgroup.includes(container.container_id.slice(0, 12)));
+  };
+  const reportInExactUnit = (report, service) => String(report?.cgroup || '')
+    .split(/\r?\n/)
+    .some((line) => line.split(':', 3).at(-1)?.endsWith(`/${service}`));
+  const validDevelopmentListener = (listener, projectRoot, revision) => {
+    const sourceRoot = `${projectRoot}/platform/frontend`;
+    const expectedVite = `${sourceRoot}/node_modules/vite/bin/vite.js`;
+    return validListenerClosure(listener, 5173, ['127.0.0.1'])
+      && listener.systemd_service === 'biomodstack-frontend.service'
+      && listener.source_root === sourceRoot
+      && listener.source_revision === revision
+      && listener.listener_reports.every((report) => {
+        const trustedNode = report.executable === '/usr/bin/node'
+          || report.executable === '/usr/bin/nodejs'
+          || /^\/home\/[^/]+\/\.nvm\/versions\/node\/v\d+\.\d+\.\d+\/bin\/node$/.test(report.executable);
+        return trustedNode
+          && report.cwd === sourceRoot
+          && report.build_revision === revision
+          && report.argv.length === 6
+          && ['node', 'nodejs', report.executable].includes(report.argv[0])
+          && normalizeAbsolutePath(report.argv[1]) === expectedVite
+          && JSON.stringify(report.argv.slice(2)) === JSON.stringify(['--host', '127.0.0.1', '--port', '5173'])
+          && reportInExactUnit(report, 'biomodstack-frontend.service');
+      });
+  };
+  const validWorkflowAdapterListener = (listener, projectRoot, revision) => {
+    const apiRoot = `${projectRoot}/platform/api`;
+    return validListenerClosure(listener, 8001, ['127.0.0.1'])
+      && listener.systemd_service === 'biomodstack-workflow-adapter.service'
+      && listener.source_root === projectRoot
+      && listener.source_revision === revision
+      && listener.listener_reports.every((report) => (
+        report.cwd === apiRoot
+        && report.argv.length === 9
+        && normalizeAbsolutePath(report.argv[0]) === `${apiRoot}/.venv/bin/python`
+        && normalizeAbsolutePath(report.argv[1]) === `${apiRoot}/.venv/bin/uvicorn`
+        && JSON.stringify(report.argv.slice(2)) === JSON.stringify([
+          'workflow_adapter_app:app', '--port', '8001', '--host', '127.0.0.1',
+          '--no-proxy-headers', '--no-access-log',
+        ])
+        && reportInExactUnit(report, 'biomodstack-workflow-adapter.service')
+      ));
+  };
   if (!expected || !payload || typeof payload !== 'object') reject();
   if (
     payload.selected_environment !== environment
@@ -582,6 +709,7 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
     || payload.runtime_target !== expected.runtimeTarget
     || payload.tailnet_origin !== trustedOrigin
     || !revisionPattern.test(String(payload.project_revision || ''))
+    || !revisionPattern.test(String(payload.selector_revision || ''))
     || payload.serve_handlers?.['/']?.Proxy !== expected.serveRootProxy
     || payload.serve_handlers?.['/api/tailnet-environment']?.Proxy !== 'http://127.0.0.1:8001'
   ) reject();
@@ -598,20 +726,57 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
     || !tailnetBuild
     || !revisionPattern.test(String(localBuild.revision || ''))
     || !nonEmptyBounded(localBuild.build_id, 256)
-    || !nonEmptyBounded(localBuild.build_time, 256)
-    || !/^\d{4}-\d{2}-\d{2}T/.test(localBuild.build_time)
+    || !validBuildTime(localBuild.build_time)
+    || health.local_api.payload.status !== 'healthy'
+    || health.tailnet_api.payload.status !== 'healthy'
+    || health.local_api.payload.liveness?.alive !== true
+    || health.tailnet_api.payload.liveness?.alive !== true
+    || health.local_api.payload.readiness?.ready !== true
+    || health.tailnet_api.payload.readiness?.ready !== true
     || localBuild.revision !== tailnetBuild.revision
     || localBuild.build_id !== tailnetBuild.build_id
     || localBuild.build_time !== tailnetBuild.build_time
+    || payload.project_revision !== localBuild.revision
     || !validContainerSet(payload.managed_api_runtime, ['biomodstack-api'], localBuild.revision)
+    || !validContainerListener(
+      payload.managed_api_listener,
+      payload.managed_api_runtime,
+      'biomodstack-api',
+      8000,
+    )
+    || JSON.stringify(payload.api_listeners) !== JSON.stringify(payload.managed_api_listener?.listener_reports)
+    || !validWorkflowAdapterListener(
+      payload.workflow_adapter_listener,
+      payload.project_root,
+      payload.selector_revision,
+    )
   ) reject();
 
   if (environment === 'development') {
-    if (payload.container_runtime !== undefined || payload.tailnet_production_proxy !== undefined) reject();
+    if (
+      payload.container_runtime !== undefined
+      || payload.tailnet_production_proxy !== undefined
+      || payload.managed_frontend_listener !== undefined
+      || !validDevelopmentListener(
+        payload.development_frontend_listener,
+        payload.project_root,
+        payload.selector_revision,
+      )
+      || JSON.stringify(payload.frontend_listeners)
+        !== JSON.stringify(payload.development_frontend_listener?.listener_reports)
+    ) reject();
   } else {
     const proxy = payload.tailnet_production_proxy;
     if (
       !validContainerSet(payload.container_runtime, ['biomodstack-api', 'biomodstack-web'], localBuild.revision)
+      || !validContainerListener(
+        payload.managed_frontend_listener,
+        payload.container_runtime,
+        'biomodstack-web',
+        18080,
+      )
+      || JSON.stringify(payload.frontend_listeners)
+        !== JSON.stringify(payload.managed_frontend_listener?.listener_reports)
       || !proxy
       || !containerIdPattern.test(String(proxy.container_id || ''))
       || proxy.image !== 'nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10'
