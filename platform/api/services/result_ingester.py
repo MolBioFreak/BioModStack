@@ -2741,7 +2741,7 @@ async def ingest_job_results(
                 bundle["cm_structure_maps"] = derived.get("structure_maps", [])
                 bundle["cm_frustration_landscapes"] = derived.get("landscapes", [])
                 bundle["cm_analysis_v1"] = derived.get("analysis")
-                bundle["cm_state_landscape_analyses"] = derived.get("state_landscape_analyses", [])
+                bundle["cm_state_landscape_analyses"] = derived.get("state_landscape_analyses")
                 bundle["cm_lineage"] = derived.get("lineage")
                 bundle["cm_support"] = derived.get("support")
                 bundle["cm_missingness"] = derived.get("missingness")

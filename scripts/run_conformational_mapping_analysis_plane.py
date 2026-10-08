@@ -358,12 +358,13 @@ def main() -> None:
         "structure_maps": maps,
         "landscapes": [landscapes[key] for key in sorted(landscapes)],
         "analysis": analysis,
-        "state_landscape_analyses": [] if state_landscape_analysis is None else [state_landscape_analysis],
         "lineage": lineage,
         "support": support,
         "missingness": missingness,
         "resampling": resampling_manifest,
     }
+    if state_landscape_analysis is not None:
+        index_without_hash["state_landscape_analyses"] = [state_landscape_analysis]
     index = {**index_without_hash, "index_sha256": canonical_sha256(index_without_hash)}
     (args.out / "cm_derived_index_v1.json").write_bytes(canonical_json_bytes(index))
     os.close(container_fd)
