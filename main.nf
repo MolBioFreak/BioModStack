@@ -27,6 +27,9 @@ include { RF3FromSequence } from './modules/structure_prediction.nf'
 include { structure_prediction_wf } from './modules/structure_prediction.nf'
 include { OpenMMRelaxation ; OpenMMScore } from './modules/openmm.nf'
 
+// Oligo Designer (RFDpoly multi-polymer design)
+include { OLIGO_DESIGNER } from './workflows/oligo_design.nf'
+
 // Antibody Design Subworkflow
 include { ANTIBODY_DESIGN } from './workflows/antibody_design.nf'
 
