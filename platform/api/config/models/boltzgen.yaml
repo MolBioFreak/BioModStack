@@ -63,16 +63,8 @@ modes:
       - num_designs
       - batch_size
 
-  - id: dna_complex
-    name: DNA-Protein Complex Prediction
-    description: Co-fold a protein with dsDNA (1-10bp). Ideal for DNA polymerase binding studies.
-    params:
-      - protein_sequence
-      - dna_template_seq
-      - dna_primer_seq
-      - dna_structure
-      - num_designs
-      - batch_size
+  # DEPRECATED: dna_complex mode has been moved to Boltz-2 Complex Prediction
+  # Use Boltz-2 with DNA/RNA complex components instead
 
 params:
   - name: ligand_smiles
@@ -133,28 +125,29 @@ params:
     required: false
     default: false
 
-  - name: protein_sequence
-    type: string
-    description: Protein sequence for co-folding with DNA
-    required: false
-    preset_type: sequence
-
-  - name: dna_template_seq
-    type: string
-    description: "DNA template strand sequence (5'→3', e.g., 'ACGTACGTAC')"
-    required: false
-
-  - name: dna_primer_seq
-    type: string
-    description: "DNA primer strand sequence (5'→3', complementary to template)"
-    required: false
-
-  - name: dna_structure
-    type: file
-    description: "Pre-generated DNA structure (e.g. from oligo library)"
-    required: false
-    file_type: pdb
-    preset_type: pdb
+  # DEPRECATED: DNA-complex params moved to Boltz-2 Complex Prediction
+  # - name: protein_sequence
+  #   type: string
+  #   description: Protein sequence for co-folding with DNA
+  #   required: false
+  #   preset_type: sequence
+  #
+  # - name: dna_template_seq
+  #   type: string
+  #   description: "DNA template strand sequence (5'→3', e.g., 'ACGTACGTAC')"
+  #   required: false
+  #
+  # - name: dna_primer_seq
+  #   type: string
+  #   description: "DNA primer strand sequence (5'→3', complementary to template)"
+  #   required: false
+  #
+  # - name: dna_structure
+  #   type: file
+  #   description: "Pre-generated DNA structure (e.g. from oligo library)"
+  #   required: false
+  #   file_type: pdb
+  #   preset_type: pdb
 
   - name: batch_size
     type: integer

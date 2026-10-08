@@ -263,6 +263,8 @@ def build_nextflow_command(
         'boltz_diffusion_samples': 'boltz_diffusion_samples',  # Alias for boltz_num_samples
         'boltz_use_msa': 'boltz_use_msa',
         'boltz_method': 'boltz_method',
+        'boltz_use_potentials': 'boltz_use_potentials',
+        'boltz_step_scale': 'boltz_step_scale',
         # RF3 structure prediction params
         'rf3_num_recycles': 'rf3_num_recycles',
         'rf3_num_samples': 'rf3_num_samples',
@@ -270,6 +272,8 @@ def build_nextflow_command(
         # Sequence input
         'sequence': 'sequence_input',
         'sequence_name': 'sequence_name',
+        # Parallelization
+        'num_parallel_jobs': 'num_parallel_jobs',
     }
     
     # Handle complex_components specially - write JSON file for BoltzFromComplex process

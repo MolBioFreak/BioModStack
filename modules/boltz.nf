@@ -28,7 +28,7 @@ process RunBoltz {
     tuple val(batch_id), path(yamls)
 
     output:
-    tuple path ("predictions/*.pdb"), path ("predictions/*.json"), emit: pdbs_jsons
+    tuple path("predictions/*.pdb"), path("predictions/*.json"), emit: pdbs_jsons
     path ("*.log"), emit: logs
 
     script:
@@ -52,6 +52,7 @@ process RunBoltz {
             --recycling_steps ${params.boltz_recycling_steps} \
             --sampling_steps ${params.boltz_sampling_steps} \
             ${params.boltz_use_potentials ? '--use_potentials' : ''} \
+            ${params.boltz_step_scale ? '--step_scale ' + params.boltz_step_scale : ''} \
             --cache /boltzcache \
             ${params.boltz_extra_config ? params.boltz_extra_config : ''} \
             2>&1 | tee boltz_${batch_id}.log
@@ -153,4 +154,3 @@ process FilterBoltz {
         2>&1 | tee filter_boltz_${task.index}.log
     """
 }
-

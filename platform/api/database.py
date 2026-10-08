@@ -13,7 +13,7 @@ import os
 # Database path - relative to project root
 DATABASE_URL = os.getenv(
     "DATABASE_URL", 
-    "sqlite+aiosqlite:///./proteindj.db"
+    "sqlite+aiosqlite:///./biomodstack.db"
 )
 
 engine = create_async_engine(DATABASE_URL, echo=False)

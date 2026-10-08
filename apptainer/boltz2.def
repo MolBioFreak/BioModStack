@@ -32,7 +32,8 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     git clone https://github.com/jwohlwend/boltz.git && cd /boltz && git checkout aaef502
     uv pip install --no-cache-dir .
 
-    # cleanup build dependencies
+    # cleanup build dependencies but KEEP python3.10-dev (needed for Triton JIT on RTX 5090)
+    apt-mark manual python3.10-dev
     apt-get autoremove -y
     apt-get clean
     

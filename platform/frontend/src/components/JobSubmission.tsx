@@ -234,9 +234,17 @@ export function JobSubmission() {
                 nextflowProfile = mergedParams.rfd_mode;
                 effectiveModelId = 'rfdiffusion';
             } else if (mergedParams.diffusion_method === 'boltzgen') {
-                // BoltzGen ligand-aware template
-                nextflowProfile = 'boltzgen';
-                effectiveModelId = 'boltzgen';
+                // Check if this is complex PREDICTION (DNA/RNA present) vs DESIGN
+                const hasNucleicAcid = ligands.some(l => l.type === 'dna' || l.type === 'rna');
+                if (hasNucleicAcid) {
+                    // DNA/RNA complex prediction - use Boltz-2, NOT BoltzGen
+                    nextflowProfile = 'complex';
+                    effectiveModelId = 'boltz2';
+                } else {
+                    // BoltzGen ligand-aware binder design template
+                    nextflowProfile = 'boltzgen';
+                    effectiveModelId = 'boltzgen';
+                }
             } else if (mergedParams.pred_method) {
                 // Structure prediction templates - map pred_method to model_id and mode
                 const predMethodMap: Record<string, { model_id: string; mode: string }> = {
@@ -267,7 +275,7 @@ export function JobSubmission() {
                 ...mergedParams,
                 complex_components: [
                     { type: 'protein', id: 'A', sequence: mergedParams.sequence || params.sequence },
-                    ...ligands.map(l => ({ type: l.type, id: l.id, ccd: l.ccd, smiles: l.smiles }))
+                    ...ligands.map(l => ({ type: l.type, id: l.id, ccd: l.ccd, smiles: l.smiles, sequence: l.sequence }))
                 ]
             } : mergedParams;
 
@@ -305,7 +313,7 @@ export function JobSubmission() {
                 ...filteredParams,
                 complex_components: [
                     { type: 'protein', id: 'A', sequence: proteinSeq },
-                    ...ligands.map(l => ({ type: l.type, id: l.id, ccd: l.ccd, smiles: l.smiles }))
+                    ...ligands.map(l => ({ type: l.type, id: l.id, ccd: l.ccd, smiles: l.smiles, sequence: l.sequence }))
                 ]
             } : filteredParams;
 
@@ -394,6 +402,8 @@ export function JobSubmission() {
                                                 boltz_sampling_steps: predictorConfig.sampling_steps,
                                                 num_parallel_jobs: predictorConfig.num_parallel_jobs,
                                                 boltz_use_msa: predictorConfig.use_msa,
+                                                boltz_use_potentials: predictorConfig.use_potentials,
+                                                boltz_step_scale: predictorConfig.step_scale,
                                                 pred_method: predictorConfig.predictor,
                                                 // Complex mode: include ligands/ions if any
                                                 ...(predictorConfig.ligands?.length ? {
@@ -707,11 +717,13 @@ export function JobSubmission() {
                                         className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-blue-500 outline-none"
                                     >
                                         <option value="" disabled>Select a mode...</option>
-                                        {(selectedModel.modes || []).map((mode: any) => (
-                                            <option key={mode.id} value={mode.id}>
-                                                {mode.name}
-                                            </option>
-                                        ))}
+                                        {(selectedModel.modes || [])
+                                            .filter((mode: any) => mode.id !== 'dna_complex') // Deprecated: use Boltz-2 Complex Prediction instead
+                                            .map((mode: any) => (
+                                                <option key={mode.id} value={mode.id}>
+                                                    {mode.name}
+                                                </option>
+                                            ))}
                                     </select>
                                     {selectedMode && (
                                         <p className="mt-2 text-sm text-slate-500">{selectedMode.description}</p>

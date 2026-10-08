@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 # Point to the correct DB used by the running service
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///platform/api/proteindj.db"
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///platform/api/biomodstack.db"
 
 # Add platform/api to python path
 sys.path.append(os.path.join(os.getcwd(), 'platform', 'api'))

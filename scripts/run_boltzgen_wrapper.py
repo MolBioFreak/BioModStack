@@ -5,12 +5,26 @@ import yaml
 import shutil
 from pathlib import Path
 import json
+try:
+    import gemmi
+except ImportError:
+    gemmi = None
 
 # BoltzGen wrapper script for ProteinDJ pipeline
 # Uses the `boltzgen run` CLI
 
 def cif_to_pdb(cif_path: Path, pdb_path: Path):
-    """Convert CIF to PDB using Biopython."""
+    """Convert CIF to PDB using Gemmi (robust) or Biopython (fallback)."""
+    # Try Gemmi first (Robust)
+    if gemmi:
+        try:
+            st = gemmi.read_structure(str(cif_path))
+            st.write_pdb(str(pdb_path))
+            return True
+        except Exception as e:
+            print(f"Warning: Gemmi conversion failed for {cif_path}: {e}")
+
+    # Fallback to Biopython (Fragile)
     try:
         from Bio.PDB import MMCIFParser, PDBIO
         parser = MMCIFParser(QUIET=True)
@@ -20,7 +34,7 @@ def cif_to_pdb(cif_path: Path, pdb_path: Path):
         io.save(str(pdb_path))
         return True
     except Exception as e:
-        print(f"Warning: CIF to PDB conversion failed for {cif_path}: {e}")
+        print(f"Warning: Fallback CIF to PDB conversion failed for {cif_path}: {e}")
         return False
 
 def create_metadata_json(csv_path: Path, output_dir: Path):
@@ -38,7 +52,8 @@ def create_metadata_json(csv_path: Path, output_dir: Path):
                 'filter_rmsd': float(row.get('filter_rmsd', 0)),
                 'source': 'boltzgen'
             }
-            json_path = output_dir / f"{design_id}.json"
+            # Start with confidence_ prefix for Ingester compatibility
+            json_path = output_dir / f"confidence_{design_id}.json"
             with open(json_path, 'w') as f:
                 json.dump(metadata, f, indent=2)
         return True
@@ -178,12 +193,24 @@ def main():
             if not search_dir.exists():
                 continue
             for cif in search_dir.glob("*.cif"):
+                # Skip input template CIFs (no numeric suffix) - only process actual designs
+                # Designs are named like: boltzgen_input_0.cif, boltzgen_input_1.cif, etc.
+                import re
+                if not re.search(r'_\d+$', cif.stem):
+                    print(f"Skipping input template: {cif.name}")
+                    continue
+                
                 if cif.stem in processed_names:
                     continue
                 # Prefix with batch name to avoid collisions
                 batch_prefix = batch_dir.name.replace("batch_", "b") + "_" if len(batch_dirs) > 1 else ""
                 pdb_name = f"{batch_prefix}{cif.stem}.pdb"
                 pdb_path = designs_dir / pdb_name
+                
+                # Copy original CIF for zero data loss (Viewer prefers this for complexes)
+                cif_dest_name = f"{batch_prefix}{cif.stem}.cif"
+                shutil.copy(cif, designs_dir / cif_dest_name)
+                
                 if cif_to_pdb(cif, pdb_path):
                     print(f"Converted: {cif.name} -> {pdb_name}")
                     cif_converted += 1
@@ -205,7 +232,7 @@ def main():
     
     # Create minimal JSON for any PDBs without metadata
     for pdb in designs_dir.glob("*.pdb"):
-        json_path = designs_dir / f"{pdb.stem}.json"
+        json_path = designs_dir / f"confidence_{pdb.stem}.json"
         if not json_path.exists():
             with open(json_path, 'w') as f:
                 json.dump({'design_id': pdb.stem, 'source': 'boltzgen'}, f)
