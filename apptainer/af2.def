@@ -38,7 +38,8 @@ From: nvcr.io/nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
 
     # Install JAX with CUDA 12 support (RTX 5090 requires compute capability 12.0)
     # Using JAX 0.4.20 as specified by nrbennet/dl_binder_design for CUDA 12
-    pip install -q --no-cache-dir "jax[cuda12_pip]==0.4.20" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+    # Use cuda12_local to leverage host CUDA libraries via --nv mount
+    pip install -q --no-cache-dir "jax[cuda12_local]==0.4.20" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 
     # Install JAX ecosystem dependencies (REQUIRED for AlphaFold2 Initial-Guess)
     pip install -q --no-cache-dir \
