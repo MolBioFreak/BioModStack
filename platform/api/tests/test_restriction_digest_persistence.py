@@ -707,6 +707,7 @@ async def test_many_output_save_and_reload_have_bounded_database_boundaries(
     engine, sessions, digest = await _store(tmp_path, sequence=sequence)
     flushes = 0
     selects = 0
+    select_statements: list[str] = []
 
     from sqlalchemy.orm import Session
 
@@ -719,6 +720,7 @@ async def test_many_output_save_and_reload_have_bounded_database_boundaries(
         nonlocal selects
         if statement.lstrip().upper().startswith("SELECT"):
             selects += 1
+            select_statements.append(statement)
 
     event.listen(Session, "before_flush", before_flush)
     event.listen(engine.sync_engine, "before_cursor_execute", before_cursor_execute)
@@ -748,6 +750,16 @@ async def test_many_output_save_and_reload_have_bounded_database_boundaries(
             assert loaded.status_code == 200, loaded.text
             assert loaded.content == saved.content
             assert selects <= 10
+            raw_result_reads = [
+                statement for statement in select_statements
+                if statement.lstrip().lower().startswith(
+                    "select restriction_digest_results.result"
+                )
+            ]
+            assert len(raw_result_reads) == 1
+            assert "length(CAST(restriction_digest_results.result AS BLOB)) <=" in (
+                raw_result_reads[0]
+            )
     finally:
         event.remove(Session, "before_flush", before_flush)
         event.remove(engine.sync_engine, "before_cursor_execute", before_cursor_execute)
@@ -823,50 +835,177 @@ async def test_saved_response_byte_limit_is_sanitized_and_rolls_back(
 
 
 @pytest.mark.asyncio
-async def test_digest_canonical_cpu_work_stays_off_event_loop_and_reuses_bytes(
+async def test_saved_output_reload_rechecks_saved_output_limit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from services.restriction_digest import DigestSimulation
+    engine, sessions, digest = await _store(tmp_path)
+    try:
+        async with await _client(sessions) as client:
+            preview = await client.post(
+                "/api/molbio/restriction/digests/simulate", json=_preview_request(digest)
+            )
+            saved = await client.post("/api/molbio/restriction/digests", json={
+                **_preview_request(digest),
+                "schema": "bms.molbio.restriction-digest-save-request.v1",
+                "simulation_sha256": preview.json()["simulation_sha256"],
+                "idempotency_key": "saved-output-reload-limit",
+                "persistence_mode": "operation_and_fragments",
+            })
+            assert saved.status_code == 200, saved.text
+            monkeypatch.setattr(molbio_restriction, "MAX_SAVED_OUTPUTS", 0)
+            rejected = await client.get(
+                f"/api/molbio/restriction/digests/{saved.json()['operation_id']}"
+            )
+            assert rejected.status_code == 413
+            assert rejected.json()["detail"]["code"] == "request_too_large"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_digest_per_output_cpu_work_stays_off_event_loop_without_orm_crossing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import fields, is_dataclass
+    from sqlalchemy import inspect as sqlalchemy_inspect
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy.orm.collections import InstrumentedList
+    from services.restriction_digest import DigestFragment, DigestSimulation
 
     engine, sessions, digest = await _store(tmp_path, sequence="GAATTC" * 32)
     event_loop_thread = threading.get_ident()
     observed: list[tuple[str, int]] = []
-    canonical_active = threading.Event()
+    per_output_active = threading.Event()
+    worker_boundary_calls: list[str] = []
+    original_run_capacity_owned = molbio_restriction._run_capacity_owned
     original_simulation_bytes = DigestSimulation.canonical_bytes
     original_unsigned_bytes = DigestSimulation.canonical_unsigned_bytes
+    original_fragment_dump = DigestFragment.model_dump
+    original_identity_dump = molbio_restriction.DigestOutputIdentity.model_dump
     original_saved_validate = molbio_restriction.SavedDigestResponse.model_validate_json
     original_saved_dump = molbio_restriction.SavedDigestResponse.model_dump
+    original_json_dump = json.dumps
+    original_jcs_dump = rfc8785.dumps
+
+    def assert_no_orm(value: object, *, root: bool = False) -> None:
+        assert not isinstance(value, (AsyncSession, InstrumentedList))
+        assert sqlalchemy_inspect(value, raiseerr=False) is None
+        if isinstance(value, dict):
+            assert root, "mutable mapping crossed the worker boundary"
+            for key, item in value.items():
+                assert_no_orm(key)
+                assert_no_orm(item)
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            for item in value:
+                assert_no_orm(item)
+        elif is_dataclass(value):
+            for field in fields(value):
+                assert_no_orm(getattr(value, field.name))
+
+    def assert_immutable_worker_result(value: object) -> None:
+        assert not isinstance(value, (dict, list, set)), (
+            "mutable worker result crossed boundary"
+        )
+        if isinstance(value, tuple):
+            for item in value:
+                assert_immutable_worker_result(item)
+        elif is_dataclass(value):
+            for field in fields(value):
+                assert_immutable_worker_result(getattr(value, field.name))
+
+    async def guarded_run_capacity_owned(function, **kwargs):
+        guarded = function.__name__ in {
+            "_prepare_saved_digest_fragments", "_validate_saved_digest_snapshot",
+        }
+        if guarded:
+            worker_boundary_calls.append(function.__name__)
+            assert_no_orm(kwargs, root=True)
+        result = await original_run_capacity_owned(function, **kwargs)
+        if guarded:
+            assert_immutable_worker_result(result)
+        return result
 
     def simulation_bytes(self):
         observed.append(("simulation_bytes", threading.get_ident()))
-        time.sleep(0.002)
         return original_simulation_bytes(self)
 
     def unsigned_bytes(self):
         observed.append(("unsigned_bytes", threading.get_ident()))
         return original_unsigned_bytes(self)
 
+    def fragment_dump(self, *args, **kwargs):
+        observed.append(("fragment_dump", threading.get_ident()))
+        per_output_active.set()
+        try:
+            time.sleep(0.01)
+            return original_fragment_dump(self, *args, **kwargs)
+        finally:
+            per_output_active.clear()
+
+    def identity_dump(self, *args, **kwargs):
+        observed.append(("identity_dump", threading.get_ident()))
+        per_output_active.set()
+        try:
+            time.sleep(0.01)
+            return original_identity_dump(self, *args, **kwargs)
+        finally:
+            per_output_active.clear()
+
     def saved_validate(value, *args, **kwargs):
         observed.append(("saved_validate", threading.get_ident()))
-        canonical_active.set()
-        try:
-            time.sleep(0.02)
-            return original_saved_validate(value, *args, **kwargs)
-        finally:
-            canonical_active.clear()
+        return original_saved_validate(value, *args, **kwargs)
 
     def saved_dump(self, *args, **kwargs):
         observed.append(("saved_dump", threading.get_ident()))
-        time.sleep(0.002)
         return original_saved_dump(self, *args, **kwargs)
 
+    def json_dump(value, *args, **kwargs):
+        if isinstance(value, dict) and (
+            value.get("sequence_type") == "dna"
+            or value.get("schema") == "bms.molbio.restriction-digest-fragment-provenance.v1"
+        ):
+            observed.append(("fragment_sql_json_dump", threading.get_ident()))
+            per_output_active.set()
+            try:
+                time.sleep(0.01)
+            finally:
+                per_output_active.clear()
+        return original_json_dump(value, *args, **kwargs)
+
+    def jcs_dump(value):
+        if isinstance(value, dict) and value.get("sequence_type") == "dna":
+            observed.append(("fragment_jcs", threading.get_ident()))
+            per_output_active.set()
+            try:
+                time.sleep(0.01)
+            finally:
+                per_output_active.clear()
+        return original_jcs_dump(value)
+
+    monkeypatch.setattr(molbio_restriction, "_run_capacity_owned", guarded_run_capacity_owned)
     monkeypatch.setattr(DigestSimulation, "canonical_bytes", simulation_bytes)
     monkeypatch.setattr(DigestSimulation, "canonical_unsigned_bytes", unsigned_bytes)
+    monkeypatch.setattr(DigestFragment, "model_dump", fragment_dump)
+    monkeypatch.setattr(molbio_restriction.DigestOutputIdentity, "model_dump", identity_dump)
     monkeypatch.setattr(
         molbio_restriction.SavedDigestResponse, "model_validate_json", saved_validate,
     )
     monkeypatch.setattr(molbio_restriction.SavedDigestResponse, "model_dump", saved_dump)
+    monkeypatch.setattr(json, "dumps", json_dump)
+    monkeypatch.setattr(rfc8785, "dumps", jcs_dump)
     try:
+        responsive_ticks = 0
+        stop_ticker = False
+
+        async def ticker() -> None:
+            nonlocal responsive_ticks
+            while not stop_ticker:
+                if per_output_active.is_set():
+                    responsive_ticks += 1
+                await asyncio.sleep(0)
+
+        ticker_task = asyncio.create_task(ticker())
+        await asyncio.sleep(0)
         async with await _client(sessions) as client:
             preview = await client.post(
                 "/api/molbio/restriction/digests/simulate", json=_preview_request(digest)
@@ -882,29 +1021,22 @@ async def test_digest_canonical_cpu_work_stays_off_event_loop_and_reuses_bytes(
             saved = await client.post("/api/molbio/restriction/digests", json=save)
             assert saved.status_code == 200, saved.text
             replay = await client.post("/api/molbio/restriction/digests", json=save)
-            responsive_ticks = 0
-            stop_ticker = False
-
-            async def ticker() -> None:
-                nonlocal responsive_ticks
-                while not stop_ticker:
-                    if canonical_active.is_set():
-                        responsive_ticks += 1
-                    await asyncio.sleep(0)
-
-            ticker_task = asyncio.create_task(ticker())
-            await asyncio.sleep(0)
             loaded = await client.get(
                 f"/api/molbio/restriction/digests/{saved.json()['operation_id']}"
             )
-            stop_ticker = True
-            await ticker_task
             assert replay.content == loaded.content == saved.content
-            assert responsive_ticks > 0
+        stop_ticker = True
+        await ticker_task
 
-        assert observed
+        assert responsive_ticks > 0
+        assert worker_boundary_calls == [
+            "_prepare_saved_digest_fragments",
+            "_validate_saved_digest_snapshot",
+            "_validate_saved_digest_snapshot",
+        ]
         assert {name for name, _thread in observed} >= {
-            "simulation_bytes", "unsigned_bytes", "saved_validate", "saved_dump",
+            "simulation_bytes", "unsigned_bytes", "fragment_dump", "identity_dump",
+            "saved_validate", "saved_dump", "fragment_jcs",
         }
         assert all(thread != event_loop_thread for _name, thread in observed)
     finally:
@@ -1250,11 +1382,15 @@ async def test_get_rejects_every_mutated_digest_operation_and_output_binding(
                         "fingerprint": fingerprint,
                         "id": operation_id,
                     })
-                elif mutation in {"operation_parameters", "operation_provenance", "persistence_mode"}:
+                elif mutation in {
+                    "operation_parameters", "operation_provenance", "persistence_mode",
+                }:
                     await connection.execute(text(
                         "DROP TRIGGER molbio_immutable_molecular_operations_update"
                     ))
-                    column = "parameters" if mutation != "operation_provenance" else "provenance"
+                    column = (
+                        "parameters" if mutation != "operation_provenance" else "provenance"
+                    )
                     raw = (await connection.execute(text(
                         f"SELECT {column} FROM molecular_operations WHERE id=:id"
                     ), {"id": operation_id})).scalar_one()
@@ -1277,18 +1413,23 @@ async def test_get_rejects_every_mutated_digest_operation_and_output_binding(
                         "UPDATE molecular_operation_inputs SET snapshot=json_set(snapshot,:path,:value) "
                         "WHERE operation_id=:id"
                     ), {"path": path, "value": "forged name", "id": operation_id})
-                elif mutation in {"output_edge_snapshot", "output_edge_snapshot_name"}:
+                elif mutation in {
+                    "output_edge_snapshot", "output_edge_snapshot_name",
+                }:
                     await connection.execute(text(
                         "DROP TRIGGER molbio_immutable_molecular_operation_outputs_update"
                     ))
-                    path = (
-                        "$.simulation_sha256"
-                        if mutation == "output_edge_snapshot" else "$.name"
-                    )
+                    path = {
+                        "output_edge_snapshot": "$.simulation_sha256",
+                        "output_edge_snapshot_name": "$.name",
+                    }[mutation]
                     await connection.execute(text(
-                        "UPDATE molecular_operation_outputs SET snapshot=json_set(snapshot,:path,:value) "
-                        "WHERE id=:id"
-                    ), {"path": path, "value": "forged name", "id": identity["output_edge_id"]})
+                        "UPDATE molecular_operation_outputs "
+                        "SET snapshot=json_set(snapshot,:path,:value) WHERE id=:id"
+                    ), {
+                        "path": path, "value": "forged name",
+                        "id": identity["output_edge_id"],
+                    })
                 elif mutation in {"output_identity_name", "output_identity_topology"}:
                     await connection.execute(text(
                         "DROP TRIGGER molbio_immutable_restriction_digest_results_update"
@@ -1332,8 +1473,11 @@ async def test_get_rejects_every_mutated_digest_operation_and_output_binding(
                         "DROP TRIGGER molbio_immutable_molecular_operation_outputs_update"
                     ))
                     await connection.execute(text(
-                        "UPDATE molecular_operation_outputs SET position=7 WHERE id=:id"
-                    ), {"id": identity["output_edge_id"]})
+                        "UPDATE molecular_operation_outputs SET position=:position WHERE id=:id"
+                    ), {
+                        "position": 7,
+                        "id": identity["output_edge_id"],
+                    })
                 else:
                     await connection.execute(text(
                         "DROP TRIGGER molbio_immutable_molecular_revisions_update"
