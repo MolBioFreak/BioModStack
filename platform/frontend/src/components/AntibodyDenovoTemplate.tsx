@@ -4,22 +4,27 @@ import { submitJob, uploadFile } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
 import { parsePDBFile, type Chain } from '../utils/pdbUtils';
 import { EpitopeSelector } from './EpitopeSelector';
+import { TargetAntigenSelector } from './TargetAntigenSelector';
 
 interface AntibodyDenovoTemplateProps {
     onBack: () => void;
+    initialValues?: Record<string, any>;
 }
 
-export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ onBack }) => {
+export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ onBack, initialValues }) => {
     const [jobName, setJobName] = useState('antibody_design');
     const [targetPdb, setTargetPdb] = useState<File | null>(null);
+    const [targetSource, setTargetSource] = useState<{ type: string; url?: string; path?: string; designId?: string; pdbId?: string; name?: string } | null>(null);
     const [numDesigns, setNumDesigns] = useState(10);
     const [seqDesigner, setSeqDesigner] = useState<'fampnn' | 'antifold' | 'proteinmpnn'>('fampnn');
     const [useAntiberty, setUseAntiberty] = useState(true);
     const [useThermoMPNN, setUseThermoMPNN] = useState(true);
     const [explorationMode, setExplorationMode] = useState(true); // Parallel GPU distribution
+    const [seqsPerDesign, setSeqsPerDesign] = useState(8); // Number of sequence variants per backbone
 
     // Framework selection - preset or custom
-    const [frameworkType, setFrameworkType] = useState<'standard-fv' | 'nanobody' | 'custom'>('standard-fv');
+    type FrameworkType = 'standard-fv' | 'nanobody' | 'custom';
+    const [frameworkType, setFrameworkType] = useState<FrameworkType>('standard-fv');
     const [customFrameworkFile, setCustomFrameworkFile] = useState<File | null>(null);
     const [customFrameworkPath, setCustomFrameworkPath] = useState<string | null>(null);
 
@@ -43,6 +48,65 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         }
     });
 
+    // Initialize from initialValues (Clone Job)
+    useEffect(() => {
+        if (initialValues) {
+            console.log('[ANTIBODY_DENOVO] Initializing from values:', initialValues);
+
+            // Basic params
+            if (initialValues.name) setJobName(initialValues.name); // Job name usually comes from wrapper but might be passed
+            if (initialValues.rfantibody_num_designs) setNumDesigns(initialValues.rfantibody_num_designs);
+            if (initialValues.seqs_per_design) setSeqsPerDesign(initialValues.seqs_per_design);
+            if (initialValues.exploration_mode !== undefined) setExplorationMode(initialValues.exploration_mode);
+
+            // Booleans
+            if (initialValues.run_immunogenicity_scoring !== undefined) setUseAntiberty(initialValues.run_immunogenicity_scoring);
+            if (initialValues.run_stability_scoring !== undefined) setUseThermoMPNN(initialValues.run_stability_scoring);
+            // Handling renamed/mapped boolean params if any
+            if (initialValues.use_antiberty !== undefined) setUseAntiberty(initialValues.use_antiberty);
+            if (initialValues.use_thermompnn !== undefined) setUseThermoMPNN(initialValues.use_thermompnn);
+
+            // Sequence Designer
+            if (initialValues.seq_design_fampnn) setSeqDesigner('fampnn');
+            else if (initialValues.seq_design_antifold) setSeqDesigner('antifold');
+            else if (initialValues.seq_design_proteinmpnn) setSeqDesigner('proteinmpnn');
+            else if (initialValues.seq_designer) setSeqDesigner(initialValues.seq_designer); // Direct name
+
+            // Framework
+            if (initialValues.framework_type) setFrameworkType(initialValues.framework_type);
+
+            // Target PDB
+            // If checking target_pdb path, we can try to set it as a "preset" or "run" source so it fetches
+            if (initialValues.target_pdb) {
+                const path = initialValues.target_pdb;
+                const name = path.split('/').pop() || 'target.pdb';
+                // We need to fetch this file to parse chains
+                setTargetSource({
+                    type: 'preset', // Treat as preset/uploaded path
+                    path: path,
+                    url: `/api/files/download?path=${encodeURIComponent(path)}`,
+                    name: name
+                });
+                // Trigger fetch
+                fetch(`/api/files/download?path=${encodeURIComponent(path)}`)
+                    .then(res => res.blob())
+                    .then(blob => {
+                        const file = new File([blob], name, { type: 'chemical/x-pdb' });
+                        setTargetPdb(file);
+                        setUploadedPath(path); // It's already on server
+                    })
+                    .catch(e => console.error("Failed to load target PDB from clone", e));
+            }
+
+            // Epitopes & Chain
+            if (initialValues.antigen_chains) setSelectedChain(initialValues.antigen_chains);
+            if (initialValues.epitope_residues) {
+                const residues = new Set((initialValues.epitope_residues as string).split(','));
+                setSelectedResidues(residues);
+            }
+        }
+    }, [initialValues]);
+
     // Auto-parse PDB when file is selected
     useEffect(() => {
         if (targetPdb) {
@@ -50,16 +114,20 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             parsePDBFile(targetPdb)
                 .then(result => {
                     setParsedChains(result.chains);
-                    // Auto-select first chain with most residues
+                    // Auto-select first chain with most residues IF NOT ALREADY SELECTED (e.g. by clone)
+                    // If clone set selectedChain, verify it exists, otherwise fallback
                     if (result.chains.length > 0) {
-                        const longestChain = result.chains.reduce((a, b) =>
-                            a.length > b.length ? a : b
-                        );
-                        setSelectedChain(longestChain.id);
+                        const chainIds = result.chains.map(c => c.id);
+                        if (!selectedChain || !chainIds.includes(selectedChain)) {
+                            const longestChain = result.chains.reduce((a, b) =>
+                                a.length > b.length ? a : b
+                            );
+                            setSelectedChain(longestChain.id);
+                            // Clear selection only if we CHANGED the chain automatically
+                            if (!initialValues) setSelectedResidues(new Set());
+                        }
                     }
-                    // Clear previous selection
-                    setSelectedResidues(new Set());
-                    setUploadedPath(null);
+                    if (!uploadedPath && !initialValues) setUploadedPath(null); // Only clear if new upload
                     console.log('[ANTIBODY_DENOVO] Parsed PDB:', result.chains.map(c => `${c.id}:${c.length}aa`));
                 })
                 .catch(err => {
@@ -150,6 +218,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     run_stability_scoring: useThermoMPNN,
                     run_structure_validation: true, // Boltz2 is always run
                     exploration_mode: explorationMode, // Parallel vs serial GPU processing
+                    seqs_per_design: seqsPerDesign, // Number of sequence variants per backbone
                 }
             };
 
@@ -225,62 +294,63 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     />
                 </div>
 
-                {/* Target PDB Upload */}
-                <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-2">Target Antigen PDB</label>
-                    <div className="flex items-center gap-4">
-                        <input
-                            type="file"
-                            accept=".pdb,.cif"
-                            onChange={(e) => {
-                                const file = e.target.files?.[0] || null;
-                                setTargetPdb(file);
-                            }}
-                            className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-blue-500 outline-none file:mr-4 file:py-1 file:px-4 file:rounded-lg file:border-0 file:bg-blue-600 file:text-white file:cursor-pointer"
-                        />
-                        {targetPdb && (
-                            <span className="text-sm text-emerald-400">
-                                {isParsing ? '⏳ Parsing...' : uploadedPath ? '✓ Uploaded' : '📎'} {targetPdb.name}
-                            </span>
-                        )}
-                    </div>
-                    <p className="mt-1 text-xs text-slate-500">Upload the antigen structure you want to design antibodies against</p>
-                </div>
+                {/* Target PDB Selection - Now with multiple sources */}
+                <TargetAntigenSelector
+                    onSelect={(target) => {
+                        if (target) {
+                            if (target.type === 'upload' && target.file) {
+                                setTargetPdb(target.file);
+                                setTargetSource({ type: 'upload' });
+                            } else if (target.url) {
+                                // For URL-based sources (runs, presets, rcsb), we need to fetch and parse
+                                setTargetSource({
+                                    type: target.type,
+                                    url: target.url,
+                                    path: target.path,
+                                    designId: target.designId,
+                                    pdbId: target.pdbId
+                                });
+                                // Fetch the PDB content and create a File object for parsing
+                                fetch(target.url)
+                                    .then(res => res.blob())
+                                    .then(blob => {
+                                        const file = new File([blob], target.name + '.pdb', { type: 'chemical/x-pdb' });
+                                        setTargetPdb(file);
+                                    })
+                                    .catch(err => {
+                                        console.error('[ANTIBODY_DENOVO] Failed to fetch PDB:', err);
+                                        alert('Failed to load PDB from source');
+                                    });
+                            }
+                        } else {
+                            setTargetPdb(null);
+                            setTargetSource(null);
+                        }
+                    }}
+                    selectedTarget={targetPdb ? { type: (targetSource?.type || 'upload') as 'upload' | 'run' | 'preset' | 'rcsb', name: targetPdb.name } : undefined}
+                />
 
                 {/* Framework Selection */}
                 <div>
                     <label className="block text-sm font-medium text-slate-400 mb-2">Antibody Framework</label>
                     <div className="grid grid-cols-3 gap-3 mb-3">
-                        <button
-                            onClick={() => setFrameworkType('standard-fv')}
-                            className={`p-3 rounded-lg border transition-all ${frameworkType === 'standard-fv'
-                                ? 'bg-blue-600/20 border-blue-500 text-blue-400'
-                                : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600'
-                                }`}
-                        >
-                            <div className="text-sm font-medium">Standard Fv</div>
-                            <div className="text-xs opacity-75">hu-4D5-8 (Herceptin)</div>
-                        </button>
-                        <button
-                            onClick={() => setFrameworkType('nanobody')}
-                            className={`p-3 rounded-lg border transition-all ${frameworkType === 'nanobody'
-                                ? 'bg-purple-600/20 border-purple-500 text-purple-400'
-                                : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600'
-                                }`}
-                        >
-                            <div className="text-sm font-medium">Nanobody</div>
-                            <div className="text-xs opacity-75">VHH single-domain</div>
-                        </button>
-                        <button
-                            onClick={() => setFrameworkType('custom')}
-                            className={`p-3 rounded-lg border transition-all ${frameworkType === 'custom'
-                                ? 'bg-amber-600/20 border-amber-500 text-amber-400'
-                                : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600'
-                                }`}
-                        >
-                            <div className="text-sm font-medium">Custom</div>
-                            <div className="text-xs opacity-75">Upload HLT format</div>
-                        </button>
+                        {[
+                            { id: 'standard-fv', name: 'Standard Fv', desc: 'hu-4D5-8 (Herceptin)', color: 'blue' },
+                            { id: 'nanobody', name: 'Nanobody', desc: 'VHH single-domain', color: 'purple' },
+                            { id: 'custom', name: 'Custom', desc: 'Upload HLT format PDB', color: 'amber' },
+                        ].map((fw) => (
+                            <button
+                                key={fw.id}
+                                onClick={() => setFrameworkType(fw.id as FrameworkType)}
+                                className={`p-3 rounded-lg border transition-all ${frameworkType === fw.id
+                                    ? `bg-${fw.color}-600/20 border-${fw.color}-500 text-${fw.color}-400`
+                                    : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600'
+                                    }`}
+                            >
+                                <div className="text-sm font-medium">{fw.name}</div>
+                                <div className="text-xs opacity-75">{fw.desc}</div>
+                            </button>
+                        ))}
                     </div>
 
                     {/* Custom framework upload */}
@@ -357,9 +427,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     </div>
                 )}
 
-                {/* Number of Designs */}
+                {/* Number of Backbones */}
                 <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-2">Number of Designs</label>
+                    <label className="block text-sm font-medium text-slate-400 mb-2">Number of Backbones</label>
                     <input
                         type="number"
                         value={numDesigns}
@@ -368,6 +438,34 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         max={100}
                         className="w-32 bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-blue-500 outline-none"
                     />
+                </div>
+
+                {/* Sequences per Design */}
+                <div>
+                    <label className="block text-sm font-medium text-slate-400 mb-2">
+                        Sequences per Design
+                        <span className="ml-2 text-xs text-slate-500 font-normal">({seqsPerDesign})</span>
+                    </label>
+                    <div className="flex items-center gap-4">
+                        <input
+                            type="range"
+                            value={seqsPerDesign}
+                            onChange={(e) => setSeqsPerDesign(parseInt(e.target.value))}
+                            min={1}
+                            max={64}
+                            step={1}
+                            className="flex-1 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                        />
+                        <input
+                            type="number"
+                            value={seqsPerDesign}
+                            onChange={(e) => setSeqsPerDesign(Math.max(1, Math.min(64, parseInt(e.target.value) || 8)))}
+                            min={1}
+                            max={64}
+                            className="w-16 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white text-center"
+                        />
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">Number of sequence variants to generate per backbone design</p>
                 </div>
 
                 {/* Sequence Designer */}
@@ -446,7 +544,33 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             </div>
 
             {/* Submit Button */}
-            <div className="mt-8 flex justify-end">
+            <div className="mt-8 flex justify-end gap-3">
+                {/* Template Manager Button */}
+                <button
+                    type="button"
+                    onClick={() => {
+                        // Store current params in localStorage for template manager
+                        const templateData = {
+                            name: jobName,
+                            model_id: 'antibody_denovo',
+                            mode: 'antibody_denovo_pipeline',
+                            params: {
+                                framework_type: frameworkType,
+                                seq_designer: seqDesigner,
+                                num_designs: numDesigns,
+                                seqs_per_design: seqsPerDesign,
+                                use_antiberty: useAntiberty,
+                                use_thermompnn: useThermoMPNN,
+                                exploration_mode: explorationMode,
+                            }
+                        };
+                        localStorage.setItem('templateManagerParams', JSON.stringify(templateData));
+                        alert('Template Manager opened. Current settings saved.\n\nNote: Full Template Manager modal coming soon.');
+                    }}
+                    className="px-6 py-3 text-purple-400 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/30 font-medium rounded-lg transition-colors flex items-center gap-2"
+                >
+                    📋 Template Manager
+                </button>
                 <button
                     onClick={handleSubmit}
                     disabled={submitMutation.isPending || isUploading || !targetPdb || selectedResidues.size === 0}

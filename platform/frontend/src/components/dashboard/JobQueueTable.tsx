@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import type { Job } from '../../lib/api';
 import { JobDetailsPanel } from '../JobDetailsPanel';
+import { getModeDisplayName, getStageDisplayName } from '../../constants/displayNames';
 
 interface JobQueueTableProps {
     jobs: Job[];
@@ -10,6 +11,7 @@ interface JobQueueTableProps {
     onResume: (job: Job) => void;
     onViewLogs: (jobId: string) => void;
     onViewQuick: (jobId: string) => void;
+    onClone?: (job: Job) => void;
     quickViewJobId: string | null;
 }
 
@@ -21,6 +23,7 @@ export function JobQueueTable({
     onResume,
     onViewLogs,
     onViewQuick,
+    onClone,
     quickViewJobId
 }: JobQueueTableProps) {
     const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
@@ -95,6 +98,30 @@ export function JobQueueTable({
                             }
                         });
 
+                        // Sort: running > queued > failed > completed > cancelled
+                        const statusOrder: Record<string, number> = {
+                            running: 0, queued: 1, failed: 2, completed: 3, cancelled: 4
+                        };
+                        displayItems.sort((a, b) => {
+                            const getStatus = (item: DisplayItem) => {
+                                if (item.type === 'batch') {
+                                    const jobs = item.jobs;
+                                    if (jobs.some(j => j.status === 'running')) return 'running';
+                                    if (jobs.some(j => j.status === 'queued')) return 'queued';
+                                    if (jobs.some(j => j.status === 'failed')) return 'failed';
+                                    return 'completed';
+                                }
+                                return item.job.status;
+                            };
+                            const aStatus = statusOrder[getStatus(a)] ?? 5;
+                            const bStatus = statusOrder[getStatus(b)] ?? 5;
+                            if (aStatus !== bStatus) return aStatus - bStatus;
+                            // Same status: sort by date descending
+                            const aDate = a.type === 'batch' ? a.firstDate : a.job.created_at;
+                            const bDate = b.type === 'batch' ? b.firstDate : b.job.created_at;
+                            return new Date(bDate).getTime() - new Date(aDate).getTime();
+                        });
+
                         const rows: React.ReactNode[] = [];
 
                         // Render items in order (maintaining date sort from API)
@@ -141,7 +168,7 @@ export function JobQueueTable({
                                                 </td>
                                                 <td className="py-3 px-4">
                                                     <span className="px-2 py-1 bg-blue-500/20 text-blue-400 rounded text-xs">
-                                                        {job.mode}
+                                                        {getModeDisplayName(job.mode)}
                                                     </span>
                                                 </td>
                                                 <td className="py-3 px-4">
@@ -200,7 +227,7 @@ export function JobQueueTable({
                                             </td>
                                             <td className="py-3 px-4">
                                                 <span className="px-2 py-1 bg-blue-500/20 text-blue-400 rounded text-xs">
-                                                    {job.mode}
+                                                    {getModeDisplayName(job.mode)}
                                                 </span>
                                             </td>
                                             <td className="py-3 px-4">
@@ -213,19 +240,33 @@ export function JobQueueTable({
                                             <td className="py-3 px-4">
                                                 <div className="flex items-center gap-2">
                                                     {job.status === 'completed' && (
-                                                        <button
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                onViewQuick(job.id);
-                                                            }}
-                                                            className={`px-2 py-1 text-xs rounded transition-colors ${quickViewJobId === job.id
-                                                                ? 'bg-purple-500/30 text-purple-300'
-                                                                : 'bg-purple-500/20 text-purple-400 hover:bg-purple-500/30'
-                                                                }`}
-                                                            title="Load in Quick Viewer"
-                                                        >
-                                                            🔬 View
-                                                        </button>
+                                                        <>
+                                                            <button
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    onViewQuick(job.id);
+                                                                }}
+                                                                className={`px-2 py-1 text-xs rounded transition-colors ${quickViewJobId === job.id
+                                                                    ? 'bg-purple-500/30 text-purple-300'
+                                                                    : 'bg-purple-500/20 text-purple-400 hover:bg-purple-500/30'
+                                                                    }`}
+                                                                title="Load in Quick Viewer"
+                                                            >
+                                                                🔬 View
+                                                            </button>
+                                                            {onClone && (
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        onClone(job);
+                                                                    }}
+                                                                    className="px-2 py-1 text-xs bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 hover:text-cyan-300 rounded transition-colors"
+                                                                    title="Clone job parameters"
+                                                                >
+                                                                    📋 Clone
+                                                                </button>
+                                                            )}
+                                                        </>
                                                     )}
                                                     {(job.status === 'running' || job.status === 'queued') && (
                                                         <button
@@ -332,8 +373,8 @@ function StageProgress({ job }: { job: Job }) {
         return [];
     };
 
-    const stages = job.all_stages && job.all_stages.length > 0 
-        ? job.all_stages 
+    const stages = job.all_stages && job.all_stages.length > 0
+        ? job.all_stages
         : getStages(job.mode);
 
     if (stages.length === 0) return null;
@@ -356,7 +397,7 @@ function StageProgress({ job }: { job: Job }) {
                             ${isCurrent ? 'bg-blue-500/20 border-blue-500/30 text-blue-400 animate-pulse' : ''}
                             ${isPending ? 'bg-slate-800/50 border-slate-700 text-slate-600' : ''}
                         `}>
-                            {stage}
+                            {getStageDisplayName(stage)}
                         </div>
                         {idx < stages.length - 1 && (
                             <div className={`w-1 h-px mx-0.5 ${isCompleted ? 'bg-emerald-500/30' : 'bg-slate-700'}`} />

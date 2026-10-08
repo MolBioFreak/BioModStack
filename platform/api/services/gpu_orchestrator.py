@@ -62,18 +62,25 @@ class JobInfo:
 
 # Base VRAM + scaling factor per model
 # Formula: base + scale * (sequence_length / 100)^2
+# NOTE: These are CONSERVATIVE estimates tuned to prevent OOMs.
+# Better to underutilize GPU than crash jobs.
 VRAM_PROFILES = {
-    'boltz': {'base': 7000, 'scale': 40},      # Boltz-2 structure prediction
-    'boltzgen': {'base': 5000, 'scale': 25},   # BoltzGen design
-    'rf3': {'base': 8000, 'scale': 50},        # RosettaFold3
-    'af2': {'base': 9000, 'scale': 60},        # AlphaFold2
-    'rfdiffusion': {'base': 4000, 'scale': 20},# RFdiffusion
-    'fampnn': {'base': 2000, 'scale': 8},      # Full-Atom MPNN
-    'mpnn': {'base': 1000, 'scale': 3},        # ProteinMPNN (very light)
-    'diffdock': {'base': 3000, 'scale': 10},   # DiffDock
-    'msa_batch': {'base': 3000, 'scale': 2},   # MSA Generation (GPU streaming, LOW VRAM)
-    'antibody_child': {'base': 8000, 'scale': 45},  # Antibody validation (Boltz + scoring)
-    'default': {'base': 6000, 'scale': 30},    # Fallback
+    'boltz': {'base': 8000, 'scale': 45},       # Boltz-2 structure prediction
+    'boltz_batch': {'base': 10000, 'scale': 50},# Boltz-2 batch mode uses more
+    'boltzgen': {'base': 6000, 'scale': 30},    # BoltzGen design
+    'rf3': {'base': 10000, 'scale': 55},        # RosettaFold3 (high VRAM)
+    'af2': {'base': 12000, 'scale': 65},        # AlphaFold2 (highest VRAM)
+    'rfdiffusion': {'base': 5000, 'scale': 25}, # RFdiffusion
+    'rfantibody': {'base': 8000, 'scale': 40},  # RFantibody antibody generation
+    'fampnn': {'base': 6000, 'scale': 20},      # Full-Atom MPNN (increased from 2000 due to OOMs)
+    'mpnn': {'base': 2000, 'scale': 5},         # ProteinMPNN (light)
+    'proteinmpnn': {'base': 2000, 'scale': 5},  # Alias
+    'diffdock': {'base': 4000, 'scale': 12},    # DiffDock
+    'unidock': {'base': 3000, 'scale': 8},      # Uni-Dock
+    'msa_batch': {'base': 3000, 'scale': 2},    # MSA Generation (GPU streaming, LOW VRAM)
+    'antibody_child': {'base': 10000, 'scale': 50},  # Antibody validation (Boltz + scoring)
+    'antibody_denovo': {'base': 8000, 'scale': 40},  # Full antibody pipeline
+    'default': {'base': 8000, 'scale': 35},     # Conservative fallback
 }
 
 # GPU capabilities

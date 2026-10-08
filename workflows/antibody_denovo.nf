@@ -110,11 +110,22 @@ process SpawnChildJobs {
     fi
     
     # Run the spawn script
+    # Resolve absolute path of MSA file (staged by Nextflow as symlink)
+    MSA_ABS_PATH=\$(readlink -f "${msa_file}" 2>/dev/null || realpath "${msa_file}" 2>/dev/null || echo "${msa_file}")
+    echo "Resolved MSA path: \$MSA_ABS_PATH" | tee -a spawn.log
+    
+    # Persist MSA to parent output directory for reliability
+    # (Nextflow work dirs may be cleaned before children run)
+    mkdir -p "${params.out_dir}/msa"
+    cp "\$MSA_ABS_PATH" "${params.out_dir}/msa/" 2>/dev/null || true
+    MSA_PERSIST_PATH="${params.out_dir}/msa/\$(basename \$MSA_ABS_PATH)"
+    echo "Persisted MSA to: \$MSA_PERSIST_PATH" | tee -a spawn.log
+    
     python3 ${projectDir}/scripts/spawn_antibody_children.py \\
         --parent_job_id "${parent_job_id}" \\
         --pdb_dir pdb_input \\
         --batch_name "${batch_name}" \\
-        --msa_path "${msa_file}" \\
+        --msa_path "\$MSA_PERSIST_PATH" \\
         --api_url "http://localhost:8000" \\
         2>&1 | tee -a spawn.log
     

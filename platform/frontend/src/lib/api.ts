@@ -133,7 +133,12 @@ export interface PowerControlResponse {
 
 // API functions
 // API functions
-export const fetchJobs = () => api.get<{ jobs: Job[]; total: number }>('/api/jobs');
+export const fetchJobs = (params?: {
+    status?: string;
+    q?: string;
+    limit?: number;
+    offset?: number;
+}) => api.get<{ jobs: Job[]; total: number }>('/api/jobs', { params });
 export const fetchSystemStatus = () => api.get<SystemStatus>('/api/gpu/status');
 export const fetchJobById = (id: string) => api.get<Job>(`/api/jobs/${id}`);
 export const cancelJob = (id: string) => api.delete(`/api/jobs/${id}`);

@@ -43,11 +43,12 @@ def count_structure_files(output_dir: str) -> int:
 @router.get("", response_model=JobList)
 async def list_jobs(
     status: Optional[JobStatus] = None,
+    q: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
     session: AsyncSession = Depends(get_session)
 ):
-    """List all jobs with optional status filter."""
+    """List all jobs with optional status filter and search query."""
     # Optimized query: fetch jobs and design counts in one go
     # This replaces the N+1 query loop with a single GROUP BY query
     query = (
@@ -60,6 +61,9 @@ async def list_jobs(
     if status:
         query = query.where(Job.status == status.value)
     
+    if q:
+        query = query.where(Job.name.ilike(f"%{q}%"))
+    
     query = query.limit(limit).offset(offset)
     result = await session.execute(query)
     rows = result.all()
@@ -68,6 +72,8 @@ async def list_jobs(
     count_query = select(func.count(Job.id))
     if status:
         count_query = count_query.where(Job.status == status.value)
+    if q:
+        count_query = count_query.where(Job.name.ilike(f"%{q}%"))
     total = (await session.execute(count_query)).scalar()
     
     job_responses = []

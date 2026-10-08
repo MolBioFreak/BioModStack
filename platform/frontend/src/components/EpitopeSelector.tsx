@@ -167,18 +167,18 @@ export function EpitopeSelector({
 
                                 return (
                                     <div key={key} className="relative group">
-                                        {/* Position Marker (every 10) */}
+                                        {/* Position Marker (every 10) - shows sequential position */}
                                         {showNumber && (
                                             <div className="absolute -top-4 left-1/2 -translate-x-1/2 text-[9px] text-slate-600 select-none">
-                                                {residue.resNum}
+                                                {idx + 1}
                                             </div>
                                         )}
 
                                         <button
                                             onClick={(e) => handleResidueClick(residue, e)}
                                             className={`w-8 h-8 flex items-center justify-center rounded transition-all border ${isSelected
-                                                    ? `${colors.bg} ${colors.border} ${colors.text} scale-105 shadow-lg`
-                                                    : 'bg-slate-800 border-transparent text-slate-400 hover:bg-slate-700 hover:border-slate-600'
+                                                ? `${colors.bg} ${colors.border} ${colors.text} scale-105 shadow-lg`
+                                                : 'bg-slate-800 border-transparent text-slate-400 hover:bg-slate-700 hover:border-slate-600'
                                                 }`}
                                             title={`${chain.id}:${residue.resNum} (${residue.resName}) - ${residue.aa}`}
                                         >

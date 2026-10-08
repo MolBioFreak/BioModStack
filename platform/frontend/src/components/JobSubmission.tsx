@@ -272,6 +272,47 @@ export function JobSubmission() {
     const [activeSequenceField, setActiveSequenceField] = useState<string>('sequence');
     const [ligands, setLigands] = useState<LigandEntry[]>([]);
     const [showAdvanced, setShowAdvanced] = useState(false);
+    const [clonedValues, setClonedValues] = useState<Record<string, any> | undefined>(undefined);
+
+    // Check for cloned job data on mount
+    useEffect(() => {
+        const stored = localStorage.getItem('clonedJobData');
+        if (stored) {
+            try {
+                const data = JSON.parse(stored);
+                console.log('Loading cloned job data:', data);
+
+                // Set common fields
+                if (data.name) setJobName(data.name);
+
+                // Determine routing
+                // 1. Antibody De Novo Template
+                if (data.mode === 'antibody_denovo' || data.mode === 'antibody_denovo_pipeline' || data.params?.antibody_pipeline_steps) {
+                    setWizardMode('templates');
+                    setSelectedTemplateId('antibody_denovo');
+                    setClonedValues({ ...data.params, name: data.name });
+                }
+                // 2. Mutagenesis Template
+                else if (data.params?.mutagenesis_variants) {
+                    setWizardMode('templates');
+                    setSelectedTemplateId('mutagenesis');
+                    // Mutagenesis logic might need updates for pre-filling too, but focusing on Antibody first
+                }
+                // 3. Manual Mode
+                else {
+                    setWizardMode('manual');
+                    setSelectedModelId(data.model_id);
+                    setSelectedModeId(data.mode);
+                    setParams(data.params);
+                }
+
+                // Clear storage
+                localStorage.removeItem('clonedJobData');
+            } catch (e) {
+                console.error("Failed to parse cloned job data", e);
+            }
+        }
+    }, []);
 
     const { data: modelsData } = useQuery({
         queryKey: ['models'],
@@ -600,7 +641,11 @@ export function JobSubmission() {
                                 />
                             ) : selectedTemplateId === 'antibody_denovo' ? (
                                 <AntibodyDenovoTemplate
-                                    onBack={() => setSelectedTemplateId(null)}
+                                    onBack={() => {
+                                        setSelectedTemplateId(null);
+                                        setClonedValues(undefined);
+                                    }}
+                                    initialValues={clonedValues}
                                 />
                             ) : (
                                 <>
