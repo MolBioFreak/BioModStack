@@ -4,14 +4,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import Plot from 'react-plotly.js';
-import { uploadQpcrFile } from '../../api/client';
-import {
-    clearAssaySnapshot,
-    loadAssaySnapshot,
-    makeAssaySnapshot,
-    QPCR_RAW_IMPORT_CACHE_KEY,
-    saveAssaySnapshot,
-} from '../assayPersistence';
+import { listAnalyticalDatasets, loadAnalyticalDataset, uploadQpcrFile } from '../../api/client';
 import { useThemePlotlyLayout } from '../useThemeColors';
 import { AssayPrimaryButton } from '../assay/AssayWorkbenchPrimitives';
 import { resolveQpcrInitialTab, highlightSelectedWellAmplificationTraces, highlightSelectedWellStandardCurvePoints, type QpcrRawImportTab } from './plotHelpers';
@@ -60,6 +53,9 @@ interface StandardCurveStats {
 
 interface RawQpcrImportResponse {
     filename?: string;
+    analytical_import_id?: string;
+    assay_run_id?: string;
+    dataset_id?: string;
     n_wells?: number;
     targets?: string[];
     samples?: string[];
@@ -83,6 +79,19 @@ interface RawQpcrImportResponse {
         ntc_qc?: unknown[];
         flag_counts?: Record<string, number>;
     };
+}
+
+interface AnalyticalDatasetSummary {
+    dataset_id: string;
+    dataset_label?: string | null;
+    created_at?: string | null;
+    metadata?: Record<string, unknown>;
+}
+
+interface AnalyticalDatasetDetail {
+    dataset_id: string;
+    dataset_label?: string | null;
+    qpcr_import?: RawQpcrImportResponse | null;
 }
 
 const PLATE_TARGET_ALL = '__all__';
@@ -170,7 +179,10 @@ export function RawDataImport() {
     const [result, setResult] = useState<Record<string, unknown> | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
-    const [cacheNotice, setCacheNotice] = useState('');
+    const [persistedNotice, setPersistedNotice] = useState('');
+    const [persistedDatasets, setPersistedDatasets] = useState<AnalyticalDatasetSummary[]>([]);
+    const [selectedDatasetId, setSelectedDatasetId] = useState('');
+    const [loadingDataset, setLoadingDataset] = useState(false);
     const [ctMin, setCtMin] = useState(10);
     const [ctMax, setCtMax] = useState(35);
     const [preferredReviewFocus, setPreferredReviewFocus] = useState<QpcrRawImportTab>('heatmap');
@@ -183,34 +195,45 @@ export function RawDataImport() {
 
     const plotlyLayout = useThemePlotlyLayout();
 
-    useEffect(() => {
-        let cancelled = false;
-        void loadAssaySnapshot<Record<string, unknown>>(QPCR_RAW_IMPORT_CACHE_KEY)
-            .then((snapshot) => {
-                if (cancelled || !snapshot) return;
-                setResult(snapshot.payload);
-                setPreferredReviewFocus(resolveQpcrInitialTab(snapshot.payload));
-                setCacheNotice(`Restored cached qPCR import${snapshot.label ? `: ${snapshot.label}` : ''}`);
-            })
-            .catch(() => undefined);
-        return () => {
-            cancelled = true;
-        };
-    }, []);
-
-    const handleClearCachedImport = useCallback(async () => {
-        await clearAssaySnapshot(QPCR_RAW_IMPORT_CACHE_KEY);
-        setResult(null);
-        setError('');
-        setCacheNotice('');
-        setPreferredReviewFocus('heatmap');
-        setSelectedPlateTarget(PLATE_TARGET_ALL);
-        setSelectedWellPosition('A1');
-        setSelectedWellPositions(['A1']);
+    const applyQpcrPayload = useCallback((payload: RawQpcrImportResponse) => {
+        setResult(payload as Record<string, unknown>);
+        setDilutionInputs({});
         setManualReplicateGroups([]);
         setReplicateGroupLabel('Triplicate 1');
-        setDilutionInputs({});
+        setPreferredReviewFocus(resolveQpcrInitialTab(payload));
     }, []);
+
+    const refreshPersistedDatasets = useCallback(async () => {
+        const datasets = await listAnalyticalDatasets('qpcr', 25) as AnalyticalDatasetSummary[];
+        setPersistedDatasets(datasets);
+        if (!selectedDatasetId && datasets.length > 0) {
+            setSelectedDatasetId(datasets[0].dataset_id);
+        }
+    }, [selectedDatasetId]);
+
+    useEffect(() => {
+        void refreshPersistedDatasets().catch(() => undefined);
+    }, [refreshPersistedDatasets]);
+
+    const handleLoadPersistedDataset = useCallback(async () => {
+        if (!selectedDatasetId) return;
+        setLoadingDataset(true);
+        setError('');
+        setPersistedNotice('');
+        try {
+            const detail = await loadAnalyticalDataset(selectedDatasetId) as AnalyticalDatasetDetail;
+            const payload = detail.qpcr_import;
+            if (!payload) {
+                throw new Error('Persisted qPCR dataset did not include qPCR import rows');
+            }
+            applyQpcrPayload({ ...payload, dataset_id: detail.dataset_id });
+            setPersistedNotice(`Loaded persisted qPCR dataset${detail.dataset_label ? `: ${detail.dataset_label}` : ''}`);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to load persisted qPCR dataset');
+        } finally {
+            setLoadingDataset(false);
+        }
+    }, [applyQpcrPayload, selectedDatasetId]);
 
     const handleUpload = useCallback(async () => {
         if (!file) {
@@ -220,28 +243,23 @@ export function RawDataImport() {
 
         setLoading(true);
         setError('');
-        setCacheNotice('');
+        setPersistedNotice('');
         setResult(null);
 
         try {
-            const response = await uploadQpcrFile(file);
-            const payload = response as Record<string, unknown>;
-            const label = typeof response?.filename === 'string' ? response.filename : file.name;
-            const snapshot = makeAssaySnapshot(payload, label);
-            setResult(payload);
-            setDilutionInputs({});
-            setManualReplicateGroups([]);
-            setReplicateGroupLabel('Triplicate 1');
-            setPreferredReviewFocus(resolveQpcrInitialTab(response));
-            if (await saveAssaySnapshot(QPCR_RAW_IMPORT_CACHE_KEY, snapshot)) {
-                setCacheNotice(`Saved qPCR import cache for ${snapshot.label ?? 'last upload'}`);
+            const response = await uploadQpcrFile(file) as RawQpcrImportResponse;
+            applyQpcrPayload(response);
+            if (response.dataset_id) {
+                setSelectedDatasetId(response.dataset_id);
             }
+            await refreshPersistedDatasets();
+            setPersistedNotice(response.dataset_id ? `Saved qPCR import to BMS DB service dataset ${response.dataset_id}` : 'Parsed qPCR import; no durable dataset id returned');
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Upload failed');
         } finally {
             setLoading(false);
         }
-    }, [file]);
+    }, [applyQpcrPayload, file, refreshPersistedDatasets]);
 
     const r = result as RawQpcrImportResponse | null;
     const assayFlags = r?.assay_summary?.flag_counts ? Object.entries(r.assay_summary.flag_counts) : [];
@@ -387,22 +405,45 @@ export function RawDataImport() {
                         {loading ? 'Uploading...' : 'Upload & Parse'}
                     </AssayPrimaryButton>
 
+                    <div className="border border-border-primary p-4 bg-bg-secondary space-y-3">
+                        <div className="flex items-center justify-between gap-2">
+                            <h4 className="text-sm font-medium text-text-primary">Persisted qPCR imports</h4>
+                            <button
+                                type="button"
+                                onClick={() => void refreshPersistedDatasets()}
+                                className="border border-border-primary bg-bg-tertiary px-2 py-1 text-xs text-text-secondary hover:text-text-primary"
+                            >
+                                Refresh
+                            </button>
+                        </div>
+                        <select
+                            value={selectedDatasetId}
+                            onChange={(event) => setSelectedDatasetId(event.target.value)}
+                            className="w-full bg-bg-tertiary text-text-primary border border-border-primary px-2 py-1 text-xs"
+                        >
+                            <option value="">{persistedDatasets.length ? 'Select persisted qPCR dataset' : 'No persisted qPCR datasets yet'}</option>
+                            {persistedDatasets.map((dataset) => (
+                                <option key={dataset.dataset_id} value={dataset.dataset_id}>
+                                    {(dataset.dataset_label ?? dataset.dataset_id).slice(0, 90)}{dataset.created_at ? ` · ${new Date(dataset.created_at).toLocaleDateString()}` : ''}
+                                </option>
+                            ))}
+                        </select>
+                        <button
+                            type="button"
+                            onClick={() => void handleLoadPersistedDataset()}
+                            disabled={!selectedDatasetId || loadingDataset}
+                            className="w-full border border-accent-primary bg-accent-primary/10 px-3 py-2 text-xs text-accent-primary hover:bg-accent-primary/20 disabled:opacity-50"
+                        >
+                            {loadingDataset ? 'Loading persisted qPCR dataset...' : 'Load selected persisted qPCR import'}
+                        </button>
+                        <p className="text-xs text-text-muted">Reloads durable qPCR result rows from the BMS DB service analytical store, not browser cache.</p>
+                    </div>
+
                     {error && <div className="p-3 bg-error/20 border border-error text-error text-sm">{error}</div>}
-                    {(cacheNotice || r) && (
+                    {(persistedNotice || r?.dataset_id) && (
                         <div className="border border-accent-primary/40 bg-accent-primary/10 p-3 text-xs text-text-secondary">
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                                <div>
-                                    <div className="font-semibold text-text-primary">Review cache</div>
-                                    <div>{cacheNotice || 'Latest qPCR import is cached in this browser after upload.'}</div>
-                                </div>
-                                <button
-                                    type="button"
-                                    onClick={handleClearCachedImport}
-                                    className="border border-border-primary bg-bg-tertiary px-2 py-1 text-text-secondary hover:text-text-primary"
-                                >
-                                    Clear cached qPCR import
-                                </button>
-                            </div>
+                            <div className="font-semibold text-text-primary">Durable analytical-store review</div>
+                            <div>{persistedNotice || `Loaded qPCR dataset ${r?.dataset_id}`}</div>
                         </div>
                     )}
 

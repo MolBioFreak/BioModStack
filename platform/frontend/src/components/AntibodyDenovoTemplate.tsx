@@ -3700,9 +3700,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                                 setParsedFrameworkChains([]);
 
                                                 const fwFile = new File([blob], `${fw.pdbCode || 'framework'}.pdb`);
-                                                import('../utils/pdbUtils').then(({ parsePDBFile }) =>
-                                                    parsePDBFile(fwFile)
-                                                )
+                                                parsePDBFile(fwFile)
                                                     .then((parsed) => setParsedFrameworkChains(parsed.chains))
                                                     .catch((err) => {
                                                         console.error('Failed to parse selected framework PDB:', err);
@@ -3719,9 +3717,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                                             setSabdabFramework((prev) => prev ? { ...prev, filePath } : prev);
                                                         }
                                                         setFrameworkPdbUrl(url);
-                                                        return import('../utils/pdbUtils').then(({ parsePDBFile }) =>
-                                                            parsePDBFile(file)
-                                                        );
+                                                        return parsePDBFile(file);
                                                     })
                                                     .then((parsed) => setParsedFrameworkChains(parsed.chains))
                                                     .catch((err) => {
@@ -3743,9 +3739,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                                     })
                                                     .then((blob) => {
                                                         const fwFile = new File([blob], `${fw.pdbCode}.pdb`);
-                                                        return import('../utils/pdbUtils').then(({ parsePDBFile }) =>
-                                                            parsePDBFile(fwFile)
-                                                        );
+                                                        return parsePDBFile(fwFile);
                                                     })
                                                     .then((parsed) => setParsedFrameworkChains(parsed.chains))
                                                     .catch((err) => {
@@ -3881,7 +3875,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                                                 name: string,
                                                                 seqRange: [number, number] | null | undefined,
                                                                 imgtRange: [number, number] | null | undefined,
-                                                                chain: import('../utils/pdbUtils').Chain | undefined,
+                                                                chain: Chain | undefined,
                                                                 chainLabel: string,
                                                                 colorBase: string
                                                             ) => {

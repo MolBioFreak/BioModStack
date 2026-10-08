@@ -3,7 +3,6 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { QPCR_RAW_IMPORT_CACHE_KEY, makeAssaySnapshot } from '../src/components/assayPersistence.js';
 import {
   highlightSelectedWellAmplificationTraces,
   highlightSelectedWellStandardCurvePoints,
@@ -24,10 +23,11 @@ test('qPCR raw import opens the standard-curve view when a parsed upload has cur
   assert.equal(resolveQpcrInitialTab({ results_plotly_json: { data: [{ type: 'heatmap' }] } }), 'heatmap');
 });
 
-test('qPCR raw import wires the parsed response through the initial-tab resolver', () => {
+test('qPCR raw import wires parsed and reloaded responses through the initial-tab resolver', () => {
   const source = readFileSync(join(root, 'src/components/qpcr/RawDataImport.tsx'), 'utf8');
   assert.match(source, /resolveQpcrInitialTab/);
-  assert.match(source, /setPreferredReviewFocus\(resolveQpcrInitialTab\(response\)\)/);
+  assert.match(source, /const applyQpcrPayload = useCallback/);
+  assert.match(source, /setPreferredReviewFocus\(resolveQpcrInitialTab\(payload\)\)/);
 });
 
 test('qPCR standard-curve tab renders a larger QC-focused Plotly review surface', () => {
@@ -128,22 +128,25 @@ test('qPCR raw import warns that EDS curve-derived Cq/Ct values are not authorit
   assert.match(source, /Use the QuantStudio\/StepOnePlus Excel Results export as the known-correct source/);
 });
 
-test('qPCR raw import persists and restores the last real parsed upload', () => {
+test('qPCR raw import reloads persisted datasets from BMS DB service, not browser cache', () => {
   const source = readFileSync(join(root, 'src/components/qpcr/RawDataImport.tsx'), 'utf8');
-  assert.match(source, /QPCR_RAW_IMPORT_CACHE_KEY/);
-  assert.match(source, /loadAssaySnapshot/);
-  assert.match(source, /saveAssaySnapshot/);
-  assert.match(source, /clearAssaySnapshot/);
-  assert.match(source, /Restored cached qPCR import/);
-  assert.match(source, /Clear cached qPCR import/);
+
+  assert.match(source, /listAnalyticalDatasets\('qpcr', 25\)/);
+  assert.match(source, /loadAnalyticalDataset\(selectedDatasetId\)/);
+  assert.match(source, /Saved qPCR import to BMS DB service dataset/);
+  assert.match(source, /BMS DB service analytical store, not browser cache/);
+  assert.match(source, /Persisted qPCR imports/);
+  assert.doesNotMatch(source, /QPCR_RAW_IMPORT_CACHE_KEY/);
+  assert.doesNotMatch(source, /loadAssaySnapshot/);
+  assert.doesNotMatch(source, /saveAssaySnapshot/);
+  assert.doesNotMatch(source, /Review cache/);
+  assert.doesNotMatch(source, /Clear cached qPCR import/);
 });
 
-test('assay persistence snapshots carry a schema, saved timestamp, label, and real payload only', () => {
-  const payload = { filename: 'real-run.eds', n_wells: 132 };
-  const snapshot = makeAssaySnapshot(payload, 'real-run.eds', () => '2026-04-28T21:15:00.000Z');
-  assert.equal(QPCR_RAW_IMPORT_CACHE_KEY, 'bms.assay.qpcr.rawImport.v1');
-  assert.equal(snapshot.schemaVersion, 1);
-  assert.equal(snapshot.label, 'real-run.eds');
-  assert.equal(snapshot.savedAt, '2026-04-28T21:15:00.000Z');
-  assert.deepEqual(snapshot.payload, payload);
+test('qPCR uploads default to durable server persistence', () => {
+  const apiSource = readFileSync(join(root, 'src/api/client.ts'), 'utf8');
+  const source = readFileSync(join(root, 'src/components/qpcr/RawDataImport.tsx'), 'utf8');
+
+  assert.match(apiSource, /formData\.append\('persist', String\(options\.persist \?\? true\)\)/);
+  assert.match(source, /const response = await uploadQpcrFile\(file\) as RawQpcrImportResponse/);
 });

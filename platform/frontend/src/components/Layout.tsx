@@ -17,6 +17,9 @@ import {
     type RuntimePortSettings,
 } from '../runtime/runtimeSwitch';
 import { ThemeSelector } from './ThemeSelector';
+import { StatsToolsMenu } from './StatsToolsControlPanel';
+import { DbServiceMenu } from './DbServiceControlPanel';
+import { BioXpInterlinkMenu } from './BioXpInterlinkControlPanel';
 import {
     InfraControlStateCollector,
     InfraTelemetryCollector,
@@ -50,7 +53,6 @@ declare global {
 const API_HEALTH_ENDPOINT = '/api/health';
 const RUNTIME_PORTS_ENDPOINT = '/api/system/runtime-ports';
 const RUNTIME_START_TARGET_ENDPOINT = '/api/system/runtime/start-target';
-
 async function readApiHealth(): Promise<string> {
     try {
         const response = await fetch(API_HEALTH_ENDPOINT, { cache: 'no-store' });
@@ -392,9 +394,9 @@ export function Layout({ children }: LayoutProps) {
                                         backgroundColor: isActive('/assay') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
                                         color: isActive('/assay') ? 'var(--accent-primary)' : 'var(--text-secondary)'
                                     }}
-                                    title="Assay Analytics"
+                                    title="Stats Toolkit"
                                 >
-                                    Assay Analytics
+                                    Stats Toolkit
                                 </Link>
                                 {showSystemAnalyticsTab && (
                                     <Link
@@ -432,8 +434,17 @@ export function Layout({ children }: LayoutProps) {
                             {/* Theme Selector */}
                             <ThemeSelector />
 
+                            {/* Governed BioXP robot interlink */}
+                            <BioXpInterlinkMenu />
+
                             {/* GPU Power Control */}
                             {showSystemMenus && <PowerControlMenu />}
+
+                            {/* Optional BMS DB service lifecycle */}
+                            {showSystemMenus && <DbServiceMenu />}
+
+                            {/* Optional stats/assay tools container lifecycle */}
+                            {showSystemMenus && <StatsToolsMenu />}
 
                             {/* Persistent MSA Server Settings */}
                             {showSystemMenus && <MSAServerSettingsMenu />}

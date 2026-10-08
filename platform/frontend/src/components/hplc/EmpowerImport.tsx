@@ -13,13 +13,6 @@ import {
     loadAnalyticalDataset,
     updateEmpowerInjection,
 } from '../../api/client';
-import {
-    clearAssaySnapshot,
-    EMPOWER_IMPORT_CACHE_KEY,
-    loadAssaySnapshot,
-    makeAssaySnapshot,
-    saveAssaySnapshot,
-} from '../assayPersistence';
 import { useThemePlotlyLayout } from '../useThemeColors';
 import { AssayPrimaryButton } from '../assay/AssayWorkbenchPrimitives';
 
@@ -125,6 +118,7 @@ interface AnalyticalDatasetDetail {
 }
 
 interface EmpowerImportPayload {
+    dataset_id?: string | null;
     import_id?: number | null;
     injections?: EmpowerInjection[];
     sst_summary?: SstSummary[];
@@ -162,7 +156,7 @@ export function EmpowerImport() {
     const [files, setFiles] = useState<File[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
-    const [cacheNotice, setCacheNotice] = useState('');
+    const [persistedNotice, setPersistedNotice] = useState('');
     const [importId, setImportId] = useState<number | null>(null);
     const [injections, setInjections] = useState<EmpowerInjection[]>([]);
     const [sstSummary, setSstSummary] = useState<SstSummary[]>([]);
@@ -247,7 +241,7 @@ export function EmpowerImport() {
             setEmpowerSummary((resultSummary.empower_summary as EmpowerSummary | null | undefined) ?? null);
             setPeakTable(detail.peak_table ?? []);
             setPeakRegionSummary((resultSummary.peak_region_summary as PeakRegionSummary[]) ?? []);
-            setCacheNotice(`Loaded persisted Empower dataset${detail.dataset_label ? `: ${detail.dataset_label}` : ''}`);
+            setPersistedNotice(`Loaded persisted Empower dataset${detail.dataset_label ? `: ${detail.dataset_label}` : ''}`);
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to load persisted Empower dataset');
         } finally {
@@ -259,25 +253,10 @@ export function EmpowerImport() {
         void refreshPersistedDatasets().catch(() => undefined);
     }, [refreshPersistedDatasets]);
 
-    useEffect(() => {
-        let cancelled = false;
-        void loadAssaySnapshot<EmpowerImportPayload>(EMPOWER_IMPORT_CACHE_KEY)
-            .then((snapshot) => {
-                if (cancelled || !snapshot) return;
-                applyEmpowerPayload(snapshot.payload);
-                setCacheNotice(`Restored cached Empower import${snapshot.label ? `: ${snapshot.label}` : ''}`);
-            })
-            .catch(() => undefined);
-        return () => {
-            cancelled = true;
-        };
-    }, [applyEmpowerPayload]);
-
-    const handleClearCachedImport = useCallback(async () => {
-        await clearAssaySnapshot(EMPOWER_IMPORT_CACHE_KEY);
+    const handleClearCurrentReview = useCallback(() => {
         resetEmpowerReview();
         setError('');
-        setCacheNotice('');
+        setPersistedNotice('');
     }, [resetEmpowerReview]);
 
     const handleFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -315,7 +294,7 @@ export function EmpowerImport() {
 
         setLoading(true);
         setError('');
-        setCacheNotice('');
+        setPersistedNotice('');
         resetEmpowerReview();
 
         try {
@@ -325,17 +304,17 @@ export function EmpowerImport() {
                 peakProminence,
             }) as EmpowerImportPayload;
             applyEmpowerPayload(response);
-            const label = files.length === 1 ? files[0].name : `${files.length} Empower files`;
-            const snapshot = makeAssaySnapshot(response, label);
-            if (await saveAssaySnapshot(EMPOWER_IMPORT_CACHE_KEY, snapshot)) {
-                setCacheNotice(`Saved Empower import cache for ${snapshot.label ?? 'last import'}`);
+            if (response.dataset_id) {
+                setSelectedDatasetId(response.dataset_id);
             }
+            await refreshPersistedDatasets();
+            setPersistedNotice(response.dataset_id ? `Saved Empower import to BMS DB service dataset ${response.dataset_id}` : 'Parsed Empower import; no durable dataset id returned');
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Import failed');
         } finally {
             setLoading(false);
         }
-    }, [files, baselineMethod, peakProminence, applyEmpowerPayload, resetEmpowerReview]);
+    }, [files, baselineMethod, peakProminence, applyEmpowerPayload, refreshPersistedDatasets, resetEmpowerReview]);
 
     const handleRefreshSst = useCallback(async () => {
         if (!importId) return;
@@ -467,7 +446,7 @@ export function EmpowerImport() {
                         >
                             {loadingDataset ? 'Loading persisted dataset...' : 'Load selected persisted import + plots'}
                         </button>
-                        <p className="text-xs text-text-muted">Reloads durable Empower review plots from the analytical store, not only the browser cache.</p>
+                        <p className="text-xs text-text-muted">Reloads durable Empower review plots from the BMS DB service analytical store, not browser cache.</p>
                     </div>
 
                     {error && <div className="p-3 bg-error/20 border border-error text-error text-sm">{error}</div>}
@@ -478,19 +457,19 @@ export function EmpowerImport() {
                             ))}
                         </div>
                     )}
-                    {(cacheNotice || totalInjections > 0) && (
+                    {(persistedNotice || totalInjections > 0) && (
                         <div className="border border-accent-primary/40 bg-accent-primary/10 p-3 text-xs text-text-secondary">
                             <div className="flex flex-wrap items-center justify-between gap-2">
                                 <div>
-                                    <div className="font-semibold text-text-primary">Review cache</div>
-                                    <div>{cacheNotice || 'Latest Empower import is cached in this browser after import.'}</div>
+                                    <div className="font-semibold text-text-primary">Durable analytical-store review</div>
+                                    <div>{persistedNotice || 'Latest Empower import is loaded from the BMS DB service response.'}</div>
                                 </div>
                                 <button
                                     type="button"
-                                    onClick={handleClearCachedImport}
+                                    onClick={handleClearCurrentReview}
                                     className="border border-border-primary bg-bg-tertiary px-2 py-1 text-text-secondary hover:text-text-primary"
                                 >
-                                    Clear cached Empower import
+                                    Clear current Empower review
                                 </button>
                             </div>
                         </div>

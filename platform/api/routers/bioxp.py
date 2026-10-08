@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
 from paths import get_data_root
+from services import bioxp_interlink
 
 router = APIRouter()
 
@@ -28,6 +29,21 @@ LINKAGE_STATE_PATH = _default_linkage_state_path()
 
 class LinkageRequest(BaseModel):
     url: str
+
+
+class InterlinkSettingsRequest(BaseModel):
+    robot_api_url: str
+    robot_ssh_host: str = "robot"
+    connection_mode: str = "direct_http"
+    display_name: str = "BioXP3200"
+
+
+class InterlinkLifecycleRequest(BaseModel):
+    operator_ack: Optional[str] = None
+    reason: Optional[str] = None
+    sudo_password: Optional[str] = None
+    watch_until_ready: bool = False
+    tail: Optional[int] = None
 
 
 def _normalize_url(url: Optional[str]) -> Optional[str]:
@@ -167,11 +183,9 @@ def _persist_linkage(url: Optional[str]) -> None:
         LINKAGE_STATE_PATH.unlink()
 
 
-# In-memory Linkage State. Falls back to persisted file, then env var, otherwise remains unset.
-_GLOBAL_LINKAGE_URL: Optional[str] = (
-    _read_persisted_linkage()
-    or _configured_default_linkage_url()
-)
+# In-memory active interlink state. A saved profile or env recommendation is not
+# activated on import; operators must press BIOXP LINK → Connect each session.
+_GLOBAL_LINKAGE_URL: Optional[str] = None
 
 
 def get_current_url() -> str:
@@ -210,6 +224,7 @@ ROBOT_LOCAL_EXPECTED_ROUTES: Dict[str, bool] = {
     "/oem/runtime/events/door": True,
     "/oem/runtime/events/pause": True,
     "/oem/runtime/events/resume": True,
+    "/oem/runtime/readiness/prepare-to-run-job/dry-run": True,
     "/oem/runtime/commands/initializeSystem": True,
     "/oem/runtime/commands/PrepareToRunJob": True,
     "/oem/runtime/commands/validateJob": True,
@@ -242,7 +257,11 @@ ROBOT_LOCAL_EXPECTED_ROUTES: Dict[str, bool] = {
 MANUAL_MOTION_ROUTES: Dict[str, bool] = {
     "/motion/axis/relative": True,
     "/motion/axis/absolute": True,
-    "/motion/axis/home": True,
+    "/motion/axis/zero": True,
+    # Disabled at the BMS proxy after live X/Z manual-home limit-ignore incidents.
+    # Use OEM startup-step recipes or explicit zero/relative moves only until
+    # the robot-local route proves switch deassert -> active transitions.
+    "/motion/axis/home": False,
 }
 DIRECT_LIQUID_COMMAND_ROUTES: Dict[str, bool] = {
     "/liquid/init": True,
@@ -263,6 +282,7 @@ COMMISSIONING_ONLY_ROUTES: Dict[str, bool] = {
 DISABLED_ROUTES: Dict[str, bool] = {
     "/daemon/start": True,
     "/daemon/stop": True,
+    "/motion/axis/home": True,
 }
 
 OPERATION_REQUIRED_ROUTES: Dict[str, list[str]] = {
@@ -282,6 +302,7 @@ OPERATION_REQUIRED_ROUTES: Dict[str, list[str]] = {
     "micro_move_proof": ["/motion/axis/{axis}/status", "/motion/axis/relative"],
     "reference_mark": ["/motion/reference/status", "/motion/reference/mark_referenced", "/motion/reference/mark_desynced"],
     "emergency_stop": ["/oem/runtime/emergency_stop"],
+    "prepare_to_run_job_readiness": ["/oem/runtime/readiness/prepare-to-run-job/dry-run"],
 }
 
 
@@ -313,7 +334,153 @@ def _runtime_status_payload(
     }
 
 
-# ── Linkage Endpoints ──────────────────────────────────────────────────
+LOCAL_ADMIN_HOSTS = {None, "127.0.0.1", "::1", "localhost", "testclient"}
+
+
+def _require_local_admin(request: Request) -> None:
+    if request.client and request.client.host not in LOCAL_ADMIN_HOSTS:
+        raise HTTPException(status_code=403, detail="BioXP interlink lifecycle routes are limited to local admin requests")
+
+
+def _request_model_dump(payload: BaseModel | None) -> Dict[str, Any]:
+    if payload is None:
+        return {}
+    return payload.model_dump(exclude_none=True)
+
+
+def _interlink_state_response() -> Dict[str, Any]:
+    return bioxp_interlink.describe_state(recommended_url=_recommended_linkage_url())
+
+
+async def _probe_active_interlink(timeout: float = 18.0) -> None:
+    try:
+        payload = await proxy_request("GET", "/status", timeout=timeout)
+        if isinstance(payload, dict) and not bool(payload.get("hardware_connected")) and bool(payload.get("runtime_available", True)):
+            try:
+                power_payload = await proxy_request("GET", "/motion/power/status", timeout=45.0)
+                if isinstance(power_payload, dict) and bool(power_payload.get("hardware_connected")):
+                    payload = {
+                        **payload,
+                        "status": "ok" if not payload.get("startup_error") and not payload.get("status_error") else payload.get("status", "degraded"),
+                        "hardware_connected": True,
+                        "targeted_power_readback": power_payload,
+                        "hardware_connected_inferred_via": "/motion/power/status",
+                    }
+            except HTTPException:
+                pass
+        bioxp_interlink.record_probe_result(payload if isinstance(payload, dict) else {"raw_payload": payload})
+    except HTTPException as exc:
+        bioxp_interlink.record_probe_result(
+            None,
+            {"status_code": exc.status_code, "detail": exc.detail},
+        )
+
+
+# ── Governed Interlink Endpoints ───────────────────────────────────────
+
+@router.get("/interlink/state")
+async def get_interlink_state(probe: bool = False):
+    if probe and _GLOBAL_LINKAGE_URL:
+        await _probe_active_interlink(timeout=18.0)
+    return _interlink_state_response()
+
+
+@router.put("/interlink/settings")
+async def save_interlink_settings(request: Request, payload: InterlinkSettingsRequest):
+    _require_local_admin(request)
+    # Persist only the operator profile. This is intentionally quiet: no robot
+    # polling, no USB recovery, no auto-activation, and no motion side effects.
+    bioxp_interlink.save_profile(payload.model_dump(exclude_none=True))
+    return _interlink_state_response()
+
+
+@router.delete("/interlink/settings")
+async def forget_interlink_settings(request: Request):
+    global _GLOBAL_LINKAGE_URL
+    _require_local_admin(request)
+    bioxp_interlink.forget_profile()
+    bioxp_interlink.reset_session()
+    _GLOBAL_LINKAGE_URL = None
+    return _interlink_state_response()
+
+
+@router.post("/interlink/connect")
+async def connect_interlink(request: Request, payload: InterlinkSettingsRequest | None = None):
+    global _GLOBAL_LINKAGE_URL
+    _require_local_admin(request)
+    if payload is not None and payload.robot_api_url:
+        profile = bioxp_interlink.save_profile(payload.model_dump(exclude_none=True))
+    else:
+        profile = bioxp_interlink.load_profile()
+        if not profile:
+            raise HTTPException(status_code=400, detail="Save a BioXP interlink profile before connecting")
+    _GLOBAL_LINKAGE_URL = _canonicalize_linkage_url(profile["robot_api_url"])
+    if not _GLOBAL_LINKAGE_URL:
+        raise HTTPException(status_code=400, detail="BioXP robot_api_url is empty or invalid")
+    bioxp_interlink.activate_session(_GLOBAL_LINKAGE_URL)
+    await _probe_active_interlink(timeout=18.0)
+    return _interlink_state_response()
+
+
+@router.post("/interlink/disconnect")
+async def disconnect_interlink(request: Request):
+    global _GLOBAL_LINKAGE_URL
+    _require_local_admin(request)
+    bioxp_interlink.deactivate_session("operator-disconnect")
+    _GLOBAL_LINKAGE_URL = None
+    return _interlink_state_response()
+
+
+@router.post("/interlink/diagnostics")
+async def interlink_diagnostics(request: Request, probe: bool = True):
+    _require_local_admin(request)
+    if probe and _GLOBAL_LINKAGE_URL:
+        await _probe_active_interlink(timeout=18.0)
+    return _interlink_state_response()
+
+
+@router.post("/interlink/logs")
+async def interlink_logs(request: Request, payload: InterlinkLifecycleRequest | None = None):
+    _require_local_admin(request)
+    try:
+        return bioxp_interlink.collect_logs(_request_model_dump(payload))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (OSError, TimeoutError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/interlink/runtime-reset")
+async def interlink_runtime_reset(request: Request, payload: InterlinkLifecycleRequest | None = None):
+    global _GLOBAL_LINKAGE_URL
+    _require_local_admin(request)
+    try:
+        result = bioxp_interlink.runtime_reset(_request_model_dump(payload))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (OSError, TimeoutError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result.get("supported", True) is not False:
+        _GLOBAL_LINKAGE_URL = None
+    return result
+
+
+@router.post("/interlink/robot-reboot")
+async def interlink_robot_reboot(request: Request, payload: InterlinkLifecycleRequest | None = None):
+    global _GLOBAL_LINKAGE_URL
+    _require_local_admin(request)
+    try:
+        result = bioxp_interlink.robot_reboot(_request_model_dump(payload))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (OSError, TimeoutError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result.get("supported", True) is not False:
+        _GLOBAL_LINKAGE_URL = None
+    return result
+
+
+# ── Legacy linkage compatibility endpoints ─────────────────────────────
 
 @router.get("/linkage")
 async def get_linkage():
@@ -325,28 +492,18 @@ async def get_linkage():
 
 @router.post("/linkage")
 async def set_linkage(req: LinkageRequest):
-    global _GLOBAL_LINKAGE_URL
-    url = _canonicalize_linkage_url(req.url)
-    _GLOBAL_LINKAGE_URL = url
-    _persist_linkage(_GLOBAL_LINKAGE_URL)
-    return {
-        "url": _GLOBAL_LINKAGE_URL,
-        "configured": bool(_GLOBAL_LINKAGE_URL),
-        "recommended_url": _recommended_linkage_url(),
-        "status": "updated",
-    }
+    _ = req
+    raise HTTPException(
+        status_code=409,
+        detail="Legacy /api/bioxp/linkage mutation is disabled. Save settings with /interlink/settings, then explicitly connect with /interlink/connect from the BIOXP LINK panel.",
+    )
 
 @router.post("/linkage/disconnect")
 async def disconnect_linkage():
-    global _GLOBAL_LINKAGE_URL
-    _GLOBAL_LINKAGE_URL = None
-    _persist_linkage(None)
-    return {
-        "url": None,
-        "configured": False,
-        "recommended_url": _recommended_linkage_url(),
-        "status": "disconnected",
-    }
+    raise HTTPException(
+        status_code=409,
+        detail="Legacy /api/bioxp/linkage/disconnect mutation is disabled. Use /interlink/disconnect from the governed BIOXP LINK panel.",
+    )
 
 
 # ── Runtime Status / Deprecated Maintenance Compatibility ───────────────
@@ -368,19 +525,38 @@ async def daemon_status():
         if not isinstance(payload, dict):
             payload = {"status": "error", "raw_payload": payload}
         hardware_connected = bool(payload.get("hardware_connected"))
+        targeted_power: Optional[Dict[str, Any]] = None
+        if not hardware_connected and bool(payload.get("runtime_available", True)):
+            # The robot-local aggregate /status can be conservative/degraded while
+            # service-owned targeted controller readbacks are healthy. Use the same
+            # motion-power route the cockpit relies on before telling operators the
+            # hardware is disconnected.
+            try:
+                power_payload = await proxy_request("GET", "/motion/power/status", timeout=45.0)
+                if isinstance(power_payload, dict):
+                    targeted_power = power_payload
+                    hardware_connected = bool(power_payload.get("hardware_connected"))
+            except HTTPException:
+                targeted_power = None
         detail = payload.get("status_error") or payload.get("startup_error")
         if not detail:
             detail = (
-                "Linked BioXP runtime responded to /status and reported hardware connectivity."
+                "Linked BioXP runtime responded and targeted controller readback reports hardware connectivity."
+                if hardware_connected and targeted_power
+                else "Linked BioXP runtime responded to /status and reported hardware connectivity."
                 if hardware_connected
                 else "Linked BioXP runtime responded to /status, but hardware is not yet connected."
             )
-        return _runtime_status_payload(
+        result = _runtime_status_payload(
             linkage_configured=True,
             linked_runtime_reachable=True,
             hardware_connected=hardware_connected,
             detail=str(detail),
         )
+        if targeted_power is not None:
+            result["targeted_power_readback"] = targeted_power
+            result["inferred_via_proxy"] = True
+        return result
     except HTTPException as exc:
         return _runtime_status_payload(
             linkage_configured=True,
@@ -436,7 +612,7 @@ async def proxy_request(
         )
     except httpx.ReadTimeout:
         raise HTTPException(
-            status_code=504, 
+            status_code=504,
             detail=f"BioXP hardware node timed out responding to {method} {path}"
         )
     except httpx.HTTPStatusError as e:
@@ -657,6 +833,7 @@ async def bioxp_capabilities():
         "disabled_routes": dict(sorted(DISABLED_ROUTES.items())),
         "notes": [
             "BMS links to the robot-local BioXP runtime and exposes only the routes listed as proxied.",
+            "named BMS proxy routes are the stable client surface; clients must not depend on raw container-internal FastAPI ports.",
             "Default operator UI is OEM-first: startup/runtime, protocol, liquid readback, range/switch readback, thermal, chiller, camera, and vision. Raw axis movement and direct pipette commands are commissioning-only.",
             "Daemon lifecycle routes are disabled by design because BMS must not own the robot-local service process.",
             "Route parity is a control-plane capability statement; hardware readiness still comes from runtime status/preflight responses.",
@@ -696,11 +873,12 @@ async def bioxp_operations_capabilities():
     operations: Dict[str, Dict[str, Any]] = {}
     for name, routes in OPERATION_REQUIRED_ROUTES.items():
         availability = {route: route_available(route) for route in routes}
+        risk = "low" if name == "prepare_to_run_job_readiness" else ("high" if name in {"head_clear_lock", "head_lift_increment", "micro_move_proof"} else "medium")
         operations[name] = {
             "available": all(availability.values()),
             "required_routes": availability,
-            "risk": "high" if name in {"head_clear_lock", "head_lift_increment", "micro_move_proof"} else "medium",
-            "operator_ack_required": name != "emergency_stop",
+            "risk": risk,
+            "operator_ack_required": name not in {"emergency_stop", "prepare_to_run_job_readiness"},
         }
 
     return {
@@ -952,6 +1130,11 @@ async def oem_runtime_event_resume(request: Request):
     return await proxy_request("POST", "/oem/runtime/events/resume", await request.json(), timeout=45.0)
 
 
+@router.post("/oem/runtime/readiness/prepare-to-run-job/dry-run")
+async def oem_runtime_prepare_to_run_job_readiness_dry_run(request: Request):
+    return await proxy_request("POST", "/oem/runtime/readiness/prepare-to-run-job/dry-run", await request.json(), timeout=90.0)
+
+
 @router.post("/oem/runtime/commands/{command_name}")
 async def oem_runtime_command(command_name: str, request: Request):
     allowed = {"initializeSystem", "PrepareToRunJob", "validateJob", "enqueue", "abortjob", "unlockProcess", "wakefrompause"}
@@ -1115,25 +1298,28 @@ async def move_axis_relative(request: Request):
 async def move_axis_absolute(request: Request):
     return await proxy_request("POST", "/motion/axis/absolute", await request.json())
 
+@router.post("/motion/axis/zero")
+async def move_axis_zero(request: Request):
+    return await proxy_request("POST", "/motion/axis/zero", await request.json())
+
 @router.post("/motion/axis/home")
 async def home_axis(request: Request):
-    payload = await request.json()
-    # Temporary BMS safety shim: Home means return to controller coordinate 0 for that axis.
-    # The robot-local switch-search homing routine currently vibrates/stalls on this unit.
-    # Keep the public BMS endpoint stable for the cockpit while routing it through the
-    # already-working absolute-position command path.
-    axis = str(payload.get("axis", "")).lower()
-    if axis not in {"x", "y", "z", "g", "door"}:
-        raise HTTPException(status_code=400, detail="axis must be one of x, y, z, g, or door")
-    absolute_payload = {
-        **payload,
-        "axis": axis,
-        "position_steps": int(payload.get("position_steps", 0) or 0),
-        "wait_timeout_s": float(payload.get("wait_timeout_s", 60.0) or 60.0),
-        "source_command": "bms_home_to_absolute_zero",
-        "home_semantics": "absolute_zero_not_switch_search",
-    }
-    return await proxy_request("POST", "/motion/axis/absolute", absolute_payload)
+    payload = await _request_json_or_empty(request)
+    axis = str(payload.get("axis", "")).lower() or "unknown"
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "message": "Manual switch-search home is disabled at the BMS proxy after live X/Z limit-switch ignore incidents.",
+            "axis": axis,
+            "blocked_route": "/motion/axis/home",
+            "allowed_alternatives": [
+                "/motion/axis/zero for controller-coordinate return-to-zero",
+                "/motion/oem/startup_step for supervised OEM-shaped step recipes",
+                "/motion/axis/relative for operator-watched bounded jogs",
+            ],
+            "required_fix": "Robot-local home must prove switch deassertion followed by an active transition before any setHome/reference claim.",
+        },
+    )
 
 @router.post("/thermal/baseline")
 async def thermal_baseline():

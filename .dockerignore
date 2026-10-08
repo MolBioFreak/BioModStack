@@ -1,5 +1,8 @@
 .git
 .gitignore
+.env
+.env.*
+!.env.core-runtime.example
 .venv
 venv
 **/__pycache__

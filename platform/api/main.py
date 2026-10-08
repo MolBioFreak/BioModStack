@@ -27,6 +27,27 @@ logger = logging.getLogger(__name__)
 # Global orchestrator instance
 _orchestrator: GPUOrchestrator = None
 _analysis_worker: AnalysisWorker = None
+ANALYTICAL_STARTUP_STATUS: dict[str, object] = {"attempted": False, "ok": None, "message": "not requested"}
+
+
+def _truthy_env(name: str, default: str = "0") -> bool:
+    return str(os.getenv(name, default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
+async def _init_analytical_store_optional() -> None:
+    """Initialize the analytical store without making API/web boot depend on Postgres."""
+    global ANALYTICAL_STARTUP_STATUS
+    if not _truthy_env("BMS_ANALYTICAL_INIT_ON_STARTUP"):
+        ANALYTICAL_STARTUP_STATUS = {"attempted": False, "ok": None, "message": "not requested"}
+        return
+    try:
+        await init_analytical_store()
+    except Exception as exc:  # noqa: BLE001 - DB startup must be degraded, not fatal.
+        ANALYTICAL_STARTUP_STATUS = {"attempted": True, "ok": False, "message": str(exc)}
+        logger.warning("[STARTUP] BMS DB service unavailable for analytical init: %s", exc)
+        return
+    ANALYTICAL_STARTUP_STATUS = {"attempted": True, "ok": True, "message": "initialized"}
+    logger.info("[STARTUP] Assay analytical PostgreSQL store initialized")
 
 
 @asynccontextmanager
@@ -37,10 +58,7 @@ async def lifespan(app: FastAPI):
     
     # Initialize database
     await init_db()
-
-    if os.getenv("BMS_ANALYTICAL_INIT_ON_STARTUP", "0").strip().lower() in {"1", "true", "yes", "on"}:
-        await init_analytical_store()
-        logger.info("[STARTUP] Assay analytical PostgreSQL store initialized")
+    await _init_analytical_store_optional()
     
     # Initialize GPU orchestrator only when this runtime is allowed to own workflow launches.
     if workflow_launches_allowed():

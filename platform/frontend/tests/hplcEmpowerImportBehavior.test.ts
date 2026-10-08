@@ -3,8 +3,6 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { EMPOWER_IMPORT_CACHE_KEY } from '../src/components/assayPersistence.js';
-
 const root = process.cwd();
 
 test('Empower import UI exposes batch QC, composition plots, and flattened peak review', () => {
@@ -25,15 +23,19 @@ test('chromatography workbench opens on the Waters Empower import workflow by de
   assert.match(source, /useState<AnalysisType>\('empower'\)/);
 });
 
-test('Empower import persists and restores the previous real batch review', () => {
+test('Empower import reloads persisted batch reviews from BMS DB service, not browser cache', () => {
   const source = readFileSync(join(root, 'src/components/hplc/EmpowerImport.tsx'), 'utf8');
-  assert.equal(EMPOWER_IMPORT_CACHE_KEY, 'bms.assay.hplc.empowerImport.v1');
-  assert.match(source, /EMPOWER_IMPORT_CACHE_KEY/);
-  assert.match(source, /loadAssaySnapshot/);
-  assert.match(source, /saveAssaySnapshot/);
-  assert.match(source, /clearAssaySnapshot/);
-  assert.match(source, /Restored cached Empower import/);
-  assert.match(source, /Clear cached Empower import/);
+
+  assert.match(source, /listAnalyticalDatasets\('chromatography', 25\)/);
+  assert.match(source, /loadAnalyticalDataset\(selectedDatasetId\)/);
+  assert.match(source, /Saved Empower import to BMS DB service dataset/);
+  assert.match(source, /BMS DB service analytical store, not browser cache/);
+  assert.match(source, /Clear current Empower review/);
+  assert.doesNotMatch(source, /EMPOWER_IMPORT_CACHE_KEY/);
+  assert.doesNotMatch(source, /loadAssaySnapshot/);
+  assert.doesNotMatch(source, /saveAssaySnapshot/);
+  assert.doesNotMatch(source, /Review cache/);
+  assert.doesNotMatch(source, /Clear cached Empower import/);
 });
 
 test('assay tab surfaces stay mounted while hidden so switching workbenches does not wipe state', () => {

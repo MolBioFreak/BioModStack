@@ -231,6 +231,44 @@ export interface HardwareDiscoveryResponse {
     timestamp: string;
 }
 
+export interface DbServiceLogicalDatabaseStatus {
+    name: string;
+    role: string;
+    storage_mode: string;
+    status: string;
+    reachable: boolean;
+    note?: string | null;
+}
+
+export interface DbServiceStatus {
+    component: string;
+    service_id: string;
+    display_name: string;
+    service_name?: string | null;
+    container_name?: string | null;
+    optional_at_boot: boolean;
+    control_mode: string;
+    state: string;
+    health: string;
+    runtime_available: boolean;
+    runtime_note?: string | null;
+    offline_message?: string | null;
+    host_agent_available?: boolean;
+    logical_databases?: DbServiceLogicalDatabaseStatus[];
+    commands?: string[];
+    logs?: string;
+    logs_tail?: number;
+    last_action?: string;
+    action_output?: string;
+    action_returncode?: number;
+}
+
+export const fetchDbServiceStatus = () =>
+    api.get<DbServiceStatus>('/api/system/db-service');
+
+export const runDbServiceAction = (action: 'start' | 'restart' | 'health' | 'logs', tail = 120) =>
+    api.post<DbServiceStatus>(`/api/system/db-service/${action}`, { tail });
+
 // API functions
 // API functions
 export const fetchJobs = (params?: {

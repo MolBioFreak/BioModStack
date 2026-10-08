@@ -7,14 +7,15 @@ const appSource = readFileSync(resolve(process.cwd(), 'src/App.tsx'), 'utf8');
 const layoutSource = readFileSync(resolve(process.cwd(), 'src/components/Layout.tsx'), 'utf8');
 const assayPagePath = resolve(process.cwd(), 'src/components/AssayAnalytics.tsx');
 
-test('BioModStack exposes assay analytics as a first-class route and nav tab', () => {
-    assert.match(appSource, /AssayAnalytics/, 'App should import the BMS assay analytics page');
-    assert.match(appSource, /path=["']\/assay["']/, 'App should route /assay to the analytics page');
-    assert.match(layoutSource, /to=["']\/assay["']/, 'Layout should include an /assay nav link');
-    assert.match(layoutSource, /Assay Analytics/, 'Layout should label the new tab Assay Analytics');
+test('BioModStack exposes Stats Toolkit as a first-class route and nav tab', () => {
+    assert.match(appSource, /AssayAnalytics/, 'App should import the BMS stats toolkit page component');
+    assert.match(appSource, /path=["']\/assay["']/, 'App should preserve /assay route compatibility for the toolkit page');
+    assert.match(layoutSource, /to=["']\/assay["']/, 'Layout should include the existing /assay nav link');
+    assert.match(layoutSource, /Stats Toolkit/, 'Layout should label the tab Stats Toolkit');
+    assert.doesNotMatch(layoutSource, /Assay Analytics/, 'Layout should not expose the old Assay Analytics label');
 });
 
-test('assay analytics page carries qPCR, chromatography, and DOE/statistics surfaces', () => {
+test('Stats Toolkit page carries qPCR, chromatography, DOE/statistics, and debug surfaces', () => {
     assert.equal(existsSync(assayPagePath), true, 'AssayAnalytics.tsx should exist');
     const source = readFileSync(assayPagePath, 'utf8');
     for (const marker of [
@@ -28,6 +29,8 @@ test('assay analytics page carries qPCR, chromatography, and DOE/statistics surf
         'DOE',
         'JMP-like',
         'Plotly',
+        'Debug',
+        'Stats-tools container',
     ]) {
         assert.match(source, new RegExp(marker, 'i'), `AssayAnalytics should expose ${marker}`);
     }

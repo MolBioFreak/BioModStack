@@ -485,6 +485,7 @@ def test_cleanup_legacy_listener_kills_matching_ancestor_chain(monkeypatch, tmp_
     api_dir = project_root / "platform" / "api"
 
     monkeypatch.setattr(services, "listener_pids", lambda port: [9100])
+    monkeypatch.setattr(services, "pid_is_biomodstack_runtime_container", lambda pid, kind, project_root=None: False)
 
     cmdlines = {
         9100: "python -c 'from multiprocessing.spawn import spawn_main'",
@@ -503,6 +504,28 @@ def test_cleanup_legacy_listener_kills_matching_ancestor_chain(monkeypatch, tmp_
     services.cleanup_legacy_listener("api", project_root=project_root)
 
     assert killed == [9102, 9101]
+
+
+def test_cleanup_legacy_listener_skips_core_runtime_container_listener(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / "repo"
+    killed: list[int] = []
+
+    monkeypatch.setattr(services, "listener_pids", lambda port: [4175129])
+    monkeypatch.setattr(
+        services,
+        "pid_is_biomodstack_runtime_container",
+        lambda pid, kind, project_root=None: pid == 4175129 and kind == "api",
+    )
+    monkeypatch.setattr(
+        services,
+        "matching_process_chain",
+        lambda pid, matcher, project_root=None: (_ for _ in ()).throw(AssertionError("container listener should not be chain-matched")),
+    )
+    monkeypatch.setattr(services, "_terminate_pid", lambda pid, grace_seconds=8.0: killed.append(pid))
+
+    services.cleanup_legacy_listener("api", project_root=project_root)
+
+    assert killed == []
 
 
 def test_pid_is_biomodstack_runtime_container_matches_compose_labels(monkeypatch, tmp_path: Path) -> None:
@@ -842,6 +865,7 @@ def test_core_runtime_script_start_does_not_rebuild_images() -> None:
     assert "up -d --remove-orphans" in script
     assert "up --build --remove-orphans" not in script
     assert "up -d --build --remove-orphans" in script
+    assert "stop)" in script
     assert "rebuild|build)" in script
 
 
@@ -882,4 +906,118 @@ def test_stop_all_container_mode_stops_both_runtime_flavors(monkeypatch, tmp_pat
         ),
         ("cleanup", "api"),
         ("cleanup", "frontend"),
+    ]
+
+
+def test_start_api_container_mode_stops_local_dev_api_then_starts_container_service(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / "repo"
+    calls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(services, "ensure_user_units", lambda root, runtime_mode=None: calls.append(("ensure", runtime_mode)))
+    monkeypatch.setattr(services, "ensure_target_enabled", lambda project_root=None, runtime_mode=None: calls.append(("enable", runtime_mode)))
+    monkeypatch.setattr(
+        services,
+        "listener_pids",
+        lambda port: [9012] if port == services.API_PORT else [],
+    )
+    monkeypatch.setattr(
+        services,
+        "pid_is_biomodstack_runtime_container",
+        lambda pid, kind, project_root=None: False,
+    )
+    monkeypatch.setattr(
+        services,
+        "service_is_active",
+        lambda name, project_root=None: name == services.API_SERVICE,
+    )
+    monkeypatch.setattr(
+        services,
+        "run_systemctl",
+        lambda *args, **kwargs: calls.append(("systemctl", args)) or SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    monkeypatch.setattr(
+        services,
+        "cleanup_legacy_listener",
+        lambda kind, project_root=None: calls.append(("cleanup", kind)),
+    )
+    monkeypatch.setattr(
+        services,
+        "run_core_runtime_script",
+        lambda *args, **kwargs: calls.append(("compose", args)) or SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    monkeypatch.setattr(
+        services,
+        "wait_for_http",
+        lambda url, timeout_seconds=30.0: calls.append(("wait", (url, timeout_seconds))),
+    )
+
+    services.start_api(project_root=project_root, runtime_mode="container")
+
+    assert calls == [
+        ("ensure", "container"),
+        ("enable", "container"),
+        ("systemctl", ("stop", services.API_SERVICE)),
+        ("cleanup", "api"),
+        ("compose", ("up", "--no-deps", "bms-api")),
+        ("wait", (services.API_HEALTH_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
+    ]
+
+
+def test_stop_api_container_mode_stops_only_container_api_service(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / "repo"
+    calls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(services, "ensure_user_units", lambda root, runtime_mode=None: calls.append(("ensure", runtime_mode)))
+    monkeypatch.setattr(
+        services,
+        "run_core_runtime_script",
+        lambda *args, **kwargs: calls.append(("compose", args)) or SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    services.stop_api(project_root=project_root, runtime_mode="container")
+
+    assert calls == [
+        ("ensure", "container"),
+        ("compose", ("stop", "bms-api")),
+    ]
+
+
+def test_start_api_dev_mode_rejects_container_owned_port(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / "repo"
+
+    monkeypatch.setattr(services, "ensure_user_units", lambda root, runtime_mode=None: None)
+    monkeypatch.setattr(services, "listener_pids", lambda port: [9012] if port == services.API_PORT else [])
+    monkeypatch.setattr(
+        services,
+        "pid_is_biomodstack_runtime_container",
+        lambda pid, kind, project_root=None: True,
+    )
+    monkeypatch.setattr(services, "service_is_active", lambda name, project_root=None: False)
+
+    with pytest.raises(services.ServiceManagerError, match="core runtime container API owns port 8000"):
+        services.start_api(project_root=project_root, runtime_mode="dev")
+
+
+def test_stop_api_dev_mode_stops_systemd_service_and_cleans_listener(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / "repo"
+    calls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(services, "ensure_user_units", lambda root, runtime_mode=None: calls.append(("ensure", runtime_mode)))
+    monkeypatch.setattr(
+        services,
+        "run_systemctl",
+        lambda *args, **kwargs: calls.append(("systemctl", args)) or SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    monkeypatch.setattr(
+        services,
+        "cleanup_legacy_listener",
+        lambda kind, project_root=None: calls.append(("cleanup", kind)),
+    )
+
+    services.stop_api(project_root=project_root, runtime_mode="dev")
+
+    assert calls == [
+        ("ensure", "dev"),
+        ("systemctl", ("stop", services.API_SERVICE)),
+        ("cleanup", "api"),
     ]

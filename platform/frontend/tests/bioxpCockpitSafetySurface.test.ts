@@ -21,14 +21,15 @@ test('default connection tab does not expose old motor interlock/lock-clear butt
     assert.match(connectionTab, /Motion interlock and lock-clear actions are commissioning-only/);
 });
 
-test('motion power actions are gated behind the commissioning toggle', () => {
+test('motion power actions are gated behind the commissioning toggle without motor reset controls', () => {
     const motionPowerPanel = sourceBetween('const motionPowerPanel = (', 'return (');
 
     assert.match(motionPowerPanel, /showCommissioningControls \? \(/);
     assert.match(motionPowerPanel, /Enable 24V \/ Prep Axes/);
     assert.match(motionPowerPanel, /Prepare Interlock/);
-    assert.match(motionPowerPanel, /Hard Reset/);
-    assert.match(motionPowerPanel, /Actuating power, interlock, lock-clear, and reset buttons are hidden/);
+    assert.doesNotMatch(motionPowerPanel, /Hard Reset/);
+    assert.doesNotMatch(motionPowerPanel, /motionHardReset/);
+    assert.match(motionPowerPanel, /Actuating power, interlock, and lock-clear buttons are hidden/);
 });
 
 test('raw axis movement is demoted to commissioning motion instead of the default operator path', () => {
@@ -36,15 +37,17 @@ test('raw axis movement is demoted to commissioning motion instead of the defaul
     const tabList = sourceBetween('<div className="flex gap-1 border-b border-border-secondary flex-wrap">', "{activeTab === 'connection'");
 
     assert.match(tabList, /showCommissioningControls \? \[\{ key: 'manual', label: 'Commissioning Motion' \}\]/);
-    assert.match(manualTab, /Commissioning Motion — Raw Axis Proxy/);
+    assert.match(manualTab, /Commissioning Motion — Axis Controls/);
     assert.match(manualTab, /Hidden from the default handler path/);
-    assert.match(manualTab, /BMS → robot-local BioXP API proxy only for live commissioning/);
+    assert.match(manualTab, /raw switch-search home is disabled/);
     assert.match(manualTab, /<AxisControls axis="x" label="Gantry X"/);
     assert.match(manualTab, /<AxisControls axis="y" label="Gantry Y"/);
     assert.match(manualTab, /<AxisControls axis="z" label="Pipette Z"/);
     assert.match(manualTab, /<AxisControls axis="g" label="Gripper"/);
     assert.match(manualTab, /\{liquidCommissioningPanel\}/);
     assert.doesNotMatch(manualTab, /Reconnect USB Runtime/);
+    assert.doesNotMatch(cockpitSource, />\s*OEM Home\s*</);
+    assert.match(cockpitSource, /Switch-home disabled/);
 });
 
 test('camera overlaid jog controls are commissioning-only', () => {
@@ -102,4 +105,11 @@ test('service operations tab exposes named operation wrappers without acknowledg
     assert.match(serviceTab, /\{serviceOperationsPanel\}/);
     assert.match(serviceTab, /\{motionPowerPanel\}/);
     assert.match(serviceTab, /\{referencePanel\}/);
+});
+
+
+test('raw telemetry payloads are debug disclosures rather than default operator panels', () => {
+    assert.match(cockpitSource, /<details className="rounded border border-border-primary bg-surface\/40 p-2">/);
+    assert.match(cockpitSource, /Debug payload/);
+    assert.doesNotMatch(cockpitSource, /<pre className="text-\[10px\] font-mono text-content-muted p-3 bg-\[#000000\]/);
 });

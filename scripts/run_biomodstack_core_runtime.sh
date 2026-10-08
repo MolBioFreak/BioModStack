@@ -84,6 +84,9 @@ case "$ACTION" in
     rebuild|build)
         exec "${compose_cmd[@]}" "${compose_extra_args[@]}" -f "$COMPOSE_FILE" up -d --build --remove-orphans "$@"
         ;;
+    stop)
+        run_compose stop "$@"
+        ;;
     down)
         run_compose down --remove-orphans "$@"
         ;;

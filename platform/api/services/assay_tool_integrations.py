@@ -7,6 +7,8 @@ import subprocess
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
+from services import stats_tools
+
 
 # Registry of the external packages Christian asked for after the assay tooling
 # survey.  This is deliberately separate from the in-house compatibility math in the
@@ -276,7 +278,16 @@ def assay_tool_registry(include_runtime_status: bool = True) -> List[Dict[str, A
     for tool in _TOOL_DEFINITIONS:
         entry = dict(tool)
         entry["integration_status"] = "integrated"
+        if entry["adapter_type"] in {"python_package", "r_package"}:
+            entry["component"] = stats_tools.STATS_TOOLS_COMPONENT
         if include_runtime_status:
+            if entry["adapter_type"] in {"python_package", "r_package"} and not stats_tools.stats_tools_available():
+                entry["runtime_available"] = False
+                entry["version"] = None
+                entry["runtime_note"] = stats_tools.STATS_TOOLS_OFFLINE_MESSAGE
+                entry["degraded_by"] = stats_tools.STATS_TOOLS_COMPONENT
+                tools.append(entry)
+                continue
             if entry["adapter_type"] == "python_package":
                 status = _python_available(entry["package"], entry.get("distribution", entry["package"]))
             elif entry["adapter_type"] == "r_package":

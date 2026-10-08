@@ -6,6 +6,7 @@ import {
     useAxisStatus,
     useAxisStatusBatch,
     useBioXpCapabilities,
+    useBioXpInterlinkState,
     useBioXpOperationCapabilities,
     useBioXpOperationReadiness,
     useBioXpStatus,
@@ -24,8 +25,6 @@ import {
     useSetChillerRates,
     useChillerSnapshot,
     useClearLock,
-    useDisconnectLinkage,
-    useGetLinkage,
     useHeadClearLockOperation,
     useHeadLiftIncrementOperation,
     useHomeAxis,
@@ -47,7 +46,6 @@ import {
     useMarkMotionDesynced,
     useMarkMotionReferenced,
     useMotionArmStrictStartup,
-    useMotionHardReset,
     usePrepareSafeOperation,
     useMotionPowerDiag,
     useMotionPowerEnable,
@@ -65,14 +63,13 @@ import {
     useOemStartupDoorEvent,
     useOemStartupLatest,
     useOemStartupRequest,
+    usePrepareToRunJobReadiness,
     usePrepareInterlock,
-    useReconnectRuntime,
     useRuntimeStatus,
     useSetThermalFan,
     useSetThermalPwm,
     useSetThermalRates,
     useSetChillerTemp,
-    useSetLinkage,
     useSetThermalTemp,
     useThermalBaseline,
     useThermalFastProfile,
@@ -109,12 +106,14 @@ const SectionCard = ({ title, subtitle, children }: { title: string; subtitle?: 
 );
 
 const JsonBlock = ({ title, data, fallback = 'No data yet.' }: { title: string; data: unknown; fallback?: string }) => (
-    <div className="space-y-2">
-        <div className="text-xs font-semibold text-content-muted">{title}</div>
-        <pre className="text-[10px] font-mono text-content-muted p-3 bg-[#000000] rounded border border-border-primary overflow-x-auto max-h-72">
+    <details className="rounded border border-border-primary bg-surface/40 p-2">
+        <summary className="cursor-pointer text-xs font-semibold text-content-muted hover:text-content transition-colors">
+            {title} Debug payload
+        </summary>
+        <pre className="mt-2 text-[10px] font-mono text-content-muted p-3 bg-[#000000] rounded border border-border-primary overflow-x-auto max-h-72">
             {data ? JSON.stringify(data, null, 2) : fallback}
         </pre>
-    </div>
+    </details>
 );
 
 const CONNECTION_STICKY_WINDOW_MS = 15000;
@@ -294,20 +293,15 @@ const getLiquidTruthLabel = (liquidStatus: LiquidStatus | undefined) => {
     return liquidStatus.hardware_truth_level ?? (liquidStatus.available ? 'software shadow' : 'unavailable');
 };
 
-const getAxisDirectionState = (axisData: AxisStatus | undefined, steps: number) => {
+const getAxisDirectionState = (axisData: AxisStatus | undefined, _steps: number) => {
     const leftActive = axisData?.switch_activity?.left_active === true;
     const rightActive = axisData?.switch_activity?.right_active === true;
     const leftMasked = axisData?.preset?.disable_left === true;
     const rightMasked = axisData?.preset?.disable_right === true;
     const conflictingSwitches = leftActive && rightActive;
-    const blocked =
-        !conflictingSwitches && (
-            (steps < 0 && leftActive && !leftMasked) ||
-            (steps > 0 && rightActive && !rightMasked)
-        );
 
     return {
-        blocked,
+        blocked: false,
         conflictingSwitches,
         leftActive,
         rightActive,
@@ -363,9 +357,12 @@ const AxisControls = ({
     const rightActive = data?.switch_activity?.right_active;
     const leftMasked = data?.preset?.disable_left === true;
     const rightMasked = data?.preset?.disable_right === true;
-    const conflictingSwitches = leftActive === true && rightActive === true;
-    const negativeMoveBlocked = leftActive === true && !leftMasked && !conflictingSwitches;
-    const positiveMoveBlocked = rightActive === true && !rightMasked && !conflictingSwitches;
+    const switchConflictObserved = leftActive === true && rightActive === true;
+    const negativeMoveBlocked = false;
+    const positiveMoveBlocked = false;
+    const homeToZeroBlocked = false;
+    const homeToZeroBlockedTitle = 'Return this axis to controller coordinate 0; does not run switch-search homing. Raw switch readback is displayed but does not software-block this command.';
+    const referenceHomeTitle = 'Manual switch-search home is disabled after live X/Z limit-switch ignore incidents. Use OEM startup-step recipes only after the robot-local predicate is fixed.';
     const motionProfile = lastMotionResult?.motion_profile ?? {
         speed: data?.preset?.speed ?? 100,
         acc: data?.preset?.acc ?? 50,
@@ -482,6 +479,9 @@ const AxisControls = ({
                 </button>
                 <button
                     onClick={() => {
+                        if (homeToZeroBlocked) {
+                            return;
+                        }
                         startCommand('HOME → 0');
                         homeAxis.mutate(
                             { axis, ...motionArtifactPayload },
@@ -491,12 +491,18 @@ const AxisControls = ({
                             },
                         );
                     }}
-                    disabled={!enabled || homeAxis.isPending}
-                    title="Return this axis to controller coordinate 0; does not run switch-search homing."
+                    disabled={!enabled || homeAxis.isPending || homeToZeroBlocked}
+                    title={homeToZeroBlockedTitle}
                     className="ml-auto px-3 py-1.5 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors"
                 >
                     Home → 0
                 </button>
+                <span
+                    title={referenceHomeTitle}
+                    className="px-3 py-1.5 bg-warning/10 text-warning text-xs rounded-lg border border-warning/20"
+                >
+                    Switch-home disabled
+                </span>
             </div>
 
             <div className="flex gap-2 items-center">
@@ -615,9 +621,15 @@ const AxisControls = ({
 
             {(negativeMoveBlocked || positiveMoveBlocked) && (
                 <div className="text-[10px] text-warning">
-                    {negativeMoveBlocked ? 'Negative travel blocked by active left limit.' : null}
+                    {negativeMoveBlocked ? 'Negative travel readback condition observed; software block disabled.' : null}
                     {negativeMoveBlocked && positiveMoveBlocked ? ' ' : null}
-                    {positiveMoveBlocked ? 'Positive travel blocked by active right limit.' : null}
+                    {positiveMoveBlocked ? 'Positive travel readback condition observed; software block disabled.' : null}
+                </div>
+            )}
+
+            {switchConflictObserved && (
+                <div className="text-[10px] text-content-muted">
+                    Raw L/R switch readback both active; displayed as telemetry only. No frontend motion block is applied.
                 </div>
             )}
 
@@ -627,11 +639,6 @@ const AxisControls = ({
                 </div>
             )}
 
-            {conflictingSwitches && (
-                <div className="text-[10px] text-content-muted">
-                    Raw switch conflict: both switch lines are active, so this read is not treated as a real endstop.
-                </div>
-            )}
         </div>
     );
 };
@@ -652,7 +659,8 @@ const CameraAxisQuickControls = ({ axis, label, enabled }: { axis: AxisName; lab
     const rightActive = data?.switch_activity?.right_active;
     const leftMasked = data?.preset?.disable_left === true;
     const rightMasked = data?.preset?.disable_right === true;
-    const conflictingSwitches = leftActive === true && rightActive === true;
+    const switchConflictObserved = leftActive === true && rightActive === true;
+    const homeToZeroBlocked = false;
     const liveDelta =
         commandStartPosition != null && typeof position === 'number'
             ? position - commandStartPosition
@@ -690,7 +698,7 @@ const CameraAxisQuickControls = ({ axis, label, enabled }: { axis: AxisName; lab
                             { onSettled: () => setCommandLabel(null) },
                         );
                     }}
-                    disabled={!enabled || moveRelative.isPending || (leftActive === true && !leftMasked && !conflictingSwitches)}
+                    disabled={!enabled || moveRelative.isPending}
                     className="px-2 py-1 rounded bg-white/10 hover:bg-white/15 text-content text-[11px] border border-white/10 disabled:opacity-30 transition-colors"
                 >
                     ◄
@@ -703,29 +711,30 @@ const CameraAxisQuickControls = ({ axis, label, enabled }: { axis: AxisName; lab
                             { onSettled: () => setCommandLabel(null) },
                         );
                     }}
-                    disabled={!enabled || moveRelative.isPending || (rightActive === true && !rightMasked && !conflictingSwitches)}
+                    disabled={!enabled || moveRelative.isPending}
                     className="px-2 py-1 rounded bg-white/10 hover:bg-white/15 text-content text-[11px] border border-white/10 disabled:opacity-30 transition-colors"
                 >
                     ►
                 </button>
                 <button
                     onClick={() => {
-                        beginCommand('HOME');
+                        beginCommand('HOME → 0');
                         homeAxis.mutate(
                             { axis },
                             { onSettled: () => setCommandLabel(null) },
                         );
                     }}
-                    disabled={!enabled || homeAxis.isPending}
+                    disabled={!enabled || homeAxis.isPending || homeToZeroBlocked}
+                    title="Return this axis to controller coordinate 0; does not run switch-search homing. Raw switch readback is displayed but does not software-block this command."
                     className="ml-auto px-2 py-1 rounded bg-white/10 hover:bg-white/15 text-content text-[11px] border border-white/10 disabled:opacity-30 transition-colors"
                 >
-                    Home
+                    Home → 0
                 </button>
             </div>
             {(leftActive === true || rightActive === true) && (
-                <div className="text-[10px] text-content-muted font-mono">
-                    {conflictingSwitches
-                        ? 'L/R switch conflict'
+                <div className={`text-[10px] ${switchConflictObserved ? 'text-content-muted' : 'text-content-muted'} font-mono`}>
+                    {switchConflictObserved
+                        ? 'L/R switch readback both active (telemetry only)'
                         : `${leftActive === true ? (leftMasked ? 'L sw(masked) ' : 'L sw ') : ''}${rightActive === true ? (rightMasked ? 'R sw(masked)' : 'R sw') : ''}`.trim()}
                 </div>
             )}
@@ -1354,7 +1363,6 @@ const ChillerControlCard = ({ bank, label, enabled }: { bank: ChillerBankName; l
 
 export const BioXpCockpit = () => {
     const [activeTab, setActiveTab] = useState<'connection' | 'operator' | 'service' | 'manual' | 'controls' | 'camera'>('controls');
-    const [linkageInput, setLinkageInput] = useState('');
     const [cameraDevice, setCameraDevice] = useState('/dev/video0');
     const [snapshot, setSnapshot] = useState<string | null>(null);
     const [pollCamera, setPollCamera] = useState(false);
@@ -1370,7 +1378,6 @@ export const BioXpCockpit = () => {
     const [lastHealthyAt, setLastHealthyAt] = useState<number | null>(null);
     const [viewerFullscreen, setViewerFullscreen] = useState(false);
     const [pendingCameraControlCid, setPendingCameraControlCid] = useState<number | null>(null);
-    const [motionHardResetRounds, setMotionHardResetRounds] = useState(2);
     const [liquidVolumeUl, setLiquidVolumeUl] = useState(10);
     const [liquidCycles, setLiquidCycles] = useState(3);
     const [liquidPressureProfile, setLiquidPressureProfile] = useState('1R');
@@ -1395,22 +1402,21 @@ export const BioXpCockpit = () => {
     });
     const hardwareBusy = hardwareMutationCount > 0;
     const motionBusy = motionMutationCount > 0;
-    const { data: linkage, isLoading: linkageLoading } = useGetLinkage();
-    const { data: status, isLoading: statusLoading, isError: statusIsError, error: statusError } = useBioXpStatus(true, false);
-    const setLinkage = useSetLinkage();
-    const disconnectLinkage = useDisconnectLinkage();
+    const bioXpInterlink = useBioXpInterlinkState(false, activeTab === 'connection' ? 5000 : false);
+    const interlinkActive = Boolean(bioXpInterlink.data?.active);
+    const interlinkConfigured = Boolean(bioXpInterlink.data?.configured);
+    const interlinkUrl = bioXpInterlink.data?.robot_api_url ?? bioXpInterlink.data?.recommended_url ?? 'http://robot:8123';
+    const { data: status, isLoading: statusLoading, isError: statusIsError, error: statusError } = useBioXpStatus(interlinkActive, false);
 
     const { data: runtimeStatus, isLoading: runtimeLoading, isError: runtimeStatusIsError, error: runtimeStatusError } = useRuntimeStatus();
-    const reconnectRuntime = useReconnectRuntime();
     const motionPowerEnable = useMotionPowerEnable();
     const motionPowerDiag = useMotionPowerDiag();
     const motionArmStrictStartup = useMotionArmStrictStartup();
-    const motionHardReset = useMotionHardReset();
     const prepareInterlock = usePrepareInterlock();
     const clearLock = useClearLock();
 
-    const hardwareReachable = !!status && !statusIsError && status.hardware_connected;
-    const linkageConfigured = Boolean(linkage?.configured || linkage?.url || status?.linkage_configured || runtimeStatus?.linkage_configured);
+    const hardwareReachable = interlinkActive && !!status && !statusIsError && status.hardware_connected;
+    const linkageConfigured = interlinkConfigured || Boolean(status?.linkage_configured || runtimeStatus?.linkage_configured);
     const runtimeSummary = deriveRuntimeStatusSummary({
         linkageConfigured,
         runtimeLoading,
@@ -1432,9 +1438,9 @@ export const BioXpCockpit = () => {
     const connectionPollingEnabled = activeTab === 'connection' && !hardwareBusy;
     const controlsPollingEnabled = false;
     const cameraDiscoveryEnabled = hardwareReachable && activeTab === 'camera' && !pollCamera && !motionBusy;
-    const capabilities = useBioXpCapabilities(linkageConfigured);
-    const operationCapabilities = useBioXpOperationCapabilities(linkageConfigured);
-    const operationReadiness = useBioXpOperationReadiness(linkageConfigured && activeTab === 'service' && !hardwareBusy, hardwareBusy ? false : 30000);
+    const capabilities = useBioXpCapabilities(interlinkActive);
+    const operationCapabilities = useBioXpOperationCapabilities(interlinkActive);
+    const operationReadiness = useBioXpOperationReadiness(interlinkActive && activeTab === 'service' && !hardwareBusy, hardwareBusy ? false : 30000);
     const prepareSafeOperation = usePrepareSafeOperation();
     const headClearLockOperation = useHeadClearLockOperation();
     const headLiftIncrementOperation = useHeadLiftIncrementOperation();
@@ -1453,7 +1459,7 @@ export const BioXpCockpit = () => {
     const oemRuntimeRecover = useOemRuntimeRecover();
     const oemRuntimeEmergencyStop = useOemRuntimeEmergencyStop();
     const oemInitializeSystem = useOemRuntimeCommand('initializeSystem');
-    const oemPrepareToRunJob = useOemRuntimeCommand('PrepareToRunJob');
+    const oemPrepareToRunJobReadiness = usePrepareToRunJobReadiness();
     const oemUnlockProcess = useOemRuntimeCommand('unlockProcess');
     const motionRangeStatus = useMotionRangeStatus(controlsPollingEnabled, motionBusy ? false : 5000);
     const liquidStatus = useLiquidStatus(controlsPollingEnabled, motionBusy ? false : 5000);
@@ -1495,14 +1501,6 @@ export const BioXpCockpit = () => {
         CAMERA_STREAM_MODES.find((mode) => mode.key === streamMode) ?? CAMERA_STREAM_MODES[1];
 
     useEffect(() => {
-        if (linkage?.url && !linkageInput) {
-            setLinkageInput(linkage.url);
-        } else if (!linkage?.url && linkage?.recommended_url && !linkageInput) {
-            setLinkageInput(linkage.recommended_url);
-        }
-    }, [linkage, linkageInput]);
-
-    useEffect(() => {
         if (hardwareReachable) {
             setLastHealthyAt(Date.now());
         }
@@ -1532,9 +1530,9 @@ export const BioXpCockpit = () => {
         return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
     }, []);
 
-    const controlPlaneReachable = linkageConfigured && operationCapabilities.data?.robot_openapi_reachable !== false;
-    const isConnected = hardwareReachable || controlPlaneReachable || (!!status?.linkage_configured && hasRecentHardwareContact);
-    const isRecovering = !hardwareReachable && (controlPlaneReachable || (!!status?.linkage_configured && hasRecentHardwareContact));
+    const controlPlaneReachable = interlinkActive && linkageConfigured && operationCapabilities.data?.robot_openapi_reachable !== false;
+    const isConnected = interlinkActive && (hardwareReachable || controlPlaneReachable || (!!status?.linkage_configured && hasRecentHardwareContact));
+    const isRecovering = interlinkActive && !hardwareReachable && (controlPlaneReachable || (!!status?.linkage_configured && hasRecentHardwareContact));
     const isDegraded = !!status && !statusIsError && (status.status === 'degraded' || isRecovering);
     const linkageHelp =
         status?.status === 'not_configured'
@@ -1543,7 +1541,7 @@ export const BioXpCockpit = () => {
                 ? getErrorMessage(status.proxy_error.detail)
                 : null;
     const latestCameraResult = latestCameraAction?.data ?? null;
-    const latestHardwareAction = reconnectRuntime.data ?? prepareInterlock.data ?? clearLock.data ?? null;
+    const latestHardwareAction = prepareInterlock.data ?? clearLock.data ?? null;
     const recordCameraAction = (action: string, data: any) => {
         setLatestCameraAction({ action, data });
     };
@@ -1820,7 +1818,6 @@ export const BioXpCockpit = () => {
         getErrorMessage(motionPowerEnable.error) ||
         getErrorMessage(motionPowerDiag.error) ||
         getErrorMessage(motionArmStrictStartup.error) ||
-        getErrorMessage(motionHardReset.error) ||
         (!motionPowerApiMissing ? motionPowerApiError : null) ||
         getErrorMessage(prepareInterlock.error) ||
         getErrorMessage(clearLock.error);
@@ -1978,7 +1975,7 @@ export const BioXpCockpit = () => {
     const liveXyzMotionPanel = (
         <SectionCard
             title="Live X/Y/Z Motion"
-            subtitle="Easy, functional gantry controls: arm first, then use relative step buttons while watching the instrument. These call the real BMS → robot-local move endpoints; no fake/demo layer."
+            subtitle="Operator-readable gantry controls: arm first, then use relative/zero buttons while watching the instrument. Manual switch-search home is disabled until robot-local predicates prove deassert→active transitions."
         >
             <div className="rounded-lg border border-warning/20 bg-warning/5 p-3 space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -2075,7 +2072,7 @@ export const BioXpCockpit = () => {
         >
             <div className="rounded-lg border border-accent/20 bg-accent/5 p-3 space-y-2">
                 <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-accent">Live testing entrypoint</div>
-                <div className="text-xs text-content-muted">Use the no-homing motor arm first. Startup preflight is explicitly non-motion until OEM config/reference gaps are fixed; every command records its exact robot-local response below.</div>
+                <div className="text-xs text-content-muted">Use the no-homing motor arm first. Startup preflight and PrepareToRunJob readiness are explicitly non-motion; the named dry-run route records motion_commanded=false / hardware_touched=false from the robot-local runtime response.</div>
                 <div className="flex flex-wrap gap-2">
                     <button
                         onClick={() => motionArmStrictStartup.mutate(
@@ -2102,11 +2099,23 @@ export const BioXpCockpit = () => {
                         {oemInitializeSystem.isPending ? 'INITIALIZING...' : 'Initialize System'}
                     </button>
                     <button
-                        onClick={() => oemPrepareToRunJob.mutate({ operator: 'bms-cockpit' }, { onSuccess: (data) => recordOemAction('PrepareToRunJob', data), onError: (error) => recordOemError('PrepareToRunJob', error) })}
-                        disabled={!isConnected || oemPrepareToRunJob.isPending}
+                        onClick={() => oemPrepareToRunJobReadiness.mutate(
+                            {
+                                mode: 'dry_run',
+                                operator: 'bms-cockpit',
+                                source: 'bms-oem-runtime-panel',
+                                params: { no_motion: true, deck_inspection: true },
+                            },
+                            {
+                                onSuccess: (data) => recordOemAction('prepare_to_run_job_readiness_no_motion', data),
+                                onError: (error) => recordOemError('prepare_to_run_job_readiness_no_motion', error),
+                            },
+                        )}
+                        disabled={!isConnected || oemPrepareToRunJobReadiness.isPending}
                         className="px-3 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors disabled:opacity-40"
+                        title="Calls /api/bioxp/oem/runtime/readiness/prepare-to-run-job/dry-run; it must not execute the raw PrepareToRunJob runtime command."
                     >
-                        {oemPrepareToRunJob.isPending ? 'PREPARING...' : 'Prepare To Run Job'}
+                        {oemPrepareToRunJobReadiness.isPending ? 'CHECKING READINESS...' : 'PrepareToRunJob Readiness / No Motion'}
                     </button>
                     <button
                         onClick={() => oemStartupDoorEvent.mutate({ event: 'closed', operator: 'bms-cockpit' }, { onSuccess: (data) => recordOemAction('door_closed', data), onError: (error) => recordOemError('door_closed', error) })}
@@ -2417,7 +2426,7 @@ export const BioXpCockpit = () => {
 
             {motionPowerApiMissing && (
                 <div className="rounded border border-warning/30 bg-warning/10 px-3 py-2 text-[11px] text-warning">
-                    Linked robot runtime is older than this BMS UI. `Enable 24V / Prep Axes` is using the legacy interlock-prep path; `Arm Motion`, `Driver Power Diag`, and `Hard Reset` require the newer runtime update.
+                    Linked robot runtime is older than this BMS UI. `Enable 24V / Prep Axes` is using the legacy interlock-prep path; `Arm Motion` and `Driver Power Diag` require the newer runtime update.
                 </div>
             )}
 
@@ -2495,36 +2504,12 @@ export const BioXpCockpit = () => {
                         >
                             {motionPowerDiag.isPending ? 'CHECKING...' : 'Driver Power Diag'}
                         </button>
-                        <div className="flex items-center gap-2">
-                            <input
-                                type="number"
-                                min={1}
-                                max={5}
-                                value={motionHardResetRounds}
-                                onChange={(e) => setMotionHardResetRounds(Number(e.target.value))}
-                                className="w-16 bg-surface border border-accent/10 rounded-lg px-2 py-2 text-content text-xs font-mono"
-                            />
-                            <button
-                                onClick={() =>
-                                    motionHardReset.mutate(
-                                        { rounds: Math.max(1, Math.min(5, motionHardResetRounds || 2)) },
-                                        {
-                                            onSuccess: (data) => recordMotionInfraAction('hard_reset', data),
-                                            onError: (error) => recordMotionInfraError('hard_reset', error),
-                                        },
-                                    )
-                                }
-                                disabled={motionHardReset.isPending || motionPowerApiMissing}
-                                className="px-4 py-2 bg-error/20 hover:bg-error/30 text-error text-xs rounded-lg transition-colors disabled:opacity-40"
-                            >
-                                {motionHardReset.isPending ? 'RESETTING...' : 'Hard Reset'}
-                            </button>
-                        </div>
+
                     </div>
                 </div>
             ) : (
                 <div className="rounded border border-border-primary bg-surface-tertiary px-3 py-2 text-[11px] text-content-muted">
-                    Actuating power, interlock, lock-clear, and reset buttons are hidden from the default operator surface. Open Commissioning Motion only with the operator at the instrument.
+                    Actuating power, interlock, and lock-clear buttons are hidden from the default operator surface. Open Commissioning Motion only with the operator at the instrument.
                 </div>
             )}
 
@@ -2550,8 +2535,8 @@ export const BioXpCockpit = () => {
         <div className="flex flex-col h-full overflow-y-auto p-8 space-y-6 bg-surface">
             <div className="flex justify-between items-start border-b border-border-secondary pb-4">
                 <div>
-                    <h2 className="text-lg font-semibold text-content">BioXP OEM + Liquid Handler Control Surface</h2>
-                    <p className="text-sm text-content-muted">Runtime, startup, liquid-handler, protocol, thermal, chiller, camera, and commissioning controls via the robot-local BioXP API</p>
+                    <h2 className="text-lg font-semibold text-content">BioXP Handler Controls</h2>
+                    <p className="text-sm text-content-muted">OEM/liquid-handler-first BMS proxy for the robot-local BioXP runtime: linkage, named no-motion readiness, startup, readback, protocol, thermal, chiller, camera, and commissioning controls.</p>
                 </div>
                 <div className={`px-4 py-1.5 rounded-sm text-xs font-mono font-semibold border ${isConnected ? (isDegraded ? 'bg-warning/10 text-warning border-warning/30' : 'bg-success/10 text-success border-success/30') : 'bg-error/10 text-error border-error/30'}`}>
                     HARDWARE: {statusLoading ? 'PINGING...' : isConnected ? (isRecovering ? 'RECOVERING' : isDegraded ? 'DEGRADED' : 'ONLINE') : 'OFFLINE'}
@@ -2582,7 +2567,7 @@ export const BioXpCockpit = () => {
                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                         <SectionCard
                             title="Linked Runtime Status"
-                            subtitle={`HTTP reachability for the robot-owned BioXP runtime at ${runtimeStatus?.runtime_url ?? linkage?.url ?? linkage?.recommended_url ?? 'http://robot:8123'}.`}
+                            subtitle={`HTTP reachability for the robot-owned BioXP runtime at ${runtimeStatus?.runtime_url ?? interlinkUrl}.`}
                         >
                             <div className="flex items-center gap-4 flex-wrap">
                                 <div className={`px-3 py-1.5 rounded-sm text-xs font-mono font-semibold border ${runtimeSummary.badgeClassName}`}>
@@ -2601,50 +2586,23 @@ export const BioXpCockpit = () => {
                         </SectionCard>
 
                         <SectionCard
-                            title="Proxy Linkage"
-                            subtitle="Point BMS at the robot-local BioXP runtime. The status poll is strict and will not fake success."
+                            title="Governed Interlink"
+                            subtitle="The cockpit is readback-only until the top-right BIOXP LINK panel activates a saved robot profile."
                         >
-                            <div className="flex gap-2">
-                                <input
-                                    type="text"
-                                    value={linkageInput}
-                                    onChange={(e) => setLinkageInput(e.target.value)}
-                                    placeholder={linkage?.recommended_url ?? 'http://robot:8123'}
-                                    className="flex-1 bg-surface border border-accent/20 rounded-lg px-3 py-2 text-content text-sm font-mono"
-                                />
-                                <button
-                                    onClick={() => setLinkage.mutate(linkageInput)}
-                                    disabled={setLinkage.isPending || linkageLoading}
-                                    className="px-4 py-2 bg-accent hover:bg-accent/80 text-white text-sm rounded-lg transition-colors font-medium"
-                                >
-                                    {setLinkage.isPending ? 'Connecting...' : 'Connect'}
-                                </button>
-                                <button
-                                    onClick={() => {
-                                        disconnectLinkage.mutate();
-                                        setLinkageInput('');
-                                    }}
-                                    disabled={disconnectLinkage.isPending || !linkage?.url}
-                                    className="px-4 py-2 bg-error/20 hover:bg-error/30 text-error text-sm rounded-lg transition-colors font-medium disabled:opacity-40"
-                                >
-                                    {disconnectLinkage.isPending ? '...' : 'Disconnect'}
-                                </button>
+                            <div className="grid grid-cols-1 gap-2 text-xs font-mono text-content-muted">
+                                <div>
+                                    Interlink state: <span className="text-accent">{interlinkActive ? 'active' : interlinkConfigured ? 'saved / inactive' : 'quiet / unconfigured'}</span>
+                                </div>
+                                <div>
+                                    Robot API URL: <span className="text-accent break-all">{interlinkActive ? interlinkUrl : '(inactive)'}</span>
+                                </div>
+                                <div>
+                                    Connect from BIOXP LINK first; this cockpit does not save robot URLs, auto-connect, reset the runtime, reboot the robot OS, home, arm, recover motion, or move axes on load.
+                                </div>
                             </div>
-                            <div className="flex items-center gap-3 text-xs font-mono text-content-muted">
-                                <span>Recommended: <span className="text-accent">{linkage?.recommended_url ?? 'http://robot:8123'}</span></span>
-                                <button
-                                    onClick={() => setLinkageInput(linkage?.recommended_url ?? 'http://robot:8123')}
-                                    className="px-2 py-1 bg-surface-tertiary hover:bg-surface border border-border-primary text-content rounded transition-colors"
-                                >
-                                    Use Recommended URL
-                                </button>
-                            </div>
-                            <div className="text-xs font-mono text-content-muted">
-                                Active linkage: <span className="text-accent">{linkage?.url ?? '(not configured)'}</span>
-                            </div>
-                            {(setLinkage.isError || disconnectLinkage.isError || statusIsError || linkageHelp) && (
+                            {(bioXpInterlink.isError || statusIsError || linkageHelp) && (
                                 <div className="text-xs text-error">
-                                    {getErrorMessage(setLinkage.error) || getErrorMessage(disconnectLinkage.error) || getErrorMessage(statusError) || linkageHelp}
+                                    {getErrorMessage(bioXpInterlink.error) || getErrorMessage(statusError) || linkageHelp}
                                 </div>
                             )}
                         </SectionCard>
@@ -2653,21 +2611,12 @@ export const BioXpCockpit = () => {
                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                         <SectionCard
                             title="Recovery & Interlocks"
-                            subtitle="These are the high-value recovery paths from the canonical BioXP runtime."
+                            subtitle="Default status surface only; lifecycle actions live in BIOXP LINK or Commissioning Motion."
                         >
-                            <div className="flex flex-wrap gap-2">
-                                <button
-                                    onClick={() => reconnectRuntime.mutate()}
-                                    disabled={!isConnected || reconnectRuntime.isPending}
-                                    className="px-4 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors"
-                                >
-                                    {reconnectRuntime.isPending ? 'RECONNECTING...' : 'Reconnect USB Runtime'}
-                                </button>
-                            </div>
-                            <div className="text-[11px] text-content-muted">Motion interlock and lock-clear actions are commissioning-only and are not exposed on this default linkage/status tab.</div>
-                            {(reconnectRuntime.isError || prepareInterlock.isError || clearLock.isError) && (
+                            <div className="text-[11px] text-content-muted">Runtime lifecycle actions are governed by the top-right BIOXP LINK panel. Motion interlock and lock-clear actions are commissioning-only and are not exposed on this default status tab.</div>
+                            {(prepareInterlock.isError || clearLock.isError) && (
                                 <div className="text-xs text-error">
-                                    {getErrorMessage(reconnectRuntime.error) || getErrorMessage(prepareInterlock.error) || getErrorMessage(clearLock.error)}
+                                    {getErrorMessage(prepareInterlock.error) || getErrorMessage(clearLock.error)}
                                 </div>
                             )}
                             <JsonBlock title="Latest Recovery Result" data={latestHardwareAction} fallback="No recovery action executed yet." />
@@ -2819,8 +2768,8 @@ export const BioXpCockpit = () => {
                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                         <div className="space-y-6">
                             <SectionCard
-                                title="Commissioning Motion — Raw Axis Proxy"
-                                subtitle="Hidden from the default handler path. These supervised movement buttons execute through BMS → robot-local BioXP API proxy only for live commissioning, not normal liquid-handler workflow."
+                                title="Commissioning Motion — Axis Controls"
+                                subtitle="Hidden from the default handler path. These supervised movement buttons execute through BMS → robot-local BioXP API proxy only for live commissioning; raw switch-search home is disabled."
                             >
                                 <div className="text-[11px] font-mono text-content-muted">
                                     Safety profile: speed 100, acc 50 unless the robot preset reports a safer axis profile; abort if speed is nonzero with no position delta for 2s.
@@ -2889,7 +2838,7 @@ export const BioXpCockpit = () => {
                                         </div>
                                     </div>
                                 ) : (
-                                    <div className="text-xs text-content-muted">Default live testing uses Runtime Linkage, Protocol Operator, and Handler Controls. Thermal Door remains available as readback and thermal-system context here; direct thermal-door movement is commissioning-only.</div>
+                                    <div className="text-xs text-content-muted">Default live testing uses Governed Interlink, Protocol Operator, and Handler Controls. Thermal Door remains available as readback and thermal-system context here; direct thermal-door movement is commissioning-only.</div>
                                 )}
                             </SectionCard>
                         </div>
@@ -2924,7 +2873,7 @@ export const BioXpCockpit = () => {
                                         disabled={thermalHardReset.isPending}
                                         className="px-4 py-2 bg-error/20 hover:bg-error/30 text-error text-xs rounded-lg transition-colors"
                                     >
-                                        Hard Reset
+                                        Reset thermal controller profile
                                     </button>
                                 </div>
                                 {(thermalBaseline.isError || thermalFastProfile.isError || thermalHardReset.isError || thermalSnapshot.isError) && (
@@ -2956,7 +2905,7 @@ export const BioXpCockpit = () => {
                                         disabled={chillerHardReset.isPending}
                                         className="px-4 py-2 bg-error/20 hover:bg-error/30 text-error text-xs rounded-lg transition-colors"
                                     >
-                                        Hard Reset
+                                        Reset chiller profile
                                     </button>
                                 </div>
                                 {(chillerBaseline.isError || chillerHardReset.isError || chillerSnapshot.isError) && (

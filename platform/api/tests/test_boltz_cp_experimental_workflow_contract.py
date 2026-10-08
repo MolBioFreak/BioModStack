@@ -136,7 +136,9 @@ def test_true_backend_threads_virtual_dram_streaming_cli_flags() -> None:
     assert "def contextPairTileTokensValue = (params.get('bcp_context_store_pair_tile_tokens', '') ?: '').toString().trim()" in run_block
     assert "def contextKeyTileTokensValue = (params.get('bcp_context_store_key_tile_tokens', '') ?: '').toString().trim()" in run_block
     assert "def contextQueryTileTokensValue = (params.get('bcp_context_store_triangle_attention_query_tile_tokens', params.get('bcp_context_query_tile_tokens', '512')) ?: '').toString().trim()" in run_block
-    assert "def contextProjectionCacheByteBudgetValue = (params.get('bcp_context_store_projection_cache_byte_budget', params.get('bcp_projection_cache_byte_budget', '0')) ?: '0').toString().trim()" in run_block
+    assert "def contextProjectionCacheDefaultValue = contextStoreModeValue == 'virtual-dram-stream-attention' ? '2147483648' : '0'" in run_block
+    assert "params.containsKey('bcp_context_store_projection_cache_byte_budget')" in run_block
+    assert "params.containsKey('bcp_projection_cache_byte_budget')" in run_block
     assert "def contextStoreEventLevelValue = (params.get('bcp_context_store_event_level', 'perf-summary') ?: 'perf-summary').toString().trim()" in run_block
     assert "BCP_CONTEXT_STORE_LOGICAL_SIZE_CP=${contextLogicalSizeCp}" in run_block
     assert "BCP_CONTEXT_STORE_PAIR_TILE_TOKENS=${contextPairTileTokens}" in run_block

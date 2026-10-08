@@ -11,8 +11,9 @@ import {
 import { HplcPage } from './hplc';
 import { QpcrPage } from './qpcr';
 import { StatisticsPage } from './statistics';
+import { StatsToolsControlPanel } from './StatsToolsControlPanel';
 
-type AssayTab = 'qpcr' | 'chromatography' | 'statistics';
+type AssayTab = 'qpcr' | 'chromatography' | 'statistics' | 'debug';
 
 const tabs: Array<AssayNavItem<AssayTab>> = [
     {
@@ -36,12 +37,19 @@ const tabs: Array<AssayNavItem<AssayTab>> = [
         description:
             'Manual analytical QC, DOE generation, RSM/regression, SPC, process capability, hypothesis testing, and Plotly visualization.',
     },
+    {
+        id: 'debug',
+        label: 'Debug',
+        eyebrow: 'Stats-tools container',
+        description:
+            'Control panel for the optional stats-tools container lifecycle, health, logs, and CLI-equivalent operator commands.',
+    },
 ];
 
 const assayStatus = [
     {
         title: 'Scope',
-        value: 'BMS-native assay analytics, separate from protein-design result analytics',
+        value: 'BMS-native Stats Toolkit: qPCR, chromatography, DOE/statistics, and stats-tools runtime controls',
         tone: 'accent' as const,
     },
     {
@@ -60,9 +68,9 @@ export function AssayAnalytics() {
     return (
         <AssayPageShell contentClassName="max-w-[1840px]">
             <AssayPageHeader
-                eyebrow="Assay Analytics"
-                title="qPCR, Waters/Empower chromatography, and DOE/statistics"
-                description="BMS-native analysis for QuantStudio, StepOnePlus, Waters Empower3, plasmid isoform workflows, JMP-like statistical tooling, and Plotly visual analytics. Assay workflows now use the same operational workbench format as the rest of BioModStack."
+                eyebrow="Stats Toolkit"
+                title="qPCR, Waters/Empower chromatography, DOE/statistics, and stats-tools runtime"
+                description="BMS-native analysis for QuantStudio, StepOnePlus, Waters Empower3, plasmid isoform workflows, JMP-like statistical tooling, Plotly visual analytics, and optional stats-tools container operations."
             />
 
             <AssayStatusStrip items={assayStatus} />
@@ -78,6 +86,13 @@ export function AssayAnalytics() {
                 </div>
                 <div hidden={activeTab !== 'statistics'}>
                     <StatisticsPage />
+                </div>
+                <div hidden={activeTab !== 'debug'}>
+                    <StatsToolsControlPanel
+                        embeddedContext="stats-toolkit-debug"
+                        title="Stats Toolkit debug / stats-tools container"
+                        subtitle="Container lifecycle control panel for optional assay/statistics runtime packages. Start/stop here without making stats-tools mandatory at boot."
+                    />
                 </div>
             </AssayPanel>
         </AssayPageShell>

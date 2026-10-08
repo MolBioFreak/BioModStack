@@ -39,7 +39,8 @@ def test_start_ui_sh_usage_contract_remains_service_control_only() -> None:
     text = START_UI.read_text(encoding="utf-8")
 
     assert "launch_biomodstack_ui.py" not in text
-    assert 'Usage: $0 {start|stop|status|restart|restart-api} [--runtime dev|container]' in text
+    assert "start-api" in text
+    assert "stop-api" in text
     assert 'exec python3 "$MANAGER" "$ACTION" "$@"' in text
 
 

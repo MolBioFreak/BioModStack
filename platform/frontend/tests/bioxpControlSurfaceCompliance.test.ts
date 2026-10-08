@@ -67,14 +67,50 @@ test('frontend client still exposes all required proxy families while UI gates r
     for (const marker of [
         '/api/bioxp/oem/startup/request',
         '/api/bioxp/oem/runtime/status',
+        '/api/bioxp/oem/runtime/readiness/prepare-to-run-job/dry-run',
         '/api/bioxp/oem/runtime/commands/',
         '/api/bioxp/liquid/status',
         '/api/bioxp/motion/axis/relative',
+        '/api/bioxp/motion/axis/zero',
         '/api/bioxp/motion/power/enable',
         '/api/bioxp/protocol/execute',
     ]) {
         assert.match(clientSource, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     }
+});
+
+test('PrepareToRunJob UI uses the named no-motion readiness route, not the raw runtime command', () => {
+    const oemPanel = sourceBetween(cockpitSource, 'const oemReadbackPanel = (', 'const visionPanel = (');
+
+    assert.match(clientSource, /export const usePrepareToRunJobReadiness/);
+    assert.match(oemPanel, /PrepareToRunJob Readiness \/ No Motion/);
+    assert.match(oemPanel, /named dry-run route/);
+    assert.match(oemPanel, /motion_commanded=false/);
+    assert.match(oemPanel, /recordOemAction\('prepare_to_run_job_readiness_no_motion'/);
+    assert.doesNotMatch(oemPanel, /useOemRuntimeCommand\('PrepareToRunJob'\)/);
+    assert.doesNotMatch(oemPanel, /recordOemAction\('PrepareToRunJob'/);
+});
+
+test('Home-to-zero controls use the zero route and raw switch telemetry does not software-block motion', () => {
+    const axisControls = sourceBetween(cockpitSource, 'const AxisControls = ({', 'const CameraAxisQuickControls = ({');
+    const cameraAxisControls = sourceBetween(cockpitSource, 'const CameraAxisQuickControls = ({', 'type CameraHoldJogCommand = {');
+    const axisDirectionHelper = sourceBetween(cockpitSource, 'const getAxisDirectionState = (', 'const hasMutationKeyPrefix =');
+
+    assert.match(clientSource, /\/api\/bioxp\/motion\/axis\/zero/);
+    assert.doesNotMatch(clientSource, /api\.post\('\/api\/bioxp\/motion\/axis\/home'/);
+    assert.match(axisDirectionHelper, /blocked: false/);
+    assert.match(axisControls, /const negativeMoveBlocked = false/);
+    assert.match(axisControls, /const positiveMoveBlocked = false/);
+    assert.match(axisControls, /const homeToZeroBlocked = false/);
+    assert.match(axisControls, /disabled=\{!enabled \|\| homeAxis\.isPending \|\| homeToZeroBlocked\}/);
+    assert.match(axisControls, /No frontend motion block is applied/);
+    assert.match(cameraAxisControls, /const homeToZeroBlocked = false/);
+    assert.match(cameraAxisControls, /disabled=\{!enabled \|\| moveRelative\.isPending\}/);
+    assert.match(cameraAxisControls, /telemetry only/);
+    assert.doesNotMatch(axisControls, /limitConflictBlocked/);
+    assert.doesNotMatch(axisControls, /Home → 0 blocked/);
+    assert.doesNotMatch(axisControls, /Raw switch conflict fault/);
+    assert.doesNotMatch(cameraAxisControls, /L\/R switch fault: motion blocked/);
 });
 
 test('stale BioXP control-surface labels are absent from active frontend surfaces', () => {
