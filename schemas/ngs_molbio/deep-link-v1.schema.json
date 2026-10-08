@@ -1,0 +1,724 @@
+{
+  "$id": "bms.ngs-molbio.deep-link.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "binding_revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "deployment_profile": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "domain_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "global_experiment_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "local_state_revision_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "schema": {
+          "const": "bms.ngs-molbio.deep-link.v1"
+        },
+        "selector": {
+          "additionalProperties": false,
+          "properties": {
+            "revision_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "sequence_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "sequence_id",
+            "revision_id"
+          ],
+          "type": "object"
+        },
+        "surface": {
+          "const": "molecular_revision"
+        }
+      },
+      "required": [
+        "schema",
+        "deployment_profile",
+        "project_id",
+        "global_experiment_id",
+        "domain_id",
+        "binding_revision_id",
+        "local_state_revision_id",
+        "surface",
+        "selector"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "binding_revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "deployment_profile": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "domain_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "global_experiment_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "local_state_revision_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "schema": {
+          "const": "bms.ngs-molbio.deep-link.v1"
+        },
+        "selector": {
+          "additionalProperties": false,
+          "properties": {
+            "primer_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "revision_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "primer_id",
+            "revision_id"
+          ],
+          "type": "object"
+        },
+        "surface": {
+          "const": "primer_revision"
+        }
+      },
+      "required": [
+        "schema",
+        "deployment_profile",
+        "project_id",
+        "global_experiment_id",
+        "domain_id",
+        "binding_revision_id",
+        "local_state_revision_id",
+        "surface",
+        "selector"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "binding_revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "deployment_profile": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "domain_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "global_experiment_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "local_state_revision_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "schema": {
+          "const": "bms.ngs-molbio.deep-link.v1"
+        },
+        "selector": {
+          "additionalProperties": false,
+          "properties": {
+            "experiment_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "revision_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "experiment_id",
+            "revision_id"
+          ],
+          "type": "object"
+        },
+        "surface": {
+          "const": "pcr_experiment_revision"
+        }
+      },
+      "required": [
+        "schema",
+        "deployment_profile",
+        "project_id",
+        "global_experiment_id",
+        "domain_id",
+        "binding_revision_id",
+        "local_state_revision_id",
+        "surface",
+        "selector"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "binding_revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "deployment_profile": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "domain_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "global_experiment_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "local_state_revision_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "schema": {
+          "const": "bms.ngs-molbio.deep-link.v1"
+        },
+        "selector": {
+          "additionalProperties": false,
+          "properties": {
+            "revision_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "sample_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "sample_id",
+            "revision_id"
+          ],
+          "type": "object"
+        },
+        "surface": {
+          "const": "sample_revision"
+        }
+      },
+      "required": [
+        "schema",
+        "deployment_profile",
+        "project_id",
+        "global_experiment_id",
+        "domain_id",
+        "binding_revision_id",
+        "local_state_revision_id",
+        "surface",
+        "selector"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "binding_revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "deployment_profile": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "domain_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "global_experiment_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "local_state_revision_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "schema": {
+          "const": "bms.ngs-molbio.deep-link.v1"
+        },
+        "selector": {
+          "additionalProperties": false,
+          "properties": {
+            "reference_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "revision_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "reference_id",
+            "revision_id"
+          ],
+          "type": "object"
+        },
+        "surface": {
+          "const": "managed_reference_revision"
+        }
+      },
+      "required": [
+        "schema",
+        "deployment_profile",
+        "project_id",
+        "global_experiment_id",
+        "domain_id",
+        "binding_revision_id",
+        "local_state_revision_id",
+        "surface",
+        "selector"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "binding_revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "deployment_profile": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "domain_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "global_experiment_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "local_state_revision_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "schema": {
+          "const": "bms.ngs-molbio.deep-link.v1"
+        },
+        "selector": {
+          "additionalProperties": false,
+          "properties": {
+            "observed_generation": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "run_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "observed_generation"
+          ],
+          "type": "object"
+        },
+        "surface": {
+          "const": "ont_observation"
+        }
+      },
+      "required": [
+        "schema",
+        "deployment_profile",
+        "project_id",
+        "global_experiment_id",
+        "domain_id",
+        "binding_revision_id",
+        "local_state_revision_id",
+        "surface",
+        "selector"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "binding_revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "deployment_profile": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "domain_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "global_experiment_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "local_state_revision_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "schema": {
+          "const": "bms.ngs-molbio.deep-link.v1"
+        },
+        "selector": {
+          "additionalProperties": false,
+          "properties": {
+            "job_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "manifest_identity": {
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "job_id",
+            "manifest_identity"
+          ],
+          "type": "object"
+        },
+        "surface": {
+          "const": "ngs_result_manifest"
+        }
+      },
+      "required": [
+        "schema",
+        "deployment_profile",
+        "project_id",
+        "global_experiment_id",
+        "domain_id",
+        "binding_revision_id",
+        "local_state_revision_id",
+        "surface",
+        "selector"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "binding_revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "deployment_profile": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "domain_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "global_experiment_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "local_state_revision_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "schema": {
+          "const": "bms.ngs-molbio.deep-link.v1"
+        },
+        "selector": {
+          "additionalProperties": false,
+          "properties": {
+            "panel_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "panel_version": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "panel_id",
+            "panel_version"
+          ],
+          "type": "object"
+        },
+        "surface": {
+          "const": "comparison_panel"
+        }
+      },
+      "required": [
+        "schema",
+        "deployment_profile",
+        "project_id",
+        "global_experiment_id",
+        "domain_id",
+        "binding_revision_id",
+        "local_state_revision_id",
+        "surface",
+        "selector"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "binding_revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "deployment_profile": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "domain_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "global_experiment_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "local_state_revision_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "schema": {
+          "const": "bms.ngs-molbio.deep-link.v1"
+        },
+        "selector": {
+          "additionalProperties": false,
+          "properties": {
+            "evidence_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "wrapper_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "evidence_id",
+            "wrapper_sha256"
+          ],
+          "type": "object"
+        },
+        "surface": {
+          "const": "evidence_assessment"
+        }
+      },
+      "required": [
+        "schema",
+        "deployment_profile",
+        "project_id",
+        "global_experiment_id",
+        "domain_id",
+        "binding_revision_id",
+        "local_state_revision_id",
+        "surface",
+        "selector"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "Exact NGS/MolBio deep link v1"
+}

@@ -1,0 +1,78 @@
+{
+  "$id": "bms.ngs-molbio.connector-command.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "command_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "domain_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "domain_revision_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "domain_revision_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "global_experiment_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "global_receipt_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "global_receipt_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "idempotency_request_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "operation": {
+      "enum": [
+        "initialize",
+        "reverify"
+      ]
+    },
+    "project_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "schema": {
+      "const": "bms.ngs-molbio.connector-command.v1"
+    }
+  },
+  "required": [
+    "schema",
+    "command_id",
+    "operation",
+    "project_id",
+    "global_experiment_id",
+    "domain_id",
+    "domain_revision_id",
+    "domain_revision_sha256",
+    "global_receipt_id",
+    "global_receipt_sha256",
+    "idempotency_request_sha256",
+    "created_at"
+  ],
+  "title": "Connector command v1",
+  "type": "object"
+}

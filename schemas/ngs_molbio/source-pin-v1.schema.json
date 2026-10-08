@@ -1,0 +1,52 @@
+{
+  "$id": "bms.ngs-molbio.source-pin.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "authorities": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "sha256"
+        ],
+        "type": "object"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "type": "array"
+    },
+    "baseline_commit": {
+      "const": "74d49997c4eaf54c28e5521b7e0ebf14eaaf3365"
+    },
+    "baseline_tree": {
+      "const": "b012040276574d13c057c11ebe3bca21f346d375"
+    },
+    "content_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "schema": {
+      "const": "bms.ngs-molbio.source-pin.v1"
+    }
+  },
+  "required": [
+    "schema",
+    "baseline_commit",
+    "baseline_tree",
+    "authorities",
+    "content_sha256"
+  ],
+  "type": "object"
+}

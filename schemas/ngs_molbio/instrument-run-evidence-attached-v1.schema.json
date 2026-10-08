@@ -1,0 +1,48 @@
+{
+  "$id": "bms.molbio-ngs.instrument-run-evidence-attached.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "global_domain_experiment_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "observation_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "observed_generation": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "receipt_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "run_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "schema": {
+      "const": "bms.molbio-ngs.instrument-run-evidence-attached.v1"
+    },
+    "state_revision_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "global_domain_experiment_id",
+    "state_revision_id",
+    "receipt_id",
+    "run_id",
+    "observed_generation",
+    "observation_sha256"
+  ],
+  "type": "object"
+}

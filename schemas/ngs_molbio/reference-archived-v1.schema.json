@@ -1,0 +1,30 @@
+{
+  "$id": "bms.molbio-ngs.reference-archived.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "archived_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "head_generation": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "reference_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "schema": {
+      "const": "bms.molbio-ngs.reference-archived.v1"
+    }
+  },
+  "required": [
+    "schema",
+    "reference_id",
+    "head_generation",
+    "archived_at"
+  ],
+  "type": "object"
+}
