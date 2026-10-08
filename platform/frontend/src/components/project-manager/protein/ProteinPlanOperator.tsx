@@ -5,6 +5,7 @@ import {
     createDomainWorkflowPlan,
     getDomainWorkflowPlan,
     issuePreparedLaunchContext,
+    launchDomainRunGroup,
     listDomainCapabilities,
     listDomainWorkflowPlanRevisions,
     listDomainWorkflowPlans,
@@ -171,7 +172,19 @@ export function ProteinPlanOperator({ projectId, globalExperimentId, domainExper
         mutationFn: async () => {
             if (!plan.data || plan.data.draft_generation === null) throw new Error('The selected Plan has no mutable draft generation.');
             const currentDraft = isObject(plan.data.draft) ? plan.data.draft as JsonObject : {};
-            return replaceDomainWorkflowPlanDraft(projectId, globalExperimentId, domainExperimentId, plan.data.plan_id, plan.data.draft_generation, { ...currentDraft, parameters: values });
+            const currentScheduler = isObject(currentDraft.scheduler) ? currentDraft.scheduler as JsonObject : null;
+            if (!currentScheduler || typeof currentScheduler.model_id !== 'string' || typeof currentScheduler.mode !== 'string') {
+                throw new Error('The selected Plan has no exact server-owned scheduler authority.');
+            }
+            const adapterId = plan.data.capability_contract.capability.workflow_adapter_id;
+            return replaceDomainWorkflowPlanDraft(projectId, globalExperimentId, domainExperimentId, plan.data.plan_id, plan.data.draft_generation, {
+                ...currentDraft,
+                parameters: values,
+                scheduler: {
+                    ...currentScheduler,
+                    params: { ...values, workflow_adapter: adapterId },
+                },
+            });
         },
         onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ['protein-project', ...scopeKey, 'plan', selectedPlanId] }); },
     });
@@ -199,6 +212,11 @@ export function ProteinPlanOperator({ projectId, globalExperimentId, domainExper
             const returnUri = proteinWorkspaceHref(projectId, globalExperimentId, domainExperimentId, 'runs');
             const context = await issuePreparedLaunchContext(projectId, globalExperimentId, domainExperimentId, preparation.preparation_id, returnUri);
             if (context.project_id !== projectId || context.global_experiment_id !== globalExperimentId || context.domain_experiment_id !== domainExperimentId || context.workflow_id !== selectedPlanId || context.workflow_revision_id !== selectedRevisionId || context.preparation_id !== preparation.preparation_id || context.normalized_request_sha256 !== preparation.normalized_request_sha256) throw new Error('The prepared launch context does not match the selected Protein Plan authority.');
+            const runGroup = await launchDomainRunGroup(projectId, globalExperimentId, domainExperimentId, [{ preparation_id: preparation.preparation_id, launch_context_id: context.launch_context_id }]);
+            const attempt = runGroup.runs.find((run) => run.preparation_id === preparation.preparation_id)?.attempts.at(-1);
+            if (!attempt || attempt.launch_context?.launch_context_id !== context.launch_context_id || attempt.state !== 'pending') {
+                throw new Error('The Project Run Group did not reserve the exact prepared native handoff.');
+            }
             const destination = new URL(pinned.canonical_source_destination, window.location.origin);
             destination.searchParams.set('launch_context_id', context.launch_context_id);
             return `${destination.pathname}${destination.search}`;

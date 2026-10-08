@@ -1705,6 +1705,104 @@ export function JobSubmission() {
     const dedicatedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'oligo_design', 'protein_modification_experimental', 'molecular_dynamics', 'conformational_mapping'];
     const showMainHeader = !selectedTemplateId || !dedicatedTemplates.includes(selectedTemplateId);
 
+    const preparedStructureModelId = launchContextQuery.data?.pinned_scheduler?.model_id;
+    const isPreparedStructureFamily = ['boltz2', 'protenix'].includes(String(preparedStructureModelId));
+    const preparedStructureScheduler = (() => {
+        const context = launchContextQuery.data;
+        const scheduler = context?.pinned_scheduler;
+        if (!scheduler || typeof scheduler !== 'object' || Array.isArray(scheduler)) return null;
+        const modelId = scheduler.model_id;
+        const mode = scheduler.mode;
+        const name = scheduler.name;
+        const pinnedParams = scheduler.params;
+        if (
+            !context?.launch_context_id
+            || context.state !== 'reserved'
+            || !['boltz2', 'protenix'].includes(String(modelId))
+            || mode !== 'predict'
+            || typeof name !== 'string'
+            || !name.trim()
+            || !pinnedParams
+            || typeof pinnedParams !== 'object'
+            || Array.isArray(pinnedParams)
+        ) return null;
+        return {
+            context,
+            name,
+            modelId: String(modelId),
+            mode: String(mode),
+            params: pinnedParams as Record<string, UntypedApiValue>,
+        };
+    })();
+    const submitPreparedStructure = useMutation({
+        mutationFn: async () => {
+            if (!preparedStructureScheduler) {
+                throw new Error('The prepared Project structure-prediction scheduler is unavailable.');
+            }
+            const response = await submitJob({
+                name: preparedStructureScheduler.name,
+                model_id: preparedStructureScheduler.modelId,
+                mode: preparedStructureScheduler.mode,
+                params: preparedStructureScheduler.params,
+                launch_context_id: preparedStructureScheduler.context.launch_context_id,
+                ...(preparedStructureScheduler.context.pinned_gpu === null
+                    ? {}
+                    : { pinned_gpu: preparedStructureScheduler.context.pinned_gpu }),
+            });
+            return {
+                response: response.data,
+                returnUri: await completeCurrentLaunchContext(response.data),
+            };
+        },
+        onSuccess: ({ returnUri }) => {
+            queryClient.invalidateQueries({ queryKey: ['jobs'] });
+            navigate(returnUri ?? '/');
+        },
+    });
+
+    if (preparedStructureScheduler) {
+        return (
+            <div className="min-h-screen bg-slate-950 p-6 text-slate-100">
+                <main className="mx-auto max-w-4xl space-y-5">
+                    <section className="rounded-2xl border border-blue-500/40 bg-blue-950/30 p-5">
+                        <h1 className="text-xl font-semibold">Confirm prepared Project structure prediction</h1>
+                        <p className="mt-2 text-sm text-blue-100/80">
+                            This request is immutable. BioModStack will submit the exact server-pinned scheduler values; the native structure form cannot recompute or edit them.
+                        </p>
+                        <dl className="mt-4 grid gap-3 text-xs sm:grid-cols-2">
+                            <div><dt className="text-slate-400">Project</dt><dd className="break-all font-mono">{preparedStructureScheduler.context.project_id}</dd></div>
+                            <div><dt className="text-slate-400">Preparation</dt><dd className="break-all font-mono">{preparedStructureScheduler.context.preparation_id}</dd></div>
+                            <div><dt className="text-slate-400">Model / mode</dt><dd className="font-mono">{preparedStructureScheduler.modelId} / {preparedStructureScheduler.mode}</dd></div>
+                            <div><dt className="text-slate-400">Job name</dt><dd>{preparedStructureScheduler.name}</dd></div>
+                        </dl>
+                    </section>
+                    <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
+                        <h2 className="text-sm font-semibold">Exact pinned scientific request</h2>
+                        <pre className="mt-3 max-h-[32rem] overflow-auto rounded-lg bg-slate-950 p-4 text-xs text-slate-300">{JSON.stringify(preparedStructureScheduler.params, null, 2)}</pre>
+                    </section>
+                    {submitPreparedStructure.error && <p role="alert" className="rounded-lg border border-red-500/40 bg-red-950/40 p-3 text-sm text-red-100">{String(submitPreparedStructure.error instanceof Error ? submitPreparedStructure.error.message : submitPreparedStructure.error)}</p>}
+                    <button
+                        type="button"
+                        disabled={submitPreparedStructure.isPending}
+                        onClick={() => submitPreparedStructure.mutate()}
+                        className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        {submitPreparedStructure.isPending ? 'Submitting exact prepared request…' : 'Submit exact prepared request'}
+                    </button>
+                </main>
+            </div>
+        );
+    }
+    if (launchContextId && launchContextQuery.isLoading) {
+        return <div className="min-h-screen bg-slate-950 p-6 text-slate-100"><main className="mx-auto max-w-3xl rounded-2xl border border-blue-500/40 bg-blue-950/30 p-5">Resolving immutable Project launch authority…</main></div>;
+    }
+    if (launchContextId && launchContextQuery.isError) {
+        return <div className="min-h-screen bg-slate-950 p-6 text-slate-100"><main role="alert" className="mx-auto max-w-3xl rounded-2xl border border-red-500/40 bg-red-950/40 p-5">Project launch is blocked because the launch context is invalid, expired, claimed, or unavailable.</main></div>;
+    }
+    if (isPreparedStructureFamily) {
+        return <div className="min-h-screen bg-slate-950 p-6 text-slate-100"><main role="alert" className="mx-auto max-w-3xl rounded-2xl border border-red-500/40 bg-red-950/40 p-5">Project launch is blocked because the prepared Boltz-2/Protenix scheduler authority is incomplete or is not reserved by a Project Run Group.</main></div>;
+    }
+
     return (
         <div className="min-h-screen bg-slate-950 p-6">
             {launchContextId && (
