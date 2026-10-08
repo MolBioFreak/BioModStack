@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -63,6 +64,25 @@ function resolveConfigDir(options: ShellPathOptions = {}): string {
 function loadInstallProfile(options: ShellPathOptions = {}): InstallProfile {
   const pathExists = options.pathExists ?? fs.existsSync;
   const readText = options.readText ?? ((target: string) => fs.readFileSync(target, 'utf8'));
+  const transaction = path.join(resolveConfigDir(options), 'configuration-v1');
+  const managed = pathExists(transaction);
+  if (managed) {
+    const journal = JSON.parse(readText(path.join(transaction, 'journal.json')));
+    if (journal.schema_version !== 'bms.configuration-journal.v1' ||
+        !pathExists(path.join(transaction, 'active'))) throw new Error('Configuration incomplete; run recover');
+    const destinations = {
+      profile: path.join(resolveConfigDir(options), 'install_profile.json'),
+      core_runtime_env: path.join(resolveConfigDir(options), 'core-runtime.env'),
+      compat_env: path.join(options.homeDir ?? os.homedir(), '.biomodstack', 'env.sh'),
+    };
+    for (const [key, destination] of Object.entries(destinations)) {
+      if (journal.context.destinations[key] !== destination) throw new Error('Configuration context changed');
+      const content = readText(destination as string);
+      if (createHash('sha256').update(content).digest('hex') !== journal.hashes[key]) {
+        throw new Error('Configuration generation mismatch; run recover');
+      }
+    }
+  }
   const installProfilePath = path.join(resolveConfigDir(options), 'install_profile.json');
   if (!pathExists(installProfilePath)) {
     return {};
@@ -72,8 +92,10 @@ function loadInstallProfile(options: ShellPathOptions = {}): InstallProfile {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return {};
     }
+    if (managed !== pathExists(transaction)) throw new Error("Configuration changed; retry");
     return parsed as InstallProfile;
-  } catch {
+  } catch (error) {
+    if (managed || pathExists(transaction)) throw error;
     return {};
   }
 }
@@ -115,11 +137,10 @@ export function resolveDataRoot(options: ShellPathOptions = {}): string {
   const homeDir = options.homeDir ?? os.homedir();
   const env = options.env ?? process.env;
 
+  const installProfile = loadInstallProfile(options);
   if (env.BMS_DATA?.trim()) {
     return resolveUserPath(env.BMS_DATA, homeDir);
   }
-
-  const installProfile = loadInstallProfile(options);
   if (installProfile.data_root?.trim()) {
     return resolveUserPath(installProfile.data_root, homeDir);
   }

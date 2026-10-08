@@ -93,7 +93,7 @@ def validate_install_document(raw: object) -> dict:
     return {"schema_version": SCHEMA_VERSION, "profile": dict(profile), "ingress": dict(ingress)}
 
 
-def load_install_document(path: Path) -> dict:
+def parse_install_document(text: str) -> dict:
     def pairs(items):
         result = {}
         for key, value in items:
@@ -105,10 +105,13 @@ def load_install_document(path: Path) -> dict:
     def constant(value):
         raise ValueError(f"non-finite JSON number: {value}")
 
+    return validate_install_document(json.loads(text, object_pairs_hook=pairs, parse_constant=constant))
+
+
+def load_install_document(path: Path) -> dict:
     if not path.is_file():
         raise ValueError("install document must be an existing regular file")
-    return validate_install_document(json.loads(path.read_text(encoding="utf-8"),
-                                                object_pairs_hook=pairs, parse_constant=constant))
+    return parse_install_document(path.read_text(encoding="utf-8"))
 
 
 def configuration_preview(raw: object, *, project_root: Path) -> dict:
@@ -157,11 +160,12 @@ def configuration_preview(raw: object, *, project_root: Path) -> dict:
             "destinations": destinations,
             "compatibility": {"existing_profile_present": existing.exists() or existing.is_symlink(),
                               "policy": "candidate_only_no_merge_no_migration",
-                              "legacy_profile_api": "unchanged"},
+                              "legacy_profile_api": "legacy_installs_only_managed_generations_read_only"},
             "environment_policy": "HOME/XDG locations only; runtime overrides ignored",
             "effects": {"writes": False, "downloads": False, "service_changes": False, "registration": False},
-            "blockers": [{"code": "transactional_apply_unavailable",
-                          "message": "No configure execution: profile and exports lack a crash-consistent generation transaction"},
+            "apply_policy": "separate_configure_command_first_install_only",
+            "blockers": [{"code": "preview_is_not_an_apply_plan",
+                          "message": "Preview cannot be resumed/applied as a plan; use configure --document for a separately validated first-install transaction"},
                          {"code": "installation_readiness_not_verified",
                           "message": "Preview is not provisioning, ingress enforcement, scientific qualification or readiness"}]}
 

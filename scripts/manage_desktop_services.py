@@ -71,7 +71,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Manage BioModStack desktop services")
     parser.add_argument(
         "action",
-        choices=["start", "start-api", "start-target", "stop", "stop-api", "restart", "restart-api", "status", "discover", "plan", "configure-preview"],
+        choices=["start", "start-api", "start-target", "stop", "stop-api", "restart", "restart-api", "status", "discover", "plan", "configure-preview", "configure", "recover", "resume"],
     )
     parser.add_argument(
         "--runtime",
@@ -83,7 +83,21 @@ def main() -> int:
     parser.add_argument("--target", choices=["dev", "prod", "both"], help="runtime target for start-target")
     parser.add_argument("--model", action="append", default=[], help="reviewed model dependency selection for discover/plan; repeatable")
     parser.add_argument("--document", type=Path, help="versioned install JSON for configure-preview")
+    parser.add_argument("--operation-id", help="expected durable configure operation identity")
+    parser.add_argument("--expect-document-sha256", help="reject a stale input before writing")
     args = parser.parse_args()
+
+    if args.action in {"configure", "recover", "resume"}:
+        if args.notify or args.target or args.runtime or args.model:
+            parser.error("configuration does not accept runtime/model/target/notify")
+        from biomodstack_configuration import configuration_report
+        report = configuration_report(args.action, project_root=REPO_ROOT, document=args.document,
+                                      operation_id=args.operation_id,
+                                      expect_document_sha256=args.expect_document_sha256)
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0 if report["configured"] else 3
+    if args.operation_id or args.expect_document_sha256:
+        parser.error("operation identity/input digest require configure/recover/resume")
 
     if args.action == "configure-preview":
         if not args.document or args.notify or args.target or args.runtime or args.model:

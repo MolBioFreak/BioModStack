@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="${BMS_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+source "$SCRIPT_DIR/configuration_read_guard.sh"
 
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
@@ -11,6 +12,7 @@ export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 if [ -f "$HOME/.biomodstack/env.sh" ]; then
     source "$HOME/.biomodstack/env.sh"
 fi
+bms_configuration_read_finish
 
 FRONTEND_MODE_RAW="${BMS_FRONTEND_MODE:-dev}"
 

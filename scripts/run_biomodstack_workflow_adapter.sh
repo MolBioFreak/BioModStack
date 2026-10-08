@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="${BMS_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+source "$SCRIPT_DIR/configuration_read_guard.sh"
 
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
@@ -97,6 +98,7 @@ fi
 for key in "${!_BMS_LAUNCH_ENV[@]}"; do
     export "$key=${_BMS_LAUNCH_ENV[$key]}"
 done
+bms_configuration_read_finish
 restore_systemd_authority_environment
 pin_nextflow_java
 

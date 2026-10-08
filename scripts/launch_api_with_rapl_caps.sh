@@ -37,7 +37,9 @@ printf -v launch_cmd '%sexport HOME=%q\n' "$launch_cmd" "$TARGET_HOME"
 printf -v launch_cmd '%sexport USER=%q\n' "$launch_cmd" "$TARGET_USER"
 printf -v launch_cmd '%sexport LOGNAME=%q\n' "$launch_cmd" "$TARGET_USER"
 printf -v launch_cmd '%sexport PATH=%q\n' "$launch_cmd" "$TARGET_PATH"
+printf -v launch_cmd '%ssource %q\n' "$launch_cmd" "$PROJECT_DIR/scripts/configuration_read_guard.sh"
 printf -v launch_cmd '%sif [ -f %q ]; then source %q; fi\n' "$launch_cmd" "$TARGET_HOME/.biomodstack/env.sh" "$TARGET_HOME/.biomodstack/env.sh"
+printf -v launch_cmd '%sbms_configuration_read_finish\n' "$launch_cmd"
 if [ -n "${BMS_INPUTS:-}" ]; then
     printf -v launch_cmd '%sexport BMS_INPUTS=%q\n' "$launch_cmd" "$BMS_INPUTS"
 fi

@@ -193,6 +193,13 @@ def _atomic_json_write(path: Path, payload: Mapping[str, Any]) -> None:
 
 
 def _atomic_text_write(path: Path, content: str) -> None:
+    from biomodstack_configuration import configuration_lock, reject_managed_write
+    with configuration_lock():
+        reject_managed_write()
+        _atomic_text_write_unlocked(path, content)
+
+
+def _atomic_text_write_unlocked(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
     temporary.write_text(content, encoding="utf-8")
@@ -248,6 +255,8 @@ class ProductionReleaseBackend:
                 / "core-runtime.env",
             )
         ).expanduser().resolve()
+        from biomodstack_configuration import reject_managed_write
+        reject_managed_write()  # release mutation requires a future managed migration
         runtime_env = _read_runtime_env(self.runtime_env_file)
         self.image_refs = {
             service: runtime_env.get(
