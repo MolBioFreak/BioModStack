@@ -7,6 +7,7 @@ import { ResultsViewer } from './components/ResultsViewer';
 import { JobDetailPage } from './components/JobDetailPage';
 import { MolBioToolkitV2 } from './components/MolBioToolkit/indexV2';
 import { NGSToolkit } from './components/NGSToolkit';
+import { BioXpCockpit } from './components/BioXpCockpit';
 
 function App() {
   return (
@@ -23,6 +24,8 @@ function App() {
           <Route path="/designer" element={<MolBioToolkitV2 />} />
           {/* NGS Data Visualization Toolkit - Nanopore-focused orchestration surface */}
           <Route path="/ngs" element={<NGSToolkit />} />
+          {/* BioXP Control Surface - Hardware proxy node component */}
+          <Route path="/bioxp" element={<BioXpCockpit />} />
         </Routes>
       </Layout>
     </HotkeysProvider>
