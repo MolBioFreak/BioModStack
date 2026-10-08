@@ -4,12 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-try:
-    from services.antibody_artifacts import normalize_antibody_artifact_class
-except Exception:  # pragma: no cover - import fallback for direct script loaders
-    def normalize_antibody_artifact_class(value: Any) -> Optional[str]:
-        text = str(value or "").strip().lower()
-        return text or None
+from antibody_pipeline_contract import normalize_antibody_artifact_class
 
 
 class ResultContract(BaseModel):
