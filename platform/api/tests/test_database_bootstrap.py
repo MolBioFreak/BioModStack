@@ -146,6 +146,23 @@ migrate_database()
     assert run(tmp_path, ATTEST).returncode == 0
 
 
+@pytest.mark.parametrize("kind", ["symlink", "hardlink", "fifo"])
+def test_redirected_or_nonregular_migration_lock_is_rejected(tmp_path, kind):
+    other = tmp_path / "unrelated"
+    other.write_text("preserve")
+    lock = tmp_path / "core.db.migration.lock"
+    if kind == "symlink":
+        lock.symlink_to(other)
+    elif kind == "hardlink":
+        os.link(other, lock)
+    else:
+        os.mkfifo(lock)
+    result = run(tmp_path)
+    assert result.returncode != 0
+    assert other.read_text() == "preserve"
+    assert not (tmp_path / "core.db").exists()
+
+
 def test_bootstrap_ddl_rolls_back_on_failure(tmp_path):
     result = run(tmp_path, '''
 from pathlib import Path

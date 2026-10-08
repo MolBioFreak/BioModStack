@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -178,6 +179,7 @@ def resolve_frontend_environment(project_root: Path) -> dict | None:
 def prerequisite_report(action: str, *, project_root: Path) -> dict:
     report = dict(schema_version=SCHEMA, action=action, status="blocked", ready=False, scientifically_qualified=False, dependencies_installed=False, steps=[], errors=[], read_only=action != "frontend-bootstrap", node_requirement=NODE_REQUIREMENT)
     lock = None
+    source_lock = None
     state = None
     try:
         if action not in ACTIONS:
@@ -202,7 +204,6 @@ def prerequisite_report(action: str, *, project_root: Path) -> dict:
                 raise PrerequisiteError("bootstrap_incomplete", "Run explicit frontend-bootstrap")
             report.update(status="verified", dependencies_installed=True)
             return report
-        source_guard(source, writable=True)
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         lock = (root / "operation.lock").open("a")
         try:
@@ -219,6 +220,18 @@ def prerequisite_report(action: str, *, project_root: Path) -> dict:
                 return report
             except PrerequisiteError:
                 pass
+        source_guard(source, writable=True)
+        # Different external roots still share this source node_modules tree.
+        lock_path = source / "node_modules/.bms-frontend-bootstrap.lock"
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        source_lock = os.fdopen(fd, "r+")
+        lock_stat = os.fstat(source_lock.fileno())
+        if lock_stat.st_nlink != 1 or not stat.S_ISREG(lock_stat.st_mode):
+            raise PrerequisiteError("unsafe_source_path", "Frontend source operation lock must be a single-link regular file")
+        try:
+            fcntl.flock(source_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise PrerequisiteError("source_operation_busy", "Another frontend bootstrap owns this source node_modules tree") from exc
         state = dict(schema_version=SCHEMA, identity=expected, status="running", steps=[], node=node)
         save(root, state)
         env = environment(root)
@@ -246,11 +259,13 @@ def prerequisite_report(action: str, *, project_root: Path) -> dict:
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         error = {"code": getattr(exc, "code", "prerequisite_failed"), "message": str(exc)}
         report["errors"].append(error)
-        if lock and state:
+        if lock and state and error["code"] != "source_operation_busy":
             state.update(status="failed", error=error)
             save(root, state)
             report["steps"] = state.get("steps", [])
     finally:
+        if source_lock:
+            source_lock.close()
         if lock:
             lock.close()
     return report

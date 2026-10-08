@@ -144,6 +144,17 @@ class FrontendPrerequisitesTests(unittest.TestCase):
         self.assertIn("frontend...", commands[1])
         self.assertTrue(all("--ignore-scripts" in c for c in commands))
 
+    def test_source_operation_lock_blocks_different_external_root(self):
+        import fcntl
+        frontend.source_guard(self.source, writable=True)
+        with (self.source / "node_modules/.bms-frontend-bootstrap.lock").open("a") as held:
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with patch.object(frontend, "node_runtime", return_value="/node"), patch.object(frontend.shutil, "which", return_value="/npm"), patch.object(frontend.subprocess, "run") as run:
+                report = frontend.prerequisite_report("frontend-bootstrap", project_root=self.source)
+            self.assertEqual(report["errors"][0]["code"], "source_operation_busy", report)
+            self.assertFalse((self.root / "state.json").exists())
+            run.assert_not_called()
+
     def test_failure_receipt_is_resumable(self):
         with patch.object(frontend, "node_runtime", return_value="/node"), patch.object(frontend.shutil, "which", return_value="/npm"), patch.object(frontend.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)):
             report = frontend.prerequisite_report("frontend-bootstrap", project_root=self.source)

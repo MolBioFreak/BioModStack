@@ -99,6 +99,17 @@ PATH. `BMS_FRONTEND_NODE` can select an explicit absolute Node binary at bootstr
 a conflicting managed launch selection is rejected. Verification probes actual
 Vite, esbuild and Rollup without installing or running lifecycle scripts.
 
+## First database creation
+
+The existing pre-launch migration command now initializes only a genuinely empty
+core SQLite schema, using the ORM-owned base tables in an explicit atomic DDL
+transaction. It then executes every registered historical migration normally;
+no migration-ledger rows are fabricated. Migration-owned tables are created by
+their historical migrations, not today's ORM schema. Existing nonempty databases
+are never treated as fresh installs, and normal application startup remains
+attest-only. A process-scoped file lock serializes initialization/migrations and
+is released on process death; redirected/nonregular locks are rejected.
+
 ## Readiness is checked, not inferred
 
 Development start starts and waits for its workflow adapter, then API and frontend.
