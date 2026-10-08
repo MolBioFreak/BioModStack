@@ -4,6 +4,16 @@
 
 BioModStack is operated as a managed service. Keep the repository limited to code, configuration, schemas, tests, reproducible runtime definitions, and approved release assets. Do not commit generated output, caches, credentials, local databases, logs, temporary scripts, historical copies, or unused/deprecated implementation code.
 
+## Hard rules: specification authority
+
+- The approved specification and explicit user amendments govern implementation scope, architecture, scientific semantics and completion. For Remote Bridge work, read `docs/specs/remote-bridge-1.0.md`, including amendments, before implementation. An agent-created plan, existing workaround or failing test does not authorize deviation.
+- Implement the specified scalable, workflow-agnostic worker through the shared execution-plan/compiler and component-runtime authorities. Local and remote placement consume the same scientific authority. Do not introduce remote-only compilers, parallel runtime stores, per-family remote schedulers or reduced result handling.
+- Workflow-specific adapters are limited to genuinely native scientific contracts, formats and declared behavior. They must use the shared execution, resource, checkpoint, transfer and publication mechanisms. Migrating legacy callbacks is not permission to reproduce bespoke orchestration.
+- Preserve requested/effective settings, candidate identity/order, grouping, requiredness, failure semantics and native results. Do not silently narrow coverage, skip stages or change science to make execution pass.
+- Before editing, identify the governing spec requirement and the existing shared mechanism the change belongs to. This is implementation discipline, not permission for another review/audit cycle. If a genuine conflict requires a spec change, explain it and obtain explicit user authorization; do not implement a substitute architecture first.
+- Completion means the specified scope and gates are fulfilled. Commits, fixture successes, percentages and fail-closed exclusions are not substitutes. Report missing implementation separately from unestablished acceptance or deployment.
+- Current user restrictions: primary agent only; no subagents until explicitly reauthorized. No further test runs or review passes until explicitly reauthorized. The standard workflows below do not override these restrictions; missing acceptance remains missing rather than silently waived.
+
 ## Branch model
 
 - `test` is the sole development and integration branch.
