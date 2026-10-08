@@ -1950,6 +1950,29 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         ]);
     });
 
+    it.each(['0', '90000', '0.5', '', '9e4'])('preserves Z absolute draft %s across catalog polling and dispatches only exact integers', async (value) => {
+        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
+        await setZInput(1, value);
+        const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('Z Axis')) as HTMLElement;
+        const input = article.querySelectorAll('input[type="number"]')[1] as HTMLInputElement;
+        expect(article.textContent).toContain('Requesting 0 is not Home');
+        expect(article.textContent).toContain('current pseudo-home minimum and axis limits');
+        const expected = value === '' ? NaN : Number(value);
+        for (let poll = 0; poll < 3; poll++) {
+            state.catalog.data = { ...state.catalog.data, actions: [...state.catalog.data.actions] };
+            await act(async () => root.render(<BioXpCockpit />));
+            expect(input.valueAsNumber).toBe(expected);
+        }
+        expect(state.yInvokeCalls).toHaveLength(0);
+        const go = [...article.querySelectorAll('button')].find((button) => button.textContent === 'Go absolute') as HTMLButtonElement;
+        expect(go.disabled).toBe(!Number.isInteger(expected));
+        await act(async () => go.click());
+        expect(state.yInvokeCalls.map((call) => {
+            const request = call.request as Record<string, unknown>;
+            return { action_id: request.action_id, inputs: request.inputs };
+        })).toEqual(Number.isInteger(expected) ? [{ action_id: 'oem.z.move_absolute', inputs: { position_steps: expected } }] : []);
+    });
+
     it('uses the robot action enabled flag as final X command authority', async () => {
         const xHome = state.catalog.data.actions.find((row) => row.action_id === 'oem.x.manual_panel_home')!;
         Object.assign(xHome, {
