@@ -54,6 +54,7 @@ class MSAOverrides:
     min_depth_warning: int | None
     min_depth_fail: int | None
     fast_env_fallback_min_depth: int | None
+    allow_degraded_quality: bool = False
 
 
 @dataclass(frozen=True)

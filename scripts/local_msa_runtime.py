@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional
 
 DEFAULT_GPUSERVER_DB_LOAD_MODE = 2
+GPUSERVER_DB_LOAD_MODE_CHOICES = range(4)
 DEFAULT_GPUSERVER_WAIT_TIMEOUT = 120
 DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS = 5.0
 DEFAULT_MSA_SERVER_STATUS_URL = (
@@ -24,8 +25,8 @@ DB_ALIAS_BY_NAME = {
 
 def normalize_gpuserver_db_load_mode(value: Optional[int]) -> int:
     normalized = DEFAULT_GPUSERVER_DB_LOAD_MODE if value is None else int(value)
-    if normalized not in {0, 1, 2, 3}:
-        raise ValueError("gpu_server_db_load_mode must be one of 0, 1, 2, 3")
+    if normalized not in GPUSERVER_DB_LOAD_MODE_CHOICES:
+        raise ValueError("gpu_server_db_load_mode must be in MMseqs db-load-mode range 0..3")
     return normalized
 
 
