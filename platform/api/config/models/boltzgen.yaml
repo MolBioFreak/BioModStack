@@ -121,5 +121,5 @@ ntp_templates:
     description: dCTP for DNA polymerase design
 
 # Not yet integrated - placeholder for future
-enabled: false
-experimental: true
+enabled: true
+experimental: false

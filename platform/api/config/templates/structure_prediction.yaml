@@ -1,0 +1,183 @@
+# Structure Prediction Template
+# Predict 3D protein structure from amino acid sequence using Boltz-2 or RF3
+
+id: structure_prediction
+name: Structure Prediction
+icon: bolt
+color: "#F59E0B"
+description: >
+  Predict 3D protein structure from amino acid sequence using
+  Boltz-2 or RosettaFold3 (RF3).
+
+stages:
+  - name: Structure Prediction
+    tool: Boltz-2/RF3
+    description: Predict 3D structure from amino acid sequence using deep learning.
+
+preset_params:
+  skip_rfd: true
+  skip_rfd_seq: true
+  rfd_mode: null
+
+user_params:
+  # === Core Inputs ===
+  - name: pred_method
+    label: Structure Predictor
+    type: enum
+    enum: [boltz, rf3, both]
+    enum_labels:
+      boltz: Boltz-2 (Fast, SOTA accuracy)
+      rf3: RosettaFold3 (Open-source AF3 alternative)
+      both: Both (Run Boltz-2 and RF3 together)
+    default: boltz
+    required: true
+    description: Deep learning model for structure prediction
+
+  - name: sequence
+    label: Amino Acid Sequence
+    type: text
+    required: true
+    description: Single-letter amino acid sequence (A-Z), or paste FASTA format
+    
+  - name: sequence_name
+    label: Sequence Name
+    type: string
+    default: predicted
+    description: Name for output structure files
+    
+  # === Boltz-2 Parameters ===
+  - name: boltz_use_msa
+    label: "[Boltz-2] Remote MSA"
+    type: boolean
+    default: true
+    description: Enable remote MSA augmentation (slower, better accuracy)
+    condition:
+      param: pred_method
+      values: [boltz, both]
+
+  - name: boltz_recycling_steps
+    label: "[Boltz-2] Recycling Steps"
+    type: integer
+    default: 3
+    minimum: 1
+    maximum: 10
+    description: "Iterative refinement (Default: 3). Use 10 for difficult targets."
+    condition:
+      param: pred_method
+      values: [boltz, both]
+    
+  - name: boltz_sampling_steps
+    label: "[Boltz-2] Sampling Steps"
+    type: integer
+    default: 50
+    minimum: 10
+    maximum: 200
+    description: "Diffusion steps (Default: 50). Higher = potential side-chain precision."
+    condition:
+      param: pred_method
+      values: [boltz, both]
+    
+  - name: boltz_num_samples
+    label: "[Boltz-2] Number of Samples"
+    type: integer
+    default: 1
+    minimum: 1
+    maximum: 5
+    description: Independent structure predictions to generate
+    condition:
+      param: pred_method
+      values: [boltz, both]
+
+  - name: boltz_method
+    label: "[Boltz-2] Conditioning Method"
+    type: enum
+    enum: 
+      - ""
+      - md
+      - x-ray diffraction
+      - electron microscopy
+      - solution nmr
+      - solid-state nmr
+      - neutron diffraction
+      - electron crystallography
+      - fiber diffraction
+      - powder diffraction
+      - infrared spectroscopy
+      - fluorescence transfer
+      - epr
+      - theoretical model
+      - solution scattering
+      - other
+      - afdb
+      - boltz-1
+    enum_labels:
+      "": "None (Standard Folding)"
+    default: ""
+    description: Hint experimental context
+    condition:
+      param: pred_method
+      values: [boltz, both]
+    
+  # === RF3 Parameters ===
+  - name: rf3_use_msa
+    label: "[RF3] Remote MSA"
+    type: boolean
+    default: true
+    description: Enable remote MSA augmentation (slower, better accuracy)
+    condition:
+      param: pred_method
+      values: [rf3, both]
+    
+  - name: rf3_num_recycles
+    label: "[RF3] Recycle Iterations"
+    type: integer
+    default: 10
+    minimum: 1
+    maximum: 20
+    description: "Structure refinement (Default: 10). Critical for accuracy."
+    condition:
+      param: pred_method
+      values: [rf3, both]
+    
+  - name: rf3_num_samples
+    label: "[RF3] Number of Samples"
+    type: integer
+    default: 1
+    minimum: 1
+    maximum: 5
+    description: Independent predictions (Seeds)
+    condition:
+      param: pred_method
+      values: [rf3, both]
+    
+  - name: rf3_early_stopping_plddt
+    label: "[RF3] Early Stop pLDDT"
+    type: number
+    default: 0.5
+    minimum: 0.0
+    maximum: 1.0
+    description: "Abort if quality < threshold (Default: 0.5)"
+    condition:
+      param: pred_method
+      values: [rf3, both]
+    
+  # === Parallelization / Stress Test ===
+  - name: num_parallel_jobs
+    label: Parallel Jobs
+    type: integer
+    default: 1
+    minimum: 1
+    maximum: 4
+    description: Concurrent GPU tasks (Limited by VRAM)
+    
+  - name: gpu_priority
+    label: GPU Priority
+    type: enum
+    enum: [auto, force_5090, force_3090, light]
+    enum_labels:
+      auto: Auto (5090 first, then 3090s)
+      force_5090: Force RTX 5090 only
+      force_3090: Force RTX 3090s only
+      light: Light tasks (5060 Ti)
+    default: auto
+    description: GPU selection strategy

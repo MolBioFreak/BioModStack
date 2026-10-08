@@ -11,6 +11,7 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
         wget \
         curl \
         python3.10 \
+        python3.10-dev \
         python3-venv \
         python3-pip \
         build-essential

@@ -39,28 +39,30 @@ def parse_contig_length(contigs: str) -> Optional[int]:
         return f"{min_len}-{max_len}"
 
 
-def parse_chain_residues(contigs: str) -> dict:
+def convert_legacy_contig_to_rfd3(contigs: str) -> str:
     """
-    Parse chain/residue specifications from contigs.
+    Convert legacy RFD contig format to RFD3 dialect 2 format.
     
-    Examples:
-        '[A17-145/0 50-100]' -> {'A': [(17, 145)]}
+    Legacy format: '[A17-145/0 50-100]' 
+    RFD3 format:   '50-100,/0,A17-145'
+    
+    For monomer: '[50-100]' -> '50-100'
+    For binder:  '[A17-145/0 50-100]' -> '50-100,/0,A17-145'
     """
-    conditioning = {}
+    # Remove brackets
+    contigs = contigs.strip('[]')
     
-    # Match patterns like 'A17-145' or 'B1-50'
-    chain_pattern = r'([A-Z])(\d+)-(\d+)'
-    matches = re.findall(chain_pattern, contigs)
+    # Check if this is a binder contig (has chain specification)
+    chain_pattern = r'([A-Z])(\d+)-(\d+)/0\s+(\d+)-(\d+)'
+    match = re.match(chain_pattern, contigs)
     
-    for chain, start, end in matches:
-        if chain not in conditioning:
-            conditioning[chain] = []
-        conditioning[chain].append({
-            'start': int(start),
-            'end': int(end)
-        })
+    if match:
+        chain, start, end, len_min, len_max = match.groups()
+        # RFD3 format: binder_length,/0,chain_residues
+        return f"{len_min}-{len_max},/0,{chain}{start}-{end}"
     
-    return conditioning
+    # Simple monomer format
+    return contigs
 
 
 def build_rfd3_spec(
@@ -73,6 +75,9 @@ def build_rfd3_spec(
     """
     Build RFD3 JSON specification from RFD parameters.
     
+    Uses RFD3 dialect 2 format as documented in Foundry:
+    https://github.com/RosettaCommons/foundry/blob/production/models/rfd3/docs/protein_binder_design.md
+    
     Args:
         mode: RFD mode (monomer_denovo, binder_denovo, etc.)
         contigs: RFD contig specification string
@@ -81,31 +86,36 @@ def build_rfd3_spec(
         num_designs: Number of designs to generate
     
     Returns:
-        Dictionary suitable for RFD3 JSON input
+        Dictionary suitable for RFD3 JSON input (dialect 2 format)
     """
-    spec = {}
+    spec = {
+        'dialect': 2,
+    }
     
-    # Mode-specific handling
-    if 'denovo' in mode:
-        # Unconditional or simple conditional
-        length = parse_contig_length(contigs)
-        if length:
-            spec['length'] = length
+    # Convert legacy contig format to RFD3 format
+    rfd3_contig = convert_legacy_contig_to_rfd3(contigs)
+    spec['contig'] = rfd3_contig
     
     if input_pdb:
         spec['input'] = str(Path(input_pdb).absolute())
-        
-        # Parse chain conditioning from contigs
-        chain_cond = parse_chain_residues(contigs)
-        if chain_cond:
-            spec['conditioning'] = {'chains': chain_cond}
     
     if hotspots:
-        # Parse hotspot format '[A56,A115,A123]' -> list
+        # Parse hotspot format '[A56,A115,A123]' and convert to RFD3 select_hotspots
+        # RFD3 wants: {"A56": "CA", "A115": "CA", ...} with atom names
+        # Default to CA (alpha carbon) if no atoms specified
+        hotspots = hotspots.strip('[]')
         hotspot_pattern = r'([A-Z])(\d+)'
         matches = re.findall(hotspot_pattern, hotspots)
         if matches:
-            spec['hotspots'] = [{'chain': c, 'residue': int(r)} for c, r in matches]
+            # Use CA (alpha carbon) as default atom for each residue
+            spec['select_hotspots'] = {f"{chain}{res}": "CA" for chain, res in matches}
+            # Use hotspots strategy when select_hotspots are provided
+            if 'binder' in mode:
+                spec['infer_ori_strategy'] = 'hotspots'
+    elif 'binder' in mode:
+        # For binder design without explicit hotspots, use centroid strategy
+        # (hotspots strategy requires select_hotspots which we don't have)
+        spec['infer_ori_strategy'] = 'centroid'
     
     return spec
 

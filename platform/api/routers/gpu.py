@@ -2,12 +2,25 @@
 System monitoring API router - GPU, CPU, RAM statistics.
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel
+import subprocess
 
 router = APIRouter()
+
+# Power profile configuration
+# GPU index -> (eco_limit_watts, default_limit_watts)
+POWER_PROFILES = {
+    0: (500, 575),   # RTX 5090: 500W eco, 575W default
+    2: (300, 370),   # RTX 3090: 300W eco, 370W default
+    3: (300, 390),   # RTX 3090: 300W eco, 390W default
+    # GPU 1 (5060 Ti) intentionally omitted - no limit changes
+}
+
+# Track current eco mode state (in-memory, resets on restart)
+_eco_mode_enabled = False
 
 
 # --- Enhanced GPU Schema ---
@@ -234,4 +247,60 @@ async def get_cpu_only():
 async def get_ram_only():
     """Get RAM status only."""
     return {"ram": get_ram_stats(), "timestamp": datetime.utcnow()}
+
+
+# --- Power Profile Endpoints ---
+
+class PowerProfileResponse(BaseModel):
+    eco_mode: bool
+    message: str
+
+
+def set_gpu_power_limit(gpu_index: int, watts: int) -> bool:
+    """Set power limit for a specific GPU using nvidia-smi."""
+    try:
+        result = subprocess.run(
+            ["sudo", "nvidia-smi", "-i", str(gpu_index), "-pl", str(watts)],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Failed to set power limit for GPU {gpu_index}: {e}")
+        return False
+
+
+@router.get("/power-profile")
+async def get_power_profile() -> PowerProfileResponse:
+    """Get current power profile state."""
+    return PowerProfileResponse(
+        eco_mode=_eco_mode_enabled,
+        message="Eco mode active" if _eco_mode_enabled else "Default power limits"
+    )
+
+
+@router.post("/power-profile")
+async def set_power_profile(enable_eco: bool) -> PowerProfileResponse:
+    """Toggle eco mode power limits."""
+    global _eco_mode_enabled
+
+    errors = []
+    for gpu_index, (eco_watts, default_watts) in POWER_PROFILES.items():
+        target_watts = eco_watts if enable_eco else default_watts
+        if not set_gpu_power_limit(gpu_index, target_watts):
+            errors.append(f"GPU {gpu_index}")
+
+    if errors:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to set power limits for: {', '.join(errors)}"
+        )
+
+    _eco_mode_enabled = enable_eco
+
+    return PowerProfileResponse(
+        eco_mode=_eco_mode_enabled,
+        message=f"Eco mode {'enabled' if enable_eco else 'disabled'} - limits applied"
+    )
 

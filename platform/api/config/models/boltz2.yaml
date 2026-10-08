@@ -28,6 +28,8 @@ modes:
     params:
       - boltz_recycling_steps
       - boltz_diffusion_samples
+      - boltz_use_msa
+      - boltz_method
 
   - id: complex
     name: Complex Prediction
@@ -36,6 +38,8 @@ modes:
       - boltz_recycling_steps
       - boltz_diffusion_samples
       - boltz_use_potentials
+      - boltz_use_msa
+      - boltz_method
 
 params:
   - name: boltz_recycling_steps
@@ -68,6 +72,47 @@ params:
     description: Use physics-based potentials (Boltz-2x mode) for better accuracy
     required: false
     default: false
+
+    hidden: true
+    minimum: 50
+    maximum: 500
+
+  - name: boltz_use_potentials
+    type: boolean
+    description: Use physics-based potentials (Boltz-2x mode) for better accuracy
+    required: false
+    default: false
+
+  - name: boltz_use_msa
+    type: boolean
+    description: Enable Remote MSA Generation (slower, better quality)
+    required: false
+    default: true
+
+  - name: boltz_method
+    type: string
+    description: Experimental Method Conditioning
+    required: false
+    default: ""
+    enum:
+      - ""
+      - md
+      - x-ray diffraction
+      - electron microscopy
+      - solution nmr
+      - solid-state nmr
+      - neutron diffraction
+      - electron crystallography
+      - fiber diffraction
+      - powder diffraction
+      - infrared spectroscopy
+      - fluorescence transfer
+      - epr
+      - theoretical model
+      - solution scattering
+      - other
+      - afdb
+      - boltz-1
 
   - name: boltz_extra_config
     type: string

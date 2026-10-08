@@ -17,30 +17,21 @@ class JobStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
-class PipelineMode(str, Enum):
-    """Available pipeline modes."""
-    MONOMER_DENOVO = "monomer_denovo"
-    MONOMER_FOLDCOND = "monomer_foldcond"
-    MONOMER_MOTIFSCAFF = "monomer_motifscaff"
-    MONOMER_PARTIALDIFF = "monomer_partialdiff"
-    BINDER_DENOVO = "binder_denovo"
-    BINDER_FOLDCOND = "binder_foldcond"
-    BINDER_MOTIFSCAFF = "binder_motifscaff"
-    BINDER_PARTIALDIFF = "binder_partialdiff"
-
 
 # --- Job Schemas ---
 
 class JobCreate(BaseModel):
     """Request schema for creating a new job."""
     name: str = Field(..., min_length=1, max_length=255)
-    mode: PipelineMode
+    model_id: str = Field(..., description="ID of the model to use (e.g., rfdiffusion)")
+    mode: str = Field(..., description="Mode ID for the selected model")
     params: dict = Field(default_factory=dict)
     
     class Config:
         json_schema_extra = {
             "example": {
                 "name": "binder_test_001",
+                "model_id": "rfdiffusion",
                 "mode": "binder_denovo",
                 "params": {
                     "rfd_num_designs": 8,
@@ -57,6 +48,7 @@ class JobResponse(BaseModel):
     id: str
     name: str
     status: JobStatus
+    model_id: str
     mode: str
     params: dict
     created_at: datetime

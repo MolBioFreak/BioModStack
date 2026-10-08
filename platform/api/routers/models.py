@@ -35,7 +35,29 @@ async def list_models(
             "version": m.version,
             "category": m.category,
             "description": m.description,
-            "modes": [{"id": mode.id, "name": mode.name} for mode in m.modes],
+            "modes": [
+                {
+                    "id": mode.id, 
+                    "name": mode.name,
+                    "description": mode.description,
+                    "params": mode.params
+                }
+                for mode in m.modes
+            ],
+            "params": [
+                {
+                    "name": p.name,
+                    "type": p.type,
+                    "description": p.description,
+                    "required": p.required,
+                    "default": p.default,
+                    "enum": p.enum,
+                    "minimum": p.minimum,
+                    "maximum": p.maximum,
+                    "hidden": p.hidden,
+                }
+                for p in m.params
+            ],
             "enabled": m.enabled,
             "experimental": m.experimental,
             "ui_icon": m.ui_icon,

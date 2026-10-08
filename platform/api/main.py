@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 import os
 
 from database import init_db
-from routers import jobs, gpu, files, models
+from routers import jobs, gpu, files, models, templates, inputs, designs, analytics
 
 
 @asynccontextmanager
@@ -39,9 +39,13 @@ app.add_middleware(
 
 # Include routers
 app.include_router(models.router, prefix="/api/models", tags=["models"])
+app.include_router(templates.router, prefix="/api/templates", tags=["templates"])
+app.include_router(inputs.router, prefix="/api/inputs", tags=["inputs"])
 app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
+app.include_router(designs.router, prefix="/api/designs", tags=["designs"])
 app.include_router(gpu.router, prefix="/api/gpu", tags=["gpu"])
 app.include_router(files.router, prefix="/api/files", tags=["files"])
+app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"])
 
 
 @app.get("/api/health")
