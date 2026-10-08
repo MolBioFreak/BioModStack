@@ -19,6 +19,12 @@ import {
     type PendingSessionNavigation,
 } from '../lib/ngsAlignmentViewer';
 import { fetchAlignmentSessions, type AlignmentSession } from '../lib/ngsAlignmentSession';
+import {
+    ngsJobShouldPoll,
+    ngsToolkitSearchForView,
+    ngsToolkitViewFromSearch,
+    type NgsToolkitView,
+} from '../lib/ngsResultRouting';
 import { normalizeNanoporeCloneState } from '../lib/nanoporeCloneState';
 import { jobPollingInterval } from '../lib/queryPolling';
 import { NanoporeTemplate } from './NanoporeTemplate';
@@ -31,7 +37,7 @@ import { useSequenceQcManifest } from './ngs/useSequenceQcManifest';
 import { useThemeColors, useThemePlotlyLayout } from './useThemeColors';
 import { useGlobalExperimentContext } from './experiments/GlobalExperimentContext';
 
-type ToolkitView = 'launch' | 'instrument' | 'runs';
+type ToolkitView = NgsToolkitView;
 type LogTab = 'parsed' | 'command' | 'stderr' | 'nextflow';
 type StageOutputsMap = Record<string, string[]>;
 
@@ -2085,7 +2091,7 @@ export function NGSToolkit() {
     const { updateQueryParams, contextHref } = useGlobalExperimentContext();
     const location = useLocation();
     const navigate = useNavigate();
-    const [view, setView] = useState<ToolkitView>('launch');
+    const [view, setView] = useState<ToolkitView>(() => ngsToolkitViewFromSearch(location.search));
     const [initialValues, setInitialValues] = useState<Record<string, unknown> | undefined>(undefined);
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
@@ -2093,6 +2099,15 @@ export function NGSToolkit() {
         () => new URLSearchParams(location.search).get('job_id')?.trim() || null,
         [location.search],
     );
+    useEffect(() => {
+        setView(ngsToolkitViewFromSearch(location.search));
+    }, [location.search]);
+    const selectView = useCallback((nextView: ToolkitView) => {
+        navigate({
+            pathname: location.pathname,
+            search: ngsToolkitSearchForView(location.search, nextView),
+        });
+    }, [location.pathname, location.search, navigate]);
     const [logsModalOpen, setLogsModalOpen] = useState(false);
     const [logsLoading, setLogsLoading] = useState(false);
     const [logsData, setLogsData] = useState<JobLogs | null>(null);
@@ -2121,6 +2136,7 @@ export function NGSToolkit() {
     const [motifMinCoverage, setMotifMinCoverage] = useState<number>(DEFAULT_MOTIF_MIN_COVERAGE);
     const [requireStrandConcordance, setRequireStrandConcordance] = useState(true);
     const igvContainerRef = useRef<HTMLDivElement | null>(null);
+    const runInspectorRef = useRef<HTMLDivElement | null>(null);
     const igvLoadTokenRef = useRef(0);
     const igvBrowserRef = useRef<UntypedApiValue | null>(null);
     const igvLibraryRef = useRef<UntypedApiValue | null>(null);
@@ -2204,6 +2220,11 @@ export function NGSToolkit() {
         queryFn: () => fetchFullJob(selectedJobId as string),
         enabled: Boolean(selectedJobId),
         retry: false,
+        refetchInterval: (query) => {
+            const currentJob = query.state.data as Job | undefined;
+            const status = currentJob?.status ?? selectedJobSummary?.status;
+            return ngsJobShouldPoll(status) ? jobPollingInterval(4000, query) : false;
+        },
     });
     const selectedJob = fullJobQuery.data ?? null;
 
@@ -2216,6 +2237,14 @@ export function NGSToolkit() {
     useEffect(() => {
         setShowRawTopLoci(false);
     }, [selectedJob?.id]);
+
+    useEffect(() => {
+        if (view !== 'runs' || !selectedJobId || selectedJob?.id !== selectedJobId) return;
+        const inspector = runInspectorRef.current;
+        if (!inspector) return;
+        inspector.focus({ preventScroll: true });
+        inspector.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }, [selectedJob?.id, selectedJobId, view]);
 
     const { data: stagesData, isLoading: stagesLoading } = useQuery({
         queryKey: ['job-stages', selectedJobId],
@@ -3762,7 +3791,7 @@ export function NGSToolkit() {
                             Mol Bio Toolkit
                         </button>
                         <button
-                            onClick={() => setView('launch')}
+                            onClick={() => selectView('launch')}
                             className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${view === 'launch'
                                 ? 'text-white'
                                 : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]'
@@ -3772,7 +3801,7 @@ export function NGSToolkit() {
                             Analyze existing data
                         </button>
                         <button
-                            onClick={() => setView('instrument')}
+                            onClick={() => selectView('instrument')}
                             className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${view === 'instrument'
                                 ? 'text-white'
                                 : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]'
@@ -3782,7 +3811,7 @@ export function NGSToolkit() {
                             Instrument intent
                         </button>
                         <button
-                            onClick={() => setView('runs')}
+                            onClick={() => selectView('runs')}
                             className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${view === 'runs'
                                 ? 'text-white'
                                 : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]'
@@ -3813,11 +3842,11 @@ export function NGSToolkit() {
 
             {view === 'launch' ? (
                 <NanoporeTemplate
-                    onBack={() => setView('runs')}
+                    onBack={() => selectView('runs')}
                     initialValues={initialValues}
                 />
             ) : view === 'instrument' ? (
-                <OntInstrumentPanel onAnalyzeExistingData={() => setView('launch')} />
+                <OntInstrumentPanel onAnalyzeExistingData={() => selectView('launch')} />
             ) : (
                 <section className="space-y-4">
                     <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
@@ -3884,7 +3913,7 @@ export function NGSToolkit() {
                         <div className="px-4 py-3 border-b border-[var(--border-primary)] flex items-center justify-between">
                             <h2 className="text-sm font-semibold text-[var(--text-primary)]">Nanopore Jobs</h2>
                             <button
-                                onClick={() => setView('launch')}
+                                onClick={() => selectView('launch')}
                                 className="px-3 py-1.5 text-xs rounded text-white transition-colors"
                                 style={{ backgroundColor: 'var(--accent-secondary)' }}
                             >
@@ -3957,7 +3986,7 @@ export function NGSToolkit() {
                                                             Logs
                                                         </button>
                                                         <button
-                                                            onClick={() => navigate(contextHref(`/jobs/${job.id}`, { job_id: job.id }))}
+                                                            onClick={() => navigate(contextHref('/ngs', { section: 'analyses', job_id: job.id }))}
                                                             className="px-2 py-1 text-xs rounded bg-[var(--bg-tertiary)] hover:bg-[var(--bg-secondary)] text-[var(--text-primary)]"
                                                         >
                                                             Open
@@ -3966,7 +3995,7 @@ export function NGSToolkit() {
                                                             onClick={() => {
                                                                 if (!selectedJob || selectedJob.id !== job.id) return;
                                                                 setInitialValues(normalizeNanoporeCloneState(selectedJob));
-                                                                setView('launch');
+                                                                selectView('launch');
                                                             }}
                                                             disabled={!fullJobQuery.isSuccess || selectedJob?.id !== job.id}
                                                             title={selectedJobId !== job.id
@@ -3991,7 +4020,12 @@ export function NGSToolkit() {
                         </div>
                     </div>
 
-                    <div className="bg-[var(--bg-secondary)] rounded-lg border border-[var(--border-primary)] p-4 space-y-4">
+                    <div
+                        ref={runInspectorRef}
+                        data-testid="ngs-run-inspector"
+                        tabIndex={-1}
+                        className="bg-[var(--bg-secondary)] rounded-lg border border-[var(--border-primary)] p-4 space-y-4 focus:outline-none focus:ring-2 focus:ring-[var(--accent-secondary)]"
+                    >
                         <div className="flex items-center justify-between">
                             <h3 className="text-sm font-semibold text-[var(--text-primary)]">Run Inspector</h3>
                             {selectedJobId && (

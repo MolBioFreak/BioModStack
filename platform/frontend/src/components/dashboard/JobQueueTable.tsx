@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import type { Job } from '../../lib/api';
+import { isNgsJob, ngsResultHref } from '../../lib/ngsResultRouting';
 import { JobDetailsPanel } from '../JobDetailsPanel';
 import { getModeDisplayName, getStageDisplayName } from '../../constants/displayNames';
 
@@ -59,6 +60,7 @@ export function JobQueueTable({
     quickViewJobId,
     debugMode = false,
 }: JobQueueTableProps) {
+    const location = useLocation();
     const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
     const [sortColumn, setSortColumn] = useState<SortColumn>('created');
     const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
@@ -220,6 +222,7 @@ export function JobQueueTable({
     const renderJobActions = (job: Job, compactButtons = false) => {
         const buttonClass = compactButtons ? 'px-2.5 py-1.5 text-[11px]' : 'px-2 py-1 text-xs';
         const mdJob = isMolecularDynamicsJob(job);
+        const ngsJob = isNgsJob(job);
 
         return (
             <div className={`flex flex-wrap items-center ${compactButtons ? 'gap-1.5' : 'gap-2'}`}>
@@ -235,28 +238,41 @@ export function JobQueueTable({
                 )}
                 {job.status === 'completed' && !mdJob && (
                     <>
-                        <button
-                            onClick={(event) => {
-                                event.stopPropagation();
-                                onViewQuick(job.id);
-                            }}
-                            className={`${buttonClass} rounded transition-colors ${
-                                quickViewJobId === job.id
-                                    ? 'bg-accent/30 text-accent'
-                                    : 'bg-accent/20 text-accent hover:bg-accent/30'
-                            }`}
-                            title="Load in Quick Viewer"
-                        >
-                            View
-                        </button>
-                        <Link
-                            to={`/designs/${job.id}`}
-                            onClick={(event) => event.stopPropagation()}
-                            className={`${buttonClass} rounded bg-emerald-500/20 text-emerald-400 transition-colors hover:bg-emerald-500/30`}
-                            title="Open in Results Viewer"
-                        >
-                            Results
-                        </Link>
+                        {ngsJob ? (
+                            <Link
+                                to={ngsResultHref(job.id, location.search)}
+                                onClick={(event) => event.stopPropagation()}
+                                className={`${buttonClass} rounded bg-emerald-500/20 text-emerald-400 transition-colors hover:bg-emerald-500/30`}
+                                title="Open the selected NGS Run Inspector"
+                            >
+                                NGS Run Inspector
+                            </Link>
+                        ) : (
+                            <>
+                                <button
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        onViewQuick(job.id);
+                                    }}
+                                    className={`${buttonClass} rounded transition-colors ${
+                                        quickViewJobId === job.id
+                                            ? 'bg-accent/30 text-accent'
+                                            : 'bg-accent/20 text-accent hover:bg-accent/30'
+                                    }`}
+                                    title="Load in Quick Viewer"
+                                >
+                                    View
+                                </button>
+                                <Link
+                                    to={`/designs/${job.id}`}
+                                    onClick={(event) => event.stopPropagation()}
+                                    className={`${buttonClass} rounded bg-emerald-500/20 text-emerald-400 transition-colors hover:bg-emerald-500/30`}
+                                    title="Open in Results Viewer"
+                                >
+                                    Results
+                                </Link>
+                            </>
+                        )}
                         {onClone && (
                             <button
                                 onClick={(event) => {
@@ -430,6 +446,7 @@ export function JobQueueTable({
                                 ? 'cancelled'
                                 : 'completed';
                 const isExpanded = expandedBatches.has(batchId);
+                const ngsBatch = batchJobs.length > 0 && batchJobs.every(isNgsJob);
 
                 rows.push(
                     <tr
@@ -448,7 +465,7 @@ export function JobQueueTable({
                                     <span className="text-slate-400">{totalDesigns} designs</span>
                                     <span className="text-slate-400">{formatCreatedAt(item.firstDate)}</span>
                                     <StatusBadge status={batchStatus} />
-                                    {batchStatus === 'completed' && (
+                                    {batchStatus === 'completed' && !ngsBatch && (
                                         <Link
                                             to={`/results?batch_id=${batchId}`}
                                             onClick={(event) => event.stopPropagation()}
@@ -495,10 +512,23 @@ export function JobQueueTable({
                                 </td>
                             </tr>
                             {expandedJobId === job.id && (
-                                <JobDetailsPanel
-                                    job={job}
-                                    onClose={() => setExpandedJobId(null)}
-                                />
+                                isNgsJob(job) ? (
+                                    <tr>
+                                        <td colSpan={6} className="bg-slate-900/40 px-6 py-4 text-sm text-slate-300">
+                                            <Link
+                                                to={ngsResultHref(job.id, location.search)}
+                                                className="font-medium text-emerald-300 hover:text-emerald-200"
+                                            >
+                                                Open NGS Run Inspector
+                                            </Link>
+                                        </td>
+                                    </tr>
+                                ) : (
+                                    <JobDetailsPanel
+                                        job={job}
+                                        onClose={() => setExpandedJobId(null)}
+                                    />
+                                )
                             )}
                         </React.Fragment>,
                     );
@@ -552,10 +582,23 @@ export function JobQueueTable({
                         </td>
                     </tr>
                     {expandedJobId === job.id && (
-                        <JobDetailsPanel
-                            job={job}
-                            onClose={() => setExpandedJobId(null)}
-                        />
+                        isNgsJob(job) ? (
+                            <tr>
+                                <td colSpan={6} className="bg-slate-900/40 px-6 py-4 text-sm text-slate-300">
+                                    <Link
+                                        to={ngsResultHref(job.id, location.search)}
+                                        className="font-medium text-emerald-300 hover:text-emerald-200"
+                                    >
+                                        Open NGS Run Inspector
+                                    </Link>
+                                </td>
+                            </tr>
+                        ) : (
+                            <JobDetailsPanel
+                                job={job}
+                                onClose={() => setExpandedJobId(null)}
+                            />
+                        )
                     )}
                 </React.Fragment>,
             );
@@ -638,10 +681,10 @@ export function JobQueueTable({
                         </div>
                         <div className="pt-1">
                             <Link
-                                to={`/designs/${job.id}`}
+                                to={isNgsJob(job) ? ngsResultHref(job.id, location.search) : `/designs/${job.id}`}
                                 className="inline-flex rounded bg-emerald-500/20 px-2.5 py-1.5 text-[11px] text-emerald-400 transition-colors hover:bg-emerald-500/30"
                             >
-                                Open in Results Viewer
+                                {isNgsJob(job) ? 'Open NGS Run Inspector' : 'Open in Results Viewer'}
                             </Link>
                         </div>
                     </div>
@@ -687,6 +730,7 @@ export function JobQueueTable({
                                         ? 'cancelled'
                                         : 'completed';
                         const isExpanded = expandedBatches.has(item.batchId);
+                        const ngsBatch = batchJobs.length > 0 && batchJobs.every(isNgsJob);
 
                         return (
                             <section key={`batch-mobile-${item.batchId}`} className="rounded-xl border border-accent/30 bg-accent/10 p-3">
@@ -713,7 +757,7 @@ export function JobQueueTable({
                                     </div>
                                 </button>
 
-                                {batchStatus === 'completed' && (
+                                {batchStatus === 'completed' && !ngsBatch && (
                                     <div className="mt-3">
                                         <Link
                                             to={`/results?batch_id=${item.batchId}`}

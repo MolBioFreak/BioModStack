@@ -41,6 +41,25 @@ def test_fastq_qc_has_one_authoritative_fail_closed_method() -> None:
     assert "CRITICAL_FAILURE: SAMTOOLS_CONSENSUS_EMPTY" in module
     assert "CRITICAL_FAILURE: IGV_REPORT_CREATE_REPORT_UNAVAILABLE" in module
     assert "CRITICAL_FAILURE: IGV_REPORT_CREATE_REPORT_FAILED" in module
+    assert "CRITICAL_FAILURE: IGV_REPORT_FINALIZE_FAILED" in module
+    assert "build_small_igv_report_inputs.py" in module
+    assert "finalize_small_igv_report.py" in module
+    assert "--reference-index reference_qc.fasta.fai" in module
+    assert "stageAs: 'source-aligned.bam'" in module
+    assert "stageAs: 'source-aligned.bam.bai'" in module
+    assert 'cp -- "${bam}" aligned.bam' in module
+    assert 'cp -- "${bai}" aligned.bam.bai' in module
+    assert "--out-reference-config igv_reference_config.json" in module
+    assert "--reference-config igv_reference_config.json" in module
+    assert "--fasta reference_qc.fasta" in module
+    assert "--generated-reference-fasta reference_qc.fasta" in module
+    assert "--generated-reference-index reference_qc.fasta.fai" in module
+    assert "igv_reference_uri" not in module
+    assert "--no-embed" in module
+    assert "IGV_REPORT_ARTIFACT_OVERSIZED" in module
+    assert "1048576" in module
+    assert '"url": "\\${bam_local}"' not in module
+    assert "/api/files/" not in module
     assert "<!doctype html>" not in module
     assert "IGV Report Fallback" not in module
     assert 'path "fastq_consensus.fasta", optional: true' not in module

@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import asyncio
-import json
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import io
+import json
+import os
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -317,6 +322,209 @@ def test_symlink_or_special_file_never_becomes_ready(tmp_path: Path, monkeypatch
         service.build_alignment_sessions("job-symlink", results_dir=tmp_path)
 
 
+def test_semantic_role_resolver_requires_ready_exact_mode_role_and_digest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    _write_manifest(tmp_path / "job-a" / "fastq_qc")
+    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
+    primary = service.build_alignment_sessions("job-a", results_dir=tmp_path)[0]
+    alignment = primary["artifacts"]["alignment"]
+
+    path, metadata = service.resolve_alignment_artifact_by_role(
+        "job-a",
+        "primary",
+        "alignment",
+        alignment["sha256"],
+        results_dir=tmp_path,
+    )
+
+    assert path.name == "aligned.bam"
+    assert metadata["sha256"] == alignment["sha256"]
+    for mode, role, digest in (
+        ("dimer_candidates", "alignment", alignment["sha256"]),
+        ("primary", "unknown", alignment["sha256"]),
+        ("primary", "alignment", "0" * 64),
+    ):
+        with pytest.raises(service.AlignmentSessionError, match="not found"):
+            service.resolve_alignment_artifact_by_role(
+                "job-a", mode, role, digest, results_dir=tmp_path
+            )
+
+
+def test_generic_alignment_routes_offload_blocking_service_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from routers import ngs_alignment_sessions as routes
+    from services import ngs_alignment_sessions as service
+
+    monkeypatch.setattr(
+        service,
+        "build_alignment_sessions",
+        lambda *_args, **_kwargs: [{"session_id": "session-a"}],
+    )
+    monkeypatch.setattr(
+        service,
+        "resolve_alignment_session",
+        lambda *_args, **_kwargs: {"session_id": "session-a"},
+    )
+    monkeypatch.setattr(
+        service,
+        "_resolve_internal_artifact",
+        lambda *_args, **_kwargs: (Path("/tmp/artifact"), {"artifact_id": "artifact-a"}),
+    )
+    monkeypatch.setattr(service, "resolve_session_bam", lambda *_args, **_kwargs: Path("/tmp/aligned.bam"))
+    monkeypatch.setattr(
+        service,
+        "read_bam_page",
+        lambda *_args, **_kwargs: {"reads": [], "next_cursor": None},
+    )
+    monkeypatch.setattr(
+        service,
+        "read_bam_exact",
+        lambda *_args, **_kwargs: {
+            "read": {"read_id": "read-a"},
+            "scan_truncated": False,
+        },
+    )
+
+    async def fake_serve_artifact(*_args, **_kwargs):
+        return JSONResponse({"served": True})
+
+    monkeypatch.setattr(routes, "_serve_artifact", fake_serve_artifact)
+    threadpool_calls = []
+    real_run_in_threadpool = routes.run_in_threadpool
+
+    async def tracked_run_in_threadpool(func, *args, **kwargs):
+        threadpool_calls.append(func)
+        return await real_run_in_threadpool(func, *args, **kwargs)
+
+    monkeypatch.setattr(routes, "run_in_threadpool", tracked_run_in_threadpool)
+    app = FastAPI()
+    app.include_router(routes.router, prefix="/api")
+    app.dependency_overrides[routes.require_alignment_job] = lambda: SimpleNamespace(
+        child_output_dir=None,
+        output_dir="/tmp/job-a-run",
+    )
+    client = TestClient(app)
+
+    assert client.get("/api/jobs/job-a/alignment-sessions").status_code == 200
+    assert client.get("/api/jobs/job-a/alignment-sessions/session-a").status_code == 200
+    assert client.get("/api/jobs/job-a/alignment-artifacts/artifact-a").status_code == 200
+    assert client.get("/api/jobs/job-a/reads?session_id=session-a").status_code == 200
+    assert client.get("/api/jobs/job-a/reads/read-a?session_id=session-a").status_code == 200
+
+    assert service.build_alignment_sessions in threadpool_calls
+    assert service.resolve_alignment_session in threadpool_calls
+    assert service._resolve_internal_artifact in threadpool_calls
+    assert service.resolve_session_bam in threadpool_calls
+    assert service.read_bam_page in threadpool_calls
+    assert service.read_bam_exact in threadpool_calls
+
+
+def test_semantic_role_route_is_capability_scoped_and_range_capable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from routers import ngs_alignment_sessions as routes
+    from services import ngs_alignment_sessions as service
+
+    artifact = tmp_path / "aligned.bam"
+    artifact.write_bytes(b"abcdefghij")
+    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    monkeypatch.setattr(
+        service,
+        "resolve_alignment_artifact_by_role",
+        lambda *_args, **_kwargs: (
+            artifact,
+            {"sha256": digest, "mime_type": "application/octet-stream", "size_bytes": 10},
+        ),
+        raising=False,
+    )
+    threadpool_calls = []
+    real_run_in_threadpool = routes.run_in_threadpool
+
+    async def tracked_run_in_threadpool(func, *args, **kwargs):
+        threadpool_calls.append(func)
+        return await real_run_in_threadpool(func, *args, **kwargs)
+
+    monkeypatch.setattr(routes, "run_in_threadpool", tracked_run_in_threadpool)
+    app = FastAPI()
+    app.include_router(routes.router, prefix="/api")
+    app.dependency_overrides[routes.require_alignment_job] = lambda: SimpleNamespace(
+        child_output_dir=None,
+        output_dir="/tmp/job-a-run",
+    )
+    client = TestClient(app)
+
+    response = client.get(
+        f"/api/jobs/job-a/alignment-session-artifacts/primary/alignment/{digest}",
+        headers={"Range": "bytes=3-6"},
+    )
+
+    assert response.status_code == 206
+    assert response.content == b"defg"
+    assert response.headers["content-range"] == "bytes 3-6/10"
+    assert response.headers["etag"] == f'"{digest}"'
+    assert threadpool_calls[0] is service.resolve_alignment_artifact_by_role
+    assert service.open_verified_artifact_snapshot in threadpool_calls
+
+
+def test_semantic_role_route_rejects_resolver_to_descriptor_open_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from routers import ngs_alignment_sessions as routes
+    from services import ngs_alignment_sessions as service
+
+    original = b"verified"
+    mutated = b"tampered"
+    artifact = tmp_path / "aligned.bam"
+    artifact.write_bytes(original)
+    digest = hashlib.sha256(original).hexdigest()
+    _isolate_snapshot_state(service, monkeypatch, tmp_path, limit=1024)
+    real_os_open = service.os.open
+    mutation_count = 0
+
+    def racing_os_open(path, flags, *args, **kwargs):
+        nonlocal mutation_count
+        if path == artifact.name and not flags & os.O_DIRECTORY:
+            artifact.write_bytes(mutated)
+            mutation_count += 1
+        return real_os_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(service.os, "open", racing_os_open)
+    monkeypatch.setattr(
+        service,
+        "resolve_alignment_artifact_by_role",
+        lambda *_args, **_kwargs: (
+            artifact,
+            {
+                "sha256": digest,
+                "mime_type": "application/octet-stream",
+                "size_bytes": len(original),
+            },
+        ),
+    )
+    app = FastAPI()
+    app.include_router(routes.router, prefix="/api")
+    app.dependency_overrides[routes.require_alignment_job] = lambda: SimpleNamespace(
+        child_output_dir=None,
+        output_dir="/tmp/job-a-run",
+    )
+
+    response = TestClient(app).get(
+        f"/api/jobs/job-a/alignment-session-artifacts/primary/alignment/{digest}",
+        headers={"Range": "bytes=0-7"},
+    )
+
+    assert mutation_count == 1
+    assert response.status_code == 400
+    assert response.json() == {"detail": "artifact integrity digest mismatch"}
+
+
 def test_paginated_bam_reads_are_bounded_and_sequences_are_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
     from services import ngs_alignment_sessions as service
 
@@ -407,6 +615,348 @@ def test_reads_route_requires_a_ready_session_and_never_returns_a_full_file(
     }
 
 
+def test_verified_snapshot_rejects_same_size_retimed_replacement(tmp_path: Path) -> None:
+    from services import ngs_alignment_sessions as service
+
+    artifact = tmp_path / "artifact.bin"
+    artifact.write_bytes(b"original")
+    original_stat = artifact.stat()
+    expected_digest = hashlib.sha256(b"original").hexdigest()
+
+    artifact.write_bytes(b"tampered")
+    os.utime(artifact, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+
+    with pytest.raises(service.AlignmentSessionError, match="integrity"):
+        service.open_verified_artifact_snapshot(
+            artifact,
+            expected_size=8,
+            expected_sha256=expected_digest,
+        )
+
+
+def test_artifact_descriptor_rehashes_same_size_retimed_replacement(tmp_path: Path) -> None:
+    from services import ngs_alignment_sessions as service
+
+    artifact = tmp_path / "artifact.bin"
+    original = b"original"
+    tampered = b"tampered"
+    artifact.write_bytes(original)
+    original_stat = artifact.stat()
+    original_digest = hashlib.sha256(original).hexdigest()
+    record = {
+        "path": artifact,
+        "manifest": "fastq_qc/qc_manifest.json",
+        "declared_path": "artifact.bin",
+        "declared_sha256": original_digest,
+        "declared_size_bytes": len(original),
+    }
+
+    first = service._artifact_descriptor("job-a", record, "alignment")
+    artifact.write_bytes(tampered)
+    os.utime(artifact, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+    second = service._artifact_descriptor("job-a", record, "alignment")
+
+    assert first["observed_sha256"] == original_digest
+    assert second["observed_sha256"] == hashlib.sha256(tampered).hexdigest()
+    assert second["integrity_valid"] is False
+
+
+def test_verified_snapshot_rejects_ancestor_symlink_swap(tmp_path: Path) -> None:
+    from services import ngs_alignment_sessions as service
+
+    expected = b"artifact"
+    artifact_dir = tmp_path / "job" / "evidence"
+    artifact_dir.mkdir(parents=True)
+    artifact = artifact_dir / "artifact.bin"
+    artifact.write_bytes(expected)
+    external_dir = tmp_path / "external"
+    external_dir.mkdir()
+    (external_dir / "artifact.bin").write_bytes(expected)
+    artifact_dir.rename(tmp_path / "original-evidence")
+    artifact_dir.symlink_to(external_dir, target_is_directory=True)
+
+    with pytest.raises(service.AlignmentSessionError, match="unsafe"):
+        service.open_verified_artifact_snapshot(
+            artifact,
+            expected_size=len(expected),
+            expected_sha256=hashlib.sha256(expected).hexdigest(),
+        )
+
+
+def test_verified_snapshot_is_stable_after_source_mutation(tmp_path: Path) -> None:
+    from services import ngs_alignment_sessions as service
+
+    original = b"verified"
+    artifact = tmp_path / "artifact.bin"
+    artifact.write_bytes(original)
+    snapshot = service.open_verified_artifact_snapshot(
+        artifact,
+        expected_size=len(original),
+        expected_sha256=hashlib.sha256(original).hexdigest(),
+    )
+    try:
+        artifact.write_bytes(b"mutated!")
+        assert snapshot.read() == original
+    finally:
+        snapshot.close()
+
+
+def test_verified_snapshot_descriptor_is_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from services import ngs_alignment_sessions as service
+
+    payload = b"immutable"
+    _isolate_snapshot_state(service, monkeypatch, tmp_path, limit=1024)
+    artifact = tmp_path / "artifact.bin"
+    artifact.write_bytes(payload)
+    snapshot = service.open_verified_artifact_snapshot(
+        artifact,
+        expected_size=len(payload),
+        expected_sha256=hashlib.sha256(payload).hexdigest(),
+    )
+
+    with pytest.raises(OSError):
+        os.write(snapshot.fileno(), b"X")
+    snapshot.seek(0)
+    assert snapshot.read() == payload
+    snapshot.close()
+
+
+def _isolate_snapshot_state(service, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, limit: int) -> None:
+    cache_dir = tmp_path / "snapshots"
+    cache_dir.mkdir()
+    lock = threading.RLock()
+    monkeypatch.setattr(service, "SNAPSHOT_CACHE_MAX_BYTES", limit)
+    monkeypatch.setattr(service, "_snapshot_cache_lock", lock)
+    monkeypatch.setattr(service, "_snapshot_cache_condition", threading.Condition(lock), raising=False)
+    monkeypatch.setattr(service, "_snapshot_cache_dir", cache_dir)
+    monkeypatch.setattr(service, "_snapshot_cache_owner", None, raising=False)
+    monkeypatch.setattr(service, "_snapshot_cache", service.OrderedDict())
+    monkeypatch.setattr(service, "_snapshot_cache_leases", {}, raising=False)
+    monkeypatch.setattr(service, "_snapshot_cache_bytes", 0)
+    monkeypatch.setattr(service, "_snapshot_inflight", set(), raising=False)
+    monkeypatch.setattr(service, "_snapshot_inflight_bytes", 0, raising=False)
+
+
+def test_oversized_snapshot_is_rejected_before_source_or_temporary_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    _isolate_snapshot_state(service, monkeypatch, tmp_path, limit=4)
+    artifact = tmp_path / "artifact.bin"
+    artifact.write_bytes(b"12345")
+    source_opened = False
+    temporary_opened = False
+
+    def fail_source(_path: Path):
+        nonlocal source_opened
+        source_opened = True
+        raise AssertionError("source must not open")
+
+    def fail_temporary(*_args, **_kwargs):
+        nonlocal temporary_opened
+        temporary_opened = True
+        raise AssertionError("temporary must not open")
+
+    monkeypatch.setattr(service, "_open_regular_file_no_symlinks", fail_source)
+    monkeypatch.setattr(service.tempfile, "NamedTemporaryFile", fail_temporary)
+
+    with pytest.raises(service.AlignmentSessionError, match="exceeds snapshot limit"):
+        service.open_verified_artifact_snapshot(
+            artifact,
+            expected_size=5,
+            expected_sha256=hashlib.sha256(b"12345").hexdigest(),
+        )
+
+    assert source_opened is False
+    assert temporary_opened is False
+
+
+def test_same_digest_snapshot_copy_is_single_flight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    payload = b"12345678"
+    _isolate_snapshot_state(service, monkeypatch, tmp_path, limit=len(payload))
+    artifact = tmp_path / "artifact.bin"
+    artifact.write_bytes(payload)
+    first_read_started = threading.Event()
+    release_first_read = threading.Event()
+    source_open_count = 0
+    source_count_lock = threading.Lock()
+    original_open = service._open_regular_file_no_symlinks
+
+    class BlockingSource:
+        def __init__(self, handle) -> None:
+            self._handle = handle
+
+        def read(self, size: int = -1) -> bytes:
+            first_read_started.set()
+            assert release_first_read.wait(timeout=2)
+            return self._handle.read(size)
+
+        def fileno(self) -> int:
+            return self._handle.fileno()
+
+        def close(self) -> None:
+            self._handle.close()
+
+    def open_source(path: Path):
+        nonlocal source_open_count
+        if path != artifact:
+            return original_open(path)
+        with source_count_lock:
+            source_open_count += 1
+        return BlockingSource(original_open(path))
+
+    monkeypatch.setattr(service, "_open_regular_file_no_symlinks", open_source)
+    kwargs = {
+        "expected_size": len(payload),
+        "expected_sha256": hashlib.sha256(payload).hexdigest(),
+    }
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(service.open_verified_artifact_snapshot, artifact, **kwargs)
+        assert first_read_started.wait(timeout=2)
+        second = executor.submit(service.open_verified_artifact_snapshot, artifact, **kwargs)
+        assert second.done() is False
+        release_first_read.set()
+        first_snapshot = first.result(timeout=2)
+        second_snapshot = second.result(timeout=2)
+
+    assert source_open_count == 1
+    assert first_snapshot.read() == payload
+    assert second_snapshot.read() == payload
+    first_snapshot.close()
+    second_snapshot.close()
+
+
+def test_active_snapshot_lease_causes_fail_fast_capacity_rejection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    _isolate_snapshot_state(service, monkeypatch, tmp_path, limit=4)
+    first_path = tmp_path / "first.bin"
+    second_path = tmp_path / "second.bin"
+    first_path.write_bytes(b"1111")
+    second_path.write_bytes(b"2222")
+    original_open = service._open_regular_file_no_symlinks
+    second_source_opened = threading.Event()
+
+    def tracked_open(path: Path):
+        if path == second_path:
+            second_source_opened.set()
+        return original_open(path)
+
+    monkeypatch.setattr(service, "_open_regular_file_no_symlinks", tracked_open)
+    first_snapshot = service.open_verified_artifact_snapshot(
+        first_path,
+        expected_size=4,
+        expected_sha256=hashlib.sha256(b"1111").hexdigest(),
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        second = executor.submit(
+            service.open_verified_artifact_snapshot,
+            second_path,
+            expected_size=4,
+            expected_sha256=hashlib.sha256(b"2222").hexdigest(),
+        )
+        try:
+            with pytest.raises(service.AlignmentSessionError, match="capacity unavailable"):
+                second.result(timeout=0.2)
+            assert second_source_opened.is_set() is False
+        finally:
+            first_snapshot.close()
+
+    second_snapshot = service.open_verified_artifact_snapshot(
+        second_path,
+        expected_size=4,
+        expected_sha256=hashlib.sha256(b"2222").hexdigest(),
+    )
+    assert second_snapshot.read() == b"2222"
+    second_snapshot.close()
+
+
+def test_temporary_open_failure_closes_source_and_releases_reservation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    payload = b"1234"
+    _isolate_snapshot_state(service, monkeypatch, tmp_path, limit=4)
+    source = io.BytesIO(payload)
+    monkeypatch.setattr(service, "_open_regular_file_no_symlinks", lambda _path: source)
+    monkeypatch.setattr(
+        service.tempfile,
+        "NamedTemporaryFile",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk unavailable")),
+    )
+
+    with pytest.raises(OSError, match="disk unavailable"):
+        service.open_verified_artifact_snapshot(
+            tmp_path / "artifact.bin",
+            expected_size=4,
+            expected_sha256=hashlib.sha256(payload).hexdigest(),
+        )
+
+    assert source.closed is True
+    assert service._snapshot_inflight_bytes == 0
+    assert service._snapshot_inflight == set()
+
+
+def test_missing_cached_snapshot_releases_accounted_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    digest = "a" * 64
+    monkeypatch.setattr(service, "_snapshot_cache_dir", tmp_path)
+    monkeypatch.setattr(service, "_snapshot_cache", service.OrderedDict([(digest, 17)]))
+    monkeypatch.setattr(service, "_snapshot_cache_bytes", 17)
+
+    assert service._cached_snapshot(digest, 17) is None
+    assert service._snapshot_cache == {}
+    assert service._snapshot_cache_bytes == 0
+
+
+@pytest.mark.asyncio
+async def test_artifact_snapshot_open_runs_outside_the_event_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from routers import ngs_alignment_sessions as routes
+
+    artifact = tmp_path / "alignment.bam"
+    artifact.write_bytes(b"bam")
+    event_loop_thread = threading.get_ident()
+    opener_thread: int | None = None
+
+    def open_snapshot(*_args, **_kwargs):
+        nonlocal opener_thread
+        opener_thread = threading.get_ident()
+        return io.BytesIO(b"bam")
+
+    monkeypatch.setattr(routes.service, "open_verified_artifact_snapshot", open_snapshot)
+    request = Request({"type": "http", "method": "GET", "path": "/artifact", "headers": []})
+    response = await routes._serve_artifact(
+        artifact,
+        {"size_bytes": 3, "sha256": hashlib.sha256(b"bam").hexdigest(), "mime_type": "application/octet-stream"},
+        request,
+    )
+
+    assert response.status_code == 200
+    assert opener_thread is not None
+    assert opener_thread != event_loop_thread
+    await response.body_iterator.aclose()
+
+
 def test_alignment_routes_enforce_the_job_authorization_dependency(monkeypatch: pytest.MonkeyPatch) -> None:
     from routers import ngs_alignment_sessions as routes
     from services import ngs_alignment_sessions as service
@@ -423,9 +973,14 @@ def test_alignment_routes_enforce_the_job_authorization_dependency(monkeypatch: 
     app = FastAPI()
     app.include_router(routes.router, prefix="/api")
     app.dependency_overrides[routes.require_alignment_job] = deny_access
-    response = TestClient(app).get("/api/jobs/job-b/alignment-sessions")
-    assert response.status_code == 403
-    assert response.json() == {"detail": "job access denied"}
+    client = TestClient(app)
+    for url in (
+        "/api/jobs/job-b/alignment-sessions",
+        f"/api/jobs/job-b/alignment-session-artifacts/primary/alignment/{'0' * 64}",
+    ):
+        response = client.get(url)
+        assert response.status_code == 403
+        assert response.json() == {"detail": "job access denied"}
 
 
 def test_read_inspection_caps_cursor_and_total_records_scanned(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -471,8 +1026,6 @@ def test_equal_length_wrong_reference_fails_exact_identity_validation(
         return SimpleNamespace(stdout=stdout, stderr="", returncode=0)
 
     monkeypatch.setattr(service.subprocess, "run", fake_run)
-    service._validate_alignment_bundle_cached.cache_clear()
-
     valid, reason = service._validate_alignment_bundle(bam, index, reference, None)
 
     assert valid is False
@@ -497,7 +1050,6 @@ def test_missing_m5_accepts_only_matching_server_manifest_reference_binding(
         return SimpleNamespace(stdout=stdout, stderr="", returncode=0)
 
     monkeypatch.setattr(service.subprocess, "run", fake_run)
-    service._validate_alignment_bundle_cached.cache_clear()
     expected = hashlib.sha256(b"ACGTACGT").hexdigest()
 
     assert service._validate_alignment_bundle(bam, index, reference, expected) == (True, None)
