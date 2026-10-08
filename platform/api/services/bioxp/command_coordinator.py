@@ -116,6 +116,13 @@ class CommandCoordinator:
         command_id = str(uuid4())
         try:
             payload = request.model_dump(mode="json", exclude={"command", "expected_generation", "idempotency_key"})
+            if request.command == "run_oem_motor_stage":
+                payload = {
+                    "name": "startupHomingStepwise",
+                    "mode": request.mode,
+                    "operator_ack": request.operator_ack,
+                    "params": {"homing_step": request.stage},
+                }
             try:
                 response = await client.request(definition.route_key, json_data=payload)
                 handler_response = dict(response) if isinstance(response, Mapping) else {"response": response}

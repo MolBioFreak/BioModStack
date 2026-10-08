@@ -30,6 +30,15 @@ class InitializeMotorsCommand(_CommandBase):
     command: Literal["initialize_motors"]
 
 
+class RunOemMotorStageCommand(_CommandBase):
+    """One admitted M01–M04 source stage; never a generic movement request."""
+
+    command: Literal["run_oem_motor_stage"]
+    stage: Literal["z-home", "gripper-current-31", "gripper-clear-10000", "gripper-home"]
+    mode: Literal["live"]
+    operator_ack: Literal["HOME"]
+
+
 class StartJobCommand(_CommandBase):
     command: Literal["start_job"]
     job_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
@@ -59,6 +68,7 @@ CommandRequest: TypeAlias = Annotated[
     | CollectHardwareSnapshotCommand
     | InitializeOemEnvironmentCommand
     | InitializeMotorsCommand
+    | RunOemMotorStageCommand
     | StartJobCommand
     | PauseJobCommand
     | ResumeJobCommand

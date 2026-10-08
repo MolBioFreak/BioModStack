@@ -26,6 +26,15 @@ type CommissioningCommandName =
     | 'collect_hardware_snapshot'
     | 'initialize_oem_environment';
 
+type OemMotorStage = 'z-home' | 'gripper-current-31' | 'gripper-clear-10000' | 'gripper-home';
+
+const OEM_MOTOR_STAGE_CONTROLS: ReadonlyArray<{ stage: OemMotorStage; label: string; detail: string }> = [
+    { stage: 'z-home', label: 'M01 · Z reference', detail: 'OEM stage M01: source-bound Z axis search-home.' },
+    { stage: 'gripper-current-31', label: 'M02 · Gripper current 31', detail: 'OEM stage M02: source-bound gripper current parameter = 31.' },
+    { stage: 'gripper-clear-10000', label: 'M03 · Gripper clear +10000', detail: 'OEM stage M03: source-bound +10000 relative clearance and stopped wait.' },
+    { stage: 'gripper-home', label: 'M04 · Gripper home', detail: 'OEM stage M04: source-bound gripper home.' },
+];
+
 const OEM_STARTUP_STAGES = [
     'constructor_pipette_stage',
     'initialization_without_motion',
@@ -110,6 +119,17 @@ export function BioXpCockpit() {
         executeCommand.mutate(commandPayload(command));
     };
 
+    const runOemMotorStage = (stage: OemMotorStage) => {
+        executeCommand.mutate({
+            command: 'run_oem_motor_stage',
+            stage,
+            mode: 'live',
+            operator_ack: 'HOME',
+            expected_generation: connection?.generation ?? 0,
+            idempotency_key: crypto.randomUUID(),
+        });
+    };
+
     return (
         <div className="space-y-6 p-6 text-slate-100">
             <header>
@@ -178,6 +198,30 @@ export function BioXpCockpit() {
                     })}
                 </div>
                 {!connection?.startup_lifecycle && <p className="mt-3 text-sm text-amber-300">Collect a hardware snapshot or probe the active robot to load lifecycle evidence.</p>}
+            </section>
+
+            <section className="rounded-xl border border-cyan-700/60 bg-cyan-950/20 p-5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h2 className="text-lg font-semibold">OEM initializeMotors · M01–M04</h2>
+                    <span className="text-xs text-cyan-200">Queued, typed, source-bound</span>
+                </div>
+                <p className="mt-2 text-sm text-slate-300">Only the first four completed OEM stages are exposed. Each request is routed to the robot-owned stage ledger; it rejects any out-of-order stage, missing predecessor observation, unavailable runtime, or non-admitted hardware state.</p>
+                <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                    {OEM_MOTOR_STAGE_CONTROLS.map(({ stage, label, detail }) => {
+                        const available = mutationAccessEnabled
+                            && isBioXpCommandAvailable(status?.available_commands, 'run_oem_motor_stage', derived?.label);
+                        const blockedReason = status?.unavailable_commands?.run_oem_motor_stage
+                            ?? (statusQuery.isError ? 'Status is unavailable.' : 'Robot has not admitted this source stage.');
+                        return (
+                            <article key={stage} className="rounded border border-cyan-700/50 bg-slate-950/40 p-4">
+                                <h3 className="font-semibold">{label}</h3>
+                                <p className="mt-1 text-sm text-slate-300">{detail}</p>
+                                <button type="button" disabled={!available || executeCommand.isPending} onClick={() => runOemMotorStage(stage)} className="mt-3 rounded bg-cyan-700 px-3 py-2 text-sm font-semibold disabled:opacity-40">Queue {label}</button>
+                                {!available && <p className="mt-2 text-xs text-slate-500">Blocked: {blockedReason}</p>}
+                            </article>
+                        );
+                    })}
+                </div>
             </section>
 
             <section className="rounded-xl border border-slate-800 bg-slate-950/70 p-5">

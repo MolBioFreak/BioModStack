@@ -22,6 +22,31 @@ def test_command_request_is_discriminated_and_rejects_unknown_names_or_parameter
     )
     assert valid.command == "initialize_motors"
 
+    staged = parse(
+        {
+            "command": "run_oem_motor_stage",
+            "expected_generation": 3,
+            "idempotency_key": "m01-z-home-3",
+            "stage": "z-home",
+            "mode": "live",
+            "operator_ack": "HOME",
+        }
+    )
+    assert staged.stage == "z-home"
+    assert staged.operator_ack == "HOME"
+
+    with pytest.raises(ValidationError):
+        parse(
+            {
+                "command": "initialize_motors",
+                "expected_generation": 3,
+                "idempotency_key": "unknown-stage-3",
+                "stage": "raw-axis-jog",
+                "mode": "live",
+                "operator_ack": "HOME",
+            }
+        )
+
     with pytest.raises(ValidationError):
         parse({"command": "arbitrary_path", "expected_generation": 3, "idempotency_key": "x"})
     with pytest.raises(ValidationError):
@@ -43,6 +68,7 @@ def test_default_registry_exposes_only_current_compact_commissioning_mappings() 
         "collect_hardware_snapshot",
         "initialize_oem_environment",
         "initialize_motors",
+        "run_oem_motor_stage",
         "start_job",
         "pause_job",
         "resume_job",
@@ -53,6 +79,7 @@ def test_default_registry_exposes_only_current_compact_commissioning_mappings() 
         "activate_usb_for_service": "activate_usb_for_service",
         "collect_hardware_snapshot": "collect_hardware_snapshot",
         "initialize_oem_environment": "initialize_oem_environment",
+        "run_oem_motor_stage": "run_oem_motor_stage",
     }
     for name, route_key in enabled.items():
         assert registry[name].enabled is True
