@@ -16,7 +16,6 @@ import {
 } from 'molstar/lib/mol-plugin-state/helpers/structure-overpaint';
 import { clearStructureTransparency, setStructureTransparency } from 'molstar/lib/mol-plugin-state/helpers/structure-transparency';
 import { StateTransforms } from 'molstar/lib/mol-plugin-state/transforms';
-import { TrajectoryFromModelAndCoordinates } from 'molstar/lib/mol-plugin-state/transforms/model';
 import { createVolumeRepresentationParams } from 'molstar/lib/mol-plugin-state/helpers/volume-representation-params';
 import type { LociLabelProvider } from 'molstar/lib/mol-plugin-state/manager/loci-label';
 import { Asset } from 'molstar/lib/mol-util/assets';
