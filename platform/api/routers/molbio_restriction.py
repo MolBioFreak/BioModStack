@@ -51,6 +51,7 @@ from services.restriction_catalog import (
     ANALYSIS_TIMEOUT_SECONDS,
     ANALYSIS_WORKER_CONCURRENCY,
     catalog_authority,
+    resource_policy_sha256,
 )
 
 _ALLOWED_QUERY_FIELDS = {
@@ -207,6 +208,7 @@ class CatalogReceipt(StrictResponse):
     supplier_code_notice: str
     bounds: CatalogBounds
     resource_policy: ResourcePolicyReceipt
+    resource_policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     analysis_enabled: Literal[True]
     digest_enabled: Literal[False]
 
@@ -726,9 +728,9 @@ async def analyze_restriction_sites(
         normalized_request["scope"]["enzyme_ids"] = sorted(payload.scope.enzyme_ids)
     normalized_request["regions"] = sorted(normalized_request["regions"], key=lambda row: (row["start"], row["end"]))
     policy_receipt = resource_policy_receipt()
-    policy_sha256 = hashlib.sha256(
-        rfc8785.dumps(policy_receipt.model_dump(mode="json", by_alias=True))
-    ).hexdigest()
+    policy_sha256 = resource_policy_sha256(
+        policy_receipt.model_dump(mode="json", by_alias=True)
+    )
     request_sha256 = hashlib.sha256(rfc8785.dumps({
         "request": normalized_request,
         "resource_policy_sha256": policy_sha256,
