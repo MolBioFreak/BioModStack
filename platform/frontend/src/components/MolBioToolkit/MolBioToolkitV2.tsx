@@ -6,6 +6,7 @@
 
 import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { useLocation } from 'react-router-dom';
+const GoldenGateRetainedWorkspace = lazy(() => import('./panels/golden-gate/GoldenGateWorkflowWorkspace'));
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ngsResultHref } from '../../lib/ngsResultRouting';
 import { createLatestAsyncResourceController } from '../../lib/latestAsyncResource';
@@ -770,9 +771,12 @@ export function MolBioToolkitV2() {
     const deepLinkRevisionId = requestedLegacyMolecularRevisionId;
     const deepLinkOperationId = queryParams.get('operation_id')?.trim() || null;
     const deepLinkReceiptId = queryParams.get('receipt_id')?.trim() || null;
+    const [goldenGateLinkedOperation,setGoldenGateLinkedOperation]=useState<string | null>(null);
+    const [showLinkedGoldenGate,setShowLinkedGoldenGate]=useState(false);
     const [deepLinkOperationState, setDeepLinkOperationState] = useState<'loading' | 'loaded' | 'unavailable' | null>(null);
     const openedDeepLinkRef = useRef<string | null>(null);
     // State
+    const [digestAssemblyFragments, setDigestAssemblyFragments] = useState<import('../../lib/api').AssemblyFragmentInput[] | null>(null);
     const [sequences, setSequences] = useState<NucleotideSequenceListItem[]>([]);
     const [showAllConstructs, setShowAllConstructs] = useState(false);
     const [selectedSequenceId, setSelectedSequenceId] = useState<string | null>(null);
@@ -1488,11 +1492,13 @@ export function MolBioToolkitV2() {
             return;
         }
         let cancelled = false;
+        setGoldenGateLinkedOperation(null);
         setDeepLinkOperationState('loading');
         void fetch(`/api/molbio/operations/${encodeURIComponent(deepLinkOperationId)}`)
             .then(async (response) => {
                 if (!response.ok) throw new Error('operation unavailable');
                 const detail = await response.json() as {
+                    operation_type?: string;
                     operation_id?: string;
                     inputs?: Array<{ revision_id?: string }>;
                     outputs?: Array<{ revision_id?: string }>;
@@ -1506,7 +1512,7 @@ export function MolBioToolkitV2() {
                 ) {
                     throw new Error('operation identity mismatch');
                 }
-                if (!cancelled) setDeepLinkOperationState('loaded');
+                if (!cancelled) { setDeepLinkOperationState('loaded'); if(detail.operation_type === 'golden_gate_design') setGoldenGateLinkedOperation(deepLinkOperationId); }
             })
             .catch(() => {
                 if (!cancelled) setDeepLinkOperationState('unavailable');
@@ -3184,6 +3190,7 @@ export function MolBioToolkitV2() {
                 )}
                 digest={(
                     <DigestPanel
+                        onUseInAssembly={fragments => { setDigestAssemblyFragments(fragments); setActivePanel('assembly'); }}
                         mobile
                         compactLandscape={viewportWidth > viewportHeight && viewportHeight <= 500}
                         sequenceData={sequenceData}
@@ -3225,6 +3232,7 @@ export function MolBioToolkitV2() {
 
     return (
         <>
+            {goldenGateLinkedOperation && <section><button onClick={()=>setShowLinkedGoldenGate(!showLinkedGoldenGate)}>Open retained Golden Gate operation</button>{showLinkedGoldenGate && <Suspense fallback={<p>Loading retained Golden Gate workup…</p>}><GoldenGateRetainedWorkspace sequenceData={sequenceData} options={null} operationId={goldenGateLinkedOperation} onLoadProduct={handleLoadAssemblyProduct}/></Suspense>}</section>}
             {(deepLinkOperationId || deepLinkReceiptId) && (
                 <aside className="border-b border-slate-700 bg-slate-950 px-4 py-2 text-xs text-slate-200" aria-label="Exact MolBio source context">
                     {deepLinkOperationId && (
@@ -3693,6 +3701,7 @@ export function MolBioToolkitV2() {
                         )}
                         {!isExactMolecularAuthority && activePanel === 'assembly' && (
                             <AssemblyPanel
+                                transferredFragments={digestAssemblyFragments}
                                 sequenceData={sequenceData}
                                 selection={selection}
                                 selectedSequenceId={selectedSequenceId}
@@ -3716,6 +3725,7 @@ export function MolBioToolkitV2() {
                         )}
                         {!isExactMolecularAuthority && activePanel === 'digest' && (
                             <DigestPanel
+                                onUseInAssembly={fragments => { setDigestAssemblyFragments(fragments); setActivePanel('assembly'); }}
                                 sequenceData={sequenceData}
                                 sequenceId={selectedSequenceId}
                                 selection={selection}
