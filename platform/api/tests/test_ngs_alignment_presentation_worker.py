@@ -510,7 +510,8 @@ async def test_worker_preserves_legacy_combined_packages_without_adoption_or_rew
         ngs_alignment_sessions, "_creation_authority", lambda: ("1" * 40, "2" * 40)
     )
     session_id = "1" * 24
-    package = ngs_alignment_sessions.build_alignment_presentation(
+    package = await asyncio.to_thread(
+        ngs_alignment_sessions.build_alignment_presentation,
         source,
         bam_sha256=bam_sha,
         bam_size_bytes=bam_size,
@@ -529,7 +530,8 @@ async def test_worker_preserves_legacy_combined_packages_without_adoption_or_rew
         cache_root=result_root / ".alignment-presentations",
     )
     published = package["manifest_path"].parent
-    foreign_package = ngs_alignment_sessions.build_alignment_presentation(
+    foreign_package = await asyncio.to_thread(
+        ngs_alignment_sessions.build_alignment_presentation,
         source,
         bam_sha256=bam_sha,
         bam_size_bytes=bam_size,
@@ -563,7 +565,7 @@ async def test_worker_preserves_legacy_combined_packages_without_adoption_or_rew
         if path.is_file()
     }
     from services.ngs_alignment_presentation_v5 import verify_package_against_source
-    verify_package_against_source(package, source)
+    await asyncio.to_thread(verify_package_against_source, package, source)
     try:
         async with sessions() as session:
             session.add(_job())
