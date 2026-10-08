@@ -188,12 +188,17 @@ def test_cancelled_smaller_request_shape_keeps_enabled_stage_assets(package):
     assert effective.get('protenix_msa_backend') == 'colabfold_api', {
         key: value for key, value in effective.items() if 'msa' in key
     }
+    # Do not silently drop an enabled stage or feed an alias to its strict registry.
+    assets = bundle._runtime_assets('protenix', 'predict', effective)
+    assert {'containers/protenix.sif', 'containers/frustrampnn.sif'} <= {relative for _, relative in assets}
     prepared = bundle.prepare_remote_bundle(job=job, target=target, command=argv)
-    sources = {transfer.origin.name for transfer in prepared.runtime_transfers}
-    assert sources == {'protenix.sif', 'frustrampnn.sif', 'protenix', 'r1'}
-    assert '--msa_local_db' not in prepared.envelope.command
-    assert prepared.envelope.command[prepared.envelope.command.index('--protenix_msa_backend') + 1] == 'colabfold_api'
-    assert prepared.input_transfers == ()
+    sif_records = [r for r in prepared.envelope.files if r.relative_path.endswith('.sif')]
+    assert sif_records == []
+    assert len(prepared.runtime_images) == 2
+    selected = prepared.envelope.environment['BMS_FRUSTRAMPNN_SIF']
+    assert any(image.remote_destination == selected and
+               any(alias.endswith('/frustrampnn.sif') for alias in image.aliases)
+               for image in prepared.runtime_images)
 
 
 @pytest.mark.asyncio

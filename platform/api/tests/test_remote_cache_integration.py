@@ -196,7 +196,10 @@ async def test_real_bundle_generations_exclude_stale_files(package, local_transp
     assert first.envelope.source_tree == second.envelope.source_tree
     assert first.attempt_id != second.attempt_id
     await cache.stage_cached_bundle(connection=target, bundle=second)
-    assert len(uploads) == upload_count
+    # Each attempt transports its small authenticated, destination-specific manifest.
+    assert len(uploads) == upload_count + 1
+    assert Path(uploads[-1]).name == '.bms-runtime-images.json'
+    upload_count = len(uploads)
     assert second.remote_source_dir == second.remote_attempt_dir + '/materialized/source'
     assert second.remote_runtime_dir == second.remote_attempt_dir + '/materialized/runtime'
     assert second.envelope.working_directory == second.remote_source_dir
