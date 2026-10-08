@@ -170,6 +170,21 @@ def test_active_development_work_reads_jobs_fail_closed(tmp_path: Path, monkeypa
     assert sync._active_development_work(tmp_path) == (True, 1)
 
 
+def test_deployment_fence_blocks_api_mutation_admission(tmp_path: Path, monkeypatch) -> None:
+    sync = load_module()
+    import runtime_policy
+
+    lock_path = tmp_path / "deployment-admission.lock"
+    monkeypatch.setenv("BMS_DEPLOYMENT_ADMISSION_LOCK", str(lock_path))
+    with sync._deployment_fence(tmp_path):
+        with pytest.raises(runtime_policy.WorkflowAdmissionBlocked):
+            with runtime_policy.workflow_mutation_admission():
+                pass
+
+    with runtime_policy.workflow_mutation_admission():
+        pass
+
+
 def _authority_blobs(*, runtime_bytes: bytes, include_uncovered_pin: bool = False) -> dict[str, bytes]:
     source_bytes = b"current source\n"
     source_sha = hashlib.sha256(source_bytes).hexdigest()

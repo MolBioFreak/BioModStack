@@ -369,14 +369,16 @@ process FastqPlasmidQC {
     fi
     if ! "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/validate_standalone_igv_report.py" \
         --report igv_report.html \
-        --max-bytes 67108864 >> igv_report.log 2>&1; then
+        --template /opt/bms/igv-reports/igv_variant_standalone.html \
+        --igv-js /opt/bms/igv-reports/igv.min.js \
+        --max-bytes 100663296 >> igv_report.log 2>&1; then
         echo "CRITICAL_FAILURE: IGV_REPORT_VALIDATE_FAILED" | tee -a igv_report.log >&2
         rm -f igv_report.html
         exit 86
     fi
     igv_report_size=\$(wc -c < igv_report.html)
-    if [[ "\${igv_report_size}" -gt 67108864 ]]; then
-        echo "CRITICAL_FAILURE: IGV_REPORT_ARTIFACT_OVERSIZED bytes=\${igv_report_size} max_bytes=67108864" | tee -a igv_report.log >&2
+    if [[ "\${igv_report_size}" -gt 100663296 ]]; then
+        echo "CRITICAL_FAILURE: IGV_REPORT_ARTIFACT_OVERSIZED bytes=\${igv_report_size} max_bytes=100663296" | tee -a igv_report.log >&2
         rm -f igv_report.html
         exit 86
     fi

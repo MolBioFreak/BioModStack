@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 from textwrap import dedent
 from typing import Literal
@@ -28,6 +29,8 @@ SYNC_QUEUE_FILENAME = "dev-sync-queue.json"
 SYNC_CONTROL_FILENAME = "dev-sync-control.json"
 DEFAULT_CANONICAL_ROOT = Path("/home/dalab/biomodstack/dev-test-canonical")
 DEFAULT_STATE_DIR = Path.home() / ".local" / "state" / "biomodstack"
+DEPLOYMENT_ADMISSION_LOCK_ENV = "BMS_DEPLOYMENT_ADMISSION_LOCK"
+DEPLOYMENT_ADMISSION_LOCK_FILENAME = "deployment-admission.lock"
 SyncDecision = Literal[
     "blocked-dirty",
     "blocked-diverged",
@@ -168,6 +171,19 @@ def _active_development_work(root: Path) -> tuple[bool, int]:
         connection.close()
     count = int(row[0]) if row is not None else 0
     return count > 0, count
+
+
+@contextmanager
+def _deployment_fence(state_dir: Path):
+    configured = os.getenv(DEPLOYMENT_ADMISSION_LOCK_ENV)
+    lock_path = Path(configured).expanduser() if configured else state_dir / DEPLOYMENT_ADMISSION_LOCK_FILENAME
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def _write_json_file(path: Path, payload: dict[str, object]) -> None:
@@ -311,38 +327,39 @@ def sync_once(root: Path, state_dir: Path) -> SyncDecision:
             _write_receipt(state_dir, receipt)
             return decision
 
-        active_work, active_work_count = _active_development_work(root)
-        if active_work:
-            decision = "deferred-active-work"
-            receipt["decision"] = decision
-            receipt["active_work_count"] = active_work_count
+        with _deployment_fence(state_dir):
+            active_work, active_work_count = _active_development_work(root)
+            if active_work:
+                decision = "deferred-active-work"
+                receipt["decision"] = decision
+                receipt["active_work_count"] = active_work_count
+                _write_receipt(state_dir, receipt)
+                return decision
+            if decision == "fast-forward-deploy":
+                _git(root, "merge", "--ff-only", "refs/remotes/origin/test")
+
+            active_work, active_work_count = _active_development_work(root)
+            if active_work:
+                receipt["decision"] = "deferred-active-work"
+                receipt["active_work_count"] = active_work_count
+                receipt["local_revision_after"] = _git(root, "rev-parse", "HEAD")
+                _write_receipt(state_dir, receipt)
+                return "deferred-active-work"
+
+            manager = root / "scripts" / "manage_desktop_services.py"
+            _run(root, sys.executable, str(manager), "restart", "--runtime", "dev")
+            deployed_after = _deployed_revision(root)
+            if deployed_after != remote:
+                raise RuntimeError(
+                    f"Development exposure mismatch after deployment: expected {remote}, got {deployed_after or 'unavailable'}"
+                )
+            receipt["deployed_revision_after"] = deployed_after
+            receipt["status"] = "deployed"
+            receipt["queue_state"] = "empty"
+            receipt["queued_revision"] = None
+            _clear_queued_revision(state_dir)
             _write_receipt(state_dir, receipt)
             return decision
-        if decision == "fast-forward-deploy":
-            _git(root, "merge", "--ff-only", "refs/remotes/origin/test")
-
-        active_work, active_work_count = _active_development_work(root)
-        if active_work:
-            receipt["decision"] = "deferred-active-work"
-            receipt["active_work_count"] = active_work_count
-            receipt["local_revision_after"] = _git(root, "rev-parse", "HEAD")
-            _write_receipt(state_dir, receipt)
-            return "deferred-active-work"
-
-        manager = root / "scripts" / "manage_desktop_services.py"
-        _run(root, sys.executable, str(manager), "restart", "--runtime", "dev")
-        deployed_after = _deployed_revision(root)
-        if deployed_after != remote:
-            raise RuntimeError(
-                f"Development exposure mismatch after deployment: expected {remote}, got {deployed_after or 'unavailable'}"
-            )
-        receipt["deployed_revision_after"] = deployed_after
-        receipt["status"] = "deployed"
-        receipt["queue_state"] = "empty"
-        receipt["queued_revision"] = None
-        _clear_queued_revision(state_dir)
-        _write_receipt(state_dir, receipt)
-        return decision
 
 
 def _atomic_copy(source: Path, target: Path) -> None:
