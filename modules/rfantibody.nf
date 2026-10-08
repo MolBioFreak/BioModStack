@@ -87,6 +87,9 @@ process RFANTIBODY {
         inference.output_prefix=\${WORK_DIR}/output/${meta.id} \\
         2>&1 | tee -a rfantibody_${meta.id}.log
     
+    # Return to work directory where output was written
+    cd \${WORK_DIR}
+    
     echo "RFantibody complete" | tee -a rfantibody_${meta.id}.log
     ls -la output/ | tee -a rfantibody_${meta.id}.log
     """
