@@ -137,7 +137,6 @@ apptainer/*.log
 .backup/
 
 # Large demo/test data (should not be in repo)
-packages/ove-react19/demo/src/exampleData/*.json
 packages/bio-parsers/test/testData/**/*.dna
 work
 GPU orchestration*.md
