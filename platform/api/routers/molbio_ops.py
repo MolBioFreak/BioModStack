@@ -19,7 +19,6 @@ from molbio_database import get_molbio_session
 from molbio_models import NucleotideSequence, PCRExperiment, PCRExperimentRevision, Primer
 from services.molbio_persistence import (
     IdempotencyConflictError,
-    begin_immediate_molbio_write,
     canonical_request_fingerprint,
     current_molecular_revision,
     get_pcr_by_idempotency_key,
@@ -577,64 +576,6 @@ async def persist_assembly_product(
         )
         parent = result.scalar_one_or_none()
 
-    input_revisions = []
-    inline_inputs = []
-    for fragment in product.fragments:
-        fragment_snapshot = {
-            "fragment": {
-                "id": fragment.id,
-                "name": fragment.name,
-                "role": fragment.role,
-                "orientation": fragment.orientation,
-                "sequence_sha256": hashlib.sha256(fragment.sequence.encode("utf-8")).hexdigest(),
-                "sequence_length": len(fragment.sequence),
-                "source_sequence_id": fragment.source_sequence_id,
-                "source_start": fragment.source_start,
-                "source_end": fragment.source_end,
-                "source_wraps_origin": fragment.source_wraps_origin,
-                "metadata": fragment.metadata or {},
-            }
-        }
-        if fragment.source_sequence_id:
-            source_revision = await current_molecular_revision(session, fragment.source_sequence_id)
-            if source_revision is None:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "Assembly source has no immutable molecular revision: "
-                        f"{fragment.source_sequence_id}"
-                    ),
-                )
-            input_revisions.append((source_revision, "fragment", fragment_snapshot))
-        else:
-            inline_fragment = NucleotideSequence(
-                id=str(uuid.uuid4()),
-                name=fragment.name,
-                description=None,
-                sequence=fragment.sequence,
-                sequence_type="dna",
-                is_circular=False,
-                length=len(fragment.sequence),
-                features=[],
-                primers=[],
-                organism=None,
-                accession=None,
-                source_file=None,
-                gc_content=round(
-                    (
-                        (fragment.sequence.count("G") + fragment.sequence.count("C"))
-                        / max(len(fragment.sequence), 1)
-                    )
-                    * 100,
-                    2,
-                ),
-                parent_id=None,
-                operation=None,
-                operation_params=None,
-                version=1,
-            )
-            inline_inputs.append((inline_fragment, "fragment", fragment_snapshot))
-
     operation_params = {
         "mode": product.mode,
         "fragments": fragment_provenance_payload(product.fragments),
@@ -686,8 +627,6 @@ async def persist_assembly_product(
         parameters=operation_params,
         warnings=list(product.warnings),
         provenance={"source": "api", "validated": True},
-        input_revisions=input_revisions,
-        inline_inputs=inline_inputs,
     )
     await session.commit()
     await session.refresh(sequence_row)
@@ -726,7 +665,7 @@ async def digest(
         name=new_name,
         circular=False,
         operation="digest",
-        operation_params={"enzymes": [e.model_dump() for e in request.enzymes]},
+        operation_params={"enzymes": [e.dict() for e in request.enzymes]},
     )
     await record_generated_sequence(
         session,
@@ -734,24 +673,8 @@ async def digest(
         parent=parent if request.sequence_id else None,
         operation_kind="digest",
         implementation="services.molbio_ops.digest_sequence",
-        parameters={"enzymes": [e.model_dump() for e in request.enzymes]},
+        parameters={"enzymes": [e.dict() for e in request.enzymes]},
         provenance={"source": "api"},
-        inline_inputs=(
-            [
-                (
-                    parent,
-                    "template",
-                    {
-                        "request_source": "inline",
-                        "declared_name": request.name,
-                        "declared_sequence_type": request.sequence_type,
-                        "declared_circular": request.is_circular,
-                    },
-                )
-            ]
-            if request.sequence_id is None
-            else []
-        ),
     )
     await session.commit()
     await session.refresh(seq_obj)
@@ -983,22 +906,6 @@ async def pcr(
             },
             warnings=warnings,
             provenance=provenance,
-            inline_inputs=(
-                [
-                    (
-                        parent,
-                        "template",
-                        {
-                            "request_source": "inline",
-                            "declared_name": request.name,
-                            "declared_sequence_type": request.sequence_type,
-                            "declared_circular": request.is_circular,
-                        },
-                    )
-                ]
-                if request.sequence_id is None
-                else []
-            ),
         )
         operation_id = operation.id
         await session.commit()
@@ -1107,20 +1014,13 @@ async def update_pcr_experiment_review_state(
     session: AsyncSession = Depends(get_molbio_session),
 ):
     try:
-        await begin_immediate_molbio_write(session)
-        review_provenance = dict(request.provenance)
-        if request.actor is not None:
-            review_provenance["client_actor_claim"] = {
-                "value": request.actor,
-                "verification": "unverified",
-            }
         revision = await revise_pcr_review_state(
             session,
             experiment_id=experiment_id,
             review_state=request.review_state,
             notes=request.notes,
-            actor="system:molbio-api",
-            provenance=review_provenance,
+            actor=request.actor,
+            provenance=request.provenance,
         )
         await session.commit()
     except ValueError as exc:
@@ -1205,22 +1105,6 @@ async def mutagenesis(
         implementation="services.molbio_ops.apply_mutations",
         parameters={"mutations": mutations},
         provenance={"source": "api"},
-        inline_inputs=(
-            [
-                (
-                    parent,
-                    "template",
-                    {
-                        "request_source": "inline",
-                        "declared_name": request.name,
-                        "declared_sequence_type": request.sequence_type,
-                        "declared_circular": request.is_circular,
-                    },
-                )
-            ]
-            if request.sequence_id is None
-            else []
-        ),
     )
     await session.commit()
     await session.refresh(seq_obj)
@@ -2661,7 +2545,6 @@ async def create_primer(
     session: AsyncSession = Depends(get_molbio_session)
 ):
     """Create a new primer in the library."""
-    await begin_immediate_molbio_write(session)
     # Validate and clean sequence
     sequence = clean_primer_sequence(request.sequence)
     if not all(c in "ATCGUMRWSYKVHDBN" for c in sequence):
@@ -2728,7 +2611,6 @@ async def update_primer(
     session: AsyncSession = Depends(get_molbio_session)
 ):
     """Update an existing primer."""
-    await begin_immediate_molbio_write(session)
     result = await session.execute(select(Primer).where(Primer.id == primer_id, Primer.deleted_at.is_(None)))
     primer = result.scalar_one_or_none()
     
@@ -2807,7 +2689,6 @@ async def delete_primer(
     session: AsyncSession = Depends(get_molbio_session)
 ):
     """Soft-delete a primer while preserving its immutable revision history."""
-    await begin_immediate_molbio_write(session)
     result = await session.execute(select(Primer).where(Primer.id == primer_id, Primer.deleted_at.is_(None)))
     primer = result.scalar_one_or_none()
     
@@ -2833,7 +2714,6 @@ async def toggle_primer_favorite(
     session: AsyncSession = Depends(get_molbio_session)
 ):
     """Toggle favorite status for a primer."""
-    await begin_immediate_molbio_write(session)
     result = await session.execute(select(Primer).where(Primer.id == primer_id, Primer.deleted_at.is_(None)))
     primer = result.scalar_one_or_none()
     

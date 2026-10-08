@@ -53,7 +53,7 @@ BMS is not just a protein-design launcher. The live repo covers:
 - antibody de novo and staged refinement workflows
 - generic structure prediction and validation with AlphaFold2, RF3, Boltz-2,
   and Protenix
-- generic binder generation and redesign with RFdiffusion, BindCraft,
+- generic binder generation and redesign with RFdiffusion, retired binder workflow,
   BoltzGen, and local redesign workflows
 - experimental workflow families including La-Proteina/DISCO protein CAD,
   Protein Hunter Experimental, Caliby Experimental, and Fold-CP Experimental

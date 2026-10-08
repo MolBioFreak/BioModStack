@@ -10,11 +10,11 @@ surfaces that are actually present in the repo and model registry today.
 
 Primary workflow:
 
-- [workflows/antibody_denovo.nf](../workflows/antibody_denovo.nf)
+- [workflows/antibody_child.nf](../workflows/antibody_child.nf)
 
 Entry modes include:
 
-- `antibody_denovo_pipeline`
+- `antibody_refinement_pipeline`
 - `antibody_refinement_pipeline`
 
 Current pipeline shape:
@@ -184,11 +184,11 @@ Primary registry entry:
 
 - [platform/api/config/models/rfdiffusion.yaml](../platform/api/config/models/rfdiffusion.yaml)
 
-### BindCraft
+### retired binder workflow
 
 Primary workflow:
 
-- [workflows/bindcraft_design.nf](../workflows/bindcraft_design.nf)
+- [workflows/retired binder workflow_design.nf](../workflows/retired binder workflow_design.nf)
 
 Purpose:
 
@@ -235,7 +235,7 @@ Docking support includes:
 
 - RFantibody
 - RFdiffusion
-- BindCraft
+- retired binder workflow
 - BoltzGen
 - Oligo Designer / RFDpoly
 - La-Proteina

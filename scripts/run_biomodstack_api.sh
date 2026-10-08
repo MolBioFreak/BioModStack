@@ -20,9 +20,46 @@ pin_nextflow_java() {
     fi
 }
 
+# Explicit launcher/service-manager environment wins over the compatibility file.
+# Capture it before sourcing ~/.biomodstack/env.sh, which is shared with the
+# container runtime and can otherwise overwrite the dev data/runtime boundary.
+declare -A _BMS_LAUNCH_ENV=()
+while IFS= read -r key; do
+    _BMS_LAUNCH_ENV["$key"]="${!key}"
+done < <(compgen -A variable BMS_)
+
 if [ -f "$HOME/.biomodstack/env.sh" ]; then
     source "$HOME/.biomodstack/env.sh"
 fi
+for key in "${!_BMS_LAUNCH_ENV[@]}"; do
+    export "$key=${_BMS_LAUNCH_ENV[$key]}"
+done
+
+# The compatibility env file also contains settings used by the container
+# runtime.  A systemd-owned native dev API must never inherit those settings:
+# otherwise GPU/CPU/RAM telemetry and workflow launches are silently proxied to
+# the optional container workflow adapter.  Re-assert the selected runtime
+# boundary after sourcing compatibility configuration.
+if [ "${BMS_RUNTIME_MODE,,}" = "dev" ]; then
+    export BMS_CORE_RUNTIME_MODE=0
+    unset BMS_WORKFLOW_ADAPTER_URL
+fi
+
+# The native dev API and the stable analytical DB share only the DB credential,
+# not the container runtime routing boundary. Load that one operator-local value
+# without sourcing the whole core-runtime environment into the dev process.
+core_runtime_env_file="${BMS_CORE_RUNTIME_ENV_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/biomodstack/core-runtime.env}"
+if [ -z "${BMS_ANALYTICAL_DB_PASSWORD:-}" ] && [ -f "$core_runtime_env_file" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            BMS_ANALYTICAL_DB_PASSWORD=*)
+                export BMS_ANALYTICAL_DB_PASSWORD="${line#*=}"
+                break
+                ;;
+        esac
+    done < "$core_runtime_env_file"
+fi
+export BMS_ANALYTICAL_DB_PORT="${BMS_ANALYTICAL_DB_PORT:-55432}"
 pin_nextflow_java
 
 API_MODE_RAW="${BMS_API_MODE:-dev}"
@@ -31,6 +68,13 @@ CPU_POWER_STRICT_RAW="${BMS_CPU_POWER_STRICT:-1}"
 RAPL_ENERGY_PATH="${BMS_CPU_POWER_RAPL_PATH:-/sys/class/powercap/intel-rapl:0/energy_uj}"
 
 export BMS_HOME="$PROJECT_DIR"
+export BMS_NEXTFLOW_VERSION="${BMS_NEXTFLOW_VERSION:-25.10.1}"
+if [[ -z "${BMS_NEXTFLOW_BIN:-}" ]]; then
+  managed_nextflow="${HOME}/.local/lib/nextflow/${BMS_NEXTFLOW_VERSION}/nextflow"
+  if [[ -x "$managed_nextflow" ]]; then
+    export BMS_NEXTFLOW_BIN="$managed_nextflow"
+  fi
+fi
 export BMS_INPUTS="${BMS_INPUTS:-$PROJECT_DIR/inputs}"
 export BMS_FAN_CONTROL_BACKEND="${BMS_FAN_CONTROL_BACKEND:-coolercontrol}"
 
@@ -65,6 +109,7 @@ fi
 
 cd "$PROJECT_DIR/platform/api"
 bms_api_port="${BMS_API_BIND_PORT:-${BMS_DEV_API_HOST_PORT:-8002}}"
+export API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:${bms_api_port}}"
 cmd=(uv run uvicorn main:app --port "$bms_api_port" --host 127.0.0.1 --no-access-log)
 case "$(api_mode)" in
     dev)
@@ -72,6 +117,8 @@ case "$(api_mode)" in
             cmd+=(
                 --reload
                 --reload-dir "$PROJECT_DIR/platform/api"
+                --reload-exclude ".pytest_cache/*"
+                --reload-exclude "tests/*"
                 --reload-exclude "inputs/*"
                 --reload-exclude "*.db"
                 --reload-exclude "__pycache__/*"

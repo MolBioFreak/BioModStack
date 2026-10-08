@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,7 +15,7 @@ for root in (API_ROOT, REPO_ROOT):
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
 
-from routers import system  # noqa: E402
+from routers import system
 
 
 def build_client() -> TestClient:
@@ -38,6 +37,27 @@ def test_runtime_state_endpoint_returns_runtime_descriptor(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json() == descriptor
+
+
+def test_stats_toolkit_status_endpoint_returns_live_addon_probe(monkeypatch) -> None:
+    expected = {
+        "id": "bms-stats-toolkit",
+        "display_name": "BioModStack Stats Toolkit",
+        "available": True,
+        "ready": True,
+        "version": "1.0.0",
+        "api_version": "v1",
+        "capability_count": 2,
+        "entry_url": "http://127.0.0.1:18180/stats/",
+        "detail": "standalone service ready",
+    }
+    monkeypatch.setattr(system, "probe_stats_addon", lambda: expected)
+
+    with build_client() as client:
+        response = client.get("/api/system/stats-toolkit")
+
+    assert response.status_code == 200
+    assert response.json() == expected
 
 
 def test_runtime_start_endpoint_invokes_service_layer(monkeypatch) -> None:
@@ -199,16 +219,16 @@ def test_install_profile_put_persists_and_returns_snapshot(monkeypatch) -> None:
     assert response.json() == snapshot
 
 
-def test_install_profile_put_accepts_feature_flags(monkeypatch) -> None:
+def test_install_profile_put_accepts_supported_feature_flags(monkeypatch) -> None:
     saved_payloads: list[dict[str, object]] = []
 
     def fake_save_install_profile(payload: dict[str, object]) -> dict[str, object]:
         saved_payloads.append(payload)
-        return {"features": {"bioxp": False, "stats_tools": True, "assay_db": False}}
+        return {"features": {"bioxp": False}}
 
     snapshot = {
-        "profile": {"features": {"bioxp": False, "stats_tools": True, "assay_db": False}},
-        "resolved": {"features": {"bioxp": False, "stats_tools": True, "assay_db": False}},
+        "profile": {"features": {"bioxp": False}},
+        "resolved": {"features": {"bioxp": False}},
     }
     monkeypatch.setattr(system, "save_install_profile", fake_save_install_profile, raising=False)
     monkeypatch.setattr(system, "install_profile_snapshot", lambda profile=None: snapshot, raising=False)
@@ -216,18 +236,18 @@ def test_install_profile_put_accepts_feature_flags(monkeypatch) -> None:
     with build_client() as client:
         response = client.put(
             "/api/system/install-profile",
-            json={"features": {"bioxp": False, "stats_tools": True, "assay_db": False}},
+            json={"features": {"bioxp": False}},
         )
 
     assert response.status_code == 200
-    assert saved_payloads == [{"features": {"bioxp": False, "stats_tools": True, "assay_db": False}}]
+    assert saved_payloads == [{"features": {"bioxp": False}}]
     assert response.json()["resolved"]["features"]["bioxp"] is False
 
 
 def test_system_features_endpoint_returns_resolved_addon_flags(monkeypatch) -> None:
     snapshot = {
         "profile": {"features": {"bioxp": False}},
-        "resolved": {"features": {"bioxp": False, "stats_tools": True, "assay_db": False}},
+        "resolved": {"features": {"bioxp": False}},
     }
     monkeypatch.setattr(system, "install_profile_snapshot", lambda profile=None: snapshot, raising=False)
 
@@ -236,9 +256,9 @@ def test_system_features_endpoint_returns_resolved_addon_flags(monkeypatch) -> N
 
     assert response.status_code == 200
     assert response.json() == {
-        "features": {"bioxp": False, "stats_tools": True, "assay_db": False},
-        "configured_features": {"bioxp": False, "stats_tools": True, "assay_db": False},
-        "dev_features": {"bioxp": True, "stats_tools": True, "assay_db": True},
+        "features": {"bioxp": False},
+        "configured_features": {"bioxp": False},
+        "dev_features": {"bioxp": True},
     }
 
 
@@ -246,12 +266,12 @@ def test_system_features_put_merges_feature_flags_into_install_profile(monkeypat
     saved_payloads: list[dict[str, object]] = []
 
     current_snapshot = {
-        "profile": {"data_root": "/srv/biomodstack", "features": {"bioxp": True, "stats_tools": True, "assay_db": True}},
-        "resolved": {"features": {"bioxp": True, "stats_tools": True, "assay_db": True}},
+        "profile": {"data_root": "/srv/biomodstack", "features": {"bioxp": True}},
+        "resolved": {"features": {"bioxp": True}},
     }
     updated_snapshot = {
-        "profile": {"data_root": "/srv/biomodstack", "features": {"bioxp": False, "stats_tools": True, "assay_db": True}},
-        "resolved": {"features": {"bioxp": False, "stats_tools": True, "assay_db": True}},
+        "profile": {"data_root": "/srv/biomodstack", "features": {"bioxp": False}},
+        "resolved": {"features": {"bioxp": False}},
     }
 
     def fake_save_install_profile(payload: dict[str, object]) -> dict[str, object]:
@@ -269,12 +289,12 @@ def test_system_features_put_merges_feature_flags_into_install_profile(monkeypat
 
     assert response.status_code == 200
     assert saved_payloads == [
-        {"data_root": "/srv/biomodstack", "features": {"bioxp": False, "stats_tools": True, "assay_db": True}},
+        {"data_root": "/srv/biomodstack", "features": {"bioxp": False}},
     ]
     assert response.json() == {
-        "features": {"bioxp": False, "stats_tools": True, "assay_db": True},
-        "configured_features": {"bioxp": False, "stats_tools": True, "assay_db": True},
-        "dev_features": {"bioxp": True, "stats_tools": True, "assay_db": True},
+        "features": {"bioxp": False},
+        "configured_features": {"bioxp": False},
+        "dev_features": {"bioxp": True},
     }
 
 
@@ -507,237 +527,3 @@ def test_start_runtime_target_endpoint_adapter_runtime_errors_are_bad_gateway(mo
 
     assert response.status_code == 502
     assert response.json()["detail"] == "workflow adapter unavailable"
-
-
-def test_stats_tools_status_endpoint_returns_lifecycle_descriptor(monkeypatch) -> None:
-    descriptor = {
-        "component": "stats-tools",
-        "state": "running",
-        "health": "healthy",
-        "service_name": "bms-stats-tools",
-        "control_mode": "host-adapter",
-        "commands": [
-            "bms stats-tools status",
-            "bms stats-tools start",
-            "bms stats-tools stop",
-            "bms stats-tools restart",
-            "bms stats-tools logs --tail 120",
-        ],
-    }
-    monkeypatch.setattr(system.stats_tools, "describe_stats_tools", lambda tail=120: descriptor, raising=False)
-
-    with build_client() as client:
-        response = client.get("/api/system/stats-tools")
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload == descriptor
-    assert "bms stats-tools start" in payload["commands"]
-
-
-def test_stats_tools_lifecycle_endpoint_invokes_service_actions(monkeypatch) -> None:
-    actions: list[tuple[str, int]] = []
-
-    def fake_run(action: str, tail: int = 120):
-        actions.append((action, tail))
-        return {
-            "component": "stats-tools",
-            "state": "running" if action in {"start", "restart"} else "stopped",
-            "health": "healthy" if action in {"start", "restart"} else "offline",
-            "last_action": action,
-            "logs_tail": tail,
-        }
-
-    monkeypatch.setattr(system.stats_tools, "run_stats_tools_action", fake_run, raising=False)
-
-    with build_client() as client:
-        response = client.post("/api/system/stats-tools/restart", json={"tail": 80})
-
-    assert response.status_code == 200
-    assert actions == [("restart", 80)]
-    assert response.json()["last_action"] == "restart"
-
-
-def test_stats_tools_rejects_unknown_lifecycle_action() -> None:
-    with build_client() as client:
-        response = client.post("/api/system/stats-tools/purge")
-
-    assert response.status_code == 400
-    assert "unsupported stats-tools action" in response.json()["detail"]
-
-
-def test_stats_tools_action_prefers_configured_host_agent_without_docker(monkeypatch) -> None:
-    from services import stats_tools
-
-    host_agent_actions: list[tuple[str, str, dict[str, object] | None]] = []
-
-    def fail_docker_available():
-        raise AssertionError("BMS API must not touch Docker directly when Host Agent is configured")
-
-    def fake_host_agent_action(service_id: str, action: str, payload: dict[str, object] | None = None):
-        host_agent_actions.append((service_id, action, payload))
-        return {
-            "component": "stats-tools",
-            "service_id": service_id,
-            "service_name": "bms-stats-tools",
-            "container_name": "biomodstack-stats-tools",
-            "state": "running",
-            "health": "healthy",
-            "runtime_available": True,
-            "last_action": action,
-            "logs_tail": payload["tail"] if payload else None,
-        }
-
-    monkeypatch.setenv("BMS_HOST_AGENT_URL", "http://127.0.0.1:8798")
-    monkeypatch.setenv("BMS_STATS_TOOLS_EXTERNALIZED", "1")
-    monkeypatch.setattr(stats_tools, "_host_agent_enabled", lambda: True, raising=False)
-    monkeypatch.setattr(stats_tools, "_run_host_agent_service_action", fake_host_agent_action, raising=False)
-    monkeypatch.setattr(stats_tools, "_docker_available", fail_docker_available, raising=False)
-
-    payload = stats_tools.run_stats_tools_action("start", tail=77)
-
-    assert host_agent_actions == [("bms-stats-tools", "start", {"tail": 77})]
-    assert payload["control_mode"] == "host-agent"
-    assert payload["host_agent_available"] is True
-    assert payload["last_action"] == "start"
-
-
-def test_db_service_status_endpoint_invokes_service_layer(monkeypatch) -> None:
-    descriptor = {
-        "component": "db-service",
-        "service_id": "bms-db-service",
-        "display_name": "BMS DB service",
-        "state": "running",
-        "health": "healthy",
-        "runtime_available": True,
-        "optional_at_boot": True,
-        "control_mode": "docker-direct-transitional",
-        "service_name": "bms-db",
-        "implementation_service_name": "bms-analytical-postgres",
-        "container_name": "biomodstack-analytical-postgres",
-        "host_agent_available": False,
-        "offline_message": "db_service_offline — use BMS DB service → Start",
-        "commands": [
-            "bms db-service status",
-            "bms db-service start",
-            "bms db-service restart",
-            "bms db-service logs --tail 120",
-        ],
-        "logical_databases": [],
-    }
-    monkeypatch.setattr(system.db_service, "describe_db_service", lambda tail=120: descriptor | {"logs_tail": tail}, raising=False)
-
-    with build_client() as client:
-        response = client.get("/api/system/db-service", params={"tail": 80})
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["service_id"] == "bms-db-service"
-    assert payload["display_name"] == "BMS DB service"
-    assert payload["logs_tail"] == 80
-    assert "bms db-service start" in payload["commands"]
-
-
-def test_db_service_lifecycle_endpoint_invokes_service_action(monkeypatch) -> None:
-    actions: list[tuple[str, int, bool]] = []
-
-    def fake_run(action: str, tail: int = 120, advanced: bool = False):
-        actions.append((action, tail, advanced))
-        return {
-            "component": "db-service",
-            "service_id": "bms-db-service",
-            "display_name": "BMS DB service",
-            "state": "running",
-            "health": "healthy",
-            "runtime_available": True,
-            "last_action": action,
-            "logs_tail": tail,
-            "advanced": advanced,
-        }
-
-    monkeypatch.setattr(system.db_service, "run_db_service_action", fake_run, raising=False)
-
-    with build_client() as client:
-        response = client.post("/api/system/db-service/restart", json={"tail": 80})
-
-    assert response.status_code == 200
-    assert actions == [("restart", 80, False)]
-    assert response.json()["last_action"] == "restart"
-
-
-def test_db_service_lifecycle_rejects_unknown_action() -> None:
-    with build_client() as client:
-        response = client.post("/api/system/db-service/purge")
-
-    assert response.status_code == 400
-    assert "unsupported db-service action" in response.json()["detail"]
-
-
-
-def _stats_descriptor(state: str = "running", health: str = "healthy") -> dict[str, object]:
-    return {
-        "component": "stats-tools",
-        "service_name": "bms-stats-tools",
-        "container_name": "biomodstack-stats-tools",
-        "externalized": True,
-        "optional_at_boot": True,
-        "control_mode": "docker-compose-profile",
-        "state": state,
-        "health": health,
-        "runtime_available": state == "running" and health == "healthy",
-        "runtime_note": None if state == "running" and health == "healthy" else "offline",
-        "offline_message": "stats_tools_offline — use Stats Toolkit → Debug → Start stats-tools",
-        "commands": [],
-        "logs": "",
-        "logs_tail": 120,
-    }
-
-
-def test_stats_tools_start_uses_existing_container_without_building(monkeypatch) -> None:
-    from services import stats_tools
-
-    docker_calls: list[list[str]] = []
-    compose_calls: list[list[str]] = []
-
-    monkeypatch.setenv("BMS_STATS_TOOLS_EXTERNALIZED", "1")
-    monkeypatch.setattr(stats_tools, "_docker_available", lambda: (True, None), raising=False)
-    monkeypatch.setattr(stats_tools, "_container_exists", lambda: True, raising=False)
-    monkeypatch.setattr(stats_tools, "_inspect_state", lambda: _stats_descriptor("running", "healthy"), raising=False)
-
-    def fake_run_docker(args: list[str], timeout: int = 60):
-        docker_calls.append(args)
-        return subprocess.CompletedProcess(args, 0, stdout="biomodstack-stats-tools\n", stderr="")
-
-    monkeypatch.setattr(stats_tools, "_run_docker", fake_run_docker, raising=False)
-    monkeypatch.setattr(stats_tools, "_run_compose", lambda args, timeout=60: compose_calls.append(args), raising=False)
-
-    payload = stats_tools.run_stats_tools_action("start")
-
-    assert payload["last_action"] == "start"
-    assert payload["action_returncode"] == 0
-    assert docker_calls == [["start", "biomodstack-stats-tools"]]
-    assert compose_calls == []
-
-
-def test_stats_tools_missing_container_fallback_never_builds(monkeypatch) -> None:
-    from services import stats_tools
-
-    compose_calls: list[list[str]] = []
-
-    monkeypatch.setenv("BMS_STATS_TOOLS_EXTERNALIZED", "1")
-    monkeypatch.setattr(stats_tools, "_docker_available", lambda: (True, None), raising=False)
-    monkeypatch.setattr(stats_tools, "_container_exists", lambda: False, raising=False)
-    monkeypatch.setattr(stats_tools, "_compose_available", lambda: (True, None), raising=False)
-    monkeypatch.setattr(stats_tools, "_inspect_state", lambda: _stats_descriptor("running", "healthy"), raising=False)
-
-    def fake_run_compose(args: list[str], timeout: int = 60):
-        compose_calls.append(args)
-        return subprocess.CompletedProcess(args, 0, stdout="started\n", stderr="")
-
-    monkeypatch.setattr(stats_tools, "_run_compose", fake_run_compose, raising=False)
-
-    payload = stats_tools.run_stats_tools_action("start")
-
-    assert payload["last_action"] == "start"
-    assert payload["action_returncode"] == 0
-    assert compose_calls == [["--profile", "stats-tools", "up", "-d", "--no-build", "bms-stats-tools"]]

@@ -25,6 +25,7 @@ import {
     type PAEData,
     type PersistedAnalysisRun,
 } from '../lib/api';
+import { jobPollingInterval } from '../lib/queryPolling';
 
 interface Design {
     id: string;
@@ -159,7 +160,7 @@ export function ExperimentalAnalyticsPane({ designs, jobId }: ExperimentalAnalyt
         staleTime: 60000,
         refetchInterval: (query) => {
             const status = (query.state.data as PersistedAnalysisRun<AACompositionResponse> | null | undefined)?.status;
-            return status === 'queued' || status === 'running' ? 1500 : false;
+            return status === 'queued' || status === 'running' ? jobPollingInterval(1500, query) : false;
         },
     });
     const aaComposition = aaCompositionRun?.status === 'completed' ? (aaCompositionRun.result as AACompositionResponse | null) : null;
@@ -184,7 +185,7 @@ export function ExperimentalAnalyticsPane({ designs, jobId }: ExperimentalAnalyt
         staleTime: 60000,
         refetchInterval: (query) => {
             const status = (query.state.data as PersistedAnalysisRun<CDRAnalysisResponse> | null | undefined)?.status;
-            return status === 'queued' || status === 'running' ? 1500 : false;
+            return status === 'queued' || status === 'running' ? jobPollingInterval(1500, query) : false;
         },
     });
     const cdrLogos = cdrLogosRun?.status === 'completed' ? (cdrLogosRun.result as CDRAnalysisResponse | null) : null;
@@ -209,7 +210,7 @@ export function ExperimentalAnalyticsPane({ designs, jobId }: ExperimentalAnalyt
         staleTime: 60000,
         refetchInterval: (query) => {
             const status = (query.state.data as PersistedAnalysisRun<CorrelationMatrix> | null | undefined)?.status;
-            return status === 'queued' || status === 'running' ? 1500 : false;
+            return status === 'queued' || status === 'running' ? jobPollingInterval(1500, query) : false;
         },
     });
     const correlationData = correlationRun?.status === 'completed' ? (correlationRun.result as CorrelationMatrix | null) : null;
@@ -242,7 +243,7 @@ export function ExperimentalAnalyticsPane({ designs, jobId }: ExperimentalAnalyt
         enabled: !!selectedDesignId && selectedPreset === 'contact_map',
         refetchInterval: (query) => {
             const status = (query.state.data as PersistedAnalysisRun<ContactMapData> | null | undefined)?.status;
-            return status === 'queued' || status === 'running' ? 1500 : false;
+            return status === 'queued' || status === 'running' ? jobPollingInterval(1500, query) : false;
         },
     });
     const contactMapData = contactMapRun?.status === 'completed' ? (contactMapRun.result as ContactMapData | null) : null;
@@ -278,7 +279,7 @@ export function ExperimentalAnalyticsPane({ designs, jobId }: ExperimentalAnalyt
         staleTime: 60000,
         refetchInterval: (query) => {
             const status = (query.state.data as PersistedAnalysisRun<PAEData> | null | undefined)?.status;
-            return status === 'queued' || status === 'running' ? 1500 : false;
+            return status === 'queued' || status === 'running' ? jobPollingInterval(1500, query) : false;
         },
     });
     const paeData = paeRun?.status === 'completed' ? (paeRun.result as PAEData | null) : null;
@@ -303,7 +304,7 @@ export function ExperimentalAnalyticsPane({ designs, jobId }: ExperimentalAnalyt
         staleTime: 60000,
         refetchInterval: (query) => {
             const status = (query.state.data as PersistedAnalysisRun<Record<string, ChainMetric>> | null | undefined)?.status;
-            return status === 'queued' || status === 'running' ? 1500 : false;
+            return status === 'queued' || status === 'running' ? jobPollingInterval(1500, query) : false;
         },
     });
     const chainMetricsData = chainMetricsRun?.status === 'completed' ? (chainMetricsRun.result as Record<string, ChainMetric> | null) : null;

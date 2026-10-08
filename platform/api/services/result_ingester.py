@@ -425,7 +425,14 @@ def _resolve_validation_structure_role_fields(
         target_sequences = extract_sequence_from_pdb(str(target_pdb)) or {}
     except Exception:
         return resolved
-    configured_target_chain_ids = _parse_chain_ids(job_params.get("antigen_chains") or job_params.get("target_chains"))
+    # Source-PDB chain selectors and validated-output role selectors are distinct.
+    # Binder workflows commonly read target chain A and publish it as output chain B.
+    configured_target_chain_ids = _parse_chain_ids(
+        job_params.get("target_source_chain")
+        or job_params.get("target_source_chains")
+        or job_params.get("antigen_source_chains")
+        or job_params.get("antigen_chains")
+    )
     if configured_target_chain_ids:
         target_sequences = {
             chain_id: seq for chain_id, seq in target_sequences.items()
@@ -617,24 +624,90 @@ def _trusted_producer_review_fields(job: Optional[Job], payload: Any) -> Dict[st
     ):
         return {}
 
+    result_role = role_map.get("result_role")
+    if not isinstance(result_role, str) or not result_role.strip():
+        return {}
+    for role_key, role_value in role_map.items():
+        if not isinstance(role_key, str) or not role_key.strip():
+            return {}
+        if role_key.endswith("_chains") and (
+            not isinstance(role_value, list)
+            or not all(isinstance(chain, str) and chain.strip() for chain in role_value)
+        ):
+            return {}
+
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, dict) or not artifacts:
+        return {}
+    contract = resolve_result_contract(review_profile_id=profile_id)
+    for artifact_name in contract.required_artifacts:
+        descriptor = artifacts.get(artifact_name)
+        if not isinstance(descriptor, dict):
+            return {}
+        if descriptor.get("kind") != artifact_name:
+            return {}
+        if descriptor.get("state") not in {"ready", "missing"}:
+            return {}
+        path = descriptor.get("path")
+        if path is not None and (not isinstance(path, str) or not path.strip()):
+            return {}
+
     model_id = str(getattr(job, "model_id", None) or "").strip().lower()
-    if model_id == "protein_local_redesign":
-        allowed_profiles = {
-            "de_novo_generation_v1",
-            "sequence_design_v1",
-            "structure_prediction_v1",
-        }
+    job_mode = str(getattr(job, "mode", None) or "").strip().lower()
+    job_params = getattr(job, "params", None) or {}
+    modification_mode = str(job_params.get("modification_mode") or "").strip().lower()
+    generator_family = str(payload.get("generator_family") or "").strip().lower()
+    if generator_family == "caliby":
+        if model_id == "binder_design" and job_mode == "rfd3_caliby":
+            allowed_profiles = {"binder_design_v1"}
+
+        else:
+            return {}
+    elif generator_family == "protein_hunter":
+        if model_id != "binder_design" or job_mode != "protein_hunter":
+            return {}
+        allowed_profiles = {"binder_design_v1"}
+    elif model_id == "protein_local_redesign" or (
+        model_id == "protein_modification_experimental"
+        and (job_mode == "region_redesign" or modification_mode == "region_redesign")
+    ):
+        allowed_profiles = {"de_novo_generation_v1"}
     else:
-        server_contract = resolve_result_contract(model_type=model_id, provenance={"model_id": model_id})
+        server_contract = resolve_result_contract(model_type=model_id)
         allowed_profiles = {server_contract.analysis_contract_id} if server_contract.analysis_contract_id else set()
     if profile_id not in allowed_profiles:
         return {}
-    return {
+    if profile_id == "binder_design_v1":
+        raw_ipsae = payload.get("ipsae")
+        if not isinstance(raw_ipsae, (int, float, str)):
+            return {}
+        try:
+            ipsae = float(raw_ipsae)
+        except (TypeError, ValueError):
+            return {}
+        if not math.isfinite(ipsae) or not 0.0 <= ipsae <= 1.0:
+            return {}
+        if (
+            str(payload.get("artifact_class") or "").strip() != "validated_binder_complex"
+            or str(payload.get("result_set") or "").strip() != "binder_candidates"
+            or str(payload.get("stage_family") or "").strip() != "binder_design"
+            or str(payload.get("stage_mode") or "").strip() not in {"rfd3_caliby", "protein_hunter"}
+        ):
+            return {}
+    fields = {
         "review_profile_id": profile_id,
         "review_contract_version": REVIEW_CONTRACT_VERSION,
         "review_contract_source": "producer",
         "review_role_map": role_map,
     }
+    if profile_id == "binder_design_v1":
+        fields.update(
+            {
+                "artifact_class": "validated_binder_complex",
+                "artifact_schema_version": 1,
+            }
+        )
+    return fields
 
 
 def _default_fampnn_metrics() -> Dict[str, Any]:
@@ -675,6 +748,8 @@ def _compute_binder_metrics_from_structure(structure_path: Optional[Path]) -> Di
         sequences = extract_sequence_from_pdb(str(structure_path))
         if not sequences:
             return metrics
+        if len(sequences) < 2:
+            return metrics
 
         binder_chains = identify_binder_chains(sequences, str(structure_path))
         ordered_chain_ids = [
@@ -700,10 +775,7 @@ def _compute_binder_metrics_from_structure(structure_path: Optional[Path]) -> Di
             metrics["binder_length"] = len(heavy_chain)
             return metrics
 
-        if len(sequences) == 1:
-            only_sequence = next(iter(sequences.values()))
-            metrics["binder_sequence"] = only_sequence
-            metrics["binder_length"] = len(only_sequence)
+
     except Exception as exc:
         print(f"[Ingester] Failed binder metric extraction for {structure_path}: {exc}")
 
@@ -1168,18 +1240,10 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
     params = _parse_job_params(job.params if job else None)
     model_id = str(job.model_id or "").strip().lower() if job else ""
     mode = str(job.mode or "").strip().lower() if job else ""
-    stage_family = str(
-        params.get("stage_family")
-        or params.get("ppiflow_stage_family")
-        or getattr(job, "stage_family", None)
-        or ""
-    ).strip().lower() or None
-    stage_mode = str(
-        params.get("stage_mode")
-        or params.get("ppiflow_stage_mode")
-        or getattr(job, "stage_mode", None)
-        or ""
-    ).strip().lower() or None
+    # Applicability selectors come only from persisted server-owned Job fields.
+    # Request params may carry workflow inputs, but cannot mint review authority.
+    stage_family = str(getattr(job, "stage_family", None) or "").strip().lower() or None
+    stage_mode = str(getattr(job, "stage_mode", None) or "").strip().lower() or None
     if not stage_family:
         if mode == "maturation_child":
             stage_family = "ppiflow"
@@ -1904,6 +1968,9 @@ async def ingest_esmfold2_results(
             "stage_mode": job_context.get("stage_mode") or "predict",
             "artifact_group": "esmfold2",
             "artifact_class": "structure_prediction",
+            "review_profile_id": job_context.get("review_profile_id"),
+            "review_contract_source": job_context.get("review_contract_source"),
+            "review_role_map": job_context.get("review_role_map"),
             "provenance": provenance,
             "confidence_metrics": confidence_metrics,
             "plddt_overall": plddt_overall,
@@ -3987,7 +4054,18 @@ async def ingest_loose_files(
 
     plr_final_candidate_dir = job_params.get("plr_final_candidate_dir")
     plr_final_path = None
-    if current_job is not None and str(getattr(current_job, "model_id", "")).strip().lower() == "protein_local_redesign":
+    current_model_id = str(getattr(current_job, "model_id", "") or "").strip().lower() if current_job is not None else ""
+    current_mode = str(getattr(current_job, "mode", "") or "").strip().lower() if current_job is not None else ""
+    if current_job is not None and (
+        current_model_id == "protein_local_redesign"
+        or (
+            current_model_id == "protein_modification_experimental"
+            and (
+                current_mode == "region_redesign"
+                or str(job_params.get("modification_mode") or "").strip().lower() == "region_redesign"
+            )
+        )
+    ):
         raw_final_path = str(plr_final_candidate_dir or "").strip()
         if raw_final_path:
             candidate = Path(raw_final_path).expanduser()
@@ -4239,8 +4317,8 @@ async def ingest_loose_files(
                         producer_job=current_job,
                         producer_payload=metrics,
                     ),
-                    stage_family=job_context.get("stage_family"),
-                    stage_mode=job_context.get("stage_mode"),
+                    stage_family=(metrics.get("stage_family") or job_context.get("stage_family")),
+                    stage_mode=(metrics.get("stage_mode") or job_context.get("stage_mode")),
                     selected_loop_scope=job_context.get("selected_loop_scope"),
                     provenance={
                         **job_context.get("provenance", {}),
@@ -4574,9 +4652,14 @@ async def ingest_loose_files(
                     json_path=str(json_file),
 
                     backbone_id=parse_backbone_id(design_name),
-                    **_design_lineage_fields(job_context, lineage),
-                    stage_family=job_context.get("stage_family"),
-                    stage_mode=job_context.get("stage_mode"),
+                    **_design_lineage_fields(
+                        job_context,
+                        lineage,
+                        producer_job=current_job,
+                        producer_payload=metrics,
+                    ),
+                    stage_family=(metrics.get("stage_family") or job_context.get("stage_family")),
+                    stage_mode=(metrics.get("stage_mode") or job_context.get("stage_mode")),
                     selected_loop_scope=job_context.get("selected_loop_scope"),
                     provenance=job_context.get("provenance", {}),
                     **_geometry_design_fields(geometry_fields),
@@ -4871,9 +4954,14 @@ async def ingest_loose_files(
                     json_path=str(fam_json_path) if fam_json_path and fam_json_path.exists() else None,
                     
                     backbone_id=parse_backbone_id(design_name),
-                    **_design_lineage_fields(job_context, lineage),
-                    stage_family=job_context.get("stage_family"),
-                    stage_mode=job_context.get("stage_mode"),
+                    **_design_lineage_fields(
+                        job_context,
+                        lineage,
+                        producer_job=current_job,
+                        producer_payload=fam_payload,
+                    ),
+                    stage_family=((fam_payload or {}).get("stage_family") or job_context.get("stage_family")),
+                    stage_mode=((fam_payload or {}).get("stage_mode") or job_context.get("stage_mode")),
                     selected_loop_scope=job_context.get("selected_loop_scope"),
                     provenance=design_provenance or None,
                     epitope_contact_count=epitope_contact_count,

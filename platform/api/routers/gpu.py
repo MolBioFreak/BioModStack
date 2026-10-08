@@ -3,7 +3,7 @@ System monitoring API router - GPU, CPU, RAM statistics.
 """
 
 from fastapi import APIRouter, HTTPException
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any, Union
 from pydantic import BaseModel, Field
 from collections import deque
@@ -29,7 +29,7 @@ from paths import get_code_root
 from runtime_policy import core_runtime_mode_enabled
 from services.gpu_config import (
     read_scheduler_config,
-    write_scheduler_config,
+    mutate_scheduler_config,
     GPU_CONFIG_PATH,
     DEFAULT_SCHEDULER_CONFIG,
 )
@@ -2693,7 +2693,7 @@ async def get_system_status():
         gpu_error=gpu_error,
         cpu=cpu,
         ram=ram,
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
         cpu_history=list(_cpu_history),
         ram_history=list(_ram_history)
     )
@@ -2705,7 +2705,7 @@ async def get_gpus_only():
     if _gpu_proxy_enabled():
         return await _gpu_proxy_request_async("GET", "/gpus")
     gpus, gpu_error = await asyncio.to_thread(get_gpu_stats_with_error)
-    return {"gpus": gpus, "gpu_error": gpu_error, "timestamp": datetime.utcnow()}
+    return {"gpus": gpus, "gpu_error": gpu_error, "timestamp": datetime.now(timezone.utc)}
 
 
 @router.get("/cpu")
@@ -2714,7 +2714,7 @@ async def get_cpu_only():
     if _gpu_proxy_enabled():
         return await _gpu_proxy_request_async("GET", "/cpu")
     cpu = await asyncio.to_thread(get_cpu_stats)
-    return {"cpu": cpu, "timestamp": datetime.utcnow()}
+    return {"cpu": cpu, "timestamp": datetime.now(timezone.utc)}
 
 
 @router.get("/ram")
@@ -2723,7 +2723,7 @@ async def get_ram_only():
     if _gpu_proxy_enabled():
         return await _gpu_proxy_request_async("GET", "/ram")
     ram = await asyncio.to_thread(get_ram_stats)
-    return {"ram": ram, "timestamp": datetime.utcnow()}
+    return {"ram": ram, "timestamp": datetime.now(timezone.utc)}
 
 
 def _reset_hardware_discovery_caches() -> None:
@@ -3206,8 +3206,7 @@ async def update_scheduler_config(global_config: SchedulerGlobalConfig):
     """Update global scheduler settings."""
     if _gpu_proxy_enabled():
         return await _gpu_proxy_request_async("PUT", "/scheduler-config", _model_payload(global_config))
-    config = read_scheduler_config()
-    config["global"] = {
+    new_global_config = {
         "busy_threshold": max(0.0, min(1.0, global_config.busy_threshold)),
         "cooldown_ms": max(0, min(60000, global_config.cooldown_ms)),
         "cpu_threads_per_job": max(1, min(24, global_config.cpu_threads_per_job)),
@@ -3223,9 +3222,14 @@ async def update_scheduler_config(global_config: SchedulerGlobalConfig):
         "msa_avoid_heavy_gpus": bool(global_config.msa_avoid_heavy_gpus),
         "force_run_excluded_gpu_ids": sorted({int(g) for g in global_config.force_run_excluded_gpu_ids if isinstance(g, int) and g >= 0}),
     }
-    
-    if not write_scheduler_config(config):
-        raise HTTPException(status_code=500, detail="Failed to save config")
+
+    def apply_global_update(config: Dict[str, Any]) -> None:
+        config["global"] = new_global_config
+
+    try:
+        config = mutate_scheduler_config(apply_global_update)
+    except (OSError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail="Failed to save config") from exc
     
     return {
         "success": True,
@@ -3240,9 +3244,7 @@ async def set_gpu_override(gpu_id: str, override: SchedulerGPUOverride):
     """Set per-GPU override (force_available, quick_enable, or custom threshold)."""
     if _gpu_proxy_enabled():
         return await _gpu_proxy_request_async("PUT", f"/scheduler-config/gpu/{gpu_id}", _model_payload(override))
-    config = read_scheduler_config()
-    
-    config["overrides"][gpu_id] = {
+    override_payload = {
         "force_available": override.force_available,
         "quick_enable": override.quick_enable,
         "threshold": override.threshold,
@@ -3251,9 +3253,14 @@ async def set_gpu_override(gpu_id: str, override: SchedulerGPUOverride):
         "vram_safety_margin_mb": override.vram_safety_margin_mb,
         "max_concurrent_jobs": override.max_concurrent_jobs,
     }
-    
-    if not write_scheduler_config(config):
-        raise HTTPException(status_code=500, detail="Failed to save config")
+
+    def apply_override(config: Dict[str, Any]) -> None:
+        config.setdefault("overrides", {})[gpu_id] = override_payload
+
+    try:
+        config = mutate_scheduler_config(apply_override)
+    except (OSError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail="Failed to save config") from exc
     
     return {
         "success": True,
@@ -3267,23 +3274,18 @@ async def toggle_gpu_disabled(gpu_id: str):
     """Simple toggle to enable/disable a GPU from inference scheduling."""
     if _gpu_proxy_enabled():
         return await _gpu_proxy_request_async("POST", f"/scheduler-config/gpu/{gpu_id}/toggle-disable")
-    config = read_scheduler_config()
-    
-    # Get current state
-    overrides = config.get("overrides", {})
-    gpu_override = overrides.get(gpu_id, {})
-    current_disabled = gpu_override.get("disabled", False)
-    
-    # Toggle
-    new_disabled = not current_disabled
-    
-    # Update override
-    if gpu_id not in config["overrides"]:
-        config["overrides"][gpu_id] = {}
-    config["overrides"][gpu_id]["disabled"] = new_disabled
-    
-    if not write_scheduler_config(config):
-        raise HTTPException(status_code=500, detail="Failed to save config")
+    new_disabled = False
+
+    def toggle_override(config: Dict[str, Any]) -> None:
+        nonlocal new_disabled
+        gpu_override = config.setdefault("overrides", {}).setdefault(gpu_id, {})
+        new_disabled = not bool(gpu_override.get("disabled", False))
+        gpu_override["disabled"] = new_disabled
+
+    try:
+        mutate_scheduler_config(toggle_override)
+    except (OSError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail="Failed to save config") from exc
     
     return {
         "success": True,
@@ -3298,13 +3300,20 @@ async def clear_gpu_override(gpu_id: str):
     """Clear per-GPU override, reverting to global settings."""
     if _gpu_proxy_enabled():
         return await _gpu_proxy_request_async("DELETE", f"/scheduler-config/gpu/{gpu_id}")
-    config = read_scheduler_config()
-    
-    if gpu_id in config["overrides"]:
-        del config["overrides"][gpu_id]
-        write_scheduler_config(config)
+    removed = False
+
+    def clear_override(config: Dict[str, Any]) -> None:
+        nonlocal removed
+        removed = config.setdefault("overrides", {}).pop(gpu_id, None) is not None
+
+    try:
+        mutate_scheduler_config(clear_override)
+    except (OSError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail="Failed to save config") from exc
+
+    if removed:
         return {"success": True, "message": f"Cleared override for GPU {gpu_id}"}
-    
+
     return {"success": True, "message": f"No override existed for GPU {gpu_id}"}
 
 
@@ -3325,7 +3334,7 @@ async def get_workflow_pins():
         "available_workflows": [
             "boltz", "fampnn", "rfantibody", "rfdiffusion", "rfd3", "rf3",
             "af2", "mpnn", "boltzgen", "diffdock", "unidock", "msa_batch",
-            "antibody_child", "antibody_denovo"
+            "antibody_child"
         ]
     }
 
@@ -3344,15 +3353,13 @@ async def pin_workflow_to_gpu(workflow_type: str, gpu_id: int):
     """
     _validate_gpu_index_for_mutation(gpu_id)
     
-    config = read_scheduler_config()
-    
-    if "workflow_pins" not in config:
-        config["workflow_pins"] = {}
-    
-    config["workflow_pins"][workflow_type] = gpu_id
-    
-    if not write_scheduler_config(config):
-        raise HTTPException(status_code=500, detail="Failed to save config")
+    def apply_pin(config: Dict[str, Any]) -> None:
+        config.setdefault("workflow_pins", {})[workflow_type] = gpu_id
+
+    try:
+        config = mutate_scheduler_config(apply_pin)
+    except (OSError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail="Failed to save config") from exc
     
     return {
         "success": True,
@@ -3364,27 +3371,29 @@ async def pin_workflow_to_gpu(workflow_type: str, gpu_id: int):
 @router.delete("/workflow-pins/{workflow_type}")
 async def unpin_workflow(workflow_type: str):
     """Remove workflow-level GPU pin for a model type."""
-    config = read_scheduler_config()
-    
-    workflow_pins = config.get("workflow_pins", {})
-    
-    if workflow_type in workflow_pins:
-        del workflow_pins[workflow_type]
-        config["workflow_pins"] = workflow_pins
-        
-        if not write_scheduler_config(config):
-            raise HTTPException(status_code=500, detail="Failed to save config")
-        
+    removed = False
+
+    def clear_pin(config: Dict[str, Any]) -> None:
+        nonlocal removed
+        removed = config.setdefault("workflow_pins", {}).pop(workflow_type, None) is not None
+
+    try:
+        config = mutate_scheduler_config(clear_pin)
+    except (OSError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail="Failed to save config") from exc
+
+    workflow_pins = config["workflow_pins"]
+    if removed:
         return {
             "success": True,
             "message": f"Removed pin for '{workflow_type}' - jobs will use normal orchestrator logic",
-            "workflow_pins": config["workflow_pins"]
+            "workflow_pins": workflow_pins,
         }
-    
+
     return {
         "success": True,
         "message": f"No pin existed for '{workflow_type}'",
-        "workflow_pins": workflow_pins
+        "workflow_pins": workflow_pins,
     }
 
 
@@ -3422,24 +3431,22 @@ async def lock_gpu_for_batch(batch_id: str, gpu_id: int):
     """
     _validate_gpu_index_for_mutation(gpu_id)
     
-    config = read_scheduler_config()
-    
-    if "gpu_locks" not in config:
-        config["gpu_locks"] = {}
-    
-    # Check if this GPU is already locked by another batch
-    existing_locks = config["gpu_locks"]
-    for existing_batch, locked_gpu in existing_locks.items():
-        if locked_gpu == gpu_id and existing_batch != batch_id:
-            raise HTTPException(
-                status_code=409,
-                detail=f"GPU {gpu_id} is already locked by batch '{existing_batch}'"
-            )
-    
-    config["gpu_locks"][batch_id] = gpu_id
-    
-    if not write_scheduler_config(config):
-        raise HTTPException(status_code=500, detail="Failed to save config")
+    def apply_lock(config: Dict[str, Any]) -> None:
+        existing_locks = config.setdefault("gpu_locks", {})
+        for existing_batch, locked_gpu in existing_locks.items():
+            if locked_gpu == gpu_id and existing_batch != batch_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"GPU {gpu_id} is already locked by batch '{existing_batch}'",
+                )
+        existing_locks[batch_id] = gpu_id
+
+    try:
+        config = mutate_scheduler_config(apply_lock)
+    except HTTPException:
+        raise
+    except (OSError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail="Failed to save config") from exc
     
     return {
         "success": True,
@@ -3458,29 +3465,30 @@ async def unlock_gpu_for_batch(batch_id: str):
     Call this when all jobs in a batch have completed to allow other
     workflows to use the GPU again.
     """
-    config = read_scheduler_config()
-    
-    gpu_locks = config.get("gpu_locks", {})
-    
-    if batch_id in gpu_locks:
-        released_gpu = gpu_locks[batch_id]
-        del gpu_locks[batch_id]
-        config["gpu_locks"] = gpu_locks
-        
-        if not write_scheduler_config(config):
-            raise HTTPException(status_code=500, detail="Failed to save config")
-        
+    released_gpu: int | None = None
+
+    def clear_lock(config: Dict[str, Any]) -> None:
+        nonlocal released_gpu
+        released_gpu = config.setdefault("gpu_locks", {}).pop(batch_id, None)
+
+    try:
+        config = mutate_scheduler_config(clear_lock)
+    except (OSError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail="Failed to save config") from exc
+
+    gpu_locks = config["gpu_locks"]
+    if released_gpu is not None:
         return {
             "success": True,
             "message": f"GPU {released_gpu} is now UNLOCKED (was reserved by batch '{batch_id}')",
             "released_gpu": released_gpu,
-            "gpu_locks": config["gpu_locks"]
+            "gpu_locks": gpu_locks,
         }
-    
+
     return {
         "success": True,
         "message": f"No lock existed for batch '{batch_id}'",
-        "gpu_locks": gpu_locks
+        "gpu_locks": gpu_locks,
     }
 
 
@@ -3586,9 +3594,10 @@ class ForceRunRequest(BaseModel):
 @router.post("/force-run/{job_id}")
 async def force_run_job(job_id: str, request: ForceRunRequest):
     """
-    [DEBUG] Force a queued job to run immediately, bypassing orchestrator.
-    
-    Skips VRAM checks and concurrency limits. Use with caution.
+    Pin a queued job to a GPU and return it to the orchestrator-owned queue.
+
+    This does not bypass VRAM checks, concurrency limits, disabled-GPU policy,
+    or the orchestrator's sole ownership of process launch.
     """
     import logging
     logger = logging.getLogger("api.gpu")
@@ -3607,11 +3616,11 @@ async def force_run_job(job_id: str, request: ForceRunRequest):
         allowed_queue_statuses=["queued"],
     )
 
-    logger.warning(f"[FORCE RUN] User forced {job.name} to GPU {gpu_id}")
+    logger.warning(f"[FORCE RUN] User pinned {job.name} to GPU {gpu_id}; orchestrator will admit it")
 
     return {
         "success": True,
-        "message": f"Force-launched {job.name} on GPU {gpu_id}",
+        "message": f"Pinned {job.name} to GPU {gpu_id} and returned it to the scheduler queue",
         "job_id": job_id,
         "gpu_id": gpu_id
     }
@@ -3646,30 +3655,34 @@ async def set_concurrency_limit(request: ConcurrencyLimitRequest):
     import logging
     logger = logging.getLogger("api.gpu")
     
-    config = read_scheduler_config()
-    
-    if "concurrency_limits" not in config:
-        config["concurrency_limits"] = {}
-    
-    old_limit = config["concurrency_limits"].get(request.model_type)
-    
+    old_limit: Union[int, str, None] = None
+
+    def apply_limit(config: Dict[str, Any]) -> None:
+        nonlocal old_limit
+        limits = config.setdefault("concurrency_limits", {})
+        old_limit = limits.get(request.model_type)
+        if request.limit is None:
+            limits.pop(request.model_type, None)
+        elif isinstance(request.limit, str):
+            limits[request.model_type] = "auto"
+        else:
+            limits[request.model_type] = int(request.limit)
+
     if request.limit is None:
-        # Remove the limit (unlimited)
-        config["concurrency_limits"].pop(request.model_type, None)
         logger.info(f"[CONCURRENCY] Removed limit for {request.model_type}")
     elif isinstance(request.limit, str):
         if request.limit.lower() != "auto":
             raise HTTPException(status_code=400, detail="limit must be an integer, 'auto', or null")
-        config["concurrency_limits"][request.model_type] = "auto"
         logger.info(f"[CONCURRENCY] Set {request.model_type} limit to auto")
     else:
         if request.limit < 1:
             raise HTTPException(status_code=400, detail="limit must be >= 1, 'auto', or null")
-        config["concurrency_limits"][request.model_type] = int(request.limit)
         logger.info(f"[CONCURRENCY] Set {request.model_type} limit to {request.limit}")
-    
-    if not write_scheduler_config(config):
-        raise HTTPException(status_code=500, detail="Failed to save config")
+
+    try:
+        config = mutate_scheduler_config(apply_limit)
+    except (OSError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail="Failed to save config") from exc
     
     return {
         "success": True,
@@ -3688,18 +3701,19 @@ async def delete_concurrency_limit(model_type: str):
     import logging
     logger = logging.getLogger("api.gpu")
     
-    config = read_scheduler_config()
-    
-    if "concurrency_limits" not in config:
-        return {"success": True, "message": "No limits configured"}
-    
-    old_limit = config["concurrency_limits"].pop(model_type, None)
-    
+    old_limit: Union[int, str, None] = None
+
+    def clear_limit(config: Dict[str, Any]) -> None:
+        nonlocal old_limit
+        old_limit = config.setdefault("concurrency_limits", {}).pop(model_type, None)
+
+    try:
+        config = mutate_scheduler_config(clear_limit)
+    except (OSError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail="Failed to save config") from exc
+
     if old_limit is None:
         return {"success": True, "message": f"No limit was set for {model_type}"}
-    
-    if not write_scheduler_config(config):
-        raise HTTPException(status_code=500, detail="Failed to save config")
     
     logger.info(f"[CONCURRENCY] Removed limit for {model_type} (was {old_limit})")
     

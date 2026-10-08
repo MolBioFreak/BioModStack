@@ -75,8 +75,6 @@ workflow PROTEIN_DESIGN {
 
     def migratedDirectModes = [
         'antibody_child': 'workflows/antibody_child.nf',
-        'antibody_denovo_pipeline': 'workflows/antibody_denovo.nf',
-        'antibody_refinement_pipeline': 'workflows/antibody_denovo.nf',
 
         'fampnn_child': 'workflows/fampnn_child.nf',
         'maturation_child': 'workflows/maturation_child.nf',

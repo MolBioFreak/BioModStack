@@ -1,0 +1,23 @@
+{
+  "phase": 1,
+  "phase_status": "focused_green_independent_review_pending",
+  "operator_approval": {"approver": "not_recorded", "utc": "not_recorded", "allowlist_sha256": "not_recorded", "decision": "STOP"},
+  "repo": {"root": "/home/dalab/biomodstack/biomodstack", "branch": "backup/test-pre-molbio-21ec0247", "head": "21ec0247", "start_porcelain_sha256": "not_recorded", "end_porcelain_sha256": "pending_final_verification"},
+  "allowlist": ["schemas/conformational_mapping", "platform/api/services/conformational_mapping/contracts.py", "platform/api/tests/test_conformational_mapping_schemas.py", "platform/api/tests/fixtures/conformational_mapping/schemas", "platform/api/pyproject.toml", "platform/api/uv.lock", "docs/reviews/conformational_mapping/phase_1_spec_check.json"],
+  "absent_at_start": [],
+  "start_hashes": {},
+  "end_hashes": {},
+  "unrelated_dirty_start_hashes": {},
+  "unrelated_dirty_end_hashes": {},
+  "red_or_probe_tests": [{"result": "RED before implementation was recorded by the interrupted remediation; exact external provenance is incomplete"}],
+  "commands": [{"command": "pytest test_conformational_mapping_schemas.py", "result": "77 passed"}],
+  "runtime_artifacts": [],
+  "baseline_attribution": [],
+  "acceptance": [{"item": "Executable schema and cross-binding focused suite", "status": "GREEN"}, {"item": "Independent review and operator GO", "status": "PENDING"}],
+  "rollback_evidence": {},
+  "reviewers": [],
+  "known_preexisting_failures": [],
+  "prerequisite": {"phase_0_contract_commit": "8f04468352d78f08055eb1f8eb96b052caab6032", "commit_present": true, "definitions_sha256": "f264173c03fd5feccd070995cdeb20c249badec4d54e8a9186bcf27cd943e17f", "vectors_sha256": "ad0c4df03387a3bd8609275f57790e54e13fb933c7dd9a83e46d02a15b788c20", "phase_0_review_go_recorded": false, "effect": "STOP pending independent Phase 0 review/GO; the completed contract commit is the factual prerequisite evidence"},
+  "self_approval": false,
+  "final_decision": "STOP"
+}

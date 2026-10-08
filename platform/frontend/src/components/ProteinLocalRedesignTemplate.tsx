@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { fetchDesigns, fetchJobById, submitJob, uploadFile, type Design, type Job } from '../lib/api';
+import { jobPollingInterval } from '../lib/queryPolling';
 import { TargetAntigenSelector, type SelectedTarget } from './TargetAntigenSelector';
 import { EpitopeSelector } from './EpitopeSelector';
 import EpitopeMolstarViewer from './EpitopeMolstarViewer';
@@ -13,6 +14,8 @@ import { getModelByNumber, parsePDBFile, type Chain, type ParsedPDB } from '../u
 interface ProteinLocalRedesignTemplateProps {
     onBack: () => void;
     initialValues?: Record<string, unknown>;
+    submissionModelId?: string;
+    submissionMode?: string;
 }
 
 type RegionMode = 'manual_ranges' | 'interface_shell';
@@ -281,7 +284,12 @@ const buildSourceComplexComponents = (
     };
 };
 
-export function ProteinLocalRedesignTemplate({ onBack, initialValues }: ProteinLocalRedesignTemplateProps) {
+export function ProteinLocalRedesignTemplate({
+    onBack,
+    initialValues,
+    submissionModelId = 'protein_local_redesign',
+    submissionMode = 'local_redesign',
+}: ProteinLocalRedesignTemplateProps) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
 
@@ -625,7 +633,7 @@ export function ProteinLocalRedesignTemplate({ onBack, initialValues }: ProteinL
         enabled: !!sourceSimulationJobId,
         refetchInterval: (query) => {
             const status = (query.state.data?.data as Job | undefined)?.status;
-            return status && ['completed', 'failed', 'cancelled'].includes(status) ? false : 4000;
+            return status && ['completed', 'failed', 'cancelled'].includes(status) ? false : jobPollingInterval(4000, query);
         },
     });
     const sourceSimulationJob = sourceSimulationJobResponse?.data ?? null;
@@ -642,7 +650,7 @@ export function ProteinLocalRedesignTemplate({ onBack, initialValues }: ProteinL
             const designs = (query.state.data?.data as { designs?: Design[] } | undefined)?.designs ?? [];
             if (designs.length > 0) return false;
             const status = sourceSimulationJob?.status;
-            return status && ['failed', 'cancelled'].includes(status) ? false : 5000;
+            return status && ['failed', 'cancelled'].includes(status) ? false : jobPollingInterval(5000, query);
         },
     });
 
@@ -750,8 +758,8 @@ export function ProteinLocalRedesignTemplate({ onBack, initialValues }: ProteinL
 
         await submitMutation.mutateAsync({
             name: jobName.trim(),
-            model_id: 'protein_local_redesign',
-            mode: 'local_redesign',
+            model_id: submissionModelId,
+            mode: submissionMode,
             params: {
                 input_pdb: resolvedPath,
                 model_number: selectedModelNumber ?? undefined,

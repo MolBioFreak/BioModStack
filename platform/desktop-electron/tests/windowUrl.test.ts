@@ -87,14 +87,14 @@ test('runtime switching ignores the currently active shell origin and basename e
     const stableContext = resolveShellContext({ runtimeMode: 'container' });
     const devSwitch = resolveRuntimeSwitchContext({
       currentContext: stableContext,
-      currentUrl: 'http://127.0.0.1:18080/bms/assay',
+      currentUrl: 'http://127.0.0.1:18080/bms/designer/oligos',
       targetRuntimeMode: 'dev',
     });
 
     assert.equal(devSwitch.runtimeMode, 'dev');
     assert.equal(devSwitch.frontendOrigin, 'http://127.0.0.1:5173');
     assert.equal(devSwitch.routerBasename, '/');
-    assert.equal(devSwitch.windowUrl, 'http://127.0.0.1:5173/assay');
+    assert.equal(devSwitch.windowUrl, 'http://127.0.0.1:5173/designer/oligos');
   } finally {
     if (previousRuntimeMode === undefined) delete process.env.BMS_RUNTIME_MODE;
     else process.env.BMS_RUNTIME_MODE = previousRuntimeMode;

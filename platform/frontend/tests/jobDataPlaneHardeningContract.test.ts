@@ -27,11 +27,12 @@ test('every fetchJobs consumer requests a bounded SQL summary', () => {
   assert.match(api, /summary: params\?\.summary \?\? true/u);
 });
 
-test('job polling is centralized and stops while hidden or offline', () => {
+test('job polling is centralized with bounded failure backoff and browser-managed foreground pausing', () => {
   const polling = read('src/lib/queryPolling.ts');
-  assert.match(polling, /document\.hidden/u);
-  assert.match(polling, /navigator\.onLine === false/u);
-  assert.match(polling, /return false/u);
+  assert.match(polling, /fetchFailureCount/u);
+  assert.match(polling, /2 \*\* failures/u);
+  assert.match(polling, /MAX_POLL_BACKOFF_MULTIPLIER/u);
+  assert.doesNotMatch(polling, /return false/u);
 
   for (const filename of ['Dashboard.tsx', 'QuickViewer.tsx', 'NGSToolkit.tsx']) {
     const source = read(`src/components/${filename}`);

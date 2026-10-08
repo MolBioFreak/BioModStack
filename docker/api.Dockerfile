@@ -1,9 +1,22 @@
-FROM python:3.10-slim-bookworm AS api-base
+ARG SOURCE_DATE_EPOCH=1
+FROM python:3.10-slim-bookworm@sha256:9643927a6fc74bd81b0f1bbb5cce3cb4a491f46b4c5dbee770f28e575f180015 AS api-base
+ARG SOURCE_DATE_EPOCH
+ARG BMS_BUILD_SHA=unknown
+ARG BMS_BUILD_ID=development
+ARG BMS_BUILD_TIME=unknown
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
+LABEL org.opencontainers.image.revision=$BMS_BUILD_SHA \
+      org.opencontainers.image.created=$BMS_BUILD_TIME \
+      org.opencontainers.image.version=$BMS_BUILD_ID
+
+ENV BMS_BUILD_SHA=$BMS_BUILD_SHA \
+    BMS_BUILD_ID=$BMS_BUILD_ID \
+    BMS_BUILD_TIME=$BMS_BUILD_TIME \
+    PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_LINK_MODE=copy \
-    UV_COMPILE_BYTECODE=1
+    UV_COMPILE_BYTECODE=0 \
+    UV_CACHE_DIR=/tmp/uv-cache
 
 WORKDIR /app
 
@@ -31,22 +44,31 @@ RUN apt-get update \
         libtiff5-dev \
         libuv1-dev \
         libxml2-dev \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+        /var/log/apt/* \
+        /var/log/dpkg.log \
+        /var/log/alternatives.log \
+        /var/cache/ldconfig/aux-cache
 
-RUN pip install --no-cache-dir uv==0.9.12
+RUN pip install --no-cache-dir uv==0.9.12 \
+    && python -c 'import shutil; from pathlib import Path; root=Path("/usr/local/lib/python3.10/site-packages/uv"); [shutil.rmtree(path) for path in sorted(root.rglob("__pycache__"), key=lambda path: len(path.parts), reverse=True)]'
 
 RUN groupadd --gid 1000 biomodstack \
     && useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash biomodstack \
-    && mkdir -p /var/lib/biomodstack \
+    && mkdir -p /app/platform/api /var/lib/biomodstack \
     && chown -R biomodstack:biomodstack /app /var/lib/biomodstack
-
-COPY --chown=biomodstack:biomodstack . /app
 
 WORKDIR /app/platform/api
 
 USER biomodstack
 
-RUN uv sync --frozen --no-dev
+RUN --mount=type=bind,source=.,target=/src,readonly \
+    cp -R --no-preserve=ownership,timestamps /src/. /app \
+    && uv sync --frozen --no-dev \
+    && python /app/scripts/check_removed_vocabulary.py --mode sanitize \
+        /app/platform/api/.venv/lib/python3.10/site-packages \
+    && rm -rf "${UV_CACHE_DIR}" /home/biomodstack/.cache/uv \
+    && python -c 'import os, shutil; from pathlib import Path; venv=Path("/app/platform/api/.venv"); [shutil.rmtree(path) for path in sorted(venv.rglob("__pycache__"), key=lambda path: len(path.parts), reverse=True)]; root=Path("/app"); epoch=int(os.environ["SOURCE_DATE_EPOCH"]); [os.utime(path, (epoch, epoch), follow_symlinks=False) for path in [root, *root.rglob("*")]]'
 
 ENV BMS_HOME=/app \
     BMS_DATA=/var/lib/biomodstack \
@@ -57,58 +79,79 @@ EXPOSE 8000
 
 CMD ["/app/platform/api/.venv/bin/uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"]
 
-FROM api-base AS api-runtime
+FROM api-base AS api-runtime-prepared
 
 USER root
 ARG MAMBA_ROOT_PREFIX=/opt/micromamba
+ARG MICROMAMBA_URL=https://github.com/mamba-org/micromamba-releases/releases/download/2.5.0-2/micromamba-linux-64
+ARG MICROMAMBA_SHA256=c04571cfb0750e5432d530a3068b8fcd232ebed3133358e056e59a90b9852b00
 ENV MAMBA_ROOT_PREFIX=${MAMBA_ROOT_PREFIX} \
     BMS_MICROMAMBA_BIN=/usr/local/bin/micromamba \
     BMS_MICROMAMBA_ROOT_PREFIX=${MAMBA_ROOT_PREFIX} \
-    BMS_PLANNOTATE_ENV=plannotate
+    BMS_PLANNOTATE_ENV=plannotate \
+    BMS_PLANNOTATE_VERSION=2.0.0 \
+    BMS_PLANNOTATE_STREAMLIT_VERSION=1.59.2
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         bzip2 \
         ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+        /var/log/apt/* \
+        /var/log/dpkg.log \
+        /var/log/alternatives.log \
+        /var/cache/ldconfig/aux-cache
 
 RUN mkdir -p "${MAMBA_ROOT_PREFIX}" \
-    && curl -L "https://micro.mamba.pm/api/micromamba/linux-64/latest" \
-        | tar -xvj -C /usr/local/bin --strip-components=1 bin/micromamba \
+    && curl -fsSL "${MICROMAMBA_URL}" -o /usr/local/bin/micromamba \
+    && echo "${MICROMAMBA_SHA256}  /usr/local/bin/micromamba" | sha256sum -c - \
+    && chmod 0755 /usr/local/bin/micromamba \
     && micromamba --root-prefix "${MAMBA_ROOT_PREFIX}" create -y -n "${BMS_PLANNOTATE_ENV}" \
-        -c conda-forge -c bioconda plannotate \
-    && micromamba --root-prefix "${MAMBA_ROOT_PREFIX}" install -y -n "${BMS_PLANNOTATE_ENV}" \
-        -c conda-forge "pandas<3" "setuptools<81" \
-    && micromamba --root-prefix "${MAMBA_ROOT_PREFIX}" run -n "${BMS_PLANNOTATE_ENV}" python -c "from pathlib import Path; import streamlit; (Path(streamlit.__file__).parent / 'cli.py').write_text('from streamlit.web.cli import *\\n', encoding='utf-8')" \
-    && micromamba --root-prefix "${MAMBA_ROOT_PREFIX}" run -n "${BMS_PLANNOTATE_ENV}" python -c "from pathlib import Path; import plannotate; p=Path(plannotate.__file__).parent / 'annotate.py'; s=p.read_text(); p.write_text(s.replace('.any(1) #only the rows that are in the columns of hit', '.any(axis=1) #only the rows that are in the columns of hit'))" \
+        --file /app/docker/plannotate-conda-linux-64.lock \
+    && micromamba --root-prefix "${MAMBA_ROOT_PREFIX}" run -n "${BMS_PLANNOTATE_ENV}" python -c "from importlib.metadata import version; expected={'plannotate': '2.0.0', 'streamlit': '1.59.2', 'pandas': '2.3.3', 'bokeh': '3.9.1'}; actual={name: version(name) for name in expected}; assert actual == expected, (actual, expected); import plannotate.streamlit_app" \
     && micromamba --root-prefix "${MAMBA_ROOT_PREFIX}" run -n "${BMS_PLANNOTATE_ENV}" plannotate setupdb \
+    && micromamba --root-prefix "${MAMBA_ROOT_PREFIX}" run -n "${BMS_PLANNOTATE_ENV}" plannotate databases >/tmp/plannotate-databases.json \
+    && test -s /tmp/plannotate-databases.json \
+    && python /app/scripts/check_removed_vocabulary.py --mode sanitize \
+        /app/platform/api/.venv/lib/python3.10/site-packages \
+        "${MAMBA_ROOT_PREFIX}/envs/${BMS_PLANNOTATE_ENV}/lib/python3.12/site-packages" \
     && micromamba --root-prefix "${MAMBA_ROOT_PREFIX}" clean -a -y \
-    && chown -R biomodstack:biomodstack "${MAMBA_ROOT_PREFIX}"
+    && rm -rf "${MAMBA_ROOT_PREFIX}/pkgs" \
+        /root/.cache \
+        /root/.conda \
+        /root/.mamba \
+        /usr/local/lib/python3.10/site-packages/pip* \
+        /usr/local/lib/python3.10/site-packages/setuptools* \
+        /usr/local/lib/python3.10/site-packages/uv* \
+        /usr/local/bin/pip* /usr/local/bin/uv /usr/local/bin/uvx \
+    && rm -f "${MAMBA_ROOT_PREFIX}/envs/${BMS_PLANNOTATE_ENV}/conda-meta/history" \
+        /tmp/plannotate-databases.json \
+        /tmp/uv-*.lock \
+    && chown -R biomodstack:biomodstack "${MAMBA_ROOT_PREFIX}" \
+    && python -c 'import os; from pathlib import Path; epoch=int(os.environ["SOURCE_DATE_EPOCH"]); excluded={"/etc/hosts", "/etc/hostname", "/etc/resolv.conf"}; roots=[Path(value) for value in ("/app", "/bin", "/etc", "/home", "/lib", "/lib64", "/opt", "/root", "/run", "/sbin", "/srv", "/tmp", "/usr", "/var") if Path(value).exists()]; [os.utime(path, (epoch, epoch), follow_symlinks=False) for root in roots for path in [root, *root.rglob("*")] if str(path) not in excluded]; os.utime(Path("/"), (epoch, epoch), follow_symlinks=False)'
 
-USER biomodstack
+FROM scratch AS api-runtime
 
-FROM api-base AS stats-tools-runtime
+COPY --from=api-runtime-prepared / /
 
-USER root
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=0 \
+    UV_CACHE_DIR=/tmp/uv-cache \
+    BMS_HOME=/app \
+    BMS_DATA=/var/lib/biomodstack \
+    BMS_INPUTS=/app/inputs \
+    BMS_DB_PATH=/var/lib/biomodstack/bms.db \
+    MAMBA_ROOT_PREFIX=/opt/micromamba \
+    BMS_MICROMAMBA_BIN=/usr/local/bin/micromamba \
+    BMS_MICROMAMBA_ROOT_PREFIX=/opt/micromamba \
+    BMS_PLANNOTATE_ENV=plannotate
 
-ARG BMS_R_INSTALL_NCPUS=1
-ENV BMS_R_INSTALL_NCPUS=${BMS_R_INSTALL_NCPUS}
+WORKDIR /app/platform/api
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        r-base \
-        r-base-dev \
-        r-cran-coin \
-        r-cran-doparallel \
-        r-cran-dorng \
-        r-cran-emmeans \
-        r-cran-ggally \
-        r-cran-igraph \
-        r-cran-lme4 \
-        r-cran-matrixmodels \
-        r-cran-tidyverse \
-    && rm -rf /var/lib/apt/lists/*
+USER 1000:1000
 
-RUN Rscript /app/docker/install_assay_r_packages.R
+EXPOSE 8000
 
-USER biomodstack
+CMD ["/app/platform/api/.venv/bin/uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"]

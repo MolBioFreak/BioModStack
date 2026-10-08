@@ -299,6 +299,36 @@ def test_protenix_template_mode_reports_shared_mmcif_path(tmp_path: Path) -> Non
         raise AssertionError("Expected missing shared Protenix mmCIF cache to raise HTTPException")
 
 
+def test_protenix_rejects_non_v2_checkpoint_selection(tmp_path: Path) -> None:
+    params = {
+        "pred_method": "protenix",
+        "protenix_model_weights": "protenix_base_default_v1.0.0",
+        "protenix_weights": str(tmp_path / "weights" / "protenix"),
+    }
+
+    try:
+        _validate_protenix_checkpoint_requirements("protenix", params)
+    except HTTPException as exc:
+        assert exc.status_code == 422
+        detail = exc.detail
+        assert isinstance(detail, dict)
+        validation_errors = detail.get("validation_errors")
+        assert isinstance(validation_errors, list)
+        assert "pinned to the V2 checkpoint" in validation_errors[0]
+    else:
+        raise AssertionError("Expected non-V2 Protenix selection to be rejected")
+
+
+def test_frustrampnn_normalizes_protenix_mmcif_before_prediction() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    module_text = (repo_root / "modules" / "frustrampnn.nf").read_text(encoding="utf-8")
+
+    assert "tuple val(meta), path(structure)" in module_text
+    assert "MMCIFParser" in module_text
+    assert "PDBIO" in module_text
+    assert "frustrampnn predict --pdb ${meta.id}.pdb" in module_text
+
+
 def test_protenix_v2_requires_shared_checkpoint(tmp_path: Path) -> None:
     params = {
         "pred_method": "protenix",
@@ -338,4 +368,28 @@ def test_protenix_v2_is_the_default_and_is_not_downgraded_without_msa() -> None:
     module_text = (repo_root / "modules" / "protenix.nf").read_text(encoding="utf-8")
 
     assert "protenix_model_weights = 'protenix-v2'" in config_text
-    assert module_text.count("effective_model.contains('protenix-v2')") == 2
+    assert module_text.count("if (model_name != 'protenix-v2')") == 2
+    assert module_text.count("def effective_model = 'protenix-v2'") == 2
+
+    active_sources = [
+        repo_root / "modules" / "protenix.nf",
+        repo_root / "modules" / "antibody_batch.nf",
+        repo_root / "scripts" / "run_protenix_inference.py",
+        repo_root / "platform" / "api" / "services" / "nextflow.py",
+        repo_root / "platform" / "api" / "routers" / "jobs.py",
+        repo_root / "platform" / "frontend" / "src" / "components" / "qualitySettingsLogic.ts",
+        repo_root / "platform" / "frontend" / "src" / "components" / "QualitySettingsPanel.tsx",
+        repo_root / "platform" / "frontend" / "src" / "components" / "StructurePredictionTemplate.tsx",
+        repo_root / "platform" / "frontend" / "src" / "components" / "AntibodyDenovoTemplate.tsx",
+        repo_root / "platform" / "frontend" / "src" / "components" / "dashboard" / "reorchestrateStructureSettings.ts",
+    ]
+    forbidden_non_v2_weights = (
+        "protenix_base_20250630_v1.0.0",
+        "protenix_mini_esm_v0.5.0",
+    )
+    for source_path in active_sources:
+        source_text = source_path.read_text(encoding="utf-8")
+        for forbidden_weight in forbidden_non_v2_weights:
+            assert forbidden_weight not in source_text, (
+                f"{source_path.relative_to(repo_root)} still selects {forbidden_weight}"
+            )

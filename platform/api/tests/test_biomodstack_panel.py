@@ -51,6 +51,56 @@ def load_module(monkeypatch):
 
 
 
+def test_panel_status_indicators_ignore_stale_process_fallbacks(monkeypatch) -> None:
+    """Endpoint failure stays red even if stale legacy probes would say active."""
+    module = load_module(monkeypatch)
+
+    def unreachable(*args, **kwargs):
+        raise OSError("connection refused")
+
+    def legacy_probe_must_not_run(*args, **kwargs):
+        raise AssertionError("launcher status must not consult process fallbacks")
+
+    import urllib.request
+
+    monkeypatch.setattr(module, "operator_runtime_mode", lambda project_root=None: "dev")
+    monkeypatch.setattr(module, "runtime_api_health_url", lambda **kwargs: "http://dev/api/health")
+    monkeypatch.setattr(module, "operator_frontend_url", lambda **kwargs: "http://dev/")
+    monkeypatch.setattr(urllib.request, "urlopen", unreachable)
+    monkeypatch.setattr(module.subprocess, "run", legacy_probe_must_not_run)
+
+    assert module.check_api_status() is False
+    assert module.check_frontend_status() is False
+
+
+def test_panel_status_indicators_use_one_selected_runtime_and_accept_http_200(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+    requested_urls = []
+
+    class ReadyResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    def ready(req, **kwargs):
+        requested_urls.append(req.full_url)
+        return ReadyResponse()
+
+    import urllib.request
+
+    monkeypatch.setattr(module, "runtime_api_health_url", lambda **kwargs: f"http://{kwargs['runtime_mode']}/api/health")
+    monkeypatch.setattr(module, "operator_frontend_url", lambda **kwargs: f"http://{kwargs['runtime_mode']}/")
+    monkeypatch.setattr(urllib.request, "urlopen", ready)
+
+    assert module.check_api_status("dev") is True
+    assert module.check_frontend_status("dev") is True
+    assert requested_urls == ["http://dev/api/health", "http://dev/"]
+
+
 def test_bioxp_summary_requires_runtime_and_hardware_readiness(monkeypatch) -> None:
     module = load_module(monkeypatch)
     base = {

@@ -314,7 +314,7 @@ describe("insertSequenceData", () => {
     const sequenceToInsert = {};
     const sequenceToInsertInto = {
       sequence: "atgagagaga",
-      chromatogramData: { baseTraces: [] },
+      traceData: { baseTraces: [] },
       features: [{ start: 0, end: 9 }],
       warnings: [{ start: 0, end: 9 }]
     };
@@ -327,13 +327,13 @@ describe("insertSequenceData", () => {
     postInsertSeq.sequence.length.should.equal(0);
     postInsertSeq.features.length.should.equal(0);
     postInsertSeq.warnings.length.should.equal(0);
-    assert.deepStrictEqual(postInsertSeq.chromatogramData, undefined);
+    assert.deepStrictEqual(postInsertSeq.traceData, undefined);
   });
-  it("deletes chromatogramData correctly", () => {
+  it("deletes traceData correctly", () => {
     const sequenceToInsert = {};
     const sequenceToInsertInto = {
       sequence: "atgagagaga",
-      chromatogramData: {
+      traceData: {
         baseCalls: ["G", "G", "C", "G", "T", "G", "G", "A", "C", "G"],
         baseTraces: [
           {
@@ -406,16 +406,16 @@ describe("insertSequenceData", () => {
       range
     );
     postInsertSeq.sequence.length.should.equal(8);
-    postInsertSeq.chromatogramData.baseCalls.length.should.equal(8);
-    postInsertSeq.chromatogramData.baseTraces.length.should.equal(8);
+    postInsertSeq.traceData.baseCalls.length.should.equal(8);
+    postInsertSeq.traceData.baseTraces.length.should.equal(8);
   });
-  it("properly inserts into chromatogramData", () => {
+  it("properly inserts into traceData", () => {
     const sequenceToInsert = {
       sequence: "rrr"
     };
     const sequenceToInsertInto = {
       sequence: "atgagag",
-      chromatogramData: {
+      traceData: {
         baseCalls: ["G", "G", "C", "G", "T", "G", "G"],
         baseTraces: [
           {
@@ -470,19 +470,19 @@ describe("insertSequenceData", () => {
       range
     );
     postInsertSeq.sequence.length.should.equal(8);
-    postInsertSeq.chromatogramData.baseCalls.length.should.equal(8);
-    postInsertSeq.chromatogramData.baseTraces.length.should.equal(8);
-    postInsertSeq.chromatogramData.baseTraces[4].aTrace.should.deep.equal([
+    postInsertSeq.traceData.baseCalls.length.should.equal(8);
+    postInsertSeq.traceData.baseTraces.length.should.equal(8);
+    postInsertSeq.traceData.baseTraces[4].aTrace.should.deep.equal([
       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
     ]);
   });
-  it("properly inserts into chromatogramData, keeping the chromatogramData intact if the insert length is the same length as the selection range", () => {
+  it("properly inserts into traceData, keeping the traceData intact if the insert length is the same length as the selection range", () => {
     const sequenceToInsert = {
       sequence: "rrr"
     };
     const sequenceToInsertInto = {
       sequence: "atgagag",
-      chromatogramData: {
+      traceData: {
         baseCalls: ["G", "G", "C", "G", "T", "G", "G"],
         baseTraces: [
           {
@@ -537,8 +537,8 @@ describe("insertSequenceData", () => {
       range
     );
     postInsertSeq.sequence.length.should.equal(7);
-    postInsertSeq.chromatogramData.baseCalls.length.should.equal(7);
-    postInsertSeq.chromatogramData.baseCalls.should.deep.equal([
+    postInsertSeq.traceData.baseCalls.length.should.equal(7);
+    postInsertSeq.traceData.baseCalls.should.deep.equal([
       "G",
       "G",
       "C",
@@ -547,8 +547,8 @@ describe("insertSequenceData", () => {
       "r",
       "G"
     ]);
-    postInsertSeq.chromatogramData.baseTraces.length.should.equal(7);
-    postInsertSeq.chromatogramData.baseTraces[4].aTrace.should.deep.equal([
+    postInsertSeq.traceData.baseTraces.length.should.equal(7);
+    postInsertSeq.traceData.baseTraces[4].aTrace.should.deep.equal([
       0, 2, 6, 8
     ]);
   });

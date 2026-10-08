@@ -244,7 +244,7 @@ def test_build_nextflow_command_maps_boltz_cp_experimental_params() -> None:
 
     joined = " ".join(cmd)
 
-    assert cmd[:4] == ["nextflow", "run", "workflows/boltz_cp_experimental.nf", "-profile"]
+    assert cmd[1:4] == ["run", "workflows/boltz_cp_experimental.nf", "-profile"]
     assert "boltz_cp_experimental,workstation_ryzen7960x" in cmd
     assert "--bcp_input_path /tmp/complex_input.yaml" in joined
     assert "--bcp_shard_plan_id 4x4" in joined

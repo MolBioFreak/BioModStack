@@ -12,8 +12,9 @@ import logging
 
 from database import init_db, async_session
 from molbio_database import init_molbio_db, molbio_health
-from services.assay_analytical_store import init_analytical_store
-from routers import analyses, analytics, assay_analytics, boltzgen, designs, files, frameworks, frustrampnn, gpu, inputs, jobs, mobile_ui_updates, models, molbio_ops, msa, nucleotide_sequences, ont_devices, ont_runs, queue, rcsb, ribocentre, rna_structure, sequence_qc, smiles_converter, system, templates, user_sequences, user_templates
+from build_identity import current_build_identity
+from readiness import collect_runtime_readiness
+from routers import analyses, analytics, boltzgen, designs, files, frameworks, frustrampnn, gpu, inputs, jobs, mobile_ui_updates, models, molecular_dynamics, molbio_ops, msa, nucleotide_sequences, ont_devices, ont_runs, queue, rcsb, ribocentre, rna_structure, sequence_qc, smiles_converter, system, templates, user_sequences, user_templates
 from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
 from biomodstack_runtime_profile import install_feature_enabled
 from services.analysis_worker import AnalysisWorker
@@ -27,27 +28,6 @@ logger = logging.getLogger(__name__)
 # Global orchestrator instance
 _orchestrator: GPUOrchestrator = None
 _analysis_worker: AnalysisWorker = None
-ANALYTICAL_STARTUP_STATUS: dict[str, object] = {"attempted": False, "ok": None, "message": "not requested"}
-
-
-def _truthy_env(name: str, default: str = "0") -> bool:
-    return str(os.getenv(name, default)).strip().lower() in {"1", "true", "yes", "on"}
-
-
-async def _init_analytical_store_optional() -> None:
-    """Initialize the analytical store without making API/web boot depend on Postgres."""
-    global ANALYTICAL_STARTUP_STATUS
-    if not _truthy_env("BMS_ANALYTICAL_INIT_ON_STARTUP"):
-        ANALYTICAL_STARTUP_STATUS = {"attempted": False, "ok": None, "message": "not requested"}
-        return
-    try:
-        await init_analytical_store()
-    except Exception as exc:  # noqa: BLE001 - DB startup must be degraded, not fatal.
-        ANALYTICAL_STARTUP_STATUS = {"attempted": True, "ok": False, "message": str(exc)}
-        logger.warning("[STARTUP] BMS DB service unavailable for analytical init: %s", exc)
-        return
-    ANALYTICAL_STARTUP_STATUS = {"attempted": True, "ok": True, "message": "initialized"}
-    logger.info("[STARTUP] Assay analytical PostgreSQL store initialized")
 
 
 @asynccontextmanager
@@ -57,10 +37,9 @@ async def lifespan(app: FastAPI):
     global _analysis_worker
     bioxp_runtime = None
     
-    # Initialize independently owned persistence stores.
+    # Initialize independently owned core and MolBio persistence stores.
     await init_db()
     await init_molbio_db()
-    await _init_analytical_store_optional()
     
     # Initialize GPU orchestrator only when this runtime is allowed to own workflow launches.
     if workflow_launches_allowed():
@@ -168,6 +147,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(models.router, prefix="/api/models", tags=["models"])
+app.include_router(molecular_dynamics.router)
 app.include_router(templates.router, prefix="/api/templates", tags=["templates"])
 app.include_router(inputs.router, prefix="/api/inputs", tags=["inputs"])
 app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
@@ -176,7 +156,6 @@ app.include_router(analyses.router, prefix="/api", tags=["analyses"])
 app.include_router(gpu.router, prefix="/api/gpu", tags=["gpu"])
 app.include_router(files.router, prefix="/api/files", tags=["files"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"])
-app.include_router(assay_analytics.router, prefix="/api/assay-analytics", tags=["assay-analytics"])
 app.include_router(user_sequences.router, prefix="/api/user-sequences", tags=["user-sequences"])
 app.include_router(user_templates.router, prefix="/api/user-templates", tags=["user-templates"])
 # msa_cache router removed - now using file-based caching
@@ -203,11 +182,23 @@ app.include_router(mobile_ui_updates.router, prefix="/api")
 
 @app.get("/api/health")
 async def health_check():
-    """Health check endpoint, including authoritative Mol Bio storage."""
+    """Separate process liveness from dependency and workflow readiness."""
     molbio = await molbio_health()
-    molbio_ok = molbio.get("status") == "healthy"
-    status = "healthy" if molbio_ok else "degraded"
-    return {"status": status, "service": "biomodstack-api", "molbio": molbio}
+    readiness = await collect_runtime_readiness(molbio=molbio)
+    return {
+        "status": "healthy" if readiness["ready"] else "degraded",
+        "service": "biomodstack-api",
+        "liveness": {"alive": True, "status": "alive"},
+        "readiness": readiness,
+        "build": current_build_identity(),
+        "molbio": molbio,
+    }
+
+
+@app.get("/api/version")
+async def api_version():
+    """Return immutable build identity for cross-surface provenance checks."""
+    return {"service": "biomodstack-api", "build": current_build_identity()}
 
 
 @app.get("/")

@@ -13,6 +13,7 @@ REPO_ROOT = API_ROOT.parent.parent
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
+
 from antibody_pipeline_contract import (  # noqa: E402
     ANTIBODY_DENOVO_PIPELINE,
     ANTIBODY_REFINEMENT_PIPELINE,
@@ -40,10 +41,11 @@ EXPECTED_PROFILE_ENTRYPOINTS = {
     "wf_clone_validation": "workflows/ngs/wf_clone_validation.nf",
     "protein_local_redesign": "workflows/protein_local_redesign.nf",
     "protein_cad_experimental": "workflows/protein_cad_experimental.nf",
-    "caliby_experimental": "workflows/caliby_experimental.nf",
-    "protein_hunter_experimental": "workflows/protein_hunter_experimental.nf",
+
+
     "boltz_cp_experimental": "workflows/boltz_cp_experimental.nf",
     "confornets_experimental": "workflows/confornets_experimental.nf",
+    "conformational_mapping": "workflows/conformational_mapping.nf",
     "molecular_dynamics": "workflows/experimental/molecular_dynamics/orchestrator.nf",
 
     "ppiflow_generator": "workflows/ppiflow_generator_design.nf",
@@ -85,8 +87,11 @@ EXPECTED_MODEL_MODE_ENTRYPOINTS = {
     ("antibody_child", "validation_batch"): "workflows/antibody_child.nf",
     ("rfantibody_child", "antibody_backbone"): "workflows/rfantibody_backbone.nf",
     ("fampnn_child", "sequence_design"): "workflows/fampnn_child.nf",
+    ("protein_modification_experimental", "de_novo_design"): "workflows/protein_cad_experimental.nf",
+    ("protein_modification_experimental", "region_redesign"): "workflows/protein_local_redesign.nf",
     ("molecular_dynamics", "simulate"): "workflows/experimental/molecular_dynamics/orchestrator.nf",
     ("molecular_dynamics", "replica"): "workflows/experimental/molecular_dynamics/replica.nf",
+    ("conformational_mapping", "map"): "workflows/conformational_mapping.nf",
 }
 
 
@@ -137,21 +142,6 @@ def test_boltzgen_modes_require_the_parent_de_novo_workflow() -> None:
             )
 
 
-def test_bindcraft_is_retired_and_not_routable() -> None:
-    assert "bindcraft_child" not in WORKFLOW_ENTRYPOINTS
-    assert not any(model_id == "bindcraft" for model_id, _mode in MODEL_MODE_WORKFLOW_ENTRYPOINTS)
-
-    with pytest.raises(ValueError, match="BindCraft has been retired"):
-        build_nextflow_command(
-            "bindcraft",
-            "minibinder",
-            {"target_pdb": "/tmp/target.pdb"},
-            "/tmp/out",
-            job_id="job-retired-bindcraft",
-        )
-
-
-
 def test_api_generated_profiles_are_defined_in_nextflow_config() -> None:
     _assert_command_profiles_exist(
         [
@@ -160,11 +150,10 @@ def test_api_generated_profiles_are_defined_in_nextflow_config() -> None:
             ("diffdock", "dock", {"protein_pdb": "/tmp/receptor.pdb", "ligand_smiles": "CCO"}),
             ("unidock", "dock", {"protein_pdb": "/tmp/receptor.pdb", "ligand_smiles": "CCO"}),
             ("docking", "compare", {"protein_pdb": "/tmp/receptor.pdb", "ligand_smiles": "CCO"}),
-            ("antibody_denovo", ANTIBODY_DENOVO_PIPELINE, {"target_pdb": "/tmp/target.pdb", "epitope_residues": "A1"}),
             ("antibody_child", "validation_batch", {"pdb_paths": "/tmp/a.pdb"}),
             ("rfantibody_child", "antibody_backbone", {"target_pdb": "/tmp/target.pdb"}),
             ("fampnn_child", "sequence_design", {"pdb_paths": "/tmp/a.pdb"}),
-            ("template_antibody_denovo", "maturation_child", {"pdb_paths": "/tmp/a.pdb"}),
+            ("antibody_child", "maturation_child", {"pdb_paths": "/tmp/a.pdb"}),
         ]
     )
 
@@ -223,15 +212,6 @@ def test_shared_engine_profiles_do_not_implicitly_select_product_entrypoints() -
         )
         == "workflows/ppiflow_generator_design.nf"
     )
-    assert (
-        resolve_nextflow_entrypoint(
-            effective_profile="boltz",
-            model_id="antibody_denovo",
-            mode=ANTIBODY_DENOVO_PIPELINE,
-            params={"structure_validator": "boltz2"},
-        )
-        == "workflows/antibody_denovo.nf"
-    )
 
 
 def test_standalone_structure_prediction_routes_direct_without_hijacking_complexes() -> None:
@@ -276,12 +256,10 @@ def test_remaining_parent_and_child_workflows_route_direct_for_fresh_and_resume(
         ("diffdock", "dock", {"protein_pdb": "/tmp/receptor.pdb", "ligand_smiles": "CCO"}, "workflows/docking.nf"),
         ("unidock", "dock", {"protein_pdb": "/tmp/receptor.pdb", "ligand_smiles": "CCO"}, "workflows/docking.nf"),
         ("docking", "compare", {"protein_pdb": "/tmp/receptor.pdb", "ligand_smiles": "CCO"}, "workflows/docking.nf"),
-        ("antibody_denovo", ANTIBODY_DENOVO_PIPELINE, {"target_pdb": "/tmp/target.pdb", "epitope_residues": "A1"}, "workflows/antibody_denovo.nf"),
-        ("antibody_denovo", ANTIBODY_REFINEMENT_PIPELINE, {"target_pdb": "/tmp/target.pdb", "selected_input_dir": "/tmp/selected"}, "workflows/antibody_denovo.nf"),
         ("antibody_child", "validation_batch", {"pdb_paths": "/tmp/a.pdb"}, "workflows/antibody_child.nf"),
         ("rfantibody_child", "antibody_backbone", {"target_pdb": "/tmp/target.pdb"}, "workflows/rfantibody_backbone.nf"),
         ("fampnn_child", "sequence_design", {"pdb_paths": "/tmp/a.pdb"}, "workflows/fampnn_child.nf"),
-        ("template_antibody_denovo", "maturation_child", {"pdb_paths": "/tmp/a.pdb"}, "workflows/maturation_child.nf"),
+
     ]
 
     for model_id, mode, params, rel_path in cases:

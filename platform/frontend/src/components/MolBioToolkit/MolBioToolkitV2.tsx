@@ -367,12 +367,17 @@ function normalizePrimerRecord(primer: Partial<Primer> & Record<string, UntypedA
 }
 
 function sequenceDataFromApiRecord(seq: NucleotideSequenceResponse): SequenceData {
+    // Older saved records can contain upper-case database values (for example
+    // "DNA"). The editor's internal union and SeqViz both require lower-case
+    // sequence type tokens; passing the persisted value through directly makes
+    // SeqViz dereference an absent complement table and unmount the viewer.
+    const sequenceType = String(seq.sequence_type || '').toLowerCase() === 'rna' ? 'rna' : 'dna';
     return {
         name: seq.name,
         description: seq.description ?? undefined,
         sequence: seq.sequence,
         circular: seq.is_circular,
-        sequenceType: seq.sequence_type,
+        sequenceType,
         moleculeStrandedness: seq.molecule_strandedness,
         moleculeOrientation: seq.molecule_orientation,
         moleculeLabel: seq.molecule_label,

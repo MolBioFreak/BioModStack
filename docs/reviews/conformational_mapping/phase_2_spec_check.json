@@ -1,0 +1,23 @@
+{
+  "phase": 2,
+  "phase_status": "focused_green_independent_review_pending",
+  "operator_approval": {"approver": "not_recorded", "utc": "not_recorded", "allowlist_sha256": "not_recorded", "decision": "STOP"},
+  "repo": {"root": "/home/dalab/biomodstack/biomodstack", "branch": "backup/test-pre-molbio-21ec0247", "head": "21ec0247", "start_porcelain_sha256": "not_recorded", "end_porcelain_sha256": "pending_final_verification"},
+  "allowlist": ["platform/api/services/conformational_mapping/structure_normalizer.py", "scripts/normalize_conformational_mapping_structure.py", "schemas/conformational_mapping/cm_structure_map_v1.schema.json", "platform/api/tests/test_conformational_mapping_normalization.py", "platform/api/tests/fixtures/conformational_mapping/normalization", "docs/reviews/conformational_mapping/phase_2_spec_check.json"],
+  "absent_at_start": [],
+  "start_hashes": {},
+  "end_hashes": {},
+  "unrelated_dirty_start_hashes": {},
+  "unrelated_dirty_end_hashes": {},
+  "red_or_probe_tests": [{"result": "Observed residue overflow was masked by completeness validation before repair"}],
+  "commands": [{"command": "pytest test_conformational_mapping_normalization.py", "result": "17 passed"}],
+  "runtime_artifacts": [],
+  "baseline_attribution": [],
+  "acceptance": [{"item": "Authoritative residue identity, explicit total-absence rejection, and paired publication rollback", "status": "GREEN"}, {"item": "Independent review and Phase 1 GO prerequisite", "status": "PENDING"}],
+  "rollback_evidence": {"paired_publication": "Injected second-publication failures restore the previous pair or leave no new partial pair"},
+  "reviewers": [],
+  "known_preexisting_failures": [],
+  "prerequisite": {"phase_1_final_decision": "STOP", "effect": "Phase 2 cannot claim GO"},
+  "self_approval": false,
+  "final_decision": "STOP"
+}

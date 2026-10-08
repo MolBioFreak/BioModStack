@@ -1,0 +1,61 @@
+schema: bms.md.chemistry-profile.v1
+id: gmx_amber99sb_ildn_tip3p_smoke_v1
+version: 1.0.0
+display_name: AMBER99SB-ILDN + TIP3P infrastructure smoke
+family: amber
+assurance: smoke_fixture
+legacy: true
+automatic_preparation: true
+inventory_class: selectable
+installed: true
+runtime_validated: true
+operator_enabled: true
+supported_engines:
+  - gromacs
+v1_preparation:
+  force_field: amber99sb-ildn
+  water_model: tip3p
+launch_constraints:
+  input_mode: structure
+  structure_sha256: c75d7a689617248cdd92dc6633531d2506fb9bef1e6e21e26c8f579ae6955abb
+  replicas: 1
+  engine: gromacs
+  force_field: amber99sb-ildn
+  water_model: tip3p
+  timestep_fs: 2.0
+  temperature_k: 300.0
+  pressure_bar: 1.0
+  salt_molar: 0.15
+  padding_nm: 1.0
+  max_production_steps: 5000
+  max_minimization_steps: 50000
+  max_nvt_steps: 50000
+  max_npt_steps: 50000
+asset_probe:
+  runtime_id: gromacs-2025.3
+  required_runtime_identity:
+    runtime_id: gromacs-2025.3
+    runtime_version: "2025.3"
+    sif_sha256: 97c117ea07496c0d1b13d80be84d33345b89063b47ccfb83f6cbff0145f1385b
+  required_asset_ids:
+    - amber99sb-ildn.ff
+scientific_validation:
+  validated: true
+  lane: gromacs_1aki_smoke_v1
+  version: 1.0.0
+  scope:
+    launch_scope: smoke_auto
+    system_classes:
+      - infrastructure_smoke_fixture
+    composition: single-chain folded protein fixture without ligands, nucleic acids, membranes, or catalytic metals
+    protocol: short deterministic preparation and runtime smoke only
+    ionic_conditions: monovalent sodium/chloride with legacy TIP3P smoke settings
+    observables:
+      - topology closure
+      - finite short trajectory
+      - checkpoint and artifact contract
+explicit_exclusions:
+  - scientific production claims
+  - mutation thermodynamics
+  - protein-nucleic-acid complexes
+  - ligands, membranes, cofactors, and catalytic metals

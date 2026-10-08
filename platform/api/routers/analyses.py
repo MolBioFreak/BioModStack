@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Design, Job, get_session
+from services.result_contracts import validate_design_analysis_request
 from services.analysis_runs import (
     get_analysis_run_by_id,
     get_matching_design_analysis_run,
@@ -16,6 +17,7 @@ from services.analysis_runs import (
     request_design_analysis,
     request_job_analysis,
     serialize_analysis_run,
+    validate_job_analysis_request,
 )
 
 
@@ -70,6 +72,12 @@ def _job_analysis_params_from_query(
     }
 
 
+def _enforce_design_analysis_contract(design: Design, analysis_type: str) -> None:
+    reason = validate_design_analysis_request(design, analysis_type)
+    if reason:
+        raise HTTPException(status_code=409, detail=reason)
+
+
 @router.get("/designs/{design_id}/analyses/{analysis_type}", response_model=AnalysisRunResponse)
 async def get_design_analysis(
     design_id: str,
@@ -81,6 +89,7 @@ async def get_design_analysis(
     design = result.scalar_one_or_none()
     if design is None:
         raise HTTPException(status_code=404, detail="Design not found")
+    _enforce_design_analysis_contract(design, analysis_type)
 
     params = _design_analysis_params_from_query(analysis_type, max_size)
     try:
@@ -117,6 +126,7 @@ async def trigger_design_analysis(
     design = result.scalar_one_or_none()
     if design is None:
         raise HTTPException(status_code=404, detail="Design not found")
+    _enforce_design_analysis_contract(design, analysis_type)
 
     try:
         run, cache_hit = await request_design_analysis(
@@ -158,6 +168,7 @@ async def get_job_analysis(
 
     params = _job_analysis_params_from_query(include_children=include_children, design_ids=design_ids)
     try:
+        await validate_job_analysis_request(session, job, analysis_type, params)
         run, definition, normalized_params, _cache_key = await get_matching_job_analysis_run(
             session,
             job,
@@ -225,6 +236,29 @@ async def get_analysis_run(
     run = await get_analysis_run_by_id(session, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Analysis run not found")
+
+    if run.subject_kind == "design":
+        subject_result = await session.execute(select(Design).where(Design.id == run.subject_id))
+        design = subject_result.scalar_one_or_none()
+        if design is None:
+            raise HTTPException(status_code=404, detail="Analysis subject not found")
+        authority_error = validate_design_analysis_request(design, run.analysis_type)
+    elif run.subject_kind == "job":
+        subject_result = await session.execute(select(Job).where(Job.id == run.subject_id))
+        job = subject_result.scalar_one_or_none()
+        if job is None:
+            raise HTTPException(status_code=404, detail="Analysis subject not found")
+        authority_error = await validate_job_analysis_request(
+            session,
+            job,
+            run.analysis_type,
+            run.params_json or {},
+        )
+    else:
+        authority_error = "unsupported analysis subject kind"
+    if authority_error:
+        raise HTTPException(status_code=409, detail=authority_error)
+
     return AnalysisRunResponse.model_validate(
         serialize_analysis_run(
             run,

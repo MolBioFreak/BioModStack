@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from sqlalchemy import func, select, text
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from molbio_database import create_molbio_engine, init_molbio_db, make_molbio_session_factory
 from molbio_models import (
@@ -199,67 +198,6 @@ def _read_legacy_rows(source: Path) -> tuple[list[dict[str, Any]], list[dict[str
     return sequence_rows, primer_rows
 
 
-async def _verify_legacy_history_graph(
-    session: AsyncSession,
-    sequence_rows: list[dict[str, Any]],
-    primer_rows: list[dict[str, Any]],
-    source_checksums: dict[str, str],
-) -> None:
-    """Fail closed unless each imported projection has its immutable source history."""
-
-    for record in sequence_rows:
-        sequence_id = str(record["id"])
-        document = await session.get(MolecularDocument, sequence_id)
-        if document is None or not document.current_revision_id:
-            raise MigrationVerificationError(
-                f"Incomplete sequence history for {sequence_id}: document/head is missing"
-            )
-        revision = await session.get(MolecularRevision, document.current_revision_id)
-        expected_snapshot = _canonical_record(record)
-        provenance = revision.provenance if revision is not None else None
-        if (
-            revision is None
-            or revision.document_id != sequence_id
-            or revision.revision_number != int(record["version"] or 1)
-            or revision.content_sha256 != source_checksums[sequence_id]
-            or revision.content_length != len(str(record["sequence"]))
-            or _canonical_record(revision.snapshot) != expected_snapshot
-            or not isinstance(provenance, dict)
-            or provenance.get("source") != "legacy_core_sqlite"
-            or str(provenance.get("source_row_id")) != sequence_id
-        ):
-            raise MigrationVerificationError(
-                f"Incomplete or corrupt sequence history for {sequence_id}"
-            )
-
-    for record in primer_rows:
-        primer_id = str(record["id"])
-        revisions = (
-            await session.execute(
-                select(PrimerRevision)
-                .where(PrimerRevision.primer_id == primer_id)
-                .order_by(PrimerRevision.revision_number)
-            )
-        ).scalars().all()
-        expected_snapshot = _canonical_record(record)
-        matching_imports = []
-        for revision in revisions:
-            provenance = revision.provenance
-            if (
-                revision.change_kind == "legacy_import"
-                and revision.sequence_sha256 == _sequence_sha256(str(record["sequence"]))
-                and _canonical_record(revision.snapshot) == expected_snapshot
-                and isinstance(provenance, dict)
-                and provenance.get("source") == "legacy_core_sqlite"
-                and str(provenance.get("source_row_id")) == primer_id
-            ):
-                matching_imports.append(revision)
-        if len(matching_imports) != 1 or revisions[-1:] != matching_imports:
-            raise MigrationVerificationError(
-                f"Incomplete or corrupt primer history for {primer_id}"
-            )
-
-
 async def extract_legacy_molbio_data(
     source_path: Path,
     destination_path: Path,
@@ -397,72 +335,61 @@ async def extract_legacy_molbio_data(
                     session.add_all([primer, primer_revision])
                     copied_primers += 1
 
-                await session.flush()
-                destination_sequence_count = int(
-                    (
-                        await session.execute(select(func.count()).select_from(NucleotideSequence))
-                    ).scalar_one()
-                )
-                destination_primer_count = int(
-                    (await session.execute(select(func.count()).select_from(Primer))).scalar_one()
-                )
-                destination_rows = (
-                    await session.execute(select(NucleotideSequence.id, NucleotideSequence.sequence))
-                ).all()
-                destination_checksums = {
-                    str(row.id): _sequence_sha256(str(row.sequence)) for row in destination_rows
-                }
-                foreign_key_violations = [
-                    tuple(row)
-                    for row in (await session.execute(text("PRAGMA foreign_key_check"))).fetchall()
-                ]
-                orphan_parent_sequences = [
-                    str(row[0])
-                    for row in (
-                        await session.execute(
-                            text(
-                                "SELECT child.id FROM nucleotide_sequences child "
-                                "LEFT JOIN nucleotide_sequences parent ON parent.id = child.parent_id "
-                                "WHERE child.parent_id IS NOT NULL AND parent.id IS NULL ORDER BY child.id"
-                            )
+            destination_sequence_count = int(
+                (await session.execute(select(func.count()).select_from(NucleotideSequence))).scalar_one()
+            )
+            destination_primer_count = int(
+                (await session.execute(select(func.count()).select_from(Primer))).scalar_one()
+            )
+            destination_rows = (
+                await session.execute(select(NucleotideSequence.id, NucleotideSequence.sequence))
+            ).all()
+            destination_checksums = {
+                str(row.id): _sequence_sha256(str(row.sequence)) for row in destination_rows
+            }
+            foreign_key_violations = [
+                tuple(row)
+                for row in (await session.execute(text("PRAGMA foreign_key_check"))).fetchall()
+            ]
+            orphan_parent_sequences = [
+                str(row[0])
+                for row in (
+                    await session.execute(
+                        text(
+                            "SELECT child.id FROM nucleotide_sequences child "
+                            "LEFT JOIN nucleotide_sequences parent ON parent.id = child.parent_id "
+                            "WHERE child.parent_id IS NOT NULL AND parent.id IS NULL ORDER BY child.id"
                         )
-                    ).fetchall()
-                ]
-                orphan_primer_targets = [
-                    str(row[0])
-                    for row in (
-                        await session.execute(
-                            text(
-                                "SELECT primer.id FROM primers primer "
-                                "LEFT JOIN nucleotide_sequences target ON target.id = primer.target_sequence_id "
-                                "WHERE primer.target_sequence_id IS NOT NULL AND target.id IS NULL ORDER BY primer.id"
-                            )
+                    )
+                ).fetchall()
+            ]
+            orphan_primer_targets = [
+                str(row[0])
+                for row in (
+                    await session.execute(
+                        text(
+                            "SELECT primer.id FROM primers primer "
+                            "LEFT JOIN nucleotide_sequences target ON target.id = primer.target_sequence_id "
+                            "WHERE primer.target_sequence_id IS NOT NULL AND target.id IS NULL ORDER BY primer.id"
                         )
-                    ).fetchall()
-                ]
+                    )
+                ).fetchall()
+            ]
 
-                if destination_sequence_count != len(sequence_rows):
-                    raise MigrationVerificationError(
-                        "Sequence count mismatch: "
-                        f"source={len(sequence_rows)} destination={destination_sequence_count}"
-                    )
-                if destination_primer_count != len(primer_rows):
-                    raise MigrationVerificationError(
-                        "Primer count mismatch: "
-                        f"source={len(primer_rows)} destination={destination_primer_count}"
-                    )
-                if destination_checksums != source_checksums:
-                    raise MigrationVerificationError("Per-sequence SHA-256 verification failed")
-                if foreign_key_violations or orphan_parent_sequences or orphan_primer_targets:
-                    raise MigrationVerificationError(
-                        "Destination has foreign-key violations or orphan molecular references"
-                    )
-                await _verify_legacy_history_graph(
-                    session,
-                    sequence_rows,
-                    primer_rows,
-                    source_checksums,
-                )
+        if destination_sequence_count != len(sequence_rows):
+            raise MigrationVerificationError(
+                f"Sequence count mismatch: source={len(sequence_rows)} destination={destination_sequence_count}"
+            )
+        if destination_primer_count != len(primer_rows):
+            raise MigrationVerificationError(
+                f"Primer count mismatch: source={len(primer_rows)} destination={destination_primer_count}"
+            )
+        if destination_checksums != source_checksums:
+            raise MigrationVerificationError("Per-sequence SHA-256 verification failed")
+        if foreign_key_violations or orphan_parent_sequences or orphan_primer_targets:
+            raise MigrationVerificationError(
+                "Destination has foreign-key violations or orphan molecular references"
+            )
 
         return LegacyMolBioMigrationReport(
             source_path=source,

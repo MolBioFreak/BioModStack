@@ -13,6 +13,8 @@ from typing import Any, Iterable
 
 import gemmi
 
+from protein_hunter_runtime import value_or_default
+
 
 def _load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -121,7 +123,9 @@ def _normalize_boltz_outputs(run_root: Path, output_dir: Path, request: dict[str
     manifest: list[dict[str, Any]] = []
 
     high_rows = _read_csv_rows(run_root / "summary_high_iptm.csv")
-    if high_rows:
+    # High-iPTM cycle snapshots are diagnostic only. Canonical BMS candidates are
+    # one terminal best structure per independent trial and are re-ranked by ipSAE.
+    if False and high_rows:
         for index, row in enumerate(high_rows, start=1):
             source_pdb = run_root / "high_iptm_pdb" / str(row.get("pdb_filename") or "")
             if not source_pdb.exists():
@@ -133,7 +137,7 @@ def _normalize_boltz_outputs(run_root: Path, output_dir: Path, request: dict[str
                 "design_id": design_id,
                 "source": "protein_hunter",
                 "source_model": "Protein Hunter (Boltz)",
-                "generator_family": "protein_hunter_experimental",
+                "generator_family": "protein_hunter",
                 "generator_backend": "boltz",
                 "generator_mode": request["task"],
                 "designed_sequence": row.get("sequence") or _structure_sequence(target_pdb, preferred_chain="A"),
@@ -171,7 +175,7 @@ def _normalize_boltz_outputs(run_root: Path, output_dir: Path, request: dict[str
             "design_id": design_id,
             "source": "protein_hunter",
             "source_model": "Protein Hunter (Boltz)",
-            "generator_family": "protein_hunter_experimental",
+            "generator_family": "protein_hunter",
             "generator_backend": "boltz",
             "generator_mode": request["task"],
             "designed_sequence": row.get("best_seq") or _structure_sequence(target_pdb, preferred_chain="A"),
@@ -203,7 +207,9 @@ def _normalize_chai_outputs(run_root: Path, output_dir: Path, request: dict[str,
     manifest: list[dict[str, Any]] = []
 
     high_rows = _read_csv_rows(run_root / "summary_high_iptm.csv")
-    if high_rows:
+    # High-iPTM cycle snapshots are diagnostic only. Canonical BMS candidates are
+    # one terminal best structure per independent trial and are re-ranked by ipSAE.
+    if False and high_rows:
         for index, row in enumerate(high_rows, start=1):
             source_cif = run_root / "high_iptm_cif" / str(row.get("cif_filename") or "")
             if not source_cif.exists():
@@ -215,7 +221,7 @@ def _normalize_chai_outputs(run_root: Path, output_dir: Path, request: dict[str,
                 "design_id": design_id,
                 "source": "protein_hunter",
                 "source_model": "Protein Hunter (Chai)",
-                "generator_family": "protein_hunter_experimental",
+                "generator_family": "protein_hunter",
                 "generator_backend": "chai",
                 "generator_mode": request["task"],
                 "designed_sequence": row.get("sequence") or _structure_sequence(target_pdb, preferred_chain="A"),
@@ -247,7 +253,7 @@ def _normalize_chai_outputs(run_root: Path, output_dir: Path, request: dict[str,
             "design_id": design_id,
             "source": "protein_hunter",
             "source_model": "Protein Hunter (Chai)",
-            "generator_family": "protein_hunter_experimental",
+            "generator_family": "protein_hunter",
             "generator_backend": "chai",
             "generator_mode": request["task"],
             "designed_sequence": _structure_sequence(target_pdb, preferred_chain="A"),
@@ -303,16 +309,16 @@ def main() -> None:
             "/opt/Protein-Hunter/boltz_ph/design.py",
             "--name", job_name,
             "--mode", "unconditional" if request.get("task") == "unconditional" else "binder",
-            "--num_designs", str(int(request.get("num_designs") or 4)),
-            "--num_cycles", str(int(request.get("num_cycles") or 7)),
+            "--num_designs", str(int(value_or_default(request, "num_designs", 4))),
+            "--num_cycles", str(int(value_or_default(request, "num_cycles", 7))),
             "--gpu_id", "0",
-            "--min_protein_length", str(int(request.get("min_protein_length") or 90)),
-            "--max_protein_length", str(int(request.get("max_protein_length") or 150)),
-            "--percent_X", str(int(request.get("percent_x") or 50)),
+            "--min_protein_length", str(int(value_or_default(request, "min_protein_length", 90))),
+            "--max_protein_length", str(int(value_or_default(request, "max_protein_length", 150))),
+            "--percent_X", str(int(value_or_default(request, "percent_x", 50))),
             "--msa_mode", str(request.get("msa_mode") or "mmseqs"),
-            "--temperature", str(float(request.get("temperature") or 0.1)),
-            "--high_iptm_threshold", str(float(request.get("high_iptm_threshold") or 0.7)),
-            "--high_plddt_threshold", str(float(request.get("high_plddt_threshold") or 0.8)),
+            "--temperature", str(float(value_or_default(request, "temperature", 0.1))),
+            "--high_iptm_threshold", str(float(value_or_default(request, "high_iptm_threshold", 0.7))),
+            "--high_plddt_threshold", str(float(value_or_default(request, "high_plddt_threshold", 0.8))),
             "--boltz_model_version", str(request.get("boltz_model_version") or "boltz2"),
             "--boltz_model_path", _resolve_container_weight_path(str(request.get("boltz_model_path") or "/weights/boltz/boltz2_conf.ckpt")),
             "--ccd_path", _resolve_container_weight_path(str(request.get("boltz_ccd_path") or "/weights/boltz/mols")),
@@ -350,17 +356,17 @@ def main() -> None:
             sys.executable,
             "/opt/Protein-Hunter/chai_ph/design.py",
             "--jobname", job_name,
-            "--percent_X", str(int(request.get("percent_x") or 50)),
-            "--min_protein_length", str(int(request.get("min_protein_length") or 90)),
-            "--max_protein_length", str(int(request.get("max_protein_length") or 150)),
-            "--n_trials", str(int(request.get("num_designs") or 4)),
-            "--n_cycles", str(int(request.get("num_cycles") or 7)),
-            "--n_recycles", str(int(request.get("chai_num_recycles") or 3)),
-            "--n_diff_steps", str(int(request.get("chai_num_diff_steps") or 200)),
+            "--percent_X", str(int(value_or_default(request, "percent_x", 50))),
+            "--min_protein_length", str(int(value_or_default(request, "min_protein_length", 90))),
+            "--max_protein_length", str(int(value_or_default(request, "max_protein_length", 150))),
+            "--n_trials", str(int(value_or_default(request, "num_designs", 4))),
+            "--n_cycles", str(int(value_or_default(request, "num_cycles", 7))),
+            "--n_recycles", str(int(value_or_default(request, "chai_num_recycles", 3))),
+            "--n_diff_steps", str(int(value_or_default(request, "chai_num_diff_steps", 200))),
             "--hysteresis_mode", str(request.get("chai_hysteresis_mode") or "templates"),
-            "--temperature", str(float(request.get("temperature") or 0.1)),
-            "--high_iptm_threshold", str(float(request.get("high_iptm_threshold") or 0.7)),
-            "--high_plddt_threshold", str(float(request.get("high_plddt_threshold") or 0.8)),
+            "--temperature", str(float(value_or_default(request, "temperature", 0.1))),
+            "--high_iptm_threshold", str(float(value_or_default(request, "high_iptm_threshold", 0.7))),
+            "--high_plddt_threshold", str(float(value_or_default(request, "high_plddt_threshold", 0.8))),
             "--gpu_id", "0",
         ]
         if request.get("seed_binder_sequence"):

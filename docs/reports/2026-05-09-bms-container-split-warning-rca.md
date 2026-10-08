@@ -1,5 +1,7 @@
 # BMS container/module split status and warning RCA
 
+> **Historical / superseded:** This report records a former BioModStack core split that included database-service and Stats Toolkit ownership. P1 retired those surfaces; this is evidence, not current architecture or implementation guidance.
+
 Date: 2026-05-09
 Repo: `/home/dalab/biomodstack/biomodstack`
 Scope: Phase-1 core-runtime split validation, BMS DB service, Stats Toolkit control surface, and non-blocking warnings from targeted backend/frontend validation.

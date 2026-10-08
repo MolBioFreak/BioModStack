@@ -12,8 +12,10 @@ import {
     type PAEData,
     type PersistedAnalysisRun,
 } from '../lib/api';
-import { inferDesignAnalysisLens, type AnalysisLens } from './designOutputSource';
+import type { AnalysisLens } from './designOutputSource';
 import { BMS_FULLSCREEN_FLUSH, BMS_PANEL_SURFACE } from './ui/bmsStyle';
+import { jobPollingInterval } from '../lib/queryPolling';
+import { isAnalyzerAvailable, supportsAnalyzer, supportsViewerCapability } from '../lib/resultCapabilities';
 
 type MetricFamily = AnalysisLens | 'dynamic';
 type ColorScaleName =
@@ -494,6 +496,23 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
     const metricLookup = useMemo(() => new Map(metricOptions.map((option) => [option.key, option])), [metricOptions]);
 
     const getMetricValue = useCallback((design: Design, key: string): number | null => {
+        const normalizedKey = key.trim().toLowerCase();
+        if (
+            /(binder|interface|interaction|iptm|ipsae|affinity|epitope|target_(contact|distance)|hotspot)/.test(normalizedKey)
+            && !supportsViewerCapability(design, 'complex_interface_metrics')
+        ) return null;
+        if (
+            /(cdr_|antibody|rfa_|frustration)/.test(normalizedKey)
+            && !supportsViewerCapability(design, 'antibody_backbone_metrics')
+        ) return null;
+        if (
+            /(maturation|ppiflow|selected_loop)/.test(normalizedKey)
+            && !supportsViewerCapability(design, 'ppiflow_maturation_metrics')
+        ) return null;
+        if (
+            /(fampnn|mpnn)/.test(normalizedKey)
+            && !supportsViewerCapability(design, 'sequence_design_metrics')
+        ) return null;
         if (key === 'screening_passed') {
             if (!design.screening_reason) return null;
             return design.screening_reason.trim().toLowerCase() === 'passed' ? 1 : 0;
@@ -566,7 +585,21 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
             .filter((value): value is number => value != null && Number.isFinite(value));
     const designLensById = useMemo(
         () => new Map(
-            baseSortedDesigns.map((design) => [design.id, inferDesignAnalysisLens(design as unknown as Record<string, unknown>)]),
+            baseSortedDesigns.map((design) => {
+                const contractId = String(design.analysis_contract_id || design.review_profile_id || '').trim().toLowerCase();
+                const lens: AnalysisLens | null = contractId === 'antibody_backbone_v1'
+                    ? 'rfantibody'
+                    : contractId === 'ppiflow_maturation_v1'
+                        ? 'ppiflow'
+                        : contractId === 'de_novo_generation_v1'
+                            ? 'boltzgen'
+                            : contractId === 'sequence_design_v1'
+                                ? 'fampnn'
+                                : contractId === 'structure_prediction_v1'
+                                    ? 'validation'
+                                    : null;
+                return [design.id, lens] as const;
+            }),
         ),
         [baseSortedDesigns],
     );
@@ -674,6 +707,11 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
     }, [baseSortedDesigns, lensPrioritizedDesigns, selectedDesignId]);
 
     const activeDesignId = selectedDesignId || lensPrioritizedDesigns[0]?.id || baseSortedDesigns[0]?.id || '';
+    const activeDesign = baseSortedDesigns.find((design) => design.id === activeDesignId) ?? null;
+    const supportsChainMetrics = supportsAnalyzer(activeDesign, 'chain_metrics');
+    const supportsPaeMatrix = supportsAnalyzer(activeDesign, 'pae_matrix');
+    const canRunChainMetrics = isAnalyzerAvailable(activeDesign, 'chain_metrics');
+    const canRunPaeMatrix = isAnalyzerAvailable(activeDesign, 'pae_matrix');
     const normalizedDesignPickerQuery = designPickerQuery.trim().toLowerCase();
     const matchedLensDesigns = useMemo(() => {
         if (!normalizedDesignPickerQuery) return lensPrioritizedDesigns;
@@ -693,11 +731,11 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
     const { data: chainMetricsRun } = useQuery({
         queryKey: ['analytics-chain-metrics', activeDesignId],
         queryFn: () => fetchDesignAnalysis<Record<string, ChainMetric>>(activeDesignId, 'chain_metrics').then((response) => response.data),
-        enabled: !!activeDesignId,
+        enabled: !!activeDesignId && canRunChainMetrics,
         staleTime: 60_000,
         refetchInterval: (query) => {
             const status = (query.state.data as PersistedAnalysisRun<Record<string, ChainMetric>> | null | undefined)?.status;
-            return status === 'queued' || status === 'running' ? 1500 : false;
+            return status === 'queued' || status === 'running' ? jobPollingInterval(1500, query) : false;
         },
     });
     const chainMetrics = chainMetricsRun?.status === 'completed'
@@ -705,7 +743,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
         : null;
     const runChainMetrics = useMutation({
         mutationFn: async () => {
-            if (!activeDesignId) throw new Error('No design selected');
+            if (!activeDesignId || !canRunChainMetrics) throw new Error('Chain metrics are unavailable for this review profile');
             const response = await triggerDesignAnalysis<Record<string, ChainMetric>>(activeDesignId, 'chain_metrics');
             return response.data;
         },
@@ -730,11 +768,11 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
     const { data: paeRun } = useQuery({
         queryKey: ['analytics-pae-data', activeDesignId],
         queryFn: () => fetchDesignAnalysis<PAEData>(activeDesignId, 'pae_matrix', { max_size: 200 }).then((response) => response.data),
-        enabled: !!activeDesignId,
+        enabled: !!activeDesignId && canRunPaeMatrix,
         staleTime: 60_000,
         refetchInterval: (query) => {
             const status = (query.state.data as PersistedAnalysisRun<PAEData> | null | undefined)?.status;
-            return status === 'queued' || status === 'running' ? 1500 : false;
+            return status === 'queued' || status === 'running' ? jobPollingInterval(1500, query) : false;
         },
     });
     const paeMatrix = paeRun?.status === 'completed'
@@ -742,7 +780,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
         : null;
     const runPaeMatrix = useMutation({
         mutationFn: async () => {
-            if (!activeDesignId) throw new Error('No design selected');
+            if (!activeDesignId || !canRunPaeMatrix) throw new Error('PAE matrix is unavailable for this review profile');
             const response = await triggerDesignAnalysis<PAEData>(activeDesignId, 'pae_matrix', { max_size: 200 });
             return response.data;
         },
@@ -1414,7 +1452,9 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
                     </div>
                 </div>
 
+                {(supportsChainMetrics || supportsPaeMatrix) && (
                 <div className="grid grid-cols-1 gap-3 rounded-2xl border border-slate-700/60 bg-slate-900/50 p-4 shadow-xl shadow-slate-950/20 md:grid-cols-2">
+                    {supportsChainMetrics && (
                     <div className="flex items-start justify-between gap-3">
                         <div>
                             <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">Chain Metrics</div>
@@ -1436,6 +1476,8 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
                             {chainLoading ? 'Running…' : chainMetrics ? 'Refresh' : 'Run'}
                         </button>
                     </div>
+                    )}
+                    {supportsPaeMatrix && (
                     <div className="flex items-start justify-between gap-3">
                         <div>
                             <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">PAE Matrix</div>
@@ -1457,8 +1499,11 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
                             {paeLoading ? 'Running…' : paeMatrix ? 'Refresh' : 'Run'}
                         </button>
                     </div>
+                    )}
                 </div>
+                )}
 
+                {supportsChainMetrics && (
                 <PlotCard
                     title="Per-Residue pLDDT Profile"
                     description="Chain-by-chain confidence curves for the selected design."
@@ -1526,7 +1571,9 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
                         />
                     )}
                 </PlotCard>
+                )}
 
+                {supportsPaeMatrix && (
                 <PlotCard
                     title="Predicted Aligned Error"
                     description="PAE matrix; chain bands when available."
@@ -1637,6 +1684,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
                         })()
                     ) : null}
                 </PlotCard>
+                )}
             </section>
             )}
 

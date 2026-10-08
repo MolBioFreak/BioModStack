@@ -46,14 +46,56 @@ class _FakeResponse:
         return False
 
 
-def test_tray_frontend_status_checks_http_before_dev_service_fallbacks(monkeypatch) -> None:
+def test_tray_frontend_status_accepts_http_200(monkeypatch) -> None:
     module = load_module(monkeypatch)
-    monkeypatch.setattr(module, "service_is_active", lambda *args, **kwargs: False)
-    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr=""))
+    monkeypatch.setattr(module, "operator_runtime_mode", lambda project_root=None: module.DEV_RUNTIME_MODE)
     monkeypatch.setattr(urllib.request, "urlopen", lambda request, timeout=2: _FakeResponse())
 
     assert module.check_frontend_status() is True
 
+
+
+def test_tray_status_probes_never_fall_back_to_process_or_service_manager(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+
+    def legacy_probe_must_not_run(*args, **kwargs):
+        raise AssertionError("status must not use a service-manager or process fallback")
+
+    monkeypatch.setattr(urllib.request, "urlopen", legacy_probe_must_not_run)
+    monkeypatch.setattr(module, "operator_runtime_mode", lambda project_root=None: module.DEV_RUNTIME_MODE)
+    monkeypatch.setattr(module, "service_is_active", legacy_probe_must_not_run, raising=False)
+    monkeypatch.setattr(module.subprocess, "run", legacy_probe_must_not_run)
+
+    assert module.check_api_status() is False
+    assert module.check_frontend_status() is False
+
+
+def test_tray_status_checks_both_surfaces_for_one_selected_runtime(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+    selected_runtime = module.DEV_RUNTIME_MODE
+    checked_runtimes: list[str] = []
+    monkeypatch.setattr(module, "operator_runtime_mode", lambda project_root=None: selected_runtime)
+    monkeypatch.setattr(module, "check_api_status", lambda runtime_mode: checked_runtimes.append(runtime_mode) or True)
+    monkeypatch.setattr(module, "check_frontend_status", lambda runtime_mode: checked_runtimes.append(runtime_mode) or True)
+
+    assert module.BioModStackTray.get_status(object()) == "healthy"
+    assert checked_runtimes == [selected_runtime, selected_runtime]
+
+
+def test_tray_icon_is_non_green_when_runtime_is_down(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+    fills: list[str] = []
+    monkeypatch.setattr(module.Image, "new", lambda *args, **kwargs: object(), raising=False)
+    monkeypatch.setattr(
+        module.ImageDraw,
+        "Draw",
+        lambda image: SimpleNamespace(ellipse=lambda *args, **kwargs: fills.append(kwargs["fill"])),
+    )
+
+    module.create_status_icon("down")
+
+    assert fills == ["#ef4444"]
+    assert "#22c55e" not in fills
 
 
 def test_tray_open_ui_passes_detected_runtime_to_launcher(monkeypatch) -> None:

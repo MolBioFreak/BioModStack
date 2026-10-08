@@ -16,6 +16,11 @@ FILTER_BOLTZGEN = SCRIPTS_DIR / "filter_boltzgen.py"
 RUN_BOLTZGEN_WRAPPER = SCRIPTS_DIR / "run_boltzgen_wrapper.py"
 
 
+def test_filter_boltzgen_defers_annotations_for_python39() -> None:
+    script_text = FILTER_BOLTZGEN.read_text(encoding="utf-8")
+    assert "from __future__ import annotations" in script_text.splitlines()[:15]
+
+
 def _write_pdb(path: Path, chain_id: str, residues: list[int]) -> None:
     lines: list[str] = []
     atom_index = 1

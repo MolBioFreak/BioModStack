@@ -467,6 +467,11 @@ def test_esmfold2_internal_runtime_contract() -> None:
     assert "from_a3m" in runner_text
     assert "parse_pdb_polymer_components" in runner_text
     assert "--complex-components-json" in runner_text
+    assert "params.esmf_complex_components_file" in active_process_text
+    assert "new File(complexComponentsFile.toString())" in active_process_text
+    assert "parsedComplexComponents.components" in active_process_text
+    assert "def hasComplexComponents" in active_process_text
+    assert "def sequenceArg = shellQuote(hasComplexComponents ? ''" in active_process_text
     assert "--pdb-sequence-path" in runner_text
     assert "--msa-path" in runner_text
     assert "biohub.ai/developer-console" not in module_text + runner_text

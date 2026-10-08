@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import sys
 from pathlib import Path
 
@@ -14,6 +15,7 @@ if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
 from filter_caliby import main as filter_caliby_main
+from caliby_runtime import normalize_sampling_results
 from prep_caliby_antibody_constraints import main as prep_caliby_constraints_main
 
 
@@ -147,3 +149,36 @@ def test_filter_caliby_accepts_canonicalized_self_consistency_metrics(tmp_path: 
 
     assert (out_dir / "caliby_0002.pdb").exists()
     assert (out_dir / "generator_caliby_0002.json").exists()
+
+
+def test_normalized_caliby_sidecar_owns_sequence_design_review_and_lineage(tmp_path: Path) -> None:
+    source_pdb = tmp_path / "source.pdb"
+    source_pdb.write_text("END\n", encoding="utf-8")
+
+    manifest = normalize_sampling_results(
+        results={
+            "example_id": ["rfantibody_0007"],
+            "out_pdb": [str(source_pdb)],
+            "seq": ["QVQLV"],
+            "U": [-14.2],
+            "input_seq": ["XXXXX"],
+        },
+        output_pdb_dir=tmp_path / "pdbs",
+        output_meta_dir=tmp_path / "metadata",
+        prefix="caliby",
+        source="caliby",
+        stage_mode="sequence_design",
+        extra_metadata={"caliby_model": "soluble_caliby_v1"},
+    )
+
+    metadata = json.loads(Path(manifest[0]["metadata_path"]).read_text(encoding="utf-8"))
+    assert metadata["source_backbone_id"] == "rfantibody_0007"
+    assert metadata["artifact_class"] == "sequence_designed_complex"
+    assert metadata["result_set"] == "sequence_designs"
+    assert metadata["review_profile_id"] == "sequence_design_v1"
+    assert metadata["review_contract_source"] == "producer"
+    assert metadata["review_artifact_manifest"]["schema"] == "bms.review-artifacts.v1"
+    assert metadata["score_family"] == "caliby"
+    assert metadata["selection_metric"] == "caliby_potts_energy"
+    assert metadata["selection_direction"] == "lower_is_better"
+    assert metadata["af3score_used"] is False

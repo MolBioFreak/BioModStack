@@ -25,6 +25,8 @@ import {
     type StructureAnalysis,
 } from '../lib/api';
 import { inferDesignAnalysisLens, inferDesignOutputSource, getValidationOutputLabel } from './designOutputSource';
+import { buildMetricLayerFromExplicitMaps } from '../lib/molstar-metrics';
+import type { MolstarResidueMetricLayer } from '../lib/molstar-metrics';
 import {
     buildConforNetsConformerNavigation,
     buildConforNetsConformerSet,
@@ -35,6 +37,7 @@ import {
     getConforNetsDefaultChainId,
     getConforNetsScalarPlddt,
     resolveConforNetsOverlayIds,
+    resolveEffectiveStructureViewerColorMode,
     resolveStructureViewerConfidenceSemantics,
     type StructureViewerColorMode,
     type StructureViewerOverlayView,
@@ -705,11 +708,12 @@ export default function StructureViewerPane({
         onRunFampnnPsceProfile();
     }, [designLens, fampnnPsceBusy, fampnnPsceStatus, hasFampnnPsceProfile, onRunFampnnPsceProfile, selectedDesignId]);
 
-    const effectiveColorMode = colorMode === 'plddt' && !hasResidueConfidence
-        ? 'default'
-        : colorMode === 'fampnn_psce' && !hasFampnnPsceProfile
-            ? 'default'
-            : colorMode;
+    const effectiveColorMode = resolveEffectiveStructureViewerColorMode({
+        requestedMode: colorMode,
+        hasResidueConfidence,
+        hasFampnnPsceProfile,
+        hasFrustrationResidues: Boolean(selectedDesign?.frustration_residues?.length),
+    });
     const applyQuickView = useCallback((quickView: StructureViewerQuickViewSpec) => {
         setFocusedMetricSection(quickView.sectionId);
         setOverlayView(quickView.overlayView);
@@ -789,18 +793,6 @@ export default function StructureViewerPane({
             };
         });
     }, [conforNetsConformerSet, effectiveColorMode, resolvedConforNetsOverlayIds, viewerStructureFormat]);
-
-    useEffect(() => {
-        if (colorMode === 'plddt' && !hasResidueConfidence) {
-            setColorMode('default');
-            setFocusedMetricSection('summary');
-            return;
-        }
-        if (colorMode === 'frustration' && !selectedDesign?.frustration_residues?.length) {
-            setColorMode('default');
-            setFocusedMetricSection('summary');
-        }
-    }, [colorMode, hasResidueConfidence, selectedDesign?.frustration_residues?.length, setColorMode]);
 
     useEffect(() => {
         if (selectedChain && !new Set([...Object.keys(chainMetrics), ...fampnnPsceChainIds]).has(selectedChain)) {
@@ -1051,6 +1043,89 @@ export default function StructureViewerPane({
         }
         return colorMap.size > 0 ? colorMap : undefined;
     })();
+
+    const residueMetricLayer = useMemo<MolstarResidueMetricLayer | undefined>(() => {
+        const source = selectedDesign?.id ? `design:${selectedDesign.id}` : 'design:unknown';
+        if (effectiveColorMode === 'plddt' && plddtResidueColors) {
+            const values = new Map<string, number>();
+            for (const [chainId, metrics] of Object.entries(chainMetrics)) {
+                metrics.residue_numbers.forEach((residueNumber, index) => {
+                    const value = metrics.plddt[index];
+                    if (Number.isFinite(value)) values.set(residueColorKey(chainId, residueNumber), value);
+                });
+            }
+            if (conforNetsDefaultChainId) {
+                residueMetricNumbers.forEach((residueNumber, index) => {
+                    const value = plddtProfile[index];
+                    if (Number.isFinite(value)) values.set(residueColorKey(conforNetsDefaultChainId, residueNumber), value);
+                });
+            }
+            for (const key of plddtResidueColors.keys()) {
+                if (!values.has(key) && Number.isFinite(conforNetsScalarPlddt)) {
+                    values.set(key, conforNetsScalarPlddt as number);
+                }
+            }
+            return buildMetricLayerFromExplicitMaps({
+                descriptor: {
+                    id: 'plddt',
+                    label: bfactorLabel,
+                    semanticType: 'confidence',
+                    units: 'score',
+                    direction: 'higher_is_better',
+                    range: [0, 100],
+                    source: 'BioModStack design analysis',
+                    provenance: { source, method: 'persisted chain_metrics/residue confidence' },
+                },
+                colors: plddtResidueColors,
+                values,
+            });
+        }
+        if (effectiveColorMode === 'frustration' && frustrationResidueColors && selectedDesign?.frustration_residues) {
+            const values = new Map<string, number>();
+            for (const residue of selectedDesign.frustration_residues) {
+                const residueNumbers = chainMetrics[residue.chain]?.residue_numbers || [];
+                const residueNumber = residueNumbers[residue.pos] ?? residueNumbers[residue.pos - 1] ?? residue.pos + 1;
+                values.set(residueColorKey(residue.chain, residueNumber), residue.frust);
+            }
+            return buildMetricLayerFromExplicitMaps({
+                descriptor: {
+                    id: 'frustration-index',
+                    label: 'Frustration index',
+                    semanticType: 'energy',
+                    units: 'dimensionless',
+                    direction: 'higher_is_better',
+                    source: 'BioModStack design analysis',
+                    provenance: { source, method: 'FrustraMPNN' },
+                },
+                colors: frustrationResidueColors,
+                values,
+            });
+        }
+        if (effectiveColorMode === 'fampnn_psce' && fampnnPsceResidueColors) {
+            const values = new Map<string, number>();
+            for (const chainId of fampnnPsceChainIds) {
+                const chain = fampnnPsceChains[chainId];
+                chain?.residue_numbers.forEach((residueNumber, index) => {
+                    const value = chain.psce[index];
+                    if (Number.isFinite(value)) values.set(residueColorKey(chainId, residueNumber), value);
+                });
+            }
+            return buildMetricLayerFromExplicitMaps({
+                descriptor: {
+                    id: 'fampnn-psce',
+                    label: 'FAMPNN pSCE',
+                    semanticType: 'distance',
+                    units: 'Å',
+                    direction: 'lower_is_better',
+                    source: 'BioModStack design analysis',
+                    provenance: { source, method: 'FAMPNN' },
+                },
+                colors: fampnnPsceResidueColors,
+                values,
+            });
+        }
+        return undefined;
+    }, [bfactorLabel, chainMetrics, conforNetsDefaultChainId, conforNetsScalarPlddt, effectiveColorMode, fampnnPsceChainIds, fampnnPsceChains, fampnnPsceResidueColors, frustrationResidueColors, plddtProfile, plddtResidueColors, residueMetricNumbers, selectedDesign]);
 
     const topFrustratedResidues = (() => {
         if (!selectedDesign?.frustration_residues?.length) return [];
@@ -2691,15 +2766,7 @@ export default function StructureViewerPane({
                             alphafoldView={effectiveColorMode === 'plddt' && !plddtResidueColors}
                             selections={effectiveColorMode === 'cdr' ? antibodySelections : undefined}
                             overlayStructures={conforNetsOverlayStructures}
-                            residueColors={
-                                effectiveColorMode === 'plddt'
-                                    ? plddtResidueColors
-                                    : effectiveColorMode === 'fampnn_psce'
-                                        ? fampnnPsceResidueColors
-                                        : effectiveColorMode === 'frustration'
-                                            ? frustrationResidueColors
-                                            : undefined
-                            }
+                            residueMetricLayer={residueMetricLayer}
                             height="100%"
                             backgroundColor={themeColors.bgPrimary}
                         />

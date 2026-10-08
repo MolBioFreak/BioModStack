@@ -19,13 +19,14 @@ if str(API_ROOT) not in sys.path:
 from database import Base, Job
 from services.gpu_orchestrator import (
     _commit_reconciled_job_mutations,
+    _has_terminal_nextflow_history,
     _recover_rfantibody_parent_after_child_wait,
     _reconcile_terminal_history_without_process,
 )
 
 
 def test_recover_rfantibody_parent_after_child_wait_opens_post_rf_gate(tmp_path: Path) -> None:
-    for mode in ("antibody_denovo_pipeline", "antibody_refinement_pipeline"):
+    for mode in ("antibody_refinement_pipeline", "antibody_refinement_pipeline"):
         parent_output = tmp_path / mode / "parent"
         child_output = tmp_path / mode / "child"
         child_rfa_dir = child_output / "run" / "rfantibody" / "output"
@@ -119,6 +120,12 @@ def test_reconcile_terminal_history_without_process_marks_err_history_as_failed(
     assert job.queue_status == "failed"
     assert job.error_message == "Reconciled as failed: terminal .nextflow/history status ERR"
     assert job.completed_at is not None
+
+
+def test_terminal_nextflow_history_overrides_gpu_activity_liveness_hint() -> None:
+    assert _has_terminal_nextflow_history(("OK", "36.6s")) is True
+    assert _has_terminal_nextflow_history(("ERR", "4.2s")) is True
+    assert _has_terminal_nextflow_history(None) is False
 
 
 @pytest.mark.asyncio

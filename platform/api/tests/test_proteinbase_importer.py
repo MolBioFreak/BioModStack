@@ -217,7 +217,7 @@ async def test_import_proteinbase_bundle_creates_completed_job_and_design_rows(t
 
 
 @pytest.mark.asyncio
-async def test_design_response_surfaces_proteinbase_sequence_and_length_from_metadata(tmp_path: Path) -> None:
+async def test_design_response_keeps_untyped_proteinbase_sequence_as_lineage_only(tmp_path: Path) -> None:
     session_factory, engine = await _build_session_factory(tmp_path)
     imported_at = datetime(2026, 4, 14, 18, 0, 0)
 
@@ -263,8 +263,11 @@ async def test_design_response_surfaces_proteinbase_sequence_and_length_from_met
 
         response = _design_to_response(design)
 
-    assert response.binder_sequence == "ASHMPW"
-    assert response.binder_length == 6
+    assert response.binder_sequence is None
+    assert response.binder_length is None
+    assert isinstance(response.provenance, dict)
+    assert response.provenance["sequence"] == "ASHMPW"
+    assert response.provenance["length_aa"] == 6
 
     await engine.dispose()
 

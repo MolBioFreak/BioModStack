@@ -148,6 +148,9 @@ async def test_lifespan_skips_gpu_orchestrator_start_in_core_runtime_mode(monkey
     async def fake_init_db() -> None:
         events.append("db-init")
 
+    async def fake_init_molbio_db() -> None:
+        events.append("molbio-db-init")
+
     class FakeGPUOrchestrator:
         def __init__(self, *args, **kwargs) -> None:
             events.append("orchestrator-init")
@@ -169,6 +172,7 @@ async def test_lifespan_skips_gpu_orchestrator_start_in_core_runtime_mode(monkey
             events.append("analysis-stop")
 
     monkeypatch.setattr(api_main, "init_db", fake_init_db)
+    monkeypatch.setattr(api_main, "init_molbio_db", fake_init_molbio_db)
     monkeypatch.setattr(api_main, "GPUOrchestrator", FakeGPUOrchestrator)
     monkeypatch.setattr(api_main, "AnalysisWorker", FakeAnalysisWorker)
     monkeypatch.setattr(api_main, "_orchestrator", None)
@@ -176,6 +180,7 @@ async def test_lifespan_skips_gpu_orchestrator_start_in_core_runtime_mode(monkey
 
     async with api_main.lifespan(api_main.app):
         assert "db-init" in events
+        assert "molbio-db-init" in events
         assert "analysis-start" in events
 
     assert "orchestrator-init" not in events

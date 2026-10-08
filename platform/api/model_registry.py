@@ -9,8 +9,10 @@ import os
 import yaml
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from functools import lru_cache
+
+from services.md.feature_gate import MD_MODEL_ID, molecular_dynamics_feature_enabled
 
 
 class ModelParameter(BaseModel):
@@ -53,6 +55,9 @@ class ModelDefinition(BaseModel):
     category: str  # backbone_generation, sequence_design, structure_prediction, docking
     description: str
     container: str
+    workflow: Optional[str] = None
+    engine_containers: Dict[str, str] = Field(default_factory=dict)
+    capabilities: Dict[str, Any] = Field(default_factory=dict)
     
     # Modes available for this model
     modes: List[ModelMode] = []
@@ -107,7 +112,13 @@ class ModelRegistry:
                 print(f"Warning: Failed to load {yaml_file}: {e}")
     
     def get_model(self, model_id: str) -> Optional[ModelDefinition]:
-        """Get a model by ID."""
+        """Get a publicly available model by ID."""
+        if model_id == MD_MODEL_ID and not molecular_dynamics_feature_enabled():
+            return None
+        return self._models.get(model_id)
+
+    def get_internal_model_definition(self, model_id: str) -> Optional[ModelDefinition]:
+        """Get a raw definition for trusted coordinators; never expose this via HTTP."""
         return self._models.get(model_id)
     
     def list_models(self, category: Optional[str] = None, enabled_only: bool = True) -> List[ModelDefinition]:
@@ -116,6 +127,9 @@ class ModelRegistry:
         
         if enabled_only:
             models = [m for m in models if m.enabled]
+
+        if not molecular_dynamics_feature_enabled():
+            models = [m for m in models if m.id != MD_MODEL_ID]
         
         if category:
             models = [m for m in models if m.category == category]
@@ -124,7 +138,7 @@ class ModelRegistry:
     
     def get_categories(self) -> List[str]:
         """Get list of unique categories."""
-        return sorted(set(m.category for m in self._models.values()))
+        return sorted(set(m.category for m in self.list_models(enabled_only=False)))
     
     def validate_job_params(self, model_id: str, mode_id: str, params: Dict[str, Any]) -> List[str]:
         """

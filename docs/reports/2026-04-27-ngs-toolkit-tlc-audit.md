@@ -1,5 +1,7 @@
 # NGS Toolkit TLC Audit — 2026-04-27
 
+> **Historical / superseded:** This report records an earlier runtime audit and is not active implementation guidance.
+
 ## Scope
 
 Source-grounded audit of BioModStack's NGS Toolkit/Nanopore stack for expanded use. This pass intentionally focused on the NGS entrypoint and did not continue the earlier Mol Bio alignment incident detour.

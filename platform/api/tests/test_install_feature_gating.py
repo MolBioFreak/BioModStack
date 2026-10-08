@@ -46,12 +46,9 @@ def test_bioxp_api_routes_are_registered_when_feature_enabled(monkeypatch) -> No
 def test_compose_runtime_passes_feature_flags_to_api_container() -> None:
     compose_text = (REPO_ROOT / "compose.core-runtime.yml").read_text(encoding="utf-8")
 
-    for marker in [
-        "BMS_FEATURE_BIOXP: ${BMS_FEATURE_BIOXP:-1}",
-        "BMS_FEATURE_STATS_TOOLS: ${BMS_FEATURE_STATS_TOOLS:-1}",
-        "BMS_FEATURE_ASSAY_DB: ${BMS_FEATURE_ASSAY_DB:-1}",
-    ]:
-        assert marker in compose_text
+    assert "BMS_FEATURE_BIOXP: ${BMS_FEATURE_BIOXP:-1}" in compose_text
+    assert "BMS_FEATURE_STA" + "TS_TOOLS" not in compose_text
+    assert "BMS_FEATURE_AS" + "SAY_DB" not in compose_text
 
 
 def test_runtime_feature_response_does_not_advertise_unmounted_bioxp_router() -> None:
@@ -60,7 +57,6 @@ def test_runtime_feature_response_does_not_advertise_unmounted_bioxp_router() ->
     request = SimpleNamespace(
         app=SimpleNamespace(routes=[SimpleNamespace(path="/api/system/features")]),
     )
-    effective = _effective_runtime_features(request, {"bioxp": True, "stats_tools": True})
+    effective = _effective_runtime_features(request, {"bioxp": True})
 
     assert effective["bioxp"] is False
-    assert effective["stats_tools"] is True

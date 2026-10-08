@@ -2235,7 +2235,7 @@ export function NGSToolkit() {
     const { data: jobsData, isLoading } = useQuery({
         queryKey: ['jobs', 'ngs'],
         queryFn: () => fetchJobs({ include_children: true, model_id: 'nanopore', limit: 100, summary: true }),
-        refetchInterval: () => jobPollingInterval(5000),
+        refetchInterval: (query) => jobPollingInterval(5000, query),
     });
 
     const nanoporeJobs = useMemo(() => {
@@ -2281,7 +2281,9 @@ export function NGSToolkit() {
         queryKey: ['job-stages', selectedJobId],
         queryFn: () => fetchJobStages(selectedJobId as string),
         enabled: !!selectedJobId,
-        refetchInterval: selectedJob?.status === 'running' ? 4000 : 15000,
+        refetchInterval: (query) => selectedJob?.status === 'running'
+            ? jobPollingInterval(4000, query)
+            : false,
     });
 
     const stats = useMemo(() => {

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +17,26 @@ from fastapi import HTTPException
 
 from routers import queue
 from routers.queue import _resolve_display_gpu_ids
+
+
+class _ScalarResult:
+    def __init__(self, job):
+        self.job = job
+
+    def scalar_one_or_none(self):
+        return self.job
+
+
+class _Session:
+    def __init__(self, job):
+        self.job = job
+        self.commits = 0
+
+    async def execute(self, _query):
+        return _ScalarResult(self.job)
+
+    async def commit(self):
+        self.commits += 1
 
 
 def _job(*, params=None, pinned_gpu=None, assigned_gpu=None, mode="design", current_stage="run_boltz"):
@@ -114,3 +137,29 @@ def test_validate_queue_gpu_index_reports_adapter_valid_indices(monkeypatch) -> 
         assert exc.detail == "Invalid GPU index (valid: 0,1)"
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("expected HTTPException")
+
+
+@pytest.mark.asyncio
+async def test_retry_restores_full_queued_state() -> None:
+    job = SimpleNamespace(
+        id="retry-1", name="retry", queue_status="failed", status="failed",
+        retry_count=0, max_retries=2, paused=True, error_message="boom",
+        assigned_gpu=0, started_at=datetime.utcnow(), completed_at=datetime.utcnow(),
+        current_stage="failed stage", stage_progress="1/2",
+    )
+    session = _Session(job)
+
+    response = await queue.retry_job(job.id, session)
+
+    assert response["success"] is True
+    assert session.commits == 1
+    assert job.retry_count == 1
+    assert job.status == "queued"
+    assert job.queue_status == "queued"
+    assert job.paused is False
+    assert job.error_message is None
+    assert job.assigned_gpu is None
+    assert job.started_at is None
+    assert job.completed_at is None
+    assert job.current_stage is None
+    assert job.stage_progress is None

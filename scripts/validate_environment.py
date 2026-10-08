@@ -101,7 +101,6 @@ OPTIONAL_CONTAINERS = [
     "af2.sif",
     "boltz2.sif",
     "boltzgen.sif",
-    "bindcraft.sif",
     "antibody_tools.sif",
     "stability_tools.sif",
     "iggm.sif",
@@ -155,7 +154,7 @@ def has_rfd_weights(path: Path) -> bool:
 
 def requires_rfantibody_assets(workflow: str) -> bool:
     workflow_key = (workflow or "all").strip().lower()
-    antibody_workflows = {"antibody", "antibody_denovo", "antibody_design", "rfantibody_backbone"}
+    antibody_workflows = {"antibody", "antibody_design", "rfantibody_backbone"}
     return workflow_key in antibody_workflows
 
 
@@ -312,7 +311,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--workflow",
         default="all",
-        choices=["all", "antibody", "antibody_denovo", "antibody_design", "rfantibody_backbone"],
+        choices=["all", "antibody", "antibody_design", "rfantibody_backbone"],
         help="Enable workflow-specific required checks",
     )
     args = parser.parse_args()

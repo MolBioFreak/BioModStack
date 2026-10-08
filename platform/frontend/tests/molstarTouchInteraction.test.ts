@@ -9,7 +9,7 @@ import {
     shouldEnableMolstarTouchInteractionOverride,
 } from '../src/components/molstarTouchInteraction.js';
 
-const MOLSTAR_VIEWER_PATH = resolve(process.cwd(), 'src/components/MolstarViewer.tsx');
+const MOLSTAR_VIEWER_PATH = resolve(process.cwd(), 'src/components/MolstarViewerImpl.tsx');
 
 test('touch-capable devices keep Mol* pinch gestures inside the viewer instead of delegating them to browser zoom', () => {
     assert.equal(shouldEnableMolstarTouchInteractionOverride({ maxTouchPoints: 2, coarsePointer: false }), true);
@@ -25,11 +25,12 @@ test('desktop Mol* viewers keep default browser touch-action semantics', () => {
     assert.match(MOLSTAR_TOUCH_INTERACTION_SELECTOR, /msp-plugin/);
 });
 
-test('MolstarViewer source wires the mobile touch-action override into host and shadow interaction surfaces', () => {
+test('MolstarViewer implementation wires the mobile touch-action override into the direct Mol* mount subtree', () => {
     const source = readFileSync(MOLSTAR_VIEWER_PATH, 'utf8');
 
     assert.match(source, /resolveMolstarTouchAction/);
     assert.match(source, /MOLSTAR_TOUCH_INTERACTION_SELECTOR/);
-    assert.match(source, /host\.style\.touchAction = interactionTouchAction/);
+    assert.match(source, /target\.style\.touchAction = interactionTouchAction/);
     assert.match(source, /querySelectorAll<HTMLElement>\(MOLSTAR_TOUCH_INTERACTION_SELECTOR\)/);
+    assert.match(source, /data-bms-molstar-mount="true"/);
 });

@@ -231,44 +231,6 @@ export interface HardwareDiscoveryResponse {
     timestamp: string;
 }
 
-export interface DbServiceLogicalDatabaseStatus {
-    name: string;
-    role: string;
-    storage_mode: string;
-    status: string;
-    reachable: boolean;
-    note?: string | null;
-}
-
-export interface DbServiceStatus {
-    component: string;
-    service_id: string;
-    display_name: string;
-    service_name?: string | null;
-    container_name?: string | null;
-    optional_at_boot: boolean;
-    control_mode: string;
-    state: string;
-    health: string;
-    runtime_available: boolean;
-    runtime_note?: string | null;
-    offline_message?: string | null;
-    host_agent_available?: boolean;
-    logical_databases?: DbServiceLogicalDatabaseStatus[];
-    commands?: string[];
-    logs?: string;
-    logs_tail?: number;
-    last_action?: string;
-    action_output?: string;
-    action_returncode?: number;
-}
-
-export const fetchDbServiceStatus = () =>
-    api.get<DbServiceStatus>('/api/system/db-service');
-
-export const runDbServiceAction = (action: 'start' | 'restart' | 'health' | 'logs', tail = 120) =>
-    api.post<DbServiceStatus>(`/api/system/db-service/${action}`, { tail });
-
 // API functions
 // API functions
 export const fetchJobs = (params?: {
@@ -288,7 +250,9 @@ export const fetchJobs = (params?: {
     },
 });
 export const fetchBoltzCpShardPlans = () => api.get<BoltzCpShardPlanCatalog>('/api/jobs/boltz-cp/shard-plans');
-export const fetchSystemStatus = () => api.get<SystemStatus>('/api/gpu/status');
+// Bound live telemetry requests so a half-open connection cannot permanently
+// occupy the shared collector and suppress its recovery/backoff loop.
+export const fetchSystemStatus = () => api.get<SystemStatus>('/api/gpu/status', { timeout: 10_000 });
 export const fetchJobById = (id: string) => api.get<Job>(`/api/jobs/${id}`);
 export const fetchDesignById = (id: string) => api.get<Design>(`/api/designs/${id}`);
 export interface ProteinBaseBundleImportRequest {
@@ -844,6 +808,15 @@ export interface Design {
     source_design_name?: string | null;
     artifact_class?: string | null;
     artifact_schema_version?: number | null;
+    review_profile_id?: string | null;
+    review_contract_version?: number | null;
+    review_contract_source?: string | null;
+    review_artifact_manifest?: {
+        schema?: string;
+        artifacts?: Record<string, { kind?: string; state?: 'ready' | 'missing' | 'invalid'; path?: string | null; reason?: string | null }>;
+        roles?: Record<string, unknown> & { has_binder?: boolean };
+    } | null;
+    review_role_map?: Record<string, unknown> | null;
     result_set?: string | null;
     result_set_label?: string | null;
     analysis_contract_id?: string | null;

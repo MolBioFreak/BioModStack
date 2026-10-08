@@ -1,5 +1,5 @@
 # FAMPNN Child Sequence-Design Workflow
-# Internal GPU-orchestrated child spawned by antibody_denovo for batched FA-MPNN redesign.
+# Internal GPU-orchestrated child for batched FA-MPNN redesign.
 
 id: fampnn_child
 name: FAMPNN Sequence Design (Child)

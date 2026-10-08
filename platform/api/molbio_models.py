@@ -59,11 +59,7 @@ class NucleotideSequence(MolBioBase):
     organism = Column(String(255), nullable=True)
     accession = Column(String(100), nullable=True)
     source_file = Column(String(255), nullable=True)
-    parent_id = Column(
-        String(36),
-        ForeignKey("nucleotide_sequences.id", ondelete="RESTRICT"),
-        nullable=True,
-    )
+    parent_id = Column(String(36), nullable=True)
     operation = Column(String(50), nullable=True)
     operation_params = Column(JSON, nullable=True)
     version = Column(Integer, nullable=False, default=1)
@@ -314,7 +310,11 @@ class PCRExperimentRevision(MolBioBase):
 
     __tablename__ = "pcr_experiment_revisions"
     __table_args__ = (
-        UniqueConstraint("experiment_id", "revision_number", name="uq_pcr_experiment_revision_number"),
+        UniqueConstraint(
+            "experiment_id",
+            "revision_number",
+            name="uq_molbio_pcr_experiment_revision_number",
+        ),
         Index("ix_pcr_revision_template", "template_document_id", "created_at"),
     )
 

@@ -28,6 +28,25 @@ export interface StructureViewerSummaryCardSpec {
 export type StructureViewerOverlayView = 'metrics' | 'plddt' | 'psce' | 'pae';
 export type StructureViewerColorMode = 'default' | 'plddt' | 'cdr' | 'frustration' | 'fampnn_psce';
 
+export interface EffectiveStructureViewerColorModeInput {
+    requestedMode: StructureViewerColorMode;
+    hasResidueConfidence: boolean;
+    hasFampnnPsceProfile: boolean;
+    hasFrustrationResidues: boolean;
+}
+
+export const resolveEffectiveStructureViewerColorMode = ({
+    requestedMode,
+    hasResidueConfidence,
+    hasFampnnPsceProfile,
+    hasFrustrationResidues,
+}: EffectiveStructureViewerColorModeInput): StructureViewerColorMode => {
+    if (requestedMode === 'plddt' && !hasResidueConfidence) return 'default';
+    if (requestedMode === 'fampnn_psce' && !hasFampnnPsceProfile) return 'default';
+    if (requestedMode === 'frustration' && !hasFrustrationResidues) return 'default';
+    return requestedMode;
+};
+
 export interface StructureViewerQuickViewSpec {
     id: StructureViewerSectionId | 'cdr';
     label: string;

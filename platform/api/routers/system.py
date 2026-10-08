@@ -12,8 +12,8 @@ import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
 
 API_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -44,7 +44,7 @@ from biomodstack_services import (  # noqa: E402
     stop_all,
 )
 from paths import get_db_path, get_results_dir, get_work_dir  # noqa: E402
-from services import db_service, stats_tools  # noqa: E402
+from services.addon_status import probe_stats_addon  # noqa: E402
 
 router = APIRouter(prefix="/system", tags=["system"])
 
@@ -107,23 +107,12 @@ class InstallFeaturesPayload(BaseModel):
 
 DEV_INSTALL_FEATURES: dict[str, bool] = {
     "bioxp": True,
-    "stats_tools": True,
-    "assay_db": True,
 }
 
 
 class RuntimeStartTargetPayload(BaseModel):
     target: str | None = None
 
-
-class StatsToolsActionPayload(BaseModel):
-    tail: int | None = 120
-
-
-class DbServiceActionPayload(BaseModel):
-    tail: int | None = 120
-    advanced: bool = False
-    i_know_this_disables_db_backed_features: bool = Field(False, alias="i_know_this_disables_db_backed_features")
 
 
 def _require_local_admin(request: Request) -> None:
@@ -281,63 +270,6 @@ def _run_runtime_action(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-@router.get("/stats-tools")
-async def get_stats_tools_status(request: Request, tail: int = 120):
-    _require_local_admin(request)
-    try:
-        return stats_tools.describe_stats_tools(tail=tail)
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-
-@router.post("/stats-tools/{action}")
-async def run_stats_tools_lifecycle_action(
-    request: Request,
-    action: str,
-    payload: StatsToolsActionPayload | None = None,
-    tail: int | None = None,
-):
-    _require_local_admin(request)
-    requested_tail = int(tail if tail is not None else (payload.tail if payload and payload.tail is not None else 120))
-    try:
-        return stats_tools.run_stats_tools_action(action, tail=requested_tail)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-
-@router.get("/db-service")
-async def get_db_service_status(request: Request, tail: int = Query(120, ge=1, le=500)):
-    _require_local_admin(request)
-    try:
-        return db_service.describe_db_service(tail=tail)
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-
-@router.post("/db-service/{action}")
-async def run_db_service_lifecycle_action(
-    request: Request,
-    action: str,
-    payload: DbServiceActionPayload | None = None,
-    tail: int | None = Query(None, ge=1, le=500),
-    i_know_this_disables_db_backed_features: bool = Query(False, alias="i-know-this-disables-db-backed-features"),
-):
-    _require_local_admin(request)
-    requested_tail = int(tail if tail is not None else (payload.tail if payload and payload.tail is not None else 120))
-    advanced = bool(
-        i_know_this_disables_db_backed_features
-        or (payload.advanced if payload else False)
-        or (payload.i_know_this_disables_db_backed_features if payload else False)
-    )
-    try:
-        return db_service.run_db_service_action(action, tail=requested_tail, advanced=advanced)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
 
 @router.get("/runtime-state")
 async def get_runtime_state(request: Request, runtime: str | None = None):
@@ -441,6 +373,12 @@ async def get_install_features(request: Request):
         "configured_features": configured,
         "dev_features": DEV_INSTALL_FEATURES,
     }
+
+
+@router.get("/stats-toolkit")
+async def get_stats_toolkit_status(request: Request):
+    _require_local_admin(request)
+    return probe_stats_addon()
 
 
 @router.put("/features")

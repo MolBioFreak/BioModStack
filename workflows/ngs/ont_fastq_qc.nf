@@ -88,7 +88,7 @@ workflow ONT_FASTQ_QC {
         FastqDimerAnalysis.out.breakpoint_screen,
         FastqDimerAnalysis.out.dimer_reference,
     )
-    BuildDimerCanonicalOutputs.out.breakpoint_call.subscribe { _ ->
+    BuildDimerCanonicalOutputs.out.breakpoint_call.subscribe { ignoredValue ->
         reportStage(params, "dimer_qc", [
             "${params.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
             "${params.out_dir}/multimer_qc/dimer_evidence_by_position.tsv",
@@ -101,7 +101,7 @@ workflow ONT_FASTQ_QC {
 
     if (runFastqQc) {
         FastqPlasmidQC(FastqAlign.out.aligned, Channel.of(reference_file), Channel.of(fastq_input))
-        FastqPlasmidQC.out.summary.subscribe { _ ->
+        FastqPlasmidQC.out.summary.subscribe { ignoredValue ->
             reportStage(params, "fastq_qc", [
                 "${params.out_dir}/fastq_qc/read_lengths.tsv",
                 "${params.out_dir}/fastq_qc/fastq_qc_summary.tsv",

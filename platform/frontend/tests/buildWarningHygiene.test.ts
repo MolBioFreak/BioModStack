@@ -5,19 +5,10 @@ import test from 'node:test';
 
 const readSource = (...parts: string[]) => fs.readFileSync(path.join(process.cwd(), ...parts), 'utf8');
 
-test('antibody launcher does not dynamically import pdbUtils after static import', () => {
-  const source = readSource('src', 'components', 'AntibodyDenovoTemplate.tsx');
-  assert.match(source, /from '\.\.\/utils\/pdbUtils'/u);
-  assert.doesNotMatch(source, /import\(['"]\.\.\/utils\/pdbUtils['"]\)/u);
-  assert.doesNotMatch(source, /import\(['"]\.\.\/utils\/pdbUtils['"]\)\.Chain/u);
-});
 
-test('vite suppresses only the pinned PDBe Molstar vendor eval warning', () => {
+test('vite no longer carries a PDBe eval-warning suppression', () => {
   const source = readSource('vite.config.ts');
-  assert.match(source, /isExpectedPdbeMolstarEvalWarning/u);
-  assert.match(source, /warning\.code\s*===\s*['"]EVAL['"]/u);
-  assert.match(source, /pdbe-molstar/u);
-  assert.match(source, /pdbe-molstar-component\.js/u);
+  assert.doesNotMatch(source, /isExpectedPdbeMolstarEvalWarning|pdbe-molstar-component|warning\.code\s*===\s*['"]EVAL['"]/u);
   assert.match(source, /chunkSizeWarningLimit:\s*6500/u, 'chunk budget should be explicit and paired with manual scientific-vendor chunking');
 });
 
@@ -32,7 +23,6 @@ test('top-level scientific workstation pages are route-lazy loaded', () => {
     ['NGSToolkit', './components/NGSToolkit'],
     ['BioXpCockpit', './components/BioXpCockpit'],
     ['InfraMonitorPage', './components/InfraMonitorPage'],
-    ['AssayAnalytics', './components/AssayAnalytics'],
   ] as const;
 
   assert.match(source, /import\s*\{\s*lazy\s*,\s*Suspense\s*\}\s*from ['"]react['"]/u);

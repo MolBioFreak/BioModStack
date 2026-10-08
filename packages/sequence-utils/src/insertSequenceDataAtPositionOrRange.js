@@ -54,28 +54,28 @@ export default function insertSequenceDataAtPositionOrRange(
         sequence: "",
         doNotRemoveInvalidChars: true,
         proteinSequence: "",
-        chromatogramData: undefined
+        traceData: undefined
       },
       options
     );
-    newSequenceData.chromatogramData = undefined;
+    newSequenceData.traceData = undefined;
   } else if (
-    newSequenceData.chromatogramData &&
-    newSequenceData.chromatogramData.baseTraces
+    newSequenceData.traceData &&
+    newSequenceData.traceData.baseTraces
   ) {
-    //handle chromatogramData updates
+    //handle traceData updates
     if (caretPositionOrRange && caretPositionOrRange.start > -1) {
       if (caretPositionOrRange.start > caretPositionOrRange.end) {
-        newSequenceData.chromatogramData = trimChromatogram({
-          chromatogramData: newSequenceData.chromatogramData,
+        newSequenceData.traceData = trimTraceData({
+          traceData: newSequenceData.traceData,
           range: {
             start: caretPositionOrRange.start,
             end: newSequenceData.sequence.length
           },
           justBaseCalls: isInsertSameLengthAsSelection
         });
-        newSequenceData.chromatogramData = trimChromatogram({
-          chromatogramData: newSequenceData.chromatogramData,
+        newSequenceData.traceData = trimTraceData({
+          traceData: newSequenceData.traceData,
           range: {
             start: 0,
             end: caretPositionOrRange.end
@@ -83,8 +83,8 @@ export default function insertSequenceDataAtPositionOrRange(
           justBaseCalls: isInsertSameLengthAsSelection
         });
       } else {
-        newSequenceData.chromatogramData = trimChromatogram({
-          chromatogramData: newSequenceData.chromatogramData,
+        newSequenceData.traceData = trimTraceData({
+          traceData: newSequenceData.traceData,
           range: {
             start: caretPositionOrRange.start,
             end: caretPositionOrRange.end
@@ -94,8 +94,8 @@ export default function insertSequenceDataAtPositionOrRange(
       }
     }
     if (sequenceDataToInsert.sequence) {
-      insertIntoChromatogram({
-        chromatogramData: newSequenceData.chromatogramData,
+      insertIntoTraceData({
+        traceData: newSequenceData.traceData,
         caretPosition:
           caretPositionOrRange.start > -1
             ? caretPositionOrRange.start
@@ -196,23 +196,23 @@ function adjustAnnotationsToDelete(annotationsToBeAdjusted, range, maxLength) {
   }).filter(range => !!range); //filter any fully deleted ranges
 }
 
-function insertIntoChromatogram({
-  chromatogramData,
+function insertIntoTraceData({
+  traceData,
   caretPosition,
   seqToInsert,
   justBaseCalls
 }) {
   if (!seqToInsert.length) return;
 
-  chromatogramData.baseCalls &&
-    chromatogramData.baseCalls.splice(
+  traceData.baseCalls &&
+    traceData.baseCalls.splice(
       caretPosition,
       0,
       ...seqToInsert.split("")
     );
   if (justBaseCalls) {
     //return early if just base calls
-    return chromatogramData;
+    return traceData;
   }
 
   const baseTracesToInsert = [];
@@ -229,16 +229,16 @@ function insertIntoChromatogram({
     });
   }
 
-  chromatogramData.baseTraces &&
-    chromatogramData.baseTraces.splice(caretPosition, 0, ...baseTracesToInsert);
-  chromatogramData.qualNums &&
-    chromatogramData.qualNums.splice(caretPosition, 0, ...qualNumsToInsert);
+  traceData.baseTraces &&
+    traceData.baseTraces.splice(caretPosition, 0, ...baseTracesToInsert);
+  traceData.qualNums &&
+    traceData.qualNums.splice(caretPosition, 0, ...qualNumsToInsert);
 
-  return chromatogramData;
+  return traceData;
 }
 
-function trimChromatogram({
-  chromatogramData,
+function trimTraceData({
+  traceData,
   range: { start, end },
   justBaseCalls
 }) {
@@ -246,9 +246,9 @@ function trimChromatogram({
     "baseCalls",
     ...(justBaseCalls ? [] : ["qualNums", "baseTraces", "basePos"])
   ].forEach(type => {
-    chromatogramData[type] &&
-      chromatogramData[type].splice(start, end - start + 1);
+    traceData[type] &&
+      traceData[type].splice(start, end - start + 1);
   });
 
-  return chromatogramData;
+  return traceData;
 }
