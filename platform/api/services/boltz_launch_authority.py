@@ -68,10 +68,17 @@ def validate_launch_settings(job):
         raise ValueError('invalid typed Boltz launch settings: ' + '; '.join(errors))
 
 
-def build_authority(job, command):
+def build_authority(job, command, *, compiled_parameters=None, prepared_inputs=None):
+    """Bind native inputs from the shared compiler's typed projection.
+
+    The argv parser is retained for historical callers, not used by current
+    launch paths as scientific authority. Prepared bytes are supplied only by
+    the native compiler when comparing a persisted recipe without writing it.
+    """
     if revision_for_job(job) is None or job.model_id != 'boltz2' or job.mode not in ('predict', 'complex'):
         return None
-    params = command_params(command)
+    params = (command_params(command) if compiled_parameters is None
+              else dict(compiled_parameters))
     if any(key in params for key in TRANSPORT):
         raise ValueError('Boltz launch authority transport is server-owned')
     root = str(Path(job.output_dir).absolute())
@@ -84,8 +91,13 @@ def build_authority(job, command):
 
     def snapshot(path):
         path = str(Path(path).absolute())
-        with Path(path).open('rb') as stream:
-            data = stream.read(MAX_BYTES + 1)
+        if prepared_inputs is not None and path in prepared_inputs:
+            data = prepared_inputs[path]
+            if type(data) is not bytes:
+                raise ValueError('compiled Boltz input snapshot must contain immutable bytes')
+        else:
+            with Path(path).open('rb') as stream:
+                data = stream.read(MAX_BYTES + 1)
         if not data or len(data) > MAX_BYTES:
             raise ValueError('Boltz input snapshot size invalid')
         files[path] = dict(sha256=digest(data), content_base64=base64.b64encode(data).decode())
@@ -122,7 +134,7 @@ def build_authority(job, command):
         for index in range(count):
             task_name = name + (f'_job{index}' if count > 1 else '')
             metadata = sequence_metadata(sequence, task_name)
-            tasks.append(dict(namespace=task_name, owner='BoltzFromSequenceWithMSATask' if params.get('boltz_use_msa') == 'true' else 'BoltzFromSequenceTask',
+            tasks.append(dict(namespace=task_name, owner='BoltzFromSequenceWithMSATask' if (params.get('boltz_use_msa') is True or params.get('boltz_use_msa') == 'true') else 'BoltzFromSequenceTask',
                 metadata=metadata, input_sha256=digest(metadata['producer_sequence'].encode())))
     if params.get('msa_path'):
         snapshot(params['msa_path'])

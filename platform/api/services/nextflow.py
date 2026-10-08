@@ -2002,19 +2002,26 @@ async def _validate_ont_fastq_qc_terminal_completion(
     )
 
 
-async def _persist_boltz_launch_authority(session, job, command):
+async def _persist_boltz_launch_authority(session, job, command, *, compiled_parameters=None):
     """Commit trusted inputs before any remote handoff or scientific spawn."""
     from services.boltz_launch_authority import KEY, build_authority, transport, validate_launch_settings, command_params
     from services.frustrampnn.contracts import canonical_json_bytes
-    authority = build_authority(job, command)
+    authority = build_authority(job, command, compiled_parameters=compiled_parameters)
     if authority is None:
         return list(command)
     validate_launch_settings(job)
-    persisted_command = build_job_nextflow_command(job, job.params, job.output_dir)
-    persisted_authority = build_authority(job, persisted_command)
-    compiled_settings = [{key:value for key,value in command_params(cmd).items()
+    persisted_invocation = compile_job_nextflow_invocation(job, job.params, job.output_dir)
+    persisted_command = list(persisted_invocation.command)
+    prepared_inputs = {str(Path(job.output_dir).absolute() / item.relative_path): item.payload
+                       for item in persisted_invocation.generated_inputs}
+    persisted_parameters = persisted_invocation.native_parameters
+    persisted_authority = build_authority(job, persisted_command,
+        compiled_parameters=persisted_parameters, prepared_inputs=prepared_inputs)
+    parameter_projections = ((command_params(command), command_params(persisted_command))
+        if compiled_parameters is None else (compiled_parameters, persisted_parameters))
+    compiled_settings = [{key:value for key,value in projection.items()
         if key.startswith('boltz_') or key in ('pred_method', 'num_parallel_jobs')}
-        for cmd in (command, persisted_command)]
+        for projection in parameter_projections]
     if compiled_settings[0] != compiled_settings[1]:
         raise ValueError('Boltz compiled settings differ from persisted request')
     if canonical_json_bytes(authority) != canonical_json_bytes(persisted_authority):
@@ -2027,7 +2034,14 @@ async def _persist_boltz_launch_authority(session, job, command):
     else:
         job.provenance = {**(job.provenance or {}), KEY: authority}
     await session.commit()
-    return list(command) + ['--protein_science_contract_revision', '1'] + transport(authority)
+    authority_transport = transport(authority)
+    if compiled_parameters is not None:
+        compiled_parameters.update({
+            'protein_science_contract_revision': 1,
+            'boltz_launch_authority_path': authority_transport[1],
+            'boltz_launch_authority_sha256': authority_transport[3],
+        })
+    return list(command) + ['--protein_science_contract_revision', '1'] + authority_transport
 
 
 async def launch_nextflow_job(
@@ -2274,7 +2288,11 @@ async def launch_nextflow_job(
             if job.model_id == 'boltz2' and job.mode in ('predict', 'complex'):
                 from services.core_protein_scientific_contract import revision_for_job
                 if revision_for_job(job) is not None:
-                    await _persist_boltz_launch_authority(session, job, build_job_nextflow_command(job, launch_params, output_dir))
+                    boltz_parameters: Dict[str, Any] = {}
+                    boltz_command = build_job_nextflow_command(job, launch_params, output_dir,
+                        compiled_parameters=boltz_parameters)
+                    await _persist_boltz_launch_authority(session, job, boltz_command,
+                        compiled_parameters=boltz_parameters)
             if job.execution_target_id:
                 if transient_runner:
                     raise ExecutionOwnershipError(
@@ -2291,7 +2309,8 @@ async def launch_nextflow_job(
                     else build_job_nextflow_command(job, launch_params, output_dir,
                         compiled_parameters=compiled_parameters)
                 )
-                remote_command = await _persist_boltz_launch_authority(session, job, remote_command)
+                remote_command = await _persist_boltz_launch_authority(session, job, remote_command,
+                    compiled_parameters=compiled_parameters)
                 remote_environment = {"NXF_ANSI_LOG": "false"}
                 if is_protenix:
                     remote_environment["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -2523,7 +2542,9 @@ async def launch_nextflow_job(
             attempt = 1
 
             while True:
-                cmd = build_job_nextflow_command(job, launch_params, output_dir)
+                local_parameters: Dict[str, Any] = {}
+                cmd = build_job_nextflow_command(job, launch_params, output_dir,
+                    compiled_parameters=local_parameters)
                 if uses_native_parent_components(cmd):
                     if launch_params.get('run_frustrampnn') is True and gpu_id is None:
                         raise ExecutionOwnershipError('Native FrustraMPNN requires the parent GPU reservation')
@@ -2536,7 +2557,8 @@ async def launch_nextflow_job(
                         'invocation_id': owner['invocation_id'], 'launch_attempt': attempt,
                     }).decode('utf-8')))
                     cmd.extend(['--component_attempt_id', component_attempt])
-                cmd = await _persist_boltz_launch_authority(session, job, cmd)
+                cmd = await _persist_boltz_launch_authority(session, job, cmd,
+                    compiled_parameters=local_parameters)
                 from services import rf_filter_task_roster
                 await rf_filter_task_roster.begin_command(session, job, cmd)
                 logger.info(
