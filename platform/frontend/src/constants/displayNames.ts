@@ -80,6 +80,8 @@ export const MODEL_DISPLAY_NAMES: Record<string, string> = {
     'protein_local_redesign': 'Protein Local Redesign',
     'nanopore': 'Nanopore Sequencing',
     'ppiflow': 'PPIFlow Seeded',
+    'caliby_experimental': 'Caliby Experimental',
+    'caliby': 'Caliby',
 };
 
 // Pipeline stage display names
@@ -97,6 +99,7 @@ export const STAGE_DISPLAY_NAMES: Record<string, string> = {
     'maturation_post_validation': 'PPIFlow Repair',
     'maturation_post_boltz': 'PPIFlow Repair',
     'post_fampnn': 'FAMPNN Review',
+    'post_caliby': 'Caliby Review',
     'post_structure_validation': 'Structure Review',
     'structure_validation': 'Structure Validation',
     'boltz2': 'Boltz-2',

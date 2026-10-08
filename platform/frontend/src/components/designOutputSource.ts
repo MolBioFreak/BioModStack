@@ -1,10 +1,11 @@
-export type OutputSourceFilter = 'all' | 'rfantibody' | 'boltzgen' | 'fampnn' | 'ppiflow' | 'validation';
-export type AnalysisLens = 'validation' | 'rfantibody' | 'boltzgen' | 'fampnn' | 'ppiflow' | 'frustrampnn' | 'protenix';
+export type OutputSourceFilter = 'all' | 'rfantibody' | 'boltzgen' | 'fampnn' | 'caliby' | 'ppiflow' | 'validation';
+export type AnalysisLens = 'validation' | 'rfantibody' | 'boltzgen' | 'fampnn' | 'caliby' | 'ppiflow' | 'frustrampnn' | 'protenix';
 
 type OutputSourceDesign = {
     name?: string | null;
     pdb_path?: string | null;
     confidence_metrics?: Record<string, unknown> | null;
+    provenance?: Record<string, unknown> | null;
     source_stage?: string | null;
     artifact_group?: string | null;
     artifact_class?: string | null;
@@ -28,7 +29,7 @@ type AnalysisLensJob = {
     awaiting_payload?: Record<string, unknown> | null;
 };
 
-const ANALYSIS_LENS_PRIORITY: AnalysisLens[] = ['rfantibody', 'boltzgen', 'fampnn', 'ppiflow', 'frustrampnn', 'protenix', 'validation'];
+const ANALYSIS_LENS_PRIORITY: AnalysisLens[] = ['rfantibody', 'boltzgen', 'fampnn', 'caliby', 'ppiflow', 'frustrampnn', 'protenix', 'validation'];
 
 const containsAny = (value: string, needles: string[]): boolean => needles.some((needle) => value.includes(needle));
 
@@ -138,6 +139,10 @@ export const inferDesignOutputSource = (design: OutputSourceDesign): OutputSourc
         return 'fampnn';
     }
 
+    if (containsAny(stageFamily, ['caliby']) || containsAny(stageMode, ['caliby', 'post_caliby'])) {
+        return 'caliby';
+    }
+
     if (containsAny(stageFamily, ['ppiflow', 'maturation']) || containsAny(stageMode, ['ppiflow', 'maturation', 'backbone_refine'])) {
         return 'ppiflow';
     }
@@ -156,6 +161,10 @@ export const inferDesignOutputSource = (design: OutputSourceDesign): OutputSourc
 
     if (sourceStage === 'post_fampnn' || artifactGroup === 'candidate') {
         return 'fampnn';
+    }
+
+    if (sourceStage === 'post_caliby') {
+        return 'caliby';
     }
 
     if (
@@ -178,6 +187,14 @@ export const inferDesignOutputSource = (design: OutputSourceDesign): OutputSourc
         path.includes('/run/fampnn/results/')
     ) {
         return 'fampnn';
+    }
+
+    if (
+        path.includes('/collected/caliby/') ||
+        path.includes('/collected/caliby_raw/') ||
+        path.includes('/run/caliby/')
+    ) {
+        return 'caliby';
     }
 
     if (
@@ -208,6 +225,10 @@ export const inferDesignOutputSource = (design: OutputSourceDesign): OutputSourc
 
     if (hasMetricKeys(design as AnalysisLensDesign, ['fampnn_psce', 'mpnn_score'])) {
         return 'fampnn';
+    }
+
+    if (hasMetricKeys(design as AnalysisLensDesign, ['U']) || String((design.confidence_metrics || {})?.caliby_model || '').trim()) {
+        return 'caliby';
     }
 
     if (hasMetricKeys(design as AnalysisLensDesign, ['maturation_delta_interface', 'maturation_interface_score', 'maturation_rmsd'])) {
@@ -254,6 +275,7 @@ export const inferDesignAnalysisLens = (design: AnalysisLensDesign): AnalysisLen
     if (source === 'rfantibody') return 'rfantibody';
     if (source === 'boltzgen') return 'boltzgen';
     if (source === 'fampnn') return 'fampnn';
+    if (source === 'caliby') return 'caliby';
     if (source === 'ppiflow') return 'ppiflow';
     if (source === 'validation') return 'validation';
 
@@ -329,6 +351,18 @@ const inferJobAnalysisLens = (job: AnalysisLensJob | null | undefined): Analysis
     }
 
     if (
+        stage === 'post_caliby' ||
+        containsAny(modelId, ['caliby']) ||
+        containsAny(mode, ['caliby']) ||
+        containsAny(stage, ['caliby']) ||
+        containsAny(stageFamily, ['caliby']) ||
+        containsAny(candidateDir, ['caliby']) ||
+        containsAny(name, ['caliby'])
+    ) {
+        return 'caliby';
+    }
+
+    if (
         containsAny(stage, ['ppiflow', 'maturation']) ||
         containsAny(name, ['ppiflow', 'maturation']) ||
         containsAny(candidateDir, ['ppiflow', 'maturation']) ||
@@ -398,6 +432,7 @@ export const getOutputSourceLabel = (design: OutputSourceDesign): string => {
     if (source === 'boltzgen') return 'BoltzGen';
     if (source === 'ppiflow') return 'PPIFlow';
     if (source === 'fampnn') return 'FAMPNN';
+    if (source === 'caliby') return 'Caliby';
     if (source === 'rfantibody') return 'RFantibody';
     return 'Other';
 };
@@ -406,6 +441,7 @@ export const getOutputSourceBadgeClass = (source: OutputSourceFilter): string =>
     if (source === 'rfantibody') return 'border-violet-500/40 bg-violet-500/10 text-violet-200';
     if (source === 'boltzgen') return 'border-amber-500/40 bg-amber-500/10 text-amber-200';
     if (source === 'fampnn') return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200';
+    if (source === 'caliby') return 'border-teal-500/40 bg-teal-500/10 text-teal-200';
     if (source === 'ppiflow') return 'border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-200';
     if (source === 'validation') return 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200';
     return 'border-slate-600/40 bg-slate-700/30 text-slate-300';

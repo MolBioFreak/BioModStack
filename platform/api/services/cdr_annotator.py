@@ -247,7 +247,7 @@ def identify_binder_chains(sequences: Dict[str, str], pdb_path: str) -> Dict[str
     """
     # Common VH/VHH framework 1 signatures.
     # Include common camelid VHH starts such as VQLQE... used by many nanobodies.
-    vh_signatures = ["MQLQE", "MQVQL", "MEVQL", "VQLVE", "VQLQE", "LQLQE", "QVQLV", "EVQLV", "QVKLV", "QVQLQ", "EVQLQ", "QVQLK", "EVQLK", "QVTLK", "VQLEQ"]
+    vh_signatures = ["MQLQE", "MQVQL", "MEVQL", "VQLVE", "VQLQE", "LQLQE", "QLQLV", "QLQLQ", "QVQLV", "EVQLV", "QVKLV", "QVQLQ", "EVQLQ", "QVQLK", "EVQLK", "QVTLK", "VQLEQ"]
     vl_signatures = ["DIVMT", "DIQMT", "EIVLT", "DIVLT", "EIVMT", "QSVLT", "QSVVS"]
     # TCR variable region signatures
     tcr_beta_signatures = ["NAGVT", "GAVVS", "DGVTQ", "LGVTQ", "LGHDT", "GVTQS"]
@@ -600,12 +600,16 @@ def annotate_pdb(
     return annotation
 
 
-def _fallback_annotate_individually(pdb_paths: list[str]) -> Dict[str, CDRAnnotation]:
+def _fallback_annotate_individually(
+    pdb_paths: list[str],
+    preferred_chains_by_path: Optional[Dict[str, Dict[str, str]]] = None,
+) -> Dict[str, CDRAnnotation]:
     """Slow but reliable fallback when batched ANARCII fails."""
     annotations: Dict[str, CDRAnnotation] = {}
     for pdb_path in pdb_paths:
         try:
-            annot = annotate_pdb(pdb_path)
+            preferred_chains = (preferred_chains_by_path or {}).get(str(pdb_path))
+            annot = annotate_pdb(pdb_path, preferred_chains=preferred_chains)
         except Exception as exc:
             print(f"[CDR Annotator] Individual fallback failed for {pdb_path}: {exc}")
             annot = None
@@ -614,7 +618,11 @@ def _fallback_annotate_individually(pdb_paths: list[str]) -> Dict[str, CDRAnnota
     return annotations
 
 
-def batch_annotate_pdbs(pdb_paths: list, batch_size: int = 500) -> Dict[str, CDRAnnotation]:
+def batch_annotate_pdbs(
+    pdb_paths: list,
+    batch_size: int = 500,
+    preferred_chains_by_path: Optional[Dict[str, Dict[str, str]]] = None,
+) -> Dict[str, CDRAnnotation]:
     """
     Batch annotate multiple PDB files for CDR regions.
     
@@ -642,7 +650,23 @@ def batch_annotate_pdbs(pdb_paths: list, batch_size: int = 500) -> Dict[str, CDR
         try:
             sequences = extract_sequence_from_pdb(pdb_path)
             if sequences:
-                binder_chains = identify_binder_chains(sequences, pdb_path)
+                binder_chains: Dict[str, str] = {}
+                preferred_chains = (preferred_chains_by_path or {}).get(str(pdb_path))
+                if preferred_chains:
+                    for chain_type in ("H", "L"):
+                        chain_id = preferred_chains.get(chain_type)
+                        if not chain_id:
+                            continue
+                        chain_id = str(chain_id).strip()
+                        if chain_id in sequences:
+                            binder_chains[chain_type] = chain_id
+                    if binder_chains:
+                        print(f"[CDR Annotator] Using preferred chains for {pdb_path}: {binder_chains}")
+                    else:
+                        print(f"[CDR Annotator] Preferred chains not found for {pdb_path}, falling back to auto-detection")
+
+                if not binder_chains:
+                    binder_chains = identify_binder_chains(sequences, pdb_path)
                 if binder_chains:
                     path_to_chains[pdb_path] = {
                         'H': None, 'L': None, 
@@ -854,33 +878,33 @@ print(json.dumps(output))
         
         if result.returncode != 0:
             print(f"[CDR Annotator] Batch ANARCII error: {result.stderr[:500]}")
-            return _fallback_annotate_individually(pdb_paths)
+            return _fallback_annotate_individually(pdb_paths, preferred_chains_by_path)
         
         # Parse JSON output
         stdout = result.stdout.strip()
         if not stdout:
             print("[CDR Annotator] Empty output from ANARCII")
-            return _fallback_annotate_individually(pdb_paths)
+            return _fallback_annotate_individually(pdb_paths, preferred_chains_by_path)
         
         try:
             anarcii_results = json.loads(stdout)
         except json.JSONDecodeError as e:
             print(f"[CDR Annotator] JSON parse error: {e}")
             print(f"[CDR Annotator] Raw output (first 500 chars): {stdout[:500]}")
-            return _fallback_annotate_individually(pdb_paths)
+            return _fallback_annotate_individually(pdb_paths, preferred_chains_by_path)
         
     except subprocess.TimeoutExpired:
         print("[CDR Annotator] Batch ANARCII timeout")
-        return _fallback_annotate_individually(pdb_paths)
+        return _fallback_annotate_individually(pdb_paths, preferred_chains_by_path)
     except Exception as e:
         print(f"[CDR Annotator] Batch error: {e}")
-        return _fallback_annotate_individually(pdb_paths)
+        return _fallback_annotate_individually(pdb_paths, preferred_chains_by_path)
     finally:
         Path(seq_file).unlink(missing_ok=True)
 
     if not isinstance(anarcii_results, list):
         print(f"[CDR Annotator] Unexpected ANARCII batch payload type: {type(anarcii_results).__name__}")
-        return _fallback_annotate_individually(pdb_paths)
+        return _fallback_annotate_individually(pdb_paths, preferred_chains_by_path)
     
     print(f"[CDR Annotator] ANARCII returned {len(anarcii_results)} results")
     

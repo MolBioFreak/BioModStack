@@ -435,6 +435,11 @@ ANALYTICS_LOAD_ONLY_COLUMNS = (
     Design.ligand_iptm,
     Design.complex_iplddt,
     Design.complex_ipde,
+    Design.ipsae,
+    Design.ipsae_binder_to_target,
+    Design.ipsae_target_to_binder,
+    Design.ipsae_d0chn,
+    Design.ipsae_d0dom,
     Design.disorder,
     Design.num_recycles,
     Design.affinity_score,
@@ -746,6 +751,11 @@ def _build_plotly_metrics(design: Design) -> Dict[str, float]:
         "ligand_iptm": design.ligand_iptm,
         "complex_iplddt": design.complex_iplddt,
         "complex_ipde": design.complex_ipde,
+        "ipsae": design.ipsae,
+        "ipsae_binder_to_target": design.ipsae_binder_to_target,
+        "ipsae_target_to_binder": design.ipsae_target_to_binder,
+        "ipsae_d0chn": design.ipsae_d0chn,
+        "ipsae_d0dom": design.ipsae_d0dom,
         "disorder": design.disorder,
         "num_recycles": design.num_recycles,
         "affinity_score": design.affinity_score,
@@ -984,6 +994,41 @@ def _fampnn_payload_records(design: Design) -> List[Dict[str, Any]]:
     return records
 
 
+def _proteinbase_payload_records(design: Design) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    try:
+        state = sa_inspect(design)
+        unloaded = set(state.unloaded)
+    except NoInspectionAvailable:
+        unloaded = set()
+    provenance_value = None if "provenance" in unloaded else getattr(design, "provenance", None)
+    confidence_value = None if "confidence_metrics" in unloaded else getattr(design, "confidence_metrics", None)
+    provenance = provenance_value if isinstance(provenance_value, dict) else {}
+    confidence = confidence_value if isinstance(confidence_value, dict) else {}
+
+    if (
+        provenance.get("source") == "proteinbase"
+        or provenance.get("proteinbase_id")
+        or provenance.get("sequence")
+        or provenance.get("length_aa")
+    ):
+        records.append(provenance)
+
+    proteinbase_confidence = confidence.get("proteinbase")
+    if isinstance(proteinbase_confidence, dict):
+        records.append(proteinbase_confidence)
+
+    return records
+
+
+def _sequence_text_length(sequence: Optional[str]) -> Optional[int]:
+    if not isinstance(sequence, str):
+        return None
+    parts = ["".join(segment.split()) for segment in sequence.split("|")]
+    lengths = [len(part) for part in parts if part]
+    return sum(lengths) if lengths else None
+
+
 def _compute_fampnn_response_metrics(
     design: Design,
     *,
@@ -1076,6 +1121,11 @@ def _compute_binder_sequence_response_value(
         if binder_sequence:
             return binder_sequence
 
+    for record in _proteinbase_payload_records(design):
+        binder_sequence = _text_record_value(record, "binder_sequence", "sequence")
+        if binder_sequence:
+            return binder_sequence
+
     if not include_structure_fallback or not design.pdb_path:
         return None
 
@@ -1111,6 +1161,37 @@ def _compute_binder_sequence_response_value(
         return None
 
     return None
+
+
+def _compute_binder_length_response_value(
+    design: Design,
+    *,
+    binder_sequence: Optional[str] = None,
+) -> Optional[int]:
+    binder_length = getattr(design, "binder_length", None)
+    if isinstance(binder_length, int) and binder_length > 0:
+        return binder_length
+
+    if isinstance(binder_length, float) and math.isfinite(binder_length):
+        rounded_length = int(round(binder_length))
+        if rounded_length > 0:
+            return rounded_length
+
+    for record in _fampnn_payload_records(design):
+        payload_length = _numeric_record_value(record, "binder_length", "length")
+        if payload_length is not None:
+            rounded_length = int(round(payload_length))
+            if rounded_length > 0:
+                return rounded_length
+
+    for record in _proteinbase_payload_records(design):
+        payload_length = _numeric_record_value(record, "binder_length", "length_aa")
+        if payload_length is not None:
+            rounded_length = int(round(payload_length))
+            if rounded_length > 0:
+                return rounded_length
+
+    return _sequence_text_length(binder_sequence)
 
 
 def _design_summary_sort_key(design: Design) -> tuple:
@@ -1176,9 +1257,14 @@ def _design_to_response(
     for field_name, fallback_value in fallback_fields.items():
         if data.get(field_name) in (None, "", [], {}, ()):
             data[field_name] = fallback_value
-    data["binder_sequence"] = _compute_binder_sequence_response_value(
+    binder_sequence = _compute_binder_sequence_response_value(
         design,
         include_structure_fallback=include_fampnn_structure_fallback,
+    )
+    data["binder_sequence"] = binder_sequence
+    data["binder_length"] = _compute_binder_length_response_value(
+        design,
+        binder_sequence=binder_sequence,
     )
     return DesignResponse.model_validate(data)
 

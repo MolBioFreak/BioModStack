@@ -37,6 +37,10 @@ Every model integration usually touches some subset of:
   constrained remodel + redesign workflow
 - `protein_cad_experimental`
   experimental La-Proteina / DISCO non-binder design workflow
+- `caliby_experimental`
+  experimental structure-conditioned sequence design workflow
+- `protein_hunter_experimental`
+  experimental broad binder and unconditional generator workflow
 
 ### Generic prediction / design / docking
 
@@ -54,6 +58,8 @@ Every model integration usually touches some subset of:
 - `oligo_design`
 - `mutagenesis`
 - `protein_cad_experimental`
+- `caliby_experimental`
+- `protein_hunter_experimental`
 
 ### Sequencing
 
@@ -67,6 +73,7 @@ Every model integration usually touches some subset of:
 - RFdiffusion
 - BindCraft
 - BoltzGen
+- Protein Hunter
 - RFDpoly / Oligo Designer
 - La-Proteina
 - DISCO
@@ -76,6 +83,7 @@ Every model integration usually touches some subset of:
 - FAMPNN
 - AntiFold
 - ProteinMPNN
+- Caliby
 - FrustraMPNN
 - IgGM
 
@@ -113,6 +121,29 @@ as the live validator backends.
 RF3 exists in the codebase as a generic predictor, but should not be documented
 as a production antibody validator surface unless the workflow and control-plane
 integration explicitly say so.
+
+### Caliby is both standalone and nanobody-facing
+
+`Caliby` is wired in two ways:
+
+- as `caliby_experimental`, a standalone experimental workflow family
+- as an experimental sequence-design option in the main nanobody workflow
+
+Document it as an experimental sequence-design backend, not as a backbone
+generator or validator.
+
+### Protein Hunter is standalone experimental generation only
+
+`Protein Hunter` is wired as `protein_hunter_experimental`.
+
+Document it as:
+
+- an experimental generator family
+- broad binder / unconditional exploration
+- Boltz or Chai backend driven
+
+Do not document it as an antibody-native workflow or as part of the nanobody
+refinement loop.
 
 ### OpenMM is live
 
