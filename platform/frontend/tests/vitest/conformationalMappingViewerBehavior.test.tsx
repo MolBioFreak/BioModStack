@@ -6,6 +6,7 @@ import React from 'react';
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 
+import { CmEvidencePage } from '../../src/components/conformationalMapping/CmEvidencePage.js';
 import { ConformationalMappingViewer } from '../../src/components/conformationalMapping/ConformationalMappingViewer.js';
 import type { CmResults } from '../../src/components/conformationalMapping/conformationalMappingApi.js';
 import { CANONICAL_AMINO_ACIDS } from '../../src/components/conformationalMapping/conformationalMappingSemantics.js';
@@ -94,6 +95,7 @@ const mount = async (
     frustraDataShape: FrustraDataShape = 'global',
     search = '',
     unavailable: boolean | 'contradictory-candidate' = false,
+    mutateResults?: (value: CmResults) => void,
 ) => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
     const captured: Array<{ primary: string; overlays: Array<{ id: string; structureUrl: string }> }> = [];
@@ -124,6 +126,7 @@ const mount = async (
             if (unavailable === true) throw new Error('ancillary artifact unavailable');
             const value = results(candidateCount, backend, frustraDataShape);
             if (unavailable === 'contradictory-candidate') value.artifacts[0].sha256 = sha('f');
+            mutateResults?.(value);
             return value;
         },
         getStateAnalysis: async () => {
@@ -177,6 +180,114 @@ const mount = async (
     await flush();
     return { renderer: renderer!, client, captured, frustraCaptured, legacyLandscapeRequests, search: () => locationSearch, pathname: () => locationPath, go: (to: number | string) => go(to as never) };
 };
+
+for (const fault of ['missing', 'invalid', 'foreign-source'] as const) {
+    test(`candidate ${fault} mapping is local; siblings and native downloads survive`, async () => {
+        const mounted = await mount(2, 'protenix_v2_ensemble', 'global', '', false, (value) => {
+            const mapping = value.records.find((record) => record.type === 'structure_map' && record.key === 'candidate-2')!;
+            if (fault === 'missing') {
+                value.records = value.records.filter((record) => record !== mapping);
+                value.section_errors = [{ type: 'structure_map', key: 'candidate-2', status: 'unavailable', detail: 'Mapping unavailable' }];
+            } else if (fault === 'invalid') mapping.payload!.candidate_id = 'foreign-candidate';
+            else mapping.payload!.original_cif_sha256 = sha('f');
+        });
+        assert.match(mounted.renderer.root.findByProps({ 'data-workbench': 'stub' }).props['data-primary'], /artifact-1$/);
+        const click = async (label: string) => {
+            await act(async () => mounted.renderer.root.findAllByType('button').find((node) => text(node) === label)!.props.onClick());
+            await flush();
+        };
+        await act(async () => mounted.go('/designs/retry-job?cm_candidate_id=candidate-2'));
+        await flush();
+        await click('Residue mapping');
+        assert.match(text(mounted.renderer.root), /Selected candidate mapping unavailable/);
+        assert.doesNotMatch(text(mounted.renderer.root), /Structure-map identity and residue mapping/);
+        assert.match(mounted.renderer.root.findByProps({ 'data-workbench': 'stub' }).props['data-primary'], /artifact-2$/);
+        await click('Downloads');
+        assert.equal(mounted.renderer.root.findAllByType('a').filter((node) => /\/artifacts\/artifact-/.test(node.props.href)).length, 2);
+        assert.doesNotMatch(text(mounted.renderer.root), /Canonical result validation failed closed/);
+        await act(async () => mounted.renderer.unmount());
+        mounted.client.clear();
+    });
+}
+
+for (const fault of ['foreign-request', 'invalid-ensemble'] as const) {
+    test(`root ${fault} remains fenced`, async () => {
+        const mounted = await mount(2, 'protenix_v2_ensemble', 'global', '', false, (value) => {
+            if (fault === 'foreign-request') value.request_id = 'other-request';
+            else value.records[0].payload!.source_snapshot_sha256 = 'not-a-hash';
+        });
+        assert.match(text(mounted.renderer.root), /Canonical result validation failed closed/);
+        assert.equal(mounted.renderer.root.findAllByProps({ 'data-workbench': 'stub' }).length, 0);
+        await act(async () => mounted.renderer.unmount());
+        mounted.client.clear();
+    });
+}
+
+test('evidence paging replaces bounded rows, resets identity, and fences late/foreign/error pages', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+    const artifact = { artifact_id: 'support-artifact', owner_kind: 'conformational_mapping', owner_id: 'request', role: 'support', schema_id: 'cm_support', schema_version: 1, content_sha256: sha('b'), size_bytes: 10000, row_count: 205, relative_path: 'support.json', media_type: 'application/json' };
+    const record = { type: 'support', key: 'first', sha256: sha('a'), artifact };
+    const calls: Array<[string, string, number, number]> = [];
+    let release: (() => void) | undefined;
+    let hold = false;
+    let fault = '';
+    const getPage = async (requestId: string, type: string, key: string, collection: string, offset = 0, limit = 100) => {
+        calls.push([requestId, key, offset, limit]);
+        if (hold) await new Promise<void>((resolve) => { release = resolve; });
+        if (fault === 'error') throw new Error('Evidence storage unavailable');
+        const total = key === 'empty' ? 0 : 205;
+        return { request_id: fault === 'foreign' ? 'foreign' : requestId, record_type: type, record_key: key, sha256: record.sha256,
+            artifact: fault === 'artifact' ? { ...artifact, content_sha256: sha('c') } : artifact,
+            collection, key: collection, offset: fault === 'offset' ? offset + 1 : offset, limit, total_count: total,
+            next_offset: offset + limit < total ? offset + limit : null,
+            rows: Array.from({ length: Math.min(limit, Math.max(0, total - offset)) }, (_, index) => ({ identity: `${key}-row-${offset + index}`, score: null })),
+        } as never;
+    };
+    const view = (requestId = 'request', key = 'first') => <QueryClientProvider client={client}><CmEvidencePage requestId={requestId} record={{ ...record, key }} collection="records" label="Support evidence" getPage={getPage} /></QueryClientProvider>;
+    let renderer: ReactTestRenderer;
+    await act(async () => { renderer = create(view()); });
+    await flush();
+    const click = async (label: string) => {
+        await act(async () => renderer.root.findAllByType('button').find((node) => text(node) === label)!.props.onClick());
+        await flush();
+    };
+    assert.match(text(renderer!.root), /100 loaded · 205 total · rows 1–100/);
+    await click('Next page');
+    assert.match(text(renderer!.root), /rows 101–200/);
+    assert.equal(renderer!.root.findAllByType('td').some((node) => text(node) === 'first-row-0'), false);
+    await click('Next page');
+    assert.match(text(renderer!.root), /5 loaded · 205 total · rows 201–205/);
+    assert.equal(renderer!.root.findAllByType('button').find((node) => text(node) === 'Next page')!.props.disabled, true);
+    await click('Previous page');
+    assert.match(text(renderer!.root), /rows 101–200/);
+    hold = true;
+    await act(async () => { renderer!.update(view('request', 'delayed')); });
+    await flush();
+    hold = false;
+    await act(async () => { renderer!.update(view('new-request', 'second')); });
+    await flush();
+    assert.match(text(renderer!.root), /rows 1–100/);
+    await act(async () => release!());
+    await flush();
+    assert.doesNotMatch(text(renderer!.root), /delayed-row/);
+    assert.match(text(renderer!.root), /second-row-0/);
+    await act(async () => { renderer!.update(view('new-request', 'empty')); });
+    await flush();
+    assert.match(text(renderer!.root), /0 loaded · 0 total/);
+    assert.match(text(renderer!.root), /No records in this collection/);
+    for (const mode of ['foreign', 'artifact', 'offset', 'error']) {
+        fault = mode;
+        await act(async () => { renderer!.update(view('new-request', mode)); });
+        await flush();
+        assert.equal(renderer!.root.findAllByProps({ role: 'alert' }).length, 1);
+        assert.equal(renderer!.root.findAllByType('tbody').length, 0);
+    }
+    assert.ok(calls.every((call) => call[3] === 100));
+    assert.ok(calls.some((call) => call[2] === 200));
+    assert.deepEqual(calls.find((call) => call[1] === 'second'), ['new-request', 'second', 0, 100]);
+    await act(async () => renderer!.unmount());
+    client.clear();
+});
 
 test('mounted viewer manages governed alternative overlays across candidate cardinalities', async () => {
     const two = await mount(2);
