@@ -220,6 +220,9 @@ async def test_bioxp_capabilities_reports_robot_local_route_parity(monkeypatch: 
     assert response['truth_source'] == 'robot_local_oem_compat_layer'
     assert response['bms_role'] == 'thin_operator_surface'
     assert response['bms_proxy_routes']['/oem-compat/capabilities/test-prep'] is True
+    assert response['bms_proxy_routes']['/oem/startup/status/latest'] is True
+    assert response['bms_proxy_routes']['/oem/runtime/status'] is True
+    assert response['bms_proxy_routes']['/motion/range/status'] is True
     assert response['bms_proxy_routes']['/liquid/status'] is True
     assert response['bms_proxy_routes']['/motion/reference/status'] is True
     assert response['bms_proxy_routes']['/motion/axes/current'] is True
@@ -227,6 +230,11 @@ async def test_bioxp_capabilities_reports_robot_local_route_parity(monkeypatch: 
     assert response['bms_proxy_routes']['/vision/inspect'] is True
     assert response['robot_local_expected_routes']['/liquid/aspirate'] is True
     assert response['robot_local_expected_routes']['/motion/axes/current'] is True
+    assert response['default_operator_routes']['/oem/runtime/status'] is True
+    assert '/motion/axis/relative' not in response['default_operator_routes']
+    assert response['commissioning_only_routes']['/motion/axis/relative'] is True
+    assert response['disabled_routes']['/daemon/start'] is True
+    assert any('disabled by design' in note for note in response['notes'])
 
 
 @pytest.mark.asyncio
@@ -308,3 +316,49 @@ async def test_motion_reference_camera_and_vision_routes_proxy_to_robot_runtime(
         ('POST', '/vision/inspect', {'axes': ['x'], 'reason': 'operator_verified'}, None, 45.0),
         ('POST', '/vision/barcode/read', {'axes': ['x'], 'reason': 'operator_verified'}, None, 45.0),
     ]
+
+@pytest.mark.asyncio
+async def test_oem_startup_runtime_and_range_routes_proxy_to_robot_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, str, dict | None, dict | None, float]] = []
+
+    async def fake_proxy_request(method: str, path: str, json_data=None, params=None, timeout: float = 65.0):
+        calls.append((method, path, json_data, params, timeout))
+        return {'ok': True, 'path': path, 'params': params}
+
+    class RequestStub:
+        async def json(self):
+            return {'operator': 'bms-test', 'dry_run': True}
+
+    monkeypatch.setattr(bioxp, 'proxy_request', fake_proxy_request)
+
+    assert await bioxp.oem_initial_check(RequestStub()) == {'ok': True, 'path': '/oem/initial_check', 'params': None}
+    assert await bioxp.oem_startup_request(RequestStub()) == {'ok': True, 'path': '/oem/startup/request', 'params': None}
+    assert await bioxp.oem_startup_status_latest() == {'ok': True, 'path': '/oem/startup/status/latest', 'params': None}
+    assert await bioxp.oem_startup_status('session-1') == {'ok': True, 'path': '/oem/startup/status/session-1', 'params': None}
+    assert await bioxp.oem_runtime_status() == {'ok': True, 'path': '/oem/runtime/status', 'params': None}
+    assert await bioxp.oem_runtime_state() == {'ok': True, 'path': '/oem/runtime/state', 'params': None}
+    assert await bioxp.oem_runtime_worker_status() == {'ok': True, 'path': '/oem/runtime/worker/status', 'params': None}
+    assert await bioxp.oem_runtime_command('initializeSystem', RequestStub()) == {'ok': True, 'path': '/oem/runtime/commands/initializeSystem', 'params': None}
+    assert await bioxp.oem_runtime_command_history(limit=7) == {'ok': True, 'path': '/oem/runtime/commands/history', 'params': {'limit': 7}}
+    assert await bioxp.oem_motion_worker_status() == {'ok': True, 'path': '/oem/motion_worker/status', 'params': None}
+    assert await bioxp.motion_oem_startup_step(RequestStub()) == {'ok': True, 'path': '/motion/oem/startup_step', 'params': None}
+    assert await bioxp.motion_range_status() == {'ok': True, 'path': '/motion/range/status', 'params': None}
+
+    assert calls == [
+        ('POST', '/oem/initial_check', {'operator': 'bms-test', 'dry_run': True}, None, 90.0),
+        ('POST', '/oem/startup/request', {'operator': 'bms-test', 'dry_run': True}, None, 190.0),
+        ('GET', '/oem/startup/status/latest', None, None, 30.0),
+        ('GET', '/oem/startup/status/session-1', None, None, 30.0),
+        ('GET', '/oem/runtime/status', None, None, 30.0),
+        ('GET', '/oem/runtime/state', None, None, 30.0),
+        ('GET', '/oem/runtime/worker/status', None, None, 30.0),
+        ('POST', '/oem/runtime/commands/initializeSystem', {'operator': 'bms-test', 'dry_run': True}, None, 90.0),
+        ('GET', '/oem/runtime/commands/history', None, {'limit': 7}, 30.0),
+        ('GET', '/oem/motion_worker/status', None, None, 30.0),
+        ('POST', '/motion/oem/startup_step', {'operator': 'bms-test', 'dry_run': True}, None, 90.0),
+        ('GET', '/motion/range/status', None, None, 30.0),
+    ]
+
+    with pytest.raises(HTTPException) as exc_info:
+        await bioxp.oem_runtime_command('rawUnsupportedCommand', RequestStub())
+    assert exc_info.value.status_code == 404

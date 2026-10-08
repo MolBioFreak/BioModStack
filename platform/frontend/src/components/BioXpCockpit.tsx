@@ -44,9 +44,13 @@ import {
     useMotionPowerDiag,
     useMotionPowerEnable,
     useMotionPowerStatus,
+    useMotionRangeStatus,
     useMotionReferenceStatus,
     useMoveAbsolute,
     useMoveRelative,
+    useOemRuntimeState,
+    useOemRuntimeStatus,
+    useOemStartupLatest,
     usePrepareInterlock,
     useReconnectRuntime,
     useRuntimeStatus,
@@ -1360,6 +1364,7 @@ export const BioXpCockpit = () => {
     const [latestLiquidAction, setLatestLiquidAction] = useState<{ action: string; data: any } | null>(null);
     const [latestReferenceAction, setLatestReferenceAction] = useState<{ action: string; data: any } | null>(null);
     const [latestVisionAction, setLatestVisionAction] = useState<{ action: string; data: any } | null>(null);
+    const [showCommissioningControls, setShowCommissioningControls] = useState(false);
     const cameraViewerRef = useRef<HTMLDivElement | null>(null);
 
     const hardwareMutationCount = useIsMutating({
@@ -1411,6 +1416,10 @@ export const BioXpCockpit = () => {
     const motionReferenceStatus = useMotionReferenceStatus(controlsPollingEnabled, ['x', 'y', 'z', 'g', 'door'], motionBusy ? false : 5000);
     const markMotionReferenced = useMarkMotionReferenced();
     const markMotionDesynced = useMarkMotionDesynced();
+    const oemStartupLatest = useOemStartupLatest(controlsPollingEnabled, motionBusy ? false : 5000);
+    const oemRuntimeStatus = useOemRuntimeStatus(controlsPollingEnabled, motionBusy ? false : 5000);
+    const oemRuntimeState = useOemRuntimeState(controlsPollingEnabled, motionBusy ? false : 5000);
+    const motionRangeStatus = useMotionRangeStatus(controlsPollingEnabled, motionBusy ? false : 5000);
     const liquidStatus = useLiquidStatus(controlsPollingEnabled, motionBusy ? false : 5000);
     const liquidInit = useLiquidInit();
     const liquidTip = useLiquidTip();
@@ -1821,8 +1830,8 @@ export const BioXpCockpit = () => {
 
     const liquidPanel = (
         <SectionCard
-            title="Liquid Handler"
-            subtitle="CAN pipette surface with explicit software-vs-hardware truth. Use at the physical console only until live validation is complete."
+            title="Liquid Readback"
+            subtitle="OEM-backed liquid status stays visible by default; direct pipette commands are commissioning-only until live validation clears them."
         >
             <div className="flex items-center gap-3 flex-wrap">
                 <div className={`px-3 py-1.5 rounded-sm text-xs font-mono font-semibold border ${liquidStatus.data?.available ? 'bg-success/10 text-success border-success/30' : 'bg-warning/10 text-warning border-warning/30'}`}>
@@ -1832,38 +1841,62 @@ export const BioXpCockpit = () => {
                     init {String(liquidStatus.data?.initialized ?? liquidStatus.data?.software_initialized ?? false)} | tip {String(liquidStatus.data?.tip_loaded ?? liquidStatus.data?.software_tip_loaded ?? false)}
                 </div>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                <label className="text-xs text-content-muted space-y-1">
-                    <span>Volume uL</span>
-                    <input type="number" min={0.1} step={0.1} value={liquidVolumeUl} onChange={(e) => setLiquidVolumeUl(Number(e.target.value))} className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm" />
-                </label>
-                <label className="text-xs text-content-muted space-y-1">
-                    <span>Cycles</span>
-                    <input type="number" min={1} max={20} value={liquidCycles} onChange={(e) => setLiquidCycles(Number(e.target.value))} className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm" />
-                </label>
-                <label className="text-xs text-content-muted space-y-1">
-                    <span>Pressure</span>
-                    <input value={liquidPressureProfile} onChange={(e) => setLiquidPressureProfile(e.target.value)} className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm font-mono" />
-                </label>
-                <label className="text-xs text-content-muted space-y-1">
-                    <span>Source</span>
-                    <input value={liquidSource} onChange={(e) => setLiquidSource(e.target.value)} className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm font-mono" />
-                </label>
-                <label className="text-xs text-content-muted space-y-1 md:col-span-2">
-                    <span>Destination</span>
-                    <input value={liquidDestination} onChange={(e) => setLiquidDestination(e.target.value)} className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm font-mono" />
-                </label>
-            </div>
-            <div className="flex flex-wrap gap-2">
-                <button onClick={() => liquidInit.mutate({}, { onSuccess: (data) => recordLiquidAction('init', data), onError: (error) => recordLiquidError('init', error) })} disabled={!isConnected || liquidInit.isPending} className="px-3 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors disabled:opacity-40">{liquidInit.isPending ? 'INIT...' : 'Init'}</button>
-                <button onClick={() => liquidTip.mutate({ tip_action: 'load' }, { onSuccess: (data) => recordLiquidAction('load_tip', data), onError: (error) => recordLiquidError('load_tip', error) })} disabled={!isConnected || liquidTip.isPending} className="px-3 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors disabled:opacity-40">Load Tip</button>
-                <button onClick={() => liquidTip.mutate({ tip_action: 'eject' }, { onSuccess: (data) => recordLiquidAction('eject_tip', data), onError: (error) => recordLiquidError('eject_tip', error) })} disabled={!isConnected || liquidTip.isPending} className="px-3 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40">Eject Tip</button>
-                <button onClick={() => liquidAspirate.mutate(liquidCommandPayload(), { onSuccess: (data) => recordLiquidAction('aspirate', data), onError: (error) => recordLiquidError('aspirate', error) })} disabled={!isConnected || liquidAspirate.isPending} className="px-3 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors disabled:opacity-40">Aspirate</button>
-                <button onClick={() => liquidDispense.mutate(liquidCommandPayload(), { onSuccess: (data) => recordLiquidAction('dispense', data), onError: (error) => recordLiquidError('dispense', error) })} disabled={!isConnected || liquidDispense.isPending} className="px-3 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors disabled:opacity-40">Dispense</button>
-                <button onClick={() => liquidMix.mutate(liquidCommandPayload(), { onSuccess: (data) => recordLiquidAction('mix', data), onError: (error) => recordLiquidError('mix', error) })} disabled={!isConnected || liquidMix.isPending} className="px-3 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40">Mix</button>
-            </div>
+            {showCommissioningControls && (
+                <div className="space-y-3 border border-warning/20 rounded-lg p-3 bg-warning/5">
+                    <div className="text-[11px] font-semibold text-warning uppercase tracking-[0.14em]">Commissioning liquid commands</div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                        <label className="text-xs text-content-muted space-y-1">
+                            <span>Volume uL</span>
+                            <input type="number" min={0.1} step={0.1} value={liquidVolumeUl} onChange={(e) => setLiquidVolumeUl(Number(e.target.value))} className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm" />
+                        </label>
+                        <label className="text-xs text-content-muted space-y-1">
+                            <span>Cycles</span>
+                            <input type="number" min={1} max={20} value={liquidCycles} onChange={(e) => setLiquidCycles(Number(e.target.value))} className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm" />
+                        </label>
+                        <label className="text-xs text-content-muted space-y-1">
+                            <span>Pressure</span>
+                            <input value={liquidPressureProfile} onChange={(e) => setLiquidPressureProfile(e.target.value)} className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm font-mono" />
+                        </label>
+                        <label className="text-xs text-content-muted space-y-1">
+                            <span>Source</span>
+                            <input value={liquidSource} onChange={(e) => setLiquidSource(e.target.value)} className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm font-mono" />
+                        </label>
+                        <label className="text-xs text-content-muted space-y-1 md:col-span-2">
+                            <span>Destination</span>
+                            <input value={liquidDestination} onChange={(e) => setLiquidDestination(e.target.value)} className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm font-mono" />
+                        </label>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                        <button onClick={() => liquidInit.mutate({}, { onSuccess: (data) => recordLiquidAction('init', data), onError: (error) => recordLiquidError('init', error) })} disabled={!isConnected || liquidInit.isPending} className="px-3 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors disabled:opacity-40">{liquidInit.isPending ? 'INIT...' : 'Init'}</button>
+                        <button onClick={() => liquidTip.mutate({ tip_action: 'load' }, { onSuccess: (data) => recordLiquidAction('load_tip', data), onError: (error) => recordLiquidError('load_tip', error) })} disabled={!isConnected || liquidTip.isPending} className="px-3 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors disabled:opacity-40">Load Tip</button>
+                        <button onClick={() => liquidTip.mutate({ tip_action: 'eject' }, { onSuccess: (data) => recordLiquidAction('eject_tip', data), onError: (error) => recordLiquidError('eject_tip', error) })} disabled={!isConnected || liquidTip.isPending} className="px-3 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40">Eject Tip</button>
+                        <button onClick={() => liquidAspirate.mutate(liquidCommandPayload(), { onSuccess: (data) => recordLiquidAction('aspirate', data), onError: (error) => recordLiquidError('aspirate', error) })} disabled={!isConnected || liquidAspirate.isPending} className="px-3 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors disabled:opacity-40">Aspirate</button>
+                        <button onClick={() => liquidDispense.mutate(liquidCommandPayload(), { onSuccess: (data) => recordLiquidAction('dispense', data), onError: (error) => recordLiquidError('dispense', error) })} disabled={!isConnected || liquidDispense.isPending} className="px-3 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors disabled:opacity-40">Dispense</button>
+                        <button onClick={() => liquidMix.mutate(liquidCommandPayload(), { onSuccess: (data) => recordLiquidAction('mix', data), onError: (error) => recordLiquidError('mix', error) })} disabled={!isConnected || liquidMix.isPending} className="px-3 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40">Mix</button>
+                    </div>
+                </div>
+            )}
             {liquidActionError && <div className="text-xs text-error">{liquidActionError}</div>}
             <JsonBlock title="Liquid Snapshot / Last Command" data={latestLiquidAction?.data ?? liquidStatus.data} fallback="Liquid status pending." />
+        </SectionCard>
+    );
+
+    const oemReadbackPanel = (
+        <SectionCard
+            title="OEM Runtime / Motion Readback"
+            subtitle="Default operator surface: startup/runtime state, worker state, and range/switch readback before any live motion."
+        >
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                <JsonBlock title="Startup Latest" data={oemStartupLatest.data} fallback="Startup status pending." />
+                <JsonBlock title="Runtime Status" data={oemRuntimeStatus.data} fallback="OEM runtime status pending." />
+                <JsonBlock title="Runtime State" data={oemRuntimeState.data} fallback="OEM runtime state pending." />
+                <JsonBlock title="Motion Range / Switches" data={motionRangeStatus.data} fallback="Range readback pending." />
+            </div>
+            {(oemStartupLatest.isError || oemRuntimeStatus.isError || oemRuntimeState.isError || motionRangeStatus.isError) && (
+                <div className="text-xs text-error">
+                    {getErrorMessage(oemStartupLatest.error) || getErrorMessage(oemRuntimeStatus.error) || getErrorMessage(oemRuntimeState.error) || getErrorMessage(motionRangeStatus.error)}
+                </div>
+            )}
         </SectionCard>
     );
 
@@ -2259,7 +2292,7 @@ export const BioXpCockpit = () => {
                 {([
                     { key: 'connection', label: 'Linkage & Status' },
                     { key: 'operator', label: 'Protocol Operator' },
-                    { key: 'controls', label: 'Motion, Latch & Thermals' },
+                    { key: 'controls', label: 'OEM Controls & Thermals' },
                     { key: 'camera', label: 'Camera Feed' },
                 ] as const).map((tab) => (
                     <button
@@ -2500,24 +2533,36 @@ export const BioXpCockpit = () => {
                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                         <div className="space-y-6">
                             {motionPowerPanel}
+                            {oemReadbackPanel}
                             {referencePanel}
                             {liquidPanel}
                             {visionPanel}
                             <SectionCard
-                                title="Motion Control System"
-                                subtitle="All five documented BioXP axes are now surfaced, including the gripper and thermal door."
+                                title="Commissioning Tools"
+                                subtitle="Raw axis and direct pipette controls are removed from the default operator path. Open only for supervised bring-up at the instrument."
                             >
-                                <div className="text-[11px] font-mono text-content-muted">
-                                    Safety profile: speed 100, acc 50, abort if speed is nonzero with no position delta for 2s.
-                                    {motionBusy ? ' Background polling is paused while a motion command is in flight.' : null}
-                                </div>
-                                <div className="space-y-4">
-                                    <AxisControls axis="x" label="Gantry X" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
-                                    <AxisControls axis="y" label="Gantry Y" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
-                                    <AxisControls axis="z" label="Pipette Z" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
-                                    <AxisControls axis="g" label="Gripper" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
-                                    <AxisControls axis="door" label="Thermal Door" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
-                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowCommissioningControls((value) => !value)}
+                                    className="px-3 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors"
+                                >
+                                    {showCommissioningControls ? 'Hide Commissioning Controls' : 'Show Commissioning Controls'}
+                                </button>
+                                {showCommissioningControls ? (
+                                    <div className="space-y-4 border border-warning/20 rounded-lg p-3 bg-warning/5">
+                                        <div className="text-[11px] font-mono text-content-muted">
+                                            Safety profile: speed 100, acc 50, abort if speed is nonzero with no position delta for 2s.
+                                            {motionBusy ? ' Background polling is paused while a motion command is in flight.' : null}
+                                        </div>
+                                        <AxisControls axis="x" label="Gantry X" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
+                                        <AxisControls axis="y" label="Gantry Y" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
+                                        <AxisControls axis="z" label="Pipette Z" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
+                                        <AxisControls axis="g" label="Gripper" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
+                                        <AxisControls axis="door" label="Thermal Door" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
+                                    </div>
+                                ) : (
+                                    <div className="text-xs text-content-muted">Default live testing should use OEM startup/runtime/readback plus protocol execution. Thermal Door remains available as readback and thermal-system context; direct door motion is commissioning-only.</div>
+                                )}
                             </SectionCard>
                         </div>
 

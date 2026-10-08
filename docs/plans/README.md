@@ -16,6 +16,8 @@ These files are still useful as current rollout, guardrail, or follow-on impleme
 - [Caliby finishing changes specification](2026-04-27-caliby-finishing-changes-spec.md)
 - [GPU MMseqs EnvDB fix implementation plan](2026-04-27-gpu-mmseqs-envdb-fix-spec.md)
 - [UI surface channel cutover implementation spec](2026-04-28-ui-surface-channel-cutover-spec.md)
+- [BioXP OEM control-surface replacement implementation plan](2026-05-04-bioxp-oem-control-surface-replacement-spec.md)
+- [BioXP current-control removal and OEM integration path](2026-05-04-bioxp-current-control-removal-and-oem-integration-path.md)
 
 ## Archived plans and historical specs
 
