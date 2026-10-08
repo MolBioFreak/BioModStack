@@ -939,7 +939,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
         const ordered = Object.entries(chainMetrics)
             .filter(([, metric]) => metric.type !== 'ligand')
             .sort(([leftId, leftMetric], [rightId, rightMetric]) => {
-                const order = { protein: 0, dna: 1, rna: 2, ligand: 3 };
+                const order: Record<string, number> = { protein: 0, dna: 1, rna: 2, ligand: 3 };
                 return (order[leftMetric.type] ?? 4) - (order[rightMetric.type] ?? 4) || leftId.localeCompare(rightId);
             });
 
@@ -1517,7 +1517,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
                             data={Object.entries(chainMetrics || {})
                                 .filter(([, metric]) => metric.type !== 'ligand')
                                 .sort(([leftId, leftMetric], [rightId, rightMetric]) => {
-                                    const order = { protein: 0, dna: 1, rna: 2, ligand: 3 };
+                                    const order: Record<string, number> = { protein: 0, dna: 1, rna: 2, ligand: 3 };
                                     return (order[leftMetric.type] ?? 4) - (order[rightMetric.type] ?? 4) || leftId.localeCompare(rightId);
                                 })
                                 .map(([chainId, metric], index) => ({
