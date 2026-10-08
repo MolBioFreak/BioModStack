@@ -55,6 +55,40 @@ runtime boundary is:
 
 This is the current production stance for BioModStack container mode.
 
+### Container runtime robustness
+
+The container runtime is robust enough to be the default control-plane/runtime
+shape, but it is intentionally bounded. The stable pieces are:
+
+- `bms-api`, `bms-web`, and the CPU-power helper are managed through
+  `compose.core-runtime.yml`
+- API health checks hit `/api/health`; web health checks hit `/bms/`
+- startup readiness uses a container-mode wait budget rather than a short dev
+  process timeout, which avoids false failures on first image builds/recreates
+- the service manager recognizes the active Compose-backed containers by labels
+  before cleaning up legacy dev listeners on the same ports
+- `BMS_CORE_RUNTIME_MODE=1` guards the API/web container from directly owning
+  workflow launches; workflow launch/cancel/running-job calls are either
+  forwarded to `BMS_WORKFLOW_ADAPTER_URL` or rejected clearly
+- mounted state/cache roots are injected for database, inputs, weights,
+  ColabFold DB, MSA cache, and SAbDab cache paths so the API does not silently
+  create home-directory fallback stores inside a recreated container
+
+The bounded pieces are just as important:
+
+- this is not full end-to-end workflow containerization; Nextflow/Apptainer
+  execution remains host-native through the workflow adapter
+- GPU and workstation hardware telemetry can degrade if the container cannot see
+  the host NVIDIA/tooling stack; host-native adapter/proxy surfaces remain the
+  safer ownership boundary for workstation hardware
+- BioXP is a local hardware integration, not a generic core-runtime dependency;
+  the dashboard should degrade when linkage is absent rather than fail startup
+
+A general Linux host should be able to start the core dashboard/API/web stack and
+show explicit degraded capability messages. It should not be expected to run the
+full scientific workflow catalog until the host-side assets and adapters are
+installed.
+
 ## Default runtime and launch rules
 
 Runtime selection resolves in this order:

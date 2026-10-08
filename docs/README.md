@@ -61,16 +61,24 @@ The canonical docs set now covers:
 - structure design, validation, refinement, and experimental workflow families
 - mol bio construct editing and sequence operations
 - nanopore/NGS launch and review surfaces
-- BioXP robotics linkage and the current cockpit/proxy surface rather than a
-  full mirror of every robot-local endpoint
+- BioXP robotics linkage and the current curated cockpit/proxy surface rather
+  than a promise that every robot-local endpoint is mirrored
 - results, lineage, analytics, and persisted runtime-path management
 
 For BioXP, the canonical docs intentionally distinguish between the current BMS
-cockpit surface and the broader robot-local runtime. Reference-state,
-liquid-handling, and some recovery semantics still live more completely on the
-robot runtime than in the BMS proxy today, and current reliability language
-should be read as unresolved transport/recovery instability rather than a
-blanket hardware-failure verdict.
+cockpit/proxy surface and the broader robot-local runtime. BMS now proxies core
+cockpit families such as reference-state, liquid handling, motion/power,
+latch/LED, thermal/chiller, camera, vision, and protocol routes when linkage is
+configured, but route parity must still be verified before documenting a new
+robot capability as BMS-supported. Current reliability language should be read
+as unresolved transport/recovery instability rather than a blanket
+hardware-failure verdict.
+
+For the core runtime, the canonical docs distinguish dashboard/control-plane
+robustness from full scientific workflow readiness. A general Linux host should
+be able to bring up API/web and show degraded capability states; full workflow
+readiness still requires host-side Nextflow, Apptainer, GPU/tooling, model, and
+reference-cache setup.
 
 Older build/implementation planning docs that no longer belong on the repo-facing
 surface should be pruned instead of left beside the canonical docs as passive

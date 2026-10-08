@@ -35,7 +35,12 @@ The live workstation/runtime model is:
 - optional Android thin-shell/update compatibility around the hosted `/bms/` UI
 
 That means container mode is real for the control plane and hosted web UI, but
-workflow execution still remains host-native through the workflow adapter.
+workflow execution still remains host-native through the workflow adapter. On a
+general Linux host, the expected baseline is dashboard/API/web availability with
+clear degraded-capability messages for missing workflow assets, GPU hardware,
+BioXP linkage, or adapter services. Full workflow readiness requires the
+host-native scientific runtime stack in addition to a healthy core container
+runtime.
 
 ## Frontend surfaces
 
