@@ -55,8 +55,10 @@ class DesignResponse(BaseModel):
     # Prediction metrics
     plddt_overall: Optional[float]
     plddt_binder: Optional[float]
+    plddt_target: Optional[float]
     pae_interaction: Optional[float]
     pae_overall: Optional[float]
+    rmsd_overall: Optional[float]
     rmsd_binder: Optional[float]
     
     # Boltz-2 specific
@@ -113,6 +115,11 @@ class DesignResponse(BaseModel):
     frustration_pct_high: Optional[float] = None
     frustration_residues: Optional[List[dict]] = None  # [{pos, chain, frust, frustClass}]
     frustration_csv_path: Optional[str] = None
+    
+    # PPIFlow Maturation
+    maturation_delta_interface: Optional[float] = None
+    maturation_interface_score: Optional[float] = None
+    maturation_rmsd: Optional[float] = None
     
     created_at: datetime
     
@@ -194,9 +201,12 @@ def _build_plotly_metrics(design: Design) -> Dict[str, float]:
     base_metrics = {
         "plddt_overall": design.plddt_overall,
         "plddt_binder": design.plddt_binder,
+        "plddt_target": design.plddt_target,
         "pae_interaction": design.pae_interaction,
         "pae_overall": design.pae_overall,
+        "rmsd_overall": design.rmsd_overall,
         "rmsd_binder": design.rmsd_binder,
+        "fampnn_psce": design.fampnn_psce,
         "conf_score": design.conf_score,
         "ptm": design.ptm,
         "iptm": design.iptm,
@@ -216,6 +226,10 @@ def _build_plotly_metrics(design: Design) -> Dict[str, float]:
         "cdr_h3_length": design.cdr_h3_length,
         "binder_length": design.binder_length,
         "epitope_contact_count": design.epitope_contact_count,
+        "epitope_min_distance": design.epitope_min_distance,
+        "maturation_delta_interface": design.maturation_delta_interface,
+        "maturation_interface_score": design.maturation_interface_score,
+        "maturation_rmsd": design.maturation_rmsd,
     }
     for key, value in base_metrics.items():
         _inject_metric(metrics, key, value)

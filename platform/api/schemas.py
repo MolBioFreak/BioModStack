@@ -67,7 +67,7 @@ class JobResponse(BaseModel):
     model_id: str
     mode: str
     params: dict
-    created_at: datetime
+    created_at: Optional[datetime] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     output_dir: Optional[str] = None

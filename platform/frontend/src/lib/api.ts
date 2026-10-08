@@ -317,12 +317,15 @@ export interface Design {
     rog: number | null;
     rfd_rog: number | null;
     mpnn_score: number | null;
+    fampnn_psce: number | null;
     plddt_overall: number | null;
     plddt_binder: number | null;
+    plddt_target: number | null;
     pae_overall: number | null;
     pae_interaction: number | null;
     ptm: number | null;
     conf_score: number | null;
+    rmsd_overall: number | null;
     rmsd_binder: number | null;
     ligand_iptm: number | null;
     affinity_score: number | null;
@@ -353,6 +356,10 @@ export interface Design {
     frustration_pct_high: number | null;
     frustration_residues: Array<{ pos: number; chain: string; frust: number; frustClass: string }> | null;
     frustration_csv_path: string | null;
+    // PPIFlow maturation metrics
+    maturation_delta_interface: number | null;
+    maturation_interface_score: number | null;
+    maturation_rmsd: number | null;
     is_favorite: boolean;
     notes: string | null;
     created_at: string;
