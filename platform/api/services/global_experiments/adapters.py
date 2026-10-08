@@ -496,12 +496,16 @@ class CoreProteinResultAdapter:
             canonical_root=artifact_root,
         )
         content_digest = _sha256(authoritative.get("sha256"), "design result digest")
+        reopen_query = {"design_id": design.id}
+        producing_model = design.provenance.get("model_id") if isinstance(design.provenance, dict) else None
+        if isinstance(producing_model, str) and producing_model.strip():
+            reopen_query["result_model"] = producing_model.strip().lower()
         return _receipt(
             self,
             entity_id=design.id,
             content_digest=content_digest,
             contract_digest=_canonical_json_sha256(manifest),
-            reopen_uri=f"/designs/{job.id}",
+            reopen_uri=f"/designs/{job.id}?{urlencode(reopen_query)}",
             metadata={
                 "canonical_state": str(job.status),
                 "job_status": str(job.status),

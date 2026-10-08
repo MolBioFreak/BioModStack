@@ -62,21 +62,33 @@ def _metadata_payload(payload: dict[str, Any]) -> dict[str, Any]:
 def _reopen_route(payload: dict[str, Any]) -> dict[str, Any]:
     route = payload.get("reopen_route")
     if isinstance(route, dict):
-        return route
-    uri = payload.get("reopen_uri")
-    if not isinstance(uri, str):
-        raise ValidationFailure("stored verification acknowledgement has no safe reopen route")
-    parsed = urlsplit(uri)
-    if parsed.scheme or parsed.netloc or not parsed.path.startswith("/") or parsed.path.startswith("//"):
-        raise ValidationFailure("stored verification acknowledgement has no safe reopen route")
-    query_items = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True)
-    if len(query_items) != len({key for key, _value in query_items}):
-        raise ValidationFailure("stored verification acknowledgement reopen route has duplicate query keys")
-    return {
-        "template_id": "bms.route.verified-external-entity.v1",
-        "path": parsed.path,
-        "query": dict(query_items),
-    }
+        route = {**route, "query": dict(route.get("query") or {})}
+    else:
+        uri = payload.get("reopen_uri")
+        if not isinstance(uri, str):
+            raise ValidationFailure("stored verification acknowledgement has no safe reopen route")
+        parsed = urlsplit(uri)
+        if parsed.scheme or parsed.netloc or not parsed.path.startswith("/") or parsed.path.startswith("//"):
+            raise ValidationFailure("stored verification acknowledgement has no safe reopen route")
+        query_items = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True)
+        if len(query_items) != len({key for key, _value in query_items}):
+            raise ValidationFailure("stored verification acknowledgement reopen route has duplicate query keys")
+        route = {
+            "template_id": "bms.route.verified-external-entity.v1",
+            "path": parsed.path,
+            "query": dict(query_items),
+        }
+    if payload.get("entity_kind") == "design":
+        # Historical receipts already bind this identity; project it without
+        # rewriting immutable acknowledgements or selecting a different row.
+        design_id = payload.get("entity_id")
+        metadata = _metadata_payload(payload)
+        if not isinstance(design_id, str) or metadata.get("design_id", design_id) != design_id:
+            raise ValidationFailure("Design reopen identity does not match its verified receipt")
+        if route["query"].get("design_id", design_id) != design_id:
+            raise ValidationFailure("Design reopen route selects a different candidate")
+        route["query"]["design_id"] = design_id
+    return route
 
 
 def _acknowledgement(receipt: ExperimentExternalEntityReceipt) -> dict[str, Any]:

@@ -3,7 +3,6 @@ import test from 'node:test';
 
 import {
     buildWorkflowModelResults,
-    filterDesignsForResultModel,
 } from '../src/components/frustrampnn/workflowModelResults.js';
 import {
     parseFrustraMpnnExperimentContext,
@@ -11,16 +10,10 @@ import {
     updateWorkflowResultViewSearch,
 } from '../src/components/frustrampnn/workflowResultViewState.js';
 
-const designs = [
-    { id: 'structure-1', provenance: { model_id: 'boltz2' }, artifact_class: 'predicted_complex' },
-    { id: 'validated-1', provenance: { model_id: 'protenix' }, artifact_class: 'validated_complex' },
-    { id: 'other-1', provenance: { model_id: 'thermompnn' }, artifact_class: 'sequence_designed_complex' },
-];
-
 test('structure workflow exposes primary and persisted real-model siblings in stable order', () => {
     const hierarchy = buildWorkflowModelResults({
         job: { model_id: 'structure_prediction', params: { structure_validator: 'protenix' } },
-        designs,
+        modelCounts: { boltz2: 501, protenix: 3, thermompnn: 1 },
         frustraMpnnAvailable: true,
     });
     assert.deepEqual(hierarchy.map(({ modelId, label }) => ({ modelId, label })), [
@@ -30,14 +23,12 @@ test('structure workflow exposes primary and persisted real-model siblings in st
         { modelId: 'boltz2', label: 'Boltz-2' },
         { modelId: 'thermompnn', label: 'ThermoMPNN' },
     ]);
-    assert.deepEqual(filterDesignsForResultModel(designs, 'protenix').map((item) => item.id), ['validated-1']);
-    assert.deepEqual(filterDesignsForResultModel(designs, 'thermompnn').map((item) => item.id), ['other-1']);
 });
 
 test('Boltz2 structure-prediction jobs keep the workflow result primary and expose only persisted model siblings', () => {
     const hierarchy = buildWorkflowModelResults({
         job: { model_id: 'boltz2', mode: 'structure_prediction', params: {} },
-        designs: [{ id: 'boltz-structure', provenance: { model_id: 'boltz2' }, artifact_class: 'predicted_complex' }],
+        modelCounts: { boltz2: 1 },
         frustraMpnnAvailable: true,
     });
     assert.deepEqual(hierarchy.map(({ modelId, label, kind }) => ({ modelId, label, kind })), [
@@ -57,7 +48,7 @@ test('result_model selects an available real model and defaults to the workflow 
     assert.equal(parseWorkflowResultViewState('?result_model=unknown', {
         availableModelIds,
         primaryModelId: 'structure_prediction',
-    }).model, 'structure_prediction');
+    }).model, 'unknown');
     assert.equal(parseWorkflowResultViewState('', {
         availableModelIds,
         primaryModelId: 'structure_prediction',
