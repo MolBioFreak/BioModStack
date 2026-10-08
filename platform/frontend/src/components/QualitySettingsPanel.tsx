@@ -14,6 +14,9 @@ export interface QualitySettings {
     boltz_use_potentials: boolean;
     boltz_use_msa: boolean;
     boltz_step_scale: number | null;
+    // Boltz-2 affinity prediction (quality feature)
+    boltz_predict_affinity: boolean;
+    boltz_diffusion_samples_affinity: number;
 
     // FAMPNN settings (sequence design)
     fampnn_temperature: number;
@@ -56,8 +59,10 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         boltz_recycling_steps: 1,
         boltz_num_samples: 1,
         boltz_use_potentials: false,
-        boltz_use_msa: false,
+        boltz_use_msa: true,
         boltz_step_scale: null,
+        boltz_predict_affinity: false,
+        boltz_diffusion_samples_affinity: 5,
         // FAMPNN
         fampnn_temperature: 0.2,
         fampnn_num_steps: 50,
@@ -92,8 +97,10 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         boltz_recycling_steps: 3,
         boltz_num_samples: 1,
         boltz_use_potentials: false,
-        boltz_use_msa: false,
+        boltz_use_msa: true,
         boltz_step_scale: null,
+        boltz_predict_affinity: false,
+        boltz_diffusion_samples_affinity: 5,
         // FAMPNN
         fampnn_temperature: 0.1,
         fampnn_num_steps: 100,
@@ -130,6 +137,8 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         boltz_use_potentials: true,
         boltz_use_msa: true,
         boltz_step_scale: null,
+        boltz_predict_affinity: false,
+        boltz_diffusion_samples_affinity: 5,
         // FAMPNN
         fampnn_temperature: 0.01,
         fampnn_num_steps: 200,
@@ -166,6 +175,8 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         boltz_use_potentials: true,
         boltz_use_msa: true,
         boltz_step_scale: null,
+        boltz_predict_affinity: true,
+        boltz_diffusion_samples_affinity: 10,
         // FAMPNN
         fampnn_temperature: 0.0001,
         fampnn_num_steps: 500,
@@ -474,6 +485,18 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                 />
                                 <span className="text-sm text-slate-300">
                                     Use MSA <span className="text-xs text-slate-500">(better accuracy)</span>
+                                </span>
+                            </label>
+
+                            <label className="flex items-center gap-2 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={settings.boltz_predict_affinity}
+                                    onChange={(e) => updateSetting('boltz_predict_affinity', e.target.checked)}
+                                    className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-purple-600 focus:ring-purple-500"
+                                />
+                                <span className="text-sm text-slate-300">
+                                    Predict Affinity <span className="text-xs text-slate-500">(log₁₀ IC50)</span>
                                 </span>
                             </label>
                         </div>

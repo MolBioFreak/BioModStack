@@ -50,6 +50,11 @@ function CPUCard({ cpu, history }: { cpu: CPUStatus; history: number[] }) {
             <div className="flex items-center justify-between mb-3">
                 <span className="text-sm text-slate-400">CPU</span>
                 <div className="flex gap-2">
+                    {cpu.power_watts !== null && (
+                        <span className="px-2 py-1 rounded-full text-xs font-medium bg-orange-500/20 text-orange-400">
+                            {cpu.power_watts.toFixed(0)}W
+                        </span>
+                    )}
                     {cpu.temperature !== null && (
                         <span className={`px-2 py-1 rounded-full text-xs font-medium ${cpu.temperature > 80 ? 'bg-red-500/20 text-red-400' :
                             cpu.temperature > 60 ? 'bg-yellow-500/20 text-yellow-400' :
@@ -1050,9 +1055,15 @@ export function SystemResources() {
                 <div className="flex items-center justify-between mb-4">
                     <h2 className="text-xl font-semibold text-slate-200">GPU Status</h2>
                     {gpus.length > 0 && (
-                        <span className="text-sm text-slate-400">
-                            Total: {gpus.reduce((sum, gpu) => sum + gpu.power_draw_w, 0).toFixed(1)}W / {gpus.reduce((sum, gpu) => sum + (currentLimits[gpu.index] ?? gpu.power_limit_w), 0)}W
-                        </span>
+                        <div className="flex items-center gap-3">
+                            {/* Total System Power (GPU + CPU) */}
+                            <span
+                                className="text-sm text-slate-400 cursor-help"
+                                title={`GPU: ${gpus.reduce((sum, gpu) => sum + gpu.power_draw_w, 0).toFixed(0)}W${cpu?.power_watts ? ` + CPU: ${cpu.power_watts.toFixed(0)}W` : ''}`}
+                            >
+                                Total: {(gpus.reduce((sum, gpu) => sum + gpu.power_draw_w, 0) + (cpu?.power_watts ?? 0)).toFixed(0)}W / {gpus.reduce((sum, gpu) => sum + (currentLimits[gpu.index] ?? gpu.power_limit_w), 0) + 350}W
+                            </span>
+                        </div>
                     )}
                 </div>
 

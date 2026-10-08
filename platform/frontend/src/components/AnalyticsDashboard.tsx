@@ -5,11 +5,11 @@
  * with 2 custom chart builders (2D and 3D) at the bottom.
  */
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
-import type { Data } from 'plotly.js';
-import { fetchChainMetrics } from '../lib/api';
+import type { Data, PlotSelectionEvent, PlotMouseEvent } from 'plotly.js';
+import { fetchChainMetrics, fetchPAEData } from '../lib/api';
 
 interface Design {
     id: string;
@@ -89,15 +89,112 @@ const extractValues = (designs: Design[], key: string): number[] => {
         .filter((v): v is number => v != null && typeof v === 'number');
 };
 
-// Mini chart component wrapper
-function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
+interface ChartCardProps {
+    title: string;
+    hasData?: boolean;
+    isHidden?: boolean;
+    onToggleHidden?: () => void;
+    onToggleExpanded?: () => void;
+    children: React.ReactNode;
+}
+
+function ChartCard({ title, hasData = true, isHidden = false, onToggleHidden, onToggleExpanded, children }: ChartCardProps) {
+    // Eye icon (visible)
+    const EyeIcon = () => (
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+        </svg>
+    );
+
+    // Eye-off icon (hidden)
+    const EyeOffIcon = () => (
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+        </svg>
+    );
+
+    // Expand icon
+    const ExpandIcon = () => (
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+        </svg>
+    );
+
     return (
-        <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
-            <div className="px-3 py-2 bg-slate-800/80 border-b border-slate-700/50">
-                <h3 className="text-sm font-medium text-slate-300">{title}</h3>
+        <div className={`bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden transition-all ${isHidden ? 'opacity-60' : ''} ${!hasData ? 'border-amber-700/30' : ''}`}>
+            <div className="px-3 py-2 bg-slate-800/80 border-b border-slate-700/50 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-medium text-slate-300">{title}</h3>
+                    {!hasData && (
+                        <span className="px-1.5 py-0.5 text-xs bg-amber-900/50 text-amber-400 rounded">No data</span>
+                    )}
+                </div>
+                <div className="flex items-center gap-1">
+                    <button
+                        onClick={onToggleHidden}
+                        className="p-1.5 rounded hover:bg-slate-700/50 text-slate-400 hover:text-slate-200 transition-colors"
+                        title={isHidden ? "Show chart" : "Hide chart"}
+                    >
+                        {isHidden ? <EyeOffIcon /> : <EyeIcon />}
+                    </button>
+                    {hasData && (
+                        <button
+                            onClick={onToggleExpanded}
+                            className="p-1.5 rounded hover:bg-slate-700/50 text-slate-400 hover:text-slate-200 transition-colors"
+                            title="Expand to fullscreen"
+                        >
+                            <ExpandIcon />
+                        </button>
+                    )}
+                </div>
             </div>
-            <div className="p-2">
-                {children}
+            {!isHidden && (
+                <div className="p-2">
+                    {children}
+                </div>
+            )}
+        </div>
+    );
+}
+
+// Fullscreen modal for expanded charts
+interface ExpandedChartModalProps {
+    title: string;
+    onClose: () => void;
+    children: React.ReactNode;
+}
+
+function ExpandedChartModal({ title, onClose, children }: ExpandedChartModalProps) {
+    // Close on Escape key
+    useEffect(() => {
+        const handleEsc = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') onClose();
+        };
+        window.addEventListener('keydown', handleEsc);
+        return () => window.removeEventListener('keydown', handleEsc);
+    }, [onClose]);
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm" onClick={onClose}>
+            <div
+                className="bg-slate-900 rounded-xl border border-slate-700 w-[95vw] h-[90vh] flex flex-col overflow-hidden"
+                onClick={e => e.stopPropagation()}
+            >
+                <div className="px-4 py-3 bg-slate-800 border-b border-slate-700 flex items-center justify-between">
+                    <h2 className="text-lg font-semibold text-slate-200">{title}</h2>
+                    <button
+                        onClick={onClose}
+                        className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"
+                    >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </button>
+                </div>
+                <div className="flex-1 p-4">
+                    {children}
+                </div>
             </div>
         </div>
     );
@@ -124,6 +221,15 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
     });
     const chainMetrics = chainMetricsData?.data as Record<string, ChainMetric> | null;
 
+    // Fetch PAE matrix for selected design (for heatmap)
+    const { data: paeData, isLoading: paeLoading } = useQuery({
+        queryKey: ['paeData', selectedDesignId || sortedDesigns[0]?.id],
+        queryFn: () => fetchPAEData(selectedDesignId || sortedDesigns[0]?.id || ''),
+        enabled: !!(selectedDesignId || sortedDesigns[0]?.id),
+        staleTime: 60000,
+    });
+    const paeMatrix = paeData?.data;
+
     // Custom chart state
     const [custom2dX, setCustom2dX] = useState<MetricKey>('plddt_overall');
     const [custom2dY, setCustom2dY] = useState<MetricKey>('pae_overall');
@@ -132,6 +238,85 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
     const [custom3dY, setCustom3dY] = useState<MetricKey>('iptm');
     const [custom3dZ, setCustom3dZ] = useState<MetricKey>('pae_overall');
     const [custom3dColor, setCustom3dColor] = useState<MetricKey>('conf_score');
+
+    // Chart visibility state
+    const [hiddenCharts, setHiddenCharts] = useState<Set<string>>(new Set());
+    const [expandedChart, setExpandedChart] = useState<string | null>(null);
+
+    // Selection state for chart interactions
+    const [selectedDesigns, setSelectedDesigns] = useState<Set<string>>(new Set());
+
+    // Toggle chart visibility
+    const toggleHidden = useCallback((id: string) => {
+        setHiddenCharts(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
+    }, []);
+
+    // Handle 2D chart lasso/box selection
+    const handlePlotlySelect = useCallback((event: PlotSelectionEvent | null) => {
+        if (!event || !event.points || event.points.length === 0) return;
+
+        const newSelection = new Set<string>();
+        event.points.forEach(pt => {
+            // The 'text' field contains the design name (set in hovertext)
+            const name = (pt as unknown as { text?: string }).text;
+            if (name) newSelection.add(name);
+        });
+
+        // Add to existing selection (use Shift key behavior)
+        setSelectedDesigns(prev => {
+            const merged = new Set(prev);
+            newSelection.forEach(n => merged.add(n));
+            return merged;
+        });
+    }, []);
+
+    // Handle 3D chart click selection
+    const handlePlotlyClick = useCallback((event: PlotMouseEvent) => {
+        if (!event || !event.points || event.points.length === 0) return;
+
+        const clickedName = (event.points[0] as unknown as { text?: string }).text;
+        if (!clickedName) return;
+
+        // Toggle selection on click
+        setSelectedDesigns(prev => {
+            const next = new Set(prev);
+            if (next.has(clickedName)) {
+                next.delete(clickedName);
+            } else {
+                next.add(clickedName);
+            }
+            return next;
+        });
+    }, []);
+
+    // Clear all selections
+    const clearSelection = useCallback(() => {
+        setSelectedDesigns(new Set());
+    }, []);
+
+    // Check if data exists for a metric combination
+    const hasScatterData = useCallback((xKey: MetricKey, yKey: MetricKey) => {
+        return designs.some(d => {
+            const rec = d as unknown as Record<string, unknown>;
+            return typeof rec[xKey] === 'number' && typeof rec[yKey] === 'number';
+        });
+    }, [designs]);
+
+    const hasHistogramData = useCallback((key: MetricKey) => {
+        return extractValues(designs, key).length > 0;
+    }, [designs]);
+
+    const has3DData = useCallback((xKey: MetricKey, yKey: MetricKey, zKey: MetricKey) => {
+        return designs.some(d => {
+            const rec = d as unknown as Record<string, unknown>;
+            return typeof rec[xKey] === 'number' && typeof rec[yKey] === 'number' && typeof rec[zKey] === 'number';
+        });
+    }, [designs]);
 
     // Get current color scheme
     const scheme = COLOR_SCHEMES[colorScheme];
@@ -257,28 +442,50 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
         }).filter(d => (d.y as number[]).length > 0);
     };
 
-    // Parallel coordinates
+    // Parallel coordinates - improved for readability
     const parallelCoordsData = useMemo((): Data[] => {
         const metricsWithData = METRICS.filter(m => extractValues(designs, m.key).length > 3);
         if (metricsWithData.length < 3) return [];
 
-        const dimensions = metricsWithData.map(m => {
-            const values = designs.map(d => {
+        // Limit to top 50 designs by pLDDT for performance and readability
+        const topDesigns = [...designs]
+            .filter(d => typeof d.plddt_overall === 'number')
+            .sort((a, b) => (b.plddt_overall || 0) - (a.plddt_overall || 0))
+            .slice(0, 50);
+
+        if (topDesigns.length < 5) return [];
+
+        const dimensions = metricsWithData.slice(0, 6).map(m => {  // Limit to 6 axes for readability
+            const values = topDesigns.map(d => {
                 const val = (d as unknown as Record<string, unknown>)[m.key];
                 return typeof val === 'number' ? val : null;
             });
             const validValues = values.filter((v): v is number => v !== null);
             const minVal = validValues.length > 0 ? Math.min(...validValues) : 0;
             const maxVal = validValues.length > 0 ? Math.max(...validValues) : 1;
-            return { label: m.label, values: values.map(v => v ?? minVal), range: [minVal, maxVal] };
+            // Truncate long labels
+            const shortLabel = m.label.length > 12 ? m.label.substring(0, 10) + '…' : m.label;
+            return {
+                label: shortLabel,
+                values: values.map(v => v ?? minVal),
+                range: [minVal, maxVal],
+                tickfont: { size: 10, color: '#94a3b8' },
+            };
         });
 
-        const colorValues = designs.map(d => typeof d.plddt_overall === 'number' ? d.plddt_overall : 0);
+        const colorValues = topDesigns.map(d => typeof d.plddt_overall === 'number' ? d.plddt_overall : 0);
 
         return [{
             type: 'parcoords',
-            line: { color: colorValues, colorscale: 'Viridis', showscale: true },
+            line: {
+                color: colorValues,
+                colorscale: 'Viridis',
+                showscale: true,
+                colorbar: { title: { text: 'pLDDT', font: { size: 11, color: '#e2e8f0' } }, tickfont: { size: 9, color: '#94a3b8' } },
+            },
             dimensions,
+            labelfont: { size: 11, color: '#e2e8f0' },
+            tickfont: { size: 9, color: '#94a3b8' },
         } as Data];
     }, [designs]);
 
@@ -354,7 +561,7 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
         },
     });
 
-    const miniConfig = { responsive: true, displayModeBar: false };
+    const miniConfig = { responsive: true, displayModeBar: true };
     const chartStyle = { width: '100%', height: '500px' };
     const chart3DStyle = { width: '100%', height: '600px' };
 
@@ -386,9 +593,71 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
                             ))}
                         </select>
                     </div>
+                    <div className="flex items-center gap-2 border-l border-slate-700 pl-4">
+                        <button
+                            onClick={() => setHiddenCharts(new Set())}
+                            className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors"
+                            title="Show all charts"
+                        >
+                            Show All
+                        </button>
+                        <button
+                            onClick={() => {
+                                const emptyCharts = new Set<string>();
+                                if (!hasScatterData('plddt_overall', 'pae_overall')) emptyCharts.add('plddt-pae');
+                                if (!hasScatterData('conf_score', 'iptm')) emptyCharts.add('conf-iptm');
+                                if (!hasScatterData('affinity_score', 'binder_probability')) emptyCharts.add('affinity-binder');
+                                if (!hasScatterData('plddt_overall', 'rog')) emptyCharts.add('plddt-rog');
+                                if (!hasHistogramData('plddt_overall')) emptyCharts.add('hist-plddt');
+                                if (!hasHistogramData('pae_overall')) emptyCharts.add('hist-pae');
+                                if (!hasHistogramData('iptm')) emptyCharts.add('hist-iptm');
+                                if (!hasHistogramData('conf_score')) emptyCharts.add('hist-conf');
+                                if (!has3DData('plddt_overall', 'iptm', 'pae_overall')) emptyCharts.add('3d-quality');
+                                if (!has3DData('affinity_score', 'binder_probability', 'iptm')) emptyCharts.add('3d-binding');
+                                setHiddenCharts(emptyCharts);
+                            }}
+                            className="px-2 py-1 text-xs bg-amber-900/50 hover:bg-amber-800/50 text-amber-300 rounded transition-colors"
+                            title="Hide charts with no data"
+                        >
+                            Hide Empty
+                        </button>
+                    </div>
                     <div className="text-sm text-slate-400">{designs.length} designs</div>
                 </div>
             </div>
+
+            {/* Selected Designs Panel */}
+            {selectedDesigns.size > 0 && (
+                <div className="bg-emerald-900/30 border border-emerald-700/50 rounded-xl p-4">
+                    <div className="flex items-center justify-between mb-2">
+                        <h3 className="text-sm font-semibold text-emerald-300">
+                            Selected: {selectedDesigns.size} design{selectedDesigns.size > 1 ? 's' : ''}
+                        </h3>
+                        <button
+                            onClick={clearSelection}
+                            className="px-2 py-1 text-xs bg-emerald-800/50 hover:bg-emerald-700/50 text-emerald-300 rounded transition-colors"
+                        >
+                            Clear
+                        </button>
+                    </div>
+                    <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto">
+                        {Array.from(selectedDesigns).map(name => (
+                            <span
+                                key={name}
+                                className="px-2 py-0.5 bg-emerald-800/50 text-emerald-200 text-xs rounded cursor-pointer hover:bg-emerald-700/50"
+                                onClick={() => setSelectedDesigns(prev => {
+                                    const next = new Set(prev);
+                                    next.delete(name);
+                                    return next;
+                                })}
+                                title="Click to remove from selection"
+                            >
+                                {name}
+                            </span>
+                        ))}
+                    </div>
+                </div>
+            )}
 
             {/* Chain-by-Chain pLDDT Profile - Full Width at Top */}
             <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-4">
@@ -486,40 +755,242 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
                 )}
             </div>
 
+            {/* PAE Heatmap - Full Width */}
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-4">
+                <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-base font-semibold text-slate-200">Predicted Aligned Error (PAE)</h3>
+                    <select
+                        value={selectedDesignId || sortedDesigns[0]?.id || ''}
+                        onChange={e => setSelectedDesignId(e.target.value)}
+                        className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white max-w-xs"
+                    >
+                        {sortedDesigns.slice(0, 50).map(d => (
+                            <option key={d.id} value={d.id}>
+                                {d.name} {d.pae_overall ? `(PAE: ${d.pae_overall.toFixed(1)})` : ''}
+                            </option>
+                        ))}
+                    </select>
+                </div>
+                {paeLoading ? (
+                    <div className="h-[500px] flex items-center justify-center text-slate-400">
+                        Loading PAE matrix...
+                    </div>
+                ) : paeMatrix && paeMatrix.pae_matrix ? (() => {
+                    // Compute chain regions from chainMetrics
+                    const chainColors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+                    const chainRegions: { start: number; end: number; name: string; color: string }[] = [];
+
+                    if (chainMetrics && Object.keys(chainMetrics).length > 0) {
+                        let cumPos = 0;
+                        Object.entries(chainMetrics)
+                            .filter(([, m]) => m.type !== 'ligand')
+                            .sort(([a], [b]) => a.localeCompare(b))
+                            .forEach(([chainId, metric], index) => {
+                                chainRegions.push({
+                                    start: cumPos,
+                                    end: cumPos + metric.length,
+                                    name: chainId,
+                                    color: chainColors[index % chainColors.length]
+                                });
+                                cumPos += metric.length;
+                            });
+                    }
+
+                    // Create solid boundary lines between chains
+                    const shapes: any[] = chainRegions.length > 1 ? chainRegions.slice(1).flatMap(({ start }) => [
+                        // Vertical line
+                        { type: 'line', x0: start, x1: start, y0: 0, y1: paeMatrix.size, line: { color: '#ffffff', width: 2 } },
+                        // Horizontal line  
+                        { type: 'line', x0: 0, x1: paeMatrix.size, y0: start, y1: start, line: { color: '#ffffff', width: 2 } },
+                    ]) : [];
+
+                    // Add colored band rectangles along the axes to show chain regions
+                    const bandWidth = 8;
+                    chainRegions.forEach(({ start, end, color }) => {
+                        // Left edge band (Y-axis)
+                        shapes.push({
+                            type: 'rect',
+                            x0: -bandWidth - 2, x1: -2,
+                            y0: start, y1: end,
+                            fillcolor: color,
+                            line: { width: 0, color: 'transparent' },
+                            xref: 'x',
+                        });
+                        // Top edge band (X-axis) - we'll put at bottom since Y is reversed
+                        shapes.push({
+                            type: 'rect',
+                            x0: start, x1: end,
+                            y0: -bandWidth - 2, y1: -2,
+                            fillcolor: color,
+                            line: { width: 0, color: 'transparent' },
+                            yref: 'y',
+                        });
+                    });
+
+                    // Create chain label annotations - positioned at center of each region
+                    const annotations = chainRegions.map(({ start, end, name, color }) => ({
+                        x: (start + end) / 2,
+                        y: paeMatrix.size + 15,
+                        text: `<b>${name}</b>`,
+                        showarrow: false,
+                        font: { size: 12, color: color },
+                        xanchor: 'center' as const,
+                    }));
+
+                    // Also add labels on Y-axis
+                    chainRegions.forEach(({ start, end, name, color }) => {
+                        annotations.push({
+                            x: -20,
+                            y: (start + end) / 2,
+                            text: `<b>${name}</b>`,
+                            showarrow: false,
+                            font: { size: 12, color: color },
+                            xanchor: 'center' as const,
+                        });
+                    });
+
+                    return (
+                        <Plot
+                            data={[{
+                                type: 'heatmap',
+                                z: paeMatrix.pae_matrix,
+                                colorscale: [
+                                    [0, '#1e3a5f'],
+                                    [0.1, '#2196f3'],
+                                    [0.25, '#4caf50'],
+                                    [0.5, '#ffeb3b'],
+                                    [0.75, '#ff9800'],
+                                    [1, '#f44336']
+                                ],
+                                zmin: 0,
+                                zmax: 30,
+                                hoverongaps: false,
+                                hovertemplate: 'Residue %{x} ↔ Residue %{y}<br>PAE: %{z:.1f} Å<extra></extra>',
+                                colorbar: {
+                                    title: { text: 'PAE (Å)', font: { color: '#e2e8f0' } },
+                                    tickfont: { color: '#94a3b8' },
+                                    thickness: 15,
+                                },
+                            } as Data]}
+                            layout={{
+                                title: {
+                                    text: `PAE Matrix: ${paeMatrix.design_name}${chainRegions.length > 1 ? ` (${chainRegions.length} chains)` : ''}`,
+                                    font: { color: '#e2e8f0', size: 16 }
+                                },
+                                paper_bgcolor: 'transparent',
+                                plot_bgcolor: '#1e293b',
+                                font: { color: '#e2e8f0' },
+                                margin: { l: 80, r: 80, t: 50, b: 80 },
+                                xaxis: {
+                                    title: { text: 'Scored Residue', font: { color: '#94a3b8' }, standoff: 30 },
+                                    color: '#94a3b8',
+                                    scaleanchor: 'y',
+                                },
+                                yaxis: {
+                                    title: { text: 'Aligned Residue', font: { color: '#94a3b8' }, standoff: 30 },
+                                    color: '#94a3b8',
+                                    autorange: 'reversed',
+                                },
+                                shapes: shapes,
+                                annotations: annotations,
+                            }}
+                            config={{ responsive: true, displayModeBar: true, toImageButtonOptions: { format: 'svg', filename: `pae_${paeMatrix.design_name}` } }}
+                            style={{ width: '100%', height: '550px' }}
+                        />
+                    );
+                })() : (
+                    <div className="h-[500px] flex items-center justify-center text-slate-500">
+                        <div className="text-center">
+                            <div className="text-4xl mb-2">🔲</div>
+                            No PAE data available for selected design<br />
+                            <span className="text-xs text-slate-600">PAE matrices require Boltz2/RF3 confidence files</span>
+                        </div>
+                    </div>
+                )}
+            </div>
+
             {/* Chart Grid - 2 columns for larger charts */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
                 {/* Row 1: Scatter plots */}
-                <ChartCard title="pLDDT vs PAE">
-                    <Plot data={makeScatter('plddt_overall', 'pae_overall', 'iptm')} layout={miniLayout()} config={miniConfig} style={chartStyle} />
+                <ChartCard
+                    title="pLDDT vs PAE"
+                    hasData={hasScatterData('plddt_overall', 'pae_overall')}
+                    isHidden={hiddenCharts.has('plddt-pae')}
+                    onToggleHidden={() => toggleHidden('plddt-pae')}
+                    onToggleExpanded={() => setExpandedChart('plddt-pae')}
+                >
+                    <Plot data={makeScatter('plddt_overall', 'pae_overall', 'iptm')} layout={miniLayout()} config={miniConfig} style={chartStyle} onSelected={handlePlotlySelect} />
                 </ChartCard>
 
-                <ChartCard title="Confidence vs iPTM">
-                    <Plot data={makeScatter('conf_score', 'iptm', 'plddt_overall')} layout={miniLayout()} config={miniConfig} style={chartStyle} />
+                <ChartCard
+                    title="Confidence vs iPTM"
+                    hasData={hasScatterData('conf_score', 'iptm')}
+                    isHidden={hiddenCharts.has('conf-iptm')}
+                    onToggleHidden={() => toggleHidden('conf-iptm')}
+                    onToggleExpanded={() => setExpandedChart('conf-iptm')}
+                >
+                    <Plot data={makeScatter('conf_score', 'iptm', 'plddt_overall')} layout={miniLayout()} config={miniConfig} style={chartStyle} onSelected={handlePlotlySelect} />
                 </ChartCard>
 
-                <ChartCard title="Affinity vs Binder Prob.">
-                    <Plot data={makeScatter('affinity_score', 'binder_probability', 'plddt_overall')} layout={miniLayout()} config={miniConfig} style={chartStyle} />
+                <ChartCard
+                    title="Affinity vs Binder Prob."
+                    hasData={hasScatterData('affinity_score', 'binder_probability')}
+                    isHidden={hiddenCharts.has('affinity-binder')}
+                    onToggleHidden={() => toggleHidden('affinity-binder')}
+                    onToggleExpanded={() => setExpandedChart('affinity-binder')}
+                >
+                    <Plot data={makeScatter('affinity_score', 'binder_probability', 'plddt_overall')} layout={miniLayout()} config={miniConfig} style={chartStyle} onSelected={handlePlotlySelect} />
                 </ChartCard>
 
-                <ChartCard title="pLDDT vs RoG">
-                    <Plot data={makeScatter('plddt_overall', 'rog', 'mpnn_score')} layout={miniLayout()} config={miniConfig} style={chartStyle} />
+                <ChartCard
+                    title="pLDDT vs RoG"
+                    hasData={hasScatterData('plddt_overall', 'rog')}
+                    isHidden={hiddenCharts.has('plddt-rog')}
+                    onToggleHidden={() => toggleHidden('plddt-rog')}
+                    onToggleExpanded={() => setExpandedChart('plddt-rog')}
+                >
+                    <Plot data={makeScatter('plddt_overall', 'rog', 'mpnn_score')} layout={miniLayout()} config={miniConfig} style={chartStyle} onSelected={handlePlotlySelect} />
                 </ChartCard>
 
                 {/* Row 2: Histograms */}
-                <ChartCard title="pLDDT Distribution">
+                <ChartCard
+                    title="pLDDT Distribution"
+                    hasData={hasHistogramData('plddt_overall')}
+                    isHidden={hiddenCharts.has('hist-plddt')}
+                    onToggleHidden={() => toggleHidden('hist-plddt')}
+                    onToggleExpanded={() => setExpandedChart('hist-plddt')}
+                >
                     <Plot data={makeHistogram('plddt_overall', 0)} layout={miniLayout()} config={miniConfig} style={chartStyle} />
                 </ChartCard>
 
-                <ChartCard title="PAE Distribution">
+                <ChartCard
+                    title="PAE Distribution"
+                    hasData={hasHistogramData('pae_overall')}
+                    isHidden={hiddenCharts.has('hist-pae')}
+                    onToggleHidden={() => toggleHidden('hist-pae')}
+                    onToggleExpanded={() => setExpandedChart('hist-pae')}
+                >
                     <Plot data={makeHistogram('pae_overall', 2)} layout={miniLayout()} config={miniConfig} style={chartStyle} />
                 </ChartCard>
 
-                <ChartCard title="iPTM Distribution">
+                <ChartCard
+                    title="iPTM Distribution"
+                    hasData={hasHistogramData('iptm')}
+                    isHidden={hiddenCharts.has('hist-iptm')}
+                    onToggleHidden={() => toggleHidden('hist-iptm')}
+                    onToggleExpanded={() => setExpandedChart('hist-iptm')}
+                >
                     <Plot data={makeHistogram('iptm', 4)} layout={miniLayout()} config={miniConfig} style={chartStyle} />
                 </ChartCard>
 
-                <ChartCard title="Confidence Distribution">
+                <ChartCard
+                    title="Confidence Distribution"
+                    hasData={hasHistogramData('conf_score')}
+                    isHidden={hiddenCharts.has('hist-conf')}
+                    onToggleHidden={() => toggleHidden('hist-conf')}
+                    onToggleExpanded={() => setExpandedChart('hist-conf')}
+                >
                     <Plot data={makeHistogram('conf_score', 6)} layout={miniLayout()} config={miniConfig} style={chartStyle} />
                 </ChartCard>
 
@@ -561,34 +1032,52 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 {/* Parallel Coordinates - full width */}
                 <div className="lg:col-span-2">
-                    <ChartCard title="Parallel Coordinates (All Metrics)">
+                    <ChartCard title="Parallel Coordinates (Top 50 by pLDDT)">
                         {parallelCoordsData.length > 0 ? (
                             <Plot
                                 data={parallelCoordsData}
-                                layout={{ paper_bgcolor: CHART_BG, font: { color: FONT_COLOR }, margin: { l: 60, r: 60, t: 20, b: 20 } }}
+                                layout={{
+                                    paper_bgcolor: CHART_BG,
+                                    font: { color: FONT_COLOR, size: 11 },
+                                    margin: { l: 80, r: 80, t: 40, b: 40 },
+                                }}
                                 config={miniConfig}
-                                style={{ width: '100%', height: '500px' }}
+                                style={{ width: '100%', height: '400px' }}
                             />
                         ) : <div className="h-[300px] flex items-center justify-center text-slate-500 text-sm">Not enough metrics with data</div>}
                     </ChartCard>
                 </div>
 
                 {/* 3D preset charts */}
-                <ChartCard title="Quality Metrics 3D (pLDDT × iPTM × PAE)">
+                <ChartCard
+                    title="Quality Metrics 3D (pLDDT × iPTM × PAE)"
+                    hasData={has3DData('plddt_overall', 'iptm', 'pae_overall')}
+                    isHidden={hiddenCharts.has('3d-quality')}
+                    onToggleHidden={() => toggleHidden('3d-quality')}
+                    onToggleExpanded={() => setExpandedChart('3d-quality')}
+                >
                     <Plot
                         data={make3DScatter('plddt_overall', 'iptm', 'pae_overall', 'conf_score')}
                         layout={mini3DLayout('pLDDT', 'iPTM', 'PAE')}
                         config={miniConfig}
                         style={chart3DStyle}
+                        onClick={handlePlotlyClick}
                     />
                 </ChartCard>
 
-                <ChartCard title="Binding Landscape 3D (Affinity × Binder% × iPTM)">
+                <ChartCard
+                    title="Binding Landscape 3D (Affinity × Binder% × iPTM)"
+                    hasData={has3DData('affinity_score', 'binder_probability', 'iptm')}
+                    isHidden={hiddenCharts.has('3d-binding')}
+                    onToggleHidden={() => toggleHidden('3d-binding')}
+                    onToggleExpanded={() => setExpandedChart('3d-binding')}
+                >
                     <Plot
                         data={make3DScatter('affinity_score', 'binder_probability', 'iptm', 'plddt_overall')}
                         layout={mini3DLayout('Affinity', 'Binder%', 'iPTM')}
                         config={miniConfig}
                         style={chart3DStyle}
+                        onClick={handlePlotlyClick}
                     />
                 </ChartCard>
             </div>
@@ -657,6 +1146,39 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
                     </div>
                 </div>
             </div>
+
+            {/* Expanded Chart Modal */}
+            {expandedChart && (
+                <ExpandedChartModal
+                    title={
+                        expandedChart === 'plddt-pae' ? 'pLDDT vs PAE' :
+                            expandedChart === 'conf-iptm' ? 'Confidence vs iPTM' :
+                                expandedChart === 'affinity-binder' ? 'Affinity vs Binder Prob.' :
+                                    expandedChart === 'plddt-rog' ? 'pLDDT vs RoG' :
+                                        expandedChart === 'hist-plddt' ? 'pLDDT Distribution' :
+                                            expandedChart === 'hist-pae' ? 'PAE Distribution' :
+                                                expandedChart === 'hist-iptm' ? 'iPTM Distribution' :
+                                                    expandedChart === 'hist-conf' ? 'Confidence Distribution' :
+                                                        expandedChart === '3d-quality' ? 'Quality Metrics 3D' :
+                                                            expandedChart === '3d-binding' ? 'Binding Landscape 3D' :
+                                                                'Chart'
+                    }
+                    onClose={() => setExpandedChart(null)}
+                >
+                    <div style={{ width: '100%', height: '100%' }}>
+                        {expandedChart === 'plddt-pae' && <Plot data={makeScatter('plddt_overall', 'pae_overall', 'iptm')} layout={miniLayout()} config={miniConfig} style={{ width: '100%', height: '100%' }} />}
+                        {expandedChart === 'conf-iptm' && <Plot data={makeScatter('conf_score', 'iptm', 'plddt_overall')} layout={miniLayout()} config={miniConfig} style={{ width: '100%', height: '100%' }} />}
+                        {expandedChart === 'affinity-binder' && <Plot data={makeScatter('affinity_score', 'binder_probability', 'plddt_overall')} layout={miniLayout()} config={miniConfig} style={{ width: '100%', height: '100%' }} />}
+                        {expandedChart === 'plddt-rog' && <Plot data={makeScatter('plddt_overall', 'rog', 'mpnn_score')} layout={miniLayout()} config={miniConfig} style={{ width: '100%', height: '100%' }} />}
+                        {expandedChart === 'hist-plddt' && <Plot data={makeHistogram('plddt_overall', 0)} layout={miniLayout()} config={miniConfig} style={{ width: '100%', height: '100%' }} />}
+                        {expandedChart === 'hist-pae' && <Plot data={makeHistogram('pae_overall', 2)} layout={miniLayout()} config={miniConfig} style={{ width: '100%', height: '100%' }} />}
+                        {expandedChart === 'hist-iptm' && <Plot data={makeHistogram('iptm', 4)} layout={miniLayout()} config={miniConfig} style={{ width: '100%', height: '100%' }} />}
+                        {expandedChart === 'hist-conf' && <Plot data={makeHistogram('conf_score', 6)} layout={miniLayout()} config={miniConfig} style={{ width: '100%', height: '100%' }} />}
+                        {expandedChart === '3d-quality' && <Plot data={make3DScatter('plddt_overall', 'iptm', 'pae_overall', 'conf_score')} layout={mini3DLayout('pLDDT', 'iPTM', 'PAE')} config={miniConfig} style={{ width: '100%', height: '100%' }} />}
+                        {expandedChart === '3d-binding' && <Plot data={make3DScatter('affinity_score', 'binder_probability', 'iptm', 'plddt_overall')} layout={mini3DLayout('Affinity', 'Binder%', 'iPTM')} config={miniConfig} style={{ width: '100%', height: '100%' }} />}
+                    </div>
+                </ExpandedChartModal>
+            )}
         </div >
     );
 }

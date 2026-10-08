@@ -22,6 +22,8 @@ export interface Job {
     // Batch grouping for job sets
     batch_id?: string | null;
     batch_name?: string | null;
+    // Parent-child relationship for exploration mode
+    parent_job_id?: string | null;
     // GPU and timing info
     pinned_gpu?: number | null;  // User-specified GPU pin
     assigned_gpu?: number | null;
@@ -84,6 +86,7 @@ export interface CPUStatus {
     frequency_current_mhz: number;
     frequency_max_mhz: number;
     temperature: number | null;
+    power_watts: number | null;  // Package power via RAPL
 }
 
 export interface RAMStatus {
@@ -143,12 +146,19 @@ export const fetchJobs = (params?: {
 export const fetchSystemStatus = () => api.get<SystemStatus>('/api/gpu/status');
 export const fetchJobById = (id: string) => api.get<Job>(`/api/jobs/${id}`);
 export const cancelJob = (id: string) => api.delete(`/api/jobs/${id}`);
+export const deleteJobPermanently = (id: string) => api.delete<{
+    message: string;
+    job_id: string;
+    children_deleted: number;
+    directories_deleted: string[];
+}>(`/api/jobs/${id}/permanent`);
 export const resubmitJob = (id: string) => api.post<{
     message: string;
     original_job_id: string;
     new_job_id: string;
     new_job_name: string;
 }>(`/api/jobs/${id}/resubmit`);
+
 
 
 // Upload file
@@ -618,6 +628,9 @@ export const fetchCancelledJobs = (limit: number = 20) =>
 export const killActiveNextflowJobs = () =>
     api.post('/api/queue/kill-active');
 
+export const forceLaunchQueueJob = (jobId: string, gpuId: number) =>
+    api.post(`/api/queue/${jobId}/force-launch`, { gpu_id: gpuId });
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // NUCLEOTIDE SEQUENCES API (BioDesigner)
@@ -819,3 +832,31 @@ export interface PAEData {
 
 export const fetchPAEData = (designId: string) =>
     api.get<PAEData>(`/api/designs/${designId}/pae`);
+
+// ============================================================
+// DEBUG ORCHESTRATOR OVERRIDES
+// ============================================================
+
+export interface ForceRunResponse {
+    success: boolean;
+    message: string;
+    job_id: string;
+    gpu_id: number;
+}
+
+export interface ConcurrencyLimitsResponse {
+    concurrency_limits: Record<string, number | null>;
+    description: string;
+}
+
+export const forceRunJob = (jobId: string, gpuId?: number) =>
+    api.post<ForceRunResponse>(`/api/system/force-run/${jobId}`, { gpu_id: gpuId ?? null });
+
+export const getConcurrencyLimits = () =>
+    api.get<ConcurrencyLimitsResponse>('/api/system/concurrency-limits');
+
+export const setConcurrencyLimit = (modelType: string, limit: number | null) =>
+    api.put('/api/system/concurrency-limits', { model_type: modelType, limit });
+
+export const deleteConcurrencyLimit = (modelType: string) =>
+    api.delete(`/api/system/concurrency-limits/${modelType}`);

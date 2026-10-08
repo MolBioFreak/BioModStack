@@ -33,6 +33,7 @@ const allTools = {
   featureTool,
   partTool,
   oligoTool,
+  primerTool: oligoTool,  // Alias for compatibility - oligoTool handles primers
   orfTool,
   editTool,
   findTool,
@@ -90,7 +91,7 @@ export function ToolBar(props) {
       if (!Tool) {
         console.error(
           "You're trying to load a tool that doesn't appear to exist: " +
-            toolName
+          toolName
         );
         return [];
       }
@@ -145,17 +146,17 @@ export function ToolBar(props) {
         style={{
           ...(displayMenuBarAboveTools && showMenuBar
             ? {
-                display: "flex",
-                width: "100%",
-                flexDirection: "column",
-                alignItems: "flex-start"
-              }
+              display: "flex",
+              width: "100%",
+              flexDirection: "column",
+              alignItems: "flex-start"
+            }
             : {
-                display: "flex",
-                width: "100%",
-                justifyContent: "center",
-                flexWrap: "wrap"
-              })
+              display: "flex",
+              width: "100%",
+              justifyContent: "center",
+              flexWrap: "wrap"
+            })
         }}
         className="veToolbar"
       >

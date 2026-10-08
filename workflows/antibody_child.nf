@@ -38,15 +38,29 @@ workflow ANTIBODY_CHILD {
     BatchBoltzValidation(pdb_files, msa_file)
     
     // =========================================================================
-    // Step 2: Batch Scoring (Parallel)
+    // Step 2: Batch Scoring (Conditional)
     // =========================================================================
     // Use the *validated* structures from Boltz (folded) for downstream scoring
-    // Or prefer the designed sequences? Usually we score the predicted structure.
-    // BatchBoltzValidation outputs a directory of PDBs.
     
-    // Note: BatchBoltzValidation.out.pdbs is a list of files.
-    BatchImmunogenicity(BatchBoltzValidation.out.pdbs)
-    BatchStability(BatchBoltzValidation.out.pdbs)
+    // ThermoMPNN stability scoring - only if enabled
+    def run_thermompnn = params.run_thermompnn ?: false
+    if (run_thermompnn) {
+        BatchStability(BatchBoltzValidation.out.pdbs)
+        thermompnn_scores = BatchStability.out.scores
+    } else {
+        // Empty channel placeholder
+        thermompnn_scores = Channel.empty()
+    }
+    
+    // AntiBERTy immunogenicity scoring - only if enabled  
+    def run_immunogenicity = params.run_immunogenicity_scoring ?: false
+    if (run_immunogenicity) {
+        BatchImmunogenicity(BatchBoltzValidation.out.pdbs)
+        antiberty_scores = BatchImmunogenicity.out.scores
+    } else {
+        // Empty channel placeholder
+        antiberty_scores = Channel.empty()
+    }
     
     // =========================================================================
     // Aggregate Results
@@ -55,8 +69,8 @@ workflow ANTIBODY_CHILD {
     emit:
     boltz_pdbs = BatchBoltzValidation.out.pdbs
     boltz_scores = BatchBoltzValidation.out.scores
-    antiberty_scores = BatchImmunogenicity.out.scores
-    thermompnn_scores = BatchStability.out.scores
+    antiberty_scores = antiberty_scores
+    thermompnn_scores = thermompnn_scores
 }
 
 // Entry point when run as standalone workflow

@@ -167,6 +167,7 @@ process WaitForChildren {
     val parent_job_id
     val stage_name
     val poll_interval_seconds
+    val batch_name
     
     output:
     path "child_outputs.json", emit: child_outputs
@@ -177,7 +178,7 @@ process WaitForChildren {
         --parent_job_id "${parent_job_id}" \\
         --stage "${stage_name}" \\
         --poll_interval ${poll_interval_seconds} \\
-        --timeout 14400 \\
+        --batch_name "${batch_name}" \\
         --api_url "http://localhost:8000" \\
         --output child_outputs.json
     """
@@ -242,6 +243,105 @@ process CollectChildOutputs {
     """
 }
 
+// FAMPNN-specific Wait and Collect processes
+// These are separate from the generic ones to allow both RFantibody and FAMPNN 
+// to use spawn-wait-aggregate in the same workflow without channel conflicts
+process WaitForFAMPNNChildren {
+    label 'process_low'
+    
+    input:
+    val parent_job_id
+    val stage_name
+    val poll_interval_seconds
+    val batch_name
+    
+    output:
+    path "child_outputs.json", emit: child_outputs
+    
+    script:
+    """
+    python3 ${projectDir}/scripts/wait_for_children.py \\
+        --parent_job_id "${parent_job_id}" \\
+        --stage "${stage_name}" \\
+        --poll_interval ${poll_interval_seconds} \\
+        --batch_name "${batch_name}" \\
+        --api_url "http://localhost:8000" \\
+        --output child_outputs.json
+    """
+}
+
+process CollectFAMPNNOutputs {
+    label 'process_low'
+    
+    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.pdb"
+    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.json"
+    
+    input:
+    path child_outputs_json
+    val stage_name
+    
+    output:
+    path "*.pdb", emit: pdbs, optional: true
+    path "*.json", emit: jsons, optional: true
+    path "collection_manifest.json", emit: manifest
+    
+    script:
+    """
+    #!/usr/bin/env python3
+    import json
+    import shutil
+    from pathlib import Path
+    
+    with open("${child_outputs_json}") as f:
+        data = json.load(f)
+    
+    output_dirs = data.get("child_output_dirs", [])
+    collected_pdbs = []
+    collected_jsons = []
+    
+    for job_idx, output_dir in enumerate(output_dirs):
+        dir_path = Path(output_dir)
+        if not dir_path.exists():
+            print(f"Warning: Output dir not found: {output_dir}")
+            continue
+        
+        # Look for PDBs and JSONs in FAMPNN output locations
+        for subdir in ["run/fampnn/results", "fampnn_output/samples", "results", ""]:
+            search_path = dir_path / subdir if subdir else dir_path
+            if not search_path.exists():
+                continue
+            
+            # Collect PDBs
+            for pdb in search_path.glob("*.pdb"):
+                dest = Path(f"job{job_idx}_{pdb.name}")
+                if not dest.exists():
+                    shutil.copy(pdb, dest)
+                    collected_pdbs.append(str(dest))
+                    print(f"Collected PDB: {pdb} -> {dest}")
+            
+            # Collect JSONs (analysis results)
+            for json_file in search_path.glob("*.json"):
+                dest = Path(f"job{job_idx}_{json_file.name}")
+                if not dest.exists():
+                    shutil.copy(json_file, dest)
+                    collected_jsons.append(str(dest))
+    
+    manifest = {
+        "stage": "${stage_name}",
+        "source_dirs": output_dirs,
+        "collected_pdbs": collected_pdbs,
+        "collected_jsons": collected_jsons,
+        "pdb_count": len(collected_pdbs),
+        "json_count": len(collected_jsons)
+    }
+    
+    with open("collection_manifest.json", "w") as f:
+        json.dump(manifest, f, indent=2)
+    
+    print(f"Collected {len(collected_pdbs)} PDBs and {len(collected_jsons)} JSONs from {len(output_dirs)} FAMPNN child jobs")
+    """
+}
+
 // =============================================================================
 // Process to spawn child validation jobs via API
 // This is a proper Nextflow process that BLOCKS until completion
@@ -258,6 +358,7 @@ process SpawnChildJobs {
     path msa_file
     val parent_job_id
     val batch_name
+    val child_params_json
     
     output:
     path "spawn_result.json", emit: result
@@ -297,11 +398,16 @@ process SpawnChildJobs {
     MSA_PERSIST_PATH="${params.out_dir}/msa/\$(basename \$MSA_ABS_PATH)"
     echo "Persisted MSA to: \$MSA_PERSIST_PATH" | tee -a spawn.log
     
+    # Pass ALL quality settings to child jobs
+    echo "Forwarding quality settings to child jobs" | tee -a spawn.log
+    
     python3 ${projectDir}/scripts/spawn_antibody_children.py \\
         --parent_job_id "${parent_job_id}" \\
         --pdb_dir pdb_input \\
         --batch_name "${batch_name}" \\
         --msa_path "\$MSA_PERSIST_PATH" \\
+        --params_json '${child_params_json}' \\
+        --seqs_per_boltz_job ${params.seqs_per_boltz_job ?: 10} \\
         --api_url "http://localhost:8000" \\
         2>&1 | tee -a spawn.log
     
@@ -317,6 +423,112 @@ process SpawnChildJobs {
     """
 }
 
+// =============================================================================
+// Process to wait for child jobs and aggregate their validated results
+// This blocks until all children complete, then collects outputs to master dir
+// =============================================================================
+process WaitAndAggregateChildResults {
+    label 'process_low'
+    
+    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.pdb"
+    publishDir "${params.out_dir}", mode: 'copy', pattern: "aggregation_report.json"
+    
+    input:
+    val parent_job_id
+    val batch_name
+    val expected_child_count
+    
+    output:
+    path "validated_designs/*.pdb", emit: pdbs, optional: true
+    path "aggregation_report.json", emit: report
+    
+    script:
+    """
+    #!/bin/bash
+    set -euo pipefail
+    
+    echo "Waiting for ${expected_child_count} child validation jobs to complete..."
+    
+    mkdir -p validated_designs intermediates/boltz intermediates/scores
+    
+    # Wait for all children using the wait script
+    python3 ${projectDir}/scripts/wait_for_children.py \\
+        --parent_job_id "${parent_job_id}" \\
+        --stage "boltz2" \\
+        --output wait_result.json \\
+        --api_url "http://localhost:8000" \\
+        2>&1 | tee wait.log
+    
+    # Parse wait result
+    CHILD_DIRS=\$(python3 -c "
+import json
+with open('wait_result.json') as f:
+    data = json.load(f)
+    for d in data.get('child_output_dirs', []):
+        print(d)
+")
+    
+    echo "Collecting validated designs from child jobs..."
+    
+    TOTAL_PDBS=0
+    TOTAL_CHILDREN=0
+    
+    for child_dir in \$CHILD_DIRS; do
+        if [ -d "\$child_dir" ]; then
+            TOTAL_CHILDREN=\$((TOTAL_CHILDREN + 1))
+            
+            # Look for Boltz-validated PDBs in child output
+            # Search multiple possible locations where Boltz outputs may be published
+            for subdir in "pdb_files/predictions" "pdb_files" "run/boltz/predictions" "run/boltz" ""; do
+                search_path="\$child_dir/\$subdir"
+                if [ -d "\$search_path" ]; then
+                    for pdb in \$search_path/*.pdb; do
+                        if [ -f "\$pdb" ]; then
+                            # Copy with unique naming
+                            basename=\$(basename "\$pdb")
+                            cp "\$pdb" "validated_designs/\$basename"
+                            TOTAL_PDBS=\$((TOTAL_PDBS + 1))
+                        fi
+                    done
+                fi
+            done
+            
+            # Also collect confidence JSONs if present
+            for json_path in \$child_dir/pdb_files/predictions/*.json \$child_dir/pdb_files/*.json \$child_dir/run/boltz/predictions/*.json \$child_dir/run/boltz/*.json; do
+                if [ -f "\$json_path" ] 2>/dev/null; then
+                    cp "\$json_path" intermediates/scores/ 2>/dev/null || true
+                fi
+            done
+        fi
+    done
+    
+    echo "Collected \$TOTAL_PDBS validated PDBs from \$TOTAL_CHILDREN child jobs"
+    
+    # Create aggregation report
+    cat > aggregation_report.json << EOF
+{
+    "parent_job_id": "${parent_job_id}",
+    "batch_name": "${batch_name}",
+    "children_processed": \$TOTAL_CHILDREN,
+    "total_validated_designs": \$TOTAL_PDBS,
+    "output_path": "${params.out_dir}/pdb_files",
+    "status": "complete"
+}
+EOF
+
+    # Trigger result ingestion for parent job (updates database)
+    if [ \$TOTAL_PDBS -gt 0 ]; then
+        echo "Triggering result ingestion for parent job..."
+        python3 ${projectDir}/scripts/result_ingester.py \\
+            --job_id "${parent_job_id}" \\
+            --results_dir "${params.out_dir}" \\
+            --api_url "http://localhost:8000" \\
+            2>&1 | tee ingest.log || echo "Warning: Ingestion had issues (non-fatal)"
+    fi
+    
+    echo "Aggregation complete: \$TOTAL_PDBS designs ready for analytics"
+    """
+}
 
 // Initialize missing parameters with defaults to suppress warnings
 if (!params.containsKey('framework_pdb')) params.framework_pdb = null
@@ -373,9 +585,28 @@ workflow ANTIBODY_DENOVO {
     def remainder = total_designs % num_gpus
     
     // =========================================================================
-    // PARALLELISM MODE: Choose between Nextflow-internal or Orchestrator spawning
+    // SKIP RFANTIBODY: Load pre-existing backbone PDBs instead of generating
     // =========================================================================
-    def use_orchestrator = params.parallel_mode == 'full_orchestrator'
+    def skip_rfantibody = params.skip_rfantibody == true || params.rfantibody_input_pdbs != null
+    
+    if (skip_rfantibody && params.rfantibody_input_pdbs) {
+        log.info("  SKIP: Loading pre-existing backbone PDBs from ${params.rfantibody_input_pdbs}")
+        
+        // Load backbone PDBs from provided directory
+        backbone_designs = Channel.fromPath("${params.rfantibody_input_pdbs}/*.pdb")
+            .collect()
+            .map { pdbs ->
+                log.info("  Loaded ${pdbs.size()} backbone PDBs")
+                def meta = [id: params.name ?: "antibody"]
+                [meta, pdbs]
+            }
+    } else if (skip_rfantibody) {
+        error("skip_rfantibody=true but no rfantibody_input_pdbs directory provided")
+    } else {
+        // =========================================================================
+        // PARALLELISM MODE: Choose between Nextflow-internal or Orchestrator spawning
+        // =========================================================================
+        def use_orchestrator = params.parallel_mode == 'full_orchestrator'
     
     if (use_orchestrator) {
         // =====================================================================
@@ -397,11 +628,14 @@ workflow ANTIBODY_DENOVO {
         
         // Wait for all child jobs to complete
         // Depends on spawn completion via SpawnRFantibodyJobs.out.result
+        // Pass batch_name for resume support (find children from original run)
         wait_trigger = SpawnRFantibodyJobs.out.result.map { it -> params.job_id ?: "unknown" }
+        batch_name = params.name ?: "antibody_batch"
         WaitForChildren(
             wait_trigger,
             "rfantibody",
-            30  // poll_interval_seconds
+            30,  // poll_interval_seconds
+            batch_name
         )
         
         // Collect outputs from completed child jobs
@@ -465,6 +699,7 @@ workflow ANTIBODY_DENOVO {
             [unified_meta, files]
         }
     } // End of else block (standard mode)
+    } // End of skip_rfantibody else block
 
     // Step 2: CDR Sequence Design (Cross-Validation Mode)
     // ---------------------------------------------------------------------------
@@ -481,111 +716,139 @@ workflow ANTIBODY_DENOVO {
     antifold_seqs = Channel.empty()
     proteinmpnn_seqs = Channel.empty()
 
-    // FAMPNN branch
+    // FAMPNN branch - using GPU orchestrator spawn-wait-aggregate pattern
     if (run_fampnn) {
-        log.info("  Running FAMPNN...")
-        
-        // Collect all PDBs from parallel GPU runs into a single list
-        // backbone_designs channel has [meta, files] per GPU - need to merge
-        all_backbone_pdbs = backbone_designs
-            .map { meta, files -> files }           // Extract just the files
-            .flatten()                              // Flatten list of lists
-            .collect()                              // Collect into single list
-        
-        // PrepFAMPNN expects [pdbs, jsons]
-        fampnn_prep_input = all_backbone_pdbs.map { pdbs ->
-            // Create dummy JSON for prep
-            [pdbs, file("${projectDir}/lib/NO_JSON")]
-        }
-        PrepFAMPNN(fampnn_prep_input)
-
-        // RunFAMPNN expects [batch_id, pdbs, csv, gpu_id], analysis_chain_id
-        // Collect all PDB outputs and the CSV into a single batch tuple
-        // Use collect() to get all PDBs as a single list emission
-        fampnn_pdbs_collected = PrepFAMPNN.out.pdbs.collect()
-        fampnn_csv_file = PrepFAMPNN.out.csv.first()
-        
-        // Multi-GPU parallelism for FAMPNN
-        // Split PDBs across available GPUs
-        log.info("  Multi-GPU mode: Splitting FAMPNN across ${available_gpus.size()} GPU(s)")
-        
-        // Create one job per GPU, splitting the PDBs
-        // Use map to structure data, then flatMap to emit multiple items
-        fampnn_run_input = fampnn_pdbs_collected
-            .combine(fampnn_csv_file)
-            .map { items ->
-                // combine() flattens everything into a list, last item is csv
-                def csv = items[-1]
-                def pdb_list = items.size() > 1 ? items[0..-2] : []
-                return [pdb_list, csv]
-            }
-            .flatMap { pdb_list, csv ->
-                def fampnn_gpu_list = available_gpus
-                def fampnn_gpu_count = fampnn_gpu_list.size()
-                def chunk_size = Math.max(1, (pdb_list.size() / fampnn_gpu_count).intValue())
-                def items = []
-                fampnn_gpu_list.eachWithIndex { gpu_id, idx ->
-                    def start = idx * chunk_size
-                    def end = (idx == fampnn_gpu_count - 1) ? pdb_list.size() : (idx + 1) * chunk_size
-                    if (start < pdb_list.size()) {
-                        def pdb_subset = pdb_list.subList(start, end)
-                        log.info("    GPU ${gpu_id}: ${pdb_subset.size()} PDBs (${start}-${end-1})")
-                        items << [idx, pdb_subset, csv, gpu_id]
-                    }
-                }
-                return items
-            }
-
-        RunFAMPNN(fampnn_run_input, params.analysis_chain_id ?: "all_chains")
-
-        // REPORT STAGE: fampnn
-        RunFAMPNN.out.pdbs_jsons.subscribe { pdbs, jsons ->
-            try {
-                def file_list = pdbs instanceof List ? pdbs : [pdbs]
-                def report_files = file_list.size() > 50 ? file_list[0..49] : file_list
-                def args = [params.job_id, "fampnn", "complete"] + report_files.collect { it.toString() }
-                def proc = ["python3", "${projectDir}/scripts/stage_reporter.py", *args].execute()
-                proc.waitFor()
-            } catch (Exception e) {
-                println "Warning: Failed to report stage fampnn: ${e.message}"
-            }
-        }
-
-        // ═══════════════════════════════════════════════════════════════════
-        // FILTER: Pre-Boltz Filtering
-        // Reject low-quality FAMPNN sequences before expensive Boltz validation
-        // This is the highest-impact filter for compute savings
-        // ═══════════════════════════════════════════════════════════════════
-        def filterEnabled = params.enable_fampnn_filter != false && 
-                           (params.fampnn_max_psce != null || params.fampnn_max_residue_psce != null)
-        
-        if (filterEnabled) {
-            def filterDesc = []
-            if (params.fampnn_max_psce != null) filterDesc << "max avg PSCE: ${params.fampnn_max_psce}"
-            if (params.fampnn_max_residue_psce != null) filterDesc << "max residue PSCE: ${params.fampnn_max_residue_psce}"
-            log.info("  Filtering FAMPNN designs (${filterDesc.join(', ')})...")
+        // =====================================================================
+        // CHECK: Skip FAMPNN if pre-collected PDBs are provided
+        // This allows resuming from filtering without re-running FAMPNN
+        // =====================================================================
+        if (params.fampnn_collected_pdbs) {
+            log.info("  FAMPNN: Using pre-collected PDBs from ${params.fampnn_collected_pdbs}")
             
-            FilterFAMPNN(RunFAMPNN.out.pdbs_jsons)
+            // Load pre-collected PDBs directly
+            pre_collected_pdbs = Channel.fromPath("${params.fampnn_collected_pdbs}/*.pdb")
+                .collect()
             
-            // Report filter results
-            FilterFAMPNN.out.pdbs.subscribe { pdbs ->
-                def count = pdbs instanceof List ? pdbs.size() : 1
-                log.info("  FilterFAMPNN: ${count} designs passed filter")
+            pre_collected_pdbs.subscribe { pdbs ->
+                log.info("  FAMPNN: Loaded ${pdbs.size()} pre-collected PDBs")
             }
             
-            // Use filtered outputs for downstream (discard JSONs, Boltz doesn't need them)
-            fampnn_seqs = FilterFAMPNN.out.pdbs.map { pdbs ->
+            // Skip directly to filtering
+            fampnn_seqs = pre_collected_pdbs.map { pdbs ->
                 def meta = [id: "fampnn_designs"]
                 [meta, pdbs]
             }
+            
+            // Skip the spawn/wait/collect/filter block
+            
         } else {
-            log.info("  FAMPNN filtering disabled (enable with fampnn_max_psce or fampnn_max_residue_psce)")
-            // Pass through unfiltered - drop JSONs to prevent downstream PrepBoltz error
-            fampnn_seqs = RunFAMPNN.out.pdbs_jsons.map { pdbs, jsons ->
-                def meta = [id: "fampnn_designs"]
-                [meta, pdbs]
+            // Standard orchestrator mode
+            log.info("  Running FAMPNN via GPU Orchestrator...")
+            log.info("  Spawning child jobs (${params.pdbs_per_job ?: 5} PDBs per job, ${params.seqs_per_design ?: 20} seqs/design)")
+            
+            // Collect all backbone PDBs from parallel GPU runs into a single list
+            all_backbone_pdbs = backbone_designs
+                .map { meta, files -> files }
+                .flatten()
+                .collect()
+            
+            // PrepFAMPNN generates constraint CSV and preps structures
+            fampnn_prep_input = all_backbone_pdbs.map { pdbs ->
+                [pdbs, file("${projectDir}/lib/NO_JSON")]
             }
-        }
+            PrepFAMPNN(fampnn_prep_input)
+            
+            // Get the output directory from PrepFAMPNN (contains prepped PDBs)
+            fampnn_pdb_dir = PrepFAMPNN.out.pdbs.collect().map { files ->
+                // Return parent directory path as string
+                files[0].parent.toString()
+            }
+            
+            // =====================================================================
+            // ORCHESTRATOR MODE: Spawn FAMPNN child jobs
+            // Each child runs FAMPNN on a subset of PDBs, scheduled by orchestrator
+            // =====================================================================
+            SpawnFAMPNNJobs(
+                fampnn_pdb_dir,
+                params.seqs_per_design ?: 20,
+                params.pdbs_per_job ?: 5,
+                params.job_id ?: "unknown",
+                params.name ?: "antibody_batch"
+            )
+            
+            // Wait for all FAMPNN children to complete
+            // Pass batch_name for resume support (find children from original run)
+            // Note: map closure must accept the path argument (even if unused) 
+            fampnn_wait_trigger = SpawnFAMPNNJobs.out.result.map { _spawn_result -> params.job_id ?: "unknown" }
+            fampnn_batch_name = params.name ?: "antibody_batch"
+            
+            // Reuse WaitForChildren process - need separate call for FAMPNN stage
+            // Note: We use a different variable name to avoid Nextflow channel conflicts
+            WaitForFAMPNNChildren(
+                fampnn_wait_trigger,
+                "fampnn",
+                30,  // poll_interval
+                fampnn_batch_name
+            )
+            
+            // Collect outputs from completed FAMPNN child jobs
+            CollectFAMPNNOutputs(
+                WaitForFAMPNNChildren.out.child_outputs,
+                "fampnn"
+            )
+            
+            // REPORT STAGE: fampnn
+            CollectFAMPNNOutputs.out.pdbs.subscribe { pdbs ->
+                try {
+                    def file_list = pdbs instanceof List ? pdbs : [pdbs]
+                    def count = file_list.size()
+                    log.info("  FAMPNN via orchestrator: Collected ${count} PDBs from child jobs")
+                    def report_files = count > 50 ? file_list[0..49] : file_list
+                    def args = [params.job_id, "fampnn", "complete"] + report_files.collect { it.toString() }
+                    def proc = ["python3", "${projectDir}/scripts/stage_reporter.py", *args].execute()
+                    proc.waitFor()
+                } catch (Exception e) {
+                    println "Warning: Failed to report stage fampnn: ${e.message}"
+                }
+            }
+            
+            // ═══════════════════════════════════════════════════════════════════
+            // FILTER: Pre-Boltz Filtering (optional)
+            // Reject low-quality FAMPNN sequences before expensive Boltz validation
+            // ═══════════════════════════════════════════════════════════════════
+            def filterEnabled = params.enable_fampnn_filter != false && 
+                               (params.fampnn_max_psce != null || params.fampnn_max_residue_psce != null)
+            
+            if (filterEnabled) {
+                def filterDesc = []
+                if (params.fampnn_max_psce != null) filterDesc << "max avg PSCE: ${params.fampnn_max_psce}"
+                if (params.fampnn_max_residue_psce != null) filterDesc << "max residue PSCE: ${params.fampnn_max_residue_psce}"
+                log.info("  Filtering FAMPNN designs (${filterDesc.join(', ')})...")
+                
+                // Collect PDBs and JSONs for filtering
+                fampnn_filter_input = CollectFAMPNNOutputs.out.pdbs
+                    .combine(CollectFAMPNNOutputs.out.jsons.ifEmpty(file("${projectDir}/lib/NO_JSON")))
+                
+                FilterFAMPNN(fampnn_filter_input)
+                
+                FilterFAMPNN.out.pdbs.subscribe { pdbs ->
+                    def count = pdbs instanceof List ? pdbs.size() : 1
+                    log.info("  FilterFAMPNN: ${count} designs passed filter")
+                }
+                
+                fampnn_seqs = FilterFAMPNN.out.pdbs.map { pdbs ->
+                    def meta = [id: "fampnn_designs"]
+                    [meta, pdbs]
+                }
+            } else {
+                log.info("  FAMPNN filtering disabled (enable with fampnn_max_psce or fampnn_max_residue_psce)")
+                // Pass through unfiltered
+                fampnn_seqs = CollectFAMPNNOutputs.out.pdbs.map { pdbs ->
+                    def meta = [id: "fampnn_designs"]
+                    [meta, pdbs]
+                }
+            }
+        } // End of else block (standard FAMPNN mode)
     }
 
     // AntiFold branch (requires IMGT numbering)
@@ -813,31 +1076,74 @@ workflow ANTIBODY_DENOVO {
             def parent_id = params.job_id ?: "unknown_${System.currentTimeMillis()}"
             def batch = params.job_name ?: "antibody_batch"
             
-            // Call the spawn process - THIS BLOCKS until complete
+            // Build comprehensive params_json with ALL quality settings for child jobs
+            def child_params = groovy.json.JsonOutput.toJson([
+                // Boltz-2 settings
+                boltz_sampling_steps: params.boltz_sampling_steps ?: 200,
+                boltz_recycling_steps: params.boltz_recycling_steps ?: 3,
+                boltz_num_samples: params.boltz_num_samples ?: 1,
+                boltz_use_potentials: params.boltz_use_potentials ?: false,
+                boltz_use_msa: params.boltz_use_msa ?: false,
+                boltz_step_scale: params.boltz_step_scale,
+                
+                // ThermoMPNN settings
+                run_thermompnn: params.run_thermompnn ?: false,
+                thermompnn_max_ddg: params.thermompnn_max_ddg,
+                
+                // Immunogenicity (AntiBERTy) settings
+                run_immunogenicity_scoring: params.run_immunogenicity_scoring ?: false,
+                
+                // GPU assignment
+                pinned_gpus: params.pinned_gpus,
+                
+                // Filtering settings carried from FAMPNN
+                fampnn_max_psce: params.fampnn_max_psce,
+                fampnn_max_residue_psce: params.fampnn_max_residue_psce
+            ])
+            
+            // Call the spawn process - THIS BLOCKS until spawn is complete
             // PDBs and MSA must both be ready before this executes
             SpawnChildJobs(
                 collected_pdbs,
                 msa_for_spawn,
                 parent_id,
-                batch
+                batch,
+                child_params
             )
             
-            // Report completion with actual count from spawn result
-            SpawnChildJobs.out.result.subscribe { result_file ->
-                try {
-                    def result = new groovy.json.JsonSlurper().parse(result_file)
-                    log.info("Parent job complete. ${result.spawned_jobs} child jobs queued for validation.")
-                    if (result.status != "complete") {
-                        log.warn("Spawn status: ${result.status}")
+            // Get expected child count from spawn result
+            spawn_child_count = SpawnChildJobs.out.result
+                .map { result_file ->
+                    try {
+                        def result = new groovy.json.JsonSlurper().parse(result_file)
+                        log.info("Spawned ${result.spawned_jobs} child validation jobs")
+                        return result.spawned_jobs ?: 0
+                    } catch (Exception e) {
+                        log.warn("Failed to parse spawn result: ${e.message}")
+                        return 0
                     }
+                }
+            
+            // Wait for all children to complete and aggregate their results
+            // This ensures validated designs are in pdb_files/ for analytics
+            WaitAndAggregateChildResults(
+                parent_id,
+                batch,
+                spawn_child_count
+            )
+            
+            // Report aggregation completion
+            WaitAndAggregateChildResults.out.report.subscribe { report_file ->
+                try {
+                    def report = new groovy.json.JsonSlurper().parse(report_file)
+                    log.info("Aggregation complete: ${report.total_validated_designs} validated designs collected")
                 } catch (Exception e) {
-                    log.warn("Failed to parse spawn result: ${e.message}")
+                    log.warn("Failed to parse aggregation report: ${e.message}")
                 }
             }
             
-            // Parent's job is done - no local validation needed
-            // Children run independently via GPU orchestrator
-            validated_structures = channel.empty()
+            // Final validated structures from aggregation
+            validated_structures = WaitAndAggregateChildResults.out.pdbs
         }
         else {
             // ═══════════════════════════════════════════════════════════════════
