@@ -25,6 +25,7 @@ import { NanoporeTemplate } from './NanoporeTemplate';
 import { OntInstrumentPanel } from './ngs/OntInstrumentPanel';
 import { RawReadInspector } from './ngs/RawReadInspector';
 import { BarcodeUnitsPanel } from './ngs/BarcodeUnitsPanel';
+import { PooledAssignmentReviewPanel } from './ngs/PooledAssignmentReviewPanel';
 import { SequenceQcManifestPanel } from './ngs/SequenceQcManifestPanel';
 import { useSequenceQcManifest } from './ngs/useSequenceQcManifest';
 import { useThemeColors, useThemePlotlyLayout } from './useThemeColors';
@@ -4069,10 +4070,20 @@ export function NGSToolkit() {
                                     onNavigateLocus={navigateToVerifiedLocus}
                                 />
 
+                                <PooledAssignmentReviewPanel
+                                    key={`pooled-assignment-review-${selectedJob.id}`}
+                                    jobId={selectedJob.id}
+                                    jobStatus={selectedJob.status}
+                                    mode={selectedJob.mode}
+                                    ontWorkflowId={selectedJob.params?.ont_workflow_id}
+                                    stageOutputs={stageOutputs}
+                                    files={selectedJob.files}
+                                    results={selectedJob.results}
+                                />
+
                                 <BarcodeUnitsPanel
                                     jobId={selectedJob.id}
                                     enabled={selectedJob.status === 'completed' && selectedJob.model_id === 'nanopore' && selectedJob.mode === 'basecall_dna' && Boolean(selectedJob.params?.barcode_kit)}
-                                    defaultReference={typeof selectedJob.params?.reference_fasta === 'string' ? selectedJob.params.reference_fasta : ''}
                                 />
 
                                 <div className="space-y-2">

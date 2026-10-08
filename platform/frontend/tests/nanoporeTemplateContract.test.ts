@@ -19,13 +19,15 @@ test('Nanopore FASTQ launch defaults stay compatible with bundled minimap2', () 
     assert.match(cloneState, /fastqMinimap2Preset: p\.fastq_minimap2_preset \?\? 'map-ont'/u);
 });
 
-test('Nanopore FASTQ launch is gated on reference input, finite numeric bounds, and a selected QC or clone workflow', () => {
+test('Nanopore reference workflows are gated on an exact saved MolBio revision', () => {
     const template = readSource('src/components/NanoporeTemplate.tsx');
 
-    assert.match(template, /const hasFastqReferenceInput = useMemo/u);
+    assert.match(template, /const requiresReference = selectedWorkflow === 'clone'/u);
+    assert.match(template, /selectedMolbioSequenceId/u);
+    assert.match(template, /selectedMolbioRevisionId/u);
     assert.match(template, /selectedWorkflow === 'clone' \|\| selectedWorkflow === 'plasmidQc' \|\| selectedWorkflow === 'constructScreening' \|\| selectedWorkflow === 'fastqQc'/u);
-    assert.match(template, /&& \(hasFastqReferenceInput \|\| Boolean\(molbioSequenceId\)\)\s+&& hasValidFastqNumericControls/u);
-    assert.match(template, /This workflow requires a reference FASTA path or a pasted\/created FASTA sequence/u);
+    assert.match(template, /This workflow requires a saved MolBio sequence and exact immutable revision/u);
+    assert.doesNotMatch(template, /localStorage|uploadFile|referencePath|reference_fasta/u);
     assert.match(template, /function coerceIntegerInput/u);
     assert.match(template, /FASTQ_MAX_IGV_REPORT_MAX_SITES/u);
     assert.match(template, /max=\{FASTQ_MAX_IGV_REPORT_MAX_SITES\}/u);

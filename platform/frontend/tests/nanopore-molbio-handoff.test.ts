@@ -9,9 +9,13 @@ test('ordinary Nanopore UI exposes no raw comparison-panel path control', () => 
 });
 
 test('MolBio handoff obtains a server-issued receipt and submits only its id', () => {
-  assert.match(source, /\/ngs-receipts`, \{ method: 'POST' \}/);
+  const api = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
+  assert.match(source, /issueMolBioNgsReceipt/);
+  assert.match(api, /\/ngs-receipts/u);
+  assert.match(api, /request: MolBioNgsReceiptRequest/u);
+  assert.match(source, /revision_id: selectedMolbioRevisionId/);
   assert.match(source, /molbio_ngs_receipt_id: molbioNgsReceiptId/);
-  assert.doesNotMatch(source, /molbio_sequence_id: molbioSequenceId/);
+  assert.doesNotMatch(source, /localStorage|uploadFile|referencePath|reference_fasta/);
 });
 
 test('comparison selection lists server-approved opaque ids and obtains a bound receipt', () => {
