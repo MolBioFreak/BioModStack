@@ -89,6 +89,7 @@ from migrations.add_ngs_alignment_presentation_jobs import (
 )
 from migrations.add_ngs_alignment_derived_products import migrate as migrate_ngs_alignment_derived_products
 from migrations.add_native_alignment_viewer_sessions import migrate as migrate_native_alignment_viewer_sessions
+from migrations.add_ngs_historical_request_ownership import migrate as migrate_ngs_historical_request_ownership
 from run_migration import migrate as migrate_stage_tracking
 
 
@@ -172,6 +173,7 @@ MIGRATIONS: List[Migration] = [
     ),
     Migration(47, "add_ngs_alignment_derived_products", migrate_ngs_alignment_derived_products),
     Migration(48, "add_native_alignment_viewer_sessions", migrate_native_alignment_viewer_sessions),
+    Migration(49, "add_ngs_historical_request_ownership", migrate_ngs_historical_request_ownership),
 ]
 
 

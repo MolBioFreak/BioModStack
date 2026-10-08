@@ -147,6 +147,9 @@ async def _request(session: AsyncSession, *, source: dict[str, Any], product: Pr
                    contract: dict[str, Any], request_sha256: str | None,
                    catalog: Product | None) -> Product:
     validate_source(source)
+    from services.ngs_historical_backfill import PROTECTED_JOB
+    if source["job_id"] == PROTECTED_JOB:
+        raise PresentationSourceStale("protected result is excluded from derived work")
     # A stale in-memory Job or worker success report is not admission authority.
     accepted = await session.scalar(select(Job.id).where(
         Job.id == source["job_id"], Job.status == "completed", Job.queue_status == "completed",
@@ -404,7 +407,9 @@ def resolve_product_source(job: Job, row: Product):
                and receipt.get("request_id") == catalog_id and receipt.get("session_id") == row.session_id
                and receipt.get("source_authority_sha256") == row.source_authority_sha256]
     if len(matches) != 1:
-        raise PresentationSourceStale("current result does not own this catalog request")
+        from services.ngs_historical_backfill import owns_request
+        if matches or not owns_request(job, row):
+            raise PresentationSourceStale("current result does not own this catalog request")
     root = resolve_persisted_job_result_root(job)
     from services.ngs_native_alignment_sources import is_native, sources
     if is_native(job):

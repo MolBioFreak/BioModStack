@@ -69,7 +69,5 @@ def test_previous_schema_migrates_without_changing_job_status_or_provenance(tmp_
 def test_presentation_migration_is_registered_after_current_head() -> None:
     from migrations.runner import MIGRATIONS
 
-    assert (MIGRATIONS[-1].version, MIGRATIONS[-1].name) == (
-        46,
-        "add_ngs_alignment_presentation_jobs",
-    )
+    matches = [(item.version, item.name) for item in MIGRATIONS if item.name == "add_ngs_alignment_presentation_jobs"]
+    assert matches == [(46, "add_ngs_alignment_presentation_jobs")]

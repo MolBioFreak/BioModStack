@@ -47,6 +47,9 @@ class _ObservationalPresentationSession:
     async def execute(self, _statement: Any):
         return _ScalarResult(self.row)
 
+    async def scalars(self, _statement: Any):
+        return SimpleNamespace(all=lambda: [self.row] if self.row is not None else [])
+
     async def commit(self):
         self.commits += 1
 
@@ -4838,15 +4841,9 @@ def test_presentation_get_is_observational_for_nonready_durable_states(
         "/api/jobs/job-a/alignment-sessions/session-a/presentation"
     )
 
-    assert response.status_code == 200
-    assert response.json() == {
-        "schema": "bms.ngs.alignment-presentation.v2",
-        "job_id": "job-a",
-        "session_id": "session-a",
-        "mode": "primary",
-        "state": expected_state,
-        **extra,
-    }
+    assert response.status_code == 410
+    assert response.json()["code"] == "NGS_LEGACY_MUTATION_RETIRED"
+    assert row.state == stored_state
     assert database.commits == 0
     assert database.rollbacks == 0
 
@@ -5019,68 +5016,22 @@ def test_presentation_retry_rejects_read_only_principal_through_real_authorizati
     assert response.json()["code"] == "NGS_PRINCIPAL_DENIED"
 
 
-@pytest.mark.parametrize(
-    ("state", "expected_status", "expected_state", "expected_code"),
-    [
-        ("failed", 200, "preparing", None),
-        ("requested", 200, "preparing", None),
-        ("running", 200, "preparing", None),
-        ("ready", 409, None, "NGS_PRESENTATION_ALREADY_READY"),
-    ],
-)
-def test_presentation_retry_route_is_current_source_checked_and_replay_idempotent(
-    monkeypatch: pytest.MonkeyPatch,
-    state: str,
-    expected_status: int,
-    expected_state: str | None,
-    expected_code: str | None,
-) -> None:
-    row = SimpleNamespace(
-        id="presentation-1",
-        job_id="job-a",
-        session_id="session-a",
-        mode="primary",
-        state=state,
-        error_code=None,
-        source_authority_sha256="a" * 64,
-        authority_sha256="d" * 64 if state == "ready" else None,
-        manifest_sha256="e" * 64 if state == "ready" else None,
-    )
+@pytest.mark.parametrize("state", ["failed", "requested", "running", "ready"])
+def test_legacy_retry_is_retired_without_queuing_or_mutating(monkeypatch, state):
+    row = SimpleNamespace(state=state)
     database = _ObservationalPresentationSession(row)
-    retries: list[str] = []
-    resolutions: list[str] = []
-
-    async def current(_job: Any, candidate: Any) -> str:
-        resolutions.append(candidate.state)
-        return candidate.source_authority_sha256
-
-    async def retry(_session: Any, request_id: str, **_kwargs: Any):
-        retries.append(request_id)
-        if state == "ready":
-            raise ngs_routes.presentation_lifecycle.PresentationAlreadyReady()
-        if state == "failed":
-            row.state = "requested"
-        return row
-
-    monkeypatch.setattr(ngs_routes, "_resolve_current_presentation_source", current, raising=False)
+    def forbidden(*args, **kwargs):
+        raise AssertionError("retired route reached legacy mutation")
     monkeypatch.setattr(ngs_routes, "_mutation_principal", lambda _request: "operator-a")
-    monkeypatch.setattr(ngs_routes.presentation_lifecycle, "retry_failed_presentation", retry)
+    monkeypatch.setattr(ngs_routes.presentation_lifecycle, "retry_failed_presentation", forbidden)
     app = _ngs_app()
     app.include_router(ngs_routes.router, prefix="/api")
     app.dependency_overrides[ngs_routes.require_alignment_job] = lambda: SimpleNamespace(id="job-a")
     app.dependency_overrides[ngs_routes.get_session] = lambda: database
-
-    response = TestClient(app).post(
-        "/api/jobs/job-a/alignment-sessions/session-a/presentation/retry"
-    )
-
-    assert response.status_code == expected_status
-    assert retries == (["presentation-1"] if state == "failed" else [])
-    assert resolutions == (["failed"] if state == "failed" else [])
-    if expected_code is not None:
-        assert response.json()["code"] == expected_code
-    else:
-        assert response.json()["state"] == expected_state
+    response = TestClient(app).post("/api/jobs/job-a/alignment-sessions/session-a/presentation/retry")
+    assert response.status_code == 410
+    assert response.json()["code"] == "NGS_LEGACY_MUTATION_RETIRED"
+    assert row.state == state and database.commits == 0
 
 
 def test_presentation_errors_validate_through_model_and_openapi_with_presentation_resource() -> None:
@@ -5097,39 +5048,6 @@ def test_presentation_errors_validate_through_model_and_openapi_with_presentatio
     app.include_router(ngs_routes.router, prefix="/api")
     schema = app.openapi()["components"]["schemas"]["OntNgsErrorV1"]
     assert "presentation" in schema["properties"]["resource"]["enum"]
-
-
-def test_presentation_retry_cas_conflict_returns_typed_409_not_500(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    row = SimpleNamespace(
-        id="presentation-1", job_id="job-a", session_id="session-a", mode="primary",
-        state="failed", error_code="source_invalid", source_authority_sha256="a" * 64,
-        authority_sha256=None, manifest_sha256=None,
-    )
-    database = _ObservationalPresentationSession(row)
-
-    async def retry(*_args: Any, **_kwargs: Any):
-        raise ngs_routes.presentation_lifecycle.PresentationClaimLost("lost")
-
-    async def current(_job: Any, candidate: Any) -> str:
-        return candidate.source_authority_sha256
-
-    monkeypatch.setattr(ngs_routes, "_mutation_principal", lambda _request: "operator-a")
-    monkeypatch.setattr(
-        ngs_routes, "_resolve_current_presentation_source", current,
-    )
-    monkeypatch.setattr(ngs_routes.presentation_lifecycle, "retry_failed_presentation", retry)
-    app = _ngs_app()
-    app.include_router(ngs_routes.router, prefix="/api")
-    app.dependency_overrides[ngs_routes.require_alignment_job] = lambda: SimpleNamespace(id="job-a")
-    app.dependency_overrides[ngs_routes.get_session] = lambda: database
-
-    response = TestClient(app, raise_server_exceptions=False).post(
-        "/api/jobs/job-a/alignment-sessions/session-a/presentation/retry"
-    )
-    assert response.status_code == 409
-    assert ngs_routes.OntNgsErrorV1.model_validate(response.json()).code == "NGS_AUTHORITY_CONFLICT"
 
 
 def test_f2_signal_input_is_pinned_before_query_scratch(monkeypatch, tmp_path):

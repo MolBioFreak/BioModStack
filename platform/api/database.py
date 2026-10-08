@@ -357,6 +357,7 @@ class NgsAlignmentDerivedProduct(Base):
     product = Column(String(16), nullable=False)
     source_authority_sha256 = Column(String(64), nullable=False)
     source_identity = Column(JSON, nullable=False)
+    historical_owner = Column(JSON, nullable=True)
     intent_sha256 = Column(String(64), nullable=False)
     request_contract = Column(JSON, nullable=False)
     request_sha256 = Column(String(64), nullable=True)

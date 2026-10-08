@@ -102,28 +102,20 @@ async def request_presentation(
 
 
 async def get_session_presentation(
-    session: AsyncSession,
-    *,
-    job_id: str,
-    session_id: str,
+    session: AsyncSession, *, job_id: str, session_id: str,
+    authority_sha256: str | None = None,
 ) -> NgsAlignmentPresentationJob | None:
-    """Read the newest durable presentation generation without mutation."""
-
-    return (
-        await session.execute(
-            select(NgsAlignmentPresentationJob)
-            .where(
-                NgsAlignmentPresentationJob.job_id == job_id,
-                NgsAlignmentPresentationJob.session_id == session_id,
-            )
-            .order_by(
-                NgsAlignmentPresentationJob.created_at.desc(),
-                NgsAlignmentPresentationJob.id.desc(),
-            )
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-
+    """Historical only: never select a newer generation as implicit authority."""
+    query = select(NgsAlignmentPresentationJob).where(
+        NgsAlignmentPresentationJob.job_id == job_id,
+        NgsAlignmentPresentationJob.session_id == session_id)
+    if authority_sha256 is not None:
+        query = query.where(NgsAlignmentPresentationJob.authority_sha256 == authority_sha256,
+                            NgsAlignmentPresentationJob.state == "ready")
+    rows = (await session.scalars(query.limit(2))).all()
+    if len(rows) > 1:
+        raise PresentationSourceStale("historical presentation generation is ambiguous; use an exact authority")
+    return rows[0] if rows else None
 
 async def claim_next_presentation(
     session: AsyncSession,

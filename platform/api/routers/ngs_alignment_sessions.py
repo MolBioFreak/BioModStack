@@ -86,7 +86,7 @@ class OntNgsErrorV1(BaseModel):
         "NGS_CAPABILITY_DENIED", "NGS_HIERARCHY_DENIED", "NGS_PRINCIPAL_DENIED",
         "NGS_ROTATION_ORIGIN_DENIED", "NGS_RESOURCE_NOT_FOUND", "NGS_AUTHORITY_CONFLICT",
         "NGS_PACKAGE_INTEGRITY_CONFLICT", "NGS_CAPABILITY_ROTATION_CONFLICT",
-        "NGS_PRESENTATION_ALREADY_READY", "NGS_PRESENTATION_SOURCE_STALE",
+        "NGS_PRESENTATION_ALREADY_READY", "NGS_PRESENTATION_SOURCE_STALE", "NGS_LEGACY_MUTATION_RETIRED",
         "NGS_ROTATION_INELIGIBLE", "NGS_ARTIFACT_INTEGRITY_CONFLICT",
         "NGS_READ_SCAN_TRUNCATED", "NGS_RANGE_INVALID", "NGS_RANGE_UNSATISFIABLE",
         "NGS_READ_POPULATION_INVALID", "NGS_READ_POPULATION_STALE",
@@ -1793,11 +1793,15 @@ def _presentation_authority(row: NgsAlignmentPresentationJob) -> tuple[str, str]
 
 
 async def _presentation_row(
-    session: AsyncSession, job_id: str, session_id: str,
+    session: AsyncSession, job_id: str, session_id: str, authority_sha256: str | None = None,
 ) -> NgsAlignmentPresentationJob:
-    row = await presentation_lifecycle.get_session_presentation(
-        session, job_id=job_id, session_id=session_id,
-    )
+    try:
+        row = await presentation_lifecycle.get_session_presentation(
+            session, job_id=job_id, session_id=session_id, authority_sha256=authority_sha256,
+        )
+    except presentation_lifecycle.PresentationSourceStale as exc:
+        raise OntNgsRouteError(status_code=409, code="NGS_AUTHORITY_CONFLICT",
+            message=str(exc), job_id=job_id, resource="presentation") from exc
     if row is None:
         raise OntNgsRouteError(
             status_code=404, code="NGS_RESOURCE_NOT_FOUND",
@@ -1934,64 +1938,10 @@ def _require_current_locus_authority(receipt: dict[str, Any], presentation: dict
         raise service.AlignmentSessionError("alignment locus slice presentation authority is stale")
 
 
-async def _resolve_current_presentation_source(
-    job: Job,
-    row: NgsAlignmentPresentationJob,
-) -> str:
-    authority = _job_session_authority(job)
-    async with _validated_pinned_result_root(job) as pinned_root:
-        available = await run_in_threadpool(
-            service.build_alignment_sessions,
-            str(job.id),
-            **authority,
-            job_output_dir=pinned_root,
-            pinned_root_descriptor=True,
-        )
-        matches = [
-            item for item in available
-            if item.get("ready") is True
-            and item.get("session_id") == row.session_id
-            and item.get("mode") == row.mode
-            and item.get("artifact_set_sha256") == row.source_artifact_set_sha256
-        ]
-        if len(matches) != 1:
-            return ""
-        _bam, bam_meta, _index, index_meta = await run_in_threadpool(
-            service.resolve_session_alignment_bundle,
-            str(job.id),
-            row.session_id,
-            source_reference_sha256=authority["source_reference_sha256"],
-            workflow_id=authority["workflow_id"],
-            input_mode=authority["input_mode"],
-            job_output_dir=pinned_root,
-            pinned_root_descriptor=True,
-        )
-    source_manifest_sha256 = bam_meta.get("source_manifest_sha256")
-    if source_manifest_sha256 != index_meta.get("source_manifest_sha256"):
-        return ""
-    current = {
-        "schema": "bms.ngs.alignment-presentation-source.v1",
-        "job_id": str(job.id),
-        "session_id": row.session_id,
-        "mode": row.mode,
-        "source_reference_sha256": authority["source_reference_sha256"],
-        "source_manifest_sha256": source_manifest_sha256,
-        "source_artifact_set_sha256": matches[0]["artifact_set_sha256"],
-        "package_artifact_set_sha256": authority["package_artifact_set_sha256"],
-        "alignment_pair_sha256": matches[0]["alignment_pair_sha256"],
-        "alignment_sha256": bam_meta.get("sha256"),
-        "alignment_size_bytes": bam_meta.get("size_bytes"),
-        "alignment_index_sha256": index_meta.get("sha256"),
-        "alignment_index_size_bytes": index_meta.get("size_bytes"),
-        "policy_version": row.policy_version,
-    }
-    return hashlib.sha256(rfc8785.dumps(current)).hexdigest()
-
-
 @router.get(
     "/jobs/{job_id}/alignment-sessions/{session_id}/presentation",
     response_model=OntAlignmentPresentationV2,
-    responses=_STANDARD_GOVERNED_ERRORS,
+    responses={**_STANDARD_GOVERNED_ERRORS, **_typed_errors(410)},
 )
 async def get_alignment_presentation(
     job_id: str,
@@ -2001,7 +1951,9 @@ async def get_alignment_presentation(
 ):
     row = await _presentation_row(db, job_id, session_id)
     if row.state != "ready":
-        return _presentation_response(job_id, session_id, row)
+        raise OntNgsRouteError(status_code=410, code="NGS_LEGACY_MUTATION_RETIRED",
+            message="This legacy request has no active builder. Use split product status or operator historical backfill.",
+            job_id=job_id, resource="presentation")
     try:
         async with _prepared_presentation(
             job_id, session_id, authorized_job, row,
@@ -2014,7 +1966,7 @@ async def get_alignment_presentation(
 @router.post(
     "/jobs/{job_id}/alignment-sessions/{session_id}/presentation/retry",
     response_model=OntAlignmentPresentationV2,
-    responses=_STANDARD_GOVERNED_ERRORS,
+    responses={**_STANDARD_GOVERNED_ERRORS, **_typed_errors(410)},
 )
 async def retry_alignment_presentation(
     job_id: str,
@@ -2033,38 +1985,11 @@ async def retry_alignment_presentation(
             job_id=job_id,
             resource="presentation",
         ) from exc
-    row = await _presentation_row(db, job_id, session_id)
-    try:
-        if row.state == "ready":
-            raise presentation_lifecycle.PresentationAlreadyReady()
-        if row.state in {"requested", "running"}:
-            return _presentation_response(job_id, session_id, row)
-        current_source = await _resolve_current_presentation_source(authorized_job, row)
-        retried = await presentation_lifecycle.retry_failed_presentation(
-            db,
-            row.id,
-            current_source_authority_sha256=current_source,
-        )
-    except presentation_lifecycle.PresentationAlreadyReady as exc:
-        raise OntNgsRouteError(
-            status_code=409, code="NGS_PRESENTATION_ALREADY_READY",
-            message="The presentation is already ready.",
-            job_id=job_id, resource="presentation",
-        ) from exc
-    except presentation_lifecycle.PresentationSourceStale as exc:
-        raise OntNgsRouteError(
-            status_code=409, code="NGS_PRESENTATION_SOURCE_STALE",
-            message="The presentation source is no longer current.",
-            job_id=job_id, resource="presentation",
-        ) from exc
-    except presentation_lifecycle.PresentationClaimLost as exc:
-        raise OntNgsRouteError(
-            status_code=409, code="NGS_AUTHORITY_CONFLICT",
-            message="The presentation retry conflicted with a concurrent transition.",
-            job_id=job_id, resource="presentation",
-        ) from exc
-    return _presentation_response(job_id, session_id, retried)
-
+    raise OntNgsRouteError(
+        status_code=410, code="NGS_LEGACY_MUTATION_RETIRED",
+        message="Combined presentation retries are retired. Use source-bound catalog/preview retry; historical requests require operator backfill.",
+        job_id=job_id, resource="presentation",
+    )
 
 async def _current_derived_products(
     db: AsyncSession, job: Job, session_id: str, preview_request_id: str | None = None,
@@ -2078,8 +2003,19 @@ async def _current_derived_products(
     matches = [item for item in receipts if isinstance(item, dict)
                and item.get("session_id") == session_id
                and str(item.get("request_id", "")).startswith("ngs-catalog-")]
+    if not matches:
+        from services.ngs_historical_backfill import current_historical_catalog
+        try:
+            catalog = await current_historical_catalog(db, job, session_id)
+        except presentation_lifecycle.PresentationSourceStale as exc:
+            raise OntNgsRouteError(status_code=409, code="NGS_PRESENTATION_SOURCE_STALE",
+                message=str(exc), job_id=str(job.id), resource="presentation") from exc
+        if catalog is None:
+            return None, None
+        matches = [{"request_id": catalog.id, "source_authority_sha256": catalog.source_authority_sha256}]
     if len(matches) != 1:
-        return None, None
+        raise OntNgsRouteError(status_code=409, code="NGS_AUTHORITY_CONFLICT",
+            message="Catalog ownership is ambiguous.", job_id=str(job.id), resource="presentation")
     receipt = matches[0]
     catalog = await db.get(NgsAlignmentDerivedProduct, receipt["request_id"])
     if catalog is None:
@@ -2220,7 +2156,7 @@ async def get_alignment_presentation_artifact(job_id: str, session_id: str, kind
                                message="The governed presentation artifact was not found.",
                                job_id=job_id, resource="artifact")
     try:
-        row = await _presentation_row(db, job_id, session_id)
+        row = await _presentation_row(db, job_id, session_id, presentation_id)
         async with _prepared_presentation(job_id, session_id, authorized_job, row) as (package, _pinned_result_root):
             if presentation_id is not None and presentation_id != package["manifest"].get("authority_sha256"):
                 raise service.AlignmentSessionError("alignment presentation identity does not match")
@@ -2233,49 +2169,14 @@ async def get_alignment_presentation_artifact(job_id: str, session_id: str, kind
 
 
 @router.post("/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices",
-             response_model=OntAlignmentLocusSliceV1, responses=_typed_errors(400, 403, 404, 409))
+             response_model=OntAlignmentLocusSliceV1, responses=_typed_errors(400, 403, 404, 409, 410))
 async def create_alignment_locus_slice(job_id: str, session_id: str, body: OntAlignmentLocusSliceRequestV1,
                                        authorized_job: Job = Depends(require_alignment_job)):
-    if (not service.SAFE_CONTIG_RE.fullmatch(body.contig) or body.start_1based < 1
-            or body.end_1based < body.start_1based
-            or body.end_1based - body.start_1based + 1 > service.LOCUS_MAX_SPAN
-            or body.max_reads < 1 or body.max_reads > service.LOCUS_MAX_READS):
-        return _ngs_error_response(status_code=400, code="NGS_RANGE_INVALID",
-                                   message="The locus slice request is invalid.", job_id=job_id, resource="range")
-    try:
-        async with _prepared_presentation(job_id, session_id, authorized_job) as (presentation, pinned_root):
-            manifest = presentation["manifest"]
-            with service.open_presentation_source_bundle(
-                presentation, pinned_root,
-            ) as (bam, index, identity, index_identity):
-                package = await run_in_threadpool(
-                    service.build_alignment_locus_slice, bam,
-                    bam_sha256=manifest["source_alignment_sha256"],
-                    bam_size_bytes=manifest["source_alignment_size_bytes"], index=index,
-                    index_sha256=manifest["source_index_sha256"],
-                    index_size_bytes=manifest["source_index_size_bytes"],
-                    source_identity=identity, source_index_identity=index_identity,
-                    source_manifest_sha256=manifest["package_manifest_sha256"],
-                    presentation_authority_sha256=manifest["authority_sha256"],
-                    presentation_manifest_sha256=presentation["manifest_metadata"]["sha256"],
-                    job_id=job_id, session_id=session_id, contig=body.contig,
-                    start=body.start_1based, end=body.end_1based, max_reads=body.max_reads,
-                )
-        receipt = package["receipt"]
-        base = f"/api/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices/{package['slice_id']}"
-        return {"schema": "bms.ngs.alignment-locus-slice.v1", "job_id": job_id, "session_id": session_id,
-                "slice_id": package["slice_id"], "state": "ready", "contig": body.contig,
-                "start_1based": body.start_1based, "end_1based": body.end_1based,
-                "overlapping_read_count": receipt["overlapping_read_count"],
-                "selected_read_count": receipt["selected_read_count"],
-                "selected_record_count": receipt["selected_record_count"], "capped": receipt["capped"],
-                "policy": receipt["policy"],
-                "bam": _derived_descriptor(package["bam_metadata"], f"{base}/{package['bam_metadata']['sha256']}/bam"),
-                "index": _derived_descriptor(package["index_metadata"], f"{base}/{package['index_metadata']['sha256']}/bai"),
-                "manifest": _derived_descriptor(package["manifest_metadata"], f"{base}/{package['manifest_metadata']['sha256']}/manifest")}
-    except service.AlignmentSessionError as exc:
-        raise _http_error(exc, job_id=job_id, resource="artifact") from exc
-
+    raise OntNgsRouteError(
+        status_code=410, code="NGS_LEGACY_MUTATION_RETIRED",
+        message="Legacy locus construction is retired. Use catalog queries and exact-read overlays; existing historical downloads remain available.",
+        job_id=job_id, resource="presentation",
+    )
 
 @router.get("/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices/{slice_id}/{artifact_sha256}/{kind}", responses=_BINARY_RESPONSES)
 @router.head("/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices/{slice_id}/{artifact_sha256}/{kind}", responses=_BINARY_RESPONSES)
