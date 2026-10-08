@@ -284,6 +284,8 @@ async def create_child_job(
     idempotency_owner: Job | None = None,
     idempotency_marker_key: str | None = None,
     triggered_marker_key: str | None = None,
+    preallocated_job_id: str | None = None,
+    commit: bool = True,
 ) -> Job:
     """Atomically publish immutable launch authority and persist one queued child."""
 
@@ -308,7 +310,24 @@ async def create_child_job(
     if bool(idempotency_owner) != bool(idempotency_marker_key):
         raise FrustraMPNNChildError("idempotency owner and marker must be supplied together")
 
-    if idempotency_owner is not None and idempotency_marker_key is not None:
+    if preallocated_job_id is not None and (
+        idempotency_owner is not None or idempotency_marker_key is not None
+    ):
+        raise FrustraMPNNChildError(
+            "preallocated Job identity cannot be combined with legacy idempotency markers"
+        )
+    if preallocated_job_id is not None:
+        try:
+            job_id = str(uuid.UUID(preallocated_job_id))
+        except (TypeError, ValueError) as exc:
+            raise FrustraMPNNChildError(
+                "preallocated Job identity must be one canonical UUID"
+            ) from exc
+        if job_id != preallocated_job_id or await session.get(Job, job_id) is not None:
+            raise FrustraMPNNChildError(
+                "preallocated FrustraMPNN child Job already exists"
+            )
+    elif idempotency_owner is not None and idempotency_marker_key is not None:
         owner_params = dict(idempotency_owner.params or {})
         recorded_child_id = owner_params.get(idempotency_marker_key)
         if recorded_child_id:
@@ -615,8 +634,9 @@ async def create_child_job(
             if triggered_marker_key:
                 owner_params[triggered_marker_key] = True
             idempotency_owner.params = owner_params
-        await session.commit()
-        committed = True
+        if commit:
+            await session.commit()
+            committed = True
         return job
     except (StructureNormalizationError, SourceResolutionError) as exc:
         if not committed:
@@ -632,6 +652,15 @@ async def create_child_job(
             await session.rollback()
             shutil.rmtree(root, ignore_errors=True)
         raise
+
+
+def discard_uncommitted_child_artifacts(child: Job) -> None:
+    """Remove only the exact server-owned root of one rolled-back child."""
+
+    expected = _snapshot_root(str(child.id)).absolute()
+    actual = Path(str(child.output_dir or "")).absolute()
+    if actual == expected and actual.is_dir() and not actual.is_symlink():
+        shutil.rmtree(actual)
 
 
 async def create_reanalysis_child(
@@ -837,5 +866,6 @@ async def child_receipt(session: AsyncSession, *, child: Job) -> dict[str, Any]:
 
 __all__ = [
     "ENVELOPE_KEY", "FrustraMPNNChildError", "child_receipt", "create_child_job",
-    "create_reanalysis_child", "design_selections", "handoff_selection", "upload_selection",
+    "create_reanalysis_child", "design_selections", "discard_uncommitted_child_artifacts",
+    "handoff_selection", "upload_selection",
 ]

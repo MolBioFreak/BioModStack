@@ -1,10 +1,11 @@
 import React, { act } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot } from 'react-dom/client';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { api } from '../../src/lib/api';
 import { CANONICAL_FRUSTRAMPNN_SETTINGS } from '../../src/components/frustrampnn/frustraMpnnSettingsState';
+import FrustraMpnnAnalysisControls from '../../src/components/FrustraMpnnAnalysisControls';
 
 const inspection = {
     source_models: [1],
@@ -91,9 +92,90 @@ const settle = async (milliseconds = 0) => {
     });
 };
 
-afterEach(() => document.body.replaceChildren());
+afterEach(() => {
+    document.body.replaceChildren();
+    vi.unstubAllGlobals();
+});
 
 describe('uploaded FrustraMPNN operator analysis', () => {
+    it('renders and opens every scheduler child, including the smaller remainder', async () => {
+        const originalGet = api.get;
+        const originalPost = api.post;
+        const childReceipt = (id: string, structureCount: number) => ({
+            job_id: id, child_job_id: id, result_job_id: id,
+            name: `FrustraMPNN ${id}`, parent_job_id: 'parent-1', source_parent_job_id: 'parent-1',
+            trigger: 'design_analyze', status: 'queued', created_at: '2026-08-27T00:00:00Z',
+            started_at: null, completed_at: null, settings_value_origin: 'operator_request',
+            requested_settings: persistedSettings, requested_settings_sha256: '2'.repeat(64),
+            candidates: [], results: [], structure_count: structureCount,
+        });
+        const receiptPolls: string[] = [];
+        (api as unknown as { get: (url: string) => Promise<{ data: unknown }> }).get = async (url) => {
+            const childId = ['child-1', 'child-2'].find((id) => url.includes(`/jobs/${id}/receipt`));
+            if (childId) {
+                receiptPolls.push(childId);
+                const { structure_count: _structureCount, ...receipt } = childReceipt(childId, childId === 'child-1' ? 2 : 1);
+                return { data: { ...receipt, status: 'completed', completed_at: '2026-08-27T00:01:00Z' } };
+            }
+            return { data: {} };
+        };
+        (api as unknown as { post: (url: string) => Promise<{ data: unknown }> }).post = async (url) => {
+            if (url.endsWith('/sources/inspect/upload')) return { data: inspection };
+            if (url.endsWith('/settings/validate/upload')) return { data: validationPreview };
+            if (url.endsWith('/jobs/parent-1/analyze')) return { data: {
+                schema_name: 'bms.structure-dataset-fanout.v1', fanout_id: 'f'.repeat(64),
+                parent_job_id: 'parent-1', selected_structure_count: 3, structures_per_job: 2,
+                replayed: false, child_jobs: [childReceipt('child-1', 2), childReceipt('child-2', 1)],
+            } };
+            throw new Error(`unexpected launch ${url}`);
+        };
+        vi.stubGlobal('fetch', vi.fn(async () => ({
+            ok: true, status: 200,
+            arrayBuffer: async () => new TextEncoder().encode('ATOM').buffer,
+        })));
+        vi.stubGlobal('crypto', { subtle: { digest: async () => new Uint8Array(32).buffer } });
+        const onOpenJob = vi.fn();
+        const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        try {
+            await act(async () => root.render(
+                <QueryClientProvider client={queryClient}>
+                    <FrustraMpnnAnalysisControls
+                        parentJobId="parent-1"
+                        selectedDesigns={[
+                            { id: 'design-1', name: 'Design 1', pdb_path: 'one.pdb' },
+                            { id: 'design-2', name: 'Design 2', pdb_path: 'two.pdb' },
+                            { id: 'design-3', name: 'Design 3', pdb_path: 'three.pdb' },
+                        ]}
+                        onOpenJob={onOpenJob}
+                    />
+                </QueryClientProvider>,
+            ));
+            await settle(250);
+            const launch = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Analyze 3 selected'))!;
+            await act(async () => launch.click());
+            await settle(100);
+            expect(container.textContent).toContain('2 scheduler children for 3 structures');
+            expect(container.textContent).toContain('Child 1/2 · 2 structures');
+            expect(container.textContent).toContain('Child 2/2 · 1 structure');
+            expect(container.textContent).toContain('child-1');
+            expect(container.textContent).toContain('child-2');
+            await settle(3100);
+            expect(receiptPolls.sort()).toEqual(['child-1', 'child-2']);
+            const openButtons = Array.from(container.querySelectorAll('button')).filter((button) => button.textContent?.includes('Open persisted results'));
+            expect(openButtons).toHaveLength(2);
+            await act(async () => { openButtons[0]!.click(); openButtons[1]!.click(); });
+            expect(onOpenJob.mock.calls).toEqual([['child-1'], ['child-2']]);
+            await act(async () => root.unmount());
+        } finally {
+            queryClient.clear();
+            (api as unknown as { get: typeof originalGet }).get = originalGet;
+            (api as unknown as { post: typeof originalPost }).post = originalPost;
+        }
+    });
+
     it('inspects the selected PDB before launch, exposes typed settings and requiredness, and blocks a failed preflight', async () => {
         const module = await import('../../src/components/FrustraMpnnUploadAnalysisPanel');
         const Panel = module.default;

@@ -1121,6 +1121,8 @@ export interface LaunchAntibodyIterationResponse {
     selection_dir: string;
     selected_design_count: number;
     launched_job: Job;
+    launched_jobs: Job[];
+    fanout_id?: string | null;
 }
 
 export const launchAntibodyIteration = (request: LaunchAntibodyIterationRequest) =>

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import stat
@@ -749,6 +750,257 @@ async def test_batch_capacity_is_governed_by_requested_settings(child_db) -> Non
                 trigger="upload_analyze",
                 requested_settings=_batched_settings(1),
             )
+
+
+@pytest.mark.asyncio
+async def test_design_dataset_fans_out_into_scheduler_visible_jobs_with_remainder(child_db) -> None:
+    sessions, results = child_db
+    source_root = results / "source-dataset"
+    source_root.mkdir()
+    async with sessions() as session:
+        parent = Job(
+            id="source-dataset-job",
+            name="source dataset",
+            status="completed",
+            queue_status="completed",
+            model_id="boltz2",
+            mode="structure_prediction",
+            params={},
+            output_dir=str(source_root),
+            child_output_dir=str(source_root),
+        )
+        session.add(parent)
+        for ordinal in range(5):
+            path = source_root / f"design-{ordinal}.pdb"
+            path.write_bytes(_pdb_for_chain(chr(ord("A") + ordinal)))
+            session.add(
+                Design(
+                    id=f"design-{ordinal}",
+                    job_id=parent.id,
+                    name=f"design-{ordinal}",
+                    pdb_path=str(path),
+                )
+            )
+        await session.commit()
+
+    app = FastAPI()
+    app.include_router(router)
+
+    async def override_session():
+        async with sessions() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = override_session
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        settings_payload = _batched_settings(2).model_dump(mode="json")
+        settings_payload.pop("settings_value_origin")
+        response = await client.post(
+            "/api/frustrampnn/jobs/source-dataset-job/analyze",
+            json={
+                "selections": [
+                    {
+                        "design_id": f"design-{ordinal}",
+                        "source_sha256": hashlib.sha256(
+                            _pdb_for_chain(chr(ord("A") + ordinal))
+                        ).hexdigest(),
+                    }
+                    for ordinal in range(5)
+                ],
+                "frustrampnn_settings": settings_payload,
+            },
+        )
+
+    assert response.status_code == 202, response.text
+    payload = response.json()
+    assert payload["schema_name"] == "bms.structure-dataset-fanout.v1"
+    assert payload["parent_job_id"] == "source-dataset-job"
+    assert payload["selected_structure_count"] == 5
+    assert payload["structures_per_job"] == 2
+    assert [child["structure_count"] for child in payload["child_jobs"]] == [2, 2, 1]
+    assert [
+        [candidate["design_id"] for candidate in child["candidates"]]
+        for child in payload["child_jobs"]
+    ] == [["design-0", "design-1"], ["design-2", "design-3"], ["design-4"]]
+
+    async with sessions() as session:
+        children = (
+            await session.execute(
+                select(Job)
+                .where(Job.parent_job_id == "source-dataset-job")
+                .order_by(Job.created_at, Job.id)
+            )
+        ).scalars().all()
+        assert len(children) == 3
+        assert all(child.status == child.queue_status == "queued" for child in children)
+        assert all(child.model_id == "frustrampnn" for child in children)
+        assert [child.source_selection_count for child in children] == [2, 2, 1]
+        assert [
+            [item["design_id"] for item in child.params[child_jobs.ENVELOPE_KEY]["selection"]]
+            for child in children
+        ] == [["design-0", "design-1"], ["design-2", "design-3"], ["design-4"]]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_identical_dataset_fanout_reconciles_one_winner_without_deleting_artifacts(child_db) -> None:
+    sessions, results = child_db
+    source_root = results / "concurrent-source"
+    source_root.mkdir()
+    async with sessions() as session:
+        parent = Job(
+            id="concurrent-source-job",
+            name="concurrent source",
+            status="completed",
+            queue_status="completed",
+            model_id="boltz2",
+            mode="structure_prediction",
+            params={},
+            output_dir=str(source_root),
+            child_output_dir=str(source_root),
+        )
+        session.add(parent)
+        for ordinal in range(3):
+            path = source_root / f"design-{ordinal}.pdb"
+            path.write_bytes(_pdb_for_chain(chr(ord("A") + ordinal)))
+            session.add(Design(
+                id=f"concurrent-design-{ordinal}",
+                job_id=parent.id,
+                name=f"concurrent-design-{ordinal}",
+                pdb_path=str(path),
+            ))
+        await session.commit()
+
+    app = FastAPI()
+    app.include_router(router)
+
+    async def override_session():
+        async with sessions() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = override_session
+    settings_payload = _batched_settings(2).model_dump(mode="json")
+    settings_payload.pop("settings_value_origin")
+    body = {
+        "selections": [
+            {
+                "design_id": f"concurrent-design-{ordinal}",
+                "source_sha256": hashlib.sha256(
+                    _pdb_for_chain(chr(ord("A") + ordinal))
+                ).hexdigest(),
+            }
+            for ordinal in range(3)
+        ],
+        "frustrampnn_settings": settings_payload,
+    }
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as first, httpx.AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as second:
+        first_response, second_response = await asyncio.gather(
+            first.post("/api/frustrampnn/jobs/concurrent-source-job/analyze", json=body),
+            second.post("/api/frustrampnn/jobs/concurrent-source-job/analyze", json=body),
+        )
+
+    assert first_response.status_code == second_response.status_code == 202
+    payloads = [first_response.json(), second_response.json()]
+    assert {payload["replayed"] for payload in payloads} == {False, True}
+    assert payloads[0]["fanout_id"] == payloads[1]["fanout_id"]
+    assert [child["child_job_id"] for child in payloads[0]["child_jobs"]] == [
+        child["child_job_id"] for child in payloads[1]["child_jobs"]
+    ]
+
+    async with sessions() as session:
+        children = (
+            await session.execute(
+                select(Job).where(Job.parent_job_id == "concurrent-source-job")
+            )
+        ).scalars().all()
+        assert len(children) == 2
+        assert sorted(child.source_selection_count for child in children) == [1, 2]
+        assert all(Path(child.output_dir).is_dir() for child in children)
+        assert all(
+            Path(child.params["frustrampnn_batch_manifest_path"]).is_file()
+            for child in children
+        )
+
+
+@pytest.mark.asyncio
+async def test_dataset_fanout_resolution_failure_rolls_back_all_children_and_artifacts(child_db) -> None:
+    sessions, results = child_db
+    source_root = results / "atomic-source"
+    source_root.mkdir()
+    payloads = [_pdb_for_chain("A"), _pdb_for_chain("A", "ALA"), _pdb_for_chain("B")]
+    async with sessions() as session:
+        parent = Job(
+            id="atomic-source-job",
+            name="atomic source",
+            status="completed",
+            queue_status="completed",
+            model_id="boltz2",
+            mode="structure_prediction",
+            params={},
+            output_dir=str(source_root),
+            child_output_dir=str(source_root),
+        )
+        session.add(parent)
+        for ordinal, payload in enumerate(payloads):
+            path = source_root / f"design-{ordinal}.pdb"
+            path.write_bytes(payload)
+            session.add(Design(
+                id=f"atomic-design-{ordinal}",
+                job_id=parent.id,
+                name=f"atomic-design-{ordinal}",
+                pdb_path=str(path),
+            ))
+        await session.commit()
+
+    app = FastAPI()
+    app.include_router(router)
+
+    async def override_session():
+        async with sessions() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = override_session
+    requested = _batched_settings(2).model_dump(mode="json")
+    requested.pop("settings_value_origin")
+    requested["protein_selection"] = {
+        "mode": "selected_entities",
+        "entities": [{
+            "entity_instance_id": "pdb:A",
+            "source_entity_id": None,
+            "label_asym_id": None,
+            "auth_asym_id": "A",
+        }],
+        "regions": [],
+        "residues": [],
+    }
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/frustrampnn/jobs/atomic-source-job/analyze",
+            json={
+                "selections": [
+                    {
+                        "design_id": f"atomic-design-{ordinal}",
+                        "source_sha256": hashlib.sha256(payload).hexdigest(),
+                    }
+                    for ordinal, payload in enumerate(payloads)
+                ],
+                "frustrampnn_settings": requested,
+            },
+        )
+
+    assert response.status_code == 422
+    assert "resolution" in response.text
+    async with sessions() as session:
+        children = (
+            await session.execute(select(Job).where(Job.parent_job_id == "atomic-source-job"))
+        ).scalars().all()
+        parent = await session.get(Job, "atomic-source-job")
+        assert children == []
+        assert "structure_dataset_fanout_v1" not in (parent.provenance or {})
+    assert sorted(path.name for path in results.iterdir()) == ["atomic-source"]
 
 
 @pytest.mark.asyncio

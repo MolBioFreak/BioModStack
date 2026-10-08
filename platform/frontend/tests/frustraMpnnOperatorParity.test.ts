@@ -338,6 +338,39 @@ const handoffReceipt = {
     },
 };
 
+test('structure dataset fan-out parser exposes every scheduler child and smaller remainder', () => {
+    const parseFanout = (frustraMpnnApi as unknown as {
+        parseFrustraMpnnStructureDatasetFanout: (value: unknown) => {
+            child_jobs: Array<{ child_job_id: string; structure_count: number }>;
+        };
+    }).parseFrustraMpnnStructureDatasetFanout;
+    assert.equal(typeof parseFanout, 'function');
+    const child = ({ id, count }: { id: string; count: number }) => ({
+        ...handoffReceipt,
+        job_id: id,
+        child_job_id: id,
+        result_job_id: id,
+        name: `FrustraMPNN ${id}`,
+        trigger: 'design_analyze',
+        handoff: undefined,
+        structure_count: count,
+    });
+    const parsed = parseFanout({
+        schema_name: 'bms.structure-dataset-fanout.v1',
+        fanout_id: hashes.f,
+        parent_job_id: 'job-1',
+        selected_structure_count: 3,
+        structures_per_job: 2,
+        replayed: false,
+        child_jobs: [child({ id: 'child-1', count: 2 }), child({ id: 'child-2', count: 1 })].map(({ handoff: _handoff, ...value }) => value),
+    });
+    assert.deepEqual(parsed.child_jobs.map((item) => [item.child_job_id, item.structure_count]), [
+        ['child-1', 2],
+        ['child-2', 1],
+    ]);
+});
+
+
 test('handoff parser preserves exact backend metadata and rejects legacy or malformed handoff contracts', () => {
     const parsed = parseFrustraMpnnChildReceipt(handoffReceipt, true);
     assert.deepEqual(parsed.handoff, handoffReceipt.handoff);
