@@ -1,7 +1,6 @@
 nextflow.enable.dsl = 2
 
 include {
-    RunConforNets;
     FinalizeConforNetsOutputs;
 } from './confornets_experimental.nf'
 
@@ -11,7 +10,7 @@ def shellQuote(value) {
 }
 
 process PrepCanonicalConforNetsRequest {
-    label 'local_cpu'
+    label 'ConforNetsCanonical'
     stageInMode 'copy'
 
     input:
@@ -31,6 +30,32 @@ process PrepCanonicalConforNetsRequest {
         --coordinate-plan ${coordinatePlanJson} \
         --assets-dir confornets_assets \
         --output confornets_request.json
+    """
+}
+
+process RunCanonicalConforNets {
+    label 'ConforNetsCanonical'
+    label 'gpu'
+    stageInMode 'copy'
+
+    input:
+    path request_json
+    path assets_dir
+
+    output:
+    path 'confornets_results', emit: results_dir
+    path 'run_confornets.log', emit: log
+
+    script:
+    def requestPath = shellQuote(request_json.toString())
+    def assetsPath = shellQuote(assets_dir.toString())
+    """
+    set -euo pipefail
+    python3 /scripts/run_confornets_inference.py \
+        --request ${requestPath} \
+        --assets-dir ${assetsPath} \
+        --output-dir confornets_results \
+        2>&1 | tee run_confornets.log
     """
 }
 
@@ -96,15 +121,14 @@ workflow CONFORMATIONAL_MAPPING_CONFORNETS {
         request_root
     }
 
-    // Dynamic legacy params cannot be safely populated from cm_request_path. The
-    // canonical prep emits an equivalent authenticated native request instead;
-    // RunConforNets and FinalizeConforNetsOutputs remain byte-unchanged and reused.
+    // The canonical lane is isolated on the instrumented image. Legacy execution
+    // and normalization remain unchanged.
     PrepCanonicalConforNetsRequest(request_roots)
-    RunConforNets(
+    RunCanonicalConforNets(
         PrepCanonicalConforNetsRequest.out.request,
         PrepCanonicalConforNetsRequest.out.assets_dir,
     )
-    FinalizeConforNetsOutputs(RunConforNets.out.results_dir)
+    FinalizeConforNetsOutputs(RunCanonicalConforNets.out.results_dir)
     BindCanonicalConforNetsOutputLedger(
         request_roots,
         FinalizeConforNetsOutputs.out.results_dir,

@@ -167,6 +167,61 @@
         "backend_coordinates": null,
         "provenance_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         "related_paths": []
+      },
+      {
+        "relative_path": "runtime/coordinate-ledger.json",
+        "sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+        "bytes": 15,
+        "media_type": "application/json",
+        "semantic_role": "coordinate_ledger",
+        "candidate_id": null,
+        "backend_coordinates": null,
+        "provenance_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "related_paths": []
+      },
+      {
+        "relative_path": "runtime/coordinate-context.json",
+        "sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+        "bytes": 16,
+        "media_type": "application/json",
+        "semantic_role": "coordinate_context",
+        "candidate_id": null,
+        "backend_coordinates": null,
+        "provenance_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "related_paths": []
+      },
+      {
+        "relative_path": "runtime/preprocessing-record.json",
+        "sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+        "bytes": 17,
+        "media_type": "application/json",
+        "semantic_role": "preprocessing_record",
+        "candidate_id": null,
+        "backend_coordinates": null,
+        "provenance_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "related_paths": []
+      },
+      {
+        "relative_path": "runtime/msa-record.json",
+        "sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+        "bytes": 18,
+        "media_type": "application/json",
+        "semantic_role": "msa_record",
+        "candidate_id": null,
+        "backend_coordinates": null,
+        "provenance_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "related_paths": []
+      },
+      {
+        "relative_path": "runtime/template-record.json",
+        "sha256": "abababababababababababababababababababababababababababababababab",
+        "bytes": 19,
+        "media_type": "application/json",
+        "semantic_role": "template_record",
+        "candidate_id": null,
+        "backend_coordinates": null,
+        "provenance_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "related_paths": []
       }
     ]
   },
@@ -193,7 +248,7 @@
       }
     ],
     "native_manifest_path": "cm_native_artifacts_v1.json",
-    "native_manifest_sha256": "05361c8da948c31aa2e34a6fe2b952b365d4011a00862ef6d0aa1bd757a16e8f",
+    "native_manifest_sha256": "fc4fc60153f3a439486aa797cf08f92d297a529be3a4433c897f9caa0f0caff3",
     "warnings": [],
     "omissions": [],
     "terminal_status": "complete",
@@ -268,8 +323,11 @@
     "raw_csv_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "checkpoint_id": "frustrampnn-test",
     "checkpoint_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "tool_id": "frustrampnn",
+    "tool_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     "threshold_policy_id": "frustrampnn_class_v1",
     "threshold_policy_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "input_issues": [],
     "residues": [
       {
         "entity_instance_id": "repeat_prot_copy1",
@@ -307,13 +365,23 @@
     "schema_name": "cm_analysis",
     "schema_version": 1,
     "analysis_id": "analysis-1",
-    "source_ensemble_sha256": "d45775e01d53698f8becce091f681ae0e29aae6d15579b4a815ab352f075d246",
-    "source_landscape_sha256": "f47f1cbd32cc0a60b783971fffcb8a2e140808beb60730a17c7e26af439701bb",
+    "source_ensemble_sha256": "bdb8aa7508f028cf14082588b8737768f2872edf8e16a15cecd9b227829a08fc",
+    "source_landscape_sha256": "0fbf64dc5f859fb18f4227b26a934a7a4143eb0c02ace7b1f251577531c3ad60",
     "formula_version": "cm_analysis_v1",
     "expected_strata": ["101", "202"],
     "results": [
       {
-        "source_row_key": "target-a:repeat_prot_copy1:A:1::1:A:V",
+        "source_row_key": "cm_row_0899a80107a75d279484d576f39927b7e67e2f9aa8d976de8aa35146c2100bc6",
+        "identity": {
+          "target_id": "target-a",
+          "entity_instance_id": "repeat_prot_copy1",
+          "auth_asym_id": "A",
+          "auth_seq_id": 1,
+          "insertion_code": "",
+          "sequence_index": 1,
+          "validated_wt": "A",
+          "substitution": "V"
+        },
         "status": "robust",
         "expected_coordinate_count": 1,
         "valid_coordinate_count": 1,
@@ -322,17 +390,24 @@
         "hierarchical_mean": 0.5,
         "hotspot_score": 0.5,
         "switch_score": 0.0,
-        "failure_reason": null
+        "failure_reason": null,
+        "components": {"absolute_effect": 0.5},
+        "sort_keys": {"primary": 0.5}
       }
     ],
-    "exclusions": []
+    "exclusions": [],
+    "pair_ledger": [],
+    "support_records": [],
+    "ranking_policy": {},
+    "clash_records": []
   },
   "cm_mutagenesis_handoff_v1": {
     "schema_name": "cm_mutagenesis_handoff",
     "schema_version": 1,
-    "source_ensemble_sha256": "d45775e01d53698f8becce091f681ae0e29aae6d15579b4a815ab352f075d246",
-    "source_analysis_sha256": "a360177349efed39512da0f2a6064ff6c6b8d4c4de859f6a3050daa8020b87cd",
+    "source_ensemble_sha256": "bdb8aa7508f028cf14082588b8737768f2872edf8e16a15cecd9b227829a08fc",
+    "source_analysis_sha256": "54745cc3a853ad5c8e0fafba6efa912ab2849472c46a67b29c40514052d463fe",
     "source_complex_sha256": "2f09caffc7afa62060e6110eb5b0d6f456a3db19e9216c033e33e1e7b214d371",
+    "source_structure_map_sha256": "b69cb8e18bb7a414a80775e4f084952a210257a4b2c88b920a26954dce18759f",
     "target_id": "target-a",
     "entity_instance_id": "repeat_prot_copy1",
     "auth_asym_id": "A",
@@ -343,7 +418,7 @@
     "substitution": "V",
     "mutation_set_id": "e12d03ef86fd285d5a0b09fdb7ea68648edc8ec55782937945b9c4608b762bc4",
     "mutation_set_string": "A1V",
-    "evidence_row_keys": ["target-a:repeat_prot_copy1:A:1::1:A:V"],
+    "evidence_row_keys": ["cm_row_0899a80107a75d279484d576f39927b7e67e2f9aa8d976de8aa35146c2100bc6"],
     "support": {"outer": 1.0, "coordinate": 1.0},
     "missingness": [],
     "ranking_components": {"hotspot_score": 0.5},

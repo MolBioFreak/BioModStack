@@ -57,6 +57,7 @@ import { DataViewerLanding } from './DataViewerLanding';
 // ReferenceSelector and MetricOverlay - unused, kept for reference
 import { AnalyticsDashboard } from './AnalyticsDashboard';
 import StructureViewerPane from './StructureViewerPane';
+import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
 import {
     saveAntibodyRefinementLaunchState,
     type AntibodyRefinementLaunchState,
@@ -4998,6 +4999,10 @@ export function ResultsViewer() {
         .map((entry) => entry.trim())
         .filter(Boolean).length;
     const showDataHubLanding = !activeJob && !(jobsLoading || (jobId && routedJobLoading));
+
+    if (activeJob?.model_id === 'conformational_mapping') {
+        return <ConformationalMappingViewer requestId={activeJob.id} title={activeJob.name} />;
+    }
 
     return (
         <div className="min-h-screen bg-slate-950 text-slate-200">

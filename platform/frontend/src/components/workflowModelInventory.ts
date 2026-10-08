@@ -85,13 +85,26 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
     },
     {
         workflowId: 'confornets_experimental',
-        label: 'Conformational Mapping',
+        label: 'ConforNets Experimental (Legacy)',
         modelTopics: ['confornets'],
         sourceFiles: [
             'platform/api/config/models/confornets_experimental.yaml',
             'platform/api/config/templates/confornets_experimental.yaml',
             'main.nf',
             'nextflow.config',
+        ],
+    },
+    {
+        workflowId: 'conformational_mapping',
+        label: 'Conformational Mapping',
+        modelTopics: ['confornets', 'protenix'],
+        sourceFiles: [
+            'platform/api/config/models/conformational_mapping.yaml',
+            'platform/api/config/templates/conformational_mapping.yaml',
+            'workflows/conformational_mapping.nf',
+            'platform/frontend/src/components/conformationalMapping/ConformationalMappingLauncher.tsx',
+            'platform/frontend/src/components/conformationalMapping/ConformationalMappingViewer.tsx',
+            'platform/frontend/src/components/ResultsViewer.tsx',
         ],
     },
 

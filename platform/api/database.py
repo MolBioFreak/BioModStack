@@ -4,15 +4,12 @@ Database models and initialization for BioModStack Control Platform.
 Uses SQLAlchemy with async SQLite.
 """
 
-from sqlalchemy import Column, String, Text, Integer, Float, Boolean, DateTime, JSON, ForeignKey, text, event
+from sqlalchemy import Column, String, Text, Integer, Float, Boolean, DateTime, JSON, ForeignKey, UniqueConstraint, text, event
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.types import TypeDecorator
 from datetime import datetime
-from pathlib import Path
 import json
-import os
-import uuid
 from types import SimpleNamespace
 from paths import get_db_path, get_db_url
 
@@ -425,6 +422,130 @@ class AnalysisRun(Base):
     last_accessed_at = Column(DateTime, nullable=True)
 
 
+class ConformationalMappingRequest(Base):
+    """Durable canonical request and lifecycle authority."""
+
+    __tablename__ = "conformational_mapping_requests"
+
+    request_id = Column(String(36), primary_key=True)
+    job_id = Column(String(36), ForeignKey("jobs.id"), nullable=False, unique=True, index=True)
+    principal_id = Column(String(255), nullable=False, index=True)
+    backend = Column(String(64), nullable=False, index=True)
+    status = Column(String(32), nullable=False, default="prepared", index=True)
+    request_sha256 = Column(String(64), nullable=False, unique=True, index=True)
+    coordinate_plan_sha256 = Column(String(64), nullable=False)
+    resume_key = Column(String(64), nullable=False, index=True)
+    result_contract_id = Column(String(64), nullable=False)
+    request_json = Column(JSON, nullable=False)
+    coordinate_plan_json = Column(JSON, nullable=False)
+    progress_json = Column(JSON, nullable=False, default=dict)
+    failure_receipt_json = Column(JSON, nullable=True)
+    retry_of_request_id = Column(String(36), nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    terminal_at = Column(DateTime, nullable=True)
+
+
+class ConformationalMappingSource(Base):
+    """Server-owned source registry for snapshots, uploads and references."""
+
+    __tablename__ = "conformational_mapping_sources"
+
+    source_id = Column(String(80), primary_key=True)
+    principal_id = Column(String(255), nullable=False, index=True)
+    source_kind = Column(String(64), nullable=False, index=True)
+    storage_root = Column(String(2000), nullable=False)
+    relative_path = Column(String(1000), nullable=False)
+    content_sha256 = Column(String(64), nullable=False, index=True)
+    size_bytes = Column(Integer, nullable=False)
+    metadata_json = Column(JSON, nullable=False, default=dict)
+    immutable = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ConformationalMappingRecord(Base):
+    """Content-addressed canonical records for every CM product plane."""
+
+    __tablename__ = "conformational_mapping_records"
+    __table_args__ = (
+        UniqueConstraint("request_id", "record_type", "record_key", name="uq_cm_record_identity"),
+    )
+
+    id = Column(String(36), primary_key=True)
+    request_id = Column(
+        String(36),
+        ForeignKey("conformational_mapping_requests.request_id"),
+        nullable=False,
+        index=True,
+    )
+    record_type = Column(String(64), nullable=False, index=True)
+    record_key = Column(String(255), nullable=False)
+    content_sha256 = Column(String(64), nullable=False, index=True)
+    payload_json = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ConformationalMappingArtifact(Base):
+    """Registered native/canonical file identity; paths are never public authority."""
+
+    __tablename__ = "conformational_mapping_artifacts"
+    __table_args__ = (
+        UniqueConstraint("request_id", "relative_path", name="uq_cm_artifact_path"),
+    )
+
+    artifact_id = Column(String(96), primary_key=True)
+    request_id = Column(
+        String(36),
+        ForeignKey("conformational_mapping_requests.request_id"),
+        nullable=False,
+        index=True,
+    )
+    candidate_id = Column(String(128), nullable=True, index=True)
+    role = Column(String(64), nullable=False, index=True)
+    relative_path = Column(String(1000), nullable=False)
+    storage_path = Column(String(2000), nullable=False)
+    content_sha256 = Column(String(64), nullable=False, index=True)
+    size_bytes = Column(Integer, nullable=False)
+    media_type = Column(String(128), nullable=False)
+    metadata_json = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ConformationalMappingLandscapeRow(Base):
+    """Range/page-backed exact substitution row storage."""
+
+    __tablename__ = "conformational_mapping_landscape_rows"
+    __table_args__ = (
+        UniqueConstraint(
+            "request_id", "candidate_id", "entity_instance_id", "auth_asym_id",
+            "auth_seq_id", "insertion_code", "sequence_index", "mutation_aa",
+            name="uq_cm_landscape_slot",
+        ),
+    )
+
+    id = Column(String(36), primary_key=True)
+    request_id = Column(
+        String(36),
+        ForeignKey("conformational_mapping_requests.request_id"),
+        nullable=False,
+        index=True,
+    )
+    candidate_id = Column(String(128), nullable=False, index=True)
+    entity_instance_id = Column(String(128), nullable=False, index=True)
+    auth_asym_id = Column(String(128), nullable=False)
+    auth_seq_id = Column(String(64), nullable=False)
+    insertion_code = Column(String(16), nullable=False, default="")
+    sequence_index = Column(Integer, nullable=False)
+    wt = Column(String(1), nullable=False)
+    mutation_aa = Column(String(1), nullable=False)
+    score = Column(Float, nullable=True)
+    score_class = Column(String(32), nullable=True)
+    scoreable = Column(Boolean, nullable=False)
+    status = Column(String(32), nullable=False, index=True)
+    reason = Column(Text, nullable=True)
+    provenance_json = Column(JSON, nullable=False, default=dict)
+
+
 class InputFile(Base):
     """Tracked input file (PDB, FASTA, etc.)."""
     __tablename__ = "input_files"
@@ -577,6 +698,11 @@ async def _ensure_schema(conn):
     await _ensure_table_columns(conn, "jobs", Job.__table__.columns)
     await _ensure_table_columns(conn, "designs", Design.__table__.columns)
     await _ensure_table_columns(conn, "analysis_runs", AnalysisRun.__table__.columns)
+    await _ensure_table_columns(conn, "conformational_mapping_requests", ConformationalMappingRequest.__table__.columns)
+    await _ensure_table_columns(conn, "conformational_mapping_sources", ConformationalMappingSource.__table__.columns)
+    await _ensure_table_columns(conn, "conformational_mapping_records", ConformationalMappingRecord.__table__.columns)
+    await _ensure_table_columns(conn, "conformational_mapping_artifacts", ConformationalMappingArtifact.__table__.columns)
+    await _ensure_table_columns(conn, "conformational_mapping_landscape_rows", ConformationalMappingLandscapeRow.__table__.columns)
     await _ensure_table_columns(conn, "nucleotide_sequences", NucleotideSequence.__table__.columns)
     await _ensure_table_columns(conn, "primers", Primer.__table__.columns)
     await _backfill_design_review_contracts(conn)

@@ -16,6 +16,7 @@ from .contracts import (
     validate_schema,
     validate_seed_sources,
 )
+from .clash import CLASH_DETECTOR_ID, CLASH_DETECTOR_VERSION
 
 
 BACKENDS = frozenset({"protenix_v2_ensemble", "confornets", "external_import"})
@@ -33,6 +34,7 @@ _TOP_LEVEL_FIELDS = frozenset(
         "confornets",
         "protenix_snapshot_id",
         "import_receipt_id",
+        "resolved_import_entries",
     }
 )
 _CONFORNETS_FIELDS = frozenset(
@@ -227,7 +229,6 @@ def _normalize_confornets_settings(settings: Mapping[str, Any]) -> dict[str, Any
         raise ConformationalMappingRequestError(
             "ConforNets MSE requires a non-null staged reference"
         )
-
     transfer = config["transfer_source"]
     normalized_transfer: dict[str, Any] | None = None
     if transfer is not None:
@@ -367,7 +368,11 @@ def build_confornets_coordinate_plan(
     config = _normalize_confornets_settings(settings)
     task = config["task"]
     test_case_id = config["test_case_id"]
-    reference_ids = [reference["reference_id"] for reference in config["references"]] or [None]
+    reference_ids = (
+        [reference["reference_id"] for reference in config["references"]]
+        if task == "mse"
+        else [None]
+    )
     runs = config["runs"]
     confornet_count = config["confornet_count"]
     samples = config["samples"]
@@ -452,6 +457,13 @@ def validate_request_params(params: Mapping[str, Any]) -> ValidatedRequest:
         "runtime_policy": values["runtime_policy"],
         "analysis_policy": values["analysis_policy"],
     }
+    analysis_policy = values["analysis_policy"]
+    if (
+        not isinstance(analysis_policy, Mapping)
+        or analysis_policy.get("clash_detector_id") != CLASH_DETECTOR_ID
+        or analysis_policy.get("clash_detector_version") != CLASH_DETECTOR_VERSION
+    ):
+        raise ConformationalMappingRequestError("requested clash detector is not installed")
 
     coordinate_plan: list[dict[str, Any]] = []
     if backend == "confornets":
@@ -500,13 +512,66 @@ def validate_request_params(params: Mapping[str, Any]) -> ValidatedRequest:
             "import_receipt_id is invalid for the selected backend"
         )
     if backend == "protenix_v2_ensemble" and values.get("protenix_snapshot_id") not in (None, ""):
+        feature_policy = values["feature_policy"]
+        if not isinstance(feature_policy, Mapping) or any(
+            key not in feature_policy
+            for key in ("protein_msa_enabled", "templates_enabled", "rna_msa_enabled")
+        ):
+            raise ConformationalMappingRequestError(
+                "Protenix requires explicit protein-MSA, template, and RNA-MSA controls"
+            )
+        if any(not isinstance(feature_policy[key], bool) for key in (
+            "protein_msa_enabled", "templates_enabled", "rna_msa_enabled"
+        )):
+            raise ConformationalMappingRequestError("Protenix feature controls must be booleans")
+        if feature_policy.get("mode") == "features_disabled_control_v1" and any(
+            feature_policy[key] for key in ("protein_msa_enabled", "templates_enabled", "rna_msa_enabled")
+        ):
+            raise ConformationalMappingRequestError("feature-disabled control cannot enable features")
         request_fields["protenix_snapshot_id"] = _strict_nonempty_string(
             values["protenix_snapshot_id"], field="protenix_snapshot_id"
         )
+        if not targets:
+            raise ConformationalMappingRequestError("Protenix requires at least one target")
+        for target in targets:
+            if not isinstance(target, Mapping) or not isinstance(target.get("target_id"), str):
+                raise ConformationalMappingRequestError("Protenix target identity is invalid")
+            for seed in ordered_seeds:
+                for sample_index in range(samples_per_seed):
+                    coordinate_plan.append(
+                        {
+                            "backend": "protenix_v2_ensemble",
+                            "target_id": target["target_id"],
+                            "ordered_seed": seed,
+                            "sample_index": sample_index,
+                        }
+                    )
+    elif backend == "protenix_v2_ensemble":
+        raise ConformationalMappingRequestError("a registered complete-complex snapshot is required")
     if backend == "external_import" and values.get("import_receipt_id") not in (None, ""):
         request_fields["import_receipt_id"] = _strict_nonempty_string(
             values["import_receipt_id"], field="import_receipt_id"
         )
+        entries = values.get("resolved_import_entries")
+        if not isinstance(entries, list) or len(entries) != len(targets) or not entries:
+            raise ConformationalMappingRequestError("import receipt entries must match ordered targets")
+        receipt_sha256 = _sha256(
+            values["import_receipt_id"], field="import_receipt_id"
+        )
+        for target, entry in zip(targets, entries, strict=True):
+            if not isinstance(target, Mapping) or not isinstance(entry, Mapping):
+                raise ConformationalMappingRequestError("import coordinate authority is invalid")
+            coordinate_plan.append(
+                {
+                    "backend": "external_import",
+                    "target_id": _strict_nonempty_string(target.get("target_id"), field="target_id"),
+                    "staged_index": _strict_nonnegative_int(entry.get("staged_index"), field="staged_index"),
+                    "source_content_sha256": _sha256(entry.get("source_content_sha256"), field="source_content_sha256"),
+                    "staged_receipt_sha256": receipt_sha256,
+                }
+            )
+    elif backend == "external_import":
+        raise ConformationalMappingRequestError("an immutable registered import receipt is required")
 
     # Exercise the Phase 1 executable schema with a temporary valid identity/hash.
     preview = {
