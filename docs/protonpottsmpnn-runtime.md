@@ -62,7 +62,7 @@ The request has:
 - `designs`: stable per-source/criteria/native-sample `design_id`, `criteria_index`, original `native_design_id`, and **full** `dataclasses.asdict(PHDesignOutput)`, including every trajectory step;
 - native `seed_energies` for supplied initial sequences;
 - source/checkpoint/module/dependency and effective native configuration identity under `runtime`;
-- artifact paths relative to `<out>` (manifest and enabled FASTA files).
+- artifact paths relative to `<out>/protonpottsmpnn_design` (manifest and enabled FASTA files), matching the BMS result reader.
 
 The native engine previously deduped a whole sweep by `design_id()`, which does not encode every criterion. The tiny source patch adds **observational `criteria_index` attribution after the solve** and keys deduplication by `(criteria_index, original_native_id)`. Native IDs, per-criterion numerical computations, ordering within solves, RNG seeding (`base_seed + 1009*ci`) and mutation semantics are unchanged. Identical criteria at indices 0 and 1 now retain both independently seeded outputs. Serial and CPU fork-pool outputs compare exactly in qualification tests. Existing deduplication within one criterion remains intact.
 

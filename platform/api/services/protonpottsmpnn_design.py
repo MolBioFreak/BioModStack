@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 from scripts.lib.protonpottsmpnn_contract import CONTRACT, normalize_params, normalize_request, parameter_schema
 
@@ -18,7 +19,13 @@ TRANSPORT_FIELDS = frozenset({REQUEST_FIELD, INPUT_FIELD, 'num_parallel_jobs', '
     'source_selection_manifest_path', 'selection_source_type', 'selection_source_job_id',
     'selected_input_source_job_id', 'lineage_root_job_id', 'iteration_source_root_job_id',
     'iteration_source_job_id', 'iteration_source_design_ids', 'native_sources',
-    'source_selection_count', 'source_design_id', 'source_pdb_path', 'source_stage_job_id', 'remote_result_policy', 'cpus'})
+    'source_selection_count', 'source_design_id', 'source_pdb_path', 'source_stage_job_id', 'remote_result_policy', 'cpus',
+    'protonpottsmpnn_device', 'protonpottsmpnn_container_path'})
+
+
+def execution_device(params=None):
+    """System-owned native device selection; keep existing CPU placement by default."""
+    return (params or {}).get('protonpottsmpnn_device') or os.environ.get('BMS_PROTONPOTTSMPNN_DEVICE', 'cpu')
 
 
 def normalize_design_params(mode, params):
@@ -28,7 +35,8 @@ def normalize_design_params(mode, params):
     if unknown:
         raise ValueError(f'Unknown ProtonPottsMPNN settings: {sorted(unknown)}')
     science = normalize_params({k:v for k,v in params.items() if k in SCIENCE_FIELDS})
-    return {**science, **{k:copy.deepcopy(v) for k,v in params.items() if k in TRANSPORT_FIELDS}}
+    return {**science, **{k:copy.deepcopy(v) for k,v in params.items() if k in TRANSPORT_FIELDS},
+            'protonpottsmpnn_device': execution_device(params)}
 
 
 def science_params(mode, params):
@@ -117,6 +125,13 @@ def result_contract(mode):
 
 def selected_assets():
     return ({'kind':'image', 'relative_path':'protonpottsmpnn.sif'},)
+
+
+def default_runtime_image(container_root):
+    """One pinned dual-device image travels with the selected native stage."""
+    lock = json.loads((Path(__file__).resolve().parents[3] /
+        'apptainer/protonpottsmpnn-runtime.lock.json').read_text())
+    return Path(container_root) / lock['image_filename'], lock['image_sha256']
 
 
 def read_design_result(output_root):

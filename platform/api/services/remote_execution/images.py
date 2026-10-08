@@ -38,6 +38,11 @@ def image_reference(name: str, container_root: Path, params: dict | None = None)
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*\.sif', name):
         raise ValueError('Invalid semantic runtime image name')
     conventional = container_root / name
+    def default_reference():
+        if name == 'protonpottsmpnn.sif':
+            from services.protonpottsmpnn_design import default_runtime_image
+            return default_runtime_image(container_root)
+        return conventional, None
     flag, selector = IMAGE_SELECTORS.get(name, (None, 'BMS_RUNTIME_IMAGE_' + image_environment_key(name).removeprefix('BMS_SELECTED_IMAGE_')))
     params = params or {}
     explicit = params.get(flag) if flag else None
@@ -59,6 +64,10 @@ def image_reference(name: str, container_root: Path, params: dict | None = None)
             and not any(selector in release['images'] for release in state['releases'].values())):
         return conventional, None
     if configured:
+        if name == 'protonpottsmpnn.sif':
+            pinned_path, pinned_digest = default_reference()
+            if configured == str(pinned_path):
+                return pinned_path, pinned_digest
         candidates = [release['images'][selector]
                       for release in state['releases'].values()
                       if selector in release['images']
@@ -74,7 +83,7 @@ def image_reference(name: str, container_root: Path, params: dict | None = None)
         release = state['releases'].get(state['current'].get(lane), {})
         image = release.get('images', {}).get(selector)
         if image is None:
-            return conventional, None
+            return default_reference()
     path = object_path(root, image['sha256'])
     if str(path) != image['path']:
         raise ValueError('Managed image path differs from shared store')

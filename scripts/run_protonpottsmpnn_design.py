@@ -104,7 +104,7 @@ def run(request: dict, input_path: Path, output: Path, native_root: Path,
         "native_module_sha256": sha256(native_module),
         "checkpoint": {"relative_path": CHECKPOINT_RELATIVE, "sha256": sha256(checkpoint)},
         "device": str(engine.device), "n_jobs": n_jobs,
-        "python": sys.version, "torch": torch.__version__,
+        "python": sys.version, "torch": torch.__version__, "torch_cuda": torch.version.cuda,
         "dependencies": {d.metadata["Name"]: d.version for d in importlib.metadata.distributions()},
         "effective_engine_options": effective_engine,
         "effective_criteria": [dataclasses.asdict(c) for c in criteria],
@@ -116,9 +116,9 @@ def run(request: dict, input_path: Path, output: Path, native_root: Path,
     manifest = {"contract": CONTRACT, "source": request["source"], "request": request,
                 "designs": designs, "seed_energies": native_results.seed_energies,
                 "runtime": runtime,
-                "artifacts": sorted(str(p.relative_to(output)) for p in result_dir.iterdir()
+                "artifacts": sorted(str(p.relative_to(result_dir)) for p in result_dir.iterdir()
                                     if p.is_file() and p.name != "manifest.json")}
-    manifest["artifacts"].append("protonpottsmpnn_design/manifest.json")
+    manifest["artifacts"].append("manifest.json")
     (result_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, allow_nan=False) + "\n")
     return manifest
 
