@@ -6,6 +6,7 @@ pinned in pyproject.toml; OS/compiler/libcurl identities belong to target receip
 """
 from contextlib import contextmanager
 import hashlib
+from importlib.metadata import version as installed_version
 import io
 import json
 import os
@@ -21,6 +22,12 @@ VERSION = "0.23.3+bms1"
 
 @contextmanager
 def source():
+    # --inexact retains extra tools but cannot prevent a project dependency
+    # from replacing one. Verify the tools actually executing this build.
+    expected_tools = {"Cython": "3.1.3", "setuptools": "80.9.0", "wheel": "0.45.1"}
+    build_tools = {name: installed_version(name) for name in expected_tools}
+    if build_tools != expected_tools:
+        raise RuntimeError(f"pysam build tools differ from authenticated lock: {build_tools}")
     provenance = json.loads((ROOT / "upstream.json").read_text())
     # An offline target can stage exactly the same authenticated sdist.
     staged = os.environ.get("BMS_PYSAM_SDIST")
@@ -62,7 +69,7 @@ def source():
             "backend_sha256": hashlib.sha256((ROOT / "bms_build.py").read_bytes()).hexdigest(),
             "patch_sha256": hashlib.sha256((ROOT / "no-save-index.patch").read_bytes()).hexdigest(),
             "build_requirements_sha256": hashlib.sha256((ROOT / "build-requirements.lock").read_bytes()).hexdigest(),
-            "required_transport": "builtin-htslib-libcurl",
+            "required_transport": "builtin-htslib-libcurl", "build_tools": build_tools,
         }
         (root / "pysam/bms_native_build.py").write_text("IDENTITY = " + repr(build_identity) + "\n")
         old_cwd = Path.cwd()

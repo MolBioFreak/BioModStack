@@ -40,3 +40,10 @@
 @@ -643,0 +647,2 @@
 +        if self.fastqfile.errcode:
 +            raise IOError("FASTX transport read failed")
+--- a/pysam/libchtslib.pyx
++++ b/pysam/libchtslib.pyx
+@@ -359,1 +359,3 @@
+-        cdef int ret = bgzf_check_EOF(bgzfp)
++        cdef int ret
++        with nogil:
++            ret = bgzf_check_EOF(bgzfp)

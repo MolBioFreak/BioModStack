@@ -48,6 +48,11 @@ Create `.venv` only when absent; inspect and preserve an existing environment.
 The hashed build-tools install uses `--no-config` so application constraints
 (such as `msgpack>=…`) cannot enter that separate, fully hashed tool transaction.
 The subsequent frozen project sync still applies the project lock and constraints.
+The project constrains its transitive `wheel` dependency to the same authenticated
+build-tool version. The backend rejects drift in the actual Cython/setuptools/wheel
+versions and includes those versions in the native build identity. BGZF EOF checks
+retain truncation validation but release the GIL during native I/O, allowing
+same-process managed delivery to serve indexed BAM/BCF reads without deadlock.
 
 Use the repository's normal test database/environment setup. Installing system
 headers, compiling the Docker image, native imports and **all** commands above are
