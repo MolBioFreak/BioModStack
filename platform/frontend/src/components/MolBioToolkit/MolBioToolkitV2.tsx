@@ -5,6 +5,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { anyToJson } from '@teselagen/bio-parsers';
 import { SequenceViewer, DEFAULT_VISIBILITY } from './SequenceViewer';
 import { SequenceHeader } from './SequenceHeader';
 import { VisibilityPanel } from './VisibilityPanel';
@@ -236,77 +237,8 @@ function PanelTabs({ active, onChange }: PanelTabsProps) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SIMPLE GENBANK/FASTA PARSER
+// FEATURE COLORS
 // ═══════════════════════════════════════════════════════════════════════════════
-
-function parseSequenceFile(content: string, filename: string): SequenceData | null {
-    const upper = content.slice(0, 100).toUpperCase();
-
-    // GenBank format
-    if (upper.startsWith('LOCUS')) {
-        const nameMatch = content.match(/^LOCUS\s+(\S+)/);
-        const name = nameMatch?.[1] || filename.replace(/\.[^.]+$/, '');
-
-        const circular = /circular/i.test(content.slice(0, 200));
-
-        // Extract sequence from ORIGIN section
-        const originMatch = content.match(/ORIGIN[\s\S]*?\/\//);
-        let sequence = '';
-        if (originMatch) {
-            sequence = originMatch[0]
-                .replace(/ORIGIN/i, '')
-                .replace(/\/\//, '')
-                .replace(/[\d\s\n\r]/g, '')
-                .toUpperCase();
-        }
-
-        // Extract features
-        const features: Feature[] = [];
-        const featureRegex = /^\s{5}(\w+)\s+(?:complement\()?(\d+)\.\.(\d+)\)?/gm;
-        let match;
-        while ((match = featureRegex.exec(content)) !== null) {
-            const labelMatch = content.slice(match.index, match.index + 500).match(/\/label="([^"]+)"/);
-            features.push({
-                id: `f_${features.length}`,
-                name: labelMatch?.[1] || match[1],
-                type: match[1],
-                start: parseInt(match[2]) - 1,
-                end: parseInt(match[3]),
-                strand: content.slice(match.index - 20, match.index).includes('complement') ? -1 : 1,
-                color: getFeatureColor(match[1])
-            });
-        }
-
-        return {
-            name,
-            sequence,
-            circular,
-            sequenceType: 'dna',
-            features,
-            primers: [],
-            translations: []
-        };
-    }
-
-    // FASTA format
-    if (upper.startsWith('>')) {
-        const lines = content.split('\n');
-        const name = lines[0].slice(1).trim().split(/\s/)[0] || filename.replace(/\.[^.]+$/, '');
-        const sequence = lines.slice(1).join('').replace(/\s/g, '').toUpperCase();
-
-        return {
-            name,
-            sequence,
-            circular: false,
-            sequenceType: 'dna',
-            features: [],
-            primers: [],
-            translations: []
-        };
-    }
-
-    return null;
-}
 
 function getFeatureColor(type: string): string {
     const colors: Record<string, string> = {
@@ -399,16 +331,49 @@ export function MolBioToolkitV2() {
         setIsDirty(false);
     }, [resetHistory]);
 
-    // Import file
+    // Import file using Teselagen bio-parsers
     const handleImport = useCallback(async (file: File) => {
-        const content = await file.text();
-        const parsed = parseSequenceFile(content, file.name);
-        if (parsed) {
-            resetHistory(parsed);
+        try {
+            // Read file content as text first (required by bio-parsers)
+            const text = await file.text();
+
+            const result = await anyToJson(text, {
+                fileName: file.name,
+                parseOptions: { inclusive1BasedStart: false, jsonType: 'json' }
+            });
+            const results = Array.isArray(result) ? result : [result];
+
+            if (results.length === 0 || !results[0]?.parsedSequence) {
+                alert('Failed to parse file. Supported formats: GenBank, FASTA, SnapGene, etc.');
+                return;
+            }
+
+            const parsed = results[0].parsedSequence;
+            const sequenceData: SequenceData = {
+                name: parsed.name || file.name.replace(/\.[^.]+$/, ''),
+                sequence: (parsed.sequence || '').toUpperCase(),
+                circular: parsed.circular ?? false,
+                sequenceType: 'dna',
+                features: (parsed.features || []).map((f: any, i: number) => ({
+                    id: f.id || `f_${i}`,
+                    name: f.name || f.type || 'feature',
+                    type: f.type || 'misc_feature',
+                    start: f.start,
+                    end: f.end,
+                    strand: f.strand === -1 ? -1 : 1,
+                    color: f.color || getFeatureColor(f.type || 'misc_feature')
+                })),
+                primers: [],
+                translations: []
+            };
+
+            console.log('Imported sequence:', sequenceData.name, 'length:', sequenceData.sequence.length);
+            resetHistory(sequenceData);
             setSelectedSequenceId(null);
-            setIsDirty(true); // Imported but not saved
-        } else {
-            alert('Failed to parse file. Supported formats: GenBank (.gb, .gbk), FASTA (.fasta, .fa)');
+            setIsDirty(true);
+        } catch (error) {
+            console.error('Import error:', error);
+            alert(`Failed to parse file: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }, [resetHistory]);
 
