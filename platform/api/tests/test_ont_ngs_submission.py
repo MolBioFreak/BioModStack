@@ -13,13 +13,11 @@ from fastapi import BackgroundTasks, FastAPI, Request, Response
 from fastapi.testclient import TestClient
 
 API_ROOT = Path(__file__).resolve().parents[1]
-ROUTERS_ROOT = API_ROOT / "routers"
-for path in (API_ROOT, ROUTERS_ROOT):
-    if str(path) not in sys.path:
-        sys.path.insert(0, str(path))
+if str(API_ROOT) not in sys.path:
+    sys.path.insert(0, str(API_ROOT))
 
 from model_registry import ModelRegistry  # noqa: E402
-import ont_runs  # noqa: E402
+from routers import ont_runs  # noqa: E402
 import routers.jobs as jobs_router  # noqa: E402
 from schemas import JobResponse, JobStatus  # noqa: E402
 from services import verified_native_reads as _native
