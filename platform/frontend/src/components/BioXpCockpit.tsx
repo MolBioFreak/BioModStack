@@ -17,6 +17,44 @@ function EvidenceValue({ value }: { value: boolean | null }) {
     return <span className={value ? 'text-emerald-300' : 'text-red-300'}>{value ? 'YES' : 'NO'}</span>;
 }
 
+type CommissioningCommandName =
+    | 'collect_hardware_snapshot'
+    | 'construct_pipettes'
+    | 'initialize_without_motion'
+    | 'run_initial_check';
+
+const COMMISSIONING_COMMANDS: ReadonlyArray<{
+    command: CommissioningCommandName;
+    label: string;
+    detail: string;
+    tone: 'query' | 'write';
+}> = [
+    {
+        command: 'collect_hardware_snapshot',
+        label: 'Collect Hardware Snapshot',
+        detail: 'Serialized query-only collection. It never activates, recovers, homes, or moves hardware.',
+        tone: 'query',
+    },
+    {
+        command: 'construct_pipettes',
+        label: 'Construct Four Pipettes',
+        detail: 'Runs the current four-channel constructor stage with no motion. Requires fresh CAN_READY=true evidence.',
+        tone: 'write',
+    },
+    {
+        command: 'initialize_without_motion',
+        label: 'Initialize Without Motion',
+        detail: 'Programs OEM motor-current state and the red LED stage. The robot contract forbids physical motion.',
+        tone: 'write',
+    },
+    {
+        command: 'run_initial_check',
+        label: 'Run OEM Initial Check',
+        detail: 'Live OEM check: LED white, door/latch reads, board deactivate/activate, and a final read. No axis motion.',
+        tone: 'write',
+    },
+];
+
 export function BioXpCockpit() {
     const statusQuery = useBioXpStatus(true);
     const jobsQuery = useBioXpJobs(true);
@@ -25,8 +63,8 @@ export function BioXpCockpit() {
     const executeCommand = useBioXpCommand();
     const emergencyStop = useBioXpEmergencyStop();
     const [protocolName, setProtocolName] = useState('BioXP offline validation');
-    const [jobId, setJobId] = useState('');
     const [operatorToken, setOperatorToken] = useState('');
+    const [initialCheckAck, setInitialCheckAck] = useState('');
     const [nowMs, setNowMs] = useState(() => Date.now());
 
     useEffect(() => {
@@ -45,14 +83,14 @@ export function BioXpCockpit() {
         steps: [{ action: 'initialize_motors' }],
     };
 
-    const commandPayload = (command: string): Record<string, unknown> => {
+    const commandPayload = (command: CommissioningCommandName): Record<string, unknown> => {
         const base = {
             command,
             expected_generation: connection?.generation ?? 0,
             idempotency_key: crypto.randomUUID(),
         };
-        return ['start_job', 'pause_job', 'resume_job', 'stop_job'].includes(command)
-            ? { ...base, job_id: jobId }
+        return command === 'run_initial_check'
+            ? { ...base, mode: 'live', operator_ack: initialCheckAck }
             : base;
     };
 
@@ -62,8 +100,8 @@ export function BioXpCockpit() {
                 <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-400">BioXP control plane</p>
                 <h1 className="mt-1 text-2xl font-bold">Status-first operator surface</h1>
                 <p className="mt-2 max-w-3xl text-sm text-slate-400">
-                    BMS owns profile, connection, admission, and local job truth. Normal OEM mappings remain
-                    unavailable until online contract verification.
+                    BMS owns profile, connection, admission, and local job truth. Only current-tranche commissioning
+                    contracts are mapped; motion and retired OEM controls remain unavailable pending online contract verification.
                 </p>
             </header>
 
@@ -99,33 +137,40 @@ export function BioXpCockpit() {
 
             <section className="rounded-xl border border-slate-800 bg-slate-950/70 p-5">
                 <h2 className="text-lg font-semibold">Normal Commands</h2>
-                {derived?.ready && status?.available_commands.length ? (
-                    <>
-                        <div className="mt-3 grid gap-3 md:grid-cols-2">
-                            <label className="text-sm">Transient operator token
-                                <input type="password" value={operatorToken} onChange={(event) => setOperatorToken(event.target.value)} autoComplete="off" className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-3 py-2" />
-                            </label>
-                            <label className="text-sm">Job identifier, when required
-                                <input value={jobId} onChange={(event) => setJobId(event.target.value)} className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-3 py-2" />
-                            </label>
-                        </div>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                            {status.available_commands.map((command) => (
-                                <button
-                                    type="button"
-                                    key={command}
-                                    disabled={!derived.ready || !operatorToken || executeCommand.isPending}
-                                    onClick={() => executeCommand.mutate({ payload: commandPayload(command), token: operatorToken })}
-                                    className="rounded bg-blue-700 px-3 py-2 text-sm disabled:opacity-40"
-                                >{command}</button>
-                            ))}
-                        </div>
-                    </>
-                ) : (
+                <label className="mt-3 block max-w-xl text-sm">Transient operator token
+                    <input type="password" value={operatorToken} onChange={(event) => setOperatorToken(event.target.value)} autoComplete="off" className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-3 py-2" />
+                </label>
+                {!status?.available_commands.length && (
                     <div className="mt-3 flex gap-2 rounded border border-amber-600/40 bg-amber-500/10 p-3 text-sm text-amber-200">
-                        No normal OEM commands are available. Mappings are disabled pending online contract verification.
+                        No normal OEM commands are available. The current robot runtime has not yet advertised an admitted command capability.
                     </div>
                 )}
+                <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                    {COMMISSIONING_COMMANDS.map(({ command, label, detail, tone }) => {
+                        const available = Boolean(derived?.ready && status?.available_commands.includes(command));
+                        const ackReady = command !== 'run_initial_check' || initialCheckAck === 'INITIALIZE';
+                        const blockedReason = status?.unavailable_commands[command]
+                            ?? (!derived?.ready ? derived?.detail : 'Command is not admitted by the server.');
+                        return (
+                            <article key={command} className={`rounded border p-4 ${tone === 'query' ? 'border-cyan-700/60 bg-cyan-950/20' : 'border-amber-700/60 bg-amber-950/20'}`}>
+                                <h3 className="font-semibold">{label}</h3>
+                                <p className="mt-1 text-sm text-slate-300">{detail}</p>
+                                {command === 'run_initial_check' && (
+                                    <label className="mt-3 block text-xs text-amber-200">Type INITIALIZE to acknowledge the live board-cycle stage
+                                        <input value={initialCheckAck} onChange={(event) => setInitialCheckAck(event.target.value)} autoComplete="off" className="mt-1 w-full rounded border border-amber-700 bg-slate-950 px-2 py-1.5 text-sm" />
+                                    </label>
+                                )}
+                                <button
+                                    type="button"
+                                    disabled={!available || !operatorToken || !ackReady || executeCommand.isPending}
+                                    onClick={() => executeCommand.mutate({ payload: commandPayload(command), token: operatorToken })}
+                                    className={`mt-3 rounded px-3 py-2 text-sm font-semibold disabled:opacity-40 ${tone === 'query' ? 'bg-cyan-700' : 'bg-amber-700'}`}
+                                >{label}</button>
+                                {!available && <p className="mt-2 text-xs text-slate-500">Blocked: {blockedReason}</p>}
+                            </article>
+                        );
+                    })}
+                </div>
                 {executeCommand.error && <p className="mt-2 text-sm text-red-300">{bioXpErrorText(executeCommand.error)}</p>}
             </section>
 

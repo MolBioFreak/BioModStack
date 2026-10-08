@@ -35,10 +35,14 @@ def test_command_request_is_discriminated_and_rejects_unknown_names_or_parameter
         )
 
 
-def test_default_registry_has_no_unverified_robot_mapping() -> None:
+def test_default_registry_exposes_only_current_compact_commissioning_mappings() -> None:
     _, registry = _load()
 
     assert set(registry) == {
+        "collect_hardware_snapshot",
+        "construct_pipettes",
+        "initialize_without_motion",
+        "run_initial_check",
         "initialize_motors",
         "start_job",
         "pause_job",
@@ -46,6 +50,44 @@ def test_default_registry_has_no_unverified_robot_mapping() -> None:
         "stop_job",
         "recover_runtime",
     }
-    assert all(not definition.enabled for definition in registry.values())
-    assert all(definition.route_key is None for definition in registry.values())
-    assert all("online contract" in definition.disabled_reason.lower() for definition in registry.values())
+    enabled = {
+        "collect_hardware_snapshot": "collect_hardware_snapshot",
+        "construct_pipettes": "construct_pipettes",
+        "initialize_without_motion": "initialize_without_motion",
+        "run_initial_check": "run_initial_check",
+    }
+    for name, route_key in enabled.items():
+        assert registry[name].enabled is True
+        assert registry[name].route_key == route_key
+        assert registry[name].required_capability == name
+
+    for name in set(registry) - set(enabled):
+        assert registry[name].enabled is False
+        assert registry[name].route_key is None
+        assert "online contract" in registry[name].disabled_reason.lower()
+
+
+def test_current_commissioning_command_payloads_are_typed_and_initial_check_requires_ack() -> None:
+    parse, _ = _load()
+
+    for name in ("collect_hardware_snapshot", "construct_pipettes", "initialize_without_motion"):
+        request = parse({"command": name, "expected_generation": 3, "idempotency_key": f"{name}-3"})
+        assert request.command == name
+
+    live = parse({
+        "command": "run_initial_check",
+        "expected_generation": 3,
+        "idempotency_key": "initial-check-3",
+        "mode": "live",
+        "operator_ack": "INITIALIZE",
+    })
+    assert live.command == "run_initial_check"
+
+    with pytest.raises(ValidationError):
+        parse({
+            "command": "run_initial_check",
+            "expected_generation": 3,
+            "idempotency_key": "initial-check-bad",
+            "mode": "live",
+            "operator_ack": "YES",
+        })

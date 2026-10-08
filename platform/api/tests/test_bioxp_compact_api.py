@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi.routing import APIRoute
+from typing import Any, cast
 
 from routers import bioxp
 
@@ -25,11 +25,17 @@ EXPECTED = {
 }
 
 
+def _effective_routes() -> tuple[Any, ...]:
+    return tuple(
+        route
+        for included_router in bioxp.router.routes
+        for route in cast(Any, included_router).effective_candidates()
+    )
+
+
 def _inventory() -> set[tuple[str, str]]:
     rows: set[tuple[str, str]] = set()
-    for route in bioxp.router.routes:
-        if not isinstance(route, APIRoute):
-            continue
+    for route in _effective_routes():
         for method in route.methods or ():
             if method not in {"HEAD", "OPTIONS"}:
                 rows.add((method, route.path))
@@ -42,12 +48,10 @@ def test_compact_api_inventory_is_exact_and_bounded() -> None:
 
 
 def test_every_non_read_route_carries_the_global_containment_dependency() -> None:
-    for route in bioxp.router.routes:
-        if not isinstance(route, APIRoute):
-            continue
+    for route in _effective_routes():
         if set(route.methods or ()) <= {"GET", "HEAD", "OPTIONS"}:
             continue
-        calls = {dependency.call for dependency in route.dependant.dependencies}
+        calls = {dependency.dependency for dependency in route.dependencies}
         assert bioxp.require_bioxp_mutation_access in calls, route.path
 
 

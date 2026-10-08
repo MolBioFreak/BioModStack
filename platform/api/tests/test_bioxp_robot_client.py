@@ -57,3 +57,21 @@ def test_robot_transport_rejects_unresolved_targets() -> None:
         assert "validated address" in str(exc)
     else:  # pragma: no cover - regression assertion
         raise AssertionError("unresolved target must fail closed")
+
+
+def test_robot_client_routes_only_current_compact_commissioning_contracts() -> None:
+    target = ValidatedBioXpTarget(
+        api_url="http://robot:8123",
+        scheme="http",
+        hostname="robot",
+        port=8123,
+        resolved_addresses=(ip_address("100.64.0.10"),),
+    )
+    client = BioXpRobotClient(target, transport=RecordingTransport())
+
+    assert client.routes["collect_hardware_snapshot"][:2] == ("POST", "/hardware/snapshot/collect")
+    assert client.routes["construct_pipettes"][:2] == ("POST", "/oem/startup/constructor_pipettes")
+    assert client.routes["initialize_without_motion"][:2] == ("POST", "/oem/startup/initialize_without_motion")
+    assert client.routes["run_initial_check"][:2] == ("POST", "/oem/initial_check")
+
+    asyncio.run(client.close())

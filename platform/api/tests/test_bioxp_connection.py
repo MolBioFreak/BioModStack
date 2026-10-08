@@ -39,7 +39,7 @@ class FakeRobotClient:
         self.closed = True
 
 
-def _service(tmp_path: Path, clients: list[FakeRobotClient], *, clock=None):
+def _service(tmp_path: Path, clients: list[FakeRobotClient], *, clock=None, **service_options):
     BioXpConnectionService, _, BioXpProfileStore, BioXpTargetPolicy = _load()
 
     async def resolver(_: str) -> tuple[str, ...]:
@@ -57,7 +57,14 @@ def _service(tmp_path: Path, clients: list[FakeRobotClient], *, clock=None):
         clients.append(client)
         return client
 
-    return BioXpConnectionService(store, policy, client_factory=factory, clock=clock, initial_generation=0)
+    return BioXpConnectionService(
+        store,
+        policy,
+        client_factory=factory,
+        clock=clock,
+        initial_generation=0,
+        **service_options,
+    )
 
 
 def test_saved_profile_does_not_activate_on_startup_or_restart(tmp_path: Path) -> None:
@@ -145,6 +152,32 @@ def test_stale_observation_is_explicit(tmp_path: Path) -> None:
     assert snapshot.observation_stale is True
     assert snapshot.reachable is None
     assert snapshot.last_observed_reachable is True
+
+
+def test_explicit_active_connection_monitor_renews_observation_and_stops_on_disconnect(tmp_path: Path) -> None:
+    _, BioXpProfile, _, _ = _load()
+    clients: list[FakeRobotClient] = []
+
+    async def scenario() -> None:
+        service = _service(
+            tmp_path,
+            clients,
+            freshness_budget_seconds=0.05,
+            active_probe_interval_seconds=0.01,
+        )
+        await service.save_profile(BioXpProfile(api_url="http://robot:8123"))
+        await service.connect()
+        await asyncio.sleep(0.08)
+
+        assert service.snapshot().observation_fresh is True
+        assert clients[0].probes >= 3
+
+        await service.disconnect()
+        stopped_at = clients[0].probes
+        await asyncio.sleep(0.04)
+        assert clients[0].probes == stopped_at
+
+    asyncio.run(scenario())
 
 
 def test_concurrent_connect_and_disconnect_leave_one_coherent_generation(tmp_path: Path) -> None:
