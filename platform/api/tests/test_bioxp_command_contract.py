@@ -60,7 +60,7 @@ def test_default_registry_exposes_only_current_compact_commissioning_mappings() 
         if name != "activate_usb_for_service":
             assert registry[name].required_capability == name
 
-    assert registry["initialize_oem_environment"].requires_hardware_ready is False
+    assert registry["initialize_oem_environment"].requires_hardware_ready is True
     assert registry["initialize_oem_environment"].required_lifecycle_states == (
         ("constructor_pipette_stage", "not_run"),
         ("initialization_without_motion", "blocked"),

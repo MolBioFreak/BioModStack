@@ -60,7 +60,7 @@ DEFAULT_COMMAND_REGISTRY: Mapping[CommandName, CommandDefinition] = MappingProxy
             enabled=True,
             route_key="initialize_oem_environment",
             required_capability="initialize_oem_environment",
-            requires_hardware_ready=False,
+            requires_hardware_ready=True,
             required_lifecycle_states=(
                 ("constructor_pipette_stage", "not_run"),
                 ("initialization_without_motion", "blocked"),

@@ -313,8 +313,10 @@ class BioXpConnectionService:
     def observe_command_response(self, response: object) -> None:
         if not isinstance(response, dict):
             return
-        lifecycle = response.get("lifecycle")
-        startup = lifecycle.get("startup") if isinstance(lifecycle, dict) else response.get("startup")
+        envelope = response.get("detail")
+        payload = envelope if isinstance(envelope, dict) else response
+        lifecycle = payload.get("lifecycle")
+        startup = lifecycle.get("startup") if isinstance(lifecycle, dict) else payload.get("startup")
         if isinstance(startup, dict):
             self._startup_lifecycle = copy.deepcopy(startup)
 
