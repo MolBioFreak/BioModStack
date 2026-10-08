@@ -12,7 +12,7 @@ API_ROOT = Path(__file__).resolve().parents[1]
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
-from database import Base, Job, MdAttemptSegment
+from database import Base, Job, MdAttemptSegment, MdRun
 from services.md.reconcile import acquire_reconciler_lease, reconcile_md_state
 from services.md.state import create_md_run, create_replica_attempt
 
@@ -225,5 +225,32 @@ async def test_reconciliation_self_heals_active_md_parent_scheduler_projection(t
         parent = await session.get(Job, "md-active-parent")
         assert parent is not None
         assert (parent.status, parent.queue_status, parent.error_message) == ("running", "running", None)
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_terminalizes_failed_coordinator_without_replicas(tmp_path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'md-coordinator.db'}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with maker() as session:
+        parent = Job(
+            id="md-failed-coordinator", name="MD", status="failed", queue_status="failed",
+            error_message="coordinator launch failed", model_id="md",
+            mode="molecular_dynamics", params={},
+        )
+        session.add(parent); await session.flush()
+        run = await create_md_run(session, job=parent, normalized_request=_request())
+        assert run.phase == "validating"
+        await session.commit()
+
+    async with maker() as session:
+        await reconcile_md_state(session, owner_id="coordinator-owner", apply=True)
+        await session.commit()
+        run = await session.get(MdRun, "md-failed-coordinator")
+        assert run is not None and run.phase == "failed"
 
     await engine.dispose()

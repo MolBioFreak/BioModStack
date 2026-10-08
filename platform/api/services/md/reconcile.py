@@ -185,7 +185,10 @@ async def reconcile_md_state(
             if segment_stale and segment is not None:
                 changes.append({"kind": "segment_state", "job_id": run.job_id,
                                 "segment_id": segment.id, "from": segment.state, "to": projected})
-        next_phase = _phase(run, effective)
+        if not effective and str(parent.status) in {"failed", "cancelled"}:
+            next_phase = "failed" if str(parent.status) == "failed" else "cancelled"
+        else:
+            next_phase = _phase(run, effective)
         if next_phase != run.phase:
             changes.append({"kind": "parent_phase", "job_id": run.job_id,
                             "from": run.phase, "to": next_phase})
