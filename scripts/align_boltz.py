@@ -90,7 +90,8 @@ def rmsd_without_refit(ref_atoms, mobile_atoms):
 def align_structures(args):
     """Align Boltz structure to Design template with chain-specific handling"""
     (design_path, boltz_path, out_pdb, src_json, dst_json, 
-     fold_id, seq_id, design_type, binder_chains_arg, target_chains_arg) = args  # Added multi-chain args
+     fold_id, seq_id, design_type, binder_chains_arg, target_chains_arg,
+     geometry_mode, strict_target_rmsd) = args
     
     try:
         parser = PDBParser(QUIET=True)
@@ -141,6 +142,10 @@ def align_structures(args):
                 "boltz_target_rmsd": round(rmsd_target, 2),
                 "boltz_binder_rmsd": round(rmsd_binder, 2)
             }
+            if strict_target_rmsd is not None and rmsd_target > strict_target_rmsd:
+                raise ValueError(
+                    f"anchored target drift {rmsd_target:.2f}A exceeded threshold {strict_target_rmsd:.2f}A"
+                )
 
         else:  # Monomer design
             ref_atoms, boltz_atoms = get_matched_ca_atoms(ref_structure, boltz_structure, chains=None)
@@ -174,6 +179,9 @@ def align_structures(args):
                 "fold_id": fold_id,
                 "seq_id": seq_id,
                 "description": boltz_path.name,
+                "validation_geometry_mode": geometry_mode,
+                "target_anchor_enabled": geometry_mode == "anchored",
+                "target_anchor_strict": strict_target_rmsd is not None,
                 "boltz_overall_rmsd": round(rmsd_data.get("boltz_overall_rmsd", 0), 2),
                 "boltz_target_rmsd": round(rmsd_data.get("boltz_target_rmsd", 0), 2),
                 "boltz_binder_rmsd": round(rmsd_data.get("boltz_binder_rmsd", 0), 2),
@@ -190,6 +198,9 @@ def align_structures(args):
                 "fold_id": fold_id,
                 "seq_id": seq_id,
                 "description": boltz_path.name,
+                "validation_geometry_mode": geometry_mode,
+                "target_anchor_enabled": geometry_mode == "anchored",
+                "target_anchor_strict": strict_target_rmsd is not None,
                 "boltz_overall_rmsd": round(rmsd_data.get("boltz_overall_rmsd", 0), 2),
                 "boltz_conf_score": round(data.get("confidence_score", 0), 3),
                 "boltz_ptm": round(data.get("ptm", 0), 3),
@@ -220,6 +231,10 @@ def main():
                       help="Comma separated list of binder chains (e.g. H,L or A)")
     parser.add_argument("--target_chains", type=str, default="",
                       help="Comma separated list of target chains (e.g. T or B)")
+    parser.add_argument("--geometry_mode", choices=['flexible', 'anchored'], default='flexible',
+                      help="Whether validation was run in flexible or anchored target mode")
+    parser.add_argument("--strict_target_rmsd", type=float, default=None,
+                      help="Fail anchored outputs whose target RMSD exceeds this threshold")
     parser.add_argument("--ncpus", type=int, default=1,
                       help="Number of CPUs for parallel processing")
     args = parser.parse_args()
@@ -285,7 +300,9 @@ def main():
             seq_id,
             args.design_type,
             args.binder_chains,
-            args.target_chains
+            args.target_chains,
+            args.geometry_mode,
+            args.strict_target_rmsd,
         ))
 
     if not tasks:

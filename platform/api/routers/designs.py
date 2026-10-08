@@ -17,6 +17,7 @@ from pathlib import Path
 import math
 
 from database import get_session, Design, Job
+from services.stage_review import REVIEWABLE_STAGES, ensure_stage_review_rows
 
 
 router = APIRouter()
@@ -110,7 +111,18 @@ class DesignResponse(BaseModel):
     backbone_id: Optional[int] = None
     epitope_contact_count: Optional[int] = None
     epitope_min_distance: Optional[float] = None
+    epitope_min_atom_distance: Optional[float] = None
+    epitope_nearest_antibody_residue: Optional[str] = None
+    epitope_nearest_target_residue: Optional[str] = None
+    epitope_nearest_antibody_atom: Optional[str] = None
+    epitope_nearest_target_atom: Optional[str] = None
     target_contact_count: Optional[int] = None
+    target_min_distance: Optional[float] = None
+    target_min_atom_distance: Optional[float] = None
+    target_nearest_antibody_residue: Optional[str] = None
+    target_nearest_target_residue: Optional[str] = None
+    target_nearest_antibody_atom: Optional[str] = None
+    target_nearest_target_atom: Optional[str] = None
     screening_reason: Optional[str] = None
     
     # Frustration analysis (FrustraMPNN)
@@ -232,7 +244,10 @@ def _build_plotly_metrics(design: Design) -> Dict[str, float]:
         "binder_length": design.binder_length,
         "epitope_contact_count": design.epitope_contact_count,
         "epitope_min_distance": design.epitope_min_distance,
+        "epitope_min_atom_distance": design.epitope_min_atom_distance,
         "target_contact_count": design.target_contact_count,
+        "target_min_distance": design.target_min_distance,
+        "target_min_atom_distance": design.target_min_atom_distance,
         "frustration_high_count": design.frustration_high_count,
         "frustration_min_count": design.frustration_min_count,
         "frustration_pct_high": design.frustration_pct_high,
@@ -327,6 +342,27 @@ def _chain_label(chain_idx: str) -> str:
     return f"Chain {chain_idx}"
 
 
+def _round_nullable(value: Optional[float], digits: int) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric):
+        return None
+    return round(numeric, digits)
+
+
+def _design_summary_sort_key(design: Design) -> tuple:
+    return (
+        -(design.plddt_overall if design.plddt_overall is not None else float("-inf")),
+        -(design.epitope_contact_count if design.epitope_contact_count is not None else float("-inf")),
+        design.epitope_min_distance if design.epitope_min_distance is not None else float("inf"),
+        design.created_at,
+    )
+
+
 # --- Endpoints ---
 
 @router.get("", response_model=DesignList)
@@ -361,6 +397,20 @@ async def list_designs(
     - favorites_only: Show only favorited designs
     - sort_by: Sort by specific field
     """
+    selected_job: Optional[Job] = None
+    review_stage: Optional[str] = None
+    if job_id:
+        job_result = await session.execute(select(Job).where(Job.id == job_id))
+        selected_job = job_result.scalar_one_or_none()
+        if (
+            selected_job
+            and not include_children
+            and bool(selected_job.awaiting_input)
+            and str(selected_job.awaiting_stage or "").strip().lower() in REVIEWABLE_STAGES
+        ):
+            review_stage = str(selected_job.awaiting_stage or "").strip().lower()
+            await ensure_stage_review_rows(session, selected_job)
+
     # Build base query with optional sorting
     sort_field_map = {
         'plddt': Design.plddt_overall,
@@ -397,6 +447,14 @@ async def list_designs(
             conditions.append(Design.job_id.in_(all_job_ids))
         else:
             conditions.append(Design.job_id == job_id)
+            if review_stage:
+                conditions.append(Design.source_stage == review_stage)
+            else:
+                conditions.append(Design.source_stage.is_(None))
+    elif not include_children:
+        conditions.append(Design.source_stage.is_(None))
+    elif not job_id:
+        conditions.append(Design.source_stage.is_(None))
     if backbone_id is not None:
         conditions.append(Design.backbone_id == backbone_id)
     if plddt_min is not None:
@@ -446,42 +504,122 @@ async def get_backbone_summary(
     
     Returns counts and average metrics per backbone for UI toggle display.
     """
-    # Query backbone aggregate stats
-    query = select(
-        Design.backbone_id,
-        func.count(Design.id).label('count'),
-        func.avg(Design.plddt_overall).label('avg_plddt'),
-        func.avg(Design.iptm).label('avg_iptm'),
-        func.avg(Design.ptm).label('avg_ptm'),
-        func.min(Design.pae_overall).label('min_pae')
-    ).where(
-        Design.job_id == job_id,
-        Design.backbone_id.isnot(None)
-    ).group_by(Design.backbone_id).order_by(Design.backbone_id)
-    
-    result = await session.execute(query)
-    rows = result.all()
-    
-    # Format response
-    backbones = {}
-    for row in rows:
-        backbone_id = row.backbone_id
-        backbones[backbone_id] = {
-            'count': row.count,
-            'avg_plddt': round(row.avg_plddt, 1) if row.avg_plddt else None,
-            'avg_iptm': round(row.avg_iptm, 3) if row.avg_iptm else None,
-            'avg_ptm': round(row.avg_ptm, 3) if row.avg_ptm else None,
-            'min_pae': round(row.min_pae, 1) if row.min_pae else None,
+    job_result = await session.execute(select(Job).where(Job.id == job_id))
+    job = job_result.scalar_one_or_none()
+    review_stage: Optional[str] = None
+    if (
+        job
+        and bool(job.awaiting_input)
+        and str(job.awaiting_stage or "").strip().lower() in REVIEWABLE_STAGES
+    ):
+        review_stage = str(job.awaiting_stage or "").strip().lower()
+        await ensure_stage_review_rows(session, job)
+
+    result = await session.execute(
+        select(Design)
+        .where(
+            Design.job_id == job_id,
+            Design.source_stage == review_stage if review_stage else Design.source_stage.is_(None),
+        )
+        .order_by(Design.created_at.asc())
+    )
+    designs = result.scalars().all()
+
+    backbones: Dict[int, Dict[str, Any]] = {}
+    for design in designs:
+        if design.backbone_id is None:
+            continue
+
+        entry = backbones.setdefault(
+            design.backbone_id,
+            {
+                "count": 0,
+                "plddt_values": [],
+                "iptm_values": [],
+                "ptm_values": [],
+                "pae_values": [],
+                "epitope_contact_values": [],
+                "epitope_distance_values": [],
+                "cdr_h1_length_values": [],
+                "cdr_h2_length_values": [],
+                "cdr_h3_length_values": [],
+                "representative": None,
+            },
+        )
+        entry["count"] += 1
+
+        for key, value in (
+            ("plddt_values", design.plddt_overall),
+            ("iptm_values", design.iptm),
+            ("ptm_values", design.ptm),
+            ("pae_values", design.pae_overall),
+            ("epitope_contact_values", design.epitope_contact_count),
+            ("epitope_distance_values", design.epitope_min_distance),
+            ("cdr_h1_length_values", design.cdr_h1_length),
+            ("cdr_h2_length_values", design.cdr_h2_length),
+            ("cdr_h3_length_values", design.cdr_h3_length),
+        ):
+            if value is None:
+                continue
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(numeric):
+                entry[key].append(numeric)
+
+        representative: Optional[Design] = entry["representative"]
+        if representative is None or _design_summary_sort_key(design) < _design_summary_sort_key(representative):
+            entry["representative"] = design
+
+    formatted_backbones: Dict[int, Dict[str, Any]] = {}
+    for backbone_id, entry in sorted(backbones.items()):
+        plddt_values = entry["plddt_values"]
+        iptm_values = entry["iptm_values"]
+        ptm_values = entry["ptm_values"]
+        pae_values = entry["pae_values"]
+        contact_values = entry["epitope_contact_values"]
+        distance_values = entry["epitope_distance_values"]
+        h1_values = entry["cdr_h1_length_values"]
+        h2_values = entry["cdr_h2_length_values"]
+        h3_values = entry["cdr_h3_length_values"]
+        representative = entry["representative"]
+
+        formatted_backbones[backbone_id] = {
+            "count": entry["count"],
+            "avg_plddt": _round_nullable(sum(plddt_values) / len(plddt_values), 1) if plddt_values else None,
+            "max_plddt": _round_nullable(max(plddt_values), 1) if plddt_values else None,
+            "avg_iptm": _round_nullable(sum(iptm_values) / len(iptm_values), 3) if iptm_values else None,
+            "avg_ptm": _round_nullable(sum(ptm_values) / len(ptm_values), 3) if ptm_values else None,
+            "min_pae": _round_nullable(min(pae_values), 1) if pae_values else None,
+            "max_epitope_contacts": int(max(contact_values)) if contact_values else None,
+            "min_epitope_distance": _round_nullable(min(distance_values), 2) if distance_values else None,
+            "avg_cdr_h1_length": _round_nullable(sum(h1_values) / len(h1_values), 1) if h1_values else None,
+            "avg_cdr_h2_length": _round_nullable(sum(h2_values) / len(h2_values), 1) if h2_values else None,
+            "avg_cdr_h3_length": _round_nullable(sum(h3_values) / len(h3_values), 1) if h3_values else None,
+            "representative": (
+                {
+                    "id": representative.id,
+                    "name": representative.name,
+                    "pdb_path": representative.pdb_path,
+                    "plddt_overall": _round_nullable(representative.plddt_overall, 1),
+                    "epitope_contact_count": representative.epitope_contact_count,
+                    "epitope_min_distance": _round_nullable(representative.epitope_min_distance, 2),
+                }
+                if representative
+                else None
+            ),
         }
-    
-    # Also get total count for "All" option
-    total_query = select(func.count(Design.id)).where(Design.job_id == job_id)
-    total = (await session.execute(total_query)).scalar()
-    
+
+    total = len(designs)
+    assigned_total = sum(entry["count"] for entry in formatted_backbones.values())
+
     return {
-        'job_id': job_id,
-        'total': total,
-        'backbones': backbones
+        "job_id": job_id,
+        "total": total,
+        "assigned_total": assigned_total,
+        "unassigned_total": max(total - assigned_total, 0),
+        "backbones": formatted_backbones,
     }
 
 

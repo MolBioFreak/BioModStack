@@ -9,6 +9,8 @@ export interface QualitySettings {
     rfantibody_noise_scale_ca: number;
     rfantibody_noise_scale_frame: number;
     rfantibody_guide_scale: number;
+    rfantibody_ckpt_override: string;
+    rfantibody_debug_repo_overlay: boolean;
 
     // Boltz-2 settings (structure validation)
     boltz_sampling_steps: number;
@@ -20,6 +22,8 @@ export interface QualitySettings {
     // Boltz-2 affinity prediction (quality feature)
     boltz_predict_affinity: boolean;
     boltz_diffusion_samples_affinity: number;
+    boltz_anchor_target: boolean;
+    boltz_anchor_strict: boolean;
 
     // Protenix settings (structure validation)
     protenix_model_weights: string;
@@ -30,6 +34,8 @@ export interface QualitySettings {
     protenix_use_msa: boolean;
     protenix_msa_backend: 'auto' | 'local' | 'colabfold_api';
     protenix_use_template: boolean;
+    protenix_anchor_target: boolean;
+    protenix_anchor_strict: boolean;
     protenix_enable_cache: boolean;
     protenix_enable_fusion: boolean;
     protenix_auto_oom_retry: boolean;
@@ -183,6 +189,8 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         rfantibody_noise_scale_ca: 1.0,
         rfantibody_noise_scale_frame: 1.0,
         rfantibody_guide_scale: 10,
+        rfantibody_ckpt_override: '',
+        rfantibody_debug_repo_overlay: false,
         // Boltz-2
         boltz_sampling_steps: 50,
         boltz_recycling_steps: 1,
@@ -192,6 +200,8 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         boltz_step_scale: null,
         boltz_predict_affinity: false,
         boltz_diffusion_samples_affinity: 5,
+        boltz_anchor_target: false,
+        boltz_anchor_strict: false,
         // Protenix
         protenix_model_weights: 'protenix_mini_esm_v0.5.0',
         protenix_seeds: '42',
@@ -201,6 +211,8 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         protenix_use_msa: false,
         protenix_msa_backend: 'auto',
         protenix_use_template: false,
+        protenix_anchor_target: false,
+        protenix_anchor_strict: false,
         protenix_enable_cache: true,
         protenix_enable_fusion: true,
         ...DEFAULT_PROTENIX_RUNTIME_SETTINGS,
@@ -263,6 +275,8 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         rfantibody_noise_scale_ca: 1.0,
         rfantibody_noise_scale_frame: 1.0,
         rfantibody_guide_scale: 10,
+        rfantibody_ckpt_override: '',
+        rfantibody_debug_repo_overlay: false,
         // Boltz-2
         boltz_sampling_steps: 200,
         boltz_recycling_steps: 3,
@@ -272,6 +286,8 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         boltz_step_scale: null,
         boltz_predict_affinity: false,
         boltz_diffusion_samples_affinity: 5,
+        boltz_anchor_target: false,
+        boltz_anchor_strict: false,
         // Protenix
         protenix_model_weights: 'protenix_base_20250630_v1.0.0',
         protenix_seeds: '42',
@@ -281,6 +297,8 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         protenix_use_msa: true,
         protenix_msa_backend: 'auto',
         protenix_use_template: false,
+        protenix_anchor_target: false,
+        protenix_anchor_strict: false,
         protenix_enable_cache: true,
         protenix_enable_fusion: true,
         ...DEFAULT_PROTENIX_RUNTIME_SETTINGS,
@@ -343,6 +361,8 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         rfantibody_noise_scale_ca: 0.8,
         rfantibody_noise_scale_frame: 0.8,
         rfantibody_guide_scale: 15,
+        rfantibody_ckpt_override: '',
+        rfantibody_debug_repo_overlay: false,
         // Boltz-2
         boltz_sampling_steps: 500,
         boltz_recycling_steps: 5,
@@ -352,6 +372,8 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         boltz_step_scale: null,
         boltz_predict_affinity: false,
         boltz_diffusion_samples_affinity: 5,
+        boltz_anchor_target: false,
+        boltz_anchor_strict: false,
         // Protenix
         protenix_model_weights: 'protenix_base_20250630_v1.0.0',
         protenix_seeds: '42',
@@ -361,6 +383,8 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         protenix_use_msa: true,
         protenix_msa_backend: 'auto',
         protenix_use_template: false,
+        protenix_anchor_target: false,
+        protenix_anchor_strict: false,
         protenix_enable_cache: true,
         protenix_enable_fusion: true,
         ...DEFAULT_PROTENIX_RUNTIME_SETTINGS,
@@ -423,6 +447,8 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         rfantibody_noise_scale_ca: 0.7,
         rfantibody_noise_scale_frame: 0.7,
         rfantibody_guide_scale: 20,
+        rfantibody_ckpt_override: '',
+        rfantibody_debug_repo_overlay: false,
         // Boltz-2
         boltz_sampling_steps: 1000,
         boltz_recycling_steps: 10,
@@ -432,6 +458,8 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         boltz_step_scale: null,
         boltz_predict_affinity: true,
         boltz_diffusion_samples_affinity: 10,
+        boltz_anchor_target: false,
+        boltz_anchor_strict: false,
         // Protenix
         protenix_model_weights: 'protenix_base_20250630_v1.0.0',
         protenix_seeds: '42',
@@ -441,6 +469,8 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         protenix_use_msa: true,
         protenix_msa_backend: 'colabfold_api',
         protenix_use_template: false,
+        protenix_anchor_target: false,
+        protenix_anchor_strict: false,
         protenix_enable_cache: true,
         protenix_enable_fusion: true,
         ...DEFAULT_PROTENIX_RUNTIME_SETTINGS,
@@ -1046,9 +1076,15 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
             fampnn_checkpoint: settings.fampnn_checkpoint,
             fampnn_checkpoint_path: settings.fampnn_checkpoint_path,
             fampnn_temperature: settings.fampnn_temperature,
+            rfantibody_ckpt_override: settings.rfantibody_ckpt_override,
+            rfantibody_debug_repo_overlay: settings.rfantibody_debug_repo_overlay,
             lock_target_chains: settings.lock_target_chains,
             lock_antibody_framework: settings.lock_antibody_framework,
+            boltz_anchor_target: settings.boltz_anchor_target,
+            boltz_anchor_strict: settings.boltz_anchor_strict,
             protenix_use_template: settings.protenix_use_template,
+            protenix_anchor_target: settings.protenix_anchor_target,
+            protenix_anchor_strict: settings.protenix_anchor_strict,
             protenix_msa_backend: settings.protenix_msa_backend,
             protenix_auto_oom_retry: settings.protenix_auto_oom_retry,
             protenix_oom_retry_attempts: settings.protenix_oom_retry_attempts,
@@ -1156,16 +1192,16 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                 <input
                                     type="range"
                                     min={20}
-                                    max={50}
-                                    step={10}
+                                    max={200}
+                                    step={5}
                                     value={settings.rfantibody_diffusion_steps}
                                     onChange={(e) => updateSetting('rfantibody_diffusion_steps', parseInt(e.target.value))}
                                     className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-pink-500"
                                 />
                                 <div className="flex justify-between text-[10px] text-slate-600 mt-1">
                                     <span>20 (fast)</span>
-                                    <span>35</span>
-                                    <span>50 (max)</span>
+                                    <span>50 (default ceiling)</span>
+                                    <span>200 (extended)</span>
                                 </div>
                             </div>
 
@@ -1231,6 +1267,39 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                 </div>
                             </div>
                         </div>
+
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-xs text-slate-500 mb-1">
+                                    Checkpoint Override
+                                </label>
+                                <input
+                                    type="text"
+                                    value={settings.rfantibody_ckpt_override}
+                                    onChange={(e) => updateSetting('rfantibody_ckpt_override', e.target.value)}
+                                    placeholder="optional .pt override path"
+                                    className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300 font-mono"
+                                />
+                                <p className="text-[10px] text-slate-600 mt-1">
+                                    Advanced/dev override for the RFantibody checkpoint path.
+                                </p>
+                            </div>
+
+                            <div className="rounded-lg border border-slate-700/50 bg-slate-900/30 p-3">
+                                <label className="flex items-center justify-between text-sm text-slate-300">
+                                    <span>Debug Repo Overlay</span>
+                                    <input
+                                        type="checkbox"
+                                        checked={settings.rfantibody_debug_repo_overlay}
+                                        onChange={(e) => updateSetting('rfantibody_debug_repo_overlay', e.target.checked)}
+                                        className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-pink-500 focus:ring-pink-500"
+                                    />
+                                </label>
+                                <p className="mt-2 text-[10px] text-slate-600">
+                                    Advanced/dev mode. Use the local RFantibody repo overlay instead of the normal packaged code path.
+                                </p>
+                            </div>
+                        </div>
                     </div>
 
                     <div className="space-y-3 pt-3 border-t border-slate-700/50">
@@ -1248,7 +1317,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                     </a>
                                 </div>
                                 <p className="text-xs text-slate-500">
-                                    These controls cover the Protenix inference CLI plus template DB usage and optional OOM retry behavior:
+                                    These controls cover the Protenix inference CLI, anchored-target template conditioning, generic template DB usage, and optional OOM retry behavior:
                                     <code className="ml-1">--model_name</code>, <code>--sample</code>, <code>--step</code>, <code>--cycle</code>,
                                     <code> --use_msa</code>, <code>--use_template</code>, <code>--enable_cache</code>, and <code>--enable_fusion</code>.
                                     Shared workflow MSA settings live in the separate MSA section below.
@@ -1381,6 +1450,31 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                     <label className="flex items-center gap-2 cursor-pointer">
                                         <input
                                             type="checkbox"
+                                            checked={settings.protenix_anchor_target}
+                                            onChange={(e) => updateSetting('protenix_anchor_target', e.target.checked)}
+                                            className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500"
+                                        />
+                                        <span className="text-sm text-slate-300">
+                                            Anchor Experimental Target <span className="text-xs text-slate-500">(task-local target templates)</span>
+                                        </span>
+                                    </label>
+
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={settings.protenix_anchor_strict}
+                                            onChange={(e) => updateSetting('protenix_anchor_strict', e.target.checked)}
+                                            disabled={!settings.protenix_anchor_target}
+                                            className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500 disabled:opacity-50"
+                                        />
+                                        <span className="text-sm text-slate-300">
+                                            Strict Target Drift Rejection <span className="text-xs text-slate-500">(drop predictions with moving target)</span>
+                                        </span>
+                                    </label>
+
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input
+                                            type="checkbox"
                                             checked={settings.protenix_enable_cache}
                                             onChange={(e) => updateSetting('protenix_enable_cache', e.target.checked)}
                                             className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500"
@@ -1436,6 +1530,11 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                 {settings.protenix_use_template && (
                                     <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
                                         Template mode requires local mmCIF data under <code>.protenix_cache/mmcif</code>. Submission is rejected if that cache is missing.
+                                    </div>
+                                )}
+                                {settings.protenix_anchor_target && (
+                                    <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-100">
+                                        Anchored Protenix keeps the current sequence-only co-fold path but stages a task-local template DB built from the experimental target chains. The binder remains free; strict mode rejects outputs whose target RMSD drifts too far after alignment.
                                     </div>
                                 )}
                             </>
@@ -1544,6 +1643,39 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                         </span>
                                     </label>
                                 </div>
+
+                                <div className="flex gap-4">
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={settings.boltz_anchor_target}
+                                            onChange={(e) => updateSetting('boltz_anchor_target', e.target.checked)}
+                                            className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-accent focus:ring-accent"
+                                        />
+                                        <span className="text-sm text-slate-300">
+                                            Anchor Experimental Target <span className="text-xs text-slate-500">(target templates only)</span>
+                                        </span>
+                                    </label>
+
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={settings.boltz_anchor_strict}
+                                            onChange={(e) => updateSetting('boltz_anchor_strict', e.target.checked)}
+                                            disabled={!settings.boltz_anchor_target}
+                                            className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-accent focus:ring-accent disabled:opacity-50"
+                                        />
+                                        <span className="text-sm text-slate-300">
+                                            Strict Target Drift Rejection <span className="text-xs text-slate-500">(drop moving-target outputs)</span>
+                                        </span>
+                                    </label>
+                                </div>
+
+                                {settings.boltz_anchor_target && (
+                                    <div className="rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-xs text-slate-200">
+                                        Anchored Boltz injects templates only on the target chains and leaves the binder flexible. Strict mode rejects aligned predictions whose target RMSD drifts beyond the anchored threshold.
+                                    </div>
+                                )}
                             </>
                         )}
                     </div>

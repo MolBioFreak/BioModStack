@@ -22,6 +22,7 @@ from paths import (
     get_code_root,
     get_db_path,
     get_data_root,
+    get_work_dir,
     get_weights_root,
     get_rfd_models_dir,
     get_colabfold_db,
@@ -49,31 +50,52 @@ def parse_stage_progress(work_dir: str, stage: str, total_designs: int = None) -
     if not work_dir:
         return None
     
-    log_path = Path(work_dir) / ".command.log"
-    if not log_path.exists():
-        return None
-    
     try:
-        # Read last 200 lines (progress is usually near the end)
-        with open(log_path, 'r', errors='replace') as f:
-            lines = f.readlines()[-200:]
-        content = ''.join(lines)
+        content_chunks = []
+        for candidate in (".command.log", ".command.out", ".command.err"):
+            log_path = Path(work_dir) / candidate
+            if not log_path.exists():
+                continue
+            with open(log_path, 'r', errors='replace') as f:
+                content_chunks.append(''.join(f.readlines()[-200:]))
+        if not content_chunks:
+            return None
+        content = '\n'.join(content_chunks)
         
         stage_lower = stage.lower() if stage else ""
         
         # RFAntibody: Count "Making design" or "Finished design"
         if 'rfantibody' in stage_lower:
-            # Count completed designs
+            output_dir = Path(work_dir) / "output"
+            completed_outputs = 0
+            if output_dir.exists():
+                completed_outputs = len(list(output_dir.glob("rfantibody_child_*.pdb")))
+
+            # Count completed designs from recent logs as a fallback only.
             finished = len(re.findall(r'Finished design in', content))
+            completed = max(completed_outputs, finished)
+            timestep_match = re.findall(r'Timestep\s+(\d+)', content, re.IGNORECASE)
+            making_match = re.findall(r'Making design .*?_(\d+)(?:\D|$)', content)
+            if timestep_match:
+                current_timestep = timestep_match[-1]
+                if making_match:
+                    current_design = int(making_match[-1]) + 1
+                else:
+                    current_design = completed + 1
+                if total_designs:
+                    current_design = min(current_design, total_designs)
+                if total_designs:
+                    return f"design {current_design}/{total_designs}, diffusion t={current_timestep}"
+                return f"design {current_design}, diffusion t={current_timestep}"
             # Try to get total from params or estimate from log
             if total_designs:
-                return f"{finished}/{total_designs}"
+                return f"{completed}/{total_designs}"
             # Look for "Making design antibody_job_X" to estimate
             making = re.findall(r'Making design.*antibody_job_(\d+)', content)
             if making:
                 max_idx = max(int(m) for m in making) + 1  # 0-indexed
-                return f"{finished}/{max_idx}"
-            return f"{finished}/?" if finished else None
+                return f"{completed}/{max_idx}"
+            return f"{completed}/?" if completed else None
         
         # FAMPNN: Check for tqdm progress bar or completed designs
         elif 'fampnn' in stage_lower:
@@ -86,6 +108,29 @@ def parse_stage_progress(work_dir: str, stage: str, total_designs: int = None) -
             completed = len(re.findall(r'Saved design', content, re.IGNORECASE))
             if completed and total_designs:
                 return f"{completed}/{total_designs}"
+            return None
+
+        # Wait stages: child orchestration progress
+        elif 'waitfor' in stage_lower and 'children' in stage_lower:
+            wait_matches = re.findall(
+                r'Progress:\s*(\d+)/(\d+)\s+done,\s*(\d+)\s+running,\s*(\d+)\s+pending,\s*(\d+)\s+failed,\s*(\d+)\s+cancelled',
+                content,
+                re.IGNORECASE,
+            )
+            if wait_matches:
+                done, total, running, pending, failed, cancelled = wait_matches[-1]
+                detail_bits = [f"{done}/{total} done"]
+                if int(running) > 0:
+                    detail_bits.append(f"{running} running")
+                if int(pending) > 0:
+                    detail_bits.append(f"{pending} pending")
+                if int(failed) > 0:
+                    detail_bits.append(f"{failed} failed")
+                if int(cancelled) > 0:
+                    detail_bits.append(f"{cancelled} cancelled")
+                return ", ".join(detail_bits)
+            if re.search(r'All children complete!', content, re.IGNORECASE):
+                return "complete"
             return None
         
         # Boltz2: Look for step counters or sample completion
@@ -119,6 +164,29 @@ def parse_stage_progress(work_dir: str, stage: str, total_designs: int = None) -
     except Exception as e:
         logger.debug(f"Error parsing progress from {work_dir}: {e}")
         return None
+
+
+def infer_task_work_dir(task_bucket: str, task_prefix: str) -> Optional[str]:
+    if not task_bucket or not task_prefix:
+        return None
+    work_roots = [Path(get_work_dir()), PROJECT_ROOT / "work"]
+    seen_roots = set()
+    for work_root in work_roots:
+        root_key = str(work_root)
+        if root_key in seen_roots:
+            continue
+        seen_roots.add(root_key)
+        bucket_dir = work_root / task_bucket
+        if not bucket_dir.exists():
+            continue
+        try:
+            matches = sorted(bucket_dir.glob(f"{task_prefix}*"))
+        except Exception:
+            continue
+        for candidate in matches:
+            if candidate.is_dir():
+                return str(candidate)
+    return None
 
 
 def sanitize_filename(name: str) -> str:
@@ -491,6 +559,156 @@ async def maybe_trigger_batch_frustrampnn(job, session) -> None:
         
     except Exception as e:
         logger.error(f"[FRUST BATCH] Error checking batch completion: {e}", exc_info=True)
+
+
+async def maybe_trigger_mutation_seed_refinement(job, session) -> None:
+    """
+    Trigger a follow-on antibody refinement round after a mutagenesis batch
+    finishes generating structural seeds.
+
+    This is used for mutation-seeded refinement of CDR indel batches: first we
+    rebuild structures for the mutated sequences, then we feed the successful
+    rebuilt structures back into the antibody workflow orchestrator.
+    """
+    if not job.batch_id:
+        return
+
+    from database import Job, Design
+    from sqlalchemy import select, func, or_
+
+    try:
+        msa_result = await session.execute(
+            select(Job).where(
+                Job.batch_id == job.batch_id,
+                Job.job_phase == "msa_generation",
+            )
+        )
+        msa_job = msa_result.scalar_one_or_none()
+        if not msa_job:
+            return
+
+        trigger_cfg = msa_job.params.get("mutation_seed_refinement_trigger") if isinstance(msa_job.params, dict) else None
+        if not isinstance(trigger_cfg, dict):
+            return
+        if msa_job.params.get("_mutation_seed_refinement_triggered"):
+            return
+
+        variant_result = await session.execute(
+            select(func.count(Job.id)).where(
+                Job.batch_id == job.batch_id,
+                Job.job_phase == "inference",
+            )
+        )
+        total_variants = variant_result.scalar() or 0
+        terminal_result = await session.execute(
+            select(func.count(Job.id)).where(
+                Job.batch_id == job.batch_id,
+                Job.job_phase == "inference",
+                or_(Job.status == "completed", Job.status == "failed"),
+            )
+        )
+        terminal_variants = terminal_result.scalar() or 0
+        logger.info(
+            f"[MUT-SEED] Variant progress: {terminal_variants}/{total_variants} for batch {job.batch_id[:8]}"
+        )
+        if total_variants == 0 or terminal_variants < total_variants:
+            return
+
+        successful_jobs_result = await session.execute(
+            select(Job)
+            .where(
+                Job.batch_id == job.batch_id,
+                Job.job_phase == "inference",
+                Job.status == "completed",
+            )
+            .order_by(Job.created_at.asc())
+        )
+        successful_jobs = successful_jobs_result.scalars().all()
+
+        msa_job.params = {**msa_job.params, "_mutation_seed_refinement_triggered": True}
+        if not successful_jobs:
+            logger.warning(f"[MUT-SEED] No successful variant jobs found for batch {job.batch_id[:8]}")
+            await session.commit()
+            return
+
+        design_result = await session.execute(
+            select(Design).where(Design.job_id.in_([variant_job.id for variant_job in successful_jobs]))
+        )
+        found_designs = design_result.scalars().all()
+        if not found_designs:
+            logger.warning(f"[MUT-SEED] No ingested designs found for successful batch {job.batch_id[:8]}")
+            await session.commit()
+            return
+
+        design_by_job: Dict[str, List[Design]] = {}
+        for design in found_designs:
+            design_by_job.setdefault(str(design.job_id), []).append(design)
+
+        ordered_designs: List[Design] = []
+        design_job_map: Dict[str, Job] = {}
+        for variant_job in successful_jobs:
+            matched_designs = design_by_job.get(str(variant_job.id), [])
+            for design in matched_designs:
+                ordered_designs.append(design)
+                design_job_map[str(design.job_id)] = variant_job
+
+        if not ordered_designs:
+            logger.warning(f"[MUT-SEED] Successful batch {job.batch_id[:8]} had no ordered designs to seed refinement")
+            await session.commit()
+            return
+
+        source_job_id = str(trigger_cfg.get("source_job_id") or "").strip()
+        root_job_id = str(trigger_cfg.get("root_job_id") or "").strip()
+        if not source_job_id or not root_job_id:
+            logger.warning(f"[MUT-SEED] Missing source/root job ids in trigger config for batch {job.batch_id[:8]}")
+            await session.commit()
+            return
+
+        source_job = await session.get(Job, source_job_id)
+        root_job = await session.get(Job, root_job_id)
+        if not source_job or not root_job:
+            logger.warning(f"[MUT-SEED] Could not resolve source/root jobs for batch {job.batch_id[:8]}")
+            await session.commit()
+            return
+
+        from fastapi import BackgroundTasks
+        from routers.jobs import (
+            _materialize_seed_selection_from_completed_designs,
+            _build_antibody_iteration_job,
+            create_job,
+        )
+
+        selection_dir, fixed_json_path = _materialize_seed_selection_from_completed_designs(
+            root_job=root_job,
+            source_job=source_job,
+            designs=ordered_designs,
+            design_job_map=design_job_map,
+            action="mutation_seeded_refinement",
+        )
+        param_overrides = dict(trigger_cfg.get("param_overrides") or {})
+        param_overrides.update({
+            "manual_mutation_mode": "seeded_refinement",
+            "manual_mutation_method": str(trigger_cfg.get("manual_mutation_method") or "cdr_indels"),
+            "manual_mutation_fixed_positions_json": str(fixed_json_path),
+        })
+        launch_request = _build_antibody_iteration_job(
+            root_job=root_job,
+            source_job=source_job,
+            action="ui_refinement",
+            selection_dir=selection_dir,
+            design_ids=[design.id for design in ordered_designs],
+            name_suffix=str(trigger_cfg.get("name_suffix") or "mutation_seeded_refinement"),
+            param_overrides=param_overrides,
+        )
+
+        await session.commit()
+        logger.info(
+            f"[MUT-SEED] Launching seeded refinement from {len(ordered_designs)} rebuilt designs for batch {job.batch_id[:8]}"
+        )
+        await create_job(launch_request, BackgroundTasks(), session)
+
+    except Exception as e:
+        logger.error(f"[MUT-SEED] Error triggering seeded refinement: {e}", exc_info=True)
 
 
 async def run_batch_frustrampnn(pdb_paths: list, batch_id: str, parent_session) -> None:
@@ -1046,6 +1264,7 @@ async def launch_nextflow_job(
                     # Check for stage update
                     # Example: "[4b/123456] process > NF_CORE:FAMPNN (1) [ 0%]"
                     match = process_regex.search(line_str)
+                    task_match = re.search(r'^\[([0-9a-f]{2})/([0-9a-f]+)\]\s+Submitted process >', line_str, re.IGNORECASE)
                     if match:
                         # Extract stage name (e.g. "NF_CORE:FAMPNN" or "FAMPNN")
                         raw_stage = match.group(1).strip()
@@ -1132,6 +1351,26 @@ async def launch_nextflow_job(
                                         await update_session.commit()
                             except Exception as db_err:
                                 logger.warning(f"Failed to update stage for {job_id}: {db_err}")
+
+                        if task_match:
+                            inferred_work_dir = infer_task_work_dir(task_match.group(1), task_match.group(2))
+                            if inferred_work_dir:
+                                try:
+                                    async with async_session() as update_session:
+                                        j_stats = await update_session.execute(select(Job).where(Job.id == job_id))
+                                        j = j_stats.scalar_one_or_none()
+                                        if j:
+                                            j.stage_work_dir = inferred_work_dir
+                                            progress = parse_stage_progress(
+                                                inferred_work_dir,
+                                                j.current_stage,
+                                                launch_params.get('rfantibody_num_designs') or launch_params.get('num_designs')
+                                            )
+                                            if progress:
+                                                j.stage_progress = progress
+                                            await update_session.commit()
+                                except Exception as db_err:
+                                    logger.warning(f"Failed to infer work dir for {job_id}: {db_err}")
 
                     # Check for work directory in TaskHandler output
                     # Example: "workDir: /home/.../work/91/0cd0da..."
@@ -1323,6 +1562,7 @@ async def launch_nextflow_job(
                             await maybe_auto_annotate_cdrs(job, session)
                             # BATCH-STAGE-GATE: Check if all sibling variants complete, trigger batch FrustraMPNN
                             await maybe_trigger_batch_frustrampnn(job, session)
+                            await maybe_trigger_mutation_seed_refinement(job, session)
                         except Exception as ingest_err:
                             logger.warning(f"Result ingestion failed: {ingest_err}")
                             
@@ -1713,6 +1953,8 @@ def build_nextflow_command(
         'boltz_method': 'boltz_method',
         'boltz_use_potentials': 'boltz_use_potentials',
         'boltz_step_scale': 'boltz_step_scale',
+        'boltz_anchor_target': 'boltz_anchor_target',
+        'boltz_anchor_strict': 'boltz_anchor_strict',
         # Boltz-2 affinity prediction (quality feature)
         'boltz_predict_affinity': 'boltz_predict_affinity',
         'boltz_sampling_steps_affinity': 'boltz_sampling_steps_affinity',
@@ -1731,6 +1973,8 @@ def build_nextflow_command(
         'protenix_use_msa': 'protenix_use_msa',
         'protenix_msa_backend': 'protenix_msa_backend',
         'protenix_use_template': 'protenix_use_template',
+        'protenix_anchor_target': 'protenix_anchor_target',
+        'protenix_anchor_strict': 'protenix_anchor_strict',
         'protenix_enable_cache': 'protenix_enable_cache',
         'protenix_enable_fusion': 'protenix_enable_fusion',
         'protenix_auto_oom_retry': 'protenix_auto_oom_retry',

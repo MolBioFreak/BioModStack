@@ -121,6 +121,28 @@ export function Layout({ children }: LayoutProps) {
                                 </span>
                             </Link>
                             <Link
+                                to="/infra"
+                                className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap shrink-0"
+                                style={{
+                                    backgroundColor: isActive('/infra') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
+                                    color: isActive('/infra') ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                                }}
+                                title="Infra Monitor"
+                            >
+                                <span className="inline-flex items-center gap-1.5">
+                                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                                        <path d="M4 18h16" strokeLinecap="round" />
+                                        <path d="M6 15l3-4 3 2 4-6 2 3" strokeLinecap="round" strokeLinejoin="round" />
+                                        <circle cx="6" cy="15" r="1" fill="currentColor" stroke="none" />
+                                        <circle cx="9" cy="11" r="1" fill="currentColor" stroke="none" />
+                                        <circle cx="12" cy="13" r="1" fill="currentColor" stroke="none" />
+                                        <circle cx="16" cy="7" r="1" fill="currentColor" stroke="none" />
+                                        <circle cx="18" cy="10" r="1" fill="currentColor" stroke="none" />
+                                    </svg>
+                                    <span>Infra</span>
+                                </span>
+                            </Link>
+                            <Link
                                 to="/bioxp"
                                 className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap shrink-0"
                                 style={{
@@ -194,7 +216,7 @@ function DebugMenu() {
         <div className="relative">
             <button
                 onClick={() => setIsOpen(!isOpen)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-white hover:bg-slate-700/50 transition-all border border-slate-700/50"
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all border bg-slate-800 text-slate-300 border-slate-700 hover:border-slate-500 hover:bg-slate-700/50"
             >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
@@ -1016,7 +1038,7 @@ function MSAServerSettingsMenu() {
                 className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all border bg-slate-800 text-slate-300 border-slate-700 hover:border-slate-500"
             >
                 <div className={`w-2 h-2 rounded-full ${indicatorClass}`} />
-                MSA SERVER SETTINGS
+                MSA SERVER
             </button>
 
             {isOpen && (

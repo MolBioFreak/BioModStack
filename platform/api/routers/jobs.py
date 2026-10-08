@@ -37,6 +37,14 @@ from schemas import JobCreate, JobResponse, JobList, JobStatus
 from services.nextflow import launch_nextflow_job, cancel_nextflow_job
 
 from model_registry import get_registry
+from services.stage_review import (
+    REVIEWABLE_STAGES,
+    gate_file_for_stage,
+    has_stage_gate,
+    infer_antibody_stage_state,
+    nextflow_history_status,
+    refresh_gate_payload,
+)
 
 router = APIRouter()
 
@@ -44,6 +52,81 @@ router = APIRouter()
 CODE_ROOT = get_code_root()
 DEFAULT_FAMPNN_CHECKPOINT = "fampnn_0_0.pt"
 DEFAULT_PPIFLOW_CHECKPOINT = "nanobody"
+
+
+def _coerce_positive_int(value: Any) -> Optional[int]:
+    try:
+        coerced = int(value)
+    except (TypeError, ValueError):
+        return None
+    return coerced if coerced > 0 else None
+
+
+def _resolve_requested_design_count(job: Job) -> Optional[int]:
+    params = job.params if isinstance(job.params, dict) else {}
+    for key in (
+        "rfantibody_num_designs",
+        "rfd_num_designs",
+        "num_designs",
+        "num_samples",
+    ):
+        if key in params:
+            count = _coerce_positive_int(params.get(key))
+            if count is not None:
+                return count
+    return None
+
+
+def _reconcile_child_jobs_from_history(children: List[Job]) -> int:
+    """
+    Opportunistically reconcile stale child-job statuses from Nextflow history.
+
+    Spawn/wait parent tasks poll this endpoint live. If child jobs have already
+    exited `OK`/`ERR` but their DB status is still `running`, the parent can hang
+    indefinitely. On read, upgrade those stale child records to terminal state.
+    """
+    if not children:
+        return 0
+
+    stale = [
+        child for child in children
+        if child.status in {JobStatus.RUNNING.value, JobStatus.QUEUED.value}
+    ]
+    if not stale:
+        return 0
+
+    updated = 0
+    for child in stale:
+        output_dir = resolve_output_dir(child.output_dir) if child.output_dir else None
+        if not output_dir:
+            continue
+        history_path = output_dir / ".nextflow" / "history"
+        if not history_path.exists():
+            continue
+        try:
+            lines = history_path.read_text(errors="ignore").splitlines()
+        except Exception:
+            continue
+        if not lines:
+            continue
+        parts = lines[-1].split("\t")
+        status_token = parts[3].strip().upper() if len(parts) > 3 else ""
+        if status_token == "OK":
+            child.status = JobStatus.COMPLETED.value
+            child.queue_status = "completed"
+            if not child.completed_at:
+                child.completed_at = datetime.utcnow()
+            child.current_stage = "Complete"
+            updated += 1
+        elif status_token == "ERR":
+            child.status = JobStatus.FAILED.value
+            child.queue_status = "failed"
+            if not child.completed_at:
+                child.completed_at = datetime.utcnow()
+            if not child.error_message:
+                child.error_message = "Reconciled from .nextflow/history (ERR)"
+            updated += 1
+    return updated
 
 
 class ResumeJobRequest(BaseModel):
@@ -72,6 +155,14 @@ class AntibodyCdrIndelConfig(BaseModel):
     msa_provider: str = Field(default="local")
 
 
+class ManualMutagenesisConfig(BaseModel):
+    """Configuration for explicit user-provided mutation rounds."""
+    chain_id: Optional[str] = None
+    mutation_sets: List[str] = Field(default_factory=list)
+    predictor: str = Field(default="protenix")
+    msa_provider: str = Field(default="local")
+
+
 class AntibodyIterationLaunchRequest(BaseModel):
     """Launch a new antibody round from selected design structures."""
     source_job_id: str = Field(..., min_length=1)
@@ -80,6 +171,7 @@ class AntibodyIterationLaunchRequest(BaseModel):
     name_suffix: Optional[str] = None
     param_overrides: Dict[str, Any] = Field(default_factory=dict)
     cdr_indel_config: Optional[AntibodyCdrIndelConfig] = None
+    manual_mutagenesis_config: Optional[ManualMutagenesisConfig] = None
 
 
 class AntibodyIterationLaunchResponse(BaseModel):
@@ -91,14 +183,6 @@ class AntibodyIterationLaunchResponse(BaseModel):
     selection_dir: str
     selected_design_count: int
     launched_job: JobResponse
-
-
-class ManualMutagenesisConfig(BaseModel):
-    """Configuration for explicit user-provided mutation rounds."""
-    chain_id: Optional[str] = None
-    mutation_sets: List[str] = Field(default_factory=list)
-    predictor: str = Field(default="protenix")
-    msa_provider: str = Field(default="local")
 
 
 class ManualMutagenesisLaunchRequest(BaseModel):
@@ -149,6 +233,78 @@ def count_structure_files(output_dir: str) -> int:
         return pdb_count + cif_count
     except Exception:
         return 0
+
+
+def _infer_gate_stage_from_files(job: Job) -> Optional[str]:
+    output_path = resolve_output_dir(job.output_dir) if job.output_dir else None
+    if not output_path:
+        return None
+    gates_dir = output_path / "gates"
+    if not gates_dir.exists():
+        return None
+    gate_files = sorted(gates_dir.glob("gate_*.json"))
+    if not gate_files:
+        return None
+    stem = gate_files[-1].stem
+    if stem.startswith("gate_"):
+        return stem[len("gate_"):]
+    return None
+
+
+def _repair_job_for_response(job: Job) -> bool:
+    changed = False
+
+    if job.awaiting_payload:
+        repaired_payload = refresh_gate_payload(job.awaiting_payload or {}, job.output_dir)
+        if repaired_payload != (job.awaiting_payload or {}):
+            job.awaiting_payload = repaired_payload
+            changed = True
+
+    history_status = nextflow_history_status(job)
+    gate_present = has_stage_gate(job)
+    if not job.awaiting_stage and gate_present:
+        inferred_stage = _infer_gate_stage_from_files(job)
+        if inferred_stage:
+            job.awaiting_stage = inferred_stage
+            changed = True
+
+    stale_failed = str(job.error_message or "").startswith(
+        "Reconciled as failed: no active process and no terminal .nextflow/history status"
+    )
+    if history_status == "OK" and (job.awaiting_input or gate_present or stale_failed):
+        if not job.awaiting_input:
+            job.awaiting_input = True
+            changed = True
+        if job.awaiting_stage:
+            job.current_stage = job.awaiting_stage
+        if job.status != JobStatus.AWAITING_INPUT.value:
+            job.status = JobStatus.AWAITING_INPUT.value
+            changed = True
+        if job.queue_status != "paused":
+            job.queue_status = "paused"
+            changed = True
+        if job.error_message:
+            job.error_message = None
+            changed = True
+
+    return changed
+
+
+def _review_candidate_count(job: Job) -> Optional[int]:
+    if not job.awaiting_input:
+        return None
+    stage = str(job.awaiting_stage or "").strip().lower()
+    if stage not in REVIEWABLE_STAGES:
+        return None
+    payload = refresh_gate_payload(job.awaiting_payload or {}, job.output_dir)
+    if stage == "post_fampnn":
+        filtered_count = payload.get("filtered_candidate_count")
+        if isinstance(filtered_count, int) and filtered_count > 0:
+            return filtered_count
+    candidate_count = payload.get("candidate_count")
+    if isinstance(candidate_count, int) and candidate_count >= 0:
+        return candidate_count
+    return None
 
 
 def _to_bool(value: object) -> bool:
@@ -447,6 +603,11 @@ def _prune_iteration_params(base_params: Dict[str, Any]) -> Dict[str, Any]:
         "iteration_source_design_ids",
         "iteration_action",
         "iteration_selection_dir",
+        "manual_mutation_fixed_positions_json",
+        "manual_mutation_mode",
+        "manual_mutation_method",
+        "mutation_seed_refinement_trigger",
+        "mutation_variant",
     }:
         pruned.pop(key, None)
     return _normalize_antibody_job_params(pruned)
@@ -474,6 +635,9 @@ AA_CODES = {
     "TYR": "Y",
     "VAL": "V",
 }
+
+AA_CODES_REVERSE = {value: key for key, value in AA_CODES.items()}
+PDB_BACKBONE_ATOMS = {"N", "CA", "C", "O", "OXT"}
 
 STANDARD_AMINO_ACIDS = list("ACDEFGHIKLMNPQRSTVWY")
 DEFAULT_CDR_POSITION_RANGES = {
@@ -725,19 +889,11 @@ def _parse_manual_mutation_set(raw_mutation_set: str) -> List[Dict[str, Any]]:
     return sorted(parsed, key=lambda entry: int(entry["position"]))
 
 
-def _build_manual_mutagenesis_iteration_job(
+def _generate_manual_mutagenesis_variants(
     source_job: Job,
     designs: List[Design],
     config: ManualMutagenesisConfig,
-    name_suffix: Optional[str],
-    param_overrides: Dict[str, Any],
-) -> tuple[JobCreate, int, str]:
-    predictor = str(config.predictor or "protenix").strip().lower()
-    if predictor == "boltz":
-        predictor = "boltz2"
-    if predictor not in {"protenix", "boltz2"}:
-        raise HTTPException(status_code=422, detail="Manual mutagenesis currently supports predictor='protenix' or 'boltz2'.")
-
+) -> List[Dict[str, Any]]:
     raw_mutation_sets = [entry.strip() for entry in config.mutation_sets if isinstance(entry, str) and entry.strip()]
     if not raw_mutation_sets:
         raise HTTPException(status_code=422, detail="Add at least one manual mutation set before launching.")
@@ -762,6 +918,7 @@ def _build_manual_mutagenesis_iteration_job(
             seq_chars = list(base_sequence)
             mutation_meta: List[Dict[str, Any]] = []
             summary_tokens: List[str] = []
+            fixed_spec_tokens: List[str] = []
             for mutation in mutation_set:
                 position = int(mutation["position"])
                 if position < 1 or position > len(seq_chars):
@@ -792,6 +949,14 @@ def _build_manual_mutagenesis_iteration_job(
                     }
                 )
                 summary_tokens.append(mutation["summary"])
+                try:
+                    residue_record = binder_records[position - 1]
+                except IndexError as exc:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Could not map mutation '{mutation['summary']}' onto '{design.name}' chain '{binder_chain_id}'.",
+                    ) from exc
+                fixed_spec_tokens.append(f"{binder_chain_id}{int(residue_record['resseq'])}")
 
             variant_sequence = "".join(seq_chars)
             complex_components = []
@@ -813,10 +978,256 @@ def _build_manual_mutagenesis_iteration_job(
                     "complex_components": complex_components,
                     "source_design_id": design.id,
                     "source_design_name": design.name,
+                    "source_pdb_path": str(design_path),
                     "binder_chain_id": binder_chain_id,
                     "mutation": mutation_meta,
+                    "locked_positions_spec": ",".join(fixed_spec_tokens),
                 }
             )
+
+    return variants
+
+
+def _create_antibody_selection_dir(action: str) -> Path:
+    selection_root = get_inputs_dir() / "design_selections" / "antibody"
+    selection_root.mkdir(parents=True, exist_ok=True)
+    selection_dir = selection_root / (
+        f"{datetime.utcnow():%Y%m%d_%H%M%S}_{action}_{uuid.uuid4().hex[:8]}"
+    )
+    selection_dir.mkdir(parents=True, exist_ok=False)
+    return selection_dir
+
+
+def _write_seeded_refinement_metadata(
+    selection_dir: Path,
+    root_job: Job,
+    source_job: Job,
+    action: str,
+    manifest_items: List[Dict[str, Any]],
+    fixed_positions_by_pdb: Optional[Dict[str, str]] = None,
+) -> None:
+    manifest = {
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "action": action,
+        "root_job_id": root_job.id,
+        "source_job_id": source_job.id,
+        "design_count": len(manifest_items),
+        "designs": manifest_items,
+    }
+    (selection_dir / "selection_manifest.json").write_text(json.dumps(manifest, indent=2))
+    if fixed_positions_by_pdb:
+        (selection_dir / "mutation_fixed_positions.json").write_text(json.dumps(fixed_positions_by_pdb, indent=2, sort_keys=True))
+
+
+def _write_mutated_seed_pdb(
+    source_path: Path,
+    dest_path: Path,
+    binder_chain_id: str,
+    mutation_meta: List[Dict[str, Any]],
+) -> None:
+    chain_records = _extract_chain_records_from_pdb(source_path)
+    binder_records = chain_records.get(binder_chain_id) or []
+    if not binder_records:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Could not find chain '{binder_chain_id}' in seed structure '{source_path.name}'.",
+        )
+
+    residue_updates: Dict[tuple[int, str], str] = {}
+    for mutation in mutation_meta:
+        if str(mutation.get("type")).lower() != "substitution":
+            continue
+        position = int(mutation["position"])
+        if position < 1 or position > len(binder_records):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Mutation position {position} is outside chain '{binder_chain_id}' in '{source_path.name}'.",
+            )
+        residue_record = binder_records[position - 1]
+        to_three = AA_CODES_REVERSE.get(str(mutation["to"]).upper())
+        if not to_three:
+            raise HTTPException(status_code=422, detail=f"Unsupported amino acid '{mutation['to']}' in mutation seed.")
+        residue_updates[(int(residue_record["resseq"]), str(residue_record.get("icode") or ""))] = to_three
+
+    with source_path.open() as src, dest_path.open("w") as dst:
+        for line in src:
+            if line.startswith(("ATOM  ", "HETATM")) and len(line) >= 27:
+                chain_id = (line[21].strip() or "_").upper()
+                if chain_id == binder_chain_id:
+                    try:
+                        resseq = int(line[22:26].strip())
+                    except ValueError:
+                        resseq = None
+                    icode = line[26].strip()
+                    if resseq is not None and (resseq, icode) in residue_updates:
+                        atom_name = line[12:16].strip()
+                        if atom_name not in PDB_BACKBONE_ATOMS:
+                            continue
+                        resname = residue_updates[(resseq, icode)]
+                        line = f"{line[:17]}{resname:>3}{line[20:]}"
+            dst.write(line)
+
+
+def _materialize_substitution_seed_selection(
+    root_job: Job,
+    source_job: Job,
+    variants: List[Dict[str, Any]],
+    action: str,
+) -> tuple[Path, Path]:
+    selection_dir = _create_antibody_selection_dir(action)
+    manifest_items: List[Dict[str, Any]] = []
+    fixed_positions_by_pdb: Dict[str, str] = {}
+
+    for idx, variant in enumerate(variants, start=1):
+        source_path = Path(str(variant["source_pdb_path"]))
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(variant["name"]))[:120]
+        dest_path = selection_dir / f"{idx:03d}_{safe_name}.pdb"
+        _write_mutated_seed_pdb(
+            source_path=source_path,
+            dest_path=dest_path,
+            binder_chain_id=str(variant["binder_chain_id"]),
+            mutation_meta=list(variant.get("mutation") or []),
+        )
+        manifest_items.append({
+            "variant_name": variant["name"],
+            "source_design_id": variant.get("source_design_id"),
+            "source_design_name": variant.get("source_design_name"),
+            "source_pdb_path": str(source_path),
+            "selection_pdb_path": str(dest_path),
+            "binder_chain_id": variant.get("binder_chain_id"),
+            "mutation": variant.get("mutation"),
+        })
+        if variant.get("locked_positions_spec"):
+            fixed_positions_by_pdb[dest_path.stem] = str(variant["locked_positions_spec"])
+
+    _write_seeded_refinement_metadata(
+        selection_dir=selection_dir,
+        root_job=root_job,
+        source_job=source_job,
+        action=action,
+        manifest_items=manifest_items,
+        fixed_positions_by_pdb=fixed_positions_by_pdb,
+    )
+    return selection_dir, selection_dir / "mutation_fixed_positions.json"
+
+
+def _sequence_positions_from_mutation_meta(mutation_meta: Any) -> List[int]:
+    if isinstance(mutation_meta, list):
+        positions = []
+        for mutation in mutation_meta:
+            if not isinstance(mutation, dict):
+                continue
+            if str(mutation.get("type")).lower() == "substitution":
+                try:
+                    positions.append(int(mutation["position"]))
+                except (TypeError, ValueError):
+                    continue
+        return sorted(set(positions))
+
+    if not isinstance(mutation_meta, dict):
+        return []
+
+    mutation_type = str(mutation_meta.get("type") or "").strip().lower()
+    try:
+        position = int(mutation_meta.get("position"))
+    except (TypeError, ValueError):
+        return []
+
+    if mutation_type == "substitution":
+        return [position]
+    if mutation_type == "insertion":
+        inserted = str(mutation_meta.get("to") or "")
+        if not inserted:
+            return []
+        start = position + 1
+        return list(range(start, start + len(inserted)))
+    return []
+
+
+def _locked_spec_from_design_pdb(
+    pdb_path: Path,
+    binder_chain_id: str,
+    mutation_meta: Any,
+) -> str:
+    chain_records = _extract_chain_records_from_pdb(pdb_path)
+    binder_records = chain_records.get(str(binder_chain_id).strip().upper()) or []
+    if not binder_records:
+        return ""
+
+    spec_tokens: List[str] = []
+    for position in _sequence_positions_from_mutation_meta(mutation_meta):
+        if 1 <= position <= len(binder_records):
+            resseq = int(binder_records[position - 1]["resseq"])
+            spec_tokens.append(f"{str(binder_chain_id).strip().upper()}{resseq}")
+    return ",".join(sorted(set(spec_tokens)))
+
+
+def _materialize_seed_selection_from_completed_designs(
+    root_job: Job,
+    source_job: Job,
+    designs: List[Design],
+    design_job_map: Dict[str, Job],
+    action: str,
+) -> tuple[Path, Path]:
+    selection_dir = _create_antibody_selection_dir(action)
+    manifest_items: List[Dict[str, Any]] = []
+    fixed_positions_by_pdb: Dict[str, str] = {}
+
+    for idx, design in enumerate(designs, start=1):
+        source_path = _resolve_design_structure_path(design.pdb_path)
+        dest_path = selection_dir / f"{idx:03d}_{design.id}.pdb"
+        try:
+            os.symlink(source_path, dest_path)
+        except OSError:
+            shutil.copy2(source_path, dest_path)
+
+        design_job = design_job_map.get(design.job_id)
+        params = design_job.params if design_job and isinstance(design_job.params, dict) else {}
+        variant_meta = params.get("mutation_variant") if isinstance(params.get("mutation_variant"), dict) else {}
+        fixed_spec = ""
+        if variant_meta:
+            fixed_spec = _locked_spec_from_design_pdb(
+                pdb_path=source_path,
+                binder_chain_id=str(variant_meta.get("binder_chain_id") or ""),
+                mutation_meta=variant_meta.get("mutation"),
+            )
+
+        manifest_items.append({
+            "design_id": design.id,
+            "design_name": design.name,
+            "design_job_id": design.job_id,
+            "source_pdb_path": str(source_path),
+            "selection_pdb_path": str(dest_path),
+            "mutation_variant": variant_meta,
+        })
+        if fixed_spec:
+            fixed_positions_by_pdb[dest_path.stem] = fixed_spec
+
+    _write_seeded_refinement_metadata(
+        selection_dir=selection_dir,
+        root_job=root_job,
+        source_job=source_job,
+        action=action,
+        manifest_items=manifest_items,
+        fixed_positions_by_pdb=fixed_positions_by_pdb,
+    )
+    return selection_dir, selection_dir / "mutation_fixed_positions.json"
+
+
+def _build_manual_mutagenesis_iteration_job(
+    source_job: Job,
+    designs: List[Design],
+    config: ManualMutagenesisConfig,
+    name_suffix: Optional[str],
+    param_overrides: Dict[str, Any],
+) -> tuple[JobCreate, int, str]:
+    predictor = str(config.predictor or "protenix").strip().lower()
+    if predictor == "boltz":
+        predictor = "boltz2"
+    if predictor not in {"protenix", "boltz2"}:
+        raise HTTPException(status_code=422, detail="Manual mutagenesis currently supports predictor='protenix' or 'boltz2'.")
+
+    variants = _generate_manual_mutagenesis_variants(source_job, designs, config)
 
     base_params = _prune_iteration_params(source_job.params if isinstance(source_job.params, dict) else {})
     requested_msa_provider = str(config.msa_provider or "local").strip().lower()
@@ -925,6 +1336,38 @@ def _build_manual_mutagenesis_iteration_job(
     return launch_request, len(variants), message_note
 
 
+def _build_manual_mutagenesis_seeded_refinement_job(
+    root_job: Job,
+    source_job: Job,
+    designs: List[Design],
+    config: ManualMutagenesisConfig,
+    name_suffix: Optional[str],
+    param_overrides: Dict[str, Any],
+) -> tuple[JobCreate, int, str]:
+    variants = _generate_manual_mutagenesis_variants(source_job, designs, config)
+    selection_dir, fixed_json_path = _materialize_substitution_seed_selection(
+        root_job=root_job,
+        source_job=source_job,
+        variants=variants,
+        action="mutation_seeded_refinement",
+    )
+    launch_request = _build_antibody_iteration_job(
+        root_job=root_job,
+        source_job=source_job,
+        action="ui_refinement",
+        selection_dir=selection_dir,
+        design_ids=[str(variant.get("source_design_id")) for variant in variants if variant.get("source_design_id")],
+        name_suffix=name_suffix or "mutation_seeded_refinement",
+        param_overrides={
+            **dict(param_overrides or {}),
+            "manual_mutation_mode": "seeded_refinement",
+            "manual_mutation_method": "explicit_substitutions",
+            "manual_mutation_fixed_positions_json": str(fixed_json_path),
+        },
+    )
+    return launch_request, len(variants), ""
+
+
 def _generate_cdr_indel_variants(
     base_sequence: str,
     base_name: str,
@@ -1028,6 +1471,9 @@ def _build_cdr_indel_iteration_job(
     config: AntibodyCdrIndelConfig,
     name_suffix: Optional[str],
     param_overrides: Dict[str, Any],
+    *,
+    seed_refinement_trigger: Optional[Dict[str, Any]] = None,
+    iteration_action: str = "cdr_indel_round",
 ) -> tuple[JobCreate, int, str]:
     loop_ids = [loop_id.strip().upper() for loop_id in config.loop_ids if isinstance(loop_id, str) and loop_id.strip()]
     if not loop_ids:
@@ -1103,11 +1549,13 @@ def _build_cdr_indel_iteration_job(
         "iteration_source_job_id": source_job.id,
         "iteration_source_root_job_id": root_job.id,
         "iteration_source_design_ids": [design.id for design in designs],
-        "iteration_action": "cdr_indel_round",
+        "iteration_action": iteration_action,
         "cdr_indel_config": config.model_dump(),
         "run_frustrampnn": False,
         "openmm_enabled": False,
     }
+    if seed_refinement_trigger:
+        launch_params["mutation_seed_refinement_trigger"] = seed_refinement_trigger
 
     if predictor == "protenix":
         for key in (
@@ -1197,6 +1645,34 @@ def _build_cdr_indel_iteration_job(
     return launch_request, len(variants), message_note
 
 
+def _build_cdr_indel_seeded_refinement_job(
+    root_job: Job,
+    source_job: Job,
+    designs: List[Design],
+    config: AntibodyCdrIndelConfig,
+    name_suffix: Optional[str],
+    param_overrides: Dict[str, Any],
+) -> tuple[JobCreate, int, str]:
+    trigger_payload = {
+        "source_job_id": source_job.id,
+        "root_job_id": root_job.id,
+        "name_suffix": name_suffix or "mutation_seeded_refinement",
+        "param_overrides": dict(param_overrides or {}),
+        "manual_mutation_mode": "seeded_refinement",
+        "manual_mutation_method": "cdr_indels",
+    }
+    return _build_cdr_indel_iteration_job(
+        root_job=root_job,
+        source_job=source_job,
+        designs=designs,
+        config=config,
+        name_suffix=name_suffix or "mutation_seed_builder",
+        param_overrides=param_overrides,
+        seed_refinement_trigger=trigger_payload,
+        iteration_action="mutation_seed_build",
+    )
+
+
 def _materialize_antibody_selection(
     root_job: Job,
     source_job: Job,
@@ -1281,7 +1757,6 @@ def _build_antibody_iteration_job(
                 "run_post_boltz_maturation": False,
                 "run_maturation": False,
                 "run_frustrampnn": False,
-                "run_anarcii_post": False,
                 "run_immunogenicity_scoring": False,
                 "run_thermompnn": False,
                 "run_stability_scoring": False,
@@ -1307,7 +1782,6 @@ def _build_antibody_iteration_job(
                 "run_post_boltz_maturation": False,
                 "run_maturation": False,
                 "run_frustrampnn": False,
-                "run_anarcii_post": False,
                 "run_immunogenicity_scoring": False,
                 "run_thermompnn": False,
                 "run_stability_scoring": False,
@@ -1332,7 +1806,6 @@ def _build_antibody_iteration_job(
                 "run_post_boltz_maturation": True,
                 "run_maturation": True,
                 "run_frustrampnn": False,
-                "run_anarcii_post": False,
                 "run_immunogenicity_scoring": False,
                 "run_thermompnn": False,
                 "run_stability_scoring": False,
@@ -1357,7 +1830,6 @@ def _build_antibody_iteration_job(
                 "run_post_boltz_maturation": False,
                 "run_maturation": False,
                 "run_frustrampnn": False,
-                "run_anarcii_post": False,
                 "run_immunogenicity_scoring": False,
                 "run_thermompnn": False,
                 "run_stability_scoring": False,
@@ -1382,7 +1854,6 @@ def _build_antibody_iteration_job(
                 "run_post_boltz_maturation": False,
                 "run_maturation": False,
                 "run_frustrampnn": True,
-                "run_anarcii_post": False,
                 "run_immunogenicity_scoring": False,
                 "run_thermompnn": False,
                 "run_stability_scoring": False,
@@ -1403,7 +1874,7 @@ def _build_antibody_iteration_job(
             status_code=422,
             detail=(
                 f"Unsupported antibody iteration action '{action}'. "
-                "Allowed: validate_boltz2, validate_protenix, ppiflow_maturation, fampnn_redesign, frustrampnn, cdr_indel_round, ui_refinement."
+                "Allowed: validate_boltz2, validate_protenix, ppiflow_maturation, fampnn_redesign, frustrampnn, cdr_indel_round, mutation_seeded_refinement, ui_refinement."
             ),
         )
 
@@ -1438,6 +1909,7 @@ def _build_antibody_iteration_job(
             "rfantibody_min_epitope_contacts",
             "rfantibody_max_epitope_distance",
             "rfantibody_min_target_contacts",
+            "rfantibody_max_target_distance",
             "rfantibody_max_epitope_centroid_distance",
             "rfantibody_contact_distance_threshold",
             "rfantibody_target_contact_distance_threshold",
@@ -1453,6 +1925,7 @@ def _build_antibody_iteration_job(
                 "rfantibody_min_epitope_contacts",
                 "rfantibody_max_epitope_distance",
                 "rfantibody_min_target_contacts",
+                "rfantibody_max_target_distance",
                 "rfantibody_max_epitope_centroid_distance",
             ):
                 if key in overrides and not _invalid_refinement_value(overrides.get(key)):
@@ -1756,6 +2229,8 @@ def _resolve_stage_state_for_response(job: Job) -> tuple[List[str], Dict[str, Li
             if merged and stage not in completed:
                 completed.append(stage)
 
+    completed, stage_outputs = infer_antibody_stage_state(job, completed, stage_outputs)
+
     return completed, stage_outputs
 
 
@@ -1910,8 +2385,14 @@ async def list_jobs(
 
     
     job_responses = []
+    jobs_changed = False
     for job, design_count in rows:
+        if _repair_job_for_response(job):
+            jobs_changed = True
         completed_stages, stage_outputs = _resolve_stage_state_for_response(job)
+        review_count = _review_candidate_count(job)
+        if (design_count or 0) == 0 and review_count is not None:
+            design_count = review_count
         # Fallback for structure/PDB jobs that don't have Design entries
         if design_count == 0 and job.status in [JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value] and job.output_dir:
             # Note: This file system check is still "slow" per job, but only runs for 
@@ -1931,6 +2412,7 @@ async def list_jobs(
             output_dir=job.output_dir,
             error_message=job.error_message,
             design_count=design_count,  # Now joined from DB
+            requested_design_count=_resolve_requested_design_count(job),
             batch_id=job.batch_id,
             batch_name=job.batch_name,
             parent_job_id=job.parent_job_id,
@@ -1943,6 +2425,9 @@ async def list_jobs(
             awaiting_payload=job.awaiting_payload,
             decision_history=job.decision_history,
         ))
+
+    if jobs_changed:
+        await session.commit()
     
     return JobList(jobs=job_responses, total=total)
 
@@ -2121,9 +2606,18 @@ async def create_job(
     
     # Estimate VRAM based on model type
     from services.gpu_orchestrator import estimate_vram, estimate_protenix_tokens
-    if job_data.model_id == "protenix":
+    estimate_model_id = job_data.model_id
+    if job_data.mode == "maturation_child":
+        estimate_model_id = "maturation_child"
+    if estimate_model_id == "protenix":
         sequence_length = estimate_protenix_tokens(job_data.params, sequence_length)
-    vram_estimate = estimate_vram(job_data.model_id, sequence_length, job_data.params)
+    vram_estimate = estimate_vram(estimate_model_id, sequence_length, job_data.params)
+
+    # ─── CPU-only override: orchestration/launcher jobs should not consume GPU slots ─────
+    if job_data.mode == "antibody_denovo_pipeline" and str(job_data.params.get("parallel_mode") or "").strip().lower() == "full_orchestrator":
+        vram_estimate = 0
+        job_data.pinned_gpu = None
+        logger.info(f"[QUEUE] Orchestrator parent job '{job_data.name}': CPU-only launcher, vram_estimate=0")
 
     # ─── CPU-only override: FASTQ-only nanopore jobs don't need a GPU ─────
     if job_data.model_id == "nanopore" and isinstance(job_data.params, dict):
@@ -2255,6 +2749,15 @@ async def create_job(
             job_params = {**job_data.params}
             job_params['sequence'] = variant.get('sequence')
             job_params['sequence_name'] = variant.get('name', f'var_{i+1}')
+            job_params['mutation_variant'] = {
+                'name': variant.get('name'),
+                'source_design_id': variant.get('source_design_id'),
+                'source_design_name': variant.get('source_design_name'),
+                'binder_chain_id': variant.get('binder_chain_id'),
+                'mutation': variant.get('mutation'),
+                'loop_ids': variant.get('loop_ids'),
+                'locked_positions_spec': variant.get('locked_positions_spec'),
+            }
             
             # BATCH-STAGE-GATE: Remove per-variant FrustraMPNN
             # FrustraMPNN runs as a post-batch phase after ALL variants complete
@@ -2442,6 +2945,30 @@ async def launch_antibody_iteration_from_designs(
             name_suffix=request.name_suffix,
             param_overrides=request.param_overrides,
         )
+    elif action == "mutation_seeded_refinement":
+        if request.manual_mutagenesis_config is not None:
+            launch_request, variant_count, variant_note = _build_manual_mutagenesis_seeded_refinement_job(
+                root_job=root_job,
+                source_job=source_job,
+                designs=ordered_designs,
+                config=request.manual_mutagenesis_config,
+                name_suffix=request.name_suffix,
+                param_overrides=request.param_overrides,
+            )
+        elif request.cdr_indel_config is not None:
+            launch_request, variant_count, variant_note = _build_cdr_indel_seeded_refinement_job(
+                root_job=root_job,
+                source_job=source_job,
+                designs=ordered_designs,
+                config=request.cdr_indel_config,
+                name_suffix=request.name_suffix,
+                param_overrides=request.param_overrides,
+            )
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail="mutation_seeded_refinement requires manual_mutagenesis_config or cdr_indel_config.",
+            )
     else:
         launch_request = _build_antibody_iteration_job(
             root_job=root_job,
@@ -2452,6 +2979,7 @@ async def launch_antibody_iteration_from_designs(
             name_suffix=request.name_suffix,
             param_overrides=request.param_overrides,
         )
+    launch_selection_dir = str(launch_request.params.get("iteration_selection_dir") or selection_dir)
     launched_job = await create_job(launch_request, background_tasks, session)
 
     return AntibodyIterationLaunchResponse(
@@ -2463,7 +2991,7 @@ async def launch_antibody_iteration_from_designs(
         action=action,
         source_job_id=source_job.id,
         root_job_id=root_job.id,
-        selection_dir=str(selection_dir),
+        selection_dir=launch_selection_dir,
         selected_design_count=len(ordered_designs),
         launched_job=launched_job,
     )
@@ -2528,13 +3056,21 @@ async def get_job(
     
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+
+    job_changed = _repair_job_for_response(job)
     
     # Get design count
     design_count_query = select(func.count(Design.id)).where(Design.job_id == job.id)
     design_count = (await session.execute(design_count_query)).scalar()
+    review_count = _review_candidate_count(job)
+    if (design_count or 0) == 0 and review_count is not None:
+        design_count = review_count
     if (design_count or 0) == 0 and job.status in [JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value] and job.output_dir:
         design_count = count_structure_files(job.output_dir)
     completed_stages, stage_outputs = _resolve_stage_state_for_response(job)
+
+    if job_changed:
+        await session.commit()
     
     return JobResponse(
         id=job.id,
@@ -2549,6 +3085,7 @@ async def get_job(
         output_dir=job.output_dir,
         error_message=job.error_message,
         design_count=design_count or 0,
+        requested_design_count=_resolve_requested_design_count(job),
         batch_id=job.batch_id,
         batch_name=job.batch_name,
         parent_job_id=job.parent_job_id,
@@ -3013,6 +3550,7 @@ async def open_stage_gate(
 
     payload = dict(request.payload or {}) if request else {}
     payload["stage"] = stage
+    payload = refresh_gate_payload(payload, job.output_dir)
 
     job.awaiting_input = True
     job.awaiting_stage = stage
@@ -3041,6 +3579,10 @@ async def get_stage_gates(
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+
+    job_changed = _repair_job_for_response(job)
+    if job_changed:
+        await session.commit()
 
     return {
         "job_id": job_id,
@@ -3100,7 +3642,11 @@ async def get_children_status(
             fallback_query = fallback_query.where(Job.child_stage == stage)
         fallback_result = await session.execute(fallback_query)
         children = fallback_result.scalars().all()
-    
+
+    reconciled = _reconcile_child_jobs_from_history(children)
+    if reconciled:
+        await session.commit()
+
     if not children:
         return {
             "parent_id": parent_id,
@@ -3384,6 +3930,8 @@ async def get_job_stages(
         # If pipeline exited successfully, remaining planned stages are considered complete.
         if job.status == JobStatus.COMPLETED.value:
             completed = _dedupe_preserve_order([*completed, *all_stages])
+
+    completed, stage_outputs = infer_antibody_stage_state(job, completed, stage_outputs)
 
     return {
         "job_id": job_id,

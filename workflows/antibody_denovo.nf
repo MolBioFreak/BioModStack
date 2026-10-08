@@ -138,6 +138,8 @@ process SpawnRFantibodyJobs {
         rfantibody_noise_scale_ca: params.rfantibody_noise_scale_ca ?: 1.0,
         rfantibody_noise_scale_frame: params.rfantibody_noise_scale_frame ?: 1.0,
         rfantibody_guide_scale: params.rfantibody_guide_scale ?: 10,
+        rfantibody_ckpt_override: params.rfantibody_ckpt_override,
+        rfantibody_debug_repo_overlay: params.rfantibody_debug_repo_overlay ?: false,
         // Pass UI CDR loop selection - prefer custom UI index over general string flag if available
         antibody_design_loops: customLoopSpec ?: (params.antibody_design_loops ?: ''),
         rfantibody_loop_length_ranges: loopLengthSpec,
@@ -155,6 +157,7 @@ process SpawnRFantibodyJobs {
         --framework_type "${framework_type}" \\
         ${frameworkArg}\
         --batch_name "${batch_name}" \\
+        --display_prefix "${params.job_name ?: 'Antibody'}" \\
         --params_json '${params_json}' \\
         --api_url "${params.api_url}" \\
         --output spawn_rfa_result.json \\
@@ -250,6 +253,7 @@ process ScreenRFantibodyBackbones {
     def maxDistanceArg = params.rfantibody_max_epitope_distance != null ? "--max-epitope-distance ${params.rfantibody_max_epitope_distance}" : ""
     def contactCutoffArg = params.rfantibody_contact_distance_threshold != null ? "--contact-distance-threshold ${params.rfantibody_contact_distance_threshold}" : ""
     def minTargetContactsArg = params.rfantibody_min_target_contacts != null ? "--min-target-contacts ${params.rfantibody_min_target_contacts}" : ""
+    def maxTargetDistanceArg = params.rfantibody_max_target_distance != null ? "--max-target-distance ${params.rfantibody_max_target_distance}" : ""
     def maxEpitopeCentroidArg = params.rfantibody_max_epitope_centroid_distance != null ? "--max-epitope-centroid-distance ${params.rfantibody_max_epitope_centroid_distance}" : ""
     def targetContactCutoffArg = params.rfantibody_target_contact_distance_threshold != null ? "--target-contact-distance-threshold ${params.rfantibody_target_contact_distance_threshold}" : ""
     def targetChainArg = target_chain ? "--target-chain \"${target_chain}\"" : ""
@@ -266,6 +270,7 @@ process ScreenRFantibodyBackbones {
         ${maxDistanceArg} \\
         ${contactCutoffArg} \\
         ${minTargetContactsArg} \\
+        ${maxTargetDistanceArg} \\
         ${maxEpitopeCentroidArg} \\
         ${targetContactCutoffArg} \\
         2>&1 | tee screen_rfantibody_${task.index}.log
@@ -289,6 +294,7 @@ process CheckRFantibodyYield {
             min_epitope_contacts: params.rfantibody_min_epitope_contacts,
             max_epitope_distance: params.rfantibody_max_epitope_distance,
             min_target_contacts: params.rfantibody_min_target_contacts,
+            max_target_distance: params.rfantibody_max_target_distance,
             max_epitope_centroid_distance: params.rfantibody_max_epitope_centroid_distance,
             recommendation: "Inspect RFantibody review artifacts, relax the coarse screen, or pause after RFantibody to review backbones manually before FAMPNN."
         ])
@@ -378,6 +384,7 @@ process SpawnFAMPNNJobs {
         --pdbs_per_job ${pdbs_per_job} \\
         --seqs_per_design ${seqs_per_design} \\
         --batch_name "${batch_name}" \\
+        --display_prefix "${params.job_name ?: 'Antibody'}" \\
         --params_json '${params_json}' \\
         --api_url "${params.api_url}" \\
         --output spawn_fampnn_result.json \\
@@ -606,6 +613,7 @@ process SpawnMaturationJobs {
     script:
     def params_json = groovy.json.JsonOutput.toJson([
         framework_type: params.framework_type,
+        framework_pdb: params.framework_pdb,
         antibody_chains: params.antibody_chains,
         antigen_chains: params.antigen_chains,
         epitope_residues: params.epitope_residues ?: "",
@@ -648,6 +656,7 @@ process SpawnMaturationJobs {
         --pdb_dir "${pdb_dir}" \\
         --designs_per_job ${designs_per_job} \\
         --batch_name "${batch_name}" \\
+        --display_prefix "${params.job_name ?: 'Antibody'}" \\
         --stage "${stage_name}" \\
         --params_json '${params_json}' \\
         --api_url "${params.api_url}" \\
@@ -741,6 +750,7 @@ process SpawnValidatedMaturationJobs {
     script:
     def params_json = groovy.json.JsonOutput.toJson([
         framework_type: params.framework_type,
+        framework_pdb: params.framework_pdb,
         antibody_chains: params.antibody_chains,
         antigen_chains: params.antigen_chains,
         epitope_residues: params.epitope_residues ?: "",
@@ -778,6 +788,7 @@ process SpawnValidatedMaturationJobs {
         --pdb_dir "${pdb_dir}" \\
         --designs_per_job ${designs_per_job} \\
         --batch_name "${batch_name}" \\
+        --display_prefix "${params.job_name ?: 'Antibody'}" \\
         --stage "${stage_name}" \\
         --params_json '${params_json}' \\
         --api_url "${params.api_url}" \\
@@ -907,7 +918,47 @@ process OpenInteractiveGate {
 // =============================================================================
 // ANARCII Polishing (trigger API annotation)
 // =============================================================================
-process TriggerANARCIIAnnotation {
+process TriggerANARCIIAnnotationPostFAMPNNGate {
+    label 'process_low'
+
+    input:
+    val job_id
+    val include_children
+
+    output:
+    path "anarcii_trigger.log", emit: log
+
+    script:
+    """
+    python3 ${params.code_root}/scripts/trigger_anarcii_annotation.py \\
+        --job_id "${job_id}" \\
+        --include_children "${include_children}" \\
+        --api_url "${params.api_url}" \\
+        2>&1 | tee anarcii_trigger.log
+    """
+}
+
+process TriggerANARCIIAnnotationPostValidationGate {
+    label 'process_low'
+
+    input:
+    val job_id
+    val include_children
+
+    output:
+    path "anarcii_trigger.log", emit: log
+
+    script:
+    """
+    python3 ${params.code_root}/scripts/trigger_anarcii_annotation.py \\
+        --job_id "${job_id}" \\
+        --include_children "${include_children}" \\
+        --api_url "${params.api_url}" \\
+        2>&1 | tee anarcii_trigger.log
+    """
+}
+
+process TriggerANARCIIAnnotationFinal {
     label 'process_low'
 
     input:
@@ -990,6 +1041,7 @@ process SpawnChildJobs {
         --parent_job_id "${parent_job_id}" \\
         --pdb_dir pdb_input \\
         --batch_name "${batch_name}" \\
+        --display_prefix "${params.job_name ?: 'Antibody'}" \\
         --msa_path "\$MSA_PERSIST_PATH" \\
         --params_json '${child_params_json}' \\
         --seqs_per_validation_job ${params.seqs_per_validation_job ?: params.seqs_per_boltz_job ?: 10} \\
@@ -1043,8 +1095,8 @@ process WaitAndAggregateChildResults {
     declare -A COPIED_BASENAMES
 
     choose_dest_name() {
-        local child_idx="\$1"
-        local filename="\$2"
+        local child_idx="${'$'}1"
+        local filename="${'$'}2"
         local stem="\${filename%.*}"
         local ext=""
         if [ "\$stem" != "\$filename" ]; then
@@ -1200,6 +1252,7 @@ if (!params.containsKey('rfantibody_min_epitope_contacts')) params.rfantibody_mi
 if (!params.containsKey('rfantibody_max_epitope_distance')) params.rfantibody_max_epitope_distance = null
 if (!params.containsKey('rfantibody_contact_distance_threshold')) params.rfantibody_contact_distance_threshold = 8.0
 if (!params.containsKey('rfantibody_min_target_contacts')) params.rfantibody_min_target_contacts = null
+if (!params.containsKey('rfantibody_max_target_distance')) params.rfantibody_max_target_distance = null
 if (!params.containsKey('rfantibody_max_epitope_centroid_distance')) params.rfantibody_max_epitope_centroid_distance = null
 if (!params.containsKey('rfantibody_target_contact_distance_threshold')) params.rfantibody_target_contact_distance_threshold = 12.0
 if (!params.containsKey('run_structure_validation')) params.run_structure_validation = true
@@ -1414,12 +1467,13 @@ workflow ANTIBODY_DENOVO {
     def shouldPauseAfterRFantibody = !params.skip_rfantibody && interactiveGateEnabled &&
         (params.interactive_gate_stage ?: 'post_fampnn') == 'post_rfantibody' &&
         params.interactive_gate_continue != true
-    def shouldScreenRFantibody = (
+    def shouldScreenRFantibody = !params.fampnn_collected_pdbs && (
         shouldPauseAfterRFantibody ||
         rfantibodyScreenEnabled ||
         params.rfantibody_min_epitope_contacts != null ||
         params.rfantibody_max_epitope_distance != null ||
         params.rfantibody_min_target_contacts != null ||
+        params.rfantibody_max_target_distance != null ||
         params.rfantibody_max_epitope_centroid_distance != null
     )
 
@@ -1666,6 +1720,15 @@ workflow ANTIBODY_DENOVO {
 
     if (shouldPauseAfterFampnn) {
         log.info("Interactive SWA gate: pausing after FAMPNN candidate collection at ${fampnnCandidateDir}")
+        if (params.run_anarcii_post == true) {
+            if (!params.job_id) {
+                log.warn("ANARCII polishing requested for post-FAMPNN gate but job_id is missing; skipping.")
+            } else {
+                def includeChildren = params.anarcii_include_children != null ? params.anarcii_include_children : true
+                log.info("Step 2.y: Triggering ANARCII CDR annotation before FAMPNN review gate (include_children=${includeChildren})")
+                TriggerANARCIIAnnotationPostFAMPNNGate(params.job_id, includeChildren)
+            }
+        }
         OpenInteractiveGate(
             params.job_id ?: "unknown",
             "post_fampnn",
@@ -2114,6 +2177,15 @@ workflow ANTIBODY_DENOVO {
 
         if (shouldPauseAfterStructureValidation) {
             log.info("Interactive SWA gate: pausing after ${validation_label} structure validation")
+            if (params.run_anarcii_post == true) {
+                if (!params.job_id) {
+                    log.warn("ANARCII polishing requested for post-structure-validation gate but job_id is missing; skipping.")
+                } else {
+                    def includeChildren = params.anarcii_include_children != null ? params.anarcii_include_children : true
+                    log.info("Step 3.y: Triggering ANARCII CDR annotation before ${validation_label} review gate (include_children=${includeChildren})")
+                    TriggerANARCIIAnnotationPostValidationGate(params.job_id, includeChildren)
+                }
+            }
             OpenInteractiveGate(
                 params.job_id ?: "unknown",
                 "post_structure_validation",
@@ -2350,7 +2422,7 @@ workflow ANTIBODY_DENOVO {
         } else {
             def includeChildren = params.anarcii_include_children != null ? params.anarcii_include_children : true
             log.info("Step 4.y: Triggering ANARCII CDR annotation (include_children=${includeChildren})")
-            TriggerANARCIIAnnotation(params.job_id, includeChildren)
+            TriggerANARCIIAnnotationFinal(params.job_id, includeChildren)
         }
     }
     }

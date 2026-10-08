@@ -19,6 +19,11 @@ Service URLs:
 - API: `http://localhost:8000`
 - API docs: `http://localhost:8000/docs`
 
+## Infra Monitor
+
+The `/infra` route is a dedicated live telemetry page inside BMS for workstation
+CPU, memory, and GPU monitoring.
+
 ## Documentation
 
 - Installation: `docs/installation.md`

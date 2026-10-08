@@ -9,6 +9,7 @@ and a SHARED MSA file, then generates individual YAML config files for Boltz to 
 import os
 import sys
 import argparse
+import json
 import yaml
 from pathlib import Path
 
@@ -62,6 +63,9 @@ def main():
     parser.add_argument('--pdb_files', required=True, nargs='+', help='List of PDB files (space or comma separated)')
     parser.add_argument('--msa_path', required=True, help='Path to shared MSA file')
     parser.add_argument('--out_dir', required=True, help='Output directory for YAMLs')
+    parser.add_argument('--anchor_target', action='store_true', help='Attach structural templates to target chains')
+    parser.add_argument('--target_chains', default='', help='Comma-separated target chain IDs to anchor')
+    parser.add_argument('--template_manifest', default='', help='JSON manifest produced by extract_target_templates.py')
     
     args = parser.parse_args()
     
@@ -76,6 +80,15 @@ def main():
         # Already a list of files
         pdb_files = raw_input
     msa_abs_path = os.path.abspath(args.msa_path)
+    target_chains = {token.strip() for token in (args.target_chains or '').split(',') if token.strip()}
+    template_manifest = {}
+    if args.anchor_target:
+        if not target_chains:
+            raise ValueError("--anchor_target requires --target_chains")
+        if not args.template_manifest:
+            raise ValueError("--anchor_target requires --template_manifest")
+        with open(args.template_manifest, 'r', encoding='utf-8') as handle:
+            template_manifest = json.load(handle)
     
     print(f"Generating YAMLs for {len(pdb_files)} PDBs using shared MSA: {args.msa_path}")
     
@@ -102,6 +115,10 @@ def main():
             "version": 1,
             "sequences": []
         }
+
+        template_info = template_manifest.get(name) if args.anchor_target else None
+        if args.anchor_target and not isinstance(template_info, dict):
+            raise ValueError(f"Missing target template manifest entry for {name}")
         
         for chain_id, sequence in chains.items():
             entry = {
@@ -115,13 +132,24 @@ def main():
             # But for batch backbones sharing an antigen, the MSA usually covers the complex.
             if "NO_MSA" not in msa_abs_path:
                 entry["protein"]["msa"] = msa_abs_path
+
+            if args.anchor_target and chain_id in target_chains:
+                template_path = os.path.abspath(str(template_info.get("cif", "")))
+                if not template_path:
+                    raise ValueError(f"Template path missing for anchored target chain {chain_id} in {name}")
+                entry["protein"]["templates"] = [{
+                    "cif": template_path,
+                    "chain_id": chain_id,
+                    "template_id": chain_id,
+                    "force": True,
+                }]
             
             yaml_data["sequences"].append(entry)
             
         # Write YAML
         out_yaml = Path(args.out_dir) / f"{name}.yaml"
         with open(out_yaml, "w") as f:
-            yaml.dump(yaml_data, f, sort_keys=False)
+            yaml.safe_dump(yaml_data, f, sort_keys=False)
             
     print("Done generating YAMLs")
 

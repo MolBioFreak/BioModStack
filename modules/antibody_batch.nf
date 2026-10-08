@@ -20,17 +20,30 @@ process BatchBoltzValidation {
     path "boltz_batch.log"
 
     script:
+    def anchor_target = (params.boltz_anchor_target == true || params.boltz_anchor_target == 'true')
+    def anchor_strict = (params.boltz_anchor_strict == true || params.boltz_anchor_strict == 'true')
+    def anchor_target_rmsd = params.boltz_anchor_target_max_rmsd ?: 1.5
+    def boltzAnchorArgs = anchor_target ? "--anchor_target --target_chains \"${params.antigen_chains ?: 'T'}\" --template_manifest target_templates/manifest.json" : ""
+    def boltzStrictArgs = (anchor_target && anchor_strict) ? "--strict_target_rmsd ${anchor_target_rmsd}" : ""
     """
     set -euo pipefail
     shopt -s nullglob
 
-    mkdir -p yamls predictions
+    mkdir -p yamls predictions target_templates
+
+    if [ "${anchor_target}" = "true" ]; then
+        python3 ${params.code_root}/scripts/extract_target_templates.py \\
+            --pdb_files ${pdbs} \\
+            --target_chains "${params.antigen_chains ?: 'T'}" \\
+            --out_dir target_templates/mmcif \\
+            --manifest target_templates/manifest.json
+    fi
     
     # Generate YAML config for each PDB sequence
     python3 ${params.code_root}/scripts/prep_boltz_batch.py \\
         --pdb_files ${pdbs} \\
         --msa_path ${msa} \\
-        --out_dir yamls
+        --out_dir yamls ${boltzAnchorArgs}
         
     # Run Boltz on the directory of YAMLs (Batch Mode)
     # This loads the model ONCE and processes all sequences
@@ -110,6 +123,7 @@ process BatchBoltzValidation {
         --design_type binder \\
         --binder_chains "${params.antibody_chains ?: 'H,L'}" \\
         --target_chains "${params.antigen_chains ?: 'T'}" \\
+        --geometry_mode "${anchor_target ? 'anchored' : 'flexible'}" ${boltzStrictArgs} \\
         --ncpus ${task.cpus} \\
         2>&1 | tee alignment_batch.log
 
@@ -150,7 +164,11 @@ process BatchProtenixValidation {
     def n_step = params.protenix_n_step ?: 200
     def n_cycle = params.protenix_n_cycle ?: 10
     def requested_template = (params.protenix_use_template == true || params.protenix_use_template == 'true')
-    def use_template = requested_template
+    def anchor_target = (params.protenix_anchor_target == true || params.protenix_anchor_target == 'true')
+    def anchor_strict = (params.protenix_anchor_strict == true || params.protenix_anchor_strict == 'true')
+    def anchor_target_rmsd = params.protenix_anchor_target_max_rmsd ?: 1.5
+    def protenixStrictArgs = (anchor_target && anchor_strict) ? "--strict_target_rmsd ${anchor_target_rmsd}" : ""
+    def use_template = requested_template || anchor_target
     def enable_cache = (params.protenix_enable_cache == true || params.protenix_enable_cache == 'true' || params.protenix_enable_cache == null)
     def enable_fusion = (params.protenix_enable_fusion == true || params.protenix_enable_fusion == 'true' || params.protenix_enable_fusion == null)
     def use_msa = (params.protenix_use_msa == true || params.protenix_use_msa == 'true' || params.protenix_use_msa == null)
@@ -186,7 +204,16 @@ process BatchProtenixValidation {
     mkdir -p original_designs raw_predictions predictions
     cp ${pdbs} original_designs/
 
-    export PROTENIX_ROOT_DIR="${params.code_root}/.protenix_cache"
+    SHARED_PROTENIX_ROOT="${params.code_root}/.protenix_cache"
+    if [ "${anchor_target}" = "true" ]; then
+        export PROTENIX_ROOT_DIR="$PWD/.protenix_anchor_root"
+        mkdir -p "\$PROTENIX_ROOT_DIR"
+        if [ -d "\$SHARED_PROTENIX_ROOT/checkpoint" ] && [ ! -e "\$PROTENIX_ROOT_DIR/checkpoint" ]; then
+            ln -s "\$SHARED_PROTENIX_ROOT/checkpoint" "\$PROTENIX_ROOT_DIR/checkpoint"
+        fi
+    else
+        export PROTENIX_ROOT_DIR="\$SHARED_PROTENIX_ROOT"
+    fi
     export XDG_CACHE_HOME="\$PROTENIX_ROOT_DIR/common"
     export TRITON_CACHE_DIR="\$PROTENIX_ROOT_DIR/triton"
     export MPLCONFIGDIR="\$PROTENIX_ROOT_DIR/matplotlib"
@@ -204,9 +231,18 @@ process BatchProtenixValidation {
         --out_json input.json \\
         --seeds "${seeds}"
 
-    echo "[BatchProtenixValidation] Antibody validator mode: sequence-only complex co-fold with original chain IDs preserved in input.json." | tee -a protenix_batch.log
-    if [ "${use_template}" = "true" ]; then
-        echo "[BatchProtenixValidation] Template DB conditioning enabled for this run; no target/binder coordinate locking is applied." | tee -a protenix_batch.log
+    if [ "${anchor_target}" = "true" ]; then
+        python3 ${params.code_root}/scripts/extract_target_templates.py \\
+            --pdb_files ${pdbs} \\
+            --target_chains "${params.antigen_chains ?: 'T'}" \\
+            --out_dir "\$PROTENIX_ROOT_DIR/mmcif" \\
+            --manifest target_template_manifest.json
+        echo "[BatchProtenixValidation] Antibody validator mode: target-anchored co-fold. A task-local Protenix template DB was staged from the experimental target chains." | tee -a protenix_batch.log
+    else
+        echo "[BatchProtenixValidation] Antibody validator mode: sequence-only complex co-fold with original chain IDs preserved in input.json." | tee -a protenix_batch.log
+    fi
+    if [ "${requested_template}" = "true" ] && [ "${anchor_target}" != "true" ]; then
+        echo "[BatchProtenixValidation] Generic template DB conditioning enabled for this run; no explicit target anchoring is applied." | tee -a protenix_batch.log
     fi
 
     PROTENIX_INPUT_JSON="input.json"
@@ -270,6 +306,7 @@ process BatchProtenixValidation {
         --design_type binder \\
         --binder_chains "${params.antibody_chains ?: 'H,L'}" \\
         --target_chains "${params.antigen_chains ?: 'T'}" \\
+        --geometry_mode "${anchor_target ? 'anchored' : 'flexible'}" ${protenixStrictArgs} \\
         --ncpus ${task.cpus} \\
         2>&1 | tee alignment_protenix.log
 

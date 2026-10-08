@@ -208,8 +208,8 @@ export function Dashboard() {
         setResumeSettingsForm({
             rfantibodyNumDesigns: clamp(Math.round(toNumber(p.rfantibody_num_designs, DEFAULT_RESUME_SETTINGS_FORM.rfantibodyNumDesigns)), 1, 64),
             seqsPerDesign: clamp(Math.round(toNumber(p.seqs_per_design, DEFAULT_RESUME_SETTINGS_FORM.seqsPerDesign)), 1, 32),
-            rfantibodyDiffusionSteps: clamp(Math.round(toNumber(p.rfantibody_diffusion_steps, DEFAULT_RESUME_SETTINGS_FORM.rfantibodyDiffusionSteps)), 10, 50),
-            rfantibodyGuideScale: clamp(Math.round(toNumber(p.rfantibody_guide_scale, DEFAULT_RESUME_SETTINGS_FORM.rfantibodyGuideScale)), 1, 20),
+            rfantibodyDiffusionSteps: clamp(Math.round(toNumber(p.rfantibody_diffusion_steps, DEFAULT_RESUME_SETTINGS_FORM.rfantibodyDiffusionSteps)), 20, 200),
+            rfantibodyGuideScale: clamp(Math.round(toNumber(p.rfantibody_guide_scale, DEFAULT_RESUME_SETTINGS_FORM.rfantibodyGuideScale)), 1, 50),
             fampnnMaxPsce: clamp(toNumber(p.fampnn_max_psce, DEFAULT_RESUME_SETTINGS_FORM.fampnnMaxPsce), 0.1, 8),
             fampnnMaxResiduePsce: clamp(toNumber(p.fampnn_max_residue_psce, DEFAULT_RESUME_SETTINGS_FORM.fampnnMaxResiduePsce), 0.1, 12),
             boltzMaxBinderRmsd: clamp(toNumber(p.boltz_max_binder_rmsd, DEFAULT_RESUME_SETTINGS_FORM.boltzMaxBinderRmsd), 0.1, 6),
@@ -519,20 +519,20 @@ export function Dashboard() {
                                         <div className="flex items-center gap-3">
                                             <input
                                                 type="range"
-                                                min={10}
-                                                max={50}
+                                                min={20}
+                                                max={200}
                                                 step={1}
                                                 value={resumeSettingsForm.rfantibodyDiffusionSteps}
-                                                onChange={(e) => setResumeNumberField('rfantibodyDiffusionSteps', clamp(Math.round(toNumber(e.target.value, 50)), 10, 50))}
+                                                onChange={(e) => setResumeNumberField('rfantibodyDiffusionSteps', clamp(Math.round(toNumber(e.target.value, 50)), 20, 200))}
                                                 className="w-full accent-blue-400"
                                                 disabled={resumeMutation.isPending}
                                             />
                                             <input
                                                 type="number"
-                                                min={10}
-                                                max={50}
+                                                min={20}
+                                                max={200}
                                                 value={resumeSettingsForm.rfantibodyDiffusionSteps}
-                                                onChange={(e) => setResumeNumberField('rfantibodyDiffusionSteps', clamp(Math.round(toNumber(e.target.value, 50)), 10, 50))}
+                                                onChange={(e) => setResumeNumberField('rfantibodyDiffusionSteps', clamp(Math.round(toNumber(e.target.value, 50)), 20, 200))}
                                                 className="w-20 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-slate-100 text-sm"
                                                 disabled={resumeMutation.isPending}
                                             />
@@ -550,7 +550,7 @@ export function Dashboard() {
                                                 max={20}
                                                 step={1}
                                                 value={resumeSettingsForm.rfantibodyGuideScale}
-                                                onChange={(e) => setResumeNumberField('rfantibodyGuideScale', clamp(Math.round(toNumber(e.target.value, 10)), 1, 20))}
+                                                onChange={(e) => setResumeNumberField('rfantibodyGuideScale', clamp(Math.round(toNumber(e.target.value, 10)), 1, 50))}
                                                 className="w-full accent-blue-400"
                                                 disabled={resumeMutation.isPending}
                                             />
@@ -559,7 +559,7 @@ export function Dashboard() {
                                                 min={1}
                                                 max={20}
                                                 value={resumeSettingsForm.rfantibodyGuideScale}
-                                                onChange={(e) => setResumeNumberField('rfantibodyGuideScale', clamp(Math.round(toNumber(e.target.value, 10)), 1, 20))}
+                                                onChange={(e) => setResumeNumberField('rfantibodyGuideScale', clamp(Math.round(toNumber(e.target.value, 10)), 1, 50))}
                                                 className="w-20 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-slate-100 text-sm"
                                                 disabled={resumeMutation.isPending}
                                             />

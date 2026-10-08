@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from functools import wraps
 import json
 import logging
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +40,51 @@ _vhh_summary_cache_time: float = 0.0
 _VHH_CACHE_TTL_SECONDS = 3600  # 1 hour
 
 
+def _isoformat_timestamp(timestamp: float) -> str:
+    return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+
+
+def _cache_metadata_path(cache_file: Path) -> Path:
+    return cache_file.with_suffix(f"{cache_file.suffix}.meta.json")
+
+
+def get_cache_timestamps(cache_file: Path) -> tuple[str, Optional[str]]:
+    stat = cache_file.stat()
+    cached_at = _isoformat_timestamp(stat.st_mtime)
+    last_used_at: Optional[str] = None
+    metadata_path = _cache_metadata_path(cache_file)
+    if metadata_path.exists():
+        try:
+            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+            cached_at = payload.get("cached_at") or cached_at
+            last_used_at = payload.get("last_used_at") or None
+        except Exception as exc:
+            logger.warning(f"[SAbDab] Failed to read cache metadata for {cache_file}: {exc}")
+    return cached_at, last_used_at
+
+
+def set_cache_timestamps(cache_file: Path, *, cached_at: str, last_used_at: Optional[str]) -> None:
+    metadata_path = _cache_metadata_path(cache_file)
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "cached_at": cached_at,
+                "last_used_at": last_used_at,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
 def _touch_cache_file(cache_file: Path) -> None:
     try:
-        stat = cache_file.stat()
-        os.utime(cache_file, ns=(time.time_ns(), stat.st_mtime_ns))
+        cached_at, _ = get_cache_timestamps(cache_file)
+        set_cache_timestamps(
+            cache_file,
+            cached_at=cached_at,
+            last_used_at=_isoformat_timestamp(time.time()),
+        )
     except Exception as exc:
         logger.warning(f"[SAbDab] Failed to update last-used timestamp for {cache_file}: {exc}")
 
@@ -308,6 +350,8 @@ async def download_pdb(
         if cache:
             cache_file = CACHE_DIR / f"{pdb_code}_{scheme}.pdb"
             cache_file.write_text(pdb_content)
+            now_iso = _isoformat_timestamp(time.time())
+            set_cache_timestamps(cache_file, cached_at=now_iso, last_used_at=now_iso)
             logger.info(f"[SAbDab] Cached: {cache_file}")
         
         return pdb_content
