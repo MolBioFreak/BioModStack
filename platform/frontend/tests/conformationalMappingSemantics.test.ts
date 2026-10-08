@@ -20,7 +20,7 @@ const coordinate = { backend: 'protenix_v2_ensemble', target_id: 'target-a', ord
 const candidate = {
     candidate_id: 'candidate-a', backend_coordinates: coordinate,
     authoritative_structure_path: 'native/target-a/structure.cif', authoritative_structure_sha256: sha('b'),
-    sidecar_paths: ['native/target-a/confidence.json'],
+    sidecar_paths: ['native/target-a/confidence.json', 'native/target-a/full-data.json'],
 };
 const ensemble = {
     schema_name: 'cm_ensemble', schema_version: 1, request_id: 'request-a', request_sha256: sha('a'),
@@ -54,6 +54,25 @@ test('test_cm13_003_candidate_order_and_identity', () => {
     const reordered = baseResults();
     (reordered.records[0].payload as typeof ensemble).expected_coordinates = [{ ...coordinate, sample_index: 1 }];
     assert.throws(() => ensembleCandidates(reordered), /order/);
+});
+
+test('external-import ensemble admits exactly zero candidate sidecars', () => {
+    const results = baseResults();
+    const payload = results.records[0].payload as typeof ensemble;
+    const imported = {
+        backend: 'external_import', target_id: 'target-a', staged_index: 0,
+        source_content_sha256: sha('7'), staged_receipt_sha256: sha('8'),
+    };
+    results.backend = 'external_import';
+    results.result_contract_id = 'conformational_mapping_import_v1';
+    payload.backend = 'external_import';
+    payload.expected_coordinates = [imported];
+    payload.candidates[0] = {
+        ...payload.candidates[0], backend_coordinates: imported, sidecar_paths: [],
+    };
+    assert.deepEqual(ensembleCandidates(results)[0].sidecar_paths, []);
+    payload.candidates[0].sidecar_paths = ['global-import-receipt.json'];
+    assert.throws(() => ensembleCandidates(results), /sidecar authority/);
 });
 
 test('test_cm13_004_mapping_overlay_uses_api_identity', () => {
@@ -98,6 +117,7 @@ test('canonical landscape display requires exact 20 API slots', () => {
     const rows = CANONICAL_AMINO_ACIDS.map((mutation_aa, index): CmLandscapeRow => ({
         candidate_id: 'candidate-a', entity_instance_id: 'copy1', auth_asym_id: 'AUTH', auth_seq_id: '7', insertion_code: '',
         sequence_index: 1, wt: 'A', mutation_aa, score: index, class: 'neutral', scoreable: true, status: 'ok', reason: null,
+        provenance: {},
     }));
     assert.equal(groupExact20Landscape(rows).length, 1);
     assert.throws(() => groupExact20Landscape(rows.slice(1)), /exact-20/);

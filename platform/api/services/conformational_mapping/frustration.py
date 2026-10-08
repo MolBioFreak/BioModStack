@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import io
 import math
 from pathlib import Path
 from typing import Any, Mapping
@@ -52,6 +53,7 @@ def finalize_landscape(
     checkpoint_sha256: str,
     tool_id: str,
     tool_sha256: str,
+    container_sha256: str,
 ) -> dict[str, Any]:
     raw_path = Path(raw_csv)
     raw_bytes = raw_path.read_bytes()
@@ -84,7 +86,11 @@ def finalize_landscape(
 
     observed: dict[tuple[str, int, str, str], dict[str, Any]] = {}
     input_issues: list[dict[str, Any]] = []
-    with raw_path.open("r", encoding="utf-8", newline="") as handle:
+    try:
+        raw_text = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise FrustrationLandscapeError("raw landscape CSV is not valid UTF-8") from exc
+    with io.StringIO(raw_text, newline="") as handle:
         reader = csv.DictReader(handle)
         if not reader.fieldnames:
             raise FrustrationLandscapeError("raw landscape CSV has no header")
@@ -209,6 +215,7 @@ def finalize_landscape(
         "checkpoint_sha256": checkpoint_sha256,
         "tool_id": tool_id,
         "tool_sha256": tool_sha256,
+        "container_sha256": container_sha256,
         "threshold_policy_id": _THRESHOLD_POLICY["id"],
         "threshold_policy_sha256": canonical_sha256(_THRESHOLD_POLICY),
         "input_issues": input_issues,

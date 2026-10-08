@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import statistics
 from collections import defaultdict
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from .contracts import (
     AA_ORDER,
@@ -19,6 +19,16 @@ from .clash import CLASH_DETECTOR_SHA256
 
 class ConformationalAnalysisError(ValueError):
     """Validated inputs cannot support an unambiguous analysis."""
+
+
+def _clash_key_sort_bytes(value: tuple[str, tuple[Any, ...], str]) -> bytes:
+    """Return canonical bytes for the typed nested clash-row identity."""
+    return canonical_json_bytes([value[0], list(value[1]), value[2]])
+
+
+def _ranked_universe_reference(common: Iterable[tuple[Any, ...]]) -> dict[str, Any]:
+    identities = [list(key) for key in sorted(common)]
+    return {"count": len(identities), "sha256": canonical_sha256(identities)}
 
 
 def _coordinate_axes(coordinate: Mapping[str, Any]) -> tuple[str, str]:
@@ -380,6 +390,10 @@ def analyze_landscapes(
         )
         for target, target_expected in expected_by_target.items()
     }
+    ranked_universe_reference_by_target = {
+        target: _ranked_universe_reference(rank_record[1])
+        for target, rank_record in rank_by_target.items()
+    }
 
     results: list[dict[str, Any]] = []
     support_records: list[dict[str, Any]] = []
@@ -491,7 +505,7 @@ def analyze_landscapes(
             "clash_free": clash,
             "clash_exclusions": clash_reasons,
             "rank_stability": rank_stability,
-            "common_ranked_universe": [list(key) for key in sorted(common)],
+            "common_ranked_universe": ranked_universe_reference_by_target[str(item[0])],
             "pairwise_rank_correlations": pairwise,
             "excluded_rank_strata": excluded_rank_strata,
         }
@@ -552,7 +566,7 @@ def analyze_landscapes(
             "comparisons": comparisons,
             "clash_rows": [
                 dict(clash_rows[key])
-                for key in sorted(clash_rows, key=lambda value: canonical_json_bytes(list(value)))
+                for key in sorted(clash_rows, key=_clash_key_sort_bytes)
             ],
         })[:32],
         "source_ensemble_sha256": canonical_sha256(ensemble),
@@ -567,7 +581,7 @@ def analyze_landscapes(
         "support_records": [*support_records, *redistribution_records],
         "ranking_policy": dict(policy),
         "clash_records": [
-            dict(clash_rows[key]) for key in sorted(clash_rows, key=lambda value: canonical_json_bytes(list(value)))
+            dict(clash_rows[key]) for key in sorted(clash_rows, key=_clash_key_sort_bytes)
         ],
     }
     validate_schema("cm_analysis_v1", analysis)

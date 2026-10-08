@@ -2710,7 +2710,7 @@ def build_nextflow_command(
     if str(model_id or "").strip() == "conformational_mapping":
         if str(mode or "").strip() != "map":
             raise ValueError("conformational_mapping supports only mode=map")
-        unknown = sorted(set(params) - {"cm_request_path"})
+        unknown = sorted(set(params) - {"cm_request_path", "gpu_id"})
         if unknown:
             raise ValueError(
                 "canonical conformational-mapping launch parameters fail closed: "
@@ -2719,6 +2719,17 @@ def build_nextflow_command(
         request_path = str(params.get("cm_request_path") or "").strip()
         if not request_path:
             raise ValueError("cm_request_path is required")
+        gpu_id = params.get("gpu_id")
+        if gpu_id is None:
+            normalized_gpu_id = None
+        elif isinstance(gpu_id, int) and not isinstance(gpu_id, bool):
+            normalized_gpu_id = gpu_id
+        elif isinstance(gpu_id, str) and gpu_id.isascii() and gpu_id.isdecimal():
+            normalized_gpu_id = int(gpu_id)
+        else:
+            raise ValueError("conformational_mapping gpu_id must be a non-negative integer")
+        if normalized_gpu_id is not None and normalized_gpu_id < 0:
+            raise ValueError("conformational_mapping gpu_id must be a non-negative integer")
         workflow_entrypoint = resolve_nextflow_entrypoint(
             effective_profile="conformational_mapping",
             model_id="conformational_mapping",
@@ -2739,6 +2750,8 @@ def build_nextflow_command(
         if job_id:
             command.extend(["--job_id", str(job_id)])
         command.extend(["--cm_request_path", request_path])
+        if normalized_gpu_id is not None:
+            command.extend(["--gpu_id", str(normalized_gpu_id)])
         return command
 
     normalized_model_id = str(model_id or "").strip().lower()

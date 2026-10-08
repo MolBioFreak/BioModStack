@@ -23,6 +23,7 @@ const sha = (value: string): string => value.repeat(64);
 const provenance = {
     checkpoint_id: 'megascale.ckpt', checkpoint_sha256: sha('a'),
     tool_id: 'frustrampnn', tool_sha256: sha('b'),
+    container_sha256: sha('e'),
     threshold_policy_id: 'frustrampnn_class_v1', threshold_policy_sha256: sha('c'),
     raw_csv_sha256: sha('d'),
 };
@@ -71,7 +72,19 @@ test('canonical FrustraMPNN metrics preserve exact structure-map and author resi
     });
     assert.equal(native.values[0]?.value, -1.25);
     assert.equal(native.descriptor.provenance.artifactSha256, sha('d'));
+    assert.equal(native.descriptor.provenance.parameters?.container_sha256, sha('e'));
     assert.match(native.descriptor.semantics ?? '', /backbone-context model score/i);
+});
+
+test('FrustraMPNN container provenance mismatch fails closed', () => {
+    const mismatched = residue();
+    mismatched.slots[1] = {
+        ...mismatched.slots[1],
+        provenance: { ...mismatched.slots[1].provenance, container_sha256: sha('9') },
+    };
+    assert.throws(() => createFrustraMpnnViewerMetrics({
+        requestId: 'request-1', candidateId: 'candidate-1', residues: [mismatched], structureMap: structureMap(),
+    }), /provenance mismatch for container_sha256/);
 });
 
 test('derived FrustraMPNN layers state formulas and exclude the native slot', () => {

@@ -499,7 +499,7 @@ def finalize_staged_import(
                 "backend_coordinates": coordinates,
                 "authoritative_structure_path": relative_path,
                 "authoritative_structure_sha256": digest,
-                "sidecar_paths": ["cm_import_receipt_v1.json"],
+                "sidecar_paths": [],
             }
         )
     files.append(

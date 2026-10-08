@@ -325,6 +325,7 @@
     "checkpoint_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "tool_id": "frustrampnn",
     "tool_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "container_sha256": "c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da",
     "threshold_policy_id": "frustrampnn_class_v1",
     "threshold_policy_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "input_issues": [],

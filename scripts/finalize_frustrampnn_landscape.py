@@ -27,6 +27,7 @@ def main() -> None:
     parser.add_argument("--checkpoint-sha256", required=True)
     parser.add_argument("--tool-id", required=True)
     parser.add_argument("--tool-sha256", required=True)
+    parser.add_argument("--container-sha256", required=True)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     try:
@@ -38,6 +39,7 @@ def main() -> None:
             checkpoint_sha256=args.checkpoint_sha256,
             tool_id=args.tool_id,
             tool_sha256=args.tool_sha256,
+            container_sha256=args.container_sha256,
         )
         args.out.parent.mkdir(parents=True, exist_ok=True)
         descriptor, temporary_name = tempfile.mkstemp(prefix=f".{args.out.name}.", dir=args.out.parent)

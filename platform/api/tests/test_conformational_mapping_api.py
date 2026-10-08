@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+import routers.conformational_mapping as cm_router
 from fastapi import HTTPException, Request
 from pydantic import ValidationError
 from sqlalchemy import select
@@ -11,7 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from database import Base, ConformationalMappingRecord, ConformationalMappingRequest, Job
-from routers.conformational_mapping import SubmitRequest, _principal, _registered_source_format
+from routers.conformational_mapping import (
+    SubmitRequest,
+    _mutation_principal,
+    _principal,
+    _registered_source_format,
+    request_status,
+    retry_request,
+)
 from services.conformational_mapping.persistence import (
     ConformationalPersistenceError,
     capability_matches,
@@ -112,8 +121,113 @@ def test_cm_proxy_contract_strips_browser_operator_token_and_injects_server_secr
     compose = (root / "compose.core-runtime.yml").read_text(encoding="utf-8")
     assert 'proxy_set_header X-BMS-CM-Operator-Token "";' in nginx
     assert 'proxy_set_header Tailscale-User-Login "";' in nginx
+    assert 'proxy_set_header X-Forwarded-Host $http_host;' in nginx
     assert 'proxy_set_header X-BMS-CM-Proxy-Secret "${BMS_CM_TRUSTED_PROXY_SECRET}";' in nginx
+    assert 'if ($host !~* ^(${BMS_CM_ALLOWED_HOST_PATTERN})$) { return 421; }' in nginx
     assert compose.count("      BMS_CM_TRUSTED_PROXY_SECRET:") == 2
+    assert "BMS_CM_ALLOWED_ORIGINS:" in compose
+    assert "BMS_CM_ALLOWED_HOST_PATTERN:" in compose
+
+
+def test_cm_proxy_mutations_require_same_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("BMS_CM_OPERATOR_TOKEN", raising=False)
+    monkeypatch.setenv("BMS_CM_TRUSTED_PROXY_SECRET", "server-only-proxy-secret")
+    monkeypatch.setenv("BMS_CM_ALLOWED_ORIGINS", "https://bms.example.test:18080")
+    base = {
+        "Host": "bms-api:8000",
+        "X-Forwarded-Host": "bms.example.test:18080",
+        "X-Forwarded-Proto": "https",
+        "X-BMS-CM-Proxy-Secret": "server-only-proxy-secret",
+    }
+    accepted = _http_request(
+        client_host="127.0.0.1",
+        headers={**base, "Origin": "https://bms.example.test:18080"},
+    )
+    assert _mutation_principal(accepted) == "local-application-operator"
+
+    for origin in (None, "https://attacker.example"):
+        headers = dict(base)
+        if origin is not None:
+            headers["Origin"] = origin
+        with pytest.raises(HTTPException) as denied:
+            _mutation_principal(_http_request(client_host="127.0.0.1", headers=headers))
+        assert denied.value.status_code == 403
+
+    rebound = {
+        **base,
+        "X-Forwarded-Host": "attacker-controlled.example:18080",
+        "Origin": "https://attacker-controlled.example:18080",
+    }
+    with pytest.raises(HTTPException) as denied:
+        _mutation_principal(_http_request(client_host="127.0.0.1", headers=rebound))
+    assert denied.value.status_code == 403
+
+
+def test_cm_explicit_operator_mutation_does_not_require_browser_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BMS_CM_TRUSTED_PROXY_SECRET", raising=False)
+    monkeypatch.setenv("BMS_CM_OPERATOR_TOKEN", "operator-secret")
+    request = _http_request(
+        client_host="127.0.0.1",
+        headers={"X-BMS-CM-Operator-Token": "operator-secret"},
+    )
+    assert _mutation_principal(request) == "configured-cm-operator"
+
+
+@pytest.mark.asyncio
+async def test_request_status_projects_terminal_job_without_mutating_on_get(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = SimpleNamespace(
+        request_id="request-1", job_id="job-1", backend="external_import",
+        status="queued", progress_json={"phase": "queued"}, failure_receipt_json=None,
+        result_contract_id=None,
+    )
+    job = SimpleNamespace(
+        id="job-1", status="failed", queue_status="failed", current_stage="analysis",
+        error_message="bounded failure",
+    )
+
+    async def authorized(*_args, **_kwargs):
+        return record
+
+    class ReadOnlySession:
+        async def get(self, *_args, **_kwargs):
+            return job
+
+        async def commit(self):
+            raise AssertionError("GET must not commit")
+
+    monkeypatch.setattr(cm_router, "_authorized_record", authorized)
+    result = await request_status(
+        "request-1", _http_request(client_host="127.0.0.1"), ReadOnlySession()
+    )
+    assert result["status"] == "failed"
+    assert result["retry_eligible"] is True
+    assert result["failure_receipt"]["terminal_state"] == "failed"
+    assert result["failure_receipt"]["message"] == "bounded failure"
+    assert record.status == "queued"
+
+
+@pytest.mark.asyncio
+async def test_retry_never_downgrades_completed_request_from_stale_failed_job(monkeypatch) -> None:
+    record = SimpleNamespace(status="completed", job_id="job-1")
+
+    async def authorized(*_args, **_kwargs):
+        return record
+
+    class UntouchedSession:
+        async def get(self, *_args, **_kwargs):
+            raise AssertionError("completed guard must run before reading stale job state")
+
+    monkeypatch.setattr(cm_router, "_authorized_record", authorized)
+    with pytest.raises(HTTPException, match="completed request authority") as exc:
+        await retry_request(
+            "request-1", _http_request(client_host="127.0.0.1"), UntouchedSession()
+        )
+    assert exc.value.status_code == 409
+    assert record.status == "completed"
 
 
 def test_cm11_api_typed_submission_rejects_unknown_fields() -> None:

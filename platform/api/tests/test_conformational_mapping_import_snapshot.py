@@ -503,6 +503,10 @@ async def test_local_application_upload_and_submit_materializes_snapshot_and_job
         assert receipt["status"] == "queued"
         assert receipt["expected_cardinality"] == 1
         assert await session.scalar(select(func.count()).select_from(Job)) == 1
+        job = await session.get(Job, receipt["job_id"])
+        assert job is not None
+        assert job.vram_estimate_mb == 12_000
+        assert job.sequence_length == 2
         assert await session.scalar(select(func.count()).select_from(ConformationalMappingRequest)) == 1
         assert await session.scalar(select(func.count()).select_from(ConformationalMappingSource)) == 1
 
@@ -519,4 +523,9 @@ async def test_local_application_upload_and_submit_materializes_snapshot_and_job
         key: value for key, value in plan.items() if key != "coordinate_plan_sha256"
     })
     assert (root / "registered_import" / "cm_import_receipt_v1.json").is_file()
+    runtime_registry = json.loads((root / "cm_runtime_registry_v1.json").read_text())
+    assert runtime_registry["analysis_runtime"] == {
+        "container_name": "frustrampnn.sif",
+        "container_sha256": "c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da",
+    }
     await engine.dispose()

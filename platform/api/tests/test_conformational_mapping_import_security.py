@@ -16,7 +16,11 @@ from services.conformational_mapping.import_stager import (
     stage_registered_artifacts,
     verify_registered_artifact,
 )
-from services.conformational_mapping.contracts import candidate_id, canonical_sha256
+from services.conformational_mapping.contracts import (
+    candidate_id,
+    canonical_sha256,
+    validate_contract_bundle,
+)
 from services.conformational_mapping.import_snapshot import (
     ImportSnapshotError,
     build_import_snapshot_from_mmcif,
@@ -241,6 +245,7 @@ def test_cm6_012_immutable_receipt_and_import_identity(tmp_path: Path) -> None:
     assert ensemble["expected_cardinality"] == 1
     assert ensemble["source_snapshot_sha256"] == canonical_sha256(snapshot)
     assert native["files"][0]["backend_coordinates"]["staged_receipt_sha256"] == staged.receipt["receipt_sha256"]
+    validate_contract_bundle({"cm_native_artifacts_v1": native, "cm_ensemble_v1": ensemble})
 
     bound_mismatch = copy.deepcopy(snapshot)
     bound_mismatch["admission"]["atom_count"] += 1

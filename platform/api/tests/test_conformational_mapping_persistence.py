@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from database import (
@@ -22,6 +23,7 @@ from services.conformational_mapping.persistence import (
     ConformationalPersistenceError,
     paged_landscape,
     persist_derived_record,
+    persist_landscape_matrix,
     register_prepared_request,
 )
 from services.result_contracts import (
@@ -31,7 +33,7 @@ from services.result_contracts import (
 )
 
 
-async def _session(tmp_path: Path) -> tuple[AsyncSession, object]:
+async def _session(tmp_path: Path) -> tuple[AsyncSession, AsyncEngine]:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'cm.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -94,6 +96,47 @@ async def test_cm11_005_idempotent_ingestion(tmp_path: Path) -> None:
         second = await register_prepared_request(session, job=_job("job-2"), principal_id="alice", request=_request("request-2"), coordinate_plan=_plan(), resume_key="0" * 64, capability_sha256="c" * 64)
         assert first is second
         assert await session.scalar(select(func.count()).select_from(ConformationalMappingRequest)) == 1
+    finally:
+        await session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cm11_005a_landscape_rows_retain_container_provenance(tmp_path: Path) -> None:
+    session, engine = await _session(tmp_path)
+    try:
+        fixture_path = (
+            Path(__file__).parent
+            / "fixtures/conformational_mapping/schemas/positive/all_schemas.json"
+        )
+        landscape = json.loads(fixture_path.read_text())["cm_frustration_landscape_v1"]
+        await persist_landscape_matrix(session, "request-1", landscape)
+        await session.flush()
+        row = await session.scalar(select(ConformationalMappingLandscapeRow))
+        assert row is not None
+        assert row.provenance_json["container_sha256"] == landscape["container_sha256"]
+    finally:
+        await session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cm_legacy_v1_landscape_replay_does_not_fabricate_container_digest(
+    tmp_path: Path,
+) -> None:
+    session, engine = await _session(tmp_path)
+    try:
+        fixture_path = (
+            Path(__file__).parent
+            / "fixtures/conformational_mapping/schemas/positive/all_schemas.json"
+        )
+        landscape = json.loads(fixture_path.read_text())["cm_frustration_landscape_v1"]
+        landscape.pop("container_sha256")
+        await persist_landscape_matrix(session, "legacy-request", landscape)
+        await session.flush()
+        row = await session.scalar(select(ConformationalMappingLandscapeRow))
+        assert row is not None
+        assert "container_sha256" not in row.provenance_json
     finally:
         await session.close()
         await engine.dispose()
