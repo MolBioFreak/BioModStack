@@ -16,7 +16,6 @@ import sqlite3
 from types import SimpleNamespace
 from paths import get_db_path, get_db_url
 from migrations.sqlite_sha256 import register_sqlite_sha256
-from services.ngs_molbio_quiescence import NgsMolBioQuiescedSession
 
 
 # Database path - resolved via paths helper (supports env overrides)
@@ -80,7 +79,6 @@ async_session = sessionmaker(
     engine,
     class_=AsyncSession,
     expire_on_commit=False,
-    sync_session_class=NgsMolBioQuiescedSession,
 )
 
 Base = declarative_base()

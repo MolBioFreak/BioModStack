@@ -12,7 +12,6 @@ from experiment_migrations import run_all
 from experiment_models import ExperimentBase
 from migrations.sqlite_sha256 import register_sqlite_sha256
 from paths import get_experiment_db_path, get_experiment_db_url
-from services.ngs_molbio_quiescence import NgsMolBioQuiescedSession
 
 
 def _sqlite_path_from_url(url: str) -> Path | None:
@@ -50,7 +49,6 @@ experiment_session_factory = async_sessionmaker(
     experiment_engine,
     class_=AsyncSession,
     expire_on_commit=False,
-    sync_session_class=NgsMolBioQuiescedSession,
 )
 
 
@@ -59,7 +57,6 @@ def create_experiment_session_factory(engine):
         engine,
         class_=AsyncSession,
         expire_on_commit=False,
-        sync_session_class=NgsMolBioQuiescedSession,
     )
 
 

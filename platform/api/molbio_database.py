@@ -19,7 +19,6 @@ from sqlalchemy.orm import sessionmaker
 
 from molbio_models import IMMUTABLE_TABLES, MolBioBase, MolecularImportBatch, ProjectPlasmidMetadata
 from paths import get_data_root
-from services.ngs_molbio_quiescence import NgsMolBioQuiescedSession
 from services.sqlite_schema_attestation import sqlite_master_sql_identity
 
 
@@ -436,7 +435,6 @@ def make_molbio_session_factory(target_engine: AsyncEngine):
         target_engine,
         class_=AsyncSession,
         expire_on_commit=False,
-        sync_session_class=NgsMolBioQuiescedSession,
     )
 
 

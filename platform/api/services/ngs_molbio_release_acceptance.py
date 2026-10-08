@@ -1,9 +1,7 @@
-"""Fail-closed validation for the final shared-package acceptance receipt.
+"""Historical shared-package evidence storage and acceptance verification.
 
-This module can materialize a receipt only after an external release lane supplies
-closed, content-addressed evidence. It verifies retained evidence bytes, live fenced
-migration/source authority, active-work quiescence, and exact package provenance.
-It never resolves Git state or launches scientific work.
+Retains evidence and verification for existing v1 records. Online creation of
+v1 acceptance receipts is retired. This module never launches scientific work.
 """
 from __future__ import annotations
 
@@ -46,9 +44,8 @@ from experiment_services import (
     canonical_json,
     now,
 )
-from molbio_database import MOLBIO_MIGRATIONS, molbio_health, molbio_session
+from molbio_database import MOLBIO_MIGRATIONS, molbio_health
 from molbio_models import MolecularOperation
-from molbio_ngs_database import molbio_ngs_session_factory
 from molbio_ngs_migrations import (
     LATEST_MIGRATION_VERSION as MOLBIO_NGS_MIGRATION_VERSION,
     attest_schema as attest_molbio_ngs_schema,
@@ -59,10 +56,6 @@ from molbio_ngs_models import (
     MolBioNGSOutboxEvent,
 )
 from paths import get_experiment_db_path
-from services.ngs_molbio_quiescence import (
-    NgsMolBioQuiescenceError,
-    package_acceptance_exclusive_fence,
-)
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SCHEMA_PATH = _REPO_ROOT / "schemas/ngs_molbio_runtime/shared-global-package-acceptance-v1.schema.json"
@@ -1205,146 +1198,8 @@ async def validate_shared_package_acceptance(
     return candidate
 
 
-async def _begin_immediate_source_transactions(
-    *sessions: AsyncSession,
-) -> None:
-    """Hold SQLite write reservations across validation and receipt commit."""
-    for session in sessions:
-        await session.execute(text("BEGIN IMMEDIATE"))
-
-
-async def acceptance_operational_receipt(
-    experiment_session: AsyncSession,
-    core_session: AsyncSession,
-    evidence: Mapping[str, Any],
-    *,
-    accepted_by: str,
-) -> ExperimentOperationalReceipt:
-    local_session = molbio_ngs_session_factory()
-    molbio_source_session = molbio_session()
-    local_closed = False
-    molbio_source_closed = False
-    fence_entered = False
-    try:
-        async with package_acceptance_exclusive_fence(
-            experiment_session,
-            core_session,
-            local_session,
-            molbio_source_session,
-        ):
-            fence_entered = True
-            try:
-                await _begin_immediate_source_transactions(
-                    experiment_session,
-                    core_session,
-                    local_session,
-                    molbio_source_session,
-                )
-                reserved = {"accepted_at", "accepted_by", "no_active_jobs", "outcome", "content_sha256"}
-                if reserved.intersection(evidence):
-                    raise SharedPackageAcceptanceError("caller evidence contains service-owned acceptance fields")
-                candidate = copy.deepcopy(dict(evidence))
-                candidate.update(
-                    {
-                        "accepted_at": now(),
-                        "accepted_by": accepted_by,
-                        "no_active_jobs": True,
-                        "outcome": "pass",
-                    }
-                )
-                candidate["content_sha256"] = _content_sha256(candidate)
-                accepted = await validate_shared_package_acceptance(
-                    experiment_session,
-                    core_session,
-                    local_session,
-                    molbio_source_session,
-                    candidate,
-                )
-                body = canonical_json(accepted)
-                request_authority = {
-                    "accepted_by": accepted_by,
-                    "evidence": copy.deepcopy(dict(evidence)),
-                }
-                receipt_id = str(
-                    uuid.uuid5(
-                        uuid.NAMESPACE_URL,
-                        f"bms:package-acceptance:{_sha256(rfc8785.dumps(request_authority))}",
-                    )
-                )
-                receipt = ExperimentOperationalReceipt(
-                    receipt_id=receipt_id,
-                    operation_kind="package_acceptance",
-                    workspace_id=None,
-                    native_identity=f"{accepted['source_commit']}:{accepted['source_tree']}",
-                    state="verified",
-                    receipt_json=body,
-                    receipt_sha256=_sha256(body.encode("utf-8")),
-                    source_revision=accepted["source_commit"],
-                    occurred_at=accepted["accepted_at"],
-                    verified_at=accepted["accepted_at"],
-                )
-                existing_receipt = await experiment_session.get(
-                    ExperimentOperationalReceipt, receipt_id
-                )
-                if existing_receipt is not None:
-                    existing_body = _receipt_document(existing_receipt)
-                    if (
-                        existing_receipt.operation_kind != "package_acceptance"
-                        or existing_receipt.state != "verified"
-                        or existing_body.get("accepted_by") != accepted_by
-                        or any(existing_body.get(key) != value for key, value in evidence.items())
-                    ):
-                        raise SharedPackageAcceptanceError(
-                            "package acceptance idempotency authority conflicts with its persisted receipt"
-                        )
-                    receipt = existing_receipt
-                else:
-                    experiment_session.add(receipt)
-                    await experiment_session.flush()
-                await experiment_session.commit()
-                await core_session.rollback()
-                await local_session.rollback()
-                await molbio_source_session.rollback()
-                await local_session.close()
-                local_closed = True
-                await molbio_source_session.close()
-                molbio_source_closed = True
-                return receipt
-            except BaseException as operation_error:
-                rollback_error: BaseException | None = None
-                for session in (
-                    experiment_session,
-                    core_session,
-                    local_session,
-                    molbio_source_session,
-                ):
-                    try:
-                        await session.rollback()
-                    except BaseException as exc:
-                        if rollback_error is None:
-                            rollback_error = exc
-                if rollback_error is not None:
-                    raise rollback_error from operation_error
-                raise
-            finally:
-                if not local_closed:
-                    await local_session.close()
-                    local_closed = True
-                if not molbio_source_closed:
-                    await molbio_source_session.close()
-                    molbio_source_closed = True
-    except NgsMolBioQuiescenceError as exc:
-        raise SharedPackageAcceptanceError(str(exc)) from exc
-    finally:
-        if not fence_entered and not local_closed:
-            await local_session.close()
-        if not fence_entered and not molbio_source_closed:
-            await molbio_source_session.close()
-
-
 __all__ = [
     "SharedPackageAcceptanceError",
-    "acceptance_operational_receipt",
     "persist_shared_package_evidence",
     "validate_shared_package_acceptance",
 ]
