@@ -537,7 +537,7 @@ def build_run_manifest(
         raise ValueError("replica_index is outside configured replica range")
     return {
         "schema": MD_RUN_SCHEMA,
-        "job_schema": MD_JOB_SCHEMA,
+        "job_schema": config["schema"],
         "created_at": datetime.now(timezone.utc).isoformat(),
         "job_id": config["job_id"],
         "replica_index": replica_index,

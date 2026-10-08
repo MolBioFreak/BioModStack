@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 import yaml
 from fastapi.testclient import TestClient
+from jsonschema import Draft202012Validator
 
 API_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = API_ROOT.parent.parent
@@ -17,6 +18,7 @@ for candidate in (str(API_ROOT), str(REPO_ROOT)):
 
 from services.md.chemistry_catalog import ChemistryCatalog, RuntimeProbeResult  # noqa: E402
 from services.md.launch_contract import MDLaunchError, materialize_md_job_spec, normalize_md_job_spec  # noqa: E402
+from scripts.bms_md.contract import build_run_manifest  # noqa: E402
 
 CATALOG_DIR = API_ROOT / "config" / "md_chemistry_profiles"
 ONE_AKI_FIXTURE = API_ROOT / "tests" / "fixtures" / "md" / "1AKI.pdb"
@@ -146,6 +148,32 @@ def test_v2_materialization_persists_server_bound_contract_and_immutable_snapsho
     assert persisted["input"]["structure_sha256"] == profile["launch_constraints"]["structure_sha256"]
     assert snapshot.read_bytes() == ONE_AKI_FIXTURE.read_bytes()
     assert snapshot.stat().st_mode & 0o222 == 0
+
+
+def test_v2_run_manifest_truthfully_identifies_its_job_contract(tmp_path: Path) -> None:
+    catalog = _catalog(); view = catalog.view(); profile = view.get_profile("gmx_amber99sb_ildn_tip3p_smoke_v1")
+    assert profile is not None
+    materialized = materialize_md_job_spec(
+        params={"md_job_spec": _v2_spec(profile, view.catalog_digest)}, job_id="v2-run-manifest",
+        output_dir=tmp_path / "out", resolve_runtime_path=lambda _value: str(ONE_AKI_FIXTURE),
+        chemistry_catalog=catalog,
+    )
+    config = json.loads(Path(materialized["md_job_config"]).read_text(encoding="utf-8"))
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    trajectory = run_dir / "production.xtc"
+    trajectory.write_bytes(b"trajectory")
+    manifest = build_run_manifest(
+        output_dir=run_dir, job_config=config, replica_index=0,
+        engine_version="2025.3", platform="CUDA",
+        artifacts={"trajectory": trajectory},
+        stages={"production": {"status": "completed"}},
+    )
+    manifest.update(status="completed", replica_seed=config["random_seed"])
+
+    assert manifest["job_schema"] == "bms.md.job.v2"
+    schema = json.loads((REPO_ROOT / "schemas" / "md_run_v1.schema.json").read_text(encoding="utf-8"))
+    Draft202012Validator(schema).validate(manifest)
 
 
 def test_capabilities_advertise_v2_without_removing_retained_v1(monkeypatch: pytest.MonkeyPatch) -> None:
