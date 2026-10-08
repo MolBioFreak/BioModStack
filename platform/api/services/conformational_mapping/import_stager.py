@@ -181,8 +181,8 @@ def _digest_fd(descriptor: int, *, maximum_bytes: int = MAX_IMPORT_BYTES) -> tup
         if not chunk:
             break
         total += len(chunk)
-        if len(prefix) < 8192:
-            prefix.extend(chunk[: 8192 - len(prefix)])
+        if len(prefix) < 256 * 1024:
+            prefix.extend(chunk[: 256 * 1024 - len(prefix)])
         if total > maximum_bytes:
             raise ImportStagingError("registered artifact exceeds the import byte limit")
         digest.update(chunk)
