@@ -95,7 +95,7 @@ export interface MolecularDynamicsForm {
     ntomp: number;
 }
 
-export interface MolecularDynamicsJobSpec {
+export interface MolecularDynamicsJobSpecV1 {
     schema: 'bms.md.job.v1';
     job_id: string;
     engine: MolecularDynamicsEngine;
@@ -141,6 +141,37 @@ export interface MolecularDynamicsJobSpec {
         pin: 'on';
     };
 }
+
+export interface MolecularDynamicsJobSpecV2 {
+    schema: 'bms.md.job.v2';
+    job_id: string;
+    engine: 'gromacs';
+    replicas: number;
+    random_seed: number;
+    input: { structure: string };
+    chemistry: {
+        profile_id: string;
+        profile_sha256: string;
+        catalog_digest: string;
+        requested_scope: string;
+    };
+    preparation: {
+        box_type: 'dodecahedron';
+        padding_nm: number;
+        salt_molar: number;
+        neutralize: true;
+    };
+    stages: MolecularDynamicsJobSpecV1['stages'];
+    execution: {
+        gpu_id: '0';
+        ntmpi: 1;
+        ntomp: number;
+        gpu_offload: 'full_forces';
+        pin: 'on';
+    };
+}
+
+export type MolecularDynamicsJobSpec = MolecularDynamicsJobSpecV1 | MolecularDynamicsJobSpecV2;
 
 const finitePositive = (value: number) => Number.isFinite(value) && value > 0;
 const stepsFromPs = (picoseconds: number, timestepFs: number) => Math.round((picoseconds * 1000) / timestepFs);
@@ -245,6 +276,7 @@ export const validateMolecularDynamicsChemistryProfile = (
 export const buildMolecularDynamicsJobSpec = (
     form: MolecularDynamicsForm,
     chemistryProfile?: MolecularDynamicsChemistryProfile,
+    catalogDigest?: string,
 ): MolecularDynamicsJobSpec => {
     const automaticPreparation = form.inputMode === 'structure';
     const errors = [
@@ -255,54 +287,60 @@ export const buildMolecularDynamicsJobSpec = (
     ];
     if (errors.length) throw new Error(errors.join(' '));
     if (automaticPreparation && !chemistryProfile) throw new Error('A chemistry profile is required for automatic preparation.');
-    const input = form.inputMode === 'prepared'
-        ? { coordinates: form.coordinatesPath.trim(), topology: form.topologyPath.trim() }
-        : { structure: form.structurePath.trim() };
-    const preparation = automaticPreparation && chemistryProfile ? {
-        chemistry_assurance: 'smoke_fixture' as const,
-        chemistry_profile_id: chemistryProfile.id,
-        chemistry_profile_sha256: chemistryProfile.profile_sha256,
-        chemistry_profile_scope: chemistryProfile.scientific_validation.scope.launch_scope,
-        force_field: chemistryProfile.v1_preparation.force_field,
-        water_model: chemistryProfile.v1_preparation.water_model,
-    } : {
-        chemistry_assurance: 'external_unreviewed' as const,
-        force_field: 'external',
-        water_model: 'external',
+    if (automaticPreparation && !/^[0-9a-f]{64}$/.test(catalogDigest || '')) {
+        throw new Error('A valid deployed chemistry catalog digest is required for automatic preparation.');
+    }
+    const stages: MolecularDynamicsJobSpecV1['stages'] = {
+        minimization: { enabled: form.engine === 'gromacs', steps: form.minimizationSteps, force_tolerance_kj_mol_nm: 1000 },
+        nvt: { enabled: form.engine === 'gromacs', steps: stepsFromPs(form.nvtPs, form.timestepFs), temperature_k: form.temperatureK },
+        npt: { enabled: form.engine === 'gromacs', steps: stepsFromPs(form.nptPs, form.timestepFs), temperature_k: form.temperatureK, pressure_bar: form.pressureBar },
+        production: {
+            enabled: true,
+            steps: stepsFromNs(form.productionNs, form.timestepFs),
+            timestep_fs: form.timestepFs,
+            temperature_k: form.temperatureK,
+            pressure_bar: form.pressureBar,
+            checkpoint_interval_minutes: form.checkpointIntervalMinutes,
+            trajectory_interval_steps: stepsFromPs(form.trajectoryIntervalPs, form.timestepFs),
+            energy_interval_steps: stepsFromPs(form.energyIntervalPs, form.timestepFs),
+        },
     };
+    if (automaticPreparation) {
+        return {
+            schema: 'bms.md.job.v2',
+            job_id: 'assigned-by-bms',
+            engine: 'gromacs',
+            replicas: form.replicas,
+            random_seed: form.randomSeed,
+            input: { structure: form.structurePath.trim() },
+            chemistry: {
+                profile_id: chemistryProfile!.id,
+                profile_sha256: chemistryProfile!.profile_sha256,
+                catalog_digest: catalogDigest!,
+                requested_scope: chemistryProfile!.scientific_validation.scope.launch_scope,
+            },
+            preparation: {
+                box_type: 'dodecahedron', padding_nm: form.paddingNm,
+                salt_molar: form.saltMolar, neutralize: true,
+            },
+            stages,
+            execution: { gpu_id: '0', ntmpi: 1, ntomp: form.ntomp, gpu_offload: 'full_forces', pin: 'on' },
+        };
+    }
     return {
         schema: 'bms.md.job.v1',
         job_id: 'assigned-by-bms',
         engine: form.engine,
         replicas: form.replicas,
         random_seed: form.randomSeed,
-        input,
+        input: { coordinates: form.coordinatesPath.trim(), topology: form.topologyPath.trim() },
         preparation: {
-            ...preparation,
-            box_type: 'dodecahedron',
-            padding_nm: form.paddingNm,
-            salt_molar: form.saltMolar,
-            positive_ion: 'NA',
-            negative_ion: 'CL',
-            solvent_group: 'SOL',
-            solvent_coordinates: 'spc216.gro',
-            neutralize: true,
+            chemistry_assurance: 'external_unreviewed', force_field: 'external', water_model: 'external',
+            box_type: 'dodecahedron', padding_nm: form.paddingNm, salt_molar: form.saltMolar,
+            positive_ion: 'NA', negative_ion: 'CL', solvent_group: 'SOL',
+            solvent_coordinates: 'spc216.gro', neutralize: true,
         },
-        stages: {
-            minimization: { enabled: form.engine === 'gromacs', steps: form.minimizationSteps, force_tolerance_kj_mol_nm: 1000 },
-            nvt: { enabled: form.engine === 'gromacs', steps: stepsFromPs(form.nvtPs, form.timestepFs), temperature_k: form.temperatureK },
-            npt: { enabled: form.engine === 'gromacs', steps: stepsFromPs(form.nptPs, form.timestepFs), temperature_k: form.temperatureK, pressure_bar: form.pressureBar },
-            production: {
-                enabled: true,
-                steps: stepsFromNs(form.productionNs, form.timestepFs),
-                timestep_fs: form.timestepFs,
-                temperature_k: form.temperatureK,
-                pressure_bar: form.pressureBar,
-                checkpoint_interval_minutes: form.checkpointIntervalMinutes,
-                trajectory_interval_steps: stepsFromPs(form.trajectoryIntervalPs, form.timestepFs),
-                energy_interval_steps: stepsFromPs(form.energyIntervalPs, form.timestepFs),
-            },
-        },
+        stages,
         execution: { gpu_id: '0', ntmpi: 1, ntomp: form.ntomp, gpu_offload: 'full', pin: 'on' },
     };
 };
