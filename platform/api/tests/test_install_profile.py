@@ -19,9 +19,11 @@ EXPECTED_CORS_ORIGINS = ",".join(
     [
         "http://127.0.0.1",
         "http://127.0.0.1:5173",
+        "http://127.0.0.1:18080",
         "http://localhost",
         "https://localhost",
         "http://localhost:5173",
+        "http://localhost:18080",
         "https://localhost:5173",
         "https://127.0.0.1",
     ]
@@ -40,6 +42,7 @@ def test_save_install_profile_writes_compatibility_exports(tmp_path: Path, monke
         {
             "data_root": "~/BioModStackData",
             "container_state_path": "/var/lib/biomodstack-custom",
+            "dev_web_host_port": 5179,
             "api_host_port": 9000,
             "web_host_port": 5174,
         }
@@ -52,6 +55,7 @@ def test_save_install_profile_writes_compatibility_exports(tmp_path: Path, monke
     env_text = env_sh.read_text(encoding="utf-8")
     assert f'export BMS_DATA="${{BMS_DATA:-{resolved_data_root}}}"' in env_text
     assert f'export BMS_STATE_DIR="${{BMS_STATE_DIR:-{resolved_data_root}}}"' in env_text
+    assert 'export BMS_DEV_WEB_HOST_PORT="${BMS_DEV_WEB_HOST_PORT:-5179}"' in env_text
     assert 'export BMS_API_HOST_PORT="${BMS_API_HOST_PORT:-9000}"' in env_text
     assert 'export BMS_WEB_HOST_PORT="${BMS_WEB_HOST_PORT:-5174}"' in env_text
     assert f'export CORS_ORIGINS="${{CORS_ORIGINS:-{EXPECTED_CORS_ORIGINS}}}"' in env_text
@@ -63,6 +67,7 @@ def test_save_install_profile_writes_compatibility_exports(tmp_path: Path, monke
     assert "BMS_CONTAINER_STATE_PATH=/var/lib/biomodstack-custom" in core_runtime_text
     assert "BMS_INPUTS_CONTAINER_PATH=/var/lib/biomodstack-custom/inputs" in core_runtime_text
     assert "BMS_DB_CONTAINER_PATH=/var/lib/biomodstack-custom/biomodstack.db" in core_runtime_text
+    assert "BMS_DEV_WEB_HOST_PORT=5179" in core_runtime_text
     assert f"CORS_ORIGINS={EXPECTED_CORS_ORIGINS}" in core_runtime_text
     assert "BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:8001" in core_runtime_text
 
@@ -81,6 +86,8 @@ def test_resolve_runtime_paths_defaults_include_cordova_and_loopback_cors_origin
     resolved = runtime_profile.resolve_runtime_paths(project_root=project_root, profile={})
 
     assert resolved["cors_origins"] == EXPECTED_CORS_ORIGINS.split(",")
+    assert resolved["dev_web_host_port"] == 5173
+    assert resolved["web_host_port"] == 18080
 
 
 def test_api_paths_prefer_install_profile_when_env_is_missing(tmp_path: Path, monkeypatch) -> None:

@@ -21,6 +21,7 @@ from biomodstack_services import (  # noqa: E402
     restart_api,
     runtime_descriptor,
     start_all,
+    start_runtime_target,
     status_lines,
     stop_all,
 )
@@ -45,7 +46,7 @@ def notify(message: str, icon: str = NOTIFY_ICON) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Manage BioModStack desktop services")
-    parser.add_argument("action", choices=["start", "stop", "restart", "restart-api", "status"])
+    parser.add_argument("action", choices=["start", "start-target", "stop", "restart", "restart-api", "status"])
     parser.add_argument(
         "--runtime",
         choices=["dev", "container"],
@@ -53,6 +54,7 @@ def main() -> int:
     )
     parser.add_argument("--notify", action="store_true", help="send desktop notifications")
     parser.add_argument("--json", action="store_true", dest="json_output", help="emit structured JSON for supported actions")
+    parser.add_argument("--target", choices=["dev", "prod", "both"], help="runtime target for start-target")
     args = parser.parse_args()
 
     if args.json_output and args.action != "status":
@@ -60,6 +62,16 @@ def main() -> int:
 
     try:
         runtime_mode = resolve_runtime_mode(args.runtime)
+
+        if args.action == "start-target":
+            target = args.target or "prod"
+            if args.notify:
+                notify(f"🚀 Starting BioModStack {target} runtime target…")
+            start_runtime_target(target=target)
+            if args.notify:
+                notify("✅ BioModStack requested runtime target is running")
+            print(f"Started runtime target: {target}")
+            return 0
 
         if args.action == "start":
             if args.notify:

@@ -33,7 +33,7 @@ def test_none_surface_does_not_open_browser(monkeypatch) -> None:
         module,
         "runtime_descriptor",
         lambda project_root=None, runtime_mode=None: {
-            "browser_url": "http://127.0.0.1:5173/bms/",
+            "browser_url": "http://127.0.0.1:18080/bms/",
             "launch_preferences": {"default_surface": "browser", "auto_open_hosted_web_on_start": True},
         },
     )
@@ -80,7 +80,7 @@ def test_stored_electron_preference_falls_back_to_browser_until_shell_exists(mon
         module,
         "runtime_descriptor",
         lambda project_root=None, runtime_mode=None: {
-            "browser_url": "http://127.0.0.1:5173/bms/",
+            "browser_url": "http://127.0.0.1:18080/bms/",
             "launch_preferences": {"default_surface": "electron", "auto_open_hosted_web_on_start": True},
         },
     )
@@ -89,7 +89,7 @@ def test_stored_electron_preference_falls_back_to_browser_until_shell_exists(mon
     module.launch_ui(runtime_mode="container")
 
     assert started == ["container"]
-    assert opened == ["http://127.0.0.1:5173/bms/"]
+    assert opened == ["http://127.0.0.1:18080/bms/"]
 
 
 def test_explicit_electron_surface_launches_shell_when_installed(monkeypatch) -> None:
@@ -104,8 +104,8 @@ def test_explicit_electron_surface_launches_shell_when_installed(monkeypatch) ->
         "runtime_descriptor",
         lambda project_root=None, runtime_mode=None: {
             "runtime_mode": runtime_mode or "container",
-            "frontend_origin": "http://127.0.0.1:5173",
-            "browser_url": "http://127.0.0.1:5173/bms/",
+            "frontend_origin": "http://127.0.0.1:18080",
+            "browser_url": "http://127.0.0.1:18080/bms/",
             "router_basename": "/bms/",
             "launch_preferences": {"default_surface": "browser", "auto_open_hosted_web_on_start": True},
         },
@@ -115,7 +115,7 @@ def test_explicit_electron_surface_launches_shell_when_installed(monkeypatch) ->
 
     descriptor = module.launch_ui(runtime_mode="container", surface="electron")
 
-    assert descriptor["browser_url"] == "http://127.0.0.1:5173/bms/"
+    assert descriptor["browser_url"] == "http://127.0.0.1:18080/bms/"
     assert started == ["container"]
     assert opened == []
     assert launched == [descriptor]
@@ -170,7 +170,7 @@ def test_launch_electron_shell_exports_runtime_context_to_the_shell(monkeypatch,
     module.launch_electron_shell(
         {
             "runtime_mode": "container",
-            "frontend_origin": "http://127.0.0.1:5173",
+            "frontend_origin": "http://127.0.0.1:18080",
             "router_basename": "/bms/",
         }
     )
@@ -182,7 +182,7 @@ def test_launch_electron_shell_exports_runtime_context_to_the_shell(monkeypatch,
     assert env["PATH"] == resolved_env["PATH"]
     assert env["BMS_HOME"] == str(module.REPO_ROOT)
     assert env["BMS_RUNTIME_MODE"] == "container"
-    assert env["BMS_FRONTEND_ORIGIN"] == "http://127.0.0.1:5173"
+    assert env["BMS_FRONTEND_ORIGIN"] == "http://127.0.0.1:18080"
     assert env["BMS_ROUTER_BASENAME"] == "/bms/"
 
 
@@ -218,8 +218,8 @@ def test_stored_electron_preference_launches_shell_when_installed(monkeypatch) -
         "runtime_descriptor",
         lambda project_root=None, runtime_mode=None: {
             "runtime_mode": runtime_mode or "container",
-            "frontend_origin": "http://127.0.0.1:5173",
-            "browser_url": "http://127.0.0.1:5173/bms/",
+            "frontend_origin": "http://127.0.0.1:18080",
+            "browser_url": "http://127.0.0.1:18080/bms/",
             "router_basename": "/bms/",
             "launch_preferences": {"default_surface": "electron", "auto_open_hosted_web_on_start": True},
         },
@@ -229,7 +229,7 @@ def test_stored_electron_preference_launches_shell_when_installed(monkeypatch) -
 
     descriptor = module.launch_ui(runtime_mode="container")
 
-    assert descriptor["browser_url"] == "http://127.0.0.1:5173/bms/"
+    assert descriptor["browser_url"] == "http://127.0.0.1:18080/bms/"
     assert started == ["container"]
     assert opened == []
     assert launched == [descriptor]

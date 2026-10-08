@@ -73,7 +73,7 @@ def test_resolve_runtime_mode_defaults_to_container_when_unset(monkeypatch) -> N
 
 def test_runtime_descriptor_for_dev_mode(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / "repo"
-    monkeypatch.setattr(services, "service_is_active", lambda name, project_root=None: name == services.API_SERVICE)
+    monkeypatch.setattr(services, "service_is_active", lambda name, project_root=None: name == services.FRONTEND_SERVICE)
     monkeypatch.setattr(services, "url_is_ready", lambda url, timeout_seconds=2.0: True)
     monkeypatch.setattr(
         services,
@@ -87,13 +87,13 @@ def test_runtime_descriptor_for_dev_mode(tmp_path: Path, monkeypatch) -> None:
     descriptor = services.runtime_descriptor(project_root=project_root, runtime_mode="dev")
 
     assert descriptor["runtime_mode"] == "dev"
+    assert descriptor["runtime_active"] is True
     assert descriptor["frontend_url"] == "http://127.0.0.1:5173/"
     assert descriptor["browser_url"] == "http://127.0.0.1:5173/"
     assert descriptor["router_basename"] == "/"
     assert descriptor["supported_launch_surfaces"] == ["browser", "electron", "none"]
     assert descriptor["services"] == [
-        {"name": services.API_SERVICE, "active": True},
-        {"name": services.FRONTEND_SERVICE, "active": False},
+        {"name": services.FRONTEND_SERVICE, "active": True},
     ]
 
 
@@ -134,8 +134,8 @@ def test_runtime_descriptor_for_container_mode(tmp_path: Path, monkeypatch) -> N
 
     assert descriptor["runtime_mode"] == "container"
     assert descriptor["runtime_active"] is True
-    assert descriptor["frontend_url"] == "http://127.0.0.1:5173/bms/"
-    assert descriptor["browser_url"] == "http://127.0.0.1:5173/bms/"
+    assert descriptor["frontend_url"] == "http://127.0.0.1:18080/bms/"
+    assert descriptor["browser_url"] == "http://127.0.0.1:18080/bms/"
     assert descriptor["router_basename"] == "/bms/"
     assert descriptor["services"] == [
         {"name": services.WORKFLOW_ADAPTER_SERVICE, "active": True},
@@ -162,6 +162,91 @@ def test_runtime_descriptor_for_container_mode(tmp_path: Path, monkeypatch) -> N
     assert descriptor["paths"]["data_root"] == "/srv/biomodstack"
     assert descriptor["paths"]["db_path"] == "/srv/biomodstack/biomodstack.db"
     assert descriptor["electron_shell_available"] is True
+
+
+def test_container_frontend_url_honors_install_profile_web_host_port(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / "repo"
+    monkeypatch.setattr(
+        services,
+        "install_profile_snapshot",
+        lambda profile=None, project_root=None: {"resolved": {"web_host_port": 19090}},
+        raising=False,
+    )
+
+    assert services.runtime_frontend_url("container", project_root=project_root) == "http://127.0.0.1:19090/bms/"
+    assert services.runtime_frontend_url("dev", project_root=project_root) == "http://127.0.0.1:5173/"
+
+
+def test_runtime_frontend_urls_honor_configured_dev_and_prod_ports(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / "repo"
+    monkeypatch.setattr(
+        services,
+        "install_profile_snapshot",
+        lambda profile=None, project_root=None: {"resolved": {"dev_web_host_port": 5179, "web_host_port": 19090}},
+        raising=False,
+    )
+
+    assert services.runtime_frontend_url("dev", project_root=project_root) == "http://127.0.0.1:5179/"
+    assert services.runtime_frontend_url("container", project_root=project_root) == "http://127.0.0.1:19090/bms/"
+
+
+def test_runtime_port_settings_preserve_profile_and_save_dev_and_prod_ports(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / "repo"
+    saved: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        services,
+        "load_install_profile",
+        lambda: {"data_root": "/srv/biomodstack", "web_host_port": 18080},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        services,
+        "save_install_profile",
+        lambda payload, project_root=None: saved.append(dict(payload)) or dict(payload),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        services,
+        "install_profile_snapshot",
+        lambda profile=None, project_root=None: {"resolved": {"dev_web_host_port": 5180, "web_host_port": 19090}},
+        raising=False,
+    )
+
+    settings = services.save_runtime_port_settings(dev_web_host_port=5180, prod_web_host_port=19090, project_root=project_root)
+
+    assert saved == [{"data_root": "/srv/biomodstack", "web_host_port": 19090, "dev_web_host_port": 5180}]
+    assert settings == {
+        "dev_web_host_port": 5180,
+        "prod_web_host_port": 19090,
+        "dev_url": "http://127.0.0.1:5180/",
+        "prod_url": "http://127.0.0.1:19090/bms/",
+    }
+
+
+def test_render_user_units_exports_configured_dev_frontend_port(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / "biomodstack"
+    monkeypatch.setattr(
+        services,
+        "install_profile_snapshot",
+        lambda profile=None, project_root=None: {"resolved": {"dev_web_host_port": 5179, "web_host_port": 18080}},
+        raising=False,
+    )
+
+    units = services.render_user_units(project_root, runtime_mode="dev")
+
+    assert "Environment=BMS_DEV_WEB_HOST_PORT=5179" in units[services.FRONTEND_SERVICE]
+
+
+def test_start_runtime_target_supports_dev_prod_and_both_without_collapsing_channels(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / "repo"
+    calls: list[str] = []
+    monkeypatch.setattr(services, "start_all", lambda project_root=None, runtime_mode=None: calls.append(runtime_mode or "missing"))
+
+    services.start_runtime_target("dev", project_root=project_root)
+    services.start_runtime_target("prod", project_root=project_root)
+    services.start_runtime_target("both", project_root=project_root)
+
+    assert calls == ["dev", "container", "container", "dev"]
 
 
 def test_runtime_descriptor_requires_all_expected_runtime_services_for_runtime_active(tmp_path: Path, monkeypatch) -> None:
@@ -192,6 +277,17 @@ def test_runtime_descriptor_requires_all_expected_runtime_services_for_runtime_a
     assert descriptor["runtime_active"] is False
 
 
+def test_service_is_active_degrades_to_false_when_systemctl_is_unavailable(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / "repo"
+
+    def raise_missing_systemctl(*args, **kwargs):
+        raise FileNotFoundError("systemctl")
+
+    monkeypatch.setattr(services, "run_systemctl", raise_missing_systemctl)
+
+    assert services.service_is_active(services.CORE_RUNTIME_SERVICE, project_root=project_root) is False
+
+
 
 def test_operator_runtime_mode_prefers_fully_active_dev_runtime(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / "repo"
@@ -213,7 +309,7 @@ def test_operator_runtime_mode_falls_back_to_default_when_no_runtime_is_fully_ac
 
     assert services.active_runtime_mode(project_root=project_root) is None
     assert services.operator_runtime_mode(project_root=project_root) == services.CONTAINER_RUNTIME_MODE
-    assert services.operator_frontend_url(project_root=project_root) == "http://127.0.0.1:5173/bms/"
+    assert services.operator_frontend_url(project_root=project_root) == "http://127.0.0.1:18080/bms/"
 
 
 
@@ -221,7 +317,7 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path) ->
     project_root = tmp_path / "biomodstack"
     units = services.render_user_units(project_root, runtime_mode="dev")
 
-    assert set(units) == {services.API_SERVICE, services.FRONTEND_SERVICE, services.TARGET_UNIT}
+    assert set(units) == {services.API_SERVICE, services.FRONTEND_SERVICE, services.DEV_TARGET_UNIT}
 
     api_unit = units[services.API_SERVICE]
     assert f"Environment=BMS_HOME={project_root}" in api_unit
@@ -230,17 +326,19 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path) ->
     assert "Environment=BMS_CPU_POWER_STRICT=0" in api_unit
     assert f"ExecStart={project_root / 'scripts' / 'run_biomodstack_api.sh'}" in api_unit
     assert f"StandardOutput=append:{services.API_LOG}" in api_unit
-    assert f"PartOf={services.TARGET_UNIT}" in api_unit
+    assert f"PartOf={services.DEV_TARGET_UNIT}" in api_unit
 
     frontend_unit = units[services.FRONTEND_SERVICE]
     assert "Environment=BMS_RUNTIME_MODE=dev" in frontend_unit
     assert "Environment=BMS_FRONTEND_MODE=dev" in frontend_unit
     assert f"ExecStart={project_root / 'scripts' / 'run_biomodstack_frontend.sh'}" in frontend_unit
     assert f"StandardOutput=append:{services.FRONTEND_LOG}" in frontend_unit
-    assert f"Wants={services.API_SERVICE}" in frontend_unit
+    assert f"PartOf={services.DEV_TARGET_UNIT}" in frontend_unit
+    assert f"Wants={services.API_SERVICE}" not in frontend_unit
 
-    target_unit = units[services.TARGET_UNIT]
-    assert f"Wants={services.API_SERVICE} {services.FRONTEND_SERVICE}" in target_unit
+    target_unit = units[services.DEV_TARGET_UNIT]
+    assert f"Wants={services.FRONTEND_SERVICE}" in target_unit
+    assert services.API_SERVICE not in target_unit
     assert "WantedBy=default.target" in target_unit
 
 
@@ -461,7 +559,7 @@ def test_start_all_container_mode_skips_legacy_cleanup_when_runtime_container_li
     assert calls == [
         ("ensure", "container"),
         ("systemctl", ("enable", services.TARGET_UNIT)),
-        ("systemctl", ("stop", services.API_SERVICE, services.FRONTEND_SERVICE)),
+        ("systemctl", ("stop", services.API_SERVICE)),
         ("systemctl", ("start", services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE, services.TARGET_UNIT)),
         ("wait", (services.WORKFLOW_ADAPTER_HEALTH_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
         ("wait", (services.API_HEALTH_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
@@ -469,27 +567,30 @@ def test_start_all_container_mode_skips_legacy_cleanup_when_runtime_container_li
     ]
 
 
-def test_start_all_dev_mode_waits_for_dev_frontend_url(monkeypatch, tmp_path: Path) -> None:
+def test_start_all_dev_mode_keeps_container_runtime_and_starts_only_dev_frontend_when_api_is_ready(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / "repo"
     calls: list[tuple[str, object]] = []
 
     monkeypatch.setattr(services, "ensure_user_units", lambda root, runtime_mode=None: calls.append(("ensure", runtime_mode)))
     monkeypatch.setattr(services, "cleanup_legacy_listener", lambda kind, project_root=None: calls.append(("cleanup", kind)))
+    monkeypatch.setattr(services, "url_is_ready", lambda url, timeout_seconds=2.0: url == services.API_HEALTH_URL)
+    monkeypatch.setattr(services, "service_is_active", lambda service_name, project_root=None: False)
     monkeypatch.setattr(
         services,
         "run_systemctl",
         lambda *args, **kwargs: calls.append(("systemctl", args)) or SimpleNamespace(returncode=0, stdout="", stderr=""),
     )
-    monkeypatch.setattr(
-        services,
-        "should_cleanup_legacy_listeners_before_start",
-        lambda runtime_mode=None, project_root=None: True,
-    )
     monkeypatch.setattr(services, "wait_for_http", lambda url, timeout_seconds=30.0: calls.append(("wait", url)))
 
     services.start_all(project_root=project_root, runtime_mode="dev")
 
-    assert calls[-1] == ("wait", "http://127.0.0.1:5173/")
+    assert calls == [
+        ("ensure", "dev"),
+        ("cleanup", "frontend"),
+        ("systemctl", ("start", services.FRONTEND_SERVICE, services.DEV_TARGET_UNIT)),
+        ("wait", services.API_HEALTH_URL),
+        ("wait", "http://127.0.0.1:5173/"),
+    ]
 
 
 def test_start_all_dev_mode_skips_legacy_cleanup_when_runtime_already_active(monkeypatch, tmp_path: Path) -> None:
@@ -518,9 +619,7 @@ def test_start_all_dev_mode_skips_legacy_cleanup_when_runtime_already_active(mon
 
     assert calls == [
         ("ensure", "dev"),
-        ("systemctl", ("enable", services.TARGET_UNIT)),
-        ("systemctl", ("stop", services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE)),
-        ("systemctl", ("start", services.API_SERVICE, services.FRONTEND_SERVICE, services.TARGET_UNIT)),
+        ("systemctl", ("start", services.FRONTEND_SERVICE, services.DEV_TARGET_UNIT)),
         ("wait", services.API_HEALTH_URL),
         ("wait", services.runtime_frontend_url("dev")),
     ]
@@ -536,7 +635,7 @@ def test_status_lines_keep_existing_container_human_output(monkeypatch, tmp_path
             "runtime_mode": "container",
             "runtime_active": True,
             "api_url": "http://127.0.0.1:8000",
-            "frontend_url": "http://127.0.0.1:5173/bms/",
+            "frontend_url": "http://127.0.0.1:18080/bms/",
             "health": {"adapter_ready": True, "api_ready": True, "frontend_ready": False},
             "logs": [
                 {"id": "workflow-adapter", "label": "Workflow adapter log", "path": str(services.WORKFLOW_ADAPTER_LOG)},
@@ -551,7 +650,7 @@ def test_status_lines_keep_existing_container_human_output(monkeypatch, tmp_path
         f"Runtime: active ({services.CORE_RUNTIME_SERVICE})",
         f"Workflow adapter: ready ({services.WORKFLOW_ADAPTER_HEALTH_URL})",
         f"API: ready ({services.API_HEALTH_URL})",
-        "Frontend: not ready (http://127.0.0.1:5173/bms/)",
+        "Frontend: not ready (http://127.0.0.1:18080/bms/)",
         f"Workflow adapter log: {services.WORKFLOW_ADAPTER_LOG}",
         f"Runtime log: {services.CORE_RUNTIME_LOG}",
     ]
@@ -585,8 +684,8 @@ def test_status_lines_do_not_mutate_runtime_state(monkeypatch, tmp_path: Path) -
     lines = services.status_lines(project_root=project_root, runtime_mode="dev")
 
     assert lines == [
-        f"API: active ({services.API_SERVICE})",
-        f"Frontend: inactive ({services.FRONTEND_SERVICE})",
+        f"API: ready ({services.API_HEALTH_URL})",
+        f"Frontend: inactive ({services.FRONTEND_SERVICE}; http://127.0.0.1:5173/)",
         f"API log: {services.API_LOG}",
         f"Frontend log: {services.FRONTEND_LOG}",
     ]
@@ -627,7 +726,7 @@ def test_start_all_container_mode_skips_legacy_cleanup_when_runtime_already_acti
     assert calls == [
         ("ensure", "container"),
         ("systemctl", ("enable", services.TARGET_UNIT)),
-        ("systemctl", ("stop", services.API_SERVICE, services.FRONTEND_SERVICE)),
+        ("systemctl", ("stop", services.API_SERVICE)),
         ("systemctl", ("start", services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE, services.TARGET_UNIT)),
         ("wait", (services.WORKFLOW_ADAPTER_HEALTH_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
         ("wait", (services.API_HEALTH_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
@@ -666,9 +765,8 @@ def test_start_all_container_mode_cleans_legacy_listeners_before_first_start(mon
     assert calls == [
         ("ensure", "container"),
         ("systemctl", ("enable", services.TARGET_UNIT)),
-        ("systemctl", ("stop", services.API_SERVICE, services.FRONTEND_SERVICE)),
+        ("systemctl", ("stop", services.API_SERVICE)),
         ("cleanup", "api"),
-        ("cleanup", "frontend"),
         ("systemctl", ("start", services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE, services.TARGET_UNIT)),
         ("wait", (services.WORKFLOW_ADAPTER_HEALTH_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
         ("wait", (services.API_HEALTH_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
@@ -712,13 +810,11 @@ def test_restart_all_container_mode_enables_target_before_restart(monkeypatch, t
             (
                 "stop",
                 services.API_SERVICE,
-                services.FRONTEND_SERVICE,
                 services.WORKFLOW_ADAPTER_SERVICE,
                 services.CORE_RUNTIME_SERVICE,
             ),
         ),
         ("cleanup", "api"),
-        ("cleanup", "frontend"),
         ("systemctl", ("start", services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE, services.TARGET_UNIT)),
         ("wait", (services.WORKFLOW_ADAPTER_HEALTH_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
         ("wait", (services.API_HEALTH_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
@@ -750,7 +846,7 @@ def test_stop_all_container_mode_stops_both_runtime_flavors(monkeypatch, tmp_pat
 
     assert calls == [
         ("ensure", "container"),
-        ("systemctl", ("stop", services.TARGET_UNIT)),
+        ("systemctl", ("stop", services.TARGET_UNIT, services.DEV_TARGET_UNIT)),
         (
             "systemctl",
             (
