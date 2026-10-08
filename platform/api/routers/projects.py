@@ -1051,6 +1051,7 @@ def _project_link_json(edge: ExperimentLineageEdge) -> dict[str, Any]:
 @router.get("/{project_id}/ngs-molbio-links")
 async def list_ngs_molbio_project_links(
     project_id: str,
+    limit: int = Query(default=100, ge=1, le=100),
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     project = await _project(session, project_id)
@@ -1069,6 +1070,7 @@ async def list_ngs_molbio_project_links(
                 ExperimentLineageEdge.edge_key.like("ngs-molbio-project-link:%"),
             )
             .order_by(ExperimentLineageEdge.created_at.desc(), ExperimentLineageEdge.id.desc())
+            .limit(limit)
         )
     ).scalars().all()
     return {

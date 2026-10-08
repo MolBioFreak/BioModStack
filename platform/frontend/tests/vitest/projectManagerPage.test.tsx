@@ -4,6 +4,11 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const nativeApi = vi.hoisted(() => ({
+    fetchMolBioNgsDomainState: vi.fn(),
+    fetchProjectHub: vi.fn(),
+}));
+
 const managerApi = vi.hoisted(() => ({
     listProjects: vi.fn(),
     searchProjects: vi.fn(),
@@ -34,6 +39,11 @@ const managerApi = vi.hoisted(() => ({
     listNgsMolBioProjectLinks: vi.fn(),
     projectManagerErrorMessage: vi.fn((error: unknown) => error instanceof Error ? error.message : String(error)),
     isPermissionError: vi.fn(() => false),
+}));
+
+vi.mock('../../src/lib/api', async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    ...nativeApi,
 }));
 
 vi.mock('../../src/lib/projectManager', async (importOriginal) => ({
@@ -231,6 +241,7 @@ async function renderAt(initialEntry: string) {
 }
 
 beforeEach(() => {
+    Object.values(nativeApi).forEach((mock) => mock.mockReset());
     Object.values(managerApi).forEach((mock) => mock.mockReset());
     managerApi.projectManagerErrorMessage.mockImplementation((error: unknown) => error instanceof Error ? error.message : String(error));
     managerApi.isPermissionError.mockReturnValue(false);
@@ -292,6 +303,81 @@ describe('ProjectManager', () => {
         await waitUntil(() => expect(container.textContent).toContain('Linked'));
         expect(managerApi.listNgsMolBioProjectLinks).toHaveBeenCalledWith('project-1');
     });
+    it('renders standalone NGS/MolBio Projects as DNA-sequence-centered current workspaces', async () => {
+        managerApi.listNgsMolBioProjectLinks.mockResolvedValue([]);
+        managerApi.getProjectSummary.mockImplementation(() => {
+            const value = summaryFor('domain_experiment:domain-1');
+            value.project.project_scope = 'ngs_molbio_local';
+            value.project.name = 'Syenex New Plasmids';
+            value.tree.nodes[0].label = 'Syenex New Plasmids';
+            return Promise.resolve(normalizeProjectManagerReadModel(value));
+        });
+        nativeApi.fetchMolBioNgsDomainState.mockResolvedValue({
+            current_state_revision_id: 'state-current',
+            head_generation: 1,
+        });
+        nativeApi.fetchProjectHub.mockResolvedValue({
+            schema: 'bms.project-hub.v1',
+            project: {
+                id: 'project-1', name: 'Syenex New Plasmids', objective: 'Verify DNA sequences', lifecycle_state: 'active',
+                created_at: '2026-08-01T00:00:00Z', plasmid_count: 1, settings_href: '/projects/project-1',
+                add_plasmid_href: '/designer?workspace_id=project-1&action=add-plasmid',
+            },
+            identity: {
+                workspace_id: 'project-1', global_experiment_id: 'global-1', domain_experiment_id: 'domain-1',
+                selected_state_revision_id: 'state-current', current_state_revision_id: 'state-current', state_head_generation: 1,
+                global_domain_revision_id: 'domain-revision-1', membership_graph_sha256: 'a'.repeat(64),
+                binding_status: 'acknowledged', adapter_status: 'available',
+            },
+            plasmids: [{
+                sequence_id: 'sequence-pl1480', revision_id: 'revision-3', receipt_id: 'receipt-pl1480',
+                receipt_sha256: 'b'.repeat(64), content_digest: 'c'.repeat(64), current_content_sha256: 'd'.repeat(64), source_store_id: 'molbio',
+                schema_name: 'bms.molecular-revision-receipt.v1', revision_number: 3, name: 'PL1480',
+                description: 'Current editable DNA sequence', availability: 'available', unavailable_reason: null,
+                length_bp: 5512, gc_percent: 48.2, feature_count: 17, feature_labels: ['CMV promoter'],
+                cmv_promoter: true, neor_kanr: true, replication_origin_count: 1, saved_experiment_count: 1,
+                molecule_type: 'dna', topology: 'circular', organism_host_context: null, project_tags: [], project_notes: '',
+                reopen_href: '/designer?workspace_id=project-1&molbio_sequence_id=sequence-pl1480', map_segments: [],
+            }],
+            sequence_data: {
+                items: [{ id: 'run-1', plasmid_sequence_id: 'sequence-pl1480', plasmid_name: 'PL1480', kind: 'run', title: 'ONT verification', summary: 'Clone sequencing', status: 'ready', created_at: '2026-08-28T00:00:00Z', reopen_href: '/ngs?job_id=run-1' }],
+                import_href: '/ngs?action=import-ont', launcher_href: '/ngs?section=sequence-data',
+            },
+            experiments: [{
+                id: 'digest-1', persistence: 'saved', kind: 'restriction_digest', plasmid_sequence_id: 'sequence-pl1480',
+                plasmid_sequence_ids: ['sequence-pl1480'], input_sequence_ids: ['sequence-pl1480'], output_sequence_ids: [],
+                plasmid_name: 'PL1480', title: 'EcoRI digest', status: 'saved', created_at: '2026-08-28T00:00:00Z', reopen_href: '/designer?molbio_operation_id=digest-1',
+            }],
+            results: [{
+                id: 'result-1', plasmid_sequence_id: 'sequence-pl1480', plasmid_name: 'PL1480', type: 'Clone assessment',
+                status: 'ready', owner: 'run-1', created_at: '2026-08-28T00:00:00Z', summary: 'Sequence matches', reopen_href: '/ngs?job_id=run-1',
+            }, {
+                id: 'result-unassigned', plasmid_sequence_id: '', plasmid_name: 'Unassigned sequence', type: 'Unassigned QC result',
+                status: 'ready', owner: 'run-2', created_at: '2026-08-28T00:00:00Z', summary: null, reopen_href: '/ngs?job_id=run-2',
+            }],
+            activity: [],
+        });
+
+        await renderAt('/projects/project-1?focus=global-1&selected=domain_experiment%3Adomain-1');
+        await waitUntil(() => expect(container.textContent).toContain('DNA sequence workspace'));
+
+        expect(container.textContent).toContain('1 current DNA sequences');
+        expect(container.textContent).toContain('A sequence can be a plasmid');
+        expect(container.textContent).toContain('Latest editable · Revision 3');
+        expect(container.textContent).toContain('ONT verification');
+        expect(container.textContent).toContain('EcoRI digest');
+        expect(container.textContent).toContain('Clone assessment');
+        expect(container.textContent).toContain('Unassigned Project records');
+        expect(container.textContent).toContain('Unassigned QC result');
+        expect(container.textContent).not.toContain('relationship map');
+        expect(container.textContent).not.toContain('Hide tree');
+        expect(container.textContent).not.toContain('Hide inspector');
+        expect(managerApi.listNgsMolBioProjectLinks).toHaveBeenCalledWith('project-1', 1);
+        const openLatest = Array.from(container.querySelectorAll<HTMLAnchorElement>('a')).find((anchor) => anchor.textContent?.trim() === 'Open latest');
+        expect(openLatest?.getAttribute('href')).toContain('molbio_sequence_id=sequence-pl1480');
+        expect(openLatest?.getAttribute('href')).not.toContain('molbio_revision_id');
+    });
+
     it('offers optional local-to-Global Project linking in the shared Add current work flow', async () => {
         managerApi.getProjectSummary.mockImplementation(() => {
             const value = summaryFor('project:project-1');

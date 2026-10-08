@@ -196,7 +196,7 @@ async def test_project_hub_read_model_is_exact_linked_typed_and_bulk_free(hub_st
     assert "state_revision_id=state-current" in reopen_href
     assert "section=plasmids" in reopen_href
     assert "molbio_sequence_id=sequence-pl1480" in reopen_href
-    assert f"molbio_revision_id={revision.id}" in reopen_href
+    assert "molbio_revision_id=" not in reopen_href
     assert payload["plasmids"][0]["saved_experiment_count"] == 2
     assert {item["title"] for item in payload["experiments"]} == {"Saved alignment", "Saved PCR"}
     assert all(item["plasmid_sequence_ids"] == ["sequence-pl1480"] for item in payload["experiments"])
@@ -207,6 +207,112 @@ async def test_project_hub_read_model_is_exact_linked_typed_and_bulk_free(hub_st
     for forbidden in (b"aaccggtt", b"fastq", b"pod5", b"blow5", b"reference_aligned", b"query_aligned"):
         assert forbidden not in encoded
     assert len(response.content) < 256 * 1024
+
+
+@pytest.mark.asyncio
+async def test_project_hub_current_view_resolves_latest_editable_molecular_revision(hub_stores):
+    experiment_factory, native_factory, molbio_factory, project, experiment, domain, attached_revision = hub_stores
+    async with molbio_factory() as session:
+        sequence = await session.get(NucleotideSequence, "sequence-pl1480")
+        assert sequence is not None
+        sequence.description = "Latest editable content"
+        sequence.version = 2
+        latest_revision = await record_sequence_revision(session, sequence, change_kind="edit")
+        await session.commit()
+
+    app = _app(experiment_factory, native_factory, molbio_factory)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            f"/api/projects/{project.id}/experiments/{experiment.id}/domains/{domain.id}/project-hub",
+            params={"state_revision_id": "state-current"},
+        )
+
+    assert response.status_code == 200, response.text
+    plasmid = response.json()["plasmids"][0]
+    assert plasmid["revision_id"] == latest_revision.id
+    assert plasmid["revision_id"] != attached_revision.id
+    assert plasmid["revision_number"] == 2
+    assert plasmid["description"] == "Latest editable content"
+    assert plasmid["current_content_sha256"] == latest_revision.content_sha256
+    assert plasmid["content_digest"] == attached_revision.content_sha256
+    assert "molbio_revision_id=" not in plasmid["reopen_href"]
+    assert "molbio_sequence_id=sequence-pl1480" in plasmid["reopen_href"]
+
+
+@pytest.mark.asyncio
+async def test_project_hub_classifies_saved_assembly_input_and_output_constructs(hub_stores):
+    experiment_factory, native_factory, molbio_factory, project, experiment, domain, source_revision = hub_stores
+    async with molbio_factory() as session:
+        product = NucleotideSequence(
+            id="sequence-gibson-product", name="Gibson product", description="Saved assembly product",
+            sequence="AACCGGTTAACC", sequence_type="dna", molecule_strandedness="double",
+            molecule_orientation="forward", is_circular=True, length=12, features=[], primers=[],
+            analysis_tracks=[], organism=None, version=1, gc_content=50.0,
+        )
+        session.add(product)
+        product_revision = await record_sequence_revision(session, product, change_kind="create")
+        operation = await create_operation(
+            session, operation_kind="gibson", implementation="test.assembly",
+            parameters={"summary": {"title": "Saved Gibson assembly"}},
+            provenance={"save_contract": "explicit"}, idempotency_key="gibson-op",
+            request_fingerprint="f" * 64,
+        )
+        await add_operation_edges(
+            session, operation,
+            input_revisions=[(source_revision, "fragment", None)],
+            output_revisions=[(product_revision, "product", None)],
+        )
+        await session.commit()
+
+    async with native_factory() as native_session, molbio_factory() as session:
+        resolved = await resolve_molecular_revision_receipt(
+            session, sequence_id=product.id, revision_id=product_revision.id,
+        )
+        member_receipt = await persist_member_receipt(native_session, resolved)
+        native_session.add(MolBioNGSDomainStateMember(
+            state_revision_id="state-current", receipt_id=member_receipt.receipt_id,
+            role="molecular_expected_construct", ordinal=1,
+        ))
+        await native_session.commit()
+
+    acknowledgement = {
+        "reopen_uri": f"/designer?molbio_operation_id={operation.id}",
+        "metadata": {"title": "Saved Gibson assembly"},
+    }
+    async with experiment_factory() as session:
+        session.add(ExperimentResource(
+            id="gibson-receipt", kind="external_entity_receipt",
+            workspace_id=project.id, lifecycle_owner_id=project.id,
+        ))
+        await session.flush()
+        session.add(ExperimentExternalEntityReceipt(
+            id="gibson-receipt", workspace_id=project.id, resource_id="gibson-receipt",
+            store_id="molbio", entity_kind="molecular_operation", entity_id=operation.id,
+            generation_or_revision="1", content_digest="9" * 64, availability="available",
+            verification_authority="test", acknowledgement_json=_canonical(acknowledgement),
+        ))
+        session.add(ExperimentLineageEdge(
+            id="gibson-edge", workspace_id=project.id, source_resource_id=domain.id,
+            target_resource_id="gibson-receipt", edge_mode="attached", edge_key="gibson",
+        ))
+        await session.commit()
+
+    app = _app(experiment_factory, native_factory, molbio_factory)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            f"/api/projects/{project.id}/experiments/{experiment.id}/domains/{domain.id}/project-hub",
+            params={"state_revision_id": "state-current"},
+        )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assembly = next(item for item in payload["experiments"] if item["id"] == operation.id)
+    assert assembly["kind"] == "gibson"
+    assert assembly["input_sequence_ids"] == ["sequence-pl1480"]
+    assert assembly["output_sequence_ids"] == ["sequence-gibson-product"]
+    assert assembly["plasmid_sequence_ids"] == ["sequence-gibson-product", "sequence-pl1480"]
+    product_summary = next(item for item in payload["plasmids"] if item["sequence_id"] == product.id)
+    assert product_summary["saved_experiment_count"] == 1
 
 
 @pytest.mark.asyncio

@@ -28,6 +28,7 @@ import {
 import { ProjectAttachmentDialog } from '../components/project-manager/ProjectAttachmentDialog';
 import { ManagerDialog, type ManagerDialogMode } from '../components/project-manager/ManagerDialog';
 import { ProjectInspector } from '../components/project-manager/ProjectInspector';
+import { DNASequenceProjectWorkspace } from '../components/project-manager/DNASequenceProjectWorkspace';
 import { ProjectTree } from '../components/project-manager/ProjectTree';
 import { RelationshipMap } from '../components/project-manager/RelationshipMap';
 import { RunPanel } from '../components/project-manager/RunPanel';
@@ -135,44 +136,17 @@ function NativeProjectDataPanel({ summary, stateRevisionId }: { summary: Project
 
     if (!isNativeProject) return null;
     if (!context) {
-        return <section role="status" className="border-b border-warning/40 bg-warning/10 px-4 py-3 text-xs text-content-secondary"><span className="font-semibold text-warning">Plasmid workspace unavailable.</span> Select the Project's NGS/MolBio Domain Experiment to restore its exact workspace context.</section>;
+        return <section role="status" className="border-b border-warning/40 bg-warning/10 px-4 py-3 text-xs text-content-secondary"><span className="font-semibold text-warning">DNA sequence workspace unavailable.</span> Select the Project's NGS/MolBio Domain Experiment to restore its exact workspace context.</section>;
     }
     if (stateQuery.isPending || (selectedStateRevisionId !== null && projectHubQuery.isPending)) {
-        return <section aria-busy="true" className="border-b border-border-primary bg-surface-secondary px-4 py-3 text-xs text-content-secondary">Loading native plasmid Project data…</section>;
+        return <section aria-busy="true" className="border-b border-border-primary bg-surface-secondary px-4 py-3 text-xs text-content-secondary">Loading Project DNA sequences…</section>;
     }
     if (stateQuery.isError || projectHubQuery.isError || !projectHubQuery.data) {
-        return <section role="alert" className="border-b border-error/40 bg-error/10 px-4 py-3 text-xs text-content-secondary"><span className="font-semibold text-error">Native plasmid Project data could not be loaded.</span> The relationship map below lists external attachments only.</section>;
+        return <section role="alert" className="border-b border-error/40 bg-error/10 px-4 py-3 text-xs text-content-secondary"><span className="font-semibold text-error">Project DNA sequences could not be loaded.</span> Retry after the NGS/MolBio workspace is available.</section>;
     }
 
     const model = projectHubQuery.data;
-    const workspaceParams = new URLSearchParams({
-        workspace_id: model.identity.workspace_id,
-        global_experiment_id: model.identity.global_experiment_id,
-        domain_experiment_id: model.identity.domain_experiment_id,
-        state_revision_id: model.identity.selected_state_revision_id,
-        section: 'plasmids',
-    });
-
-    return (
-        <section aria-label="Native plasmid Project data" className="border-b border-border-primary bg-surface-secondary px-4 py-3">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">Project plasmid data</p>
-                    <h2 className="mt-1 text-sm font-semibold text-content">{model.project.plasmid_count} plasmids in {model.project.name}</h2>
-                    <p className="mt-1 text-xs text-content-secondary">These records are stored in the native NGS/MolBio workspace. External attachments appear separately in the relationship map.</p>
-                </div>
-                <Link to={`/designer?${workspaceParams.toString()}`} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white outline-none focus:ring-2 focus:ring-accent">Open plasmid workspace</Link>
-            </div>
-            <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                {model.plasmids.map((plasmid) => (
-                    <Link key={`${plasmid.sequence_id}:${plasmid.revision_id}`} to={plasmid.reopen_href} className="rounded-lg border border-border-primary bg-surface px-3 py-2 outline-none hover:border-accent focus:ring-2 focus:ring-accent">
-                        <span className="block truncate text-xs font-semibold text-content">{plasmid.name}</span>
-                        <span className="mt-1 block text-[10px] text-content-muted">{plasmid.length_bp.toLocaleString()} bp · {plasmid.feature_count} features · Revision {plasmid.revision_number}</span>
-                    </Link>
-                ))}
-            </div>
-        </section>
-    );
+    return <DNASequenceProjectWorkspace model={model} />;
 }
 
 function ProjectManagerErrorState({ error, onRetry, permission = false }: { error: unknown; onRetry: () => void; permission?: boolean }) {
@@ -394,6 +368,11 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
     const rawSummary = summaryQuery.isPlaceholderData
         ? fallbackQuery.data
         : summaryQuery.data ?? fallbackQuery.data;
+    const globalLinksQuery = useQuery({
+        queryKey: ['project-manager', 'local-project-links', projectId, 'existence'],
+        queryFn: () => listNgsMolBioProjectLinks(projectId, 1),
+        enabled: rawSummary?.project.project_scope === 'ngs_molbio_local',
+    });
     const projectLevelError = summaryQuery.isError && !invalidSelection;
     const mapContextKey = `${projectId}:${focusId ?? 'default'}`;
     const selectedDomainScope = selectedNodeKey?.startsWith('virtual_folder:')
@@ -851,8 +830,20 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
         );
     }
 
+    if (summary.project.project_scope === 'ngs_molbio_local' && globalLinksQuery.isPending) {
+        return <div aria-busy="true" className="grid min-h-[32rem] place-items-center p-6 text-sm text-content-secondary">Loading Project relationship state…</div>;
+    }
+    if (summary.project.project_scope === 'ngs_molbio_local' && globalLinksQuery.isError) {
+        return <ProjectManagerErrorState error={globalLinksQuery.error} onRetry={() => void globalLinksQuery.refetch()} />;
+    }
+
     const selectionUnavailable = invalidSelection ? projectManagerErrorMessage(summaryQuery.error) : null;
     const busy = summaryQuery.isFetching || fallbackQuery.isFetching;
+    const isStandaloneNativeProject = summary.project.project_scope === 'ngs_molbio_local'
+        && globalLinksQuery.isSuccess
+        && globalLinksQuery.data.length === 0;
+    const projectTreeVisible = treeOpen && !isStandaloneNativeProject;
+    const projectInspectorVisible = inspectorOpen && !isStandaloneNativeProject;
     const folderKind = folderKindFromNodeKey(selectedNodeKey);
     const loadMoreFolder = (folder: FolderKind) => {
         if (folder === 'plans') setMapCursor(summary.map.next_cursor ?? undefined);
@@ -883,11 +874,11 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
         window.addEventListener('pointermove', onMove);
         window.addEventListener('pointerup', onUp);
     };
-    const gridClass = treeOpen
-        ? inspectorOpen
+    const gridClass = projectTreeVisible
+        ? projectInspectorVisible
             ? 'md:grid-cols-[var(--tree-width)_0.5rem_minmax(0,1fr)] xl:grid-cols-[var(--tree-width)_0.5rem_minmax(0,1fr)_0.5rem_var(--inspector-width)]'
             : 'md:grid-cols-[var(--tree-width)_0.5rem_minmax(0,1fr)]'
-        : inspectorOpen
+        : projectInspectorVisible
             ? 'xl:grid-cols-[minmax(0,1fr)_0.5rem_var(--inspector-width)]'
             : 'grid-cols-1';
 
@@ -903,10 +894,10 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                     {busy && <span role="status" className="text-[10px] font-medium text-accent">Refreshing…</span>}
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                    <button type="button" onClick={() => setAttachOpen(true)} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white focus:ring-2 focus:ring-accent">Attach existing record</button>
-                    <button type="button" onClick={() => setTreeOpen((value) => !value)} className="rounded-lg border border-border-primary px-3 py-2 text-xs text-content-secondary focus:ring-2 focus:ring-accent">{treeOpen ? 'Hide tree' : 'Show tree'}</button>
-                    <button type="button" onClick={() => setInspectorOpen((value) => !value)} className="rounded-lg border border-border-primary px-3 py-2 text-xs text-content-secondary focus:ring-2 focus:ring-accent">{inspectorOpen ? 'Hide inspector' : 'Show inspector'}</button>
-                    {summary.allowed_actions.includes('create_global_experiment') && <button type="button" onClick={() => setDialogMode('create_global')} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white focus:ring-2 focus:ring-accent">New Global Experiment</button>}
+                    <button type="button" onClick={() => setAttachOpen(true)} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white focus:ring-2 focus:ring-accent">{isStandaloneNativeProject ? 'Link Project or attach record' : 'Attach existing record'}</button>
+                    {!isStandaloneNativeProject && <button type="button" onClick={() => setTreeOpen((value) => !value)} className="rounded-lg border border-border-primary px-3 py-2 text-xs text-content-secondary focus:ring-2 focus:ring-accent">{treeOpen ? 'Hide tree' : 'Show tree'}</button>}
+                    {!isStandaloneNativeProject && <button type="button" onClick={() => setInspectorOpen((value) => !value)} className="rounded-lg border border-border-primary px-3 py-2 text-xs text-content-secondary focus:ring-2 focus:ring-accent">{inspectorOpen ? 'Hide inspector' : 'Show inspector'}</button>}
+                    {!isStandaloneNativeProject && summary.allowed_actions.includes('create_global_experiment') && <button type="button" onClick={() => setDialogMode('create_global')} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white focus:ring-2 focus:ring-accent">New Global Experiment</button>}
                 </div>
             </header>
 
@@ -924,7 +915,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                 className={`relative grid min-h-0 flex-1 grid-cols-1 ${gridClass}`}
                 style={{ '--tree-width': `${treeWidth}px`, '--inspector-width': `${inspectorWidth}px` } as CSSProperties}
             >
-                {treeOpen && (
+                {projectTreeVisible && (
                     <div className="fixed inset-y-0 left-0 z-[70] w-[min(88vw,25rem)] shadow-2xl md:static md:z-auto md:w-auto md:shadow-none">
                         <ProjectTree
                             nodes={summary.tree.nodes}
@@ -937,22 +928,26 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                         />
                     </div>
                 )}
-                {treeOpen && <div role="separator" aria-orientation="vertical" aria-label="Resize Project tree" tabIndex={0} onPointerDown={(event) => startRailResize('tree', event)} onKeyDown={(event) => { if (event.key === 'ArrowLeft') setTreeWidth((value) => Math.max(208, value - 16)); if (event.key === 'ArrowRight') setTreeWidth((value) => Math.min(400, value + 16)); }} className="hidden cursor-col-resize bg-border-primary outline-none focus:bg-accent md:block" />}
+                {projectTreeVisible && <div role="separator" aria-orientation="vertical" aria-label="Resize Project tree" tabIndex={0} onPointerDown={(event) => startRailResize('tree', event)} onKeyDown={(event) => { if (event.key === 'ArrowLeft') setTreeWidth((value) => Math.max(208, value - 16)); if (event.key === 'ArrowRight') setTreeWidth((value) => Math.min(400, value + 16)); }} className="hidden cursor-col-resize bg-border-primary outline-none focus:bg-accent md:block" />}
                 <main className="flex min-h-0 min-w-0 flex-col">
                     <NativeProjectDataPanel summary={summary} stateRevisionId={stateRevisionId} />
-                    <RelationshipMap
-                        summary={summary}
-                        selectedNodeKey={summary.selection.node_key}
-                        onSelect={(node: ProjectMapNode) => setSelection(node.node_key, node.node_type, typeof node.canonical_identity.entity_id === 'string' ? node.canonical_identity.entity_id : null)}
-                        onLoadMore={summary.map.next_cursor ? () => setMapCursor(summary.map.next_cursor ?? undefined) : undefined}
-                    />
-                    <div className="p-3">
-                        <VirtualFolderPanel folder={folderKind} summary={summary} onLoadMore={loadMoreFolder} onSelectRecord={selectFolderRecord} loading={busy} />
-                    </div>
-                    <RunPanel runs={summary.runs.items} selectedNodeKey={summary.selection.node_key} onSelect={inspectExecution} onAction={(action, run) => runActionMutation.mutate({ action, run })} onLoadMore={summary.runs.next_cursor ? () => setRunCursor(summary.runs.next_cursor ?? undefined) : undefined} />
+                    {!isStandaloneNativeProject && (
+                        <>
+                            <RelationshipMap
+                                summary={summary}
+                                selectedNodeKey={summary.selection.node_key}
+                                onSelect={(node: ProjectMapNode) => setSelection(node.node_key, node.node_type, typeof node.canonical_identity.entity_id === 'string' ? node.canonical_identity.entity_id : null)}
+                                onLoadMore={summary.map.next_cursor ? () => setMapCursor(summary.map.next_cursor ?? undefined) : undefined}
+                            />
+                            <div className="p-3">
+                                <VirtualFolderPanel folder={folderKind} summary={summary} onLoadMore={loadMoreFolder} onSelectRecord={selectFolderRecord} loading={busy} />
+                            </div>
+                            <RunPanel runs={summary.runs.items} selectedNodeKey={summary.selection.node_key} onSelect={inspectExecution} onAction={(action, run) => runActionMutation.mutate({ action, run })} onLoadMore={summary.runs.next_cursor ? () => setRunCursor(summary.runs.next_cursor ?? undefined) : undefined} />
+                        </>
+                    )}
                 </main>
-                {inspectorOpen && <div role="separator" aria-orientation="vertical" aria-label="Resize Project inspector" tabIndex={0} onPointerDown={(event) => startRailResize('inspector', event)} onKeyDown={(event) => { if (event.key === 'ArrowLeft') setInspectorWidth((value) => Math.min(520, value + 16)); if (event.key === 'ArrowRight') setInspectorWidth((value) => Math.max(288, value - 16)); }} className="hidden cursor-col-resize bg-border-primary outline-none focus:bg-accent xl:block" />}
-                {inspectorOpen && (
+                {projectInspectorVisible && <div role="separator" aria-orientation="vertical" aria-label="Resize Project inspector" tabIndex={0} onPointerDown={(event) => startRailResize('inspector', event)} onKeyDown={(event) => { if (event.key === 'ArrowLeft') setInspectorWidth((value) => Math.min(520, value + 16)); if (event.key === 'ArrowRight') setInspectorWidth((value) => Math.max(288, value - 16)); }} className="hidden cursor-col-resize bg-border-primary outline-none focus:bg-accent xl:block" />}
+                {projectInspectorVisible && (
                     <div className="fixed inset-y-0 right-0 z-[70] w-[min(100vw,32rem)] shadow-2xl xl:static xl:z-auto xl:w-auto xl:shadow-none">
                         <ProjectInspector
                             summary={summary}

@@ -61,7 +61,7 @@ import {
     type NucleotideSequenceCreate,
 } from '../../lib/api';
 import { useGlobalExperimentContext } from '../experiments/GlobalExperimentContext';
-import { projectHubPlasmidsToConstructShelf } from './utils/projectConstructShelf';
+import { projectHubDNASequencesToConstructShelf } from './utils/projectConstructShelf';
 import type {
     AnalysisTrack,
     SequenceData,
@@ -825,7 +825,7 @@ export function MolBioToolkitV2() {
     const loadLibrary = useCallback(async () => {
         if (!showAllConstructs && workspaceId && globalExperimentId && domainExperimentId && stateRevisionId) {
             const model = await fetchProjectHub(workspaceId, globalExperimentId, domainExperimentId, stateRevisionId);
-            setSequences(projectHubPlasmidsToConstructShelf(model));
+            setSequences(projectHubDNASequencesToConstructShelf(model));
             return;
         }
         const seqs = await listSequences({
