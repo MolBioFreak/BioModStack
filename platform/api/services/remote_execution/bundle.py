@@ -500,6 +500,14 @@ def compile_remote_dependencies(model_id: str, mode: str, command: list[str]) ->
         if value.startswith("--"):
             raw = command[index + 1] if index + 1 < len(command) and not command[index + 1].startswith("--") else True
             params[value[2:]] = {"true": True, "false": False}.get(raw, raw) if isinstance(raw, str) else raw
+    if ('protein_design.nf' in selected_workflows
+            and model_id.lower() not in {'boltzgen', 'boltzgen_child'}
+            and params.get('diffusion_method') != 'boltzgen'):
+        raise RemoteBundleError(
+            'Native protein-design components are implemented, but this non-BoltzGen '
+            'parent still lacks a complete remote scientific-runtime dependency binding. '
+            'No fallback or partial scientific execution was performed.'
+        )
     from services.ont_ngs_contract import CANONICAL_ONT_WORKFLOWS, resolve_ont_workflow_alias
     if resolve_ont_workflow_alias(model_id) in CANONICAL_ONT_WORKFLOWS:
         # Dorado preflight rejects symlink runtime_sif. Pin the supported typed
