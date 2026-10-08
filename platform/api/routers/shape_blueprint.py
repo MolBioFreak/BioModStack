@@ -71,6 +71,19 @@ def _summary(row: ShapeDesignGeometry | AdmittedGeometry) -> dict[str, object]:
     }
 
 
+def _current_summary_or_conflict(row: ShapeDesignGeometry) -> dict[str, object]:
+    try:
+        return _summary(row)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "legacy_shape_geometry",
+                "message": "Shape geometry predates the current immutable provenance contract",
+            },
+        ) from exc
+
+
 @router.post("/geometries", status_code=status.HTTP_201_CREATED)
 async def upload_geometry(
     file: UploadFile = File(...),
@@ -117,7 +130,15 @@ async def list_geometries(session: AsyncSession = Depends(get_session)):
             ).limit(100)
         )
     ).scalars().all()
-    return {"geometries": [_summary(row) for row in rows]}
+    geometries: list[dict[str, object]] = []
+    for row in rows:
+        try:
+            geometries.append(_summary(row))
+        except (KeyError, TypeError, ValueError):
+            # Legacy rows without the complete immutable provenance contract
+            # must not be selectable as if their units or hashes were known.
+            continue
+    return {"geometries": geometries}
 
 
 async def _geometry_or_404(session: AsyncSession, geometry_id: str) -> ShapeDesignGeometry:
@@ -129,7 +150,7 @@ async def _geometry_or_404(session: AsyncSession, geometry_id: str) -> ShapeDesi
 
 @router.get("/geometries/{geometry_id}")
 async def get_geometry(geometry_id: str, session: AsyncSession = Depends(get_session)):
-    return _summary(await _geometry_or_404(session, geometry_id))
+    return _current_summary_or_conflict(await _geometry_or_404(session, geometry_id))
 
 
 @router.get("/geometries/{geometry_id}/preview.obj")

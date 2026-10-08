@@ -469,6 +469,21 @@ async def test_shape_geometry_http_upload_list_and_preview(tmp_path: Path, monke
             assert listed.status_code == 200
             assert [row["geometry_id"] for row in listed.json()["geometries"]] == [body["geometry_id"]]
 
+            async with factory() as session:
+                legacy = await session.get(database.ShapeDesignGeometry, body["geometry_id"])
+                assert legacy is not None
+                legacy_manifest = dict(legacy.manifest)
+                legacy_manifest.pop("source_unit")
+                legacy.manifest = legacy_manifest
+                await session.commit()
+
+            legacy_list = await client.get("/api/shape-blueprint/geometries")
+            assert legacy_list.status_code == 200
+            assert legacy_list.json() == {"geometries": []}
+            legacy_get = await client.get(f"/api/shape-blueprint/geometries/{body['geometry_id']}")
+            assert legacy_get.status_code == 409
+            assert legacy_get.json()["detail"]["code"] == "legacy_shape_geometry"
+
             preview = await client.get(f"/api/shape-blueprint/geometries/{body['geometry_id']}/preview.obj")
             assert preview.status_code == 200
             assert preview.content.startswith(b"# bms_shape_canonical_obj_v1")
