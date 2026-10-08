@@ -10,7 +10,7 @@ process CanonicalConformationalAnalysisPlane {
     publishDir "${params.out_dir}/final/conformational_mapping/${backend_dir}", mode: 'copy'
 
     input:
-    tuple val(request_id), val(backend_dir), path(request_root), path(canonical_dir), path(checkpoint)
+    tuple val(request_id), val(backend_dir), path(request_root), path(canonical_dir), val(checkpoint)
 
     output:
     tuple val(request_id), path('canonical_result'), emit: canonical

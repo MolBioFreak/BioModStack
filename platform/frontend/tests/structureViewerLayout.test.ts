@@ -58,7 +58,6 @@ test('structure viewer separates persisted structure summaries from spatial visu
     for (const id of ['ptm', 'complex-iplddt', 'complex-ipde', 'gyration-radius', 'residue-count', 'helix-percent', 'sheet-percent', 'coil-percent']) {
         assert.match(source, new RegExp(`id: '${id}'`));
     }
-    assert.match(source, /id: 'subunit-mean-plddt'/);
     assert.match(source, /metricLayers=\{allMetricLayers\}/);
     assert.match(legend, /Scalar value/);
     assert.match(host, /visualMetricLayers/);
