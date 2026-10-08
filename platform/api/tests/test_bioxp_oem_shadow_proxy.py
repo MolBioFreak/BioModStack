@@ -155,3 +155,22 @@ async def test_oem_pathing_scriptmove_plan_proxy_is_readonly(monkeypatch):
         "params": {"location_id": "LOC_MS", "column": 2, "row": 3, "positionflag": 0, "current_x": 1, "current_y": 2, "current_z": 3, "tip_loaded": False, "tip_dirty": False, "tip_location": -1, "clean_path": False, "device_type": "", "gripper_confirmed": True, "run_in_parallel": True, "current_loc": "LOC_OC"},
         "timeout": 12.0,
     }]
+
+
+
+@pytest.mark.asyncio
+async def test_oem_movement_readiness_comparison_proxy_is_readonly(monkeypatch):
+    calls = []
+
+    async def fake_proxy(method, path, json_data=None, params=None, timeout=65.0):
+        calls.append({"method": method, "path": path, "json_data": json_data, "params": params, "timeout": timeout})
+        return {"ok": True, "motion_commanded": False, "summary": {"live_oem_path_execution": "not_enabled"}}
+
+    monkeypatch.setattr(bioxp, "proxy_request", fake_proxy)
+    payload = await bioxp.oem_movement_readiness_comparison()
+
+    assert payload["motion_commanded"] is False
+    assert payload["summary"]["live_oem_path_execution"] == "not_enabled"
+    assert payload["bms_role"] == "thin_proxy_only"
+    assert payload["usb_motion"] == "no"
+    assert calls == [{"method": "GET", "path": "/motion/oem/movement_readiness/comparison", "json_data": None, "params": None, "timeout": 12.0}]
