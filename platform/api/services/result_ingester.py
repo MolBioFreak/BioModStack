@@ -295,8 +295,9 @@ async def ingest_loose_files(
                 # Use ranking_score as confidence if available
                 conf_score = ranking_score if ranking_score is not None else None
                 
-                # Extract per-residue pLDDT from structure B-factors (works for PDB, may be None for CIF)
-                _, residue_plddt = extract_plddt_from_pdb(structure_path) if str(structure_path).endswith('.pdb') else (None, None)
+                # Extract per-residue pLDDT from structure B-factors (works for both PDB and CIF via Biotite)
+                from .structure_utils import get_residue_plddt
+                _, residue_plddt = get_residue_plddt(structure_path)
                 
                 # Create design
                 design = Design(
