@@ -12,7 +12,8 @@ const heightCss = (height: number | string | undefined): string | number => (
 );
 
 export default function MolstarViewer(props: StructureViewerHostProps) {
-    if (!props.structureUrl) {
+    const hasGovernedMDPlayback = props.molecularDynamics?.playbackCapability.supported === true;
+    if (!props.structureUrl && !hasGovernedMDPlayback) {
         return (
             <div
                 className="w-full flex items-center justify-center text-slate-500 bg-slate-900"
