@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { createContext, useContext, useRef, useState } from 'react';
 import { isMethodNumber } from '../lib/bioxpMethodNumber';
 import { BioXpMethodExpression } from './BioXpMethodExpression';
 import { BioXpNumericInput } from './BioXpNumericInput';
 import type { BioXpOperatorJsonSchema as Schema } from '../lib/bioxpClient';
 
+export const BioXpSchemaVariantContext = createContext<{ selection: (label: string) => number | undefined; change: (label: string, index: number) => boolean } | null>(null);
 const classes = 'mt-1 w-full rounded border border-slate-700 bg-slate-900 p-2';
 const objectValue = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 const typeOf = (value: unknown) => value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
@@ -75,9 +76,11 @@ export function BioXpSchemaInput({ label, schema, value, onChange, fallback, roo
     fallback: (label: string, value: unknown, onChange: (value: unknown) => void) => React.ReactNode;
 }) {
     const [newKey, setNewKey] = useState('');
+    const variantOwner = useContext(BioXpSchemaVariantContext);
     const display = (name: string) => rawDraft ? name.replace(/^(Inputs|Node|Structure|Repeat|Condition|Arguments) [^.\[]+/, '$1').replaceAll('_', ' ') : name;
     // Object unions can share a type and start empty. Keep an explicit choice
     // while authoring; persisted unique field names identify it on reopen.
+    const retainedVariants = useRef<Record<number, unknown>>({});
     const [chosenVariant, setChosenVariant] = useState<number | null>(null);
     const resolved = resolve(schema, rootSchema);
     const choices = variants(resolved, rootSchema);
@@ -91,7 +94,7 @@ export function BioXpSchemaInput({ label, schema, value, onChange, fallback, roo
         return Object.keys(value).reduce((score, name) => score + (Object.hasOwn(choice.properties!, name) ? 1 : choice.additionalProperties === false ? -1 : 0), 0);
     });
     const inferred = Math.max(0, scores.indexOf(Math.max(...scores)));
-    const selected = mappedIndex >= 0 ? mappedIndex : chosenVariant !== null && choices[chosenVariant] && scores[chosenVariant] >= scores[inferred] ? chosenVariant : inferred;
+    const selected = variantOwner?.selection(label) ?? (mappedIndex >= 0 ? mappedIndex : chosenVariant !== null && choices[chosenVariant] && scores[chosenVariant] >= scores[inferred] ? chosenVariant : inferred);
     const initialValue = (field: Schema) => rawDraft ? rawDraftInitial(field, rootSchema) : schemaInitialValue(field, rootSchema);
     const variantValue = (index: number) => {
         const initial = initialValue(choices[index]);
@@ -114,7 +117,7 @@ export function BioXpSchemaInput({ label, schema, value, onChange, fallback, roo
         <legend>{display(label)}</legend>
         {rawDraft && ['string', 'number', 'integer', 'boolean'].includes(String(kind)) && !enums && <button type="button" aria-label={`Use expression for ${label}`} onClick={() => onChange({ expr: { version: 1, op: 'literal', value } })}>Use expression for {display(label)}</button>}
         {schema.description && <p className="text-xs text-slate-400">{schema.description}</p>}
-        {choices.length > 1 && <label>Variant<select aria-label={`${label} variant`} className={classes} value={selected} onChange={event => { const index = Number(event.target.value); setChosenVariant(index); onChange(variantValue(index)); }}>
+        {choices.length > 1 && <label>Variant<select aria-label={`${label} variant`} className={classes} value={selected} onChange={event => { const index = Number(event.target.value); if (variantOwner?.change(label, index)) return; retainedVariants.current[selected] = structuredClone(value); setChosenVariant(index); const initial = variantValue(index), restored = retainedVariants.current[index]; if (objectValue(value) && objectValue(initial)) { const next = { ...value }; for (const key of Object.keys(choices[selected].properties ?? {})) if (!Object.hasOwn(choices[index].properties ?? {}, key)) delete next[key]; const prior = objectValue(restored) ? restored : {}; onChange({ ...prior, ...next, ...initial }); } else onChange(restored === undefined ? initial : structuredClone(restored)); }}>
             {choices.map((choice, index) => <option key={index} value={index}>{choice.title ?? String(choice.type ?? `Variant ${index + 1}`)}</option>)}
         </select></label>}
         {enums ? <label>{display(label)}<select aria-label={label} className={classes} value={enums.findIndex(item => JSON.stringify(item) === JSON.stringify(value))} onChange={event => onChange(structuredClone(enums[Number(event.target.value)]))}>

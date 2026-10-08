@@ -33,13 +33,15 @@ export const emptyTransferIntent = (): WorkflowTransferIntent => ({
     source_lift_height_steps: '', destination_lift_height_steps: '',
 });
 /** Display only actual emitted native destinations; never editable draft labels. */
-export function previewActionDestination(action: Pick<WorkflowPreviewAction, 'kind' | 'params' | 'station' | 'well'>): { station: string | null; well: string | null } {
+export function previewActionDestination(action: Pick<WorkflowPreviewAction, 'kind' | 'params' | 'station' | 'well'>, custodyDestinations: Record<string, unknown>[] = []): { station: string | null; well: string | null } {
     const p = action.params;
-    const explicit = p.location_id ?? p.destination_location_id ?? p.target ?? (['plate_move', 'move_cover', 'plate_release'].includes(action.kind) ? p.destination : undefined);
-    const mapped = explicit === undefined || explicit === null ? undefined : deckStations.find(s => s.id === explicit || s.locationId !== null && String(s.locationId) === String(explicit));
+    const explicit = p.target_location ?? p.location_id ?? p.destination_location_id ?? p.target ?? (['plate_move', 'move_cover', 'plate_release'].includes(action.kind) ? p.destination : undefined);
+    const custody = ['plate_move', 'move_cover', 'plate_release'].includes(action.kind);
+    const destination = custody ? custodyDestinations.find(d => d.token === explicit) : undefined;
+    const mapped = explicit === undefined || explicit === null ? undefined : deckStations.find(s => s.id === (destination?.station ?? explicit) || !custody && s.locationId !== null && String(s.locationId) === String(explicit));
     const tip = p.operation === 'load_tip' ? deckStations.find(s => s.tipTray !== null && String(s.tipTray) === String(p.tray)) : undefined;
-    const park = p.operation === 'park' ? 'LOC_PARK' : null;
-    const station = mapped?.id ?? tip?.id ?? park ?? action.station;
+    const park = action.kind === 'park' || p.operation === 'park' ? 'LOC_PARK' : null;
+    const station = mapped?.id ?? tip?.id ?? park ?? (explicit == null ? action.station : null);
     const well = p.well ?? p.reference_well ?? action.well;
     return { station, well: well === undefined || well === null ? null : String(well).trim().toUpperCase() };
 }

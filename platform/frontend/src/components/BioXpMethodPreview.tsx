@@ -8,7 +8,7 @@ import { deckResources } from '../lib/bioxpWorkflowDeck';
 export function nativeMethodActions(document: unknown): MethodValue[] {
     return (Array.isArray(object(document).stages) ? object(document).stages as unknown[] : []).flatMap(stage => Array.isArray(object(stage).actions) ? object(stage).actions as MethodValue[] : []);
 }
-export function BioXpMethodPreview({ result, initialState }: { result: MethodCompile; initialState?: unknown }) {
+export function BioXpMethodPreview({ result, initialState, custodyDestinations = [] }: { result: MethodCompile; initialState?: unknown; custodyDestinations?: MethodValue[] }) {
     const [selected, setSelected] = useState('');
     const provenance = result.provenance ?? [];
     const row = provenance.find(p => p.occurrence_id === selected) ?? provenance[0];
@@ -16,7 +16,7 @@ export function BioXpMethodPreview({ result, initialState }: { result: MethodCom
     const actions = nativeMethodActions(result.document).filter(a => ids.has(a.action_id));
     const [child, setChild] = useState(0);
     const action = actions[Math.min(child, Math.max(0, actions.length - 1))];
-    const destination = previewActionDestination({ kind: String(action?.kind ?? ''), params: object(action?.params), station: null, well: null });
+    const destination = previewActionDestination({ kind: String(action?.kind ?? ''), params: object(action?.params), station: null, well: null }, custodyDestinations);
     const after = methodStateAfter(result.simulation, initialState, row?.occurrence_id);
     const vessels = methodVessels(after);
     const display = (value: unknown) => value == null ? 'unknown' : typeof value === 'object' ? JSON.stringify(value) : String(value);
