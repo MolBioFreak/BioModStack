@@ -173,7 +173,10 @@ test('Results, structure viewer, and quality settings avoid explainer paragraphs
 });
 
 test('BioXP handler cockpit uses terse operator copy, not explainer paragraphs', () => {
-    const source = readSource('src', 'components', 'BioXpCockpit.tsx');
+    const source = [
+        readSource('src', 'components', 'BioXpCockpit.tsx'),
+        readSource('src', 'components', 'bioxpInterlinkStatus.ts'),
+    ].join('\n');
 
     for (const snippet of [
         'Status-first operator surface',

@@ -84,7 +84,7 @@ def test_offline_compile_is_open_but_local_submission_requires_mutation_authoriz
     assert detail.json()["events"][-1]["to_state"] == "submission_blocked"
 
 
-def test_robot_facing_operations_fail_closed_then_default_registry_still_denies(
+def test_unregistered_commands_and_stop_without_active_target_fail_closed_regardless_global_setting(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -110,8 +110,10 @@ def test_robot_facing_operations_fail_closed_then_default_registry_still_denies(
         )
     asyncio.run(runtime.close())
 
-    assert disabled_command.status_code == 503
-    assert disabled_stop.status_code == 503
+    assert disabled_command.status_code == 409
+    assert "Disabled until" in disabled_command.json()["detail"]
+    assert disabled_stop.status_code == 409
+    assert "active target" in disabled_stop.json()["detail"]
     assert authorized_command.status_code == 409
     assert "Disabled until" in authorized_command.json()["detail"]
     assert authorized_stop.status_code == 409
