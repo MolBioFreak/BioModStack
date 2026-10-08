@@ -1857,6 +1857,7 @@ def _design_to_response(
     *,
     include_fampnn_structure_fallback: bool = False,
     job: Optional[Job] = None,
+    producer_model_id: Optional[str] = None,
 ) -> DesignResponse:
     state = sa_inspect(design)
     unloaded = set(state.unloaded)
@@ -2096,8 +2097,6 @@ def _design_to_response(
     if strict_rank or not isinstance(data.get("metric_completeness"), dict):
         data["metric_completeness"] = build_design_metric_completeness(data, job=job)
     data.update(_compute_import_metadata(design))
-    from services.plr_workflow_results import design_producer_model_id
-    producer_model_id = design_producer_model_id(job, design)
     if producer_model_id:
         data["provenance"] = {**(data.get("provenance") or {}), "producer_model_id": producer_model_id}
     return DesignResponse.model_validate(data)
@@ -2636,10 +2635,10 @@ async def list_designs(
     
     # Apply pagination
     query = query.limit(limit).offset(offset)
-    result = await session.execute(query)
-    designs = result.scalars().all()
+    rows = (await session.execute(query.add_columns(model_identity))).all()
+    designs = [design for design, _ in rows]
     owners = await owning_jobs(session, designs)
-    responses = [_design_to_response(d, job=owners.get(d.job_id)) for d in designs]
+    responses = [_design_to_response(d, job=owners.get(d.job_id), producer_model_id=identity) for d, identity in rows]
     for design, response in zip(designs, responses):
         response.core_protein_scientific_contract = await scientific_contract_revision(design, session)
         if response.core_protein_scientific_contract == 1:
@@ -2857,11 +2856,13 @@ async def get_design(
     job_id: Optional[str] = None,
 ):
     """Get a specific design by ID."""
-    result = await session.execute(select(Design).where(Design.id == design_id))
-    design = result.scalar_one_or_none()
+    from services.plr_workflow_results import design_model_identity_expression
+    result = await session.execute(select(Design, design_model_identity_expression()).where(Design.id == design_id))
+    row = result.one_or_none()
     
-    if not design:
+    if row is None:
         raise HTTPException(status_code=404, detail="Design not found")
+    design, producer_model_id = row
     
     if job_id:
         lineage_job_ids = await _resolve_design_query_job_ids(session, job_id, include_children=True)
@@ -2869,7 +2870,7 @@ async def get_design(
             raise HTTPException(status_code=404, detail="Design not found in requested Job lineage")
     owners = await owning_jobs(session, [design])
     response = _design_to_response(design, include_fampnn_structure_fallback=True,
-                                   job=owners.get(design.job_id))
+                                   job=owners.get(design.job_id), producer_model_id=producer_model_id)
     response.core_protein_scientific_contract = await scientific_contract_revision(design, session)
     if response.core_protein_scientific_contract == 1:
         from services.core_protein_scientific_contract import scientific_document
@@ -3081,13 +3082,14 @@ async def get_designs_for_job(
     # Apply pagination
     query = query.limit(limit).offset(offset)
     
-    result = await session.execute(query)
-    designs = result.scalars().all()
+    from services.plr_workflow_results import design_model_identity_expression
+    rows = (await session.execute(query.add_columns(design_model_identity_expression()))).all()
+    designs = [design for design, _ in rows]
     
     # Count total
     total = (await session.execute(count_query)).scalar()
     owners = await owning_jobs(session, designs)
-    responses = [_design_to_response(d, job=owners.get(d.job_id)) for d in designs]
+    responses = [_design_to_response(d, job=owners.get(d.job_id), producer_model_id=identity) for d, identity in rows]
     for design, response in zip(designs, responses):
         response.core_protein_scientific_contract = await scientific_contract_revision(design, session)
         if response.core_protein_scientific_contract == 1:

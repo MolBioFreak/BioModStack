@@ -163,26 +163,12 @@ def _stage_for_relative(relative_path: str, name: str) -> str | None:
     return None
 
 
-def design_producer_model_id(job: Any, design: Any) -> str | None:
-    """Metadata-only native membership; not an artifact availability assertion."""
-    if not is_protein_local_redesign_job(job) or job.id != design.job_id:
-        return None
-    root = str(getattr(job, "output_dir", None) or "").rstrip("/")
-    path = str(getattr(design, "pdb_path", None) or "")
-    if not root or any(part in {".", ".."} for part in path.split("/")):
-        return None
-    if path.startswith("/"):
-        if not path.startswith(root + "/"):
-            return None
-        path = path[len(root) + 1:]
-    return _stage_for_relative(path, str(design.name or ""))
-
-
 def design_model_identity_expression():
-    """SQL counterpart of native membership, before shared filtering/pagination.
+    """Shared producer identity for filtering, counts and response projection.
 
     Uses only owning Job/Design metadata, never builds or hashes artifact surfaces.
-    Non-PLR persisted model identities keep their historical semantics.
+    Explicit producer identity is distinct from workflow/upstream model identity.
+    Without it, disagreeing persisted model identities remain ungrouped.
     """
     from sqlalchemy import and_, case, func, or_, select
     from database import Design, Job
@@ -219,7 +205,13 @@ def design_model_identity_expression():
             member = and_(member, Design.name.contains("_seq_", autoescape=True))
         stages.append((member, stage_id))
     native = case((canonical, case(*stages, else_=None)), else_=None)
-    stored = normalized(Design.provenance["model_id"].as_string())
+    def persisted(key):
+        return func.nullif(normalized(Design.provenance[key].as_string()), "")
+
+    identities = [persisted(key) for key in ("model_id", "model_call_family", "sequence_design_model")]
+    candidate = func.coalesce(*identities)
+    agreed = and_(*(or_(identity.is_(None), identity == candidate) for identity in identities))
+    stored = func.coalesce(persisted("producer_model_id"), case((agreed, candidate), else_=None))
     # PLR source/reference rows have no native producer, even when an ingester
     # persisted the workflow model_id on every row.
     return select(case((plr_job, native), else_=stored)).where(

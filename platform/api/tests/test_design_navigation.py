@@ -64,6 +64,103 @@ async def test_model_scope_summary_pagination_and_exact_lineage(tmp_path: Path):
     await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_persisted_producer_identity_drives_every_design_read(tmp_path, monkeypatch):
+    from collections import Counter
+    from sqlalchemy import select
+    from services import plr_workflow_results
+
+    def no_artifact_surface(*args, **kwargs):
+        raise AssertionError('model navigation must remain metadata-only')
+    monkeypatch.setattr(plr_workflow_results, 'build_protein_local_redesign_result_surface', no_artifact_surface)
+    monkeypatch.setattr(plr_workflow_results, '_sha256', no_artifact_surface)
+    # Explicit producer metadata overrides upstream/workflow identity. Without it,
+    # disagreements are unknown; stage tags and filenames alone are not producers.
+    cases = [
+        ('sequence', {'model_call_family': 'fampnn', 'sequence_design_model': 'fampnn'}, 'fampnn'),
+        ('family', {'model_call_family': ' FAMPNN '}, 'fampnn'),
+        ('sequence-only', {'sequence_design_model': 'fampnn'}, 'fampnn'),
+        ('generic', {'model_id': 'boltz2'}, 'boltz2'),
+        ('explicit', {'producer_model_id': 'protenix', 'model_id': 'boltz2'}, 'protenix'),
+        ('unknown', {'producer_model_id': 'future_model'}, 'future_model'),
+        ('missing', None, None),
+        ('blank', {'model_id': ' ', 'model_call_family': None}, None),
+        ('conflict', {'model_call_family': 'boltz2', 'sequence_design_model': 'fampnn'}, None),
+        ('stored-conflict', {'model_id': 'boltz2', 'model_call_family': 'fampnn'}, None),
+        ('agree', {'model_id': 'fampnn', 'model_call_family': ' FAMPNN ', 'sequence_design_model': 'fampnn'}, 'fampnn'),
+    ]
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'producers.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as session:
+        session.add_all([
+            Job(id='parent', name='TEST nanobody', model_id='nanobody', mode='refinement', params={}),
+            Job(id='child', name='TEST child', model_id='nanobody', mode='refinement', parent_job_id='parent', params={}),
+            Job(id='foreign', name='TEST foreign', model_id='nanobody', mode='refinement', params={}),
+        ])
+        for identity, provenance, _ in cases:
+            session.add(Design(id=identity, name=identity, job_id='parent', provenance=provenance,
+                               stage_family='fampnn', stage_mode='sequence_design',
+                               pdb_path='native-sequence.pdb', fampnn_psce=0.02))
+        for owner in ('child', 'foreign'):
+            session.add(Design(id=owner, name=owner, job_id=owner, pdb_path='native-sequence.pdb',
+                               provenance={'producer_model_id': 'fampnn'}, stage_family='fampnn',
+                               stage_mode='sequence_design', fampnn_psce=0.02))
+        await session.commit()
+    app = FastAPI()
+    app.include_router(designs.router, prefix='/api/designs')
+    async def sessions():
+        async with factory() as session:
+            yield session
+    app.dependency_overrides[get_session] = sessions
+    expected = {identity: producer for identity, _, producer in cases}
+    expected['child'] = 'fampnn'
+    counts = dict(Counter(producer for producer in expected.values() if producer))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+        base = {'job_id': 'parent', 'sort_by': 'name', 'sort_desc': False, 'include_summary': True}
+        unfiltered = await client.get('/api/designs', params={**base, 'limit': 2})
+        assert unfiltered.status_code == 200, unfiltered.text
+        assert unfiltered.json()['total'] == len(expected)
+        assert unfiltered.json()['model_counts'] == counts
+        for producer, count in counts.items():
+            observed = []
+            for offset in range(0, count + 1, 2):
+                page = await client.get('/api/designs', params={**base, 'model_id': producer.upper(), 'limit': 2, 'offset': offset})
+                assert page.status_code == 200, page.text
+                body = page.json()
+                assert body['total'] == body['summary']['total'] == count
+                assert body['model_counts'] == counts
+                for row in body['designs']:
+                    observed.append(row['id'])
+                    assert row['provenance']['producer_model_id'] == producer
+                    assert row['pdb_path'] == 'native-sequence.pdb'
+                    assert row['plddt_overall'] is None
+            assert sorted(observed) == sorted(identity for identity, model in expected.items() if model == producer)
+        for identity, producer in expected.items():
+            detail = await client.get(f'/api/designs/{identity}', params={'job_id': 'parent'})
+            assert detail.status_code == 200, detail.text
+            assert (detail.json()['provenance'] or {}).get('producer_model_id') == producer
+        exact = await client.post('/api/designs/query', json={**base, 'model_id': 'fampnn', 'design_ids': ['sequence', 'foreign']})
+        assert [row['id'] for row in exact.json()['designs']] == ['sequence']
+        assert exact.json()['model_counts'] == counts
+        own = await client.get('/api/designs', params={**base, 'include_children': False, 'model_id': 'fampnn'})
+        assert own.json()['total'] == counts['fampnn'] - 1
+        assert own.json()['model_counts'] == {**counts, 'fampnn': counts['fampnn'] - 1}
+        child = await client.get('/api/designs', params={**base, 'job_id': 'child'})
+        assert child.json()['model_counts'] == {'fampnn': 1}
+        by_job = await client.get('/api/designs/by-job/parent', params={'limit': 500})
+        assert {row['id']: (row['provenance'] or {}).get('producer_model_id') for row in by_job.json()['designs']} == expected
+        assert (await client.get('/api/designs/foreign', params={'job_id': 'parent'})).status_code == 404
+        empty = await client.get('/api/designs', params={**base, 'model_id': 'unrecorded'})
+        assert empty.json()['total'] == 0
+        assert empty.json()['model_counts'] == counts
+    async with factory() as session:
+        stored = dict((await session.execute(select(Design.id, Design.provenance))).all())
+        assert all(stored[identity] == provenance for identity, provenance, _ in cases)
+    await engine.dispose()
+
+
 def test_historical_design_reopen_uses_receipt_identity_without_mutating_acknowledgement():
     payload = {"entity_kind": "design", "entity_id": "second", "reopen_uri": "/designs/job", "metadata": {"design_id": "second"}}
     assert _reopen_route(payload)["query"] == {"design_id": "second"}
