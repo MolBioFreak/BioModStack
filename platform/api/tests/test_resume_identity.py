@@ -63,7 +63,7 @@ class DummyChild:
 
 
 def test_ensure_job_resume_identity_preserves_root_batch_name() -> None:
-    for mode in ("antibody_denovo_pipeline", "antibody_refinement_pipeline"):
+    for mode in ("antibody_refinement_pipeline", "antibody_refinement_pipeline"):
         params = {
             "parallel_mode": "full_orchestrator",
             "resume_root_job_id": "root-job-123",
@@ -72,7 +72,7 @@ def test_ensure_job_resume_identity_preserves_root_batch_name() -> None:
         normalized = _ensure_job_resume_identity(
             job_name="RBX1 beta large",
             job_id="new-job-456",
-            model_id="template_antibody_denovo",
+            model_id="antibody_child",
             mode=mode,
             params=params,
         )

@@ -1,7 +1,5 @@
 import { startTransition, useEffect, useState } from 'react';
 import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import Plot from 'react-plotly.js';
-import type { Config, Data, Layout, PlotData } from 'plotly.js';
 import {
     discoverHardware,
     fetchFanControl,
@@ -14,9 +12,26 @@ import {
 } from '../lib/api';
 import type { GPUStatus, PerGpuFanStatus, SystemStatus } from '../lib/api';
 import { resolveCpuFrequencyScaleMhz, resolveCpuPowerScaleWatts } from './infraTelemetryScaling';
+import {
+    appendRetainedTelemetrySample,
+    INFRA_TELEMETRY_PREFERENCES_STORAGE_KEY,
+    INFRA_TELEMETRY_STORAGE_KEY,
+    isValidPollPreset,
+    loadPersistedTelemetryState,
+    parseTelemetryTimestampMs,
+    persistTelemetryPreferences,
+    persistTelemetryState,
+    reconcileTelemetryHistories,
+    shouldPersistTelemetryHistory,
+} from './infraTelemetryHistory';
+import type {
+    LiveSample,
+    PollPreset,
+    RestoredInfraTelemetryState,
+    WindowPreset,
+} from './infraTelemetryHistory';
+import { jobPollingInterval } from '../lib/queryPolling';
 
-const MAX_WINDOW_RETENTION_MS = 60 * 60 * 1000;
-const INFRA_TELEMETRY_STORAGE_KEY = 'bms_infra_live_telemetry_v1';
 const INFRA_STORAGE_WRITE_DEBOUNCE_MS = 1500;
 const SHARED_CONTROL_POLL_INTERVAL_MS = 10000;
 const MIN_GAP_BREAK_MS = 12000;
@@ -29,14 +44,20 @@ const INFRA_LIVE_SHARED_STATUS_QUERY_KEY = ['infra-live-shared-status'];
 let sharedTelemetryCollectorSubscribers = 0;
 let sharedTelemetryCollectorTimerId: number | undefined;
 let sharedTelemetryCollectorRunning = false;
+let sharedTelemetryCollectorFailureCount = 0;
+let sharedTelemetryCollectorGeneration = 0;
+let sharedTelemetryCollectorActiveGeneration: number | null = null;
+let sharedTelemetryCollectorWakeHandler: (() => void) | undefined;
+let sharedTelemetryCollectorStorageHandler: ((event: StorageEvent) => void) | undefined;
 let sharedTelemetryCollectorQueryClient: QueryClient | null = null;
 let sharedTelemetryCollectorDefaults: { pollIntervalMs: PollPreset; windowMinutes: WindowPreset } = {
     pollIntervalMs: 1000,
     windowMinutes: 3,
 };
+let sharedTelemetryCollectorState: RestoredInfraTelemetryState | null = null;
+let sharedTelemetryCollectorLastPersistedAtMs = 0;
+const sharedTelemetryCollectorStateListeners = new Set<(state: RestoredInfraTelemetryState) => void>();
 
-type PollPreset = 1000 | 2000 | 5000;
-type WindowPreset = 1 | 3 | 5 | 10 | 15 | 30 | 60;
 const POLL_PRESETS: ReadonlyArray<{ value: PollPreset; label: string }> = [
     { value: 1000, label: '1s' },
     { value: 2000, label: '2s' },
@@ -52,21 +73,6 @@ const WINDOW_PRESETS: ReadonlyArray<{ value: WindowPreset; label: string }> = [
     { value: 60, label: '1h' },
 ];
 
-interface LiveSample {
-    timestamp: string;
-    timestampMs: number;
-    pollIntervalMs: PollPreset;
-    clock: string;
-    cpuUtil: number;
-    cpuFreqMhz: number;
-    cpuPower: number | null;
-    cpuTemp: number | null;
-    ramUsed: number;
-    ramFree: number;
-    ramUtil: number;
-    ramSwap: number;
-    gpu: Record<number, { util: number; vram: number; power: number; temp: number }>;
-}
 
 interface AxisConfig {
     title: string;
@@ -76,29 +82,32 @@ interface AxisConfig {
     decimals?: number;
 }
 
+interface TimeSeriesLine {
+    x?: Array<string | number | null>;
+    y?: Array<number | null>;
+    customdata?: unknown[];
+    name?: string;
+    mode?: string;
+    line?: {
+        color?: string;
+        width?: number;
+        shape?: string;
+        simplify?: boolean;
+    };
+    hovertemplate?: string;
+}
+
 interface TimeSeriesPlotProps {
     height: number;
     samples: LiveSample[];
     yAxis: AxisConfig;
-    series: Data[];
+    series: TimeSeriesLine[];
     showXAxisLabels?: boolean;
     traceType?: 'scatter' | 'scattergl';
     compact?: boolean;
     redrawKey?: string | number;
 }
 
-interface PersistedInfraTelemetryState {
-    version: 3;
-    pollIntervalMs: PollPreset;
-    windowMinutes: WindowPreset;
-    samples: LiveSample[];
-}
-
-interface RestoredInfraTelemetryState {
-    pollIntervalMs: PollPreset;
-    windowMinutes: WindowPreset;
-    samples: LiveSample[];
-}
 
 interface SharedTelemetryStatus {
     lastUpdatedMs: number | null;
@@ -196,13 +205,83 @@ const DASHBOARD_SIZING: Record<NonNullable<InfraLiveTelemetryProps['dashboardSiz
 };
 
 
+function publishSharedTelemetryCollectorState() {
+    if (!sharedTelemetryCollectorState) return;
+    const snapshot: RestoredInfraTelemetryState = {
+        pollIntervalMs: sharedTelemetryCollectorState.pollIntervalMs,
+        windowMinutes: sharedTelemetryCollectorState.windowMinutes,
+        samples: sharedTelemetryCollectorState.samples,
+    };
+    for (const listener of sharedTelemetryCollectorStateListeners) listener(snapshot);
+}
+
+function readSharedTelemetryCollectorState(
+    defaultPollIntervalMs: PollPreset,
+    defaultWindowMinutes: WindowPreset,
+): RestoredInfraTelemetryState {
+    return sharedTelemetryCollectorState ?? loadPersistedTelemetryState(
+        defaultPollIntervalMs,
+        defaultWindowMinutes,
+    );
+}
+
+function subscribeSharedTelemetryCollectorState(
+    listener: (state: RestoredInfraTelemetryState) => void,
+): () => void {
+    sharedTelemetryCollectorStateListeners.add(listener);
+    if (sharedTelemetryCollectorState) listener(readSharedTelemetryCollectorState(
+        sharedTelemetryCollectorDefaults.pollIntervalMs,
+        sharedTelemetryCollectorDefaults.windowMinutes,
+    ));
+    return () => {
+        sharedTelemetryCollectorStateListeners.delete(listener);
+    };
+}
+
+function persistSharedTelemetryCollectorState(nowMs = Date.now()) {
+    if (!sharedTelemetryCollectorState) return;
+    const durableState = loadPersistedTelemetryState(
+        sharedTelemetryCollectorState.pollIntervalMs,
+        sharedTelemetryCollectorState.windowMinutes,
+        nowMs,
+    );
+    sharedTelemetryCollectorState.samples = reconcileTelemetryHistories(
+        sharedTelemetryCollectorState.samples,
+        durableState.samples,
+        nowMs,
+    );
+    persistTelemetryState({
+        version: 3,
+        pollIntervalMs: sharedTelemetryCollectorState.pollIntervalMs,
+        windowMinutes: sharedTelemetryCollectorState.windowMinutes,
+        samples: sharedTelemetryCollectorState.samples,
+    });
+    sharedTelemetryCollectorLastPersistedAtMs = nowMs;
+    publishSharedTelemetryCollectorState();
+}
+
 function stopSharedTelemetryCollector() {
+    persistSharedTelemetryCollectorState();
+    sharedTelemetryCollectorState = null;
+    sharedTelemetryCollectorLastPersistedAtMs = 0;
     sharedTelemetryCollectorRunning = false;
+    sharedTelemetryCollectorGeneration += 1;
+    sharedTelemetryCollectorFailureCount = 0;
     if (sharedTelemetryCollectorTimerId != null && typeof window !== 'undefined') {
         window.clearTimeout(sharedTelemetryCollectorTimerId);
     }
     sharedTelemetryCollectorTimerId = undefined;
     sharedTelemetryCollectorQueryClient = null;
+    if (sharedTelemetryCollectorWakeHandler && typeof window !== 'undefined') {
+        document.removeEventListener('visibilitychange', sharedTelemetryCollectorWakeHandler);
+        window.removeEventListener('online', sharedTelemetryCollectorWakeHandler);
+        window.removeEventListener('pageshow', sharedTelemetryCollectorWakeHandler);
+    }
+    if (sharedTelemetryCollectorStorageHandler && typeof window !== 'undefined') {
+        window.removeEventListener('storage', sharedTelemetryCollectorStorageHandler);
+    }
+    sharedTelemetryCollectorWakeHandler = undefined;
+    sharedTelemetryCollectorStorageHandler = undefined;
 }
 
 
@@ -223,6 +302,13 @@ function startSharedTelemetryCollector(
     }
 
     sharedTelemetryCollectorRunning = true;
+    const collectorGeneration = ++sharedTelemetryCollectorGeneration;
+    sharedTelemetryCollectorState = loadPersistedTelemetryState(
+        defaultPollIntervalMs,
+        defaultWindowMinutes,
+    );
+    sharedTelemetryCollectorLastPersistedAtMs = Date.now();
+    publishSharedTelemetryCollectorState();
 
     const scheduleNext = (delayMs: number) => {
         if (!sharedTelemetryCollectorRunning || typeof window === 'undefined') return;
@@ -233,17 +319,36 @@ function startSharedTelemetryCollector(
     };
 
     const run = async () => {
-        if (!sharedTelemetryCollectorRunning || !sharedTelemetryCollectorQueryClient) {
+        if (!sharedTelemetryCollectorRunning || !sharedTelemetryCollectorQueryClient || collectorGeneration !== sharedTelemetryCollectorGeneration) {
             return;
         }
+        // Do not issue telemetry requests while the renderer is hidden or offline.
+        // Keep a lightweight wake-up timer so a restored foreground/connection resumes
+        // without requiring an unrelated React Query observer update.
+        if (document.hidden || navigator.onLine === false) {
+            scheduleNext(1_000);
+            return;
+        }
+        if (sharedTelemetryCollectorActiveGeneration === collectorGeneration) {
+            scheduleNext(250);
+            return;
+        }
+        sharedTelemetryCollectorActiveGeneration = collectorGeneration;
 
         const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
         const defaults = sharedTelemetryCollectorDefaults;
-        const persisted = loadPersistedTelemetryState(defaults.pollIntervalMs, defaults.windowMinutes);
+        const collectorState = sharedTelemetryCollectorState ?? loadPersistedTelemetryState(
+            defaults.pollIntervalMs,
+            defaults.windowMinutes,
+        );
+        sharedTelemetryCollectorState = collectorState;
 
         try {
             const response = await fetchSystemStatus();
-            if (!sharedTelemetryCollectorRunning || !sharedTelemetryCollectorQueryClient) return;
+            if (!sharedTelemetryCollectorRunning || !sharedTelemetryCollectorQueryClient || collectorGeneration !== sharedTelemetryCollectorGeneration) {
+                if (sharedTelemetryCollectorActiveGeneration === collectorGeneration) sharedTelemetryCollectorActiveGeneration = null;
+                return;
+            }
 
             sharedTelemetryCollectorQueryClient.setQueryData(INFRA_LIVE_SHARED_QUERY_KEY, response);
             sharedTelemetryCollectorQueryClient.setQueryData(SHARED_SYSTEM_QUERY_KEY, response);
@@ -252,16 +357,25 @@ function startSharedTelemetryCollector(
                 error: null,
             });
 
-            const nextSample = buildSample(response.data, persisted.pollIntervalMs);
-            const nextSamples = mergeTelemetrySample(persisted.samples, nextSample);
-            persistTelemetryState({
-                version: 3,
-                pollIntervalMs: persisted.pollIntervalMs,
-                windowMinutes: persisted.windowMinutes,
-                samples: nextSamples,
-            });
+            sharedTelemetryCollectorFailureCount = 0;
+            const nextSample = buildSample(response.data, collectorState.pollIntervalMs);
+            collectorState.samples = appendRetainedTelemetrySample(
+                collectorState.samples,
+                nextSample,
+                nextSample.timestampMs,
+            );
+            const nowMs = Date.now();
+            if (shouldPersistTelemetryHistory(sharedTelemetryCollectorLastPersistedAtMs, nowMs)) {
+                persistSharedTelemetryCollectorState(nowMs);
+            } else {
+                publishSharedTelemetryCollectorState();
+            }
         } catch (error) {
-            if (!sharedTelemetryCollectorRunning || !sharedTelemetryCollectorQueryClient) return;
+            if (!sharedTelemetryCollectorRunning || !sharedTelemetryCollectorQueryClient || collectorGeneration !== sharedTelemetryCollectorGeneration) {
+                if (sharedTelemetryCollectorActiveGeneration === collectorGeneration) sharedTelemetryCollectorActiveGeneration = null;
+                return;
+            }
+            sharedTelemetryCollectorFailureCount = Math.min(sharedTelemetryCollectorFailureCount + 1, 4);
             const message = error instanceof Error ? error.message : 'Unknown telemetry error';
             const previousStatus = readSharedTelemetryStatus(sharedTelemetryCollectorQueryClient);
             sharedTelemetryCollectorQueryClient.setQueryData<SharedTelemetryStatus>(INFRA_LIVE_SHARED_STATUS_QUERY_KEY, {
@@ -270,15 +384,50 @@ function startSharedTelemetryCollector(
             });
         }
 
-        const nextPersisted = loadPersistedTelemetryState(defaults.pollIntervalMs, defaults.windowMinutes);
         const endedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
         const elapsedMs = Math.max(0, endedAt - startedAt);
-        const nextDelayMs = Math.max(0, nextPersisted.pollIntervalMs - elapsedMs);
+        if (sharedTelemetryCollectorActiveGeneration === collectorGeneration) sharedTelemetryCollectorActiveGeneration = null;
+        const nextDelayMs = Math.max(
+            0,
+            (collectorState.pollIntervalMs * 2 ** sharedTelemetryCollectorFailureCount) - elapsedMs,
+        );
         scheduleNext(nextDelayMs);
     };
 
     // Start on the next macrotask so StrictMode's mount/unmount probe can cancel
-    // the first pass before it emits a duplicate request.
+    // the first pass before it emits a duplicate request. Foreground/online
+    // transitions bypass any failure backoff so a recovered browser catches up now.
+    sharedTelemetryCollectorWakeHandler = () => {
+        if (document.hidden || navigator.onLine === false) return;
+        sharedTelemetryCollectorFailureCount = 0;
+        scheduleNext(0);
+    };
+    sharedTelemetryCollectorStorageHandler = (event: StorageEvent) => {
+        if (!sharedTelemetryCollectorState) return;
+        if (
+            event.key !== INFRA_TELEMETRY_STORAGE_KEY
+            && event.key !== INFRA_TELEMETRY_PREFERENCES_STORAGE_KEY
+        ) return;
+        const durableState = loadPersistedTelemetryState(
+            sharedTelemetryCollectorState.pollIntervalMs,
+            sharedTelemetryCollectorState.windowMinutes,
+        );
+        sharedTelemetryCollectorState.samples = reconcileTelemetryHistories(
+            sharedTelemetryCollectorState.samples,
+            durableState.samples,
+        );
+        sharedTelemetryCollectorState.pollIntervalMs = durableState.pollIntervalMs;
+        sharedTelemetryCollectorState.windowMinutes = durableState.windowMinutes;
+        sharedTelemetryCollectorDefaults = {
+            pollIntervalMs: durableState.pollIntervalMs,
+            windowMinutes: durableState.windowMinutes,
+        };
+        publishSharedTelemetryCollectorState();
+    };
+    document.addEventListener('visibilitychange', sharedTelemetryCollectorWakeHandler);
+    window.addEventListener('online', sharedTelemetryCollectorWakeHandler);
+    window.addEventListener('pageshow', sharedTelemetryCollectorWakeHandler);
+    window.addEventListener('storage', sharedTelemetryCollectorStorageHandler);
     scheduleNext(0);
 }
 
@@ -324,13 +473,7 @@ function PanelFrame({
 const PLOT_GRID = 'rgba(51, 65, 85, 0.42)';
 const PLOT_FONT = '#cbd5e1';
 const PLOT_TICK = '#94a3b8';
-const PLOT_BG = 'rgba(15, 23, 42, 0)';
 const PLOT_PANEL_BG = 'rgba(15, 23, 42, 0.22)';
-const PLOT_CONFIG: Partial<Config> = {
-    displayModeBar: false,
-    responsive: true,
-    scrollZoom: false,
-};
 
 const UI_ACCENT = 'var(--accent-primary)';
 const UI_SUCCESS = 'var(--success)';
@@ -444,60 +587,9 @@ function SegmentedControl<T extends string | number>({
     );
 }
 
-function buildAxis(axis: AxisConfig, side: 'left' | 'right') {
-    return {
-        title: {
-            text: axis.title,
-            font: { color: side === 'left' ? axis.color : PLOT_TICK, size: 11 },
-        },
-        color: PLOT_TICK,
-        tickfont: { color: PLOT_TICK, size: 10 },
-        titlefont: { color: axis.color, size: 11 },
-        gridcolor: side === 'left' ? PLOT_GRID : 'rgba(0,0,0,0)',
-        zeroline: false,
-        showline: false,
-        tickformat: axis.decimals === 0 ? ',.0f' : axis.decimals === 1 ? ',.1f' : undefined,
-        ticksuffix: axis.suffix,
-        range: axis.range,
-        fixedrange: true,
-    };
-}
-
-function chooseDateGridMs(rangeMs: number): number {
-    if (!Number.isFinite(rangeMs) || rangeMs <= 0) return 30_000;
-    if (rangeMs <= 60_000) return 10_000;
-    if (rangeMs <= 3 * 60_000) return 30_000;
-    if (rangeMs <= 5 * 60_000) return 60_000;
-    if (rangeMs <= 15 * 60_000) return 3 * 60_000;
-    if (rangeMs <= 30 * 60_000) return 5 * 60_000;
-    return 10 * 60_000;
-}
-
 function clamp01(value: number): number {
     if (Number.isNaN(value)) return 0;
     return Math.max(0, Math.min(1, value));
-}
-
-function isValidPollPreset(value: unknown): value is PollPreset {
-    return value === 1000 || value === 2000 || value === 5000;
-}
-
-function isValidWindowPreset(value: unknown): value is WindowPreset {
-    return value === 1 || value === 3 || value === 5 || value === 10 || value === 15 || value === 30 || value === 60;
-}
-
-function trimRetainedSamples(samples: LiveSample[], nowMs = Date.now()): LiveSample[] {
-    const cutoffMs = nowMs - MAX_WINDOW_RETENTION_MS;
-    return samples.filter((sample) => Number.isFinite(sample.timestampMs) && sample.timestampMs >= cutoffMs);
-}
-
-function normalizeSamples(samples: LiveSample[]): LiveSample[] {
-    const deduped = new Map<number, LiveSample>();
-    for (const sample of samples) {
-        if (!Number.isFinite(sample.timestampMs)) continue;
-        deduped.set(sample.timestampMs, sample);
-    }
-    return Array.from(deduped.values()).sort((a, b) => a.timestampMs - b.timestampMs);
 }
 
 function sampleGapAllowance(previous: LiveSample, current: LiveSample, defaultGapBreakMs: number): number {
@@ -537,107 +629,6 @@ function buildGapAwareTraceData<T = number>(
     }
 
     return customForSample ? { x, y, customdata } : { x, y };
-}
-
-function parseStoredSample(value: unknown): LiveSample | null {
-    if (!value || typeof value !== 'object') return null;
-    const sample = value as Partial<LiveSample>;
-    if (typeof sample.timestamp !== 'string' || typeof sample.timestampMs !== 'number') return null;
-    if (
-        !isValidPollPreset(sample.pollIntervalMs) ||
-        typeof sample.cpuUtil !== 'number' ||
-        typeof sample.cpuFreqMhz !== 'number' ||
-        typeof sample.ramUsed !== 'number' ||
-        typeof sample.ramFree !== 'number' ||
-        typeof sample.ramUtil !== 'number' ||
-        typeof sample.ramSwap !== 'number'
-    ) {
-        return null;
-    }
-    if (!sample.gpu || typeof sample.gpu !== 'object') return null;
-
-    return {
-        timestamp: sample.timestamp,
-        timestampMs: sample.timestampMs,
-        pollIntervalMs: sample.pollIntervalMs,
-        clock: typeof sample.clock === 'string' ? sample.clock : formatClock(sample.timestamp),
-        cpuUtil: sample.cpuUtil,
-        cpuFreqMhz: sample.cpuFreqMhz,
-        cpuPower: typeof sample.cpuPower === 'number' ? sample.cpuPower : null,
-        cpuTemp: typeof sample.cpuTemp === 'number' ? sample.cpuTemp : null,
-        ramUsed: sample.ramUsed,
-        ramFree: sample.ramFree,
-        ramUtil: sample.ramUtil,
-        ramSwap: sample.ramSwap,
-        gpu: sample.gpu as LiveSample['gpu'],
-    };
-}
-
-function loadPersistedTelemetryState(
-    defaultPollIntervalMs: PollPreset,
-    defaultWindowMinutes: WindowPreset,
-): RestoredInfraTelemetryState {
-    if (typeof window === 'undefined') {
-        return {
-            pollIntervalMs: defaultPollIntervalMs,
-            windowMinutes: defaultWindowMinutes,
-            samples: [],
-        };
-    }
-
-    try {
-        const raw = window.localStorage.getItem(INFRA_TELEMETRY_STORAGE_KEY);
-        if (!raw) {
-            return {
-                pollIntervalMs: defaultPollIntervalMs,
-                windowMinutes: defaultWindowMinutes,
-                samples: [],
-            };
-        }
-
-        const parsed = JSON.parse(raw) as Partial<PersistedInfraTelemetryState>;
-        if (parsed.version !== 3) {
-            return {
-                pollIntervalMs: defaultPollIntervalMs,
-                windowMinutes: defaultWindowMinutes,
-                samples: [],
-            };
-        }
-        const pollIntervalMs = isValidPollPreset(parsed.pollIntervalMs)
-            ? parsed.pollIntervalMs
-            : defaultPollIntervalMs;
-        const windowMinutes = isValidWindowPreset(parsed.windowMinutes)
-            ? parsed.windowMinutes
-            : defaultWindowMinutes;
-        const samples = Array.isArray(parsed.samples)
-            ? trimRetainedSamples(normalizeSamples(parsed.samples.map(parseStoredSample).filter(Boolean) as LiveSample[]))
-            : [];
-
-        return { pollIntervalMs, windowMinutes, samples };
-    } catch {
-        return {
-            pollIntervalMs: defaultPollIntervalMs,
-            windowMinutes: defaultWindowMinutes,
-            samples: [],
-        };
-    }
-}
-
-function persistTelemetryState(state: PersistedInfraTelemetryState): void {
-    if (typeof window === 'undefined') return;
-    try {
-        window.localStorage.setItem(INFRA_TELEMETRY_STORAGE_KEY, JSON.stringify(state));
-    } catch {
-        // Ignore storage quota / availability failures and keep live telemetry flowing.
-    }
-}
-
-function mergeTelemetrySample(previousSamples: LiveSample[], nextSample: LiveSample): LiveSample[] {
-    const normalizedPrevious = normalizeSamples(previousSamples);
-    if (normalizedPrevious.length > 0 && normalizedPrevious[normalizedPrevious.length - 1]?.timestamp === nextSample.timestamp) {
-        return normalizedPrevious;
-    }
-    return trimRetainedSamples(normalizeSamples([...normalizedPrevious, nextSample]), nextSample.timestampMs);
 }
 
 function readSharedTelemetryStatus(queryClient: ReturnType<typeof useQueryClient>): SharedTelemetryStatus {
@@ -1106,79 +1097,166 @@ function GpuInlinePowerControl({
     );
 }
 
+function parseSeriesTimestamp(value: string | number | null | undefined): number | null {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+    if (typeof value !== 'string') return null;
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function buildTelemetrySvgPath(
+    line: TimeSeriesLine,
+    xMin: number,
+    xMax: number,
+    yMin: number,
+    yMax: number,
+): string {
+    const xValues = line.x ?? [];
+    const yValues = line.y ?? [];
+    const xRange = Math.max(1, xMax - xMin);
+    const yRange = Math.max(Number.EPSILON, yMax - yMin);
+    let path = '';
+    let drawing = false;
+
+    for (let index = 0; index < Math.min(xValues.length, yValues.length); index += 1) {
+        const timestampMs = parseSeriesTimestamp(xValues[index]);
+        const value = yValues[index];
+        if (timestampMs == null || value == null || !Number.isFinite(value)) {
+            drawing = false;
+            continue;
+        }
+
+        const x = Math.max(0, Math.min(1000, ((timestampMs - xMin) / xRange) * 1000));
+        const y = Math.max(0, Math.min(100, 100 - ((value - yMin) / yRange) * 100));
+        path += `${drawing ? ' L' : ' M'} ${x.toFixed(2)} ${y.toFixed(2)}`;
+        drawing = true;
+    }
+
+    return path;
+}
+
+function formatAxisValue(value: number, axis: AxisConfig): string {
+    const decimals = axis.decimals ?? (Number.isInteger(value) ? 0 : 1);
+    return `${value.toFixed(decimals)}${axis.suffix ?? ''}`;
+}
+
 function TimeSeriesPlot({
     height,
     samples,
     yAxis,
     series,
     showXAxisLabels = true,
-    traceType = 'scatter',
     compact = false,
-    redrawKey,
 }: TimeSeriesPlotProps) {
-    const revision =
-        samples.length === 0
-            ? 0
-            : samples[samples.length - 1].timestampMs + samples.length;
-    const xValues = samples.map((sample) => sample.timestamp);
-    const startMs = samples.length > 0 ? samples[0].timestampMs : null;
-    const endMs = samples.length > 0 ? samples[samples.length - 1].timestampMs : null;
-    const rangeMs =
-        startMs != null && endMs != null && endMs >= startMs
-            ? endMs - startMs
-            : 0;
-    const dateGridMs = chooseDateGridMs(rangeMs);
-    const layout: Partial<Layout> = {
-        height,
-        margin: { l: 52, r: 54, t: compact ? 3 : 10, b: showXAxisLabels ? 30 : 10 },
-        paper_bgcolor: PLOT_BG,
-        plot_bgcolor: PLOT_PANEL_BG,
-        font: { color: PLOT_FONT, size: 11 },
-        hovermode: 'x unified',
-        showlegend: true,
-        legend: {
-            orientation: 'h',
-            x: 0,
-            y: compact ? 1.03 : 1.08,
-            xanchor: 'left',
-            yanchor: 'bottom',
-            font: { color: PLOT_FONT, size: compact ? 10 : 11 },
-        },
-        xaxis: {
-            type: 'date',
-            color: PLOT_TICK,
-            tickfont: { color: PLOT_TICK, size: 10 },
-            tickformat: showXAxisLabels ? '%I:%M:%S %p' : undefined,
-            tickmode: 'linear',
-            tick0: '1970-01-01T00:00:00.000Z',
-            dtick: dateGridMs,
-            showgrid: true,
-            gridcolor: PLOT_GRID,
-            zeroline: false,
-            fixedrange: true,
-            showticklabels: showXAxisLabels,
-            ticks: showXAxisLabels ? undefined : '',
-            range: xValues.length > 0 ? [xValues[0], xValues[xValues.length - 1]] : undefined,
-        },
-        yaxis: buildAxis(yAxis, 'left'),
-    };
-    const plotData: Data[] = series.map((item) => ({
-        ...(item as Partial<PlotData>),
-        type: traceType,
-        connectgaps: false,
-    }));
+    const firstTimestampMs = samples[0]?.timestampMs ?? Date.now() - 1;
+    const lastTimestampMs = samples[samples.length - 1]?.timestampMs ?? firstTimestampMs + 1;
+    const xMin = Math.min(firstTimestampMs, lastTimestampMs - 1);
+    const xMax = Math.max(lastTimestampMs, firstTimestampMs + 1);
+    const finiteValues = series.flatMap((line) => (line.y ?? []).filter(
+        (value): value is number => value != null && Number.isFinite(value),
+    ));
+    const yMin = yAxis.range?.[0] ?? (finiteValues.length > 0 ? Math.min(...finiteValues) : 0);
+    const computedYMax = yAxis.range?.[1] ?? (finiteValues.length > 0 ? Math.max(...finiteValues) : 1);
+    const yMax = computedYMax > yMin ? computedYMax : yMin + 1;
+    const middleY = yMin + (yMax - yMin) / 2;
+    const legendHeight = compact ? 22 : 26;
+    const xLabelHeight = showXAxisLabels ? 18 : 4;
 
     return (
-        <Plot
-            key={redrawKey != null ? String(redrawKey) : undefined}
-            data={plotData}
-            layout={layout}
-            config={PLOT_CONFIG}
-            style={{ width: '100%', height: '100%' }}
-            useResizeHandler
-            revision={revision}
-            className="h-full w-full"
-        />
+        <div
+            className="relative w-full overflow-hidden rounded-lg"
+            style={{ height, background: PLOT_PANEL_BG }}
+            role="img"
+            aria-label={`${yAxis.title} telemetry history`}
+        >
+            <div
+                className={`absolute left-11 right-2 top-1 z-10 flex min-w-0 items-center overflow-hidden whitespace-nowrap ${compact ? 'gap-2 text-[9px]' : 'gap-3 text-[10px]'}`}
+                style={{ color: PLOT_FONT }}
+            >
+                {series.map((line, index) => (
+                    <span key={`${line.name ?? 'series'}:${index}`} className="inline-flex min-w-0 items-center gap-1">
+                        <span
+                            className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
+                            style={{ background: line.line?.color ?? UI_LINK }}
+                        />
+                        <span className="truncate">{line.name ?? `Series ${index + 1}`}</span>
+                    </span>
+                ))}
+            </div>
+
+            <div
+                className="absolute bottom-1 left-1 top-6 flex w-9 flex-col justify-between text-right text-[9px] tabular-nums"
+                style={{ color: PLOT_TICK }}
+                aria-hidden="true"
+            >
+                <span>{formatAxisValue(yMax, yAxis)}</span>
+                <span>{formatAxisValue(middleY, yAxis)}</span>
+                <span>{formatAxisValue(yMin, yAxis)}</span>
+            </div>
+
+            <div
+                className="absolute left-11 right-2"
+                style={{ top: legendHeight, bottom: xLabelHeight }}
+            >
+                <svg
+                    className="h-full w-full"
+                    viewBox="0 0 1000 100"
+                    preserveAspectRatio="none"
+                    aria-hidden="true"
+                >
+                    {[0, 25, 50, 75, 100].map((y) => (
+                        <line
+                            key={`h:${y}`}
+                            x1="0"
+                            x2="1000"
+                            y1={y}
+                            y2={y}
+                            stroke={PLOT_GRID}
+                            strokeWidth="1"
+                            vectorEffect="non-scaling-stroke"
+                        />
+                    ))}
+                    {[0, 200, 400, 600, 800, 1000].map((x) => (
+                        <line
+                            key={`v:${x}`}
+                            x1={x}
+                            x2={x}
+                            y1="0"
+                            y2="100"
+                            stroke={PLOT_GRID}
+                            strokeWidth="1"
+                            vectorEffect="non-scaling-stroke"
+                        />
+                    ))}
+                    {series.map((line, index) => {
+                        const path = buildTelemetrySvgPath(line, xMin, xMax, yMin, yMax);
+                        return path ? (
+                            <path
+                                key={`${line.name ?? 'series'}:${index}`}
+                                d={path}
+                                fill="none"
+                                stroke={line.line?.color ?? UI_LINK}
+                                strokeWidth={line.line?.width ?? 1.5}
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                vectorEffect="non-scaling-stroke"
+                            />
+                        ) : null;
+                    })}
+                </svg>
+            </div>
+
+            {showXAxisLabels ? (
+                <div
+                    className="absolute bottom-0 left-11 right-2 flex justify-between text-[9px] tabular-nums"
+                    style={{ color: PLOT_TICK }}
+                    aria-hidden="true"
+                >
+                    <span>{samples[0]?.clock ?? '--:--:--'}</span>
+                    <span>{samples[samples.length - 1]?.clock ?? '--:--:--'}</span>
+                </div>
+            ) : null}
+        </div>
     );
 }
 
@@ -1484,6 +1562,7 @@ function GpuPanel({
 
 function buildSample(payload: SystemStatus, pollIntervalMs: PollPreset): LiveSample {
     const gpu: LiveSample['gpu'] = {};
+    const timestampMs = parseTelemetryTimestampMs(payload.timestamp);
     payload.gpus.forEach((item) => {
         gpu[item.index] = {
             util: item.utilization,
@@ -1494,10 +1573,10 @@ function buildSample(payload: SystemStatus, pollIntervalMs: PollPreset): LiveSam
     });
 
     return {
-        timestamp: payload.timestamp,
-        timestampMs: Date.parse(payload.timestamp),
+        timestamp: new Date(timestampMs).toISOString(),
+        timestampMs,
         pollIntervalMs,
-        clock: formatClock(payload.timestamp),
+        clock: formatClock(new Date(timestampMs).toISOString()),
         cpuUtil: payload.cpu.utilization,
         cpuFreqMhz: payload.cpu.frequency_current_mhz,
         cpuPower: payload.cpu.power_watts,
@@ -1532,7 +1611,7 @@ export function InfraControlStateCollector() {
     useQuery({
         queryKey: SHARED_POWER_CONTROL_QUERY_KEY,
         queryFn: fetchPowerControl,
-        refetchInterval: SHARED_CONTROL_POLL_INTERVAL_MS,
+        refetchInterval: (query) => jobPollingInterval(SHARED_CONTROL_POLL_INTERVAL_MS, query),
         refetchIntervalInBackground: false,
         refetchOnWindowFocus: false,
     });
@@ -1540,7 +1619,7 @@ export function InfraControlStateCollector() {
     useQuery({
         queryKey: SHARED_FAN_CONTROL_QUERY_KEY,
         queryFn: fetchFanControl,
-        refetchInterval: SHARED_CONTROL_POLL_INTERVAL_MS,
+        refetchInterval: (query) => jobPollingInterval(SHARED_CONTROL_POLL_INTERVAL_MS, query),
         refetchIntervalInBackground: false,
         refetchOnWindowFocus: false,
     });
@@ -1548,7 +1627,7 @@ export function InfraControlStateCollector() {
     useQuery({
         queryKey: SHARED_SCHEDULER_CONFIG_QUERY_KEY,
         queryFn: fetchSchedulerConfig,
-        refetchInterval: SHARED_CONTROL_POLL_INTERVAL_MS,
+        refetchInterval: (query) => jobPollingInterval(SHARED_CONTROL_POLL_INTERVAL_MS, query),
         refetchIntervalInBackground: false,
         refetchOnWindowFocus: false,
     });
@@ -1570,7 +1649,7 @@ export function InfraLiveTelemetry({
     const traceType: 'scatter' | 'scattergl' = 'scatter';
     const queryClient = useQueryClient();
     const [restoredState] = useState<RestoredInfraTelemetryState>(() =>
-        loadPersistedTelemetryState(defaultPollIntervalMs, defaultWindowMinutes),
+        readSharedTelemetryCollectorState(defaultPollIntervalMs, defaultWindowMinutes),
     );
     const [pollIntervalMs, setPollIntervalMs] = useState<PollPreset>(restoredState.pollIntervalMs);
     const [windowMinutes, setWindowMinutes] = useState<WindowPreset>(restoredState.windowMinutes);
@@ -1666,37 +1745,38 @@ export function InfraLiveTelemetry({
         },
     });
 
-    useEffect(() => {
-        if (!payload) return;
+    useEffect(() => subscribeSharedTelemetryCollectorState((state) => {
         startTransition(() => {
-            setSamples((prev) => mergeTelemetrySample(prev, buildSample(payload, pollIntervalMs)));
+            setPollIntervalMs(state.pollIntervalMs);
+            setWindowMinutes(state.windowMinutes);
+            setSamples(state.samples);
         });
-    }, [payload, pollIntervalMs]);
+    }), []);
 
     useEffect(() => {
-        persistTelemetryState({
-            version: 3,
-            pollIntervalMs,
-            windowMinutes,
-            samples: trimRetainedSamples(samples),
-        });
-    }, [pollIntervalMs, samples, windowMinutes]);
-
-    useEffect(() => {
+        sharedTelemetryCollectorDefaults = { pollIntervalMs, windowMinutes };
+        if (sharedTelemetryCollectorState) {
+            sharedTelemetryCollectorState.pollIntervalMs = pollIntervalMs;
+            sharedTelemetryCollectorState.windowMinutes = windowMinutes;
+            publishSharedTelemetryCollectorState();
+        }
         if (typeof window === 'undefined') return undefined;
 
+        let flushed = false;
+        const flushPreferences = () => {
+            if (flushed) return;
+            flushed = true;
+            persistTelemetryPreferences(pollIntervalMs, windowMinutes);
+        };
         const timeoutId = window.setTimeout(() => {
-            const persistedState: PersistedInfraTelemetryState = {
-                version: 3,
-                pollIntervalMs,
-                windowMinutes,
-                samples: trimRetainedSamples(samples),
-            };
-            persistTelemetryState(persistedState);
+            flushPreferences();
         }, INFRA_STORAGE_WRITE_DEBOUNCE_MS);
 
-        return () => window.clearTimeout(timeoutId);
-    }, [pollIntervalMs, samples, windowMinutes]);
+        return () => {
+            window.clearTimeout(timeoutId);
+            flushPreferences();
+        };
+    }, [pollIntervalMs, windowMinutes]);
 
     const latestTimestampMs = samples.length > 0 ? samples[samples.length - 1].timestampMs : NaN;
     const visibleSamples =

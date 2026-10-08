@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -27,6 +28,82 @@ def parse_bool(value: Any) -> bool:
     if text in {"0", "false", "no", "off", ""}:
         return False
     raise ValueError(f"Invalid boolean value: {value}")
+
+
+_CALIBY_CHECKPOINTS = {
+    "caliby": Path("caliby/caliby.ckpt"),
+    "soluble_caliby": Path("caliby/soluble_caliby.ckpt"),
+    "soluble_caliby_v1": Path("caliby/soluble_caliby_v1.ckpt"),
+    "caliby_packer_000": Path("caliby/caliby_packer_000.ckpt"),
+    "caliby_packer_010": Path("caliby/caliby_packer_010.ckpt"),
+    "caliby_packer_030": Path("caliby/caliby_packer_030.ckpt"),
+}
+
+
+def resolve_expected_caliby_checkpoint(model_name: str, model_params_dir: Path) -> Path:
+    normalized_name = str(model_name or "").strip()
+    relative_path = _CALIBY_CHECKPOINTS.get(normalized_name)
+    if relative_path is None:
+        supported = ", ".join(sorted(_CALIBY_CHECKPOINTS))
+        raise RuntimeError(f"Unknown Caliby checkpoint '{normalized_name}'. Supported: {supported}")
+    return (model_params_dir / relative_path).resolve()
+
+
+def _validate_cache_directory(env_name: str) -> None:
+    raw_value = str(os.environ.get(env_name) or "").strip()
+    if not raw_value:
+        return
+    cache_path = Path(raw_value).expanduser()
+    if cache_path.exists() and not cache_path.is_dir():
+        raise RuntimeError(f"{env_name} must point to a writable directory, not {cache_path}")
+    existing_parent = cache_path
+    while not existing_parent.exists() and existing_parent != existing_parent.parent:
+        existing_parent = existing_parent.parent
+    if not existing_parent.is_dir() or not os.access(existing_parent, os.W_OK):
+        raise RuntimeError(f"{env_name} is not writable: {cache_path}")
+
+
+def preflight_caliby_runtime(
+    *,
+    task: str,
+    model_name: str,
+    packer_model_name: str | None = None,
+    allow_download: bool | None = None,
+) -> dict[str, Any]:
+    normalized_task = str(task or "").strip().lower()
+    if normalized_task not in {"sequence_design", "ensemble_design", "sidechain_pack"}:
+        raise RuntimeError(f"Unsupported Caliby task: {normalized_task}")
+
+    raw_model_params_dir = str(os.environ.get("MODEL_PARAMS_DIR") or "").strip()
+    if not raw_model_params_dir:
+        raise RuntimeError("MODEL_PARAMS_DIR must be set before loading Caliby")
+    model_params_dir = Path(raw_model_params_dir).expanduser().resolve()
+
+    selected_model = packer_model_name if normalized_task == "sidechain_pack" else model_name
+    checkpoint_path = resolve_expected_caliby_checkpoint(str(selected_model or ""), model_params_dir)
+    downloads_allowed = (
+        parse_bool(os.environ.get("CALIBY_ALLOW_DOWNLOAD", "0"))
+        if allow_download is None
+        else bool(allow_download)
+    )
+
+    for env_name in ("HF_HOME", "XDG_CACHE_HOME", "TRITON_CACHE_DIR"):
+        _validate_cache_directory(env_name)
+
+    if not checkpoint_path.is_file() and not downloads_allowed:
+        raise RuntimeError(
+            f"Caliby {normalized_task} checkpoint is missing: {checkpoint_path}. "
+            "Install the selected checkpoint or explicitly set CALIBY_ALLOW_DOWNLOAD=1."
+        )
+
+    return {
+        "task": normalized_task,
+        "model_name": str(selected_model or ""),
+        "model_params_dir": str(model_params_dir),
+        "checkpoint_path": str(checkpoint_path),
+        "checkpoint_exists": checkpoint_path.is_file(),
+        "allow_download": downloads_allowed,
+    }
 
 
 def parse_omit_aas(raw: str | None) -> list[str]:
@@ -353,10 +430,37 @@ def normalize_sampling_results(
         metadata = {
             "design_id": design_id,
             "example_id": example_id,
+            "source_backbone_id": example_id,
             "source": source,
             "source_model": source,
             "generator_family": source,
             "generator_mode": stage_mode,
+            "stage_family": "caliby",
+            "stage_mode": stage_mode,
+            "artifact_class": "sequence_designed_complex",
+            "result_set": "sequence_designs",
+            "review_profile_id": "sequence_design_v1",
+            "review_contract_version": 1,
+            "review_contract_source": "producer",
+            "review_role_map": {
+                "result_role": "sequence_designed_complex",
+                "source_backbone_id": example_id,
+            },
+            "review_artifact_manifest": {
+                "schema": "bms.review-artifacts.v1",
+                "artifacts": {
+                    "structure": {
+                        "kind": "structure",
+                        "state": "ready",
+                        "path": str(published_pdb),
+                    }
+                },
+            },
+            "score_family": "caliby",
+            "selection_metric": "caliby_potts_energy",
+            "selection_direction": "lower_is_better",
+            "af3score_used": False,
+            "upstream_ppiflow_rank_score_used": False,
             "sequence": sequences[index - 1] if index - 1 < len(sequences) else None,
             "input_sequence": input_sequences[index - 1] if index - 1 < len(input_sequences) else None,
             "caliby_potts_energy": energies[index - 1] if index - 1 < len(energies) else None,

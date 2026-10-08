@@ -4,7 +4,8 @@ export const DEDICATED_LAUNCHER_TEMPLATE_IDS = [
     'structure_prediction',
     'boltz_cp_experimental',
     'oligo_design',
-    'protein_local_redesign',
+    'protein_modification_experimental',
+
     'molecular_dynamics',
 ] as const;
 

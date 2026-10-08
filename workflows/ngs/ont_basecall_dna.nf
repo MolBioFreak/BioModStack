@@ -54,7 +54,7 @@ workflow ONT_BASECALL_DNA {
 
     // --- Dorado basecalling ---
     DoradoBasecall(Channel.of(pod5_input))
-    DoradoBasecall.out.bam.subscribe { _ ->
+    DoradoBasecall.out.bam.subscribe { ignoredValue ->
         reportStage(params, "dorado_basecall", [
             "${params.out_dir}/basecall/calls.bam",
             "${params.out_dir}/basecall/basecall.log",

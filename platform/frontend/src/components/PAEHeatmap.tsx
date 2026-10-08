@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchDesignAnalysis, triggerDesignAnalysis, type ChainMetric, type PAEData, type PersistedAnalysisRun } from '../lib/api';
+import { jobPollingInterval } from '../lib/queryPolling';
 
 interface PAEHeatmapProps {
     designId: string;
@@ -41,7 +42,7 @@ export function PAEHeatmap({ designId, width = 400, height = 400, chainMetrics }
         enabled: !!designId,
         refetchInterval: (query) => {
             const status = (query.state.data as PersistedAnalysisRun<PAEData> | null | undefined)?.status;
-            return status === 'queued' || status === 'running' ? 1500 : false;
+            return status === 'queued' || status === 'running' ? jobPollingInterval(1500, query) : false;
         },
     });
     const pae = paeRun?.status === 'completed' ? (paeRun.result as PAEData | null) : null;

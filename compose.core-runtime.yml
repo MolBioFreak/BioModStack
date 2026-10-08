@@ -4,19 +4,34 @@ x-bms-json-logging: &bms-json-logging
     max-size: ${BMS_DOCKER_LOG_MAX_SIZE:-10m}
     max-file: "${BMS_DOCKER_LOG_MAX_FILE:-5}"
 
+x-bms-default-ulimits: &bms-default-ulimits
+  nofile:
+    soft: ${BMS_CONTAINER_NOFILE_SOFT:-131072}
+    hard: ${BMS_CONTAINER_NOFILE_HARD:-131072}
+
 services:
   bms-api:
+    image: ${BMS_API_IMAGE:-biomodstack/api:local}
     build:
       context: .
       dockerfile: docker/api.Dockerfile
       target: api-runtime
+      args:
+        BMS_BUILD_SHA: ${BMS_BUILD_SHA:-unknown}
+        BMS_BUILD_ID: ${BMS_BUILD_ID:-development}
+        BMS_BUILD_TIME: ${BMS_BUILD_TIME:-unknown}
+    mem_limit: ${BMS_API_MEMORY_LIMIT:-16g}
+    pids_limit: ${BMS_API_PIDS_LIMIT:-4096}
+    ulimits: *bms-default-ulimits
     container_name: biomodstack-api
-    restart: unless-stopped
+    restart: "no"
     logging: *bms-json-logging
     network_mode: host
     environment:
       BMS_HOME: /app
       BMS_STATE_DIR: ${BMS_STATE_DIR:-/mnt/BioModStack}
+      BMS_NVIDIA_SMI_PATH: ${BMS_NVIDIA_SMI_PATH:-/usr/bin/nvidia-smi}
+      BMS_GPU_CONFIG_PATH: /app/platform/api/config/gpu_power_limits.json
       BMS_CONTAINER_STATE_PATH: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}
       BMS_INPUTS_CONTAINER_PATH: ${BMS_INPUTS_CONTAINER_PATH:-/var/lib/biomodstack/inputs}
       BMS_DB_CONTAINER_PATH: ${BMS_DB_CONTAINER_PATH:-/var/lib/biomodstack/biomodstack.db}
@@ -36,6 +51,7 @@ services:
       BMS_BIOXP_OPERATOR_TOKEN: ${BMS_BIOXP_OPERATOR_TOKEN:-}
       BMS_BIOXP_ALLOWED_HOSTS: ${BMS_BIOXP_ALLOWED_HOSTS:-robot}
       BMS_BIOXP_ALLOWED_CIDRS: ${BMS_BIOXP_ALLOWED_CIDRS:-}
+      BMS_FEATURE_MOLECULAR_DYNAMICS: ${BMS_FEATURE_MOLECULAR_DYNAMICS:-0}
       BMS_WORKFLOW_ADAPTER_URL: ${BMS_WORKFLOW_ADAPTER_URL:-http://127.0.0.1:8001}
       BMS_HOST_AGENT_URL: ${BMS_HOST_AGENT_URL:-http://127.0.0.1:8798}
       BMS_HOST_AGENT_TIMEOUT_SECONDS: ${BMS_HOST_AGENT_TIMEOUT_SECONDS:-2.0}
@@ -62,12 +78,20 @@ services:
       start_period: 20s
 
   bms-host-agent:
+    image: ${BMS_HOST_AGENT_IMAGE:-biomodstack/host-agent:local}
     build:
       context: .
       dockerfile: docker/api.Dockerfile
       target: api-runtime
+      args:
+        BMS_BUILD_SHA: ${BMS_BUILD_SHA:-unknown}
+        BMS_BUILD_ID: ${BMS_BUILD_ID:-development}
+        BMS_BUILD_TIME: ${BMS_BUILD_TIME:-unknown}
+    mem_limit: ${BMS_HOST_AGENT_MEMORY_LIMIT:-2g}
+    pids_limit: ${BMS_HOST_AGENT_PIDS_LIMIT:-512}
+    ulimits: *bms-default-ulimits
     container_name: biomodstack-host-agent
-    restart: unless-stopped
+    restart: "no"
     logging: *bms-json-logging
     network_mode: host
     labels:
@@ -101,12 +125,20 @@ services:
       start_period: 5s
 
   bms-cpu-power:
+    image: ${BMS_CPU_POWER_IMAGE:-biomodstack/cpu-power:local}
     build:
       context: .
       dockerfile: docker/api.Dockerfile
       target: api-runtime
+      args:
+        BMS_BUILD_SHA: ${BMS_BUILD_SHA:-unknown}
+        BMS_BUILD_ID: ${BMS_BUILD_ID:-development}
+        BMS_BUILD_TIME: ${BMS_BUILD_TIME:-unknown}
+    mem_limit: ${BMS_CPU_POWER_MEMORY_LIMIT:-1g}
+    pids_limit: ${BMS_CPU_POWER_PIDS_LIMIT:-256}
+    ulimits: *bms-default-ulimits
     container_name: biomodstack-cpu-power
-    restart: unless-stopped
+    restart: "no"
     logging: *bms-json-logging
     network_mode: host
     user: "0:0"
@@ -133,13 +165,20 @@ services:
       retries: 5
       start_period: 5s
 
-
   bms-web:
+    image: ${BMS_WEB_IMAGE:-biomodstack/web:local}
     build:
       context: .
       dockerfile: docker/web.Dockerfile
+      args:
+        BMS_BUILD_SHA: ${BMS_BUILD_SHA:-unknown}
+        BMS_BUILD_ID: ${BMS_BUILD_ID:-development}
+        BMS_BUILD_TIME: ${BMS_BUILD_TIME:-unknown}
+    mem_limit: ${BMS_WEB_MEMORY_LIMIT:-2g}
+    pids_limit: ${BMS_WEB_PIDS_LIMIT:-512}
+    ulimits: *bms-default-ulimits
     container_name: biomodstack-web
-    restart: unless-stopped
+    restart: "no"
     logging: *bms-json-logging
     network_mode: host
     environment:

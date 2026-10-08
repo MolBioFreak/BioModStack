@@ -157,7 +157,7 @@ def test_score_maturation_payload_documents_local_non_af3_objective() -> None:
 
 
 def test_ppiflow_workflow_propagates_objective_and_uses_zero_preserving_defaults() -> None:
-    workflow_text = (REPO_ROOT / "workflows" / "antibody_denovo.nf").read_text(encoding="utf-8")
+    workflow_text = (REPO_ROOT / "workflows" / "antibody_child.nf").read_text(encoding="utf-8")
     module_text = (REPO_ROOT / "modules" / "ppiflow.nf").read_text(encoding="utf-8")
 
     for process_name in ("process SpawnMaturationJobs {", "process SpawnValidatedMaturationJobs {"):

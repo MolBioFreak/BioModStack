@@ -12,7 +12,9 @@ import logging
 
 from database import init_db, async_session
 from molbio_database import init_molbio_db, molbio_health
-from routers import analyses, analytics, boltzgen, designs, files, frameworks, frustrampnn, gpu, inputs, jobs, mobile_ui_updates, models, molbio_ops, msa, nucleotide_sequences, ont_devices, ont_runs, queue, rcsb, ribocentre, rna_structure, sequence_qc, smiles_converter, system, templates, user_sequences, user_templates
+from build_identity import current_build_identity
+from readiness import collect_runtime_readiness
+from routers import analyses, analytics, boltzgen, designs, files, frameworks, frustrampnn, gpu, inputs, jobs, mobile_ui_updates, models, molecular_dynamics, molbio_ops, msa, nucleotide_sequences, ont_devices, ont_runs, queue, rcsb, ribocentre, rna_structure, sequence_qc, smiles_converter, system, templates, user_sequences, user_templates
 from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
 from biomodstack_runtime_profile import install_feature_enabled
 from services.analysis_worker import AnalysisWorker
@@ -26,6 +28,8 @@ logger = logging.getLogger(__name__)
 # Global orchestrator instance
 _orchestrator: GPUOrchestrator = None
 _analysis_worker: AnalysisWorker = None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize database and GPU orchestrator on startup."""
@@ -33,7 +37,7 @@ async def lifespan(app: FastAPI):
     global _analysis_worker
     bioxp_runtime = None
     
-    # Initialize independently owned persistence stores.
+    # Initialize independently owned core and MolBio persistence stores.
     await init_db()
     await init_molbio_db()
     
@@ -143,6 +147,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(models.router, prefix="/api/models", tags=["models"])
+app.include_router(molecular_dynamics.router)
 app.include_router(templates.router, prefix="/api/templates", tags=["templates"])
 app.include_router(inputs.router, prefix="/api/inputs", tags=["inputs"])
 app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
@@ -177,11 +182,23 @@ app.include_router(mobile_ui_updates.router, prefix="/api")
 
 @app.get("/api/health")
 async def health_check():
-    """Health check endpoint, including authoritative Mol Bio storage."""
+    """Separate process liveness from dependency and workflow readiness."""
     molbio = await molbio_health()
-    molbio_ok = molbio.get("status") == "healthy"
-    status = "healthy" if molbio_ok else "degraded"
-    return {"status": status, "service": "biomodstack-api", "molbio": molbio}
+    readiness = await collect_runtime_readiness(molbio=molbio)
+    return {
+        "status": "healthy" if readiness["ready"] else "degraded",
+        "service": "biomodstack-api",
+        "liveness": {"alive": True, "status": "alive"},
+        "readiness": readiness,
+        "build": current_build_identity(),
+        "molbio": molbio,
+    }
+
+
+@app.get("/api/version")
+async def api_version():
+    """Return immutable build identity for cross-surface provenance checks."""
+    return {"service": "biomodstack-api", "build": current_build_identity()}
 
 
 @app.get("/")

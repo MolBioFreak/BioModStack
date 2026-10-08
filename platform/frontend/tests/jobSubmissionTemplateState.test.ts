@@ -5,15 +5,16 @@ import { getDedicatedTemplateInitialValues, isDedicatedLauncherTemplate } from '
 
 test('dedicated launcher templates all suppress the generic launcher chrome', () => {
     assert.equal(isDedicatedLauncherTemplate('mutagenesis'), true);
-    assert.equal(isDedicatedLauncherTemplate('antibody_denovo'), true);
+    assert.equal(isDedicatedLauncherTemplate('antibody_child'), false);
     assert.equal(isDedicatedLauncherTemplate('structure_prediction'), true);
     assert.equal(isDedicatedLauncherTemplate('boltz_cp_experimental'), true);
     assert.equal(isDedicatedLauncherTemplate('esmfold2'), false);
     assert.equal(isDedicatedLauncherTemplate('esmfold2_experimental'), false);
     assert.equal(isDedicatedLauncherTemplate('boltzgen_design'), false);
-    assert.equal(isDedicatedLauncherTemplate('bindcraft'), false);
+    assert.equal(isDedicatedLauncherTemplate('retired binder workflow'), false);
     assert.equal(isDedicatedLauncherTemplate('oligo_design'), true);
-    assert.equal(isDedicatedLauncherTemplate('protein_local_redesign'), true);
+    assert.equal(isDedicatedLauncherTemplate('protein_local_redesign'), false);
+    assert.equal(isDedicatedLauncherTemplate('protein_modification_experimental'), true);
     assert.equal(isDedicatedLauncherTemplate('unknown_template'), false);
     assert.equal(isDedicatedLauncherTemplate(null), false);
 });

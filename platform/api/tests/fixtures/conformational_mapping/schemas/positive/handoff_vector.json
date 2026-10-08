@@ -1,0 +1,6 @@
+{
+  "source_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "candidate_set": [{"entity_instance_id": "copy1", "mutation_aa": "V", "sequence_index": 12}],
+  "resampling_settings": {"feature_mode": "regenerate_mutated_protein_v1", "ordered_seeds": [101, 202]},
+  "expected_idempotency_key": "246dd708f09010758fb31c2c9503f33ffa1ee94b517953898e2ebdec14e6fe00"
+}

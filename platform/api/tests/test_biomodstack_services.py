@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -12,6 +13,25 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import biomodstack_services as services  # noqa: E402
+
+
+def owned_listener_preflight(runtime_mode: str) -> dict[str, Any]:
+    specs = services._runtime_listener_specs(runtime_mode=runtime_mode)
+    return {
+        "ok": True,
+        "status": "ok",
+        "conflicts": [],
+        "components": {
+            str(spec["id"]): {
+                "port": spec["port"],
+                "checked": True,
+                "ok": True,
+                "status": "owned",
+                "listeners": [],
+            }
+            for spec in specs
+        },
+    }
 
 
 def test_launch_preferences_default_to_browser_and_auto_open(tmp_path: Path, monkeypatch) -> None:
@@ -81,6 +101,22 @@ def test_runtime_descriptor_for_dev_mode(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(services, "url_is_ready", lambda url, timeout_seconds=2.0: True)
     monkeypatch.setattr(
         services,
+        "runtime_listener_preflight",
+        lambda *args, **kwargs: owned_listener_preflight("dev"),
+    )
+    monkeypatch.setattr(
+        services,
+        "runtime_api_listener_ownership",
+        lambda *args, **kwargs: {
+            "port": services.DEV_API_PORT,
+            "checked": True,
+            "ok": True,
+            "status": "owned",
+            "listeners": [],
+        },
+    )
+    monkeypatch.setattr(
+        services,
         "load_launch_preferences",
         lambda: {
             "default_surface": services.BROWSER_LAUNCH_SURFACE,
@@ -136,6 +172,17 @@ def test_runtime_descriptor_for_container_mode(tmp_path: Path, monkeypatch) -> N
         raising=False,
     )
     monkeypatch.setattr(services, "electron_shell_available", lambda project_root=None: True, raising=False)
+    monkeypatch.setattr(
+        services,
+        "runtime_listener_preflight",
+        lambda *args, **kwargs: owned_listener_preflight("container"),
+    )
+    monkeypatch.setattr(
+        services,
+        "runtime_api_listener_ownership",
+        lambda project_root, runtime_mode: owned_listener_preflight("container")["components"]["api"],
+        raising=False,
+    )
 
     descriptor = services.runtime_descriptor(project_root=project_root, runtime_mode="container")
 
@@ -186,6 +233,7 @@ def test_runtime_descriptor_for_container_mode(tmp_path: Path, monkeypatch) -> N
 
 def test_runtime_descriptor_container_rejects_legacy_api_listener(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / "repo"
+    monkeypatch.setattr(services, "docker_compose_service_is_running", lambda *args, **kwargs: False)
     monkeypatch.setattr(
         services,
         "service_is_active",
@@ -208,9 +256,53 @@ def test_runtime_descriptor_container_rejects_legacy_api_listener(tmp_path: Path
 
     assert descriptor["health"]["api_ready"] is False
     assert descriptor["runtime_ready"] is False
-    assert descriptor["runtime_active"] is False
+    assert descriptor["runtime_active"] is True
     assert descriptor["runtime_ownership"]["api"]["status"] == "wrong-owner"
     assert descriptor["runtime_ownership"]["api"]["listeners"][0]["owner"] == "legacy-dev-api"
+
+
+def test_runtime_descriptor_does_not_report_ready_without_verified_listener_owner(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / "repo"
+    monkeypatch.setattr(
+        services,
+        "service_is_active",
+        lambda name, project_root=None: name in {services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE},
+    )
+    monkeypatch.setattr(services, "url_is_ready", lambda url, timeout_seconds=2.0: True)
+    monkeypatch.setattr(
+        services,
+        "runtime_listener_preflight",
+        lambda *args, **kwargs: owned_listener_preflight("container"),
+    )
+    monkeypatch.setattr(
+        services,
+        "runtime_api_listener_ownership",
+        lambda *args, **kwargs: {
+            "port": services.API_PORT,
+            "checked": False,
+            "ok": None,
+            "status": "no-listener",
+            "listeners": [],
+        },
+    )
+
+    descriptor = services.runtime_descriptor(project_root=project_root, runtime_mode="container")
+
+    assert descriptor["health"]["api_ready"] is False
+    api_component = descriptor["component_readiness"]["api"]
+    assert api_component["required"] is True
+    assert api_component["ready"] is False
+    assert api_component["http_ready"] is True
+    assert api_component["owner_verified"] is False
+    assert api_component["state"] == "inactive"
+    assert api_component["diagnostic"]["code"] == "no-listener"
+    assert api_component["port"] == services.API_PORT
+    assert api_component["listeners"] == []
+    assert descriptor["runtime_ready"] is False
+    assert descriptor["runtime_active"] is True
 
 
 def test_container_frontend_url_honors_install_profile_web_host_port(tmp_path: Path, monkeypatch) -> None:
@@ -239,7 +331,7 @@ def test_runtime_frontend_urls_honor_configured_dev_and_prod_ports(tmp_path: Pat
     assert services.runtime_frontend_url("container", project_root=project_root) == "http://127.0.0.1:19090/bms/"
 
 
-def test_runtime_api_urls_split_dev_and_prod_ports(tmp_path: Path, monkeypatch) -> None:
+def test_runtime_api_urls_keep_container_port_fixed_and_allow_dev_override(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / "repo"
     monkeypatch.setattr(
         services,
@@ -250,7 +342,7 @@ def test_runtime_api_urls_split_dev_and_prod_ports(tmp_path: Path, monkeypatch) 
 
     assert services.runtime_api_url("dev", project_root=project_root) == "http://127.0.0.1:9002"
     assert services.runtime_api_health_url("dev", project_root=project_root) == "http://127.0.0.1:9002/api/health"
-    assert services.runtime_api_url("container", project_root=project_root) == "http://127.0.0.1:9000"
+    assert services.runtime_api_url("container", project_root=project_root) == "http://127.0.0.1:8000"
 
 
 def test_runtime_port_settings_preserve_profile_and_save_dev_and_prod_ports(tmp_path: Path, monkeypatch) -> None:
@@ -295,15 +387,48 @@ def test_render_user_units_exports_configured_dev_frontend_port(tmp_path: Path, 
     monkeypatch.setattr(
         services,
         "install_profile_snapshot",
-        lambda profile=None, project_root=None: {"resolved": {"dev_api_host_port": 8179, "dev_web_host_port": 5179, "web_host_port": 18080}},
+        lambda profile=None, project_root=None: {"resolved": {
+            "dev_api_host_port": 8179,
+            "dev_web_host_port": 5179,
+            "web_host_port": 18080,
+            "dev_data_root": "/srv/biomodstack-dev",
+            "dev_inputs_dir": "/srv/biomodstack-dev/inputs",
+            "dev_db_path": "/srv/biomodstack-dev/biomodstack.db",
+            "dev_work_dir": "/srv/biomodstack-dev/work",
+            "dev_weights_root": "/srv/biomodstack-dev/weights",
+            "dev_colabfold_db": "/srv/biomodstack-dev/colabfold_db",
+            "dev_msa_cache_dir": "/srv/biomodstack-dev/msa_cache",
+            "dev_sabdab_cache_dir": "/srv/biomodstack-dev/sabdab_cache",
+        }},
         raising=False,
     )
 
     units = services.render_user_units(project_root, runtime_mode="dev")
 
     assert "Environment=BMS_API_BIND_PORT=8179" in units[services.API_SERVICE]
+    assert "Environment=BMS_DATA=/srv/biomodstack-dev" in units[services.API_SERVICE]
+    assert "Environment=BMS_DB_PATH=/srv/biomodstack-dev/biomodstack.db" in units[services.API_SERVICE]
+    assert "ExecStartPre=/usr/bin/mkdir -p /srv/biomodstack-dev" in units[services.API_SERVICE]
     assert "Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:8179" in units[services.FRONTEND_SERVICE]
     assert "Environment=BMS_DEV_WEB_HOST_PORT=5179" in units[services.FRONTEND_SERVICE]
+
+
+def test_start_rejects_an_invalid_port_contract_before_touching_systemd(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / "repo"
+    monkeypatch.setattr(
+        services,
+        "install_profile_snapshot",
+        lambda profile=None, project_root=None: {"resolved": {
+            "api_host_port": 8000,
+            "dev_api_host_port": 8002,
+            "dev_web_host_port": 8002,
+            "web_host_port": 18080,
+        }},
+    )
+    monkeypatch.setattr(services, "ensure_user_units", lambda *args, **kwargs: pytest.fail("must not render units"))
+
+    with pytest.raises(services.ServiceManagerError, match="must be distinct"):
+        services.start_all(project_root=project_root, runtime_mode="dev")
 
 
 def test_start_runtime_target_supports_dev_prod_and_both_without_collapsing_channels(monkeypatch, tmp_path: Path) -> None:
@@ -331,6 +456,7 @@ def test_start_runtime_target_supports_dev_prod_and_both_without_collapsing_chan
 
 def test_runtime_descriptor_requires_all_expected_runtime_services_for_runtime_active(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / "repo"
+    monkeypatch.setattr(services, "docker_compose_service_is_running", lambda *args, **kwargs: False)
     monkeypatch.setattr(
         services,
         "service_is_active",
@@ -379,6 +505,17 @@ def test_runtime_descriptor_requires_http_readiness_for_runtime_active(tmp_path:
     )
     monkeypatch.setattr(services, "install_profile_snapshot", lambda profile=None, project_root=None: {}, raising=False)
     monkeypatch.setattr(services, "electron_shell_available", lambda project_root=None: False, raising=False)
+    monkeypatch.setattr(
+        services,
+        "runtime_listener_preflight",
+        lambda *args, **kwargs: owned_listener_preflight("container"),
+    )
+    monkeypatch.setattr(
+        services,
+        "runtime_api_listener_ownership",
+        lambda project_root, runtime_mode: owned_listener_preflight("container")["components"]["api"],
+        raising=False,
+    )
 
     descriptor = services.runtime_descriptor(project_root=project_root, runtime_mode="container")
 
@@ -388,7 +525,7 @@ def test_runtime_descriptor_requires_http_readiness_for_runtime_active(tmp_path:
     ]
     assert descriptor["health"] == {"adapter_ready": True, "api_ready": True, "frontend_ready": False}
     assert descriptor["runtime_ready"] is False
-    assert descriptor["runtime_active"] is False
+    assert descriptor["runtime_active"] is True
 
 
 def test_service_is_active_degrades_to_false_when_systemctl_is_unavailable(tmp_path: Path, monkeypatch) -> None:
@@ -442,6 +579,10 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path) ->
     assert f"ExecStartPre=/usr/bin/env python3 {project_root / 'scripts' / 'rotate_biomodstack_logs.py'}" in api_unit
     assert f"ExecStart={project_root / 'scripts' / 'run_biomodstack_api.sh'}" in api_unit
     assert f"StandardOutput=append:{services.API_LOG}" in api_unit
+    assert "Restart=on-failure" in api_unit
+    assert "RestartSec=10" in api_unit
+    assert "StartLimitIntervalSec=300" in api_unit
+    assert "StartLimitBurst=3" in api_unit
     assert f"PartOf={services.DEV_TARGET_UNIT}" in api_unit
 
     frontend_unit = units[services.FRONTEND_SERVICE]
@@ -451,6 +592,10 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path) ->
     assert f"ExecStartPre=/usr/bin/env python3 {project_root / 'scripts' / 'rotate_biomodstack_logs.py'}" in frontend_unit
     assert f"ExecStart={project_root / 'scripts' / 'run_biomodstack_frontend.sh'}" in frontend_unit
     assert f"StandardOutput=append:{services.FRONTEND_LOG}" in frontend_unit
+    assert "Restart=on-failure" in frontend_unit
+    assert "RestartSec=10" in frontend_unit
+    assert "StartLimitIntervalSec=300" in frontend_unit
+    assert "StartLimitBurst=3" in frontend_unit
     assert f"PartOf={services.DEV_TARGET_UNIT}" in frontend_unit
     assert f"Wants={services.API_SERVICE}" not in frontend_unit
 
@@ -472,17 +617,26 @@ def test_render_user_units_support_container_runtime_mode(tmp_path: Path) -> Non
     assert f"ExecStartPre=/usr/bin/env python3 {project_root / 'scripts' / 'rotate_biomodstack_logs.py'}" in adapter_unit
     assert f"ExecStart={project_root / 'scripts' / 'run_biomodstack_workflow_adapter.sh'}" in adapter_unit
     assert f"StandardOutput=append:{services.WORKFLOW_ADAPTER_LOG}" in adapter_unit
+    assert "Restart=on-failure" in adapter_unit
+    assert "RestartSec=10" in adapter_unit
+    assert "StartLimitIntervalSec=300" in adapter_unit
+    assert "StartLimitBurst=3" in adapter_unit
     assert f"PartOf={services.TARGET_UNIT}" in adapter_unit
 
     runtime_unit = units[services.CORE_RUNTIME_SERVICE]
     assert f"Environment=BMS_HOME={project_root}" in runtime_unit
     assert "Environment=BMS_RUNTIME_MODE=container" in runtime_unit
-    assert "Type=oneshot" in runtime_unit
-    assert "RemainAfterExit=yes" in runtime_unit
-    assert f"ExecStartPre=/usr/bin/env python3 {project_root / 'scripts' / 'rotate_biomodstack_logs.py'}" in runtime_unit
-    assert f"ExecStart={project_root / 'scripts' / 'run_biomodstack_core_runtime.sh'}" in runtime_unit
+    assert "Type=simple" in runtime_unit
+    assert "RemainAfterExit=yes" not in runtime_unit
+    assert f"ExecStartPre={project_root / 'scripts' / 'run_biomodstack_core_runtime.sh'} preflight" in runtime_unit
+    assert f"ExecStart={project_root / 'scripts' / 'run_biomodstack_core_runtime.sh'} supervise" in runtime_unit
     assert f"ExecStop={project_root / 'scripts' / 'run_biomodstack_core_runtime.sh'} down" in runtime_unit
     assert f"StandardOutput=append:{services.CORE_RUNTIME_LOG}" in runtime_unit
+    assert "Restart=no" in runtime_unit
+    assert "Restart=on-failure" not in runtime_unit
+    assert "TimeoutStartSec=180" in runtime_unit
+    assert "StartLimitIntervalSec=300" in runtime_unit
+    assert "StartLimitBurst=3" in runtime_unit
     assert f"PartOf={services.TARGET_UNIT}" in runtime_unit
 
     target_unit = units[services.TARGET_UNIT]
@@ -609,7 +763,9 @@ def test_runtime_api_listener_ownership_classifies_legacy_dev_api_as_wrong_owner
 
     assert ownership["ok"] is False
     assert ownership["status"] == "wrong-owner"
-    assert ownership["listeners"] == [{"pid": 9100, "owner": "legacy-dev-api", "matched_chain": [9101, 9102]}]
+    assert ownership["listeners"] == [
+        {"pid": 9100, "owner": "legacy-dev-api", "matched_chain": [9101, 9102], "command": "(cmdline unavailable)"}
+    ]
 
 
 def test_runtime_api_listener_ownership_accepts_current_core_runtime_api(monkeypatch, tmp_path: Path) -> None:
@@ -622,6 +778,108 @@ def test_runtime_api_listener_ownership_accepts_current_core_runtime_api(monkeyp
     assert ownership["ok"] is True
     assert ownership["status"] == "ok"
     assert ownership["listeners"][0]["owner"] == "managed-container-api"
+
+
+def test_runtime_listener_ownership_accepts_exact_running_compose_service_when_pid_is_hidden(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "repo"
+    monkeypatch.setattr(services, "listener_pids", lambda port: [])
+    seen: list[tuple[str, Path]] = []
+
+    def running(service: str, project_root: Path | None = None) -> bool:
+        seen.append((service, Path(project_root or ".")))
+        return service == "bms-web"
+
+    monkeypatch.setattr(services, "docker_compose_service_is_running", running, raising=False)
+
+    ownership = services.runtime_listener_ownership(
+        "frontend",
+        services.STABLE_FRONTEND_PORT,
+        "frontend",
+        project_root,
+    )
+
+    assert seen == [("bms-web", project_root)]
+    assert ownership["ok"] is True
+    assert ownership["status"] == "ok"
+    assert ownership["listeners"] == [
+        {
+            "pid": None,
+            "owner": "managed-container-frontend",
+            "matched_chain": [],
+            "command": "docker compose service bms-web (listener PID hidden)",
+        }
+    ]
+
+
+def test_runtime_listener_preflight_checks_all_stable_dependencies(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / "repo"
+    seen: list[int] = []
+
+    def fake_listener_pids(port: int) -> list[int]:
+        seen.append(port)
+        return []
+
+    monkeypatch.setattr(services, "listener_pids", fake_listener_pids)
+    monkeypatch.setattr(services, "docker_compose_service_is_running", lambda *args, **kwargs: False)
+
+    result = services.runtime_listener_preflight(project_root=project_root, runtime_mode="container")
+
+    assert result["ok"] is True
+    assert result["status"] == "ok"
+    assert set(result["components"]) == {
+        "workflow-adapter",
+        "api",
+        "frontend",
+        "cpu-power",
+        "host-agent",
+    }
+    assert set(seen) == {8001, 8000, 18080, 8797, 8798}
+    assert all(component["status"] == "no-listener" for component in result["components"].values())
+
+
+def test_runtime_listener_preflight_blocks_foreign_dependency_owner(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / "repo"
+    monkeypatch.setattr(services, "listener_pids", lambda port: [9012] if port == services.HOST_AGENT_PORT else [])
+    monkeypatch.setattr(services, "docker_compose_service_is_running", lambda *args, **kwargs: False)
+    monkeypatch.setattr(services, "pid_is_biomodstack_runtime_container", lambda *args, **kwargs: False)
+    monkeypatch.setattr(services, "read_pid_cmdline", lambda pid: "python foreign_host_agent.py")
+
+    result = services.runtime_listener_preflight(project_root=project_root, runtime_mode="container")
+
+    assert result["ok"] is False
+    assert result["status"] == "blocked"
+    assert result["conflicts"] == ["host-agent"]
+    assert result["components"]["host-agent"]["listeners"] == [
+        {
+            "pid": 9012,
+            "owner": "foreign",
+            "matched_chain": [],
+            "command": "python foreign_host_agent.py",
+        }
+    ]
+
+
+def test_assert_runtime_listener_preflight_reports_conflicting_component(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        services,
+        "runtime_listener_preflight",
+        lambda *args, **kwargs: {
+            "ok": False,
+            "components": {
+                "api": {
+                    "port": 8000,
+                    "ok": False,
+                    "listeners": [{"pid": 321, "owner": "foreign"}],
+                }
+            },
+        },
+    )
+
+    with pytest.raises(services.ServiceManagerError, match="api port 8000"):
+        services.assert_runtime_listener_preflight(project_root=tmp_path, runtime_mode="container")
 
 
 def test_cleanup_legacy_listener_kills_matching_ancestor_chain(monkeypatch, tmp_path: Path) -> None:
@@ -702,6 +960,7 @@ def test_pid_is_biomodstack_runtime_container_matches_compose_labels(monkeypatch
 def test_start_all_container_mode_skips_legacy_cleanup_when_runtime_container_listener_already_present(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / "repo"
     calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(services, "docker_compose_service_is_running", lambda *args, **kwargs: False)
 
     monkeypatch.setattr(
         services,
@@ -750,6 +1009,7 @@ def test_start_all_container_mode_skips_legacy_cleanup_when_runtime_container_li
 def test_start_all_dev_mode_keeps_container_runtime_and_starts_only_dev_frontend_when_api_is_ready(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / "repo"
     calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(services, "assert_runtime_listener_preflight", lambda *args, **kwargs: {})
 
     monkeypatch.setattr(services, "ensure_user_units", lambda root, runtime_mode=None: calls.append(("ensure", runtime_mode)))
     monkeypatch.setattr(services, "cleanup_legacy_listener", lambda kind, project_root=None, runtime_mode=None: calls.append(("cleanup", kind)))
@@ -770,7 +1030,6 @@ def test_start_all_dev_mode_keeps_container_runtime_and_starts_only_dev_frontend
 
     assert calls == [
         ("ensure", "dev"),
-        ("cleanup", "frontend"),
         ("systemctl", ("start", services.FRONTEND_SERVICE, services.DEV_TARGET_UNIT)),
         ("wait", services.runtime_api_health_url("dev", project_root=project_root)),
         ("wait", "http://127.0.0.1:5173/"),
@@ -780,6 +1039,7 @@ def test_start_all_dev_mode_keeps_container_runtime_and_starts_only_dev_frontend
 def test_start_all_dev_mode_skips_legacy_cleanup_when_runtime_already_active(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / "repo"
     calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(services, "assert_runtime_listener_preflight", lambda *args, **kwargs: {})
 
     monkeypatch.setattr(services, "ensure_user_units", lambda root, runtime_mode=None: calls.append(("ensure", runtime_mode)))
     monkeypatch.setattr(
@@ -803,7 +1063,6 @@ def test_start_all_dev_mode_skips_legacy_cleanup_when_runtime_already_active(mon
 
     assert calls == [
         ("ensure", "dev"),
-        ("systemctl", ("start", services.FRONTEND_SERVICE, services.DEV_TARGET_UNIT)),
         ("wait", services.runtime_api_health_url("dev", project_root=project_root)),
         ("wait", services.runtime_frontend_url("dev")),
     ]
@@ -879,6 +1138,7 @@ def test_status_lines_do_not_mutate_runtime_state(monkeypatch, tmp_path: Path) -
 def test_start_all_container_mode_skips_legacy_cleanup_when_runtime_already_active(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / "repo"
     calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(services, "assert_runtime_listener_preflight", lambda *args, **kwargs: {})
 
     monkeypatch.setattr(
         services,
@@ -919,9 +1179,10 @@ def test_start_all_container_mode_skips_legacy_cleanup_when_runtime_already_acti
     ]
 
 
-def test_start_all_container_mode_restarts_api_web_when_units_active_but_http_down(monkeypatch, tmp_path: Path) -> None:
+def test_start_all_container_mode_blocks_when_supervisor_active_but_http_down(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / "repo"
     calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(services, "assert_runtime_listener_preflight", lambda *args, **kwargs: {})
 
     monkeypatch.setattr(services, "ensure_user_units", lambda root, runtime_mode=None: calls.append(("ensure", runtime_mode)))
     monkeypatch.setattr(services, "ensure_target_enabled", lambda root, runtime_mode=None: calls.append(("enable", runtime_mode)))
@@ -930,39 +1191,23 @@ def test_start_all_container_mode_restarts_api_web_when_units_active_but_http_do
         "service_is_active",
         lambda service_name, project_root=None: service_name in {services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE},
     )
-    monkeypatch.setattr(services, "should_cleanup_legacy_listeners_before_start", lambda runtime_mode=None, project_root=None: False)
     monkeypatch.setattr(services, "url_is_ready", lambda url, timeout_seconds=2.0: False)
     monkeypatch.setattr(
         services,
-        "run_systemctl",
-        lambda *args, **kwargs: calls.append(("systemctl", args)) or SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
-    monkeypatch.setattr(
-        services,
         "run_core_runtime_script",
-        lambda *args, **kwargs: calls.append(("core-script", args)) or SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
-    monkeypatch.setattr(
-        services,
-        "wait_for_http",
-        lambda url, timeout_seconds=30.0: calls.append(("wait", (url, timeout_seconds))),
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not bypass supervisor recovery budget")),
     )
 
-    services.start_all(project_root=project_root, runtime_mode="container")
+    with pytest.raises(services.ServiceManagerError, match="Automatic lifecycle restart is disabled"):
+        services.start_all(project_root=project_root, runtime_mode="container")
 
-    assert calls == [
-        ("ensure", "container"),
-        ("enable", "container"),
-        ("core-script", ("up", "bms-api", "bms-web")),
-        ("wait", (services.WORKFLOW_ADAPTER_HEALTH_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
-        ("wait", (services.runtime_api_health_url("container", project_root=project_root), services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
-        ("wait", (services.FRONTEND_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
-    ]
+    assert calls == [("ensure", "container"), ("enable", "container")]
 
 
-def test_start_all_container_mode_cleans_legacy_listeners_before_first_start(monkeypatch, tmp_path: Path) -> None:
+def test_start_all_container_mode_never_kills_existing_listeners_before_first_start(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / "repo"
     calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(services, "assert_runtime_listener_preflight", lambda *args, **kwargs: {})
 
     monkeypatch.setattr(
         services,
@@ -973,7 +1218,7 @@ def test_start_all_container_mode_cleans_legacy_listeners_before_first_start(mon
     monkeypatch.setattr(
         services,
         "cleanup_legacy_listener",
-        lambda kind, project_root=None, runtime_mode=None: calls.append(("cleanup", kind)),
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("launch must never kill a listener")),
     )
     monkeypatch.setattr(
         services,
@@ -991,7 +1236,6 @@ def test_start_all_container_mode_cleans_legacy_listeners_before_first_start(mon
     assert calls == [
         ("ensure", "container"),
         ("systemctl", ("enable", services.TARGET_UNIT)),
-        ("cleanup", "api"),
         ("systemctl", ("start", services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE, services.TARGET_UNIT)),
         ("wait", (services.WORKFLOW_ADAPTER_HEALTH_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
         ("wait", (services.runtime_api_health_url("container", project_root=project_root), services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
@@ -1002,6 +1246,7 @@ def test_start_all_container_mode_cleans_legacy_listeners_before_first_start(mon
 def test_restart_all_container_mode_enables_target_before_restart(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / "repo"
     calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(services, "assert_runtime_listener_preflight", lambda *args, **kwargs: {})
 
     monkeypatch.setattr(
         services,
@@ -1038,7 +1283,6 @@ def test_restart_all_container_mode_enables_target_before_restart(monkeypatch, t
                 services.CORE_RUNTIME_SERVICE,
             ),
         ),
-        ("cleanup", "api"),
         ("systemctl", ("start", services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE, services.TARGET_UNIT)),
         ("wait", (services.WORKFLOW_ADAPTER_HEALTH_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
         ("wait", (services.runtime_api_health_url("container", project_root=project_root), services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
@@ -1046,15 +1290,15 @@ def test_restart_all_container_mode_enables_target_before_restart(monkeypatch, t
     ]
 
 
-def test_core_runtime_script_start_does_not_rebuild_images() -> None:
+def test_core_runtime_script_delegates_to_bounded_supervisor() -> None:
     script = (services.get_project_root() / "scripts" / "run_biomodstack_core_runtime.sh").read_text(encoding="utf-8")
 
-    assert "up -d --remove-orphans" in script
-    assert "up --build --remove-orphans" not in script
-    assert "up -d --build --remove-orphans" in script
-    assert "cleanup_legacy_api_listener_if_needed" in script
-    assert "cleanup_legacy_listener('api', root, runtime_mode=CONTAINER_RUNTIME_MODE)" in script
-    assert "stop)" in script
+    assert "biomodstack_core_runtime_controller.py" in script
+    assert "BMS_STATE_DIR must be explicitly configured" in script
+    assert "no fallback state root is permitted" in script
+    assert "remove-orphans" not in script
+    assert "cleanup_legacy_api_listener_if_needed" not in script
+    assert "supervise|preflight|status|up|stop|down" in script
     assert "rebuild|build)" in script
 
 
@@ -1071,6 +1315,13 @@ def test_core_runtime_compose_bounds_docker_json_logs() -> None:
     assert "max-size: ${BMS_DOCKER_LOG_MAX_SIZE:-10m}" in compose
     assert "max-file: \"${BMS_DOCKER_LOG_MAX_FILE:-5}\"" in compose
     assert compose.count("logging: *bms-json-logging") == 4
+
+
+def test_core_runtime_compose_disables_docker_restart_policy() -> None:
+    compose = (services.get_project_root() / "compose.core-runtime.yml").read_text(encoding="utf-8")
+
+    assert "restart: unless-stopped" not in compose
+    assert compose.count('restart: "no"') == 6
 
 
 def test_stop_all_container_mode_is_prod_scoped(monkeypatch, tmp_path: Path) -> None:
@@ -1131,58 +1382,32 @@ def test_stop_all_dev_mode_stops_dev_frontend_without_touching_container_api(mon
     ]
 
 
-def test_start_api_container_mode_stops_local_dev_api_then_starts_container_service(monkeypatch, tmp_path: Path) -> None:
+def test_start_api_container_mode_blocks_foreign_api_listener_without_killing_it(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / "repo"
     calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(services, "docker_compose_service_is_running", lambda *args, **kwargs: False)
 
-    monkeypatch.setattr(services, "ensure_user_units", lambda root, runtime_mode=None: calls.append(("ensure", runtime_mode)))
-    monkeypatch.setattr(services, "ensure_target_enabled", lambda project_root=None, runtime_mode=None: calls.append(("enable", runtime_mode)))
     monkeypatch.setattr(
         services,
         "listener_pids",
         lambda port: [9012] if port == services.API_PORT else [],
     )
-    monkeypatch.setattr(
-        services,
-        "pid_is_biomodstack_runtime_container",
-        lambda pid, kind, project_root=None: False,
-    )
-    monkeypatch.setattr(
-        services,
-        "service_is_active",
-        lambda name, project_root=None: name == services.API_SERVICE,
-    )
-    monkeypatch.setattr(
-        services,
-        "run_systemctl",
-        lambda *args, **kwargs: calls.append(("systemctl", args)) or SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
+    monkeypatch.setattr(services, "pid_is_biomodstack_runtime_container", lambda *args, **kwargs: False)
     monkeypatch.setattr(
         services,
         "cleanup_legacy_listener",
-        lambda kind, project_root=None, runtime_mode=None: calls.append(("cleanup", kind)),
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not kill a foreign listener")),
     )
     monkeypatch.setattr(
         services,
         "run_core_runtime_script",
-        lambda *args, **kwargs: calls.append(("compose", args)) or SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
-    monkeypatch.setattr(
-        services,
-        "wait_for_http",
-        lambda url, timeout_seconds=30.0: calls.append(("wait", (url, timeout_seconds))),
+        lambda *args, **kwargs: calls.append(("compose", args)),
     )
 
-    services.start_api(project_root=project_root, runtime_mode="container")
+    with pytest.raises(services.ServiceManagerError, match="api port 8000"):
+        services.start_api(project_root=project_root, runtime_mode="container")
 
-    assert calls == [
-        ("ensure", "container"),
-        ("enable", "container"),
-        ("systemctl", ("stop", services.API_SERVICE)),
-        ("cleanup", "api"),
-        ("compose", ("up", "--no-deps", "bms-api")),
-        ("wait", (services.API_HEALTH_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
-    ]
+    assert calls == []
 
 
 def test_stop_api_container_mode_stops_only_container_api_service(monkeypatch, tmp_path: Path) -> None:
@@ -1238,7 +1463,6 @@ def test_start_api_dev_mode_can_coexist_with_container_api_on_prod_port(monkeypa
 
     assert calls == [
         ("ensure", "dev"),
-        ("cleanup", ("api", "dev")),
         ("systemctl", ("start", services.API_SERVICE)),
         ("wait", services.runtime_api_health_url("dev", project_root=project_root)),
     ]
@@ -1267,3 +1491,24 @@ def test_stop_api_dev_mode_stops_systemd_service_and_cleans_listener(monkeypatch
         ("systemctl", ("stop", services.API_SERVICE)),
         ("cleanup", "api"),
     ]
+
+
+class _HttpResponse:
+    def __init__(self, status: int) -> None:
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        return None
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [(200, True), (204, False), (404, False), (500, False)],
+)
+def test_url_is_ready_requires_exact_http_200(monkeypatch, status: int, expected: bool) -> None:
+    monkeypatch.setattr(services.urllib.request, "urlopen", lambda *args, **kwargs: _HttpResponse(status))
+
+    assert services.url_is_ready("http://operator-surface.test/health") is expected

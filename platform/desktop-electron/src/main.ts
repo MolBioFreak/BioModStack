@@ -4,12 +4,14 @@ import path from 'node:path';
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell, Tray } from 'electron';
 
 import { buildApplicationMenu } from './menu.js';
+import { resolveElectronBuildIdentity } from './buildIdentity.js';
 import { applyShellGraphicsWorkarounds } from './graphicsWorkarounds.js';
 import { resolveShellPaths } from './shellPaths.js';
 import { createServiceControl, type ServiceRuntimeTarget } from './serviceControl.js';
-import { createAppTray } from './tray.js';
+import { ensureRuntimeReady } from './runtimeReadiness.js';
+import { createAppTray, disposeAppTray } from './tray.js';
 import { enforceSingleInstanceLock, attachCloseToTrayBehavior } from './windowLifecycle.js';
-import { attachWindowDiagnostics } from './windowDiagnostics.js';
+import { attachWindowDiagnostics, createPersistentDiagnosticsStore } from './windowDiagnostics.js';
 import {
   ADJUST_ZOOM_CHANNEL,
   buildBrowserWindowOptions,
@@ -48,6 +50,7 @@ let appTray: Tray | null = null;
 let activeContext: ShellContext | null = null;
 let isQuitting = false;
 let refreshApplicationMenuState = () => undefined;
+let runtimeSwitchQueue: Promise<void> = Promise.resolve();
 
 const gpuAccelerationDisabled = applyShellGraphicsWorkarounds(app);
 if (gpuAccelerationDisabled) {
@@ -145,27 +148,57 @@ function resetShellZoom(): number {
 
 async function switchShellRuntime(requestedRuntimeMode: ShellRuntimeMode): Promise<ShellContext> {
   const runtimeMode = normalizeRequestedRuntimeMode(requestedRuntimeMode);
-  const currentContext = getActiveContext();
-  const currentUrl = mainWindow?.webContents.getURL() || currentContext.windowUrl;
-  const nextContext = resolveRuntimeSwitchContext({
-    currentContext,
-    currentUrl,
-    targetRuntimeMode: runtimeMode,
+  let resolveResult: ((context: ShellContext) => void) | undefined;
+  let rejectResult: ((error: unknown) => void) | undefined;
+  let rollbackContext: ShellContext | null = null;
+  let rollbackUrl: string | null = null;
+  const result = new Promise<ShellContext>((resolve, reject) => {
+    resolveResult = resolve;
+    rejectResult = reject;
   });
 
-  activeContext = nextContext;
-  applyShellContextEnvironment(nextContext);
-  installMenuAndTray(nextContext);
+  runtimeSwitchQueue = runtimeSwitchQueue
+    .catch(() => undefined)
+    .then(async () => {
+      const currentContext = getActiveContext();
+      const currentUrl = mainWindow?.webContents.getURL() || currentContext.windowUrl;
+      rollbackContext = currentContext;
+      rollbackUrl = currentUrl;
+      // Do not publish a new context until its selected runtime reports complete readiness.
+      await ensureRuntimeReady(runtimeMode, createServiceControl());
+      const nextContext = resolveRuntimeSwitchContext({
+        currentContext,
+        currentUrl,
+        targetRuntimeMode: runtimeMode,
+      });
 
-  if (mainWindow) {
-    await mainWindow.webContents.session.clearCache().catch((error: unknown) => {
-      const details = error instanceof Error ? error.message : String(error);
-      console.warn(`[BioModStack Shell] Failed to clear HTTP cache before switching runtime: ${details}`);
+      if (mainWindow) {
+        await mainWindow.webContents.session.clearCache().catch((error: unknown) => {
+          const details = error instanceof Error ? error.message : String(error);
+          console.warn(`[BioModStack Shell] Failed to clear HTTP cache before switching runtime: ${details}`);
+        });
+        await mainWindow.loadURL(nextContext.windowUrl);
+      }
+
+      activeContext = nextContext;
+      applyShellContextEnvironment(nextContext);
+      installMenuAndTray(nextContext);
+      resolveResult?.(nextContext);
+    })
+    .catch(async (error: unknown) => {
+      // loadURL can fail after navigation has begun; restore the still-authoritative
+      // context before reporting the switch failure, and keep future switches usable.
+      if (rollbackContext) {
+        activeContext = rollbackContext;
+        applyShellContextEnvironment(rollbackContext);
+        if (mainWindow && rollbackUrl && mainWindow.webContents.getURL() !== rollbackUrl) {
+          await mainWindow.loadURL(rollbackUrl).catch(() => undefined);
+        }
+      }
+      rejectResult?.(error);
     });
-    await mainWindow.loadURL(nextContext.windowUrl);
-  }
 
-  return nextContext;
+  return await result;
 }
 
 function buildMenuAndTray(context: ShellContext) {
@@ -211,6 +244,7 @@ function buildMenuAndTray(context: ShellContext) {
       mainWindow.setAlwaysOnTop(!mainWindow.isAlwaysOnTop());
       refreshApplicationMenu();
     },
+    reportActionError: (error: unknown) => reportFatalShellError('Service action failed', error),
     iconPath: shellPaths.trayIconPath,
   };
 
@@ -235,6 +269,7 @@ function attachTrayHandlers(tray: Tray): void {
 function installMenuAndTray(context: ShellContext): void {
   const { tray, refreshApplicationMenu } = buildMenuAndTray(context);
   if (appTray) {
+    disposeAppTray(appTray);
     appTray.destroy();
   }
   appTray = tray;
@@ -332,23 +367,32 @@ export function createMainWindow(context: ShellContext): BrowserWindow {
   });
 
   window.once('ready-to-show', () => {
-    window.show();
+    if (!window.isDestroyed()) window.show();
   });
 
   window.webContents.setZoomFactor(readPersistedZoomFactor(getZoomSettingsPath()));
   attachShellNavigationGuard(window, getActiveContext);
   attachExternalLinkHandler(window);
   attachCloseToTrayBehavior(window, () => isQuitting);
-  attachWindowDiagnostics(window, context, {
+  const detachWindowDiagnostics = attachWindowDiagnostics(window, getActiveContext, {
+    diagnosticsStore: createPersistentDiagnosticsStore({
+      path: path.join(app.getPath('userData'), 'shell-renderer-diagnostics.json'),
+      buildIdentity: resolveElectronBuildIdentity(process.env, app.getVersion()),
+    }),
     showErrorBox: (title, content) => {
       dialog.showErrorBox(title, content);
     },
   });
+  window.once('closed', detachWindowDiagnostics);
   window.webContents.session.clearCache().catch((error: unknown) => {
     const details = error instanceof Error ? error.message : String(error);
     console.warn(`[BioModStack Shell] Failed to clear HTTP cache before loading frontend: ${details}`);
   }).finally(() => {
-    void window.loadURL(context.windowUrl);
+    if (window.isDestroyed()) return;
+    void window.loadURL(context.windowUrl).catch((error: unknown) => {
+      const details = error instanceof Error ? error.message : String(error);
+      console.warn(`[BioModStack Shell] Failed to load frontend: ${details}`);
+    });
   });
 
   return window;
@@ -366,6 +410,7 @@ async function bootstrap(): Promise<void> {
     iconPath: resolveShellPaths().appIconPath,
   });
 
+  await ensureRuntimeReady(context.runtimeMode, createServiceControl());
   registerIpcHandlers(getActiveContext);
   mainWindow = createMainWindow(context);
   installMenuAndTray(context);
@@ -383,6 +428,9 @@ async function bootstrap(): Promise<void> {
 
 app.on('before-quit', () => {
   isQuitting = true;
+  if (appTray) {
+    disposeAppTray(appTray);
+  }
 });
 
 const singleInstanceLockAcquired = enforceSingleInstanceLock(app, () => showMainWindow());

@@ -34,6 +34,7 @@ _PATH_FIELDS = (
     "inputs_dir",
     "db_path",
     "container_dir",
+    "dev_data_root",
     "weights_root",
     "colabfold_db",
     "msa_cache_dir",
@@ -47,11 +48,19 @@ _CONFIG_FIELDS = (
     "compose_project_name",
 )
 _INT_FIELDS = ("api_host_port", "dev_api_host_port", "dev_web_host_port", "web_host_port")
+# Host-side operational endpoints; application surfaces may never claim them.
+RESERVED_AUXILIARY_PORTS: dict[int, str] = {
+    8001: "workflow adapter",
+    8797: "CPU telemetry",
+    8798: "host telemetry",
+}
 _FEATURE_DEFAULTS = {
     "bioxp": True,
+    "molecular_dynamics": False,
 }
 _FEATURE_ENV_NAMES = {
     "bioxp": "BMS_FEATURE_BIOXP",
+    "molecular_dynamics": "BMS_FEATURE_MOLECULAR_DYNAMICS",
 }
 
 
@@ -181,6 +190,12 @@ def get_project_root(project_root: Path | None = None) -> Path:
 
 def _default_data_root() -> Path:
     return Path.home().resolve() / ".biomodstack"
+
+
+def _default_dev_data_root() -> Path:
+    # Production mounts and local development must not share SQLite, queues,
+    # caches, or result directories.
+    return Path.home().resolve() / ".biomodstack-dev"
 
 
 def _candidate_data_roots() -> list[Path]:
@@ -354,6 +369,12 @@ def resolve_runtime_paths(
     colabfold_db = resolve_data_like("BMS_COLABFOLD_DB", "colabfold_db", "colabfold_db")
     msa_cache_dir = resolve_data_like("BMS_MSA_CACHE", "msa_cache_dir", "msa_cache")
     sabdab_cache_dir = resolve_data_like("BMS_SABDAB_CACHE", "sabdab_cache_dir", "sabdab_cache")
+    profile_dev_data_root = normalized_profile.get("dev_data_root")
+    dev_data_root = (
+        Path(profile_dev_data_root).expanduser().resolve()
+        if isinstance(profile_dev_data_root, str) and profile_dev_data_root.strip()
+        else _default_dev_data_root()
+    )
 
     container_state_path = os.getenv("BMS_CONTAINER_STATE_PATH") or str(
         normalized_profile.get("container_state_path") or DEFAULT_CONTAINER_STATE_PATH
@@ -396,10 +417,20 @@ def resolve_runtime_paths(
         "colabfold_db": str(colabfold_db),
         "msa_cache_dir": str(msa_cache_dir),
         "sabdab_cache_dir": str(sabdab_cache_dir),
+        "dev_data_root": str(dev_data_root),
+        "dev_inputs_dir": str(dev_data_root / "inputs"),
+        "dev_db_path": str(dev_data_root / "biomodstack.db"),
+        "dev_work_dir": str(dev_data_root / "work"),
+        "dev_weights_root": str(dev_data_root / "weights"),
+        "dev_colabfold_db": str(dev_data_root / "colabfold_db"),
+        "dev_msa_cache_dir": str(dev_data_root / "msa_cache"),
+        "dev_sabdab_cache_dir": str(dev_data_root / "sabdab_cache"),
         "container_state_path": container_state_path,
         "inputs_container_path": inputs_container_path,
         "db_container_path": db_container_path,
-        "api_host_port": _coerce_env_int("BMS_API_HOST_PORT", int(normalized_profile.get("api_host_port") or DEFAULT_API_HOST_PORT)),
+        # The production API image is deliberately pinned to 8000.  Do not
+        # advertise a configurable host port that Docker cannot honor.
+        "api_host_port": DEFAULT_API_HOST_PORT,
         "dev_api_host_port": _coerce_env_int(
             "BMS_DEV_API_HOST_PORT",
             int(normalized_profile.get("dev_api_host_port") or DEFAULT_DEV_API_HOST_PORT),
@@ -418,6 +449,36 @@ def resolve_runtime_paths(
             bool(normalized_profile.get("core_runtime_mode", True)),
         ),
     }
+
+
+def validate_runtime_port_contract(resolved: Mapping[str, object]) -> None:
+    """Reject ambiguous application channels before a profile or unit is written."""
+    port_fields = {
+        "api_host_port": resolved.get("api_host_port", DEFAULT_API_HOST_PORT),
+        "dev_api_host_port": resolved.get("dev_api_host_port", DEFAULT_DEV_API_HOST_PORT),
+        "dev_web_host_port": resolved.get("dev_web_host_port", DEFAULT_DEV_WEB_HOST_PORT),
+        "web_host_port": resolved.get("web_host_port", DEFAULT_WEB_HOST_PORT),
+    }
+    normalized: dict[str, int] = {}
+    for field, value in port_fields.items():
+        if field == "api_host_port" and value is not None and int(str(value)) != DEFAULT_API_HOST_PORT:
+            raise ValueError(
+                f"api_host_port is fixed at {DEFAULT_API_HOST_PORT}: the stable container image binds that port"
+            )
+        try:
+            port = int(str(value))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{field} must be an integer TCP port") from exc
+        if not 1 <= port <= 65535:
+            raise ValueError(f"{field} must be between 1 and 65535")
+        if port in RESERVED_AUXILIARY_PORTS:
+            raise ValueError(
+                f"{field} uses reserved BioModStack auxiliary port {port} ({RESERVED_AUXILIARY_PORTS[port]})"
+            )
+        normalized[field] = port
+    duplicates = sorted({port for port in normalized.values() if list(normalized.values()).count(port) > 1})
+    if duplicates:
+        raise ValueError(f"BioModStack runtime ports must be distinct; duplicate port(s): {', '.join(map(str, duplicates))}")
 
 
 def _compat_env_lines(resolved: Mapping[str, object]) -> list[str]:
@@ -446,6 +507,7 @@ def _compat_env_lines(resolved: Mapping[str, object]) -> list[str]:
         f'export CORS_ORIGINS="${{CORS_ORIGINS:-{cors_origins}}}"',
         f'export BMS_CORE_RUNTIME_MODE="${{BMS_CORE_RUNTIME_MODE:-{core_runtime_mode}}}"',
         f'export BMS_FEATURE_BIOXP="${{BMS_FEATURE_BIOXP:-{1 if resolved["features"]["bioxp"] else 0}}}"',
+        f'export BMS_FEATURE_MOLECULAR_DYNAMICS="${{BMS_FEATURE_MOLECULAR_DYNAMICS:-{1 if resolved["features"]["molecular_dynamics"] else 0}}}"',
         f'export BMS_WORKFLOW_ADAPTER_URL="${{BMS_WORKFLOW_ADAPTER_URL:-{resolved["workflow_adapter_url"]}}}"',
         f'export COMPOSE_PROJECT_NAME="${{COMPOSE_PROJECT_NAME:-{resolved["compose_project_name"]}}}"',
         "",
@@ -477,6 +539,7 @@ def _core_runtime_env_lines(resolved: Mapping[str, object]) -> list[str]:
         f'CORS_ORIGINS={cors_origins}',
         f'BMS_CORE_RUNTIME_MODE={core_runtime_mode}',
         f'BMS_FEATURE_BIOXP={1 if resolved["features"]["bioxp"] else 0}',
+        f'BMS_FEATURE_MOLECULAR_DYNAMICS={1 if resolved["features"]["molecular_dynamics"] else 0}',
         f'BMS_WORKFLOW_ADAPTER_URL={resolved["workflow_adapter_url"]}',
         f'COMPOSE_PROJECT_NAME={resolved["compose_project_name"]}',
         "",
@@ -486,6 +549,7 @@ def _core_runtime_env_lines(resolved: Mapping[str, object]) -> list[str]:
 def export_install_profile(profile: Mapping[str, object] | None = None, project_root: Path | None = None) -> dict[str, str]:
     normalized_profile = normalize_install_profile(profile if profile is not None else load_install_profile())
     resolved = resolve_runtime_paths(project_root=project_root, profile=normalized_profile)
+    validate_runtime_port_contract(resolved)
 
     compat_env_path = get_compat_env_path()
     compat_env_path.parent.mkdir(parents=True, exist_ok=True)
@@ -502,7 +566,14 @@ def export_install_profile(profile: Mapping[str, object] | None = None, project_
 
 
 def save_install_profile(raw: Mapping[str, object], project_root: Path | None = None) -> dict[str, object]:
+    requested_api_port = _normalize_optional_int(raw.get("api_host_port"))
+    if requested_api_port is not None and requested_api_port != DEFAULT_API_HOST_PORT:
+        raise ValueError(
+            f"api_host_port is fixed at {DEFAULT_API_HOST_PORT}: the stable container image binds that port"
+        )
     normalized = normalize_install_profile(raw)
+    resolved = resolve_runtime_paths(project_root=project_root, profile=normalized)
+    validate_runtime_port_contract(resolved)
     profile_path = get_install_profile_path()
     profile_path.parent.mkdir(parents=True, exist_ok=True)
     profile_path.write_text(json.dumps(normalized, indent=2, sort_keys=True) + "\n", encoding="utf-8")

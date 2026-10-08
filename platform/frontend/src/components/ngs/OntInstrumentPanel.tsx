@@ -10,6 +10,7 @@ import {
     type OntInstrumentRun,
     type OntLiveDevice,
 } from '../../lib/api';
+import { jobPollingInterval } from '../../lib/queryPolling';
 
 interface OntInstrumentPanelProps {
     onAnalyzeExistingData: () => void;
@@ -85,7 +86,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
     const { data, isLoading, refetch } = useQuery({
         queryKey: ['ont-device-status'],
         queryFn: async () => (await fetchOntDeviceStatus()).data,
-        refetchInterval: 10000,
+        refetchInterval: (query) => jobPollingInterval(10000, query),
     });
     const liveDevices = data?.live_devices ?? [];
     const devices = testModeEnabled ? [TEST_MODE_MK1D_DEVICE, ...liveDevices] : liveDevices;
@@ -102,7 +103,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
         queryKey: ['ont-protocol-options', selectedPositionForQuery, kit],
         queryFn: async () => (await fetchOntProtocolOptions(selectedPositionForQuery, kit)).data,
         enabled: Boolean(selectedPositionForQuery),
-        refetchInterval: 10000,
+        refetchInterval: (query) => jobPollingInterval(10000, query),
     });
 
     const refreshPosition = useMutation({

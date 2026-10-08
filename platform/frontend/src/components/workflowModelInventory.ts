@@ -42,7 +42,7 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
         sourceFiles: [
             'platform/api/config/models/antibody_denovo.yaml',
             'platform/frontend/src/components/AntibodyDenovoTemplate.tsx',
-            'main.nf',
+            'workflows/antibody_denovo.nf',
             'nextflow.config',
         ],
     },
@@ -59,13 +59,15 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
         ],
     },
     {
-        workflowId: 'protein_local_redesign',
-        label: 'Protein Local Redesign',
-        modelTopics: ['rfdiffusion', 'fampnn', 'proteinmpnn', 'boltz2'],
+        workflowId: 'protein_modification_experimental',
+        label: 'De Novo Design',
+        modelTopics: ['laproteina', 'disco', 'rfdiffusion', 'fampnn', 'proteinmpnn', 'boltz2'],
         sourceFiles: [
+            'platform/api/config/models/protein_modification_experimental.yaml',
+            'platform/frontend/src/components/ProteinModificationTemplate.tsx',
             'platform/frontend/src/components/ProteinLocalRedesignTemplate.tsx',
-            'platform/frontend/src/components/JobSubmission.tsx',
-            'main.nf',
+            'workflows/protein_cad_experimental.nf',
+            'workflows/protein_local_redesign.nf',
             'nextflow.config',
         ],
     },
@@ -93,55 +95,14 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
         ],
     },
 
-    {
-        workflowId: 'caliby_experimental',
-        label: 'Caliby Experimental',
-        modelTopics: ['caliby'],
-        sourceFiles: [
-            'platform/api/config/models/caliby_experimental.yaml',
-            'platform/api/config/templates/caliby_experimental.yaml',
-            'main.nf',
-            'nextflow.config',
-        ],
-    },
-    {
-        workflowId: 'protein_cad_experimental',
-        label: 'Protein CAD Experimental',
-        modelTopics: ['laproteina', 'disco'],
-        sourceFiles: [
-            'platform/api/config/models/protein_cad_experimental.yaml',
-            'platform/api/config/templates/protein_cad_experimental.yaml',
-            'main.nf',
-            'nextflow.config',
-        ],
-    },
-    {
-        workflowId: 'protein_hunter_experimental',
-        label: 'Protein Hunter Experimental',
-        modelTopics: ['protein_hunter', 'boltz2', 'chai1'],
-        sourceFiles: [
-            'platform/api/config/models/protein_hunter_experimental.yaml',
-            'platform/api/config/templates/protein_hunter_experimental.yaml',
-            'main.nf',
-            'nextflow.config',
-        ],
-    },
+
+
     {
         workflowId: 'dna_polymerase',
         label: 'DNA Polymerase Engineering',
         modelTopics: ['ligandmpnn', 'boltz2'],
         sourceFiles: [
             'platform/api/config/templates/dna_polymerase.yaml',
-            'main.nf',
-            'nextflow.config',
-        ],
-    },
-    {
-        workflowId: 'binder_design',
-        label: 'Protein Binder Design',
-        modelTopics: ['rfdiffusion', 'proteinmpnn', 'alphafold2'],
-        sourceFiles: [
-            'platform/api/config/templates/binder_design.yaml',
             'main.nf',
             'nextflow.config',
         ],
@@ -167,8 +128,8 @@ export const getWorkflowModelTopics = (workflowId: string | null | undefined): M
     if (!workflowId) return [];
     const canonicalWorkflowId = workflowId === 'esmfold2_experimental' || workflowId === 'esmfold2'
         ? 'structure_prediction'
-        : workflowId === 'boltzgen_design' || workflowId === 'boltzgen_ligand'
-            ? 'antibody_denovo'
+        : workflowId === 'protein_cad_experimental' || workflowId === 'protein_local_redesign'
+            ? 'protein_modification_experimental'
             : workflowId;
     return WORKFLOW_MODEL_INVENTORY.find((workflow) => workflow.workflowId === canonicalWorkflowId)?.modelTopics ?? [];
 };

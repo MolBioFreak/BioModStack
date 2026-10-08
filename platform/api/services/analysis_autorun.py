@@ -39,7 +39,7 @@ def _is_antibody_like_job(job: Job | None) -> bool:
     mode = str(job.mode or "").strip().lower()
     name = str(job.name or "").strip().lower()
     return (
-        model_id in {"rfantibody", "antibody_denovo", "template_antibody_denovo", "antibody_child"} or
+        model_id in {"rfantibody", "antibody_child"} or
         "antibody" in model_id or
         "antibody" in mode or
         "nanobody" in mode or

@@ -10,6 +10,8 @@ Implements upstream BoltzGen filtering capabilities:
 - Affinity threshold: Minimum binding probability
 """
 
+from __future__ import annotations
+
 import argparse
 import shutil
 import os

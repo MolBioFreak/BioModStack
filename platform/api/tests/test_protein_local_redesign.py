@@ -15,12 +15,13 @@ if str(API_ROOT) not in sys.path:
 from services.nextflow import build_nextflow_command
 
 
-def test_protein_local_redesign_is_experimental_tab_workflow_not_generic_model_yaml() -> None:
+def test_protein_local_redesign_is_internal_mode_of_protein_modification_product() -> None:
     frontend_text = (REPO_ROOT / "platform" / "frontend" / "src" / "components" / "JobSubmission.tsx").read_text(encoding="utf-8")
     workflow_text = (REPO_ROOT / "workflows" / "protein_local_redesign.nf").read_text(encoding="utf-8")
 
-    assert "id: 'protein_local_redesign'" in frontend_text
-    assert "name: 'Protein Local Redesign'" in frontend_text
+    assert "id: 'protein_modification_experimental'" in frontend_text
+    assert "name: 'De Novo Design'" in frontend_text
+    assert "id: 'protein_local_redesign'" not in frontend_text
     assert "workflow PROTEIN_LOCAL_REDESIGN" in workflow_text
     assert "workflow {" in workflow_text
     assert "PROTEIN_LOCAL_REDESIGN()" in workflow_text
@@ -57,7 +58,7 @@ def test_build_nextflow_command_maps_protein_local_redesign_params() -> None:
 
     joined = " ".join(cmd)
 
-    assert cmd[:4] == ["nextflow", "run", "workflows/protein_local_redesign.nf", "-profile"]
+    assert cmd[1:4] == ["run", "workflows/protein_local_redesign.nf", "-profile"]
     assert "protein_local_redesign,workstation_ryzen7960x" in cmd
     assert "--plr_input_pdb /tmp/input.pdb" in joined
     assert "--plr_design_chains A" in joined
@@ -181,3 +182,63 @@ def test_plr_rfd3_input_normalizes_legacy_contigs(tmp_path: Path) -> None:
     spec = next(iter(payload.values()))
 
     assert spec["contig"] == "A146-165,34-34,A200-219"
+
+
+def test_merge_local_redesign_emits_canonical_typed_review_contract(tmp_path: Path) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "merged"
+    input_dir.mkdir()
+    original = tmp_path / "complex.pdb"
+    manifest = tmp_path / "region_manifest.json"
+    redesign = input_dir / "design_0.pdb"
+
+    original.write_text(
+        "ATOM      1  CA  GLY A   1       0.000   0.000   0.000  1.00 10.00           C\n"
+        "TER\n"
+        "ATOM      2  CA  ALA B   1       1.000   0.000   0.000  1.00 10.00           C\n"
+        "TER\nEND\n",
+        encoding="utf-8",
+    )
+    redesign.write_text(
+        "ATOM      1  CA  SER A   1       0.500   0.000   0.000  1.00 10.00           C\nEND\n",
+        encoding="utf-8",
+    )
+    manifest.write_text(
+        json.dumps({"design_chain": "A", "context_chains": ["B"], "region_mode": "manual_ranges"}),
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "merge_redesigned_complexes.py"),
+            "--input-dir",
+            str(input_dir),
+            "--complex-pdb",
+            str(original),
+            "--manifest",
+            str(manifest),
+            "--output-dir",
+            str(output_dir),
+        ],
+        check=True,
+    )
+
+    payload = json.loads((output_dir / "design_0.json").read_text(encoding="utf-8"))
+    assert payload["review_profile_id"] == "de_novo_generation_v1"
+    assert payload["review_contract_version"] == 1
+    assert payload["review_contract_source"] == "producer"
+    assert payload["review_role_map"] == {
+        "result_role": "locally_redesigned_backbone",
+        "design_chains": ["A"],
+        "context_chains": ["B"],
+    }
+    assert payload["review_artifact_manifest"]["schema"] == "bms.review-artifacts.v1"
+    assert payload["review_artifact_manifest"]["artifacts"]["structure"] == {
+        "kind": "structure",
+        "state": "ready",
+        "path": "design_0.pdb",
+        "reason": None,
+    }
+    assert payload["artifact_class"] == "generated_complex"
+    assert payload["result_set"] == "de_novo_backbones"

@@ -1,0 +1,83 @@
+id: molecular_dynamics
+name: Molecular Dynamics (Experimental)
+version: "1.0"
+category: molecular_dynamics
+description: >-
+  Default-off CUDA-first molecular dynamics with engine-neutral contracts,
+  deterministic replicas, checkpoint/restart, checksummed artifacts, and
+  runtime provenance. GROMACS and OpenMM are separate fail-closed adapters;
+  enabling this workflow does not imply production or scientific approval.
+container: gromacs-md-2025.3.sif
+workflow: molecular_dynamics
+engine_containers:
+  gromacs: gromacs-md-2025.3.sif
+  openmm: openmm-md-8.5.2.sif
+capabilities:
+  engines:
+    - gromacs
+    - openmm
+  accelerator:
+    vendor: nvidia
+    api: cuda
+    count_per_replica: 1
+  input_formats:
+    - pdb
+    - gro
+    - top
+  openmm_initial_scope:
+    prepared_gromacs_topology_only: true
+    stages:
+      - production
+
+modes:
+  - id: simulate
+    name: Experimental CUDA simulation
+    description: Validate one structured bms.md.job.v1 request and launch bounded preparation, replica, and finalization children.
+    params:
+      - md_job_spec
+  - id: replica
+    name: Durable replica child
+    description: Internal singleton replica execution owned by a durable MD parent job.
+    params:
+      - md_job_config
+      - md_replica_index
+      - md_engine
+
+params:
+  - name: md_job_spec
+    type: object
+    description: Structured bms.md.job.v1 request compiled by the first-class MD launcher.
+    required: true
+  - name: md_job_config
+    type: file
+    description: Materialized bms.md.job.v1 JSON document used by durable replica children.
+    required: false
+    file_type: json
+  - name: md_replica_index
+    type: integer
+    description: Internal zero-based replica index assigned by the MD parent.
+    required: false
+  - name: md_engine
+    type: string
+    description: Internal explicit engine copied from the validated parent contract.
+    required: false
+
+inputs:
+  - json
+  - pdb
+  - gro
+  - top
+outputs:
+  - json
+  - xtc
+  - dcd
+  - gro
+  - pdb
+  - edr
+  - cpt
+  - chk
+
+ui_icon: activity
+ui_color: "#0EA5E9"
+enabled: true
+experimental: true

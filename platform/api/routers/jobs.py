@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, B
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.exc import OperationalError
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, NoReturn
 from types import SimpleNamespace
 from copy import deepcopy
 import asyncio
@@ -21,6 +21,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from pydantic import BaseModel, Field
+from jsonschema.exceptions import SchemaError
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +37,11 @@ from antibody_pipeline_contract import (
     normalize_antibody_pipeline_contract_version,
 )
 from database import get_session, Job, Design
+from services.result_contracts import build_review_artifact_manifest, resolve_result_contract
 from paths import (
     get_code_root,
     get_data_root,
+    get_allowed_roots,
     get_inputs_dir,
     get_results_dir,
     get_work_dir,
@@ -48,6 +51,10 @@ from paths import (
 from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
 from schemas import JobCreate, JobResponse, JobList, JobStatus
 from services.job_control import cancel_job_lineage
+
+from services.md.chemistry_catalog import ChemistryCatalogError, ChemistryProfileSelectionError
+from services.md.feature_gate import require_molecular_dynamics_feature
+from services.md.launch_contract import MDLaunchError, materialize_md_job_spec, normalize_md_job_spec
 from services.proteinbase_importer import import_proteinbase_bundle
 
 from model_registry import get_registry
@@ -138,6 +145,99 @@ def _raise_if_workflow_launches_disabled(action: str) -> None:
     if workflow_launches_allowed():
         return
     raise HTTPException(status_code=409, detail=workflow_launch_block_detail(action))
+
+
+def _raise_md_launch_http_error(exc: Exception) -> NoReturn:
+    """Map expected MD launch failures to one typed, client-safe HTTP contract."""
+
+    if isinstance(exc, MDLaunchError):
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    if isinstance(exc, ChemistryProfileSelectionError):
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    if isinstance(exc, ChemistryCatalogError):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "MD_LAUNCH_SERVICE_UNAVAILABLE",
+                "message": "The molecular-dynamics launch service is temporarily unavailable.",
+            },
+        ) from exc
+    if isinstance(exc, (OSError, json.JSONDecodeError, SchemaError)):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "MD_LAUNCH_SERVICE_UNAVAILABLE",
+                "message": "The molecular-dynamics launch service is temporarily unavailable.",
+            },
+        ) from exc
+    if isinstance(exc, ValueError):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "MD_JOB_CONTRACT_INVALID",
+                "message": "The molecular-dynamics job contract is invalid.",
+            },
+        ) from exc
+    raise exc
+
+
+_MD_OUTPUT_SLUG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def _md_output_path_forbidden() -> MDLaunchError:
+    return MDLaunchError(
+        "MD_OUTPUT_PATH_FORBIDDEN",
+        "The molecular-dynamics output path is not permitted.",
+        status_code=403,
+    )
+
+
+def _prepare_md_output_dir(job_name: str, timestamp: str) -> tuple[Path, bool]:
+    """Create one contained MD output directory and report whether this call owns it."""
+
+    safe_name = str(job_name or "").strip()
+    if not _MD_OUTPUT_SLUG.fullmatch(safe_name):
+        raise _md_output_path_forbidden()
+
+    try:
+        results_root = get_results_dir().expanduser().resolve()
+        output_path = results_root / f"{safe_name}_{timestamp}"
+        resolved_output = output_path.resolve()
+        if output_path.is_symlink() or not resolved_output.is_relative_to(results_root):
+            raise _md_output_path_forbidden()
+        try:
+            output_path.mkdir(parents=True, exist_ok=False)
+            created = True
+        except FileExistsError:
+            if output_path.is_symlink() or not output_path.is_dir():
+                raise _md_output_path_forbidden()
+            created = False
+        resolved_output = output_path.resolve()
+        if not resolved_output.is_relative_to(results_root):
+            raise _md_output_path_forbidden()
+        return resolved_output, created
+    except MDLaunchError:
+        raise
+    except (OSError, ValueError) as exc:
+        raise _md_output_path_forbidden() from exc
+
+
+def _cleanup_call_owned_md_output(output_dir: Path, *, created: bool) -> None:
+    """Remove only empty MD contract directories owned by this failed call."""
+
+    if not created:
+        return
+    for candidate in (output_dir / "inputs", output_dir):
+        try:
+            candidate.rmdir()
+        except (FileNotFoundError, OSError):
+            pass
 
 
 def _coerce_positive_int(value: Any) -> Optional[int]:
@@ -255,8 +355,6 @@ def _job_uses_child_batches(model_id: str, mode: str, params: dict) -> bool:
     if is_antibody_pipeline_mode(mode):
         return True
 
-    if model_id == "bindcraft" and bool(params.get("bindcraft_use_swa")):
-        return True
 
     if model_id == "boltzgen" and bool(params.get("boltzgen_parallel_mode")):
         return True
@@ -982,7 +1080,7 @@ def _normalize_antibody_job_params(params: Optional[Dict[str, Any]]) -> Dict[str
     ).strip().lower()
     if structure_validator == "boltz":
         structure_validator = "boltz2"
-    if structure_validator not in {"boltz2", "protenix"}:
+    if structure_validator not in {"boltz2", "protenix", "esmfold2"}:
         structure_validator = "boltz2"
     normalized["structure_validator"] = structure_validator
 
@@ -1909,18 +2007,22 @@ def _derive_job_stage_tags(model_id: str, mode: str, params: Dict[str, Any], chi
     if not isinstance(params, dict):
         params = {}
 
+    model_normalized = (model_id or "").strip().lower()
+    mode_normalized = (mode or "").strip().lower()
+    trusted_iteration_identity = (
+        model_normalized in {"rfantibody", "ppiflow", "fampnn_child", "maturation_child"}
+        or mode_normalized in {"antibody_design", "maturation_child"}
+    )
     action = _coerce_nonempty_text(params.get("iteration_action"))
-    if action:
+    if action and trusted_iteration_identity:
         family, stage_mode = _derive_iteration_stage_metadata(action, params)
         if family or stage_mode:
             return family, stage_mode
 
     child_stage_normalized = _normalize_stage_family(child_stage)
-    if child_stage_normalized:
+    if child_stage_normalized and trusted_iteration_identity:
         return child_stage_normalized, child_stage_normalized
 
-    mode_normalized = (mode or "").strip().lower()
-    model_normalized = (model_id or "").strip().lower()
     if mode_normalized == "maturation_child":
         return "ppiflow", "maturation"
     if model_normalized == "boltzgen":
@@ -1995,8 +2097,6 @@ def _candidate_child_batch_aliases(
     model_id_normalized = (job.model_id or "").strip().lower()
     if _is_antibody_launch(job.model_id, params):
         add(f"antibody_batch_{root_job_id}")
-    elif model_id_normalized == "bindcraft":
-        add(f"bindcraft_{root_job_id}")
     elif model_id_normalized == "boltzgen":
         add(_coerce_nonempty_text(params.get("name")) or "boltzgen_campaign")
 
@@ -4384,9 +4484,16 @@ def _validate_protenix_checkpoint_requirements(model_id: str, params: dict) -> N
     if not uses_protenix:
         return
 
-    selected_model = str(params.get("protenix_model_weights") or "").strip()
+    selected_model = str(params.get("protenix_model_weights") or "protenix-v2").strip()
     if selected_model != "protenix-v2":
-        return
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "validation_errors": [
+                    "Protenix is pinned to the V2 checkpoint; set protenix_model_weights to protenix-v2."
+                ]
+            },
+        )
 
     checkpoint_path = _resolve_protenix_weights_dir(params) / "checkpoint" / "protenix-v2.pt"
     if checkpoint_path.exists():
@@ -4397,9 +4504,8 @@ def _validate_protenix_checkpoint_requirements(model_id: str, params: dict) -> N
         detail={
             "validation_errors": [
                 (
-                    "Protenix v2 was selected, but the shared checkpoint was not found at "
-                    f"{checkpoint_path}. Stage protenix-v2.pt in the shared Protenix weights directory before using v2, "
-                    "or switch back to protenix_base_20250630_v1.0.0."
+                    "Protenix v2 is required, but the shared checkpoint was not found at "
+                    f"{checkpoint_path}. Stage protenix-v2.pt in the shared Protenix weights directory before submitting."
                 )
             ]
         },
@@ -4417,6 +4523,41 @@ def _resolve_alias_path_for_runtime(value: str) -> str:
         return str(resolve_allowed_path(raw))
     except ValueError:
         return raw
+
+
+def _resolve_md_input_path_for_runtime(value: str) -> str:
+    """Resolve one MD input only when it is an existing file below an allowed root."""
+
+    raw = str(value or "").strip()
+    forbidden = MDLaunchError(
+        "MD_INPUT_PATH_FORBIDDEN",
+        "The molecular-dynamics input path is not available from an allowed data root.",
+        status_code=403,
+    )
+    if not raw:
+        raise forbidden
+    expanded = Path(os.path.expanduser(raw))
+    try:
+        if expanded.is_absolute():
+            resolved = expanded.resolve()
+            if not any(
+                resolved.is_relative_to(root.resolve())
+                for root in get_allowed_roots().values()
+            ):
+                raise forbidden
+        else:
+            resolved = resolve_allowed_path(raw).resolve()
+    except (OSError, ValueError) as exc:
+        if isinstance(exc, MDLaunchError):
+            raise
+        raise forbidden from exc
+    if not resolved.is_file():
+        raise MDLaunchError(
+            "MD_INPUT_MISSING",
+            "A molecular-dynamics input disappeared before launch materialization.",
+            status_code=409,
+        )
+    return str(resolved)
 
 
 def _normalize_nanopore_runtime_paths(model_id: str, params: dict) -> dict:
@@ -4794,7 +4935,49 @@ async def create_job(
     session: AsyncSession = Depends(get_session)
 ):
     """Create and queue a new pipeline job."""
+    require_molecular_dynamics_feature(job_data.model_id)
     _raise_if_workflow_launches_disabled("create new workflow jobs")
+    retired_model_ids = {
+        "antibody" + "_" + "denovo",
+        "template_" + "antibody" + "_" + "denovo",
+        "bind" + "craft",
+    }
+    retired_modes = {
+        "antibody" + "_" + "denovo",
+        "antibody" + "_" + "denovo" + "_pipeline",
+        "bind" + "craft",
+    }
+    normalized_model_id = str(job_data.model_id or "").strip().lower()
+    normalized_mode = str(job_data.mode or "").strip().lower()
+    if normalized_model_id == "conformational_mapping":
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Generic conformational-mapping launch is disabled: this endpoint has no "
+                "authenticated principal or server-owned artifact registry. Use a separately "
+                "authorized typed/internal launcher."
+            ),
+        )
+    if normalized_model_id in retired_model_ids or normalized_mode in retired_modes:
+        raise HTTPException(status_code=410, detail="This retired workflow has been permanently removed.")
+    if str(job_data.model_id or "").strip().lower() == "caliby_experimental":
+        raise HTTPException(
+            status_code=410,
+            detail="Standalone Caliby is retired; select Caliby inside a supported parent design workflow.",
+        )
+    reserved_review_keys = {
+        "review_profile_id",
+        "review_contract_version",
+        "review_contract_source",
+        "review_role_map",
+        "review_artifact_manifest",
+    }
+    forged_review_keys = sorted(reserved_review_keys.intersection(job_data.params or {}))
+    if forged_review_keys:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Review authority fields are server-controlled: {', '.join(forged_review_keys)}",
+        )
     registry = get_registry()
 
     # Keep model schema in sync with disk changes during long-lived API sessions.
@@ -4821,6 +5004,23 @@ async def create_job(
         job_data.params = _normalize_structure_geometry_params(job_data.params)
         job_data.params = _normalize_boltz_no_msa_quality_params(job_data.model_id, job_data.mode, job_data.params)
         job_data.params = _normalize_antibody_job_params(job_data.params)
+
+        if job_data.model_id == "molecular_dynamics" and job_data.mode == "simulate":
+            try:
+                job_data.params["md_job_spec"] = normalize_md_job_spec(
+                    params=job_data.params,
+                    job_id="validation-preview",
+                    resolve_runtime_path=_resolve_md_input_path_for_runtime,
+                )
+            except (
+                MDLaunchError,
+                ChemistryCatalogError,
+                ChemistryProfileSelectionError,
+                OSError,
+                SchemaError,
+                ValueError,
+            ) as exc:
+                _raise_md_launch_http_error(exc)
     
     # Skip validation for template jobs and mutagenesis batches
     # Mutagenesis uses mutagenesis_variants array instead of top-level sequence
@@ -4987,8 +5187,17 @@ async def create_job(
     
     # Create output directory (base for all jobs in batch)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base_output_dir = str(get_results_dir() / f"{job_data.name}_{timestamp}")
-    os.makedirs(base_output_dir, exist_ok=True)
+    is_md_launch = job_data.model_id == "molecular_dynamics" and job_data.mode == "simulate"
+    md_output_dir_created = False
+    if is_md_launch:
+        try:
+            md_output_path, md_output_dir_created = _prepare_md_output_dir(job_data.name, timestamp)
+        except MDLaunchError as exc:
+            _raise_md_launch_http_error(exc)
+        base_output_dir = str(md_output_path)
+    else:
+        base_output_dir = str(get_results_dir() / f"{job_data.name}_{timestamp}")
+        os.makedirs(base_output_dir, exist_ok=True)
     
     # Extract sequence length for VRAM estimation (same for all jobs in batch)
     # PRIORITY: 1) job_data.sequence_length (explicit), 2) extract from params, 3) fallback
@@ -5024,6 +5233,10 @@ async def create_job(
         vram_estimate = 0
         job_data.pinned_gpu = None
         logger.info(f"[QUEUE] Orchestrator parent job '{job_data.name}': CPU-only launcher, vram_estimate=0")
+    if job_data.model_id == "molecular_dynamics" and job_data.mode == "simulate":
+        vram_estimate = 0
+        job_data.pinned_gpu = None
+        logger.info(f"[QUEUE] MD parent job '{job_data.name}': CPU-only durable coordinator, vram_estimate=0")
 
     # ─── CPU-only override: FASTQ-only nanopore jobs don't need a GPU ─────
     if job_data.model_id == "nanopore" and isinstance(job_data.params, dict):
@@ -5188,7 +5401,30 @@ async def create_job(
         else:
             job_name = job_data.name
             output_dir = base_output_dir
-            job_params = job_data.params
+            job_params = dict(job_data.params)
+
+        if is_md_launch:
+            try:
+                job_params = materialize_md_job_spec(
+                    params=job_params,
+                    job_id=job_id,
+                    output_dir=Path(output_dir),
+                    resolve_runtime_path=_resolve_md_input_path_for_runtime,
+                )
+            except (
+                MDLaunchError,
+                ChemistryCatalogError,
+                ChemistryProfileSelectionError,
+                OSError,
+                SchemaError,
+                ValueError,
+            ) as exc:
+                _cleanup_call_owned_md_output(
+                    Path(base_output_dir),
+                    created=md_output_dir_created,
+                )
+                _raise_md_launch_http_error(exc)
+            job_params["job_name"] = job_name
 
         if isinstance(job_params, dict):
             job_params = _ensure_job_resume_identity(

@@ -8,6 +8,15 @@ from pathlib import Path
 from typing import Any
 
 
+_THREE_TO_ONE = {
+    "ALA": "A", "ARG": "R", "ASN": "N", "ASP": "D", "CYS": "C",
+    "GLN": "Q", "GLU": "E", "GLY": "G", "HIS": "H", "ILE": "I",
+    "LEU": "L", "LYS": "K", "MET": "M", "PHE": "F", "PRO": "P",
+    "SER": "S", "THR": "T", "TRP": "W", "TYR": "Y", "VAL": "V",
+    "MSE": "M",
+}
+
+
 def _parse_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -38,6 +47,45 @@ def _normalize_text(value: str) -> str:
 
 def _normalize_sequence(value: str) -> str:
     return "".join(ch for ch in str(value or "").strip().upper() if ch.isalpha() or ch in {":"})
+
+
+def _extract_pdb_sequence(path_value: str, requested_chain: str) -> tuple[str, str]:
+    path = Path(path_value).expanduser().resolve()
+    if not path.is_file():
+        raise ValueError(f"Protein Hunter target PDB does not exist: {path}")
+    residues_by_chain: dict[str, list[tuple[tuple[str, str], str]]] = {}
+    seen: set[tuple[str, str, str]] = set()
+    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        if not line.startswith("ATOM") or len(line) < 27:
+            continue
+        chain = line[21].strip() or "_"
+        residue_key = (chain, line[22:26].strip(), line[26].strip())
+        if residue_key in seen:
+            continue
+        seen.add(residue_key)
+        residue_name = line[17:20].strip().upper()
+        if residue_name not in _THREE_TO_ONE:
+            raise ValueError(
+                f"Protein Hunter cannot derive an authoritative sequence from nonstandard residue "
+                f"{residue_name!r} at {chain}{residue_key[1]}{residue_key[2]}"
+            )
+        residues_by_chain.setdefault(chain, []).append(((residue_key[1], residue_key[2]), _THREE_TO_ONE[residue_name]))
+
+    selected = requested_chain.strip()
+    if selected:
+        if selected not in residues_by_chain:
+            raise ValueError(f"target_pdb_chain {selected!r} is absent; available chains: {sorted(residues_by_chain)}")
+    elif len(residues_by_chain) == 1:
+        selected = next(iter(residues_by_chain))
+    else:
+        raise ValueError(
+            "Protein Hunter target_pdb_chain is required for a multi-chain target PDB; "
+            f"available chains: {sorted(residues_by_chain)}"
+        )
+    sequence = "".join(amino_acid for _key, amino_acid in residues_by_chain.get(selected, []))
+    if not sequence:
+        raise ValueError(f"No protein residues found in target PDB chain {selected!r}")
+    return sequence, selected
 
 
 def main() -> None:
@@ -88,6 +136,9 @@ def main() -> None:
     task = _normalize_text(args.task)
     backend = _normalize_text(args.backend)
     target_protein_sequences = _normalize_sequence(args.target_protein_sequences)
+    target_pdb_chain = _normalize_text(args.target_pdb_chain)
+    if not target_protein_sequences and _normalize_text(args.target_pdb):
+        target_protein_sequences, target_pdb_chain = _extract_pdb_sequence(args.target_pdb, target_pdb_chain)
     ligand_smiles = _normalize_text(args.ligand_smiles)
     ligand_ccd = _normalize_text(args.ligand_ccd)
     nucleic_sequence = _normalize_sequence(args.nucleic_sequence).replace(":", "")
@@ -125,7 +176,7 @@ def main() -> None:
         "seed_binder_sequence": _normalize_sequence(args.seed_binder_sequence).replace(":", ""),
         "target_protein_sequences": target_protein_sequences,
         "target_pdb": copied_target_pdb,
-        "target_pdb_chain": _normalize_text(args.target_pdb_chain),
+        "target_pdb_chain": target_pdb_chain,
         "target_template_path": copied_template_path or _normalize_text(args.target_template_path),
         "target_template_chain_id": _normalize_text(args.target_template_chain_id),
         "ligand_smiles": ligand_smiles,

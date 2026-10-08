@@ -89,27 +89,10 @@ def _install_exact_template_duplicate_allowlist(allowed_pdb_ids: list[str]) -> N
 def _apply_default_params(args: argparse.Namespace) -> None:
     if not args.use_default_params:
         return
-    if args.model_name in {
-        "protenix_base_default_v0.5.0",
-        "protenix_base_constraint_v0.5.0",
-        "protenix-v2",
-        "protenix_base_default_v1.0.0",
-        "protenix_base_20250630_v1.0.0",
-    }:
-        args.cycle = 10
-        args.step = 200
-    elif args.model_name in {
-        "protenix_mini_esm_v0.5.0",
-        "protenix_mini_ism_v0.5.0",
-        "protenix_mini_default_v0.5.0",
-        "protenix_tiny_default_v0.5.0",
-    }:
-        args.cycle = 4
-        args.step = 5
-        if args.model_name in {"protenix_mini_esm_v0.5.0", "protenix_mini_ism_v0.5.0"}:
-            args.use_msa = False
-    else:
-        raise RuntimeError(f"{args.model_name} is not supported for default inference params")
+    if args.model_name != "protenix-v2":
+        raise RuntimeError("Only the protenix-v2 checkpoint is supported")
+    args.cycle = 10
+    args.step = 200
 
 
 def main() -> None:
@@ -121,7 +104,7 @@ def main() -> None:
     parser.add_argument("--step", type=int, default=200, help="Diffusion steps.")
     parser.add_argument("--sample", type=int, default=5, help="Number of samples.")
     parser.add_argument("--dtype", default="bf16", help="Inference dtype.")
-    parser.add_argument("--model_name", default="protenix_base_20250630_v1.0.0", help="Model checkpoint name.")
+    parser.add_argument("--model_name", choices=("protenix-v2",), default="protenix-v2", help="Model checkpoint name (V2 only).")
     parser.add_argument("--use_msa", type=_parse_bool, default=True, help="Whether to use MSA for inference.")
     parser.add_argument("--use_default_params", type=_parse_bool, default=False, help="Use recommended default parameters.")
     parser.add_argument("--trimul_kernel", default="cuequivariance", help="Triangle multiplicative update kernel.")

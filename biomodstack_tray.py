@@ -48,7 +48,7 @@ from biomodstack_services import (  # noqa: E402
     build_launch_ui_command,
     operator_frontend_url,
     operator_runtime_mode,
-    service_is_active,
+    runtime_api_health_url,
 )
 
 PROJECT_ROOT = get_code_root()
@@ -95,32 +95,25 @@ def save_config(config: dict):
 # SERVICE STATUS CHECKING
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def check_api_status() -> bool:
-    """Check if API is responding."""
+def check_api_status(runtime_mode: Optional[str] = None) -> bool:
+    """Return true only when the selected runtime API health endpoint returns HTTP 200."""
+    selected_runtime = runtime_mode or operator_runtime_mode(project_root=PROJECT_ROOT)
+    api_url = runtime_api_health_url(project_root=PROJECT_ROOT, runtime_mode=selected_runtime)
     try:
         import urllib.request
-        req = urllib.request.Request(f"{API_URL}/api/health", method="GET")
+
+        req = urllib.request.Request(api_url, method="GET")
         req.add_header("Accept", "application/json")
         with urllib.request.urlopen(req, timeout=2) as resp:
             return resp.status == 200
     except Exception:
-        try:
-            return service_is_active(API_SERVICE)
-        except Exception:
-            pass
-        # Fallback: check if process is running
-        try:
-            result = subprocess.run(
-                ["pgrep", "-f", f"uvicorn.*:{API_PORT}"],
-                capture_output=True, timeout=2
-            )
-            return result.returncode == 0
-        except Exception:
-            return False
+        return False
 
-def check_frontend_status() -> bool:
-    """Check if the frontend is responding on the active runtime hosted-web URL."""
-    frontend_url = operator_frontend_url(project_root=PROJECT_ROOT)
+
+def check_frontend_status(runtime_mode: Optional[str] = None) -> bool:
+    """Return true only when the selected runtime frontend endpoint returns HTTP 200."""
+    selected_runtime = runtime_mode or operator_runtime_mode(project_root=PROJECT_ROOT)
+    frontend_url = operator_frontend_url(project_root=PROJECT_ROOT, runtime_mode=selected_runtime)
     try:
         import urllib.request
 
@@ -128,20 +121,6 @@ def check_frontend_status() -> bool:
         with urllib.request.urlopen(req, timeout=2) as resp:
             return resp.status == 200
     except Exception:
-        runtime_mode = operator_runtime_mode(project_root=PROJECT_ROOT)
-        if runtime_mode == DEV_RUNTIME_MODE:
-            try:
-                return service_is_active(FRONTEND_SERVICE)
-            except Exception:
-                pass
-            try:
-                result = subprocess.run(
-                    ["pgrep", "-f", f"vite.*{FRONTEND_PORT}"],
-                    capture_output=True, timeout=2
-                )
-                return result.returncode == 0
-            except Exception:
-                return False
         return False
 
 STATUS_DB_TIMEOUT_SECONDS = 0.25
@@ -208,44 +187,22 @@ def get_db_info() -> dict:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def create_status_icon(status: str = "unknown") -> Image.Image:
-    """Create a status-colored icon.
-    
-    status: 'healthy' (green), 'degraded' (yellow), 'down' (red), 'unknown' (gray)
+    """Create a fully status-colored tray icon.
+
+    Only a fresh healthy probe may produce green.  All non-healthy states replace
+    the full icon so static brand artwork cannot imply readiness.
     """
     colors = {
-        "healthy": "#22c55e",   # Green
-        "degraded": "#eab308",  # Yellow
-        "down": "#ef4444",      # Red
-        "unknown": "#6b7280",   # Gray
+        "healthy": "#22c55e",
+        "degraded": "#eab308",
+        "down": "#ef4444",
+        "unknown": "#6b7280",
     }
     color = colors.get(status, colors["unknown"])
-    
-    # Try to load custom icon, fall back to generated
-    if TRAY_ICON_PATH.exists():
-        try:
-            img = Image.open(TRAY_ICON_PATH).convert("RGBA")
-            img = img.resize((64, 64), Image.Resampling.LANCZOS)
-            
-            # Add status dot in corner
-            draw = ImageDraw.Draw(img)
-            draw.ellipse([48, 48, 62, 62], fill=color, outline="#ffffff")
-            return img
-        except Exception:
-            pass
-    
-    # Fallback: generate simple icon
-    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    
-    # Draw stacked blocks (simplified logo)
-    draw.rectangle([16, 40, 48, 52], fill="#166534")  # Dark green
-    draw.rectangle([14, 26, 50, 38], fill="#22c55e")  # Mid green
-    draw.rectangle([18, 12, 46, 24], fill="#86efac")  # Light green
-    
-    # Status dot
-    draw.ellipse([48, 48, 62, 62], fill=color, outline="#ffffff")
-    
-    return img
+    image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    draw.ellipse([3, 3, 61, 61], fill=color, outline="#111827", width=3)
+    return image
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # LOG VIEWER (Uses system text editor or terminal)
@@ -455,9 +412,10 @@ class BioModStackTray:
         self.current_status = "unknown"
         
     def get_status(self) -> str:
-        """Determine overall system status."""
-        api_ok = check_api_status()
-        frontend_ok = check_frontend_status()
+        """Determine status from HTTP-200 probes for one selected operator runtime."""
+        selected_runtime = operator_runtime_mode(project_root=PROJECT_ROOT)
+        api_ok = check_api_status(selected_runtime)
+        frontend_ok = check_frontend_status(selected_runtime)
         
         if api_ok and frontend_ok:
             return "healthy"
@@ -475,9 +433,10 @@ class BioModStackTray:
                 self.icon.icon = create_status_icon(new_status)
     
     def get_tooltip(self) -> str:
-        """Generate tooltip text."""
-        api_status = "✓" if check_api_status() else "✗"
-        frontend_status = "✓" if check_frontend_status() else "✗"
+        """Generate a tooltip from one selected runtime's HTTP-200 probes."""
+        selected_runtime = operator_runtime_mode(project_root=PROJECT_ROOT)
+        api_status = "✓" if check_api_status(selected_runtime) else "✗"
+        frontend_status = "✓" if check_frontend_status(selected_runtime) else "✗"
         running, queued, total = get_job_counts()
         
         return (

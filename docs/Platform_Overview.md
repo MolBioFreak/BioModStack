@@ -87,7 +87,7 @@ The live workflow surface includes:
 - generic structure prediction and validation
 - RFdiffusion-based generation
 - protein local redesign
-- BindCraft
+- retired binder workflow
 - BoltzGen
 - Oligo Designer / RFDpoly
 - docking

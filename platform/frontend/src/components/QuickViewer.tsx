@@ -140,7 +140,7 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
     const { data: jobsData } = useQuery({
         queryKey: ['jobs', 'quick-viewer-summary'],
         queryFn: () => fetchJobs({ status: 'completed', limit: 100, summary: true }),
-        refetchInterval: () => jobPollingInterval(3000),
+        refetchInterval: (query) => jobPollingInterval(3000, query),
     });
 
     // Get completed jobs with structures

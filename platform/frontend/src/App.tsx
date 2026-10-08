@@ -40,8 +40,8 @@ function App() {
             <Route path="/designer" element={<MolBioToolkitV2 />} />
             {/* NGS Data Visualization Toolkit - Nanopore-focused orchestration surface */}
             <Route path="/ngs" element={<NGSToolkit />} />
+            {/* Isolated Stats Toolkit rendered inside the BioModStack workspace. */}
             <Route path="/stats" element={<StatsToolkitLauncher />} />
-
             {/* Infra Monitor - native workstation telemetry surface */}
             <Route path="/infra" element={<InfraMonitorPage />} />
             {/* BioXP Handler Controls */}

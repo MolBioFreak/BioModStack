@@ -9,6 +9,7 @@ API_ROOT = Path(__file__).resolve().parents[1]
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
+from services import gpu_orchestrator  # noqa: E402
 from services.gpu_orchestrator import (  # noqa: E402
     GPUState,
     JobInfo,
@@ -46,7 +47,15 @@ def test_maturation_child_running_reservation_keeps_fractional_floor_with_low_li
     assert _running_job_reservation_mb(job, live_vram_mb=1200) == 14044
 
 
-def test_maturation_child_pack_does_not_fit_four_x8_children_on_one_5090() -> None:
+def test_maturation_child_pack_does_not_fit_four_x8_children_on_one_5090(monkeypatch) -> None:
+    # Keep this packing test independent from the workstation's live GPU index
+    # mapping.  On Christian's host GPU 0 is the 5060 Ti, while this fixture
+    # intentionally models a heavy-capable 5090 at index 0.
+    monkeypatch.setattr(
+        gpu_orchestrator,
+        "GPU_CAPABILITIES",
+        {0: {"supports_heavy": True, "supports_protenix": True}},
+    )
     jobs = [_maturation_job(i) for i in range(1, 5)]
     jobs = [
         job.__class__(

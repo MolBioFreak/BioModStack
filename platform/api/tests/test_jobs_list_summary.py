@@ -31,7 +31,7 @@ async def test_jobs_list_summary_omits_heavy_fields_but_keeps_rows_selectable(tm
             id="job-summary-1",
             name="heavy lineage job",
             status="completed",
-            model_id="template_antibody_denovo",
+            model_id="antibody_child",
             mode="antibody_refinement_pipeline",
             params={"very_large": "x" * 10000, "antibody_chains": "H"},
             created_at=datetime(2026, 6, 10, 12, 0, 0),
