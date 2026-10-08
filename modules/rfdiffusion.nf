@@ -1,3 +1,14 @@
+def formatFilterParams(params, paramPrefix, paramNames) {
+    return paramNames.collect { name ->
+        def paramValue = params["${paramPrefix}_${name}"]
+        if (paramValue != null) {
+            def cmdParam = name.replaceAll('_', '-')
+            return "--${paramPrefix}-${cmdParam} ${paramValue}"
+        }
+        return ""
+    }.findAll { value -> value != "" }.join(' ')
+}
+
 process RunRFDiffusion {
     label 'RFDiffusion'
     label 'gpu'
@@ -46,7 +57,7 @@ process FilterRFD {
 
     script:
     // Only pass parameters if filter values are provided
-    def paramString = Utils.formatFilterParams(
+    def paramString = formatFilterParams(
         params,
         "rfd",
         [
@@ -70,4 +81,3 @@ process FilterRFD {
         --ncpus ${num_processes}
     """
 }
-

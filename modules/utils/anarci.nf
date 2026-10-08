@@ -1,10 +1,6 @@
-def ANARCII_PROCESS_LABEL = (((params.anarcii_execution_mode ?: 'auto').toString().toLowerCase() == 'gpu') && ((params.anarcii_gpu_id ?: params.gpu_id) != null))
-    ? 'gpu_light'
-    : 'process_low'
-
 process ANARCII {
     tag "${meta.id}"
-    label ANARCII_PROCESS_LABEL
+    label 'process_low'
     container "${params.container_dir}/antibody_tools.sif"
     containerOptions {
         def runtimeMode = (params.anarcii_execution_mode ?: 'auto').toString().toLowerCase()

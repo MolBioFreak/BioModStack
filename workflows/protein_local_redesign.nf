@@ -6,6 +6,42 @@ include { RunFAMPNN ; FilterFAMPNN } from '../modules/fampnn.nf'
 include { RunMPNN ; FilterMPNN } from '../modules/proteinmpnn.nf'
 include { PrepBoltz ; RunBoltz } from '../modules/boltz.nf'
 
+def loadProteinLocalDesignArtifacts(rawDir) {
+    def resolvedDir = file(rawDir.toString())
+    def pdbs = resolvedDir.exists()
+        ? (resolvedDir.listFiles()?.findAll { candidate -> candidate.name.toLowerCase().endsWith('.pdb') }?.sort { left, right -> left.name <=> right.name }?.collect { candidate -> file(candidate.toString()) } ?: [])
+        : []
+    def jsons = resolvedDir.exists()
+        ? (resolvedDir.listFiles()?.findAll { candidate -> candidate.name.toLowerCase().endsWith('.json') }?.sort { left, right -> left.name <=> right.name }?.collect { candidate -> file(candidate.toString()) } ?: [])
+        : []
+    return channel.of([pdbs, jsons])
+}
+
+def loadProteinLocalPdbCollection(rawDir) {
+    def resolvedDir = file(rawDir.toString())
+    def pdbs = resolvedDir.exists()
+        ? (resolvedDir.listFiles()?.findAll { candidate -> candidate.name.toLowerCase().endsWith('.pdb') }?.sort { left, right -> left.name <=> right.name }?.collect { candidate -> file(candidate.toString()) } ?: [])
+        : []
+    return channel.of(pdbs)
+}
+
+def partitionProteinLocalGpuBatches(allPdbs, gpus) {
+    def totalSize = allPdbs.size()
+    if (totalSize == 0) {
+        return []
+    }
+    def batchCount = Math.max(1, Math.min((gpus ?: 1) as int, totalSize))
+    def batchSize = (totalSize / batchCount).doubleValue()
+    def index = 0
+    def batches = allPdbs.collect { pdb ->
+        def position = index
+        index = index + 1
+        def batchId = (position / batchSize).intValue()
+        [batchId, pdb]
+    }
+    return batches
+}
+
 process OpenInteractiveGate {
     label 'process_low'
 
@@ -240,25 +276,6 @@ workflow PROTEIN_LOCAL_REDESIGN {
         error('manual_ranges mode requires plr_redesign_ranges')
     }
 
-    def loadDesignArtifacts = { rawDir ->
-        def resolvedDir = file(rawDir.toString())
-        def pdbs = resolvedDir.exists()
-            ? (resolvedDir.listFiles()?.findAll { it.name.toLowerCase().endsWith('.pdb') }?.sort { it.name }?.collect { file(it.toString()) } ?: [])
-            : []
-        def jsons = resolvedDir.exists()
-            ? (resolvedDir.listFiles()?.findAll { it.name.toLowerCase().endsWith('.json') }?.sort { it.name }?.collect { file(it.toString()) } ?: [])
-            : []
-        Channel.of([pdbs, jsons])
-    }
-
-    def loadPdbCollection = { rawDir ->
-        def resolvedDir = file(rawDir.toString())
-        def pdbs = resolvedDir.exists()
-            ? (resolvedDir.listFiles()?.findAll { it.name.toLowerCase().endsWith('.pdb') }?.sort { it.name }?.collect { file(it.toString()) } ?: [])
-            : []
-        Channel.of(pdbs)
-    }
-
     def interactiveGateEnabled = params.interactive_gating == true
     def resumeFromValidation = params.plr_validation_input_pdbs ? true : false
     def resumeFromSequences = !resumeFromValidation && params.plr_sequence_input_pdbs ? true : false
@@ -289,7 +306,7 @@ workflow PROTEIN_LOCAL_REDESIGN {
     }
 
     if (resumeFromBackbones) {
-        mergedBackboneArtifacts = loadDesignArtifacts(params.plr_backbone_input_pdbs)
+        mergedBackboneArtifacts = loadProteinLocalDesignArtifacts(params.plr_backbone_input_pdbs)
     }
 
     def shouldPauseAfterBackboneRemodel = interactiveGateEnabled &&
@@ -322,7 +339,7 @@ workflow PROTEIN_LOCAL_REDESIGN {
     def filteredSequenceDir = null
 
     if (resumeFromSequences || resumeFromValidation) {
-        finalDesignPdbs = loadPdbCollection(params.plr_sequence_input_pdbs ?: params.plr_validation_input_pdbs)
+        finalDesignPdbs = loadProteinLocalPdbCollection(params.plr_sequence_input_pdbs ?: params.plr_validation_input_pdbs)
         rawSequenceDir = params.plr_sequence_input_pdbs ?: params.plr_validation_input_pdbs
     } else if ((params.plr_seq_method ?: 'fampnn') == 'mpnn') {
         PrepProteinLocalMPNN(mergedBackboneArtifacts, manifestChannel)
@@ -358,8 +375,11 @@ workflow PROTEIN_LOCAL_REDESIGN {
             .collectFile(name: 'merged_protein_local_redesign.csv', keepHeader: true)
             .set { megaCsv }
 
-        Utils
-            .rebatchGPU(PrepProteinLocalFAMPNN.out.pdbs, params.gpus)
+        PrepProteinLocalFAMPNN.out.pdbs
+            .collect()
+            .map { allPdbs -> partitionProteinLocalGpuBatches(allPdbs, params.gpus) }
+            .flatten()
+            .groupTuple()
             .set { fampnnPdbs }
 
         def defaultGpu = params.pinned_gpus ? params.pinned_gpus.toString().split(',')[0].trim().toInteger() : (params.gpu_id ?: 0)
@@ -406,8 +426,11 @@ workflow PROTEIN_LOCAL_REDESIGN {
 
     if (shouldRunBoltzValidation) {
         PrepBoltz(finalDesignPdbs)
-        Utils
-            .rebatchGPU(PrepBoltz.out.yamls, params.gpus)
+        PrepBoltz.out.yamls
+            .collect()
+            .map { allPdbs -> partitionProteinLocalGpuBatches(allPdbs, params.gpus) }
+            .flatten()
+            .groupTuple()
             .set { boltzInput }
         RunBoltz(boltzInput)
         ExportProteinLocalBoltzPredictions(RunBoltz.out.pdbs_jsons)

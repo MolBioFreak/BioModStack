@@ -1,3 +1,14 @@
+def formatFilterParams(params, paramPrefix, paramNames) {
+    return paramNames.collect { name ->
+        def paramValue = params["${paramPrefix}_${name}"]
+        if (paramValue != null) {
+            def cmdParam = name.replaceAll('_', '-')
+            return "--${paramPrefix}-${cmdParam} ${paramValue}"
+        }
+        return ""
+    }.findAll { value -> value != "" }.join(' ')
+}
+
 process RunRFD3 {
     /*
      * Run RFdiffusion3 for all-atom protein structure generation.
@@ -101,7 +112,7 @@ process FilterRFD3 {
 
     script:
     // Filter parameters - same as RFD but for CIF format
-    def paramString = Utils.formatFilterParams(
+    def paramString = formatFilterParams(
         params,
         "rfd",
         [
@@ -128,4 +139,3 @@ process FilterRFD3 {
         2>&1 | tee filter_rfd3_${task.index}.log
     """
 }
-
