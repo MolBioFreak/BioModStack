@@ -17,8 +17,15 @@ nvidia-smi >/dev/null || fail 'NVIDIA driver unavailable; automatic setup does n
 . /etc/os-release
 case "$ID" in ubuntu|debian) ;; *) fail 'Automatic setup supports Ubuntu or Debian only';; esac
 command -v apt-get >/dev/null || fail 'apt-get is required'
+# The managed/cache helpers and provisioning envelope run under system python3,
+# before the support runtime exists. 3.11 is the qualified stdlib helper floor;
+# command presence (or the boot path's 3.9 dict union alone) is not qualification.
+# Reject before root creation/packages: installing a distro's python3 package
+# does not guarantee this contract, and must not silently replace an interpreter.
+command -v python3 >/dev/null && python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' \
+    || fail 'System python3 3.11 or newer is required; provision a compatible interpreter before worker setup'
 packages=()
-for pair in 'python3:python3' 'rsync:rsync' 'tar:tar' 'sha256sum:coreutils' 'curl:curl'; do
+for pair in 'rsync:rsync' 'tar:tar' 'sha256sum:coreutils' 'curl:curl'; do
     command -v "${pair%%:*}" >/dev/null || packages+=("${pair#*:}")
 done
 if ! java -version 2>&1 | grep -Eq 'version "(17|18|19|2[0-5])\.'; then
