@@ -1,5 +1,9 @@
 # Read-only bootstrap discovery and planning (v1)
 
+For executable locked prerequisite bootstrap and managed Development startup,
+see [Non-production installation](Nonproduction_Installation.md). The discovery
+operations below remain read-only and do not install those prerequisites.
+
 The existing human/agent entrypoint now supports a bounded pre-service slice:
 
 ```bash

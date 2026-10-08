@@ -5,8 +5,10 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import sys
 from unittest.mock import patch
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 import biomodstack_frontend_prerequisites as frontend
 
 
@@ -16,7 +18,7 @@ class FrontendPrerequisitesTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.source = Path(self.temp.name) / "source"
         self.root = Path(self.temp.name) / "managed"
-        for name, value in {"pnpm-lock.yaml": "lockfileVersion: '9.0'", "pnpm-workspace.yaml": "packages: [packages/*, platform/frontend]", "platform/frontend/package.json": '{"name":"frontend"}', "packages/shared/package.json": '{"name":"shared"}', "patches/example.patch": "patch", "docker/web.Dockerfile": "pnpm@9.15.4"}.items():
+        for name, value in {"pnpm-lock.yaml": "lockfileVersion: '9.0'", "pnpm-workspace.yaml": "packages: [packages/*, platform/frontend]", "platform/frontend/package.json": '{"name":"frontend"}', "packages/shared/package.json": '{"name":"shared"}', "patches/example.patch": "patch", "docker/web.Dockerfile": "pnpm@10.11.0"}.items():
             p = self.source / name
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(value)
@@ -28,8 +30,8 @@ class FrontendPrerequisitesTests(unittest.TestCase):
         self.root.mkdir()
         frontend.save(self.root, {"schema_version": frontend.SCHEMA, "identity": frontend.identity(self.source), "status": status, "inventory_sha256": "inventory"})
 
-    def test_pnpm9_newer_patch_lock_blocked_before_network(self):
-        (self.source / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n\npatchedDependencies:\n  seqviz@3.10.14:\n    hash: " + "a" * 64 + "\n    path: patches/example.patch\n\nimporters:\n")
+    def test_unknown_lock_format_blocked_before_network(self):
+        (self.source / "pnpm-lock.yaml").write_text("lockfileVersion: '10.0'\n")
         with patch.object(frontend, "node_runtime", return_value="/node"), patch.object(frontend.shutil, "which", return_value="/npm"), patch.object(frontend.subprocess, "run") as run:
             report = frontend.prerequisite_report("frontend-bootstrap", project_root=self.source)
         self.assertEqual(report["errors"][0]["code"], "pnpm_lock_incompatible")
@@ -37,20 +39,40 @@ class FrontendPrerequisitesTests(unittest.TestCase):
         self.assertFalse((self.source / "node_modules").exists())
         run.assert_not_called()
 
-    def test_pnpm9_workspace_only_patches_blocked(self):
-        (self.source / "pnpm-workspace.yaml").write_text("patchedDependencies:\n  seqviz@3.10.14: patches/example.patch\n")
+    def test_pnpm_authority_mismatch_blocked(self):
+        (self.source / "docker/web.Dockerfile").write_text("pnpm@9.15.4")
         with self.assertRaises(frontend.PrerequisiteError) as exc:
             frontend.validate_lock_compatibility(self.source)
-        self.assertEqual(exc.exception.code, "pnpm_lock_incompatible")
+        self.assertEqual(exc.exception.code, "pnpm_authority_mismatch")
+
+    def test_existing_sha256_workspace_patch_authority_supported(self):
+        root = Path(__file__).resolve().parents[3]
+        before = frontend.identity(root)
+        frontend.validate_lock_compatibility(root)
+        self.assertEqual(frontend.identity(root), before)
 
     def test_node_engines(self):
         for version, compatible in [("v20.18.3", False), ("v20.19.0", True), ("v21.7.0", False), ("v22.11.0", False), ("v22.12.0", True), ("v24.0.0", True)]:
-            with self.subTest(version=version), patch.object(frontend.shutil, "which", return_value="/usr/bin/node"), patch.object(frontend.subprocess, "check_output", return_value=version):
+            with self.subTest(version=version), patch.object(frontend.os, "access", return_value=True), patch.object(frontend.shutil, "which", return_value="/usr/bin/node"), patch.object(frontend.subprocess, "check_output", return_value=version):
                 if compatible:
                     self.assertEqual(frontend.node_runtime(), str(Path('/usr/bin/node').resolve()))
                 else:
                     with self.assertRaisesRegex(frontend.PrerequisiteError, "require"):
                         frontend.node_runtime()
+
+    def test_recorded_node_survives_service_path_without_node(self):
+        node = Path(self.temp.name) / "recorded-node"
+        node.write_text("#!/bin/sh\nprintf 'v22.16.0\\n'\n")
+        node.chmod(0o755)
+        with patch.object(frontend.shutil, "which", return_value=None):
+            self.assertEqual(frontend.node_runtime(str(node)), str(node))
+        other = Path(self.temp.name) / "other-node"
+        other.write_text(node.read_text())
+        other.chmod(0o755)
+        with patch.dict(os.environ, {"BMS_FRONTEND_NODE": str(other)}):
+            with self.assertRaises(frontend.PrerequisiteError) as exc:
+                frontend.node_runtime(str(node))
+        self.assertEqual(exc.exception.code, "node_identity_mismatch")
 
     def test_plan_no_writes(self):
         with patch.object(frontend, "node_runtime", return_value="/node"), patch.object(frontend.shutil, "which", return_value="/npm"):
@@ -117,7 +139,7 @@ class FrontendPrerequisitesTests(unittest.TestCase):
             report = frontend.prerequisite_report("frontend-bootstrap", project_root=self.source)
             self.assertEqual(report["status"], "already-installed", report)
         self.assertEqual(len(commands), 2)
-        self.assertIn("pnpm@9.15.4", commands[0])
+        self.assertIn("pnpm@10.11.0", commands[0])
         self.assertIn("--frozen-lockfile", commands[1])
         self.assertIn("frontend...", commands[1])
         self.assertTrue(all("--ignore-scripts" in c for c in commands))

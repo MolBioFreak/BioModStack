@@ -18,7 +18,7 @@ import tempfile
 
 from biomodstack_python_prerequisites import PrerequisiteError, save
 
-PNPM_VERSION = "9.15.4"  # docker/web.Dockerfile authority
+PNPM_VERSION = "10.11.0"  # docker/web.Dockerfile authority; existing workspace lock format
 SCHEMA = "bms.frontend-prerequisites.v1"
 ACTIONS = {"frontend-plan", "frontend-bootstrap", "frontend-verify"}
 NODE_REQUIREMENT = "^20.19.0 || >=22.12.0 (Node 22 recommended)"
@@ -36,8 +36,12 @@ def location(project_root: Path) -> Path:
     return root
 
 
-def node_runtime() -> str:
-    node = shutil.which("node")
+def node_runtime(expected: str | None = None) -> str:
+    node = os.environ.get("BMS_FRONTEND_NODE") or expected or shutil.which("node")
+    if node and (not Path(node).is_absolute() or not os.access(node, os.X_OK)):
+        raise PrerequisiteError("node_invalid", "Frontend Node must be an existing absolute executable")
+    if node and expected and Path(node).resolve() != Path(expected):
+        raise PrerequisiteError("node_identity_mismatch", "Selected Node differs from the bootstrapped frontend interpreter")
     if not node:
         raise PrerequisiteError("node_missing", "Install Node " + NODE_REQUIREMENT + " explicitly; bootstrap does not install Node")
     output = subprocess.check_output([node, "--version"], text=True, timeout=15).strip()
@@ -58,22 +62,17 @@ def identity(project_root: Path) -> dict:
 
 
 def validate_lock_compatibility(source: Path) -> None:
-    """Fail before writes/network for a known pnpm 9 patch-format mismatch.
+    """Require the reviewed workspace format and aligned build-tool authority.
 
-    pnpm 9.15.4 calcPatchHashes uses base32-MD5 (26 characters), not the
-    SHA-256 hex patch identities in newer pnpm locks. Do not rewrite the lock
-    or synthesize a root manifest to hide an incompatible pinned authority.
+    pnpm 10 consumes the existing SHA-256 patchedDependencies directly. Do not
+    regenerate the dependency lock or translate patches during installation.
     """
     lock = (source / "pnpm-lock.yaml").read_text()
-    patch_section = lock.split("\npatchedDependencies:\n", 1)
-    if len(patch_section) == 2:
-        section = re.split(r"\n[^ \n]", patch_section[1], maxsplit=1)[0]
-        if re.search(r"\bhash: [0-9a-f]{64}\b", section):
-            raise PrerequisiteError("pnpm_lock_incompatible", "Pinned pnpm 9.15.4 cannot consume this frozen lock's SHA-256 patchedDependencies (it uses base32-MD5). A reviewed package-manager authority update or lock migration is required; bootstrap will not change the pin, workspace, patches, or lock")
-    if re.search(r"^patchedDependencies:", (source / "pnpm-workspace.yaml").read_text(), re.M):
-        manifest = source / "package.json"
-        if not manifest.exists() or not json.loads(manifest.read_text()).get("pnpm", {}).get("patchedDependencies"):
-            raise PrerequisiteError("pnpm_lock_incompatible", "Pinned pnpm 9.15.4 requires patchedDependencies in a root package.json, not pnpm-workspace.yaml. A reviewed authority/configuration migration is required; no source files were modified")
+    if not re.search(r"^lockfileVersion: ['\"]?9\.0['\"]?\s*$", lock, re.M):
+        raise PrerequisiteError("pnpm_lock_incompatible", "Pinned frontend setup requires the reviewed pnpm lock format 9.0")
+    dockerfile = (source / "docker/web.Dockerfile").read_text()
+    if f"pnpm@{PNPM_VERSION}" not in dockerfile:
+        raise PrerequisiteError("pnpm_authority_mismatch", "Frontend setup and web build package-manager pins disagree")
 
 
 def source_guard(source: Path, writable: bool = False) -> None:
@@ -123,7 +122,10 @@ def read_state(root: Path, expected: dict) -> dict | None:
 
 
 def check_environment(source: Path, root: Path) -> dict:
-    node = node_runtime()
+    recorded = json.loads((root / "state.json").read_text()).get("node")
+    if not isinstance(recorded, str) or not Path(recorded).is_absolute():
+        raise PrerequisiteError("node_identity_missing", "Frontend receipt lacks its absolute Node interpreter; run explicit frontend-bootstrap")
+    node = node_runtime(recorded)
     source_guard(source)
     validate_lock_compatibility(source)
     pnpm = root / "toolchain/node_modules/pnpm/bin/pnpm.cjs"
@@ -133,6 +135,7 @@ def check_environment(source: Path, root: Path) -> dict:
     if not pnpm.resolve().is_relative_to(root) or not vite.resolve().is_relative_to(source / "node_modules"):
         raise PrerequisiteError("unsafe_path", "Pinned pnpm/Vite escapes its owned dependency directory")
     env = environment(root)
+    env["PATH"] = str(Path(node).parent) + os.pathsep + env.get("PATH", os.defpath)
     for command, prefix in (([node, str(pnpm), "--version"], PNPM_VERSION), ([node, str(vite), "--version"], "vite/")):
         p = subprocess.run(command, cwd=source / "platform/frontend", env=env, capture_output=True, text=True, timeout=30)
         if p.returncode or (p.stdout.strip() != PNPM_VERSION if prefix == PNPM_VERSION else not p.stdout.strip().startswith(prefix)):
@@ -185,7 +188,7 @@ def prerequisite_report(action: str, *, project_root: Path) -> dict:
         report.update(root=str(root), identity=expected, resume_command="./start_ui.sh frontend-bootstrap --json")
         state = read_state(root, expected)
         report["operation_status"] = state.get("status") if state else "absent"
-        node = node_runtime()
+        node = node_runtime(state.get("node") if state and isinstance(state.get("node"), str) else None)
         npm = shutil.which("npm")
         if action != "frontend-verify" and not npm:
             raise PrerequisiteError("npm_missing", "Node npm CLI required for explicit pinned pnpm bootstrap; no global install is performed")
@@ -216,9 +219,10 @@ def prerequisite_report(action: str, *, project_root: Path) -> dict:
                 return report
             except PrerequisiteError:
                 pass
-        state = dict(schema_version=SCHEMA, identity=expected, status="running", steps=[])
+        state = dict(schema_version=SCHEMA, identity=expected, status="running", steps=[], node=node)
         save(root, state)
         env = environment(root)
+        env["PATH"] = str(Path(node).parent) + os.pathsep + env.get("PATH", os.defpath)
         pnpm = root / "toolchain/node_modules/pnpm/bin/pnpm.cjs"
         commands = [
             ("pinned-pnpm", [npm, "install", "--prefix", str(root / "toolchain"), "--ignore-scripts", "--no-audit", "--no-fund", "--package-lock=false", "--registry=https://registry.npmjs.org", f"pnpm@{PNPM_VERSION}"], root),

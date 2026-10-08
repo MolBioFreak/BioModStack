@@ -71,7 +71,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Manage BioModStack desktop services")
     parser.add_argument(
         "action",
-        choices=["start", "start-api", "start-target", "stop", "stop-api", "restart", "restart-api", "status", "python-plan", "python-bootstrap", "python-verify", "discover", "plan", "provision-plan", "provision", "verify", "configure-preview", "configure", "recover", "resume"],
+        choices=["start", "start-api", "start-target", "stop", "stop-api", "restart", "restart-api", "status", "python-plan", "python-bootstrap", "python-verify", "frontend-plan", "frontend-bootstrap", "frontend-verify", "discover", "plan", "provision-plan", "provision", "verify", "configure-preview", "configure", "recover", "resume"],
     )
     parser.add_argument(
         "--runtime",
@@ -92,11 +92,13 @@ def main() -> int:
     from biomodstack_python_prerequisites import (
         ACTIONS, SETUP_ACTIONS, prerequisite_report, dispatch_setup,
     )
+    if args.action.startswith("frontend-"):
+        from biomodstack_frontend_prerequisites import ACTIONS, prerequisite_report
     if args.action in ACTIONS:
         if any((args.runtime, args.notify, args.target, args.model, args.document,
                 args.operation_id, args.expect_document_sha256, args.expect_plan_sha256,
                 args.accept_license, args.runtime_attestation)):
-            parser.error("Python prerequisites accept only --json; use BMS_PYTHON_ROOT for an external environment")
+            parser.error("Dependency prerequisites accept only --json; use BMS_PYTHON_ROOT/BMS_FRONTEND_ROOT for external state")
         report = prerequisite_report(args.action, project_root=REPO_ROOT)
         print(json.dumps(report, indent=2, sort_keys=True))
         return 0 if report["status"] in {"planned", "installed", "already-installed", "verified"} else 3

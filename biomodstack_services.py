@@ -1630,6 +1630,10 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         "\n", "\n        "
     )
     proxy_identity_env = development_proxy_identity_env_path()
+    from biomodstack_frontend_prerequisites import location as frontend_prerequisite_location
+    frontend_root_directive = "Environment=" + systemd_value(
+        f"BMS_FRONTEND_ROOT={frontend_prerequisite_location(root)}"
+    )
     from biomodstack_configuration import configured_ingress_policy
     ingress_policy = configured_ingress_policy()
     # A clean local-only install must not activate Tailnet through a transitive
@@ -1851,6 +1855,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment={systemd_value(f"BMS_HOME={root}")}
         Environment={systemd_value(f"BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}")}
         Environment=BMS_FRONTEND_MODE=dev
+        {frontend_root_directive}
         Environment={systemd_value(f"BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:{dev_api_host_port}")}
         Environment={systemd_value(f"BMS_DEV_WEB_HOST_PORT={dev_web_host_port}")}
         Environment={systemd_value(f"VITE_BMS_BUILD_SHA={build_revision}")}
