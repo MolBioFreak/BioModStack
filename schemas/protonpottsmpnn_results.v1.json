@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "protonpottsmpnn_results.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract",
+    "source",
+    "request",
+    "designs",
+    "seed_energies",
+    "runtime",
+    "artifacts"
+  ],
+  "properties": {
+    "contract": {
+      "const": "protonpottsmpnn_design.v1"
+    },
+    "source": {
+      "type": "object"
+    },
+    "request": {
+      "type": "object"
+    },
+    "designs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "design_id",
+          "criteria_index",
+          "native_design_id",
+          "native"
+        ],
+        "properties": {
+          "design_id": {
+            "type": "string"
+          },
+          "criteria_index": {
+            "type": "integer"
+          },
+          "native_design_id": {
+            "type": "string"
+          },
+          "native": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "binder_chain",
+              "canonical_sequence",
+              "extended_tokens",
+              "extended_vocab",
+              "scheme",
+              "sample",
+              "final_potts_energy",
+              "seed_idx",
+              "protonation_type",
+              "site_rank",
+              "center_res_id",
+              "n_neighbours",
+              "selective_energy",
+              "n_centers",
+              "center_res_ids",
+              "center_protonation_types",
+              "selective_energies",
+              "global_protonation_dH",
+              "placement_prob",
+              "placement_entropy",
+              "sequence_decoded_prob_score",
+              "sequence_entropy",
+              "method",
+              "backend",
+              "selective_source",
+              "placement_label",
+              "placement_region",
+              "placement_by",
+              "combined_lambda",
+              "repetitive_window_weight",
+              "block_size",
+              "sweep_order",
+              "neighbour_k",
+              "max_mutations",
+              "energy_trajectory"
+            ],
+            "properties": {
+              "binder_chain": {},
+              "canonical_sequence": {},
+              "extended_tokens": {},
+              "extended_vocab": {},
+              "scheme": {},
+              "sample": {},
+              "final_potts_energy": {},
+              "seed_idx": {},
+              "protonation_type": {},
+              "site_rank": {},
+              "center_res_id": {},
+              "n_neighbours": {},
+              "selective_energy": {},
+              "n_centers": {},
+              "center_res_ids": {},
+              "center_protonation_types": {},
+              "selective_energies": {},
+              "global_protonation_dH": {},
+              "placement_prob": {},
+              "placement_entropy": {},
+              "sequence_decoded_prob_score": {},
+              "sequence_entropy": {},
+              "method": {},
+              "backend": {},
+              "selective_source": {},
+              "placement_label": {},
+              "placement_region": {},
+              "placement_by": {},
+              "combined_lambda": {},
+              "repetitive_window_weight": {},
+              "block_size": {},
+              "sweep_order": {},
+              "neighbour_k": {},
+              "max_mutations": {},
+              "energy_trajectory": {}
+            }
+          }
+        }
+      }
+    },
+    "seed_energies": {
+      "type": "array"
+    },
+    "runtime": {
+      "type": "object"
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

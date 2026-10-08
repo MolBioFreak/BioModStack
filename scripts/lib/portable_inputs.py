@@ -232,6 +232,10 @@ def prepared_generation_source_fields(model_id, mode, params):
             and params.get('shape_request_path')):
         return {'shape_requested_sequence_settings', 'shape_requested_rfd3_settings',
                 'shape_requested_sequence_input_settings', 'shape_requested_validator_settings'}
+    if (model_id == 'protonpottsmpnn' and mode == 'redesign'
+            and params.get('protonpottsmpnn_design_request') and params.get('protonpottsmpnn_design_input')):
+        return {'target_pdb', 'source_pdb_path', 'pdb_paths', 'source_identity_json',
+                'selected_input_dir', 'selected_input_manifest', 'source_selection_manifest_path'}
     if (model_id == 'ligandmpnn' and mode in {'ligand_aware', 'ntp_aware', 'metal_aware', 'dna_aware'}
             and params.get('ligandmpnn_design_request') and params.get('ligandmpnn_design_input')):
         return {'target_pdb', 'ligand_pdb'}
@@ -366,6 +370,10 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
                 visit(path.strip(), None, ('pdb_paths', index))
     if params.get('mpnn_bias_AA_jsonl'):
         keys.add('mpnn_bias_AA_jsonl')
+    if model_id == 'protonpottsmpnn' and mode == 'redesign':
+        keys.update({'protonpottsmpnn_design_request', 'protonpottsmpnn_design_input'})
+        if not (params.get('protonpottsmpnn_design_request') and params.get('protonpottsmpnn_design_input')):
+            keys.add('target_pdb')
     if model_id == 'ligandmpnn' and mode in {'ligand_aware', 'ntp_aware', 'metal_aware', 'dna_aware'}:
         keys.update({'ligandmpnn_design_request', 'ligandmpnn_design_input'})
         if not (params.get('ligandmpnn_design_request') and params.get('ligandmpnn_design_input')):

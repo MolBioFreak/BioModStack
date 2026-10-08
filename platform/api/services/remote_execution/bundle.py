@@ -188,6 +188,9 @@ def resolve_job_result_contract(job: Any) -> dict[str, Any]:
         from services.caliby_native import SUPPORTED_MODES, result_contract
         if job.mode in SUPPORTED_MODES:
             return result_contract(job.mode)
+    if (job.model_id, job.mode) == ('protonpottsmpnn', 'redesign'):
+        from services.protonpottsmpnn_design import result_contract
+        return result_contract(job.mode)
     if job.model_id == 'ligandmpnn':
         from services.ligandmpnn_design import MODES, result_contract
         if job.mode in MODES:
