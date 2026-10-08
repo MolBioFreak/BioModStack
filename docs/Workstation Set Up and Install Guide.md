@@ -5,7 +5,7 @@
 **Current Configuration:**
 - CPU: AMD Ryzen Threadripper 9960X (24 cores / 48 threads)
 - RAM: 128GB DDR5
-- Storage: 4TB NVMe (primary) + expansion drives
+- Storage: 2TB NVMe (primary) +2TB Secondary + 4TB Data and Models Drive + Backup
 - GPUs: 4 GPUs in pipeline
   - GPU 0: RTX 5090 (32GB VRAM) - Primary compute
   - GPU 1: RTX 5060 Ti (16GB VRAM) - Secondary

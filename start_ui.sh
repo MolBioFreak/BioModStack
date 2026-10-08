@@ -14,6 +14,11 @@ export NVM_DIR="$HOME/.nvm"
 # Add uv to PATH (usually in $HOME/.cargo/bin or $HOME/.local/bin)
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 
+# Load BMS environment variables (paths for MSA databases, weights, etc.)
+if [ -f "$HOME/.bashrc" ]; then
+    source "$HOME/.bashrc"
+fi
+
 check_port() {
     local port=$1
     if lsof -i :$port > /dev/null; then
