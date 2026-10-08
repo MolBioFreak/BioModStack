@@ -39,6 +39,7 @@ def parse_required(value: str) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--job-id", required=True)
     parser.add_argument("--out", type=Path, default=Path("qc_manifest.json"))
     parser.add_argument("--mode", choices=("primary", "dimer_candidates"), default="dimer_candidates")
     parser.add_argument(
@@ -89,7 +90,8 @@ def main() -> int:
         raise ValueError("alignment-session manifest requires a reference artifact")
     payload = {
         "artifact_schema_version": 2,
-        "schema": "biomodstack.alignment_session.v1",
+        "schema": "sequence_qc.manifest.v1",
+        "job_id": args.job_id,
         "alignment_session": {
             "mode": args.mode,
             "reference_sequence_sha256": _normalized_fasta_sha256(reference_path),

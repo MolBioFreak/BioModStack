@@ -41,8 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reference-fasta", required=True, type=Path)
     parser.add_argument(
         "--expected-sha256",
-        required=False,
-        default=None,
+        required=True,
         help="Expected reference SHA-256 from upstream provenance; never inferred from the observed file",
     )
     parser.add_argument("--summary", required=False, type=Path)
@@ -197,7 +196,7 @@ def build_manifest(
     consensus_fasta: Path | None,
     consensus_status: str,
     artifacts: Iterable[ArtifactSpec],
-    expected_sha256: str | None = None,
+    expected_sha256: str,
     workflow_status: str | None = None,
     verification_status: str | None = None,
     verification_reason_codes: Iterable[str] = (),
@@ -208,14 +207,13 @@ def build_manifest(
     manifest_dir = out.parent.resolve()
     manifest_dir.mkdir(parents=True, exist_ok=True)
     ref_name, ref_seq = read_first_fasta_record(reference_fasta)
-    expected_sequence_sha256 = hashlib.sha256(ref_seq.encode("ascii")).hexdigest()
-    normalized_provided_expected_sha256: str | None = None
-    if expected_sha256 is not None:
-        normalized_provided_expected_sha256 = str(expected_sha256).strip().lower()
-        if re.fullmatch(r"[0-9a-f]{64}", normalized_provided_expected_sha256) is None:
-            raise ValueError("expected_sha256 must be a 64-character hexadecimal SHA-256 digest")
-        if normalized_provided_expected_sha256 != expected_sequence_sha256:
-            raise ValueError("expected_sha256 does not match the normalized expected reference sequence")
+    observed_reference_sha256 = hashlib.sha256(ref_seq.encode("ascii")).hexdigest()
+    normalized_provided_expected_sha256 = str(expected_sha256).strip().lower()
+    if re.fullmatch(r"[0-9a-f]{64}", normalized_provided_expected_sha256) is None:
+        raise ValueError("expected_sha256 must be a 64-character hexadecimal SHA-256 digest")
+    if normalized_provided_expected_sha256 != observed_reference_sha256:
+        raise ValueError("expected_sha256 does not match the normalized expected reference sequence")
+    expected_sequence_sha256 = normalized_provided_expected_sha256
     reference_source_sha256 = hashlib.sha256(reference_fasta.read_bytes()).hexdigest()
     consensus_name = None
     consensus_length = None
@@ -234,6 +232,7 @@ def build_manifest(
     )
     payload: dict[str, Any] = {
         "artifact_schema_version": MANIFEST_SCHEMA_VERSION,
+        "schema": "sequence_qc.manifest.v1",
         "job_id": normalized_job_id,
         "sample_name": sample_name or normalized_job_id,
         "workflow_status": normalized_workflow_status,
