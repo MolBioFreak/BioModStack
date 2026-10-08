@@ -295,8 +295,8 @@ export function BioXpCockpit() {
                 <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-400">BioXP control plane</p>
                 <h1 className="mt-1 text-2xl font-bold">Status-first operator surface</h1>
                 <p className="mt-2 max-w-3xl text-sm text-slate-400">
-                    BMS owns profile, connection, admission, and local job truth. Only current-tranche commissioning
-                    contracts are mapped; motion and retired OEM controls remain unavailable pending online contract verification.
+                    BMS owns profile, connection, admission, and local job truth. Finite robot-owned component diagnostics
+                    are mapped; motion requires fresh ready evidence and supervised commissioning, while retired arbitrary OEM controls remain unavailable.
                 </p>
             </header>
 
