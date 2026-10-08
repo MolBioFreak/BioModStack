@@ -148,6 +148,57 @@ class _LifecycleRun(BaseModel):
     updated_at: StrictFloat = Field(ge=0)
 
 
+class _ContractProvider(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    source_contract: bool
+    implemented: bool | Literal["receipt_evaluator", "typed_plan"]
+    live_bound: bool
+    commissioned: bool
+
+
+class _ContractSafetyBoundary(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    caller_supplied_motion_parameters: Literal[False]
+    dry_run_commands_hardware: Literal[False]
+    queue_acceptance_is_execution: Literal[False]
+    physical_effect_verified: Literal[False]
+
+
+class _InitializeSystemProducer(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    producer: str
+    source_anchor: str
+
+
+class _SafeLifecycleContract(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schema_version: Literal["bioxp.oem_full_lifecycle_contract.v1"]
+    command: Literal["initialize_oem_movement_lifecycle"]
+    machine_serial: Literal[206]
+    ownership_generation: StrictInt | None
+    registry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    evidence_lock_path: str = Field(exclude=True)
+    evidence_lock_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    evidence_lock_schema: Literal["bioxp.oem_evidence_lock.v4"]
+    evidence_lock_identity_verified: bool
+    acquisition_id: str
+    evidence_lock_verified: bool
+    source_registry_identity_verified: bool
+    machine_configuration_verified: bool
+    source_authority_verified: Literal[False]
+    initialize_system_producers: list[_InitializeSystemProducer]
+    plan_available: bool
+    plan_blockers: list[str]
+    live_creation_enabled: Literal[False]
+    physical_commissioning_complete: Literal[False]
+    providers: dict[str, _ContractProvider]
+    safety_boundary: _ContractSafetyBoundary
+
+
 def _validate_contract_authority(contract: dict[str, Any], request: FullLifecyclePlanRequest) -> None:
     if contract.get("machine_serial") != request.expected_machine_serial:
         raise HTTPException(status_code=409, detail="Robot lifecycle contract machine identity changed")
@@ -210,6 +261,14 @@ def _parse_lifecycle_run(response: dict[str, Any]) -> _LifecycleRun:
     return run
 
 
+def _parse_safe_contract(response: dict[str, Any]) -> dict[str, Any]:
+    try:
+        contract = _SafeLifecycleContract.model_validate(response)
+    except ValidationError as exc:
+        raise HTTPException(status_code=502, detail="BioXP robot returned an unsafe or malformed lifecycle contract") from exc
+    return contract.model_dump()
+
+
 def _validate_planned_run(
     response: dict[str, Any],
     *,
@@ -224,6 +283,7 @@ def _validate_planned_run(
         raise HTTPException(status_code=502, detail="BioXP robot returned a mismatched lifecycle request echo")
     if (
         run.run_state != "planned"
+        or run.terminal_state is not None
         or run.source_authority_verified is not False
         or run.configuration_verified is not False
         or run.transport_owner_verified is not False
@@ -239,7 +299,10 @@ def _validate_planned_run(
         or run.controller_acknowledged is not False
         or run.postcondition_verified is not False
         or run.ownership_generation != outbound["expected_generation"]
+        or run.request.inputs.ownership_generation != outbound["expected_generation"]
         or any(
+            stage.status != "pending"
+            or
             stage.physical_motion_commanded
             or stage.controller_acknowledged
             or stage.postcondition_verified
@@ -278,7 +341,7 @@ async def _leased_robot_request(
 @router.get("/oem-full-lifecycle/contract")
 async def get_full_lifecycle_contract(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
     client = _active_client(runtime)
-    return await _robot_request(client, "oem_full_lifecycle_contract")
+    return _parse_safe_contract(await _robot_request(client, "oem_full_lifecycle_contract"))
 
 
 @router.post(
@@ -289,9 +352,9 @@ async def plan_full_lifecycle(
     request: FullLifecyclePlanRequest,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> dict[str, Any]:
-    contract = await _leased_robot_request(
+    contract = _parse_safe_contract(await _leased_robot_request(
         runtime, "oem_full_lifecycle_contract", expected_generation=request.expected_generation,
-    )
+    ))
     _validate_contract_for_plan(contract, request)
     robot_generation = contract.get("ownership_generation")
     if type(robot_generation) is not int or robot_generation < 1:
@@ -368,6 +431,13 @@ async def cancel_full_lifecycle_run(
         path_params={"run_id": run_id},
     )
     admitted = _parse_lifecycle_run(admitted_response)
+    _validate_planned_run(
+        admitted_response,
+        outbound=admitted.request.model_dump(exclude={"inputs"}),
+        expected_machine_serial=request.expected_machine_serial,
+        expected_registry_sha256=request.expected_registry_sha256,
+        expected_evidence_lock_sha256=request.expected_evidence_lock_sha256,
+    )
     if (
         admitted.run_id != run_id
         or admitted.request.bms_connection_generation != request.expected_generation
@@ -391,9 +461,17 @@ async def cancel_full_lifecycle_run(
         json_data=cancel_payload,
     )
     run = _parse_lifecycle_run(response)
+    admitted_canonical = admitted.model_dump()
+    cancelled_canonical = run.model_dump()
+    for mutable_field in ("run_state", "terminal_state", "expected_next_stage", "updated_at", "sequence"):
+        admitted_canonical.pop(mutable_field)
+        cancelled_canonical.pop(mutable_field)
     if (
         run.run_id != run_id
         or run.run_state != "cancelled"
+        or run.terminal_state != "cancelled"
+        or run.expected_next_stage is not None
+        or cancelled_canonical != admitted_canonical
         or run.source_authority_verified is not False
         or run.configuration_verified is not False
         or run.transport_owner_verified is not False
@@ -410,10 +488,14 @@ async def cancel_full_lifecycle_run(
         or run.machine_configuration_verified is not True
         or run.request.expected_generation != admitted.request.expected_generation
         or run.request.bms_connection_generation != request.expected_generation
+        or run.request.inputs.ownership_generation != admitted.request.expected_generation
+        or run.ownership_generation != admitted.request.expected_generation
         or run.request.expected_machine_serial != request.expected_machine_serial
         or run.request.expected_registry_sha256 != request.expected_registry_sha256
         or run.request.expected_evidence_lock_sha256 != request.expected_evidence_lock_sha256
         or any(
+            stage.status != "pending"
+            or
             stage.physical_motion_commanded
             or stage.controller_acknowledged
             or stage.postcondition_verified
