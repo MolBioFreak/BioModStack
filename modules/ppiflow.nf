@@ -86,8 +86,26 @@ PY
     )
 
     if ! printf '%s' "\${detectedChains}" | grep -q "${heavyChain}"; then
-        echo "[PPIFlow] ERROR: heavy chain '${heavyChain}' not found in ${complex_pdb}; detected chains: \${detectedChains}" >&2
-        exit 1
+        inferredHeavy=\$("\${PYTHON_BIN}" - <<'PY'
+from pathlib import Path
+
+chains = []
+with open(Path("${complex_pdb}")) as handle:
+    for line in handle:
+        if line.startswith("ATOM"):
+            chain = line[21].strip()
+            if chain and chain not in chains:
+                chains.append(chain)
+print(chains[0] if chains else "")
+PY
+        )
+        if [ -n "\${inferredHeavy}" ]; then
+            echo "[PPIFlow] Warning: heavy chain '${heavyChain}' not found in ${complex_pdb}; using detected chain '\${inferredHeavy}' instead" >&2
+            heavyChain="\${inferredHeavy}"
+        else
+            echo "[PPIFlow] ERROR: heavy chain '${heavyChain}' not found in ${complex_pdb}; detected chains: \${detectedChains}" >&2
+            exit 1
+        fi
     fi
 
     if [ -n "\${lightChain}" ] && ! printf '%s' "\${detectedChains}" | grep -q "\${lightChain}"; then
@@ -95,7 +113,12 @@ PY
         lightChain=""
     fi
 
-    if [ -z "\${antigenChainBash}" ]; then
+    if [ -n "\${antigenChainBash}" ] && [ "\${antigenChainBash}" = "\${heavyChain}" ]; then
+        echo "[PPIFlow] Warning: antigen chain '\${antigenChainBash}' overlaps inferred heavy chain; re-inferring antigen chain" >&2
+        antigenChainBash=""
+    fi
+
+    if [ -z "\${antigenChainBash}" ] || ! printf '%s' "\${detectedChains}" | grep -q "\${antigenChainBash}"; then
         antigenChainBash=\$("\${PYTHON_BIN}" - <<'PY'
 from pathlib import Path
 

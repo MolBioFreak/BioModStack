@@ -210,8 +210,10 @@ def _validate_antibody_runtime_paths(model_id: str, params: dict) -> None:
     if not _is_antibody_launch(model_id, params) or not isinstance(params, dict):
         return
 
+    # Skip target PDB validation for iteration/refinement jobs that bypass RFA
+    skip_rfa = params.get("skip_rfantibody") or params.get("iteration_action") in ("ui_refinement",)
     target_pdb = str(params.get("target_pdb") or "").strip()
-    if target_pdb and not Path(target_pdb).exists():
+    if target_pdb and not skip_rfa and not Path(target_pdb).exists():
         raise HTTPException(
             status_code=422,
             detail=f"Target PDB not found: {target_pdb}",
@@ -817,7 +819,15 @@ def _build_cdr_indel_iteration_job(
                 launch_params[key] = base_params[key]
 
     if param_overrides:
-        launch_params.update(param_overrides)
+        cleaned_overrides = dict(param_overrides)
+        if action == "ui_refinement":
+            for key in ("epitope_residues", "target_pdb"):
+                value = cleaned_overrides.get(key)
+                if value is None or (isinstance(value, str) and not value.strip()):
+                    cleaned_overrides.pop(key, None)
+            if not cleaned_overrides.get("selected_residues"):
+                cleaned_overrides.pop("selected_residues", None)
+        launch_params.update(cleaned_overrides)
 
     suffix = name_suffix.strip() if isinstance(name_suffix, str) and name_suffix.strip() else "cdr_indel_round"
     model_id = "protenix" if predictor == "protenix" else "boltz2"
@@ -1053,6 +1063,13 @@ def _build_antibody_iteration_job(
         "iteration_selection_dir": str(selection_dir),
         "interactive_gate_continue": False,
     })
+    
+    # Preserve epitope residue configurations for contact calculations during refinement
+    if isinstance(root_job.params, dict):
+        for key in ["epitope_residues", "selected_residues"]:
+            if key in root_job.params:
+                launch_params[key] = root_job.params[key]
+                
     launch_params.update(action_map[action]["params"])
 
     for key in ["rfantibody_input_pdbs", "fampnn_collected_pdbs"]:

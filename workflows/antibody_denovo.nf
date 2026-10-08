@@ -225,6 +225,7 @@ process ScreenRFantibodyBackbones {
     label 'process_low'
 
     publishDir "${params.out_dir}/run/rfantibody_screen", mode: 'copy', pattern: '*.log'
+    publishDir "${params.out_dir}/run/rfantibody_screen", mode: 'copy', pattern: 'screening_summary.json'
     publishDir "${params.out_dir}/collected/rfantibody_filtered", mode: 'copy', pattern: 'screened_output/*.pdb', saveAs: { fn -> fn.replace('screened_output/', '') }
     publishDir "${params.out_dir}/collected/rfantibody_filtered", mode: 'copy', pattern: 'screened_output/*.json', saveAs: { fn -> fn.replace('screened_output/', '') }
     publishDir "${params.out_dir}/collected/rfantibody_filtered", mode: 'copy', pattern: 'screened_output/*.csv', saveAs: { fn -> fn.replace('screened_output/', '') }
@@ -1360,15 +1361,17 @@ workflow ANTIBODY_DENOVO {
     def rfantibodyRawDir = params.out_dir ? "${params.out_dir}/collected/rfantibody_raw" : null
     def rfantibodyFilteredDir = params.out_dir ? "${params.out_dir}/collected/rfantibody_filtered" : null
     def rfantibodyScreenEnabled = params.enable_rfantibody_filter == true
-    def shouldPauseAfterRFantibody = interactiveGateEnabled &&
+    def shouldPauseAfterRFantibody = !params.skip_rfantibody && interactiveGateEnabled &&
         (params.interactive_gate_stage ?: 'post_fampnn') == 'post_rfantibody' &&
         params.interactive_gate_continue != true
-    def shouldScreenRFantibody = shouldPauseAfterRFantibody ||
+    def shouldScreenRFantibody = (
+        shouldPauseAfterRFantibody ||
         rfantibodyScreenEnabled ||
         params.rfantibody_min_epitope_contacts != null ||
         params.rfantibody_max_epitope_distance != null ||
         params.rfantibody_min_target_contacts != null ||
         params.rfantibody_max_epitope_centroid_distance != null
+    )
 
     staged_rfantibody_pdbs = backbone_designs
         .map { meta, files -> files }
@@ -1424,10 +1427,16 @@ workflow ANTIBODY_DENOVO {
         mutations = Channel.empty()
         backbone_designs = reviewed_backbone_designs
     } else {
-        CheckRFantibodyYield(rfantibody_candidate_count)
-        backbone_designs = reviewed_backbone_designs
-            .combine(CheckRFantibodyYield.out.ok)
-            .map { meta, pdbs, _guard -> [meta, pdbs] }
+        // If a coarse screen ran, enforce non-zero yield even in refinement mode.
+        // If screening is disabled for a hand-selected refinement set, trust the user selection.
+        if (params.skip_rfantibody && !shouldScreenRFantibody) {
+            backbone_designs = reviewed_backbone_designs
+        } else {
+            CheckRFantibodyYield(rfantibody_candidate_count)
+            backbone_designs = reviewed_backbone_designs
+                .combine(CheckRFantibodyYield.out.ok)
+                .map { meta, pdbs, _guard -> [meta, pdbs] }
+        }
 
         // Step 2: CDR Sequence Design (Cross-Validation Mode)
         // ---------------------------------------------------------------------------
