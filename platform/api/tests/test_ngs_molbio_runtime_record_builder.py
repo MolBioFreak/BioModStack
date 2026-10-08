@@ -49,6 +49,13 @@ def test_builder_defaults_to_active_v2_runtime_authority() -> None:
     assert builder.DENOMINATOR_SCHEMA == "bms.ngs-molbio.runtime-source-denominator.v2"
 
 
+def test_checked_in_active_runtime_record_is_accepted() -> None:
+    accepted = ngs_molbio_runtime_status.runtime_implementation_record()
+    assert accepted["implementation_state"] == "implemented_unverified"
+    assert accepted["release_acceptance_state"] == "open"
+    assert accepted["capability_exposure_state"] == "fail_closed"
+
+
 def test_builder_uses_current_n0_authority_and_status_accepts_generated_record(
     tmp_path: Path,
     monkeypatch,
