@@ -47,17 +47,6 @@ _ATTACHMENT_METADATA_FIELDS = {
     "operation",
     "note",
 }
-_PROJECT_STATUSES = {"draft", "active", "on_hold", "completed", "archived"}
-_EXPERIMENT_STATUSES = {
-    "draft",
-    "planned",
-    "active",
-    "analysis",
-    "review",
-    "completed",
-    "blocked",
-    "archived",
-}
 _DOMAIN_KINDS = {"protein_in_silico", "ngs_molbio"}
 _HIERARCHY_SCHEMA_VERSIONS = {
     "bms.project.v1": "1",
@@ -103,7 +92,11 @@ def _validate_hierarchy_producer_payload(
     aggregate_kind: str,
     payload: dict[str, Any],
 ) -> None:
-    """Mirror experiment_services hierarchy admission without importing it circularly."""
+    """Validate the hierarchy used by preparation.
+
+    Shared base fields and lifecycle checks use the producer owner;
+    schema support and retained-payload checks remain preparation-specific.
+    """
     if not isinstance(payload, dict):
         raise PreparationInputAuthorityError("aggregate payload must be an object")
     allowed_schemas = {
@@ -120,55 +113,22 @@ def _validate_hierarchy_producer_payload(
         raise PreparationInputAuthorityError(
             f"{aggregate_kind} payload schema is not a supported immutable hierarchy contract"
         )
-    required = {
-        "workspace": {
-            "name",
-            "description",
-            "research_objective",
-            "status",
-            "needs_metadata_review",
-        },
-        "experiment": {
-            "name",
-            "objective",
-            "scientific_question",
-            "description",
-            "status",
-            "priority",
-            "success_criteria",
-            "needs_metadata_review",
-        },
-        "domain_experiment": {
-            "domain_kind",
-            "domain_contract_version",
-            "name",
-            "objective",
-            "status",
-            "domain_payload",
-        },
-    }[aggregate_kind]
+    from experiment_services import (
+        _hierarchy_required_fields,
+        _validate_hierarchy_lifecycle,
+        ValidationFailure,
+    )
+
+    required = _hierarchy_required_fields(aggregate_kind)
     missing = sorted(field for field in required if field not in payload)
     if missing:
         raise PreparationInputAuthorityError(
             f"{aggregate_kind} payload missing required fields: {', '.join(missing)}"
         )
-    statuses = _PROJECT_STATUSES if aggregate_kind == "workspace" else _EXPERIMENT_STATUSES
-    if payload.get("status") not in statuses:
-        raise PreparationInputAuthorityError(f"invalid {aggregate_kind} lifecycle status")
-    if aggregate_kind == "experiment":
-        if payload.get("status") == "active":
-            criteria = payload.get("success_criteria")
-            if not isinstance(criteria, list) or not criteria:
-                raise PreparationInputAuthorityError(
-                    "active global experiments require success criteria"
-                )
-        if payload.get("status") == "completed" and (
-            not str(payload.get("review_summary") or "").strip()
-            or not str(payload.get("conclusion") or "").strip()
-        ):
-            raise PreparationInputAuthorityError(
-                "completed global experiments require review_summary and conclusion"
-            )
+    try:
+        _validate_hierarchy_lifecycle(aggregate_kind, payload)
+    except ValidationFailure as exc:
+        raise PreparationInputAuthorityError(str(exc)) from exc
     if aggregate_kind != "domain_experiment":
         return
 
@@ -1079,7 +1039,7 @@ async def _dataset_authority(
         or isinstance(head.head_generation, bool)
         or revision.revision_number > head.head_generation
     ):
-        raise PreparationInputAuthorityError("Dataset revision does not have exact active parent authority")
+        raise PreparationInputAuthorityError("The selected dataset revision is not linked to an active dataset in this experiment.")
     payload = await _selected_dataset_revision_chain(
         session,
         head=head,
@@ -1242,8 +1202,6 @@ async def build_preparation_input_authority(
             global_experiment_id=global_experiment_id,
             domain_id=domain_id,
         )
-    if (dataset_revision_ids or source_receipt_ids) and domain_id is None:
-        raise PreparationInputAuthorityError("preparation inputs require an exact Domain parent")
     datasets: list[dict[str, Any]] = []
     total_members = 0
     for revision_id in dataset_revision_ids:

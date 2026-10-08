@@ -1,4 +1,4 @@
-"""Fail-closed server authority for frozen NGS/MolBio capability contracts."""
+"""NGS/MolBio capability discovery and selected-operation validation; retains historical schema support."""
 from __future__ import annotations
 
 import copy
@@ -377,41 +377,55 @@ def _verify_capability_owners(record: dict[str, Any]) -> None:
             _resolve_owner(owner, label=f"capability {field}")
 
 
-def capability_inventory() -> dict[str, Any]:
-    """Read the operational catalog, not historical release acceptance evidence."""
-    inventory, _raw = _read(_CONFIG_ROOT / "capability_inventory_v2.json")
+def _capability_inventory_source() -> dict[str, Any]:
+    # The cached document is read-only; callers copy only what they return.
+    path = _CONFIG_ROOT / "capability_inventory_v2.json"
+    version = _file_version(path)
+    inventory, _raw = _read_version(path, version.st_mtime_ns, version.st_size)
     if inventory.get("schema") != "bms.ngs-molbio.capability-inventory.v2":
         raise NgsMolBioCapabilityError("capability inventory identity mismatch")
     if inventory.get("content_sha256") != _canonical_digest(inventory):
         raise NgsMolBioCapabilityError("capability inventory digest mismatch")
     _unique(inventory["capabilities"], "capability_id", "capability ID")
+    return inventory
+
+
+def _apply_operational_capability(record: dict[str, Any]) -> None:
+    mapping = _PROJECT_SCHEDULED_CAPABILITIES.get(record["capability_id"])
+    if mapping is None:
+        return
+    model_id, mode, destination = mapping
+    record["exposure_state"] = "accepted"
+    record["plannable"] = True
+    record["workflow_family"] = "typed_core_job"
+    record["workflow_adapter_id"] = "bms.ngs.job-reference.adapter.v1"
+    record["allowed_model_modes"] = [{"model_id": model_id, "mode": mode}]
+    record["canonical_source_destination"] = destination
+    record["source_receipt_contracts"] = list(_PROJECT_SOURCE_RECEIPT_CONTRACTS)
+    record["result_contract"] = "bms.global.ngs-molbio-job-result.v1"
+    record["native_mapping"]["native_request_compatibility"] = "exact_native_mapping"
+    # Engineering acceptance is a release concern, not live admission.
+    for gate in record["parity_ledger"]:
+        gate["state"] = "not_applicable"
+        gate["evidence"] = f"operational-discovery:{destination}; release acceptance is separate"
+    record["inventory_sha256"] = _canonical_digest(record, "inventory_sha256")
+    record["capability_sha256"] = record["inventory_sha256"]
+
+
+def capability_inventory() -> dict[str, Any]:
+    """Read the operational catalog, not historical release acceptance evidence."""
+    inventory = copy.deepcopy(_capability_inventory_source())
     for record in inventory["capabilities"]:
-        mapping = _PROJECT_SCHEDULED_CAPABILITIES.get(record["capability_id"])
-        if mapping is None:
-            continue
-        model_id, mode, destination = mapping
-        record["exposure_state"] = "accepted"
-        record["plannable"] = True
-        record["workflow_family"] = "typed_core_job"
-        record["workflow_adapter_id"] = "bms.ngs.job-reference.adapter.v1"
-        record["allowed_model_modes"] = [{"model_id": model_id, "mode": mode}]
-        record["canonical_source_destination"] = destination
-        record["source_receipt_contracts"] = list(_PROJECT_SOURCE_RECEIPT_CONTRACTS)
-        record["result_contract"] = "bms.global.ngs-molbio-job-result.v1"
-        record["native_mapping"]["native_request_compatibility"] = "exact_native_mapping"
-        # Engineering acceptance is a release concern, not live admission.
-        for gate in record["parity_ledger"]:
-            gate["state"] = "not_applicable"
-            gate["evidence"] = f"operational-discovery:{destination}; release acceptance is separate"
-        record["inventory_sha256"] = _canonical_digest(record, "inventory_sha256")
-        record["capability_sha256"] = record["inventory_sha256"]
+        _apply_operational_capability(record)
     return inventory
 
 
 def capability_record(capability_id: str) -> dict[str, Any]:
-    record = next((row for row in capability_inventory()["capabilities"] if row["capability_id"] == capability_id), None)
+    record = next((row for row in _capability_inventory_source()["capabilities"] if row["capability_id"] == capability_id), None)
     if record is None:
         raise NgsMolBioCapabilityError(f"unknown capability: {capability_id}")
+    record = copy.deepcopy(record)
+    _apply_operational_capability(record)
     _verify_parameter_partition(record)
     _verify_capability_owners(record)
     # Only the selected operation's parameter contract is required here.
@@ -429,7 +443,11 @@ def capability_record(capability_id: str) -> dict[str, Any]:
 
 
 def capability_parameter_schema(capability_id: str) -> dict[str, Any]:
-    record = capability_record(capability_id)
+    return _capability_parameter_schema(capability_record(capability_id))
+
+
+def _capability_parameter_schema(record: dict[str, Any]) -> dict[str, Any]:
+    """Project parameters from a request-local, verified capability record."""
     schema = registered_schema(record["parameter_schema_id"])
     if "samtools_consensus_config" in schema.get("properties", {}):
         from services.ont_ngs_contract import samtools_consensus_setting
@@ -457,76 +475,6 @@ def contract_registry(name: str) -> dict[str, Any]:
     return document
 
 
-def _payload_value(payload: dict[str, Any], expression: str) -> Any:
-    if not expression.startswith("payload."):
-        raise NgsMolBioCapabilityError(f"unsupported event derivation: {expression}")
-    value: Any = payload
-    for field in expression.removeprefix("payload.").split("."):
-        if not isinstance(value, dict) or field not in value:
-            raise NgsMolBioCapabilityError(f"unresolved event derivation: {expression}")
-        value = value[field]
-    return value
-
-
-def _event_derived_value(payload: dict[str, Any], expression: str) -> Any:
-    if expression == "null":
-        return None
-    if expression.startswith("constant:"):
-        raw = expression.removeprefix("constant:")
-        try:
-            return int(raw)
-        except ValueError as exc:
-            raise NgsMolBioCapabilityError(f"invalid event constant: {expression}") from exc
-    return _payload_value(payload, expression)
-
-
-def _event_stream(payload: dict[str, Any], template: str) -> str:
-    def replace(match: re.Match[str]) -> str:
-        value = _payload_value(payload, match.group(1))
-        if not isinstance(value, (str, int)) or isinstance(value, bool):
-            raise NgsMolBioCapabilityError(f"invalid event stream placeholder: {match.group(1)}")
-        return str(value)
-
-    stream = re.sub(r"\{(payload\.[A-Za-z0-9_.]+)\}", replace, template)
-    if "{" in stream or "}" in stream:
-        raise NgsMolBioCapabilityError(f"unresolved event stream template: {template}")
-    return stream
-
-
-def validate_connector_event(value: dict[str, Any]) -> dict[str, Any]:
-    schemas, reference_registry = _schema_context()
-    _validate(
-        value,
-        schemas["bms.ngs-molbio.connector-event.v1"],
-        "connector event",
-        reference_registry,
-    )
-    event = next(
-        (row for row in contract_registry("event")["entries"] if row["event_type"] == value["event_type"]),
-        None,
-    )
-    if event is None:
-        raise NgsMolBioCapabilityError(f"unknown connector event type: {value['event_type']}")
-    _validate(
-        value["payload"],
-        schemas[event["payload_schema_id"]],
-        "connector event payload",
-        reference_registry,
-    )
-    if value["payload_sha256"] != hashlib.sha256(rfc8785.dumps(value["payload"])).hexdigest():
-        raise NgsMolBioCapabilityError("connector event payload digest mismatch")
-    expected_stream = _event_stream(value["payload"], event["event_stream_template"])
-    if value["event_stream"] != expected_stream:
-        raise NgsMolBioCapabilityError("connector event stream mismatch")
-    expected_generation = _event_derived_value(value["payload"], event["source_generation_derivation"])
-    if value["source_generation"] != expected_generation:
-        raise NgsMolBioCapabilityError("connector source generation mismatch")
-    expected_state = _event_derived_value(value["payload"], event["state_revision_id_derivation"])
-    if value["state_revision_id"] != expected_state:
-        raise NgsMolBioCapabilityError("connector state revision mismatch")
-    return copy.deepcopy(value)
-
-
 def _assert_unique_values(values: Iterable[Any], *, label: str) -> None:
     seen: set[bytes] = set()
     for value in values:
@@ -541,12 +489,11 @@ def _verify_ngs_molbio_domain_semantics(value: dict[str, Any]) -> None:
         return
     payload = value["domain_payload"]
     if value.get("status") in {"planned", "active"}:
-        for field in ("planned_capability_ids", "acceptance_criteria", "evidence_plan"):
-            items = payload.get(field)
-            if not isinstance(items, list) or not items:
-                raise NgsMolBioCapabilityError(
-                    f"{value['status']} NGS/MolBio Domains require non-empty {field}"
-                )
+        planned = payload.get("planned_capability_ids")
+        if not isinstance(planned, list) or not planned:
+            raise NgsMolBioCapabilityError(
+                f"{value['status']} NGS/MolBio Domains require non-empty planned_capability_ids"
+            )
     _assert_unique_values(
         (row["group_id"] for row in payload["grouping_intent"]),
         label="group ID",
@@ -783,6 +730,5 @@ __all__ = [
     "capability_record",
     "contract_registry",
     "registered_schema",
-    "validate_connector_event",
     "validate_domain_experiment",
 ]

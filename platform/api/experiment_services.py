@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from jsonschema import Draft202012Validator
 from services.ngs_molbio_capabilities import (
     NgsMolBioCapabilityError,
-    capability_parameter_schema,
+    _capability_parameter_schema,
     capability_record,
     validate_domain_experiment,
 )
@@ -264,7 +264,7 @@ def workflow_plan_capability_contract(capability_id: str) -> dict[str, Any]:
     except ProteinProjectCapabilityError:
         try:
             capability = capability_record(capability_id)
-            parameter_schema = capability_parameter_schema(capability_id)
+            parameter_schema = _capability_parameter_schema(capability)
         except NgsMolBioCapabilityError as exc:
             raise ValidationFailure(str(exc)) from exc
     if capability.get("plannable") is not True or capability.get("exposure_state") != "accepted":
@@ -1235,6 +1235,23 @@ async def save_workflow_draft(
     return draft
 
 
+def _hierarchy_required_fields(aggregate_kind: str) -> set[str]:
+    return {
+        "workspace": {"name", "description", "research_objective", "status", "needs_metadata_review"},
+        "experiment": {"name", "objective", "scientific_question", "description", "status", "priority", "success_criteria", "needs_metadata_review"},
+        "domain_experiment": {"domain_kind", "domain_contract_version", "name", "objective", "status", "domain_payload"},
+    }[aggregate_kind]
+
+
+def _validate_hierarchy_lifecycle(aggregate_kind: str, payload: dict[str, Any]) -> None:
+    statuses = PROJECT_STATUSES if aggregate_kind == "workspace" else EXPERIMENT_STATUSES
+    if payload.get("status") not in statuses:
+        raise ValidationFailure(f"invalid {aggregate_kind} lifecycle status")
+    if aggregate_kind == "experiment" and payload.get("status") == "active":
+        if not isinstance(payload.get("success_criteria"), list):
+            raise ValidationFailure("active global experiments require success criteria to be a list")
+
+
 def _validate_hierarchy_payload(aggregate_kind: str, payload: dict[str, Any]) -> None:
     if not isinstance(payload, dict):
         raise ValidationFailure("aggregate payload must be an object")
@@ -1245,11 +1262,7 @@ def _validate_hierarchy_payload(aggregate_kind: str, payload: dict[str, Any]) ->
     }[aggregate_kind]
     if payload.get("schema") not in expected_schemas:
         raise ValidationFailure(f"{aggregate_kind} payload schema is unsupported")
-    required = {
-        "workspace": {"name", "description", "research_objective", "status", "needs_metadata_review"},
-        "experiment": {"name", "objective", "scientific_question", "description", "status", "priority", "success_criteria", "needs_metadata_review"},
-        "domain_experiment": {"domain_kind", "domain_contract_version", "name", "objective", "status", "domain_payload"},
-    }[aggregate_kind]
+    required = _hierarchy_required_fields(aggregate_kind)
     if aggregate_kind == "workspace" and payload.get("schema") == "bms.project.v2":
         required |= {
             "schema", "project_scope", "owner", "contributors", "tags", "start_date",
@@ -1263,22 +1276,12 @@ def _validate_hierarchy_payload(aggregate_kind: str, payload: dict[str, Any]) ->
     missing = sorted(field for field in required if field not in payload)
     if missing:
         raise ValidationFailure(f"{aggregate_kind} payload missing required fields: {', '.join(missing)}")
-    statuses = PROJECT_STATUSES if aggregate_kind == "workspace" else EXPERIMENT_STATUSES
-    if payload.get("status") not in statuses:
-        raise ValidationFailure(f"invalid {aggregate_kind} lifecycle status")
+    _validate_hierarchy_lifecycle(aggregate_kind, payload)
     if aggregate_kind == "workspace" and payload.get("schema") == "bms.project.v2":
         if payload.get("project_scope") not in {"global", "ngs_molbio_local"}:
             raise ValidationFailure("Project v2 project_scope is invalid")
         if not isinstance(payload.get("needs_metadata_review"), bool):
             raise ValidationFailure("Project v2 needs_metadata_review must be boolean")
-    if aggregate_kind == "experiment":
-        if payload.get("status") == "active":
-            criteria = payload.get("success_criteria")
-            if not isinstance(criteria, list) or not criteria:
-                raise ValidationFailure("active global experiments require success criteria")
-        if payload.get("status") == "completed":
-            if not str(payload.get("review_summary") or "").strip() or not str(payload.get("conclusion") or "").strip():
-                raise ValidationFailure("completed global experiments require review_summary and conclusion")
     if aggregate_kind == "domain_experiment":
         domain_kind = payload.get("domain_kind")
         if domain_kind not in DOMAIN_KINDS:
