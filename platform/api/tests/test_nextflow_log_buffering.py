@@ -25,11 +25,12 @@ def test_bounded_log_tail_caps_line_count_and_line_size() -> None:
     assert tail.tail(2) == [lines[1], "last\n"]
 
 
-def test_nextflow_execution_keeps_only_bounded_tails_and_never_rewrites_durable_log() -> None:
+def test_nextflow_execution_keeps_bounded_tails_and_compacts_durable_log_in_place() -> None:
     source = NEXTFLOW_SOURCE.read_text(encoding="utf-8")
 
-    assert "full_log = _BoundedLogTail(" in source
-    assert "attempt_log = _BoundedLogTail(" in source
+    assert "full_log = BoundedLogBuffer(" in source
+    assert "attempt_log = BoundedLogBuffer(" in source
     assert "append_control_log(" in source
     assert "full_log.tail(20)" in source
+    assert "compact_log_file(log_path, log_file_max_bytes)" in source
     assert 'open(log_path, "w", encoding="utf-8")' not in source
