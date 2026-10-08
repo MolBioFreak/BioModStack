@@ -149,33 +149,33 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             <div className="mb-6 p-4 bg-slate-900/50 rounded-lg border border-slate-700/50">
                 <h3 className="text-sm font-medium text-slate-400 mb-3">Workflow Pipeline</h3>
                 <div className="flex items-center gap-2 flex-wrap">
-                    <div className="bg-emerald-500/20 text-emerald-400 px-3 py-1.5 rounded-lg text-sm font-medium">
-                        1. RFantibody
-                    </div>
-                    <span className="text-slate-600">→</span>
-                    <div className="bg-blue-500/20 text-blue-400 px-3 py-1.5 rounded-lg text-sm font-medium">
-                        2. {seqDesigner.toUpperCase()}
-                    </div>
-                    <span className="text-slate-600">→</span>
-                    <div className="bg-purple-500/20 text-purple-400 px-3 py-1.5 rounded-lg text-sm font-medium">
-                        3. Boltz2
-                    </div>
-                    {useAntiberty && (
-                        <>
-                            <span className="text-slate-600">→</span>
-                            <div className="bg-amber-500/20 text-amber-400 px-3 py-1.5 rounded-lg text-sm font-medium">
-                                4. AntiBERTy
-                            </div>
-                        </>
-                    )}
-                    {useThermoMPNN && (
-                        <>
-                            <span className="text-slate-600">→</span>
-                            <div className="bg-rose-500/20 text-rose-400 px-3 py-1.5 rounded-lg text-sm font-medium">
-                                5. ThermoMPNN
-                            </div>
-                        </>
-                    )}
+                    {(() => {
+                        // Color classes must be complete strings for Tailwind purging
+                        const colorClasses: Record<string, string> = {
+                            emerald: 'bg-emerald-500/20 text-emerald-400',
+                            blue: 'bg-blue-500/20 text-blue-400',
+                            purple: 'bg-purple-500/20 text-purple-400',
+                            amber: 'bg-amber-500/20 text-amber-400',
+                            rose: 'bg-rose-500/20 text-rose-400',
+                        };
+
+                        const steps: Array<{ name: string; colorKey: string }> = [
+                            { name: 'RFantibody', colorKey: 'emerald' },
+                            { name: seqDesigner.toUpperCase(), colorKey: 'blue' },
+                            { name: 'Boltz2', colorKey: 'purple' },
+                        ];
+                        if (useAntiberty) steps.push({ name: 'AntiBERTy', colorKey: 'amber' });
+                        if (useThermoMPNN) steps.push({ name: 'ThermoMPNN', colorKey: 'rose' });
+
+                        return steps.map((step, idx) => (
+                            <React.Fragment key={step.name}>
+                                {idx > 0 && <span className="text-slate-600">→</span>}
+                                <div className={`${colorClasses[step.colorKey]} px-3 py-1.5 rounded-lg text-sm font-medium`}>
+                                    {idx + 1}. {step.name}
+                                </div>
+                            </React.Fragment>
+                        ));
+                    })()}
                 </div>
             </div>
 
