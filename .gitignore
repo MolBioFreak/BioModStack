@@ -108,3 +108,17 @@ test.nf
 
 # Debug scripts
 debug_confidence.py
+
+# Build logs
+*.log
+apptainer/*.log
+
+# Turbo cache
+.turbo/
+
+# Backup folders
+.backup/
+
+# Large demo/test data (should not be in repo)
+packages/ove-react19/demo/src/exampleData/*.json
+packages/bio-parsers/test/testData/**/*.dna

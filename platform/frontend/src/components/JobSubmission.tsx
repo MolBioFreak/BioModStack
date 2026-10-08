@@ -9,6 +9,7 @@ import { TemplateManagerModal } from './TemplateManagerModal';
 import { MutagenesisTemplate } from './MutagenesisTemplate';
 import { AntibodyDenovoTemplate } from './AntibodyDenovoTemplate';
 import { StructurePredictionTemplate } from './StructurePredictionTemplate';
+import { BoltzGenTemplate } from './BoltzGenTemplate';
 import { PresetSelector } from './PresetSelector';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
 import { StructureInput } from './StructureInput';
@@ -653,13 +654,21 @@ export function JobSubmission() {
                                     onBack={() => setSelectedTemplateId(null)}
                                     initialValues={clonedValues}
                                 />
+                            ) : selectedTemplateId === 'boltzgen_design' ? (
+                                <BoltzGenTemplate
+                                    onBack={() => {
+                                        setSelectedTemplateId(null);
+                                        setClonedValues(undefined);
+                                    }}
+                                    initialValues={clonedValues}
+                                />
                             ) : (
                                 <>
                                     <p className="text-slate-400 text-sm">Choose a preset workflow for your experiment goal:</p>
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                         {[
-                                            // Dynamic templates from API
-                                            ...(templatesData?.data ?? []),
+                                            // Dynamic templates from API (filter out boltzgen_ligand - using hardcoded version)
+                                            ...(templatesData?.data ?? []).filter((t: any) => t.id !== 'boltzgen_ligand'),
                                             // Hardcoded Mutagenesis Template
                                             {
                                                 id: 'mutagenesis',
@@ -685,6 +694,19 @@ export function JobSubmission() {
                                                     { tool: 'Boltz2' },
                                                     { tool: 'AntiBERTy' }
                                                 ]
+                                            },
+                                            // Ligand-Aware Binder Design (BoltzGen)
+                                            {
+                                                id: 'boltzgen_design',
+                                                name: 'Ligand-Aware Binder',
+                                                description: 'Design proteins that bind small molecules, NTPs, or other ligands. Uses BoltzGen for all-atom structure generation with optional docking validation.',
+                                                icon: 'pill',
+                                                color: '#F59E0B', // Amber
+                                                stages: [
+                                                    { tool: 'BoltzGen' },
+                                                    { tool: 'Filtering' },
+                                                    { tool: 'Docking' }
+                                                ]
                                             }
                                         ].map((template: any) => (
                                             <div
@@ -700,10 +722,11 @@ export function JobSubmission() {
                                                         className="w-10 h-10 rounded-lg flex items-center justify-center text-lg"
                                                         style={{ backgroundColor: `${template.color}20`, color: template.color }}
                                                     >
-                                                        {template.icon === 'target' ? '🎯' :
-                                                            template.icon === 'flask' ? '🧪' :
-                                                                template.icon === 'dna' ? '🧬' :
-                                                                    template.icon === 'microscope' ? '🔬' : '⚡'}
+                                                        {template.icon === 'target' ? 'TG' :
+                                                            template.icon === 'flask' ? 'AB' :
+                                                                template.icon === 'dna' ? 'MU' :
+                                                                    template.icon === 'microscope' ? 'SP' :
+                                                                        template.icon === 'pill' ? 'LB' : 'WF'}
                                                     </div>
                                                     <div>
                                                         <h3 className="font-semibold text-slate-200">{template.name}</h3>

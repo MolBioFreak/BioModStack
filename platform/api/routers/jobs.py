@@ -559,18 +559,8 @@ async def annotate_cdr_regions(
     if not designs:
         raise HTTPException(status_code=400, detail="No designs found for this job")
     
-    # Filter to designs that need annotation
-    designs_to_annotate = [d for d in designs if not (d.cdr_h1 and d.cdr_h1_length)]
-    already_annotated = len(designs) - len(designs_to_annotate)
-    
-    if not designs_to_annotate:
-        return {
-            "message": f"All {len(designs)} designs already annotated",
-            "job_id": job_id,
-            "status": "complete",
-            "annotated": len(designs),
-            "total": len(designs)
-        }
+    # Always re-annotate ALL designs (allows fixing bad annotations)
+    designs_to_annotate = list(designs)
     
     # Collect PDB paths and design IDs for background processing
     pdb_paths = [d.pdb_path for d in designs_to_annotate]

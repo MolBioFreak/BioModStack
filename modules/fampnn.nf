@@ -9,21 +9,30 @@ process PrepFAMPNN {
     path ("*.csv"), emit: csv
 
     script:
+    // Design mode parameters with defaults
+    def designMode = params.antibody_design_mode ?: 'cdr_only'
+    def designLoops = params.antibody_design_loops ?: 'H1,H2,H3,L1,L2,L3'
+    def protectTetrad = params.protect_vhh_tetrad != null ? params.protect_vhh_tetrad : true
+    def antibodyChains = params.antibody_chains ?: 'H,L'
+    
     """
     eval "\$(micromamba shell hook --shell bash)"
     micromamba activate pyrosetta
 
     # Restore missing side-chains required by FAMPNN    
-    python /scripts/prep_fampnn_designs.py \
-        --input_dir "./" \
+    python /scripts/prep_fampnn_designs.py \\
+        --input_dir "./" \\
         --out_dir "fampnn_input"
     
-    # Define residue ranges to be fixed during sequence generation in CSV
-    # Define residue ranges to be fixed (Fix chains != H, L)
-    python /scripts/prep_antibody_constraints.py \
-        --input_dir "./" \
-        --out_fampnn "fampnn.csv" \
-        --out_mpnn "mpnn_fixed_chains_unused.json"
+    # Generate CDR-aware constraints based on design mode
+    python /scripts/prep_antibody_constraints.py \\
+        --input_dir "./" \\
+        --out_fampnn "fampnn.csv" \\
+        --out_mpnn "mpnn_fixed_chains.json" \\
+        --design_mode "${designMode}" \\
+        --design_loops "${designLoops}" \\
+        --protect_tetrad "${protectTetrad}" \\
+        --antibody_chains "${antibodyChains}"
     """
 }
 

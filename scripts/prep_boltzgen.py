@@ -54,6 +54,10 @@ def main():
     parser.add_argument("--dna_template_seq", type=str, help="DNA template sequence")
     parser.add_argument("--dna_primer_seq", type=str, help="DNA primer sequence")
     parser.add_argument("--dna_structure", type=str, help="Pre-generated DNA structure PDB")
+    parser.add_argument("--secondary_structure", type=str, help="Secondary structure constraints (e.g., 'helix:1-20,sheet:25-35,loop:40-45')")
+    parser.add_argument("--protocol", type=str, default="protein-anything", 
+                        choices=["protein-anything", "peptide-anything", "protein-small_molecule", "nanobody-anything"],
+                        help="BoltzGen protocol to use")
     parser.add_argument("--output_yaml", type=str, required=True, help="Output YAML file")
     
     args = parser.parse_args()
@@ -189,11 +193,40 @@ def main():
     if constraints:
         config['constraints'] = constraints
     
+    # Add secondary structure constraints
+    if args.secondary_structure:
+        ss_map = {'helix': [], 'sheet': [], 'loop': []}
+        for part in args.secondary_structure.split(','):
+            if ':' in part:
+                ss_type, residues = part.split(':', 1)
+                ss_type = ss_type.strip().lower()
+                if ss_type in ss_map:
+                    if '-' in residues:
+                        start, end = residues.split('-')
+                        ss_map[ss_type].append(f"{start}..{end}")
+                    else:
+                        ss_map[ss_type].append(residues.strip())
+        
+        # Add to first protein entity's secondary_structure block
+        if any(ss_map.values()):
+            secondary_structure = {}
+            for ss_type, ranges in ss_map.items():
+                if ranges:
+                    secondary_structure[ss_type] = ','.join(ranges)
+            
+            # Find first protein entity and add secondary_structure
+            for entity in entities:
+                if 'protein' in entity:
+                    entity['protein']['secondary_structure'] = secondary_structure
+                    break
+            print(f"Secondary structure constraints: {secondary_structure}")
+    
     with open(args.output_yaml, 'w') as f:
         yaml.dump(config, f, default_flow_style=False)
     
     print(f"Generated BoltzGen design spec: {args.output_yaml}")
     print(f"  Entities: {len(entities)}")
+    print(f"  Protocol: {args.protocol}")
     if constraints:
         print(f"  Constraints: {len(constraints)}")
 

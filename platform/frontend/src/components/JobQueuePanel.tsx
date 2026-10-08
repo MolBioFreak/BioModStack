@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
     fetchQueue,
@@ -100,6 +100,43 @@ function GPUBadge({ gpu, pinned }: { gpu: number | null; pinned: boolean }) {
     return (
         <span className={`px-2 py-0.5 rounded text-xs font-medium ${pinned ? 'bg-orange-500/20 text-orange-400' : 'bg-cyan-500/20 text-cyan-400'}`}>
             {pinned ? '📌 ' : ''}{name}
+        </span>
+    );
+}
+
+// Elapsed time badge for running jobs
+function ElapsedTimeBadge({ startedAt }: { startedAt: string | null }) {
+    const [, forceUpdate] = useState(0);
+
+    // Update every second for running jobs
+    useEffect(() => {
+        if (!startedAt) return;
+        const timer = setInterval(() => forceUpdate(n => n + 1), 1000);
+        return () => clearInterval(timer);
+    }, [startedAt]);
+
+    if (!startedAt) return null;
+
+    const start = new Date(startedAt).getTime();
+    const now = Date.now();
+    const elapsedMs = now - start;
+
+    const seconds = Math.floor(elapsedMs / 1000) % 60;
+    const minutes = Math.floor(elapsedMs / 60000) % 60;
+    const hours = Math.floor(elapsedMs / 3600000);
+
+    let display = '';
+    if (hours > 0) {
+        display = `${hours}h ${minutes}m`;
+    } else if (minutes > 0) {
+        display = `${minutes}m ${seconds}s`;
+    } else {
+        display = `${seconds}s`;
+    }
+
+    return (
+        <span className="px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/20 text-emerald-400">
+            ⏱ {display}
         </span>
     );
 }
@@ -438,6 +475,10 @@ function JobRow({
                                 <span className="px-2 py-0.5 rounded text-xs font-medium bg-purple-500/20 text-purple-400" title={`Batch: ${job.batch_name}`}>
                                     📦 {job.batch_name.length > 15 ? job.batch_name.slice(0, 15) + '...' : job.batch_name}
                                 </span>
+                            )}
+                            {/* Elapsed time for running jobs */}
+                            {job.queue_status === 'running' && (
+                                <ElapsedTimeBadge startedAt={job.started_at} />
                             )}
                         </div>
                     </div>

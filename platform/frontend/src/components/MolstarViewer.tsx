@@ -1,7 +1,7 @@
-import React, { useEffect, useState, useRef, useMemo } from 'react';
+import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 
 interface Selection {
-    chain_id?: string;
+    chain_id?: string;  // Will be mapped to struct_asym_id
     start_residue_number?: number;
     end_residue_number?: number;
     color?: { r: number; g: number; b: number };
@@ -61,6 +61,11 @@ function loadScript(callback: () => void) {
     document.head.appendChild(script);
 }
 
+// Convert RGB to hex
+function rgbToHex(r: number, g: number, b: number): string {
+    return '#' + [r, g, b].map(x => x.toString(16).padStart(2, '0')).join('');
+}
+
 export default function MolstarViewer({
     structureUrl,
     format = 'pdb',
@@ -73,6 +78,7 @@ export default function MolstarViewer({
 }: Props) {
     const [isScriptLoaded, setIsScriptLoaded] = useState(scriptLoaded);
     const containerRef = useRef<HTMLDivElement>(null);
+    const viewerRef = useRef<HTMLElement | null>(null);
 
     // Build absolute URL
     const absoluteUrl = useMemo(() => {
@@ -87,6 +93,59 @@ export default function MolstarViewer({
     useEffect(() => {
         loadScript(() => setIsScriptLoaded(true));
     }, []);
+
+    // Apply selections after viewer loads
+    const applySelections = useCallback(async () => {
+        if (!selections || selections.length === 0) return;
+        if (!viewerRef.current) return;
+
+        const viewer = viewerRef.current as any;
+
+        // Wait for viewer to be ready
+        const waitForReady = async () => {
+            for (let i = 0; i < 50; i++) {
+                if (viewer.viewerInstance?.visual?.select) {
+                    return true;
+                }
+                await new Promise(r => setTimeout(r, 100));
+            }
+            return false;
+        };
+
+        const ready = await waitForReady();
+        if (!ready) {
+            console.warn('MolstarViewer: viewer.viewerInstance not ready after 5s');
+            return;
+        }
+
+        try {
+            // Convert our selection format to pdbe-molstar format
+            const selectData = selections.map(sel => ({
+                struct_asym_id: sel.chain_id,
+                start_residue_number: sel.start_residue_number,
+                end_residue_number: sel.end_residue_number,
+                color: sel.color ? rgbToHex(sel.color.r, sel.color.g, sel.color.b) : undefined,
+                focus: sel.focus
+            }));
+
+            await viewer.viewerInstance.visual.select({
+                data: selectData,
+                nonSelectedColor: '#888888'  // Grey out non-selected regions
+            });
+            console.log('CDR selections applied:', selectData);
+        } catch (err) {
+            console.error('Failed to apply CDR selections:', err);
+        }
+    }, [selections]);
+
+    // Call applySelections when selections change
+    useEffect(() => {
+        if (isScriptLoaded && selections && selections.length > 0) {
+            // Delay to allow structure to load
+            const timer = setTimeout(applySelections, 1500);
+            return () => clearTimeout(timer);
+        }
+    }, [isScriptLoaded, selections, applySelections, absoluteUrl]);
 
     // Parse background color
     const bgColor = useMemo(() => {
@@ -141,6 +200,7 @@ export default function MolstarViewer({
                 </div>
             )}
             {React.createElement('pdbe-molstar', {
+                ref: (el: HTMLElement) => { viewerRef.current = el; },
                 'custom-data-url': absoluteUrl,
                 'custom-data-format': format,
                 'bg-color-r': bgColor.r.toString(),
@@ -157,7 +217,6 @@ export default function MolstarViewer({
                 'select-interaction': 'true',
                 'granularity': 'residue',
                 'pdbe-link': 'false',
-                'selection-data': selections && selections.length > 0 ? JSON.stringify(selections) : undefined,
                 style: { width: '100%', height: '100%', display: 'block' }
             })}
         </div>
