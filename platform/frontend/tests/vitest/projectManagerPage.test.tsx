@@ -1278,9 +1278,11 @@ describe('ProjectManager', () => {
         expect(save?.hasAttribute('disabled')).toBe(true);
     });
 
-    it('accumulates and deduplicates map pages while preserving stable root and focus context', async () => {
+    it('replaces bounded map pages while preserving server-issued root and focus context', async () => {
         const first = structuredClone(baseSummary);
-        first.map.nodes = first.map.nodes.slice(0, 3);
+        first.map.nodes = [...first.map.nodes.slice(0, 3), {
+            ...first.map.nodes[3], node_key: 'external_entity_receipt:old-page', label: 'Old page receipt',
+        }];
         first.map.edges = first.map.edges.slice(0, 2);
         first.map.truncated = true;
         first.map.next_cursor = 'map:3';
@@ -1293,14 +1295,16 @@ describe('ProjectManager', () => {
 
         await renderAt('/projects/project-1?focus=global-1&selected=domain_experiment%3Adomain-1');
         await waitUntil(() => expect(container.textContent).toContain('Load next map page'));
+        expect(container.textContent).toContain('Old page receipt');
         const loadMore = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Load next map page'));
         await act(async () => loadMore?.click());
         await waitUntil(() => expect(container.textContent).toContain('PLM-07 result'));
+        expect(container.textContent).not.toContain('Old page receipt');
         expect(container.querySelectorAll('[aria-label="Select DNA Polymerase Design"]')).toHaveLength(1);
         expect(container.querySelectorAll('[aria-label="Select Catalytic-loop redesign"]')).toHaveLength(1);
     });
 
-    it('accumulates bounded run pages and keeps both pages selectable', async () => {
+    it('replaces bounded run pages without retaining the prior page', async () => {
         const first = structuredClone(baseSummary);
         first.runs.next_cursor = 'run:1';
         const second = structuredClone(baseSummary);
@@ -1320,7 +1324,7 @@ describe('ProjectManager', () => {
         const loadMore = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Load next run page'));
         await act(async () => loadMore?.click());
         await waitUntil(() => expect(container.querySelector('[aria-label="Inspect run run-2"]')).not.toBeNull());
-        expect(container.querySelector('[aria-label="Inspect run run-1"]')).not.toBeNull();
+        expect(container.querySelector('[aria-label="Inspect run run-1"]')).toBeNull();
         expect(managerApi.getProjectSummary).toHaveBeenCalledWith('project-1', expect.objectContaining({ runCursor: 'run:1' }));
     });
 
@@ -1358,11 +1362,17 @@ describe('ProjectManager', () => {
         await waitUntil(() => expect(container.querySelector('[data-testid="location"]')?.textContent).toContain('selected=virtual_folder%3Adomain-1%3Aactivity'));
         expect(container.querySelector('[aria-label="Collapse Activity"]')?.getAttribute('aria-expanded')).toBe('true');
         await waitUntil(() => expect(container.textContent).toContain('Source attached'));
-        await waitUntil(() => expect(container.textContent).toContain('Load more activity'));
-        const loadMore = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'Load more activity');
+        await waitUntil(() => expect(container.textContent).toContain('Next activity page'));
+        const loadMore = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'Next activity page');
         await act(async () => loadMore?.click());
         await waitUntil(() => expect(container.textContent).toContain('Run completed'));
-        expect(container.textContent).toContain('Source attached');
+        expect(container.textContent).not.toContain('Source attached');
         expect(managerApi.getProjectSummary).toHaveBeenCalledWith('project-1', expect.objectContaining({ activityCursor: 'activity:1' }));
+    });
+    it('renders a single detailed Run list when the Runs folder is selected', async () => {
+        await renderAt('/projects/project-1?focus=global-1&selected=virtual_folder%3Adomain-1%3Aruns');
+        await waitUntil(() => expect(container.querySelector('[aria-label="Inspect run run-1"]')).not.toBeNull());
+        expect(container.querySelector('[aria-label="Runs bounded records"]')).toBeNull();
+        expect(container.querySelectorAll('[aria-label="Inspect run run-1"]')).toHaveLength(1);
     });
 });
