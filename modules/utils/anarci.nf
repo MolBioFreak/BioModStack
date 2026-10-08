@@ -13,14 +13,17 @@ process ANARCII {
     path "anarci.log"
 
     script:
+    def chainTimeout = params.anarcii_chain_timeout ?: 120
     """
     (python3 << 'EOF'
 import sys
 import json
+import subprocess
 import warnings
+from pathlib import Path
 from Bio import PDB
 from Bio import SeqUtils
-from Bio.PDB import PDBIO, Select
+from Bio.PDB import PDBIO
 try:
     from anarcii import Anarcii
 except ImportError:
@@ -34,9 +37,30 @@ pdb_file = "${pdb}"
 output_pdb = "${meta.id}_imgt.pdb"
 output_json = "${meta.id}_cdrs.json"
 output_positions_json = "${meta.id}_cdr_positions.json"
+chain_timeout = int("${chainTimeout}")
 
 # Suppress PDB warnings
 warnings.simplefilter("ignore", PDB.PDBExceptions.PDBConstructionWarning)
+
+ANARCII_SUBPROCESS = r"""
+import json
+import sys
+
+try:
+    from anarcii import Anarcii
+except ImportError:
+    from ANARCII import Anarcii
+
+seq = sys.argv[1]
+runner = Anarcii(seq_type='unknown')
+runner.number([seq])
+numbering, alignments, hit_tables = runner.to_legacy()
+print(json.dumps({
+    "numbering": numbering,
+    "alignments": alignments,
+    "hit_tables": hit_tables,
+}))
+"""
 
 def get_seq_from_chain(chain):
     seq = ""
@@ -48,6 +72,43 @@ def get_seq_from_chain(chain):
             residues.append(residue)
     return seq, residues
 
+def run_anarcii(seq, chain_id):
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", ANARCII_SUBPROCESS, seq],
+            capture_output=True,
+            text=True,
+            timeout=chain_timeout,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"ANARCII timed out for chain {chain_id} after {chain_timeout}s")
+        return None
+    except Exception as exc:
+        print(f"ANARCII subprocess failed for chain {chain_id}: {exc}")
+        return None
+
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        print(f"ANARCII failed for chain {chain_id}: {stderr[:500]}")
+        return None
+
+    stdout = (result.stdout or "").strip()
+    if not stdout:
+        print(f"ANARCII produced no output for chain {chain_id}")
+        return None
+
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        print(f"ANARCII returned invalid JSON for chain {chain_id}: {exc}")
+        return None
+
+    return (
+        payload.get("numbering") or [],
+        payload.get("alignments") or [],
+        payload.get("hit_tables") or [],
+    )
+
 parser = PDB.PDBParser()
 structure = parser.get_structure("input", pdb_file)
 
@@ -58,9 +119,7 @@ renumbered_structure.add(renumbered_model)
 cdr_data = {"cdrs": {}, "numbering": {}, "humanness_score": 0.0}
 cdr_positions = {"H1": [], "H2": [], "H3": [], "L1": [], "L2": [], "L3": []}
 processed_chains = []
-
-# Instantiate ANARCII runner (default scheme is IMGT)
-runner = Anarcii()
+chain_failures = []
 
 # Process each chain
 for model in structure:
@@ -70,13 +129,14 @@ for model in structure:
         
         # Run ANARCII
         try:
-            # ANARCII number() takes list of sequences
-            runner.number([seq])
-            # Convert to legacy format: (numbering, alignments, hit_tables)
-            results = runner.to_legacy()
+            results = run_anarcii(seq, chain.id)
+            if results is None:
+                chain_failures.append(chain.id)
+                continue
             numbering, alignments, hit_tables = results
         except Exception as e:
             print(f"ANARCII failed for chain {chain.id}: {e}")
+            chain_failures.append(chain.id)
             continue
             
         if not numbering or not numbering[0]:
@@ -153,8 +213,12 @@ for model in structure:
         cdr_data["cdrs"][f"{suffix}3"] = cdrs["3"]
 
 io = PDBIO()
-io.set_structure(renumbered_structure)
-io.save(output_pdb)
+if processed_chains:
+    io.set_structure(renumbered_structure)
+    io.save(output_pdb)
+else:
+    Path(output_pdb).write_text(Path(pdb_file).read_text())
+    print("No chains were renumbered; copied input PDB to fallback output.")
 
 with open(output_json, 'w') as f:
     json.dump(cdr_data, f, indent=2)
@@ -166,6 +230,8 @@ with open(output_positions_json, 'w') as f:
     json.dump(cdr_positions, f, indent=2)
 
 print(f"Renumbered chains: {processed_chains}")
+if chain_failures:
+    print(f"Chains skipped after ANARCII failure/timeout: {chain_failures}")
 EOF
     ) > anarci.log 2>&1
     """

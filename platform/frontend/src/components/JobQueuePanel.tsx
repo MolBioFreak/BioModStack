@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
     fetchQueue,
-    fetchQueueStats,
     pauseQueueJob,
     resumeQueueJob,
     cancelQueueJob,
@@ -216,19 +215,17 @@ export function JobQueuePanel() {
     const { data: queueData, isLoading } = useQuery({
         queryKey: ['queue'],
         queryFn: () => fetchQueue(),
-        refetchInterval: 2000,
-    });
-
-    const { data: statsData } = useQuery({
-        queryKey: ['queueStats'],
-        queryFn: () => fetchQueueStats(),
-        refetchInterval: 2000,
+        refetchInterval: 5000,
+        refetchIntervalInBackground: false,
+        refetchOnWindowFocus: false,
     });
 
     const { data: cancelledData } = useQuery({
         queryKey: ['cancelledJobs'],
         queryFn: () => fetchCancelledJobs(20),
-        refetchInterval: 5000,
+        refetchInterval: 10000,
+        refetchIntervalInBackground: false,
+        refetchOnWindowFocus: false,
         enabled: showCancelled,
     });
 
@@ -268,7 +265,6 @@ export function JobQueuePanel() {
         mutationFn: cancelAllQueuedJobs,
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['queue'] });
-            queryClient.invalidateQueries({ queryKey: ['queueStats'] });
             queryClient.invalidateQueries({ queryKey: ['cancelledJobs'] });
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
         },
@@ -301,7 +297,12 @@ export function JobQueuePanel() {
     });
 
     const queue = queueData?.data || [];
-    const stats = statsData?.data;
+    const stats = {
+        queued: queue.filter(j => j.queue_status === 'queued').length,
+        running: queue.filter(j => j.queue_status === 'running').length,
+        paused: queue.filter(j => j.queue_status === 'paused').length,
+        total: queue.length,
+    };
     const cancelledJobsRaw = cancelledData?.data || [];
     const isPending = pauseMutation.isPending || resumeMutation.isPending ||
         cancelMutation.isPending || pinMutation.isPending || cancelAllMutation.isPending || killActiveMutation.isPending || forceLaunchMutation.isPending;

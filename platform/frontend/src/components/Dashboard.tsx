@@ -106,7 +106,9 @@ export function Dashboard() {
     const { data: jobsData, isLoading: jobsLoading } = useQuery({
         queryKey: ['jobs'],
         queryFn: () => fetchJobs(),
-        refetchInterval: 5000,
+        refetchInterval: 10000,
+        refetchIntervalInBackground: false,
+        refetchOnWindowFocus: false,
     });
 
     const cancelMutation = useMutation({

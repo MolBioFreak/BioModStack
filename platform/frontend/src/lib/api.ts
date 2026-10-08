@@ -105,6 +105,7 @@ export interface RAMStatus {
 
 export interface SystemStatus {
     gpus: GPUStatus[];
+    gpu_error?: string | null;
     cpu: CPUStatus;
     ram: RAMStatus;
     timestamp: string;
