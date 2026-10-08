@@ -137,6 +137,7 @@ def test_awaiting_stage_to_resume_hint_supports_generator_and_validation_gates()
     assert _awaiting_stage_to_resume_hint("post_boltzgen") == "boltzgen"
     assert _awaiting_stage_to_resume_hint("post_ppiflow_generator") == "ppiflow"
     assert _awaiting_stage_to_resume_hint("post_fampnn") == "fampnn"
+    assert _awaiting_stage_to_resume_hint("post_caliby") == "caliby"
     assert _awaiting_stage_to_resume_hint("post_structure_validation") == "structure_validation"
     assert _awaiting_stage_to_resume_hint("pre_protenix_msa") == "structure_validation"
     assert _awaiting_stage_to_resume_hint("unknown_stage") is None

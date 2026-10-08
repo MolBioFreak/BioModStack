@@ -44,7 +44,7 @@ interface AnalyticsDashboardProps {
     loadedDesignCount?: number;
 }
 
-const ANALYSIS_LENS_ORDER: AnalysisLens[] = ['rfantibody', 'boltzgen', 'fampnn', 'ppiflow', 'frustrampnn', 'protenix', 'validation'];
+const ANALYSIS_LENS_ORDER: AnalysisLens[] = ['rfantibody', 'boltzgen', 'fampnn', 'caliby', 'ppiflow', 'frustrampnn', 'protenix', 'validation'];
 
 const FAMILY_META: Record<AnalysisLens, { title: string; description: string; accent: string }> = {
     validation: {
@@ -66,6 +66,11 @@ const FAMILY_META: Record<AnalysisLens, { title: string; description: string; ac
         title: 'FAMPNN Sequence Design',
         description: 'Sequence design quality centered on PSCE plus any additional flattened FAMPNN sidechain signals.',
         accent: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
+    },
+    caliby: {
+        title: 'Caliby Sequence Design',
+        description: 'Experimental Potts-model sequence design for antibody and nanobody redesign, including ensemble-aware Caliby energy signals.',
+        accent: 'border-teal-500/30 bg-teal-500/10 text-teal-200',
     },
     ppiflow: {
         title: 'PPIFlow Maturation',
@@ -142,6 +147,7 @@ const CORE_METRICS: MetricOption[] = [
     { key: 'rfa_plddt_selected', label: 'RFA Selected pLDDT', color: '#8b5cf6', family: 'rfantibody' },
     { key: 'rfa_plddt_delta', label: 'RFA pLDDT Delta', color: '#8b5cf6', family: 'rfantibody' },
     { key: 'fampnn_psce', label: 'FAMPNN PSCE', color: '#22c55e', family: 'fampnn' },
+    { key: 'caliby_potts_energy', label: 'Caliby Potts Energy', color: '#14b8a6', family: 'caliby' },
     { key: 'maturation_delta_interface', label: 'Global Delta Interface', color: '#e879f9', family: 'ppiflow' },
     { key: 'maturation_selected_delta_interface', label: 'Selected Delta Interface', color: '#f0abfc', family: 'ppiflow' },
     { key: 'maturation_interface_score', label: 'Global Interface Score', color: '#d946ef', family: 'ppiflow' },
@@ -203,6 +209,10 @@ const LENS_DEFAULT_METRICS: Record<AnalysisLens, {
     fampnn: {
         custom2d: ['fampnn_psce', 'plddt_overall', 'iptm'],
         custom3d: ['fampnn_psce', 'plddt_overall', 'iptm', 'conf_score'],
+    },
+    caliby: {
+        custom2d: ['caliby_potts_energy', 'plddt_overall', 'iptm'],
+        custom3d: ['caliby_potts_energy', 'plddt_overall', 'iptm', 'conf_score'],
     },
     ppiflow: {
         custom2d: ['maturation_selected_delta_interface', 'maturation_selected_rmsd', 'maturation_selected_interface_score'],
@@ -362,6 +372,7 @@ function inferMetricFamily(key: string): MetricFamily {
         return 'rfantibody';
     }
     if (lower.includes('fampnn') || lower.includes('psce')) return 'fampnn';
+    if (lower.includes('caliby') || lower.includes('potts_energy')) return 'caliby';
     if (lower.includes('maturation') || lower.includes('interface_score_matured') || lower.includes('delta_interface')) return 'ppiflow';
     if (lower.includes('frustr')) return 'frustrampnn';
     if (
@@ -564,6 +575,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
             rfantibody: [],
             boltzgen: [],
             fampnn: [],
+            caliby: [],
             ppiflow: [],
             frustrampnn: [],
             protenix: [],
@@ -582,6 +594,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
             rfantibody: 0,
             boltzgen: 0,
             fampnn: 0,
+            caliby: 0,
             ppiflow: 0,
             frustrampnn: 0,
             protenix: 0,

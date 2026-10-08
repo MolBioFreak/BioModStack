@@ -63,6 +63,26 @@ export interface QualitySettings {
     lock_target_chains: boolean;
     lock_antibody_framework: boolean;
 
+    // Caliby settings (experimental sequence design)
+    caliby_model_name: string;
+    caliby_temperature: number;
+    caliby_batch_size: number;
+    caliby_num_workers: number;
+    caliby_clean_num_workers: number;
+    caliby_omit_aas: string;
+    caliby_run_self_consistency_eval: boolean;
+    caliby_self_consistency_num_models: number;
+    caliby_self_consistency_num_recycles: number;
+    caliby_self_consistency_use_multimer: boolean;
+    enable_caliby_filter: boolean;
+    caliby_max_potts_energy: number | null;
+    caliby_min_sc_plddt: number | null;
+    caliby_max_sc_rmsd: number | null;
+    caliby_fixed_pos_override_seq: string;
+    caliby_pos_restrict_aatype: string;
+    caliby_symmetry_pos: string;
+    caliby_sampling_overrides_json: string;
+
     // PPIFlow stage control (backbone refinement and/or post-sequence maturation)
     run_maturation: boolean;
     ppiflow_stage_mode: PPIFlowStageMode;
@@ -357,6 +377,24 @@ const PRESETS: Record<'speed' | 'balanced' | 'quality' | 'maximum', QualitySetti
         ppiflow_maturation_loop_scope: '',
         lock_target_chains: true,
         lock_antibody_framework: true,
+        caliby_model_name: 'soluble_caliby_v1',
+        caliby_temperature: 0.1,
+        caliby_batch_size: 4,
+        caliby_num_workers: 8,
+        caliby_clean_num_workers: 2,
+        caliby_omit_aas: 'C',
+        caliby_run_self_consistency_eval: false,
+        caliby_self_consistency_num_models: 5,
+        caliby_self_consistency_num_recycles: 3,
+        caliby_self_consistency_use_multimer: false,
+        enable_caliby_filter: false,
+        caliby_max_potts_energy: null,
+        caliby_min_sc_plddt: null,
+        caliby_max_sc_rmsd: null,
+        caliby_fixed_pos_override_seq: '',
+        caliby_pos_restrict_aatype: '',
+        caliby_symmetry_pos: '',
+        caliby_sampling_overrides_json: '',
         // Pre-Boltz filter (null = disabled for speed mode, let everything through)
         fampnn_max_psce: null,
         fampnn_max_residue_psce: null,
@@ -454,6 +492,24 @@ const PRESETS: Record<'speed' | 'balanced' | 'quality' | 'maximum', QualitySetti
         ppiflow_maturation_loop_scope: '',
         lock_target_chains: true,
         lock_antibody_framework: true,
+        caliby_model_name: 'soluble_caliby_v1',
+        caliby_temperature: 0.1,
+        caliby_batch_size: 4,
+        caliby_num_workers: 8,
+        caliby_clean_num_workers: 2,
+        caliby_omit_aas: 'C',
+        caliby_run_self_consistency_eval: false,
+        caliby_self_consistency_num_models: 5,
+        caliby_self_consistency_num_recycles: 3,
+        caliby_self_consistency_use_multimer: false,
+        enable_caliby_filter: false,
+        caliby_max_potts_energy: null,
+        caliby_min_sc_plddt: null,
+        caliby_max_sc_rmsd: null,
+        caliby_fixed_pos_override_seq: '',
+        caliby_pos_restrict_aatype: '',
+        caliby_symmetry_pos: '',
+        caliby_sampling_overrides_json: '',
         // Pre-Boltz filter: off by default, opt in manually
         fampnn_max_psce: null,
         fampnn_max_residue_psce: null,
@@ -551,6 +607,24 @@ const PRESETS: Record<'speed' | 'balanced' | 'quality' | 'maximum', QualitySetti
         ppiflow_maturation_loop_scope: '',
         lock_target_chains: true,
         lock_antibody_framework: true,
+        caliby_model_name: 'soluble_caliby_v1',
+        caliby_temperature: 0.08,
+        caliby_batch_size: 4,
+        caliby_num_workers: 8,
+        caliby_clean_num_workers: 2,
+        caliby_omit_aas: 'C',
+        caliby_run_self_consistency_eval: false,
+        caliby_self_consistency_num_models: 5,
+        caliby_self_consistency_num_recycles: 3,
+        caliby_self_consistency_use_multimer: false,
+        enable_caliby_filter: false,
+        caliby_max_potts_energy: null,
+        caliby_min_sc_plddt: null,
+        caliby_max_sc_rmsd: null,
+        caliby_fixed_pos_override_seq: '',
+        caliby_pos_restrict_aatype: '',
+        caliby_symmetry_pos: '',
+        caliby_sampling_overrides_json: '',
         // Pre-Boltz filter: off by default, opt in manually
         fampnn_max_psce: null,
         fampnn_max_residue_psce: null,
@@ -648,6 +722,24 @@ const PRESETS: Record<'speed' | 'balanced' | 'quality' | 'maximum', QualitySetti
         ppiflow_maturation_loop_scope: '',
         lock_target_chains: true,
         lock_antibody_framework: true,
+        caliby_model_name: 'soluble_caliby_v1',
+        caliby_temperature: 0.06,
+        caliby_batch_size: 4,
+        caliby_num_workers: 8,
+        caliby_clean_num_workers: 2,
+        caliby_omit_aas: 'C',
+        caliby_run_self_consistency_eval: false,
+        caliby_self_consistency_num_models: 5,
+        caliby_self_consistency_num_recycles: 3,
+        caliby_self_consistency_use_multimer: false,
+        enable_caliby_filter: false,
+        caliby_max_potts_energy: null,
+        caliby_min_sc_plddt: null,
+        caliby_max_sc_rmsd: null,
+        caliby_fixed_pos_override_seq: '',
+        caliby_pos_restrict_aatype: '',
+        caliby_symmetry_pos: '',
+        caliby_sampling_overrides_json: '',
         // Pre-Boltz filter: off by default, opt in manually
         fampnn_max_psce: null,
         fampnn_max_residue_psce: null,
@@ -686,6 +778,7 @@ interface QualitySettingsPanelProps {
     showRfantibodySettings?: boolean;
     showStructureValidationSettings?: boolean;
     showFampnnSettings?: boolean;
+    showCalibySettings?: boolean;
     showPreValidationFiltering?: boolean;
     showPostValidationFiltering?: boolean;
 }
@@ -1468,6 +1561,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
     showRfantibodySettings = true,
     showStructureValidationSettings = true,
     showFampnnSettings = true,
+    showCalibySettings = false,
     showPreValidationFiltering = true,
     showPostValidationFiltering = true,
 }) => {
@@ -2411,6 +2505,274 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                             </label>
                         </div>
                         </div>
+                    )}
+
+                    {showCalibySettings && (
+                    <div className="space-y-3 pt-3 border-t border-slate-700/50">
+                        <div className="flex items-center gap-2 text-sm font-medium text-teal-300">
+                            Sequence Design (Caliby Experimental)
+                            <a
+                                href="https://github.com/ProteinDesignLab/caliby"
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-xs text-slate-400 underline hover:text-teal-200"
+                            >
+                                GitHub
+                            </a>
+                        </div>
+                        <p className="text-xs text-slate-500">
+                            Structure-conditioned Potts sequence design for hard or non-ideal backbones. In the nanobody workflow this is intended as an experimental alternative to FA-MPNN for CDR-focused redesign.
+                        </p>
+
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-xs text-slate-500 mb-1">Model Variant</label>
+                                <select
+                                    value={settings.caliby_model_name}
+                                    onChange={(e) => updateSetting('caliby_model_name', e.target.value)}
+                                    className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-300"
+                                >
+                                    <option value="soluble_caliby_v1">soluble_caliby_v1</option>
+                                    <option value="soluble_caliby">soluble_caliby</option>
+                                    <option value="caliby">caliby</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-xs text-slate-500 mb-1">Omit Amino Acids</label>
+                                <input
+                                    type="text"
+                                    value={settings.caliby_omit_aas}
+                                    onChange={(e) => updateSetting('caliby_omit_aas', e.target.value)}
+                                    placeholder="C"
+                                    className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-300 font-mono"
+                                />
+                                <p className="mt-1 text-[10px] text-slate-600">
+                                    Comma-separated amino acids excluded globally during sampling.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-4">
+                            <div>
+                                <label className="block text-xs text-slate-500 mb-1">
+                                    Temperature <span className="text-slate-600">({settings.caliby_temperature.toFixed(2)})</span>
+                                </label>
+                                <input
+                                    type="range"
+                                    min={0.01}
+                                    max={0.5}
+                                    step={0.01}
+                                    value={settings.caliby_temperature}
+                                    onChange={(e) => updateSetting('caliby_temperature', parseFloat(e.target.value))}
+                                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-slate-500 mb-1">
+                                    Batch Size <span className="text-slate-600">({settings.caliby_batch_size})</span>
+                                </label>
+                                <input
+                                    type="range"
+                                    min={1}
+                                    max={16}
+                                    step={1}
+                                    value={settings.caliby_batch_size}
+                                    onChange={(e) => updateSetting('caliby_batch_size', parseInt(e.target.value))}
+                                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-slate-500 mb-1">
+                                    Model Workers <span className="text-slate-600">({settings.caliby_num_workers})</span>
+                                </label>
+                                <input
+                                    type="range"
+                                    min={1}
+                                    max={32}
+                                    step={1}
+                                    value={settings.caliby_num_workers}
+                                    onChange={(e) => updateSetting('caliby_num_workers', parseInt(e.target.value))}
+                                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-xs text-slate-500 mb-1">
+                                    Clean Workers <span className="text-slate-600">({settings.caliby_clean_num_workers})</span>
+                                </label>
+                                <input
+                                    type="range"
+                                    min={1}
+                                    max={8}
+                                    step={1}
+                                    value={settings.caliby_clean_num_workers}
+                                    onChange={(e) => updateSetting('caliby_clean_num_workers', parseInt(e.target.value))}
+                                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
+                                />
+                                <p className="mt-1 text-[10px] text-slate-600">
+                                    Workers used to clean input structures before inference.
+                                </p>
+                            </div>
+                            <div>
+                                <label className="block text-xs text-slate-500 mb-1">Sampling Overrides JSON</label>
+                                <textarea
+                                    value={settings.caliby_sampling_overrides_json}
+                                    onChange={(e) => updateSetting('caliby_sampling_overrides_json', e.target.value)}
+                                    rows={4}
+                                    placeholder='{"max_iter": 64}'
+                                    className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-300 font-mono"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="rounded-lg border border-slate-700/60 bg-slate-900/40 p-3">
+                            <label className="flex items-start gap-3">
+                                <input
+                                    type="checkbox"
+                                    checked={settings.caliby_run_self_consistency_eval}
+                                    onChange={(e) => updateSetting('caliby_run_self_consistency_eval', e.target.checked)}
+                                    className="mt-0.5 h-4 w-4 rounded border-slate-600 bg-slate-800 text-teal-500 focus:ring-teal-500"
+                                />
+                                <span>
+                                    <span className="font-medium text-slate-200">AF2 self-consistency</span>
+                                    <span className="mt-1 block text-[10px] text-slate-500">
+                                        Refolds Caliby outputs and stores fold-consistency metrics that can be used for pre-validation filtering.
+                                    </span>
+                                </span>
+                            </label>
+                            {settings.caliby_run_self_consistency_eval && (
+                                <div className="mt-3 grid grid-cols-3 gap-4">
+                                    <div>
+                                        <label className="block text-xs text-slate-500 mb-1">
+                                            AF2 Models <span className="text-slate-600">({settings.caliby_self_consistency_num_models})</span>
+                                        </label>
+                                        <input
+                                            type="range"
+                                            min={1}
+                                            max={5}
+                                            step={1}
+                                            value={settings.caliby_self_consistency_num_models}
+                                            onChange={(e) => updateSetting('caliby_self_consistency_num_models', parseInt(e.target.value))}
+                                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs text-slate-500 mb-1">
+                                            Recycles <span className="text-slate-600">({settings.caliby_self_consistency_num_recycles})</span>
+                                        </label>
+                                        <input
+                                            type="range"
+                                            min={1}
+                                            max={12}
+                                            step={1}
+                                            value={settings.caliby_self_consistency_num_recycles}
+                                            onChange={(e) => updateSetting('caliby_self_consistency_num_recycles', parseInt(e.target.value))}
+                                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
+                                        />
+                                    </div>
+                                    <label className="flex items-center gap-2 text-xs text-slate-300">
+                                        <input
+                                            type="checkbox"
+                                            checked={settings.caliby_self_consistency_use_multimer}
+                                            onChange={(e) => updateSetting('caliby_self_consistency_use_multimer', e.target.checked)}
+                                            className="h-4 w-4 rounded border-slate-600 bg-slate-800 text-teal-500 focus:ring-teal-500"
+                                        />
+                                        Use AF2-Multimer
+                                    </label>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="rounded-lg border border-slate-700/60 bg-slate-900/40 p-3">
+                            <label className="flex items-start gap-3">
+                                <input
+                                    type="checkbox"
+                                    checked={settings.enable_caliby_filter}
+                                    onChange={(e) => updateSetting('enable_caliby_filter', e.target.checked)}
+                                    className="mt-0.5 h-4 w-4 rounded border-slate-600 bg-slate-800 text-teal-500 focus:ring-teal-500"
+                                />
+                                <span>
+                                    <span className="font-medium text-slate-200">Pre-validation Caliby filter</span>
+                                    <span className="mt-1 block text-[10px] text-slate-500">
+                                        Gate Caliby candidates on Potts energy and optional self-consistency metrics before Boltz or Protenix.
+                                    </span>
+                                </span>
+                            </label>
+                            <div className="mt-3 grid grid-cols-3 gap-4">
+                                <div>
+                                    <label className="block text-xs text-slate-500 mb-1">Max Potts Energy</label>
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        value={settings.caliby_max_potts_energy ?? ''}
+                                        disabled={!settings.enable_caliby_filter}
+                                        onChange={(e) => updateSetting('caliby_max_potts_energy', e.target.value === '' ? null : parseFloat(e.target.value))}
+                                        className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-300 disabled:opacity-50"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs text-slate-500 mb-1">Min SC pLDDT</label>
+                                    <input
+                                        type="number"
+                                        step="0.1"
+                                        min="0"
+                                        max="100"
+                                        value={settings.caliby_min_sc_plddt ?? ''}
+                                        disabled={!settings.enable_caliby_filter || !settings.caliby_run_self_consistency_eval}
+                                        onChange={(e) => updateSetting('caliby_min_sc_plddt', e.target.value === '' ? null : parseFloat(e.target.value))}
+                                        className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-300 disabled:opacity-50"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs text-slate-500 mb-1">Max SC RMSD</label>
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        min="0"
+                                        value={settings.caliby_max_sc_rmsd ?? ''}
+                                        disabled={!settings.enable_caliby_filter || !settings.caliby_run_self_consistency_eval}
+                                        onChange={(e) => updateSetting('caliby_max_sc_rmsd', e.target.value === '' ? null : parseFloat(e.target.value))}
+                                        className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-300 disabled:opacity-50"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-4">
+                            <div>
+                                <label className="block text-xs text-slate-500 mb-1">fixed_pos_override_seq</label>
+                                <input
+                                    type="text"
+                                    value={settings.caliby_fixed_pos_override_seq}
+                                    onChange={(e) => updateSetting('caliby_fixed_pos_override_seq', e.target.value)}
+                                    placeholder="H52:A,H53:G"
+                                    className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-300 font-mono"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-slate-500 mb-1">pos_restrict_aatype</label>
+                                <input
+                                    type="text"
+                                    value={settings.caliby_pos_restrict_aatype}
+                                    onChange={(e) => updateSetting('caliby_pos_restrict_aatype', e.target.value)}
+                                    placeholder="H52:AVG,H53:VG"
+                                    className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-300 font-mono"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-slate-500 mb-1">symmetry_pos</label>
+                                <input
+                                    type="text"
+                                    value={settings.caliby_symmetry_pos}
+                                    onChange={(e) => updateSetting('caliby_symmetry_pos', e.target.value)}
+                                    placeholder="H26,H52|H27,H53"
+                                    className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-300 font-mono"
+                                />
+                            </div>
+                        </div>
+                    </div>
                     )}
 
                     {/* PPIFlow Maturation */}

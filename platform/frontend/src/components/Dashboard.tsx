@@ -88,6 +88,8 @@ const formatResumeStageLabel = (stage: string): string => {
             return 'RFantibody';
         case 'fampnn':
             return 'FAMPNN';
+        case 'caliby':
+            return 'Caliby';
         case 'structure_validation':
             return 'Structure Validation';
         case 'boltzgen':
@@ -96,6 +98,8 @@ const formatResumeStageLabel = (stage: string): string => {
             return 'RFantibody Review';
         case 'post_fampnn':
             return 'FAMPNN Review';
+        case 'post_caliby':
+            return 'Caliby Review';
         case 'post_structure_validation':
             return 'Structure Validation Review';
         case 'post_boltzgen':
@@ -113,6 +117,8 @@ const mapAwaitingStageToResumeStage = (awaitingStage?: string | null): string =>
             return 'rfantibody';
         case 'post_fampnn':
             return 'fampnn';
+        case 'post_caliby':
+            return 'caliby';
         case 'post_structure_validation':
             return 'structure_validation';
         case 'post_boltzgen':
