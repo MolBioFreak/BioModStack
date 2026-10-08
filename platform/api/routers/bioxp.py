@@ -258,6 +258,7 @@ ROBOT_LOCAL_EXPECTED_ROUTES: Dict[str, bool] = {
     "/motion/oem/programs": True,
     "/motion/oem/programs/{program_name}": True,
     "/motion/oem/{program_name}/dry_run": True,
+    "/motion/oem/machine_config": True,
     "/motion/oem/shadow_readback": True,
     "/motion/oem/shadow_readback/capture": True,
     "/motion/range/status": True,
@@ -904,6 +905,18 @@ async def oem_homing_program_dry_run(program_name: str, request: Request):
         payload = dict(payload)
         payload.setdefault("bms_role", "thin_proxy_only")
         payload.setdefault("live_homing", "blocked")
+    return payload
+
+
+@router.get("/motion/oem/machine_config")
+async def oem_machine_config():
+    """Read-only proxy to robot-local OEM original-SSD machine config binding."""
+    payload = await proxy_request("GET", "/motion/oem/machine_config", timeout=12.0)
+    if isinstance(payload, dict):
+        payload = dict(payload)
+        payload["bms_role"] = "thin_proxy_only"
+        payload["live_homing"] = "blocked"
+        payload["usb_motion"] = "no"
     return payload
 
 
