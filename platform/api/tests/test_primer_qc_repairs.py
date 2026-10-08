@@ -175,6 +175,8 @@ def test_design_receives_correct_metrics_same_weights_and_shortlist(monkeypatch)
     for pair in result.pairs:
         f, r = pair.forward, pair.reverse
         assert f.sequence in calls and r.sequence in calls
+        assert f.binding_site_count is not None
+        assert r.binding_site_count is not None
         general, terminal = _paired_run(f.sequence, r.sequence), _paired_run(f.sequence, r.sequence, True)
         assert (pair.heterodimer_complement, pair.three_prime_heterodimer) == (general, terminal)
         expected = round(abs(f.tm - request.tm_target_c) + abs(r.tm - request.tm_target_c)

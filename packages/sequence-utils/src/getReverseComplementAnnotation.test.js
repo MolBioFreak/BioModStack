@@ -1,8 +1,5 @@
-import * as chai from "chai";
-import chaiSubset from "chai-subset";
+import assert from "node:assert/strict";
 import getReverseComplementAnnotation from "./getReverseComplementAnnotation";
-chai.should();
-chai.use(chaiSubset);
 describe("getReverseComplementAnnotation", () => {
   it("reverse complements an annotation ", () => {
     //0123456789
@@ -15,7 +12,7 @@ describe("getReverseComplementAnnotation", () => {
       },
       10
     );
-    newAnn.should.deep.equal({
+    assert.deepEqual(newAnn, {
       start: 4,
       end: 6,
       forward: true,
@@ -34,7 +31,7 @@ describe("getReverseComplementAnnotation", () => {
       },
       10
     );
-    newAnn.should.deep.equal({
+    assert.deepEqual(newAnn, {
       start: 7,
       end: 1,
       forward: true,

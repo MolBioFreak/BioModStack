@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import gzip
-import random
 import threading
 import time
 from types import SimpleNamespace
@@ -73,27 +72,6 @@ def test_alignment_expands_once_per_orientation(monkeypatch, mode, strand, expec
     result = alignment.align_sequences("ATGCCGTAACGTTAGC", "CCGTAACGT", alignment.AlignmentSettings(mode=mode, strand=strand))
     assert result["matches"] >= 8
     assert len(calls) == expected
-
-
-def test_design_qc_only_shortlisted_candidates(monkeypatch):
-    rng = random.Random(114)
-    template = "".join(rng.choice("ACGT") for _ in range(420))
-    request = api.PrimerDesignRequest(sequence=template, sequence_type="dna", target_start=130,
-        target_end=270, flank_search_span=100, primer_min_length=12, primer_max_length=13,
-        gc_min_percent=0, gc_max_percent=100, gc_clamp_min=0, max_poly_x=20,
-        tm_max_delta_c=100, product_min_length=40, product_max_length=1000)
-    original = api._evaluate_primer_qc_canonical
-    calls = []
-    def tracked(*args, **kwargs):
-        calls.append(args[0])
-        return original(*args, **kwargs)
-    monkeypatch.setattr(api, "_evaluate_primer_qc_canonical", tracked)
-    result = api.design_primer_pairs_for_request(request, "fixture")
-    assert result.pair_count > 0
-    assert len(calls) == 96
-    for pair in result.pairs:
-        assert pair.forward.sequence in calls and pair.reverse.sequence in calls
-        assert pair.forward.binding_site_count is not None
 
 
 def test_design_rejects_bad_overhang_even_without_candidates():
@@ -236,17 +214,25 @@ async def test_rna_fold_offloads_unchanged_arguments(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_native_rna_fold_and_partition_match_service():
+async def test_rna_routes_preserve_transport_limits_and_native_mfe():
+    import RNA
     from routers import rna_structure as rna
-    from services.rna_structure import analyze_rna_structure, RnaStructureSettings
     sequence = "GGGAAACCCGGGAAACCC"
     settings = rna.RnaStructureSettingsSchema(temperature_c=28, no_lonely_pairs=True)
-    expected = analyze_rna_structure(sequence, RnaStructureSettings(temperature_c=28, no_lonely_pairs=True), include_partition=True)
+    # Initialize the numerical owner independently of the service under test.
+    model = RNA.md()
+    model.temperature = 28
+    model.noLP = True
+    model.dangles = 2
+    model.uniq_ML = 1
+    native = RNA.fold_compound(sequence, model)
+    expected_structure, expected_energy = native.mfe()
     fold = await rna.fold_rna(rna.RnaFoldRequest(sequence=sequence, settings=settings), None)
     partition = await rna.partition_rna(rna.RnaStructureRequest(sequence=sequence, settings=settings), None)
     assert fold.model_dump() == partition.model_dump()
-    assert fold.mfe.dot_bracket == expected["mfe"]["dot_bracket"]
-    assert fold.mfe.energy_kcal_mol == expected["mfe"]["energy_kcal_mol"]
+    assert fold.mfe.dot_bracket == expected_structure
+    assert fold.mfe.energy_kcal_mol == pytest.approx(expected_energy, abs=1e-4)
+    # Route equality proves transport parity, not probability-marginal accuracy.
     assert len(fold.bases) == len(sequence)
     with pytest.raises(api.HTTPException, match="limited"):
         await rna.fold_rna(rna.RnaFoldRequest(sequence="A" * 1201), None)
