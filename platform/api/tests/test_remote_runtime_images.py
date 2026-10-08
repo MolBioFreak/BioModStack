@@ -90,15 +90,26 @@ def test_runtime_reference_paths_fail_closed(tmp_path, bad):
 
 
 @pytest.mark.asyncio
-async def test_repeated_attempt_alias_explicit_dedup_and_execution_boundary(package, local_transport, tmp_path, monkeypatch):
+async def test_actual_job_compiler_no_original_prewarm_provision_and_repeated_execution(package, local_transport, tmp_path, monkeypatch):
     roots, release, job, target, command = package
-    # Two controller names with identical bytes (including a managed alias).
+    from services import nextflow
+    from lib.shared_runtime_images import publish_image
+    from lib.runtime_image_lifecycle import commit_release, transaction
     source = roots['containers'] / 'protenix.sif'
-    explicit = roots['containers'] / 'shared/explicit.sif'
-    explicit.parent.mkdir()
-    source.rename(explicit)
-    source.symlink_to('shared/explicit.sif')
-    command += ['--protenix_container_path', str(explicit), '--literal', '$(touch NOT_EXECUTED); with spaces']
+    root = roots['containers'] / '.image-store'
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    explicit = publish_image(source, root, digest)
+    with transaction(root):
+        commit_release(root, 'production', {'BMS_PROTENIX_CONTAINER_PATH':
+                       {'path': str(explicit), 'sha256': digest}})
+    source.unlink()
+    monkeypatch.setenv('BMS_PROTENIX_CONTAINER_PATH', str(explicit))
+    # Actual persisted Job compiler, not a hand-written selector-bearing argv.
+    job.params = dict(sequence='AAAA', protenix_use_msa=False,
+                      msa_provider='colabfold_api', run_frustrampnn=False)
+    command = nextflow.build_job_nextflow_command(job, dict(job.params), job.output_dir)
+    assert '--protenix_container_path' not in command
+    command += ['--literal', '$(touch NOT_EXECUTED); with spaces']
     # Archive the real boundary/helper, not a fabricated protocol response.
     repo = Path(__file__).resolve().parents[3]
     modules = ['platform/api/tools/bms_artifact_cache.py', 'scripts/lib/shared_runtime_images.py']
@@ -121,22 +132,31 @@ async def test_repeated_attempt_alias_explicit_dedup_and_execution_boundary(pack
     # A real executable argv recorder stands in for Nextflow, not Apptainer/science.
     executable = Path(target.remote_root) / 'runner/nextflow'
     executable.parent.mkdir(parents=True)
-    executable.write_text(f'#!{sys.executable}\nimport json,sys; print(json.dumps(sys.argv[1:]))\n')
+    executable.write_text(f'#!{sys.executable}\n'
+        'import json,os,sys\nfrom pathlib import Path\n'
+        'image=Path(os.environ["BMS_PROTENIX_CONTAINER_PATH"])\n'
+        'print(json.dumps(dict(argv=sys.argv[1:], image=str(image), inode=image.stat().st_ino)))\n')
     executable.chmod(0o700)
     calls, uploads = local_transport
     monkeypatch.setattr(cache, 'get_code_root', lambda: roots['repo'])
     monkeypatch.setattr(cache, 'current_source_identity', lambda *_: ('a' * 40, 'b' * 40))
+    from types import SimpleNamespace
+    entries = cache.independent_plan(SimpleNamespace(kind='image', model_id='protenix'))
+    assert len(entries) == 1 and entries[0].source == explicit
+    await cache.provision_cache(connection=target, entries=entries, operation_id=str(uuid.uuid4()),
+                               progress=cache._noop, check_fence=cache._noop)
     await cache.prewarm_cache(connection=target, job=job, command=command, source_revision='a' * 40,
                              source_tree='b' * 40, operation_id=str(uuid.uuid4()),
                              progress=cache._noop, check_fence=cache._noop)
     assert not (Path(target.remote_root) / 'attempts').exists()
+    invocation_inodes = []
     attempts = []
     for _ in range(2):
         prepared = bundle.prepare_remote_bundle(job=job, target=target, command=command)
         attempts.append(prepared)
         assert len(prepared.runtime_images) == 1
         image = prepared.runtime_images[0]
-        assert len(image.aliases) == 2
+        assert len(image.aliases) == 1
         assert not any(record.relative_path.endswith('.sif') for record in prepared.envelope.files)
         await cache.stage_cached_bundle(connection=target, bundle=prepared)
         for transfer in (*bundle.uncached_runtime_transfers(prepared), *prepared.input_transfers):
@@ -149,36 +169,43 @@ async def test_repeated_attempt_alias_explicit_dedup_and_execution_boundary(pack
                 shutil.copymode(transfer.source, destination)
         attempt = Path(prepared.remote_attempt_dir)
         shutil.copytree(prepared.local_attempt_dir, attempt, dirs_exist_ok=True)
+        (attempt / 'bundle').mkdir(exist_ok=True)
         (attempt / 'bundle/source').symlink_to(prepared.remote_source_dir)
         (attempt / 'bundle/runtime').symlink_to(prepared.remote_runtime_dir)
         worker.verify_bundle(attempt)
-        result = subprocess.run(prepared.envelope.command, capture_output=True, text=True, check=True)
-        argv = json.loads(result.stdout)
+        result = subprocess.run(prepared.envelope.command, env={**os.environ, **prepared.envelope.environment},
+                                capture_output=True, text=True, check=True)
+        observed = json.loads(result.stdout)
+        argv = observed['argv']
+        invocation_inodes.append(observed['inode'])
+        assert observed['image'] == image.remote_destination
+        assert prepared.envelope.environment['BMS_PROTENIX_CONTAINER_PATH'] == image.remote_destination
         assert argv[argv.index('--literal') + 1] == '$(touch NOT_EXECUTED); with spaces'
         assert argv[argv.index('--protenix_container_path') + 1] == image.remote_destination
         for alias in image.aliases:
             assert Path(alias).is_symlink()
             assert Path(alias).resolve() == Path(image.remote_destination)
         assert not any(p.is_file() and not p.is_symlink() for p in Path(prepared.remote_runtime_dir).rglob('*.sif'))
-    assert sum(path.endswith('explicit.sif') for path in uploads) == 1
+    assert sum(path == str(explicit) for path in uploads) == 1
     images = list((Path(target.remote_root) / 'cache/runtime-images/objects').rglob('runtime.sif'))
     assert len(images) == 1 and images[0].stat().st_nlink == 1
+    assert invocation_inodes == [images[0].stat().st_ino] * 2
+    assert not (roots['containers'] / 'protenix.sif').exists()
     assert not list((Path(target.remote_root) / 'cache/artifacts/v1/objects').rglob(image.sha256))
     assert not list((Path(target.remote_root) / 'cache/artifacts/v1/incoming').rglob('*sif'))
     assert all(not p.is_file() for p in (Path(target.remote_root) / 'cache/artifacts/v1/incoming').rglob('*'))
-    # Source mutation cannot change the worker's published image.
-    explicit.write_bytes(b'changed controller')
+    assert explicit.stat().st_nlink == 1
     assert hashlib.sha256(images[0].read_bytes()).hexdigest() == image.sha256
     # Corruption between staging and execution prevents the real child from running.
     images[0].chmod(0o600)
     images[0].write_bytes(b'corrupt')
     images[0].chmod(0o400)
-    failed = subprocess.run(prepared.envelope.command, capture_output=True, text=True)
+    failed = subprocess.run(prepared.envelope.command, env={**os.environ, **prepared.envelope.environment},
+                            capture_output=True, text=True)
     assert failed.returncode == 1 and not failed.stdout
     count = len(uploads)
     with pytest.raises(subprocess.CalledProcessError):
-        # Restore controller identity so this is a corrupt hit, not a new digest.
-        explicit.write_bytes(b'image-not-executed')
+        # A corrupt worker hit must not upload/repair from the valid controller.
         retry = bundle.prepare_remote_bundle(job=job, target=target, command=command)
         await cache.stage_cached_bundle(connection=target, bundle=retry)
     assert len(uploads) == count
@@ -318,10 +345,17 @@ async def test_frustrampnn_shared_canonical_reader(
     data = (roots['containers'] / 'protenix.sif').read_bytes()
     source.write_bytes(data)
     if controller_alias:
-        backing = roots['containers'] / 'shared/frustra.sif'
-        backing.parent.mkdir()
-        source.rename(backing)
-        source.symlink_to('shared/frustra.sif')
+        from lib.shared_runtime_images import publish_image
+        store = roots['containers'] / '.image-store'
+        backing = publish_image(source, store, hashlib.sha256(data).hexdigest())
+        source.unlink()
+        monkeypatch.setenv('BMS_FRUSTRAMPNN_SIF', str(backing))
+        monkeypatch.setenv('BMS_RUNTIME_IMAGE_STORE', str(store))
+    else:
+        backing = source
+    monkeypatch.setattr(strict, 'FRUSTRAMPNN_RUNTIME_IDENTITY', replace(
+        strict.FRUSTRAMPNN_RUNTIME_IDENTITY, configured_sif_path=str(backing),
+        sif_sha256=hashlib.sha256(data).hexdigest()))
     command += ['--run_frustrampnn', 'true']
     monkeypatch.setattr(cache, 'get_code_root', lambda: roots['repo'])
     monkeypatch.setattr(cache, 'current_source_identity', lambda *_: ('a' * 40, 'b' * 40))

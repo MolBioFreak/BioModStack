@@ -592,3 +592,47 @@ def test_cached_input_is_available_while_another_submission_owns_lock(tmp_path, 
         cached = c.prepare_msa(**{**setup, 'cache_only': True, 'credential_file': None})
     assert cached['cache_hit'] is True
     assert cached['artifacts'] == first['artifacts']
+
+
+SIGNED_FIXTURE_URL = 'https://ns-job-files.' + 'a' * 32 + '.r2.cloudflarestorage.com/fixture-job/out/native.a3m?X-Amz-Signature=fixture'
+
+
+def test_neurosnap_signed_download_strips_key_and_caches(tmp_path, setup):
+    replies = ns_success('native.a3m')[:-1]
+    transport = FixtureHTTP(*replies, api.HTTPResponse(307, b'', location=SIGNED_FIXTURE_URL), response(a3m(identifier='query')))
+    c = client(tmp_path, transport)
+    result = c.prepare_msa(**setup)
+    signed = transport.calls[-1]
+    assert signed[1] == SIGNED_FIXTURE_URL
+    assert signed[2]['headers'] == {}
+    assert transport.calls[-2][2]['headers']['X-API-KEY'] == FIXTURE_KEY
+    replay = c.prepare_msa(**{**setup, 'cache_only': True, 'credential_file': None})
+    assert replay['artifacts'] == result['artifacts'] and replay['cache_hit']
+    assert len(transport.calls) == 5
+    for path in setup['cache_root'].rglob('*.json'):
+        assert 'X-Amz-Signature' not in path.read_text()
+        assert FIXTURE_KEY not in path.read_text()
+    assert 'X-Amz-Signature' not in repr(api.HTTPResponse(307, b'', location=SIGNED_FIXTURE_URL))
+
+
+@pytest.mark.parametrize('location', [
+    'http://localhost/file', 'https://localhost/file',
+    SIGNED_FIXTURE_URL.replace('.com/', '.com.attacker.invalid/'),
+    SIGNED_FIXTURE_URL.replace('fixture-job/out/', 'another-job/out/'),
+    SIGNED_FIXTURE_URL.replace('https://', 'https://username@'),
+    SIGNED_FIXTURE_URL.replace('.com/', '.com:444/'),
+    SIGNED_FIXTURE_URL + '#fragment',
+    SIGNED_FIXTURE_URL + '&key=' + FIXTURE_KEY,
+])
+def test_neurosnap_unsafe_signed_redirect_never_followed(tmp_path, location):
+    transport = FixtureHTTP(api.HTTPResponse(307, b'', location=location))
+    with pytest.raises(api.MSAAPIError, match='unsafe provider file redirect'):
+        client(tmp_path, transport)._http('neurosnap_api', '/job/file/fixture-job/out/native.a3m', {'X-API-KEY': FIXTURE_KEY})
+    assert len(transport.calls) == 1
+
+
+def test_signed_storage_second_redirect_is_not_followed(tmp_path):
+    transport = FixtureHTTP(api.HTTPResponse(307, b'', location=SIGNED_FIXTURE_URL), api.HTTPResponse(307, b'', location=SIGNED_FIXTURE_URL))
+    with pytest.raises(api.MSAAPIError, match='HTTP 307'):
+        client(tmp_path, transport)._http('neurosnap_api', '/job/file/fixture-job/out/native.a3m', {'X-API-KEY': FIXTURE_KEY})
+    assert len(transport.calls) == 2

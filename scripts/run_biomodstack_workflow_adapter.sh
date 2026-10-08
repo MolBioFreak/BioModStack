@@ -175,6 +175,8 @@ PY
 provision_cm_api_runtime() {
     local source_venv="$API_SOURCE_VENV"
     local source_python source_runtime stage runtime_name runtime_dir target_python next_link
+    # CM_API_SUPPORT_IMAGE was selected by the shared read-only probe authority
+    # before entering this function; clean controllers do not create a generation.
     source_python="$(readlink -f "$source_venv/bin/python")"
     [ -x "$source_python" ] || { echo "locked API interpreter is unavailable: $source_python" >&2; return 1; }
     source_runtime="$(python3 "$SCRIPT_DIR/cm_api_support_runtime.py" python-runtime "$source_python")" || return $?

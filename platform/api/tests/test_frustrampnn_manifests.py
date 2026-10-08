@@ -775,7 +775,7 @@ def test_manifest_rejects_fully_rehashed_receipt_outside_exact_launcher_grammar(
         receipt["sif_path"] = "/tmp/attacker-controlled.sif"
         receipt["argv"][receipt["argv"].index(old)] = receipt["sif_path"]
     elif mutation == "configured_sif_path":
-        receipt["configured_sif_path"] = "/tmp/attacker-controlled/frustrampnn.sif"
+        receipt["configured_sif_path"] = "/tmp/attacker-controlled/../frustrampnn.sif"
     else:
         old = receipt["executable_path"]
         receipt["executable_path"] = "/tmp/frustrampnn"

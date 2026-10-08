@@ -16,6 +16,16 @@ from tools import bms_remote_worker as worker
 from services import nextflow
 
 
+@pytest.fixture(autouse=True)
+def isolated_image_selection(tmp_path, monkeypatch):
+    # Compiler tests must never discover a host installation release or image.
+    for key in ('BMS_PROTENIX_CONTAINER_PATH', 'BMS_CM_CONFORNETS_CONTAINER_PATH',
+                'BMS_FRUSTRAMPNN_SIF', 'BMS_RUNTIME_IMAGE_LANE'):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv('BMS_RUNTIME_IMAGE_STORE', str(tmp_path / 'isolated-store'))
+    monkeypatch.setattr(bundle, 'get_container_dir', lambda: tmp_path / 'isolated-containers')
+
+
 @pytest.fixture
 def package(tmp_path, monkeypatch):
     roots = {key: tmp_path / 'controller' / key for key in ('data', 'inputs', 'results', 'weights', 'containers', 'repo', 'runtime')}
@@ -42,6 +52,18 @@ def package(tmp_path, monkeypatch):
     (venv/'bin/probe').chmod(0o755)
     current = roots['runtime']/'current'
     current.symlink_to('releases/r1', target_is_directory=True)
+    for key in ('BMS_PROTENIX_CONTAINER_PATH', 'BMS_CM_CONFORNETS_CONTAINER_PATH',
+                'BMS_FRUSTRAMPNN_SIF', 'BMS_RUNTIME_IMAGE_STORE', 'BMS_RUNTIME_IMAGE_LANE'):
+        monkeypatch.delenv(key, raising=False)
+    from services.frustrampnn import runtime as strict
+    from dataclasses import replace
+    import hashlib
+    monkeypatch.setattr(strict, 'FRUSTRAMPNN_RUNTIME_IDENTITY', replace(
+        strict.FRUSTRAMPNN_RUNTIME_IDENTITY,
+        configured_sif_path=str(roots['containers'] / 'frustrampnn.sif'),
+        sif_sha256=hashlib.sha256(b'fixture-image-not-executed').hexdigest()))
+    monkeypatch.setattr(strict, 'get_container_dir', lambda: roots['containers'])
+    monkeypatch.setattr(strict, 'get_container_path', lambda name: roots['containers'] / name)
     monkeypatch.setenv('BMS_CM_API_RUNTIME_DIR', str(roots['runtime']))
     monkeypatch.setenv('BMS_API_PYTHON', str(current/'venv/bin/python'))
     monkeypatch.setenv('BMS_REMOTE_API_BASE_URL', 'https://bms.example.invalid')

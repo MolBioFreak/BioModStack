@@ -12,36 +12,20 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from biomodstack_runtime_profile import resolve_runtime_paths
-from lib.runtime_image_lifecycle import load_state, object_path
+from lib.runtime_image_lifecycle import object_path
+from select_workflow_adapter_image import select_probe_image
 from lib.shared_runtime_images import verify_image
 
 
 def support_image(project_root: Path) -> Path | None:
     container_dir = Path(str(resolve_runtime_paths(project_root=project_root)["container_dir"]))
     root = Path(os.environ.get("BMS_RUNTIME_IMAGE_STORE", "").strip() or container_dir / ".image-store")
-    if not root.is_absolute():
-        raise ValueError("runtime image store must be absolute")
-    state = load_state(root)
-    selector = "BMS_PROTENIX_CONTAINER_PATH"
-    configured = os.environ.get(selector, "").strip()
-    if configured:
-        candidates = [release["images"][selector]
-                      for release in state["releases"].values()
-                      if selector in release["images"]
-                      and release["images"][selector]["path"] == configured]
-        if not candidates:
-            raise ValueError("configured Protenix image is not a retained managed reference")
-        image = candidates[0]
-    else:
-        lane = os.environ.get("BMS_RUNTIME_IMAGE_LANE", "production")
-        release = state["current"].get(lane)
-        image = state["releases"][release]["images"].get(selector) if release else None
-    if image:
-        path = object_path(root, image["sha256"])
-        if str(path) != image["path"]:
-            raise ValueError("managed image path differs from shared store")
-        verify_image(path, image["sha256"])
-        return path
+    try:
+        path = select_probe_image(containers=container_dir)
+    except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+        raise ValueError(f"workflow adapter Protenix probe image is unavailable: {exc}") from exc
+    if path != container_dir / "protenix.sif":
+        return path  # shared selector already verified retained identity/bytes
 
     # Preserve installed legacy support-host behavior, without registering or
     # approving either image. Frustra-only installations do not need Protenix.

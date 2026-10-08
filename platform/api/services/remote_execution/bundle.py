@@ -20,6 +20,7 @@ from paths import get_code_root, get_container_dir, get_data_root, get_weights_r
 from services.result_contracts import resolve_result_contract
 
 from .contracts import RemoteExecutionEnvelope, RemoteFileRecord
+from .images import IMAGE_SELECTORS, resolve_image
 
 
 class RemoteBundleError(RuntimeError):
@@ -185,10 +186,18 @@ def _record_file(
         raise RemoteBundleError(f"Package input is not one regular file: {path}")
     if path.stat().st_mode & 0o7000:
         raise RemoteBundleError(f"Package file has an unapproved special mode: {path}")
+    digest = _sha256_file(path)
+    if role == 'runtime' and path.name == 'runtime.sif' and path.parent.parent.name == 'sha256':
+        # The resolver already established release approval; do not let a later
+        # read silently turn changed bytes into a new transport identity.
+        from .images import verify_image
+        verified = verify_image(path, path.parent.name)
+        if verified['sha256'] != digest:
+            raise RemoteBundleError('Selected runtime image changed during recording')
     return RemoteFileRecord(
         relative_path=relative_path,
         size_bytes=path.stat().st_size,
-        sha256=_sha256_file(path),
+        sha256=digest,
         role=role,
         mode=path.stat().st_mode & 0o777,
     )
@@ -322,7 +331,13 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any]) -> list[tu
         if explicit_bcp_repo:
             extra_paths.add(Path(explicit_bcp_repo).expanduser().resolve())
 
+    for name, (flag, _) in IMAGE_SELECTORS.items():
+        if flag in params:
+            container_names.add(name)
+
     for key, value in params.items():
+        if key in {flag for flag, _ in IMAGE_SELECTORS.values()}:
+            continue
         normalized_key = str(key).lower()
         if not any(
             token in normalized_key
@@ -336,13 +351,10 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any]) -> list[tu
 
     assets: list[tuple[Path, str]] = []
     for name in sorted(container_names):
-        path = container_root / name
-        if name == "frustrampnn.sif" and os.environ.get("BMS_FRUSTRAMPNN_SIF"):
-            from services.frustrampnn import runtime as frustra_runtime
-            identity = frustra_runtime.FRUSTRAMPNN_RUNTIME_IDENTITY
-            path = Path(frustra_runtime.validate_configured_container_path(identity.configured_sif_path))
-            with frustra_runtime.open_verified_container(path, identity.sif_sha256):
-                pass
+        try:
+            path = resolve_image(name, container_root, params)
+        except (OSError, RuntimeError, ValueError, KeyError) as exc:
+            raise RemoteBundleError(f"Selected runtime image is unavailable: {name}") from exc
         assets.append((path, f"containers/{name}"))
     for name in sorted(weight_names):
         assets.append((weights_root / name, f"weights/{name}"))
@@ -501,7 +513,35 @@ def compile_remote_dependencies(model_id: str, mode: str, command: list[str]) ->
             continue
         compiled.append(value)
         index += 1
-    return compiled, {key: value for key, value in params.items() if key not in omitted}
+    params = {key: value for key, value in params.items() if key not in omitted}
+    # Resolve before inventory AND argv translation. This also covers saved-job
+    # prewarm, whose argv is rebuilt by the ordinary Job command compiler.
+    names = {name for name, (flag, _) in IMAGE_SELECTORS.items() if flag in params}
+    if model_id.lower() == 'protenix':
+        names.add('protenix.sif')
+    if model_id.lower() == 'frustrampnn' or params.get('run_frustrampnn') is True:
+        names.add('frustrampnn.sif')
+    for name in sorted(names):
+        flag, selector = IMAGE_SELECTORS[name]
+        if name == 'frustrampnn.sif' and flag not in params and not os.environ.get(selector):
+            # The default is inventoried/verified below; no override to compile.
+            continue
+        try:
+            selected = str(resolve_image(name, get_container_dir().resolve(), params))
+        except (OSError, RuntimeError, ValueError, KeyError) as exc:
+            raise RemoteBundleError(f"Selected runtime image is unavailable: {name}") from exc
+        if (flag not in params and selected == str(get_container_dir().resolve() / name)):
+            # Legacy default has no typed override. Inventory still requires it;
+            # the authenticated worker environment selects its published object.
+            continue
+        if '--' + flag in compiled:
+            for index, value in enumerate(compiled[:-1]):
+                if value == '--' + flag:
+                    compiled[index + 1] = selected
+        else:
+            compiled.extend(['--' + flag, selected])
+        params[flag] = selected
+    return compiled, params
 
 
 def _input_command(command: list[str]) -> list[str]:
@@ -780,10 +820,11 @@ def prepare_remote_bundle(
         "CUDA_VISIBLE_DEVICES": ",".join(str(value) for value in assigned_gpu_indices),
     }
 
-    frustra_alias = f"{remote_runtime}/containers/frustrampnn.sif"
-    for image in images.values():
-        if frustra_alias in image.aliases:
-            effective_environment["BMS_FRUSTRAMPNN_SIF"] = image.remote_destination
+    for name, (_, selector) in IMAGE_SELECTORS.items():
+        alias = f"{remote_runtime}/containers/{name}"
+        for image in images.values():
+            if alias in image.aliases:
+                effective_environment[selector] = image.remote_destination
 
     for key, value in dict(environment or {}).items():
         if key in {
