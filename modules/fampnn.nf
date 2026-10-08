@@ -96,7 +96,7 @@ process RunFAMPNN {
         cp "\$file" "results/\$new_name"
     done
 
-    python /scripts/analyse_fampnn.py \\\\
+    python /scripts/analyse_fampnn.py \\
         --input_dir results \\
         --chain_id ${analysis_chain_id} \\
         --ignore_cbeta \\

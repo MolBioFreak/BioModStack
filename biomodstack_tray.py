@@ -44,7 +44,7 @@ PROJECT_ROOT = get_code_root()
 API_PORT = 8000
 FRONTEND_PORT = 5173
 API_URL = f"http://localhost:{API_PORT}"
-FRONTEND_URL = f"http://localhost:{FRONTEND_PORT}"
+FRONTEND_URL = f"http://localhost:{FRONTEND_PORT}/bms/"
 
 # Paths
 DB_PATH = get_db_path()

@@ -2,6 +2,19 @@
 
 FastAPI backend for the BioModStack web interface.
 
+## Pathing and Database
+
+DB resolution is centralized in `platform/api/paths.py`. Defaults:
+- `platform/api/biomodstack.db` (local)
+- `${BMS_DATA}/biomodstack.db` when `BMS_DATA` is set
+
+Overrides (highest priority first):
+- `DATABASE_URL` (SQLAlchemy URL)
+- `BMS_DB_PATH` (absolute sqlite path)
+
+If you change any of these, keep them consistent across API, scripts, and
+workflows to avoid writing to multiple databases.
+
 ## Setup (using uv)
 
 ```bash
@@ -31,6 +44,7 @@ uvicorn main:app --reload --port 8000
 - `DELETE /api/jobs/{id}` - Cancel job
 - `GET /api/gpu/status` - GPU monitoring
 - `GET /api/files/browse` - Browse directories
+- `GET /api/system/db-info` - DB path + health info
 
 ## Interactive Docs
 
