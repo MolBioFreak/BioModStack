@@ -450,6 +450,15 @@ async def annotate_framework_cdrs(
     Requires the framework to be downloaded first via /sabdab/{pdb_code}/download.
     """
     from services.cdr_annotator import annotate_pdb
+
+    def _first_chain(chain_value: Optional[str]) -> Optional[str]:
+        if not chain_value:
+            return None
+        for delimiter in [",", ";", "|", " "]:
+            if delimiter in chain_value:
+                token = chain_value.split(delimiter)[0].strip()
+                return token or None
+        return chain_value.strip() or None
     
     # Check cache for framework PDB
     cache_file = CACHE_DIR / f"{pdb_code.lower()}_{scheme}.pdb"
@@ -461,7 +470,25 @@ async def annotate_framework_cdrs(
     
     try:
         logger.info(f"[CDR Annotation] Running ANARCII on {pdb_code}")
-        annotation = annotate_pdb(str(cache_file))
+        preferred_chains = {}
+        try:
+            db = get_sabdab_db()
+            entries = db.get_by_pdb(pdb_code)
+            if entries:
+                entry = entries[0]
+                h_chain = _first_chain(entry.h_chain)
+                l_chain = _first_chain(entry.l_chain)
+                if h_chain:
+                    preferred_chains["H"] = h_chain
+                if l_chain:
+                    preferred_chains["L"] = l_chain
+        except Exception as chain_err:
+            logger.warning(f"[CDR Annotation] Could not load chain metadata for {pdb_code}: {chain_err}")
+
+        annotation = annotate_pdb(
+            str(cache_file),
+            preferred_chains=preferred_chains or None,
+        )
         
         if not annotation:
             raise HTTPException(status_code=500, detail="ANARCII returned no results")

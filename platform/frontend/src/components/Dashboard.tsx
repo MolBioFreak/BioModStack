@@ -64,6 +64,17 @@ const toNumber = (value: unknown, fallback: number): number => {
     return Number.isFinite(parsed) ? parsed : fallback;
 };
 
+const toBoolean = (value: unknown, fallback = false): boolean => {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+        if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+    }
+    if (typeof value === 'number') return value !== 0;
+    return fallback;
+};
+
 const clamp = (value: number, min: number, max: number): number =>
     Math.max(min, Math.min(max, value));
 
@@ -158,7 +169,8 @@ export function Dashboard() {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
             setResumeSettingsJob(null);
             setResumeSettingsError(null);
-            alert(`Job resumed! New job: ${response.data.new_job_name}\nResuming from: ${response.data.resume_from_stage}`);
+            const note = response.data.resume_stage_note ? `\nNote: ${response.data.resume_stage_note}` : '';
+            alert(`Job resumed! New job: ${response.data.new_job_name}\nResuming from: ${response.data.resume_from_stage}${note}`);
         },
         onError: (error: any) => {
             alert(`Resume failed: ${error.response?.data?.detail || error.message}`);
@@ -240,7 +252,7 @@ export function Dashboard() {
         };
         const maybeSetBool = (key: string, nextValue: boolean) => {
             const prevRaw = p[key];
-            if (prevRaw === undefined || Boolean(prevRaw) !== nextValue) {
+            if (prevRaw === undefined || toBoolean(prevRaw) !== nextValue) {
                 parsedOverrides[key] = nextValue;
             }
         };
@@ -374,7 +386,7 @@ export function Dashboard() {
                         <div className="p-6 overflow-auto space-y-4">
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <label className="text-sm text-slate-300">
-                                    Resume Stage
+                                    Resume Stage Hint
                                     <select
                                         value={resumeSettingsFromStage}
                                         onChange={(e) => setResumeSettingsFromStage(e.target.value)}
@@ -386,6 +398,9 @@ export function Dashboard() {
                                             <option key={stage} value={stage}>{stage}</option>
                                         ))}
                                     </select>
+                                    <p className="mt-1 text-xs text-slate-500">
+                                        Cache-based resume reuses matching tasks; this hint does not strictly force stage restart yet.
+                                    </p>
                                 </label>
                                 <label className="text-sm text-slate-300">
                                     New Job Name Suffix

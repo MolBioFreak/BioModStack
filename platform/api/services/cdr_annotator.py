@@ -334,7 +334,10 @@ print(json.dumps(output))
         return None
 
 
-def annotate_pdb(pdb_path: str) -> Optional[CDRAnnotation]:
+def annotate_pdb(
+    pdb_path: str,
+    preferred_chains: Optional[Dict[str, str]] = None,
+) -> Optional[CDRAnnotation]:
     """
     Annotate CDR regions for an antibody PDB file.
     
@@ -356,8 +359,25 @@ def annotate_pdb(pdb_path: str) -> Optional[CDRAnnotation]:
         print(f"[CDR Annotator] No sequences extracted from {pdb_path}")
         return None
     
-    # Identify antibody chains (H and/or L)
-    binder_chains = identify_binder_chains(sequences, str(pdb_path))
+    # Identify antibody chains (H and/or L).
+    # Prefer explicit chain hints when available (e.g. SAbDab metadata),
+    # then fall back to sequence-signature auto-detection.
+    binder_chains: Dict[str, str] = {}
+    if preferred_chains:
+        for chain_type in ("H", "L"):
+            chain_id = preferred_chains.get(chain_type)
+            if not chain_id:
+                continue
+            chain_id = str(chain_id).strip()
+            if chain_id in sequences:
+                binder_chains[chain_type] = chain_id
+        if binder_chains:
+            print(f"[CDR Annotator] Using preferred chains: {binder_chains}")
+        else:
+            print("[CDR Annotator] Preferred chains not found in parsed PDB, falling back to auto-detection")
+
+    if not binder_chains:
+        binder_chains = identify_binder_chains(sequences, str(pdb_path))
     if not binder_chains:
         print(f"[CDR Annotator] Could not identify binder chain")
         return None

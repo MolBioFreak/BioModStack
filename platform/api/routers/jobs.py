@@ -1735,8 +1735,8 @@ async def resume_job(
     """
     Resume a failed job from a checkpoint.
     
-    If from_stage is specified, restarts from that stage using existing outputs.
-    If not specified, resumes from the last completed stage.
+    If from_stage is specified, it is recorded as a stage hint for cache-based
+    resume behavior. The underlying Nextflow resume remains cache-driven.
     """
     result = await session.execute(select(Job).where(Job.id == job_id))
     job = result.scalar_one_or_none()
@@ -1755,6 +1755,8 @@ async def resume_job(
 
     # Allow body payload to override query-provided from_stage.
     effective_from_stage = (request.from_stage if request and request.from_stage else from_stage)
+    if isinstance(effective_from_stage, str):
+        effective_from_stage = effective_from_stage.strip() or None
     requested_overrides = dict(request.param_overrides) if request else {}
     requested_name_suffix = request.name_suffix if request else None
 
@@ -1801,6 +1803,7 @@ async def resume_job(
             "resume_job_id": job_id,
             "resume_work_dir": resume_work_dir,
             "resume_source_dir": job.output_dir,  # For NXF_CACHE_DIR session isolation
+            "resume_requested_stage": effective_from_stage,
             # We don't need manual stage skipping params because we use -resume
         },
         output_dir=output_dir,
@@ -1821,7 +1824,10 @@ async def resume_job(
     session.add(new_job)
     await session.commit()
     
-    logger.info(f"Job {job_id} resumed as {new_job_id} using work dir '{resume_work_dir}'")
+    logger.info(
+        f"Job {job_id} resumed as {new_job_id} using work dir '{resume_work_dir}'"
+        + (f" (requested_stage_hint={effective_from_stage})" if effective_from_stage else "")
+    )
     
     return {
         "message": f"Job resumed. Checking cache in '{resume_work_dir}'",
@@ -1829,6 +1835,8 @@ async def resume_job(
         "new_job_id": new_job_id,
         "new_job_name": new_name,
         "resume_from_stage": effective_from_stage or "auto",
+        "resume_stage_mode": "hint",
+        "resume_stage_note": "Stage selection is advisory; cache hits determine exact task reuse.",
         "preserved_stages": [],
         "applied_overrides": sorted(param_overrides.keys())
     }
