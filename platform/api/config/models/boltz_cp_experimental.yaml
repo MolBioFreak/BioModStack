@@ -1,13 +1,13 @@
 id: boltz_cp_experimental
-name: Boltz-CP Experimental
+name: Fold-CP Experimental
 version: "0.1.0"
 category: structure_prediction
 description: >
   Experimental single-example Boltz-2 inference using DTensor context
   parallelism (CP) across multiple GPUs. Accepts either a prepared Boltz YAML
   / FASTA input or a preprocessed Boltz directory, then launches the checked-out
-  Boltz-CP fork through torch.distributed.
-container: boltz2.sif
+  Fold-CP fork through torch.distributed.
+container: boltz2-pre-community-20260417-211613.sif
 
 ui_icon: sparkles
 ui_color: "#F97316"
@@ -25,7 +25,7 @@ outputs:
 modes:
   - id: design
     name: Distributed Prediction
-    description: Run Boltz-CP multi-GPU structure prediction from a prepared Boltz input path
+    description: Run Fold-CP multi-GPU structure prediction from a prepared Boltz input path
     params:
       - input_path
       - gpu_ids
@@ -60,13 +60,13 @@ params:
 
   - name: input_format
     type: string
-    description: Input layout for the Boltz-CP CLI (config_files or preprocessed)
+    description: Input layout for the Fold-CP CLI (config_files or preprocessed)
     required: false
     default: config_files
 
   - name: output_format
     type: string
-    description: Output structure format written by Boltz-CP (mmcif or pdb)
+    description: Output structure format written by Fold-CP (mmcif or pdb)
     required: false
     default: mmcif
 
