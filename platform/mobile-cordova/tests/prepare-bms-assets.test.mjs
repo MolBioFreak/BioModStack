@@ -693,6 +693,16 @@ test('selection response contract accepts exact development and production recei
     (value) => { value.tailnet_production_proxy.config_path = '/tmp/docker/tailnet-production-proxy.conf'; },
     (value) => { value.tailnet_production_proxy.image_id = 'sha256:' + '0'.repeat(64); },
     (value) => { value.unexpected_authority = { pid: 999 }; },
+    (value) => { value.health.rogue = true; },
+    (value) => { value.health.local_frontend.rogue = true; },
+    (value) => { value.health.local_api.rogue = true; },
+    (value) => { value.health.local_api.payload.rogue = true; },
+    (value) => { value.health.local_api.payload.build.rogue = true; },
+    (value) => { value.health.local_api.payload.liveness.rogue = true; },
+    (value) => { value.health.local_api.payload.readiness.rogue = true; },
+    (value) => { value.serve_handlers.rogue = { Proxy: 'http://127.0.0.1:9999' }; },
+    (value) => { value.serve_handlers['/'].rogue = true; },
+    (value) => { value.serve_handlers['/api/tailnet-environment'].rogue = true; },
     (value) => { value.workflow_adapter_listener.unexpected_authority = { pid: 999 }; },
     (value) => {
       value.managed_api_listener.container_listener_pids = [999];
