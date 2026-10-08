@@ -46,7 +46,9 @@ export function withHandlersHook(handlerCreators) {
                 return result;
             }, [props]);
 
-            return <WrappedComponent {...props} {...handlers} />;
+            // Extract key to avoid React 19 "key is being spread into JSX" error
+            const { key: _key, ...propsWithoutKey } = props;
+            return <WrappedComponent {...propsWithoutKey} {...handlers} />;
         };
 
         WithHandlers.displayName = `withHandlersHook(${getDisplayName(WrappedComponent)})`;
@@ -70,7 +72,9 @@ export function withPropsHook(propsOrMapper) {
                 return propsOrMapper;
             }, [props]);
 
-            return <WrappedComponent {...props} {...additionalProps} />;
+            // Extract key to avoid React 19 "key is being spread into JSX" error
+            const { key: _k, ...propsWithoutKey } = props;
+            return <WrappedComponent {...propsWithoutKey} {...additionalProps} />;
         };
 
         WithProps.displayName = `withPropsHook(${getDisplayName(WrappedComponent)})`;
@@ -134,7 +138,9 @@ export function lifecycleHook(spec) {
                 prevPropsRef.current = props;
             }, [props]);
 
-            return <WrappedComponent {...props} />;
+            // Extract key to avoid React 19 "key is being spread into JSX" error
+            const { key: _k2, ...propsWithoutKey } = props;
+            return <WrappedComponent {...propsWithoutKey} />;
         };
 
         WithLifecycle.displayName = `lifecycleHook(${getDisplayName(WrappedComponent)})`;
@@ -155,11 +161,11 @@ export function branchHook(test, left, right = x => x) {
         const LeftComponent = left(WrappedComponent);
         const RightComponent = right(WrappedComponent);
 
-        const Branch = (props) => {
-            if (test(props)) {
-                return <LeftComponent {...props} />;
+        const Branch = ({ key: _bk, ...propsWithoutKey }) => {
+            if (test(propsWithoutKey)) {
+                return <LeftComponent {...propsWithoutKey} />;
             }
-            return <RightComponent {...props} />;
+            return <RightComponent {...propsWithoutKey} />;
         };
 
         Branch.displayName = `branchHook(${getDisplayName(WrappedComponent)})`;
@@ -176,7 +182,7 @@ export function branchHook(test, left, right = x => x) {
  */
 export function renderComponentHook(Component) {
     return function () {
-        const RenderComponent = (props) => <Component {...props} />;
+        const RenderComponent = ({ key: _rk, ...propsWithoutKey }) => <Component {...propsWithoutKey} />;
         RenderComponent.displayName = `renderComponentHook(${getDisplayName(Component)})`;
         return RenderComponent;
     };
@@ -218,8 +224,11 @@ export function onlyUpdateForKeysHook(keys) {
 export function mapPropsHook(propsMapper) {
     return function (WrappedComponent) {
         const MapProps = (props) => {
-            const mappedProps = useMemo(() => propsMapper(props), [props]);
-            return <WrappedComponent {...mappedProps} />;
+            const { key: _mk, ...propsNoKey } = props;
+            const mappedProps = useMemo(() => propsMapper(propsNoKey), [propsNoKey]);
+            // mappedProps might also contain key, extract it
+            const { key: _mk2, ...mappedPropsNoKey } = mappedProps;
+            return <WrappedComponent {...mappedPropsNoKey} />;
         };
 
         MapProps.displayName = `mapPropsHook(${getDisplayName(WrappedComponent)})`;
