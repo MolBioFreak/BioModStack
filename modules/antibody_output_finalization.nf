@@ -50,21 +50,13 @@ def choose_dest_name(base_dir: Path, filename: str) -> Path:
     candidate = base_dir / filename
     if not candidate.exists():
         return candidate
-    stem = candidate.stem
-    suffix = candidate.suffix
-    counter = 2
-    while True:
-        candidate = base_dir / f"{stem}_{counter}{suffix}"
-        if not candidate.exists():
-            return candidate
-        counter += 1
+    raise ValueError(f"duplicate declared artifact identity: {filename}")
 
 for key in ("pdbs", "cifs", "scores", "aligned_error"):
     for raw_path in manifest.get(key) or []:
         source_path = Path(str(raw_path)).expanduser()
         if not source_path.exists():
-            print(f"[FinalizeSequentialValidationOutputs] WARNING: missing {key} artifact: {source_path}")
-            continue
+            raise FileNotFoundError(f"required declared {key} artifact: {source_path}")
         dest_root = aligned_error_dir if key == "aligned_error" and source_path.suffix.lower() == ".json" else validated_dir
         dest_path = choose_dest_name(dest_root, source_path.name)
         shutil.copy2(source_path, dest_path)
@@ -108,22 +100,8 @@ PY
             cp -f "\$staged_artifact" "\$dest_dir/"
         done < <(find validated_designs -type f -print0)
         cp -f aggregation_report.json "${params.out_dir}/aggregation_report.json"
-        echo "Triggering result ingestion for parent job..."
-        python3 ${params.code_root}/scripts/result_ingester.py \\
-            --job_id "${params.job_id ?: 'unknown'}" \\
-            --results_dir "${params.out_dir}" \\
-            --api_url "${params.api_url}" \\
-            2>&1 | tee ingest.log || echo "Warning: Ingestion had issues (non-fatal)"
+        # Host projection is performed only after authorized result return.
 
-        if [ -s report_files.txt ]; then
-            mapfile -t report_files < report_files.txt
-            python3 ${params.code_root}/scripts/stage_reporter.py \\
-                "${params.job_id ?: 'unknown'}" \\
-                "structure_validation" \\
-                "complete" \\
-                "\${report_files[@]}" \\
-                || echo "Warning: Failed to report sequential structure_validation completion"
-        fi
     fi
 
     echo "Sequential validation closeout complete: \$TOTAL_PDBS designs ready for analytics"
@@ -162,14 +140,6 @@ process FinalizeTerminalAntibodyOutputs {
 }
 EOF
 
-    if [ \$TOTAL_PDBS -gt 0 ]; then
-        echo "Triggering terminal result ingestion for parent job..."
-        python3 ${params.code_root}/scripts/result_ingester.py \\
-            --job_id "${params.job_id ?: 'unknown'}" \\
-            --results_dir "${params.out_dir}" \\
-            --api_url "${params.api_url}" \\
-            2>&1 | tee ingest.log || echo "Warning: Terminal ingestion had issues (non-fatal)"
-    fi
 
     echo "Terminal antibody closeout complete: \$TOTAL_PDBS designs ready for analytics"
     """

@@ -533,6 +533,7 @@ process BatchESMFold2Validation {
 }
 
 process BatchImmunogenicity {
+    publishDir "${params.out_dir}/structure_validation/immunogenicity/batch_${task.index}", mode: 'copy'
     label 'Antiberty'
     container "${params.container_dir}/antibody_tools.sif"
 
@@ -553,6 +554,7 @@ process BatchImmunogenicity {
 }
 
 process BatchStability {
+    publishDir "${params.out_dir}/structure_validation/stability/batch_${task.index}", mode: 'copy'
     label 'ThermoMPNN'
     container "${params.container_dir}/stability_tools.sif"
 

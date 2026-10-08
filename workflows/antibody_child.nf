@@ -17,7 +17,7 @@ nextflow.enable.dsl = 2
 // Spawned by parent antibody_denovo workflow in exploration mode.
 // =============================================================================
 
-include { BatchBoltzValidation ; BatchProtenixValidation ; BatchESMFold2Validation ; BatchImmunogenicity ; BatchStability } from '../modules/antibody_batch'
+include { AlignBoltzValidation ; BatchBoltzValidation ; BatchProtenixValidation ; BatchESMFold2Validation ; BatchImmunogenicity ; BatchStability } from '../modules/antibody_batch'
 
 def resolveBooleanParam(value, defaultValue = false) {
     if (value == null) {

@@ -138,12 +138,11 @@ workflow MATURATION_CHILD_CORE {
     def ppiflowMode = (params.ppiflow_mode ?: params.maturation_stage_name ?: 'maturation').toString().toLowerCase()
     def runRedesign = (params.maturation_redesign_enabled != false) && ppiflowMode != 'backbone_refine'
 
-    def anchor_inputs = Channel
-        .from(pdb_list)
-        .map { pdb ->
-            def meta = [id: pdb.baseName]
-            tuple(meta, pdb)
-        }
+    def anchor_inputs = params.antibody_native_batches == true
+        ? pdb_list.flatMap { group, pdbs -> pdbs.collect { pdb ->
+            tuple([id: pdb.baseName, component_group: group], pdb)
+        } }
+        : Channel.fromList(pdb_list).map { pdb -> tuple([id: pdb.baseName, component_group: 0], pdb) }
 
     IdentifyAnchorResidues(anchor_inputs)
     def usable_anchor_inputs = IdentifyAnchorResidues.out.anchor_inputs.filter { meta, original_pdb, enriched_pdb, anchors_json, ppiflow_positions, cdr_positions, cdr_positions_by_loop_json ->
@@ -236,8 +235,9 @@ workflow MATURATION_CHILD_CORE {
     def partial_selected = partial_scored
     if (redesign_enabled && runRedesign && redesign_top_n > 0) {
         partial_selected = partial_scored
-            .collect()
-            .map { items ->
+            .map { meta, backbone, scoreJson, score -> tuple(meta.component_group ?: 0, [meta, backbone, scoreJson, score]) }
+            .groupTuple()
+            .map { group, items ->
                 def normalizedItems = normalizeMaturationScoredSamples(items)
                 normalizedItems
                     .sort { a, b -> a.score <=> b.score }

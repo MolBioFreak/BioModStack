@@ -60,7 +60,11 @@ def test_existing_export_and_prep_callers_are_wired():
     assert 'rfantibody_inference_wrapper.py --bms-role-export' in (root/'modules/rfantibody.nf').read_text()
     assert 'carry_export(pdb_file, output_path' in (root/'scripts/prep_fampnn_designs.py').read_text()
     assert '--require_role_provenance --prepared_dir fampnn_input' in (root/'modules/fampnn.nf').read_text()
-    assert 'fampnn_analysis_declaration: analysisContract.declaration' in (root/'workflows/antibody_denovo.nf').read_text()
+    workflow = (root/'workflows/antibody_denovo.nf').read_text()
+    assert "FampnnAnalysisPolicy.forWorkflow(params, 'antibody_denovo', 'authorized_sequence_design_region')" in workflow
+    assert 'FampnnAnalysisPolicy.stagePrepared(params, batch)' in workflow
+    assert 'RunFAMPNN(native_fampnn_batches, params.analysis_chain_id,' in workflow
+    assert 'spawn_fampnn_children.py' not in workflow
 
 
 def test_substituted_export_bytes_rejected(tmp_path):

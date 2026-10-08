@@ -153,8 +153,7 @@ Path('frustrampnn_report_outputs.txt').write_text('\n'.join(outputs) + '\n', enc
 PY
     mapfile -t outputs < frustrampnn_report_outputs.txt
     test "\${#outputs[@]}" -gt 0
-    '${params.api_python}' '${params.code_root}/scripts/stage_reporter.py' --job-root-relative \
-      '${params.job_id}' frustrampnn complete "\${outputs[@]}"
+    # Native manifest is projected by the host after authorized return.
     : > frustrampnn_complete.reported
     """
 }
@@ -191,8 +190,7 @@ process ReportAntibodyFrustraMPNNNotRequested {
     """
     set -euo pipefail
     printf '%s\n' '${payload}' > antibody_frustrampnn_terminal_manifest.json
-    '${params.api_python}' '${params.code_root}/scripts/stage_reporter.py' \
-      '${params.job_id}' frustrampnn not_requested
+    # Native manifest is projected by the host after authorized return.
     : > frustrampnn_not_requested.reported
     """
 }

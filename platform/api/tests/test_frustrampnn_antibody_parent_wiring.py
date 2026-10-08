@@ -71,8 +71,8 @@ def test_antibody_prepare_publish_and_terminal_report_are_scheduled_and_strict()
     assert "frustrampnn_requiredness_must_be_required" in source
     assert "frustrampnn_required_candidate_failed" in source
     assert "frustrampnn_ambiguous_candidate" in source
-    assert "stage_reporter.py" in source
-    assert "frustrampnn complete" in source
+    assert "stage_reporter.py" not in source
+    assert "frustrampnn_complete.reported" in source
     assert "|| true" not in source.split("process AggregateAndReportAntibodyFrustraMPNN", 1)[1].split(
         "process ReportAntibodyFrustraMPNNNotRequested", 1
     )[0]
@@ -109,7 +109,8 @@ def test_antibody_disabled_branch_is_scheduled_and_emits_typed_status() -> None:
     assert "requiredness: 'not_requested'" in disabled
     assert "candidate_count: 0" in disabled
     assert "tuple val(parent_status)" in disabled
-    assert "frustrampnn not_requested" in disabled
+    assert "frustrampnn_not_requested.reported" in disabled
+    assert "stage_reporter.py" not in disabled
     assert "frustrampnn_results = ReportAntibodyFrustraMPNNNotRequested.out.result" in source
     assert "frustrampnn_results = frustrampnn_results" in source
 

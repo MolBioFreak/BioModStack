@@ -104,6 +104,7 @@ process RunFAMPNN {
 
     output:
     tuple path("results/*.pdb"), path("results/*.json"), emit: pdbs_jsons
+    tuple val(batch_id), path("results/*.pdb"), path("results/*.json"), emit: antibody_batches
     path ("fampnn_metadata_${batch_id}.jsonl"), topic: metadata_ch_fold_seq
     path ("fampnn_seq_prob_metrics_${batch_id}.jsonl"), emit: seq_prob_metrics, optional: true
     path "*.log"
