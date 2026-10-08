@@ -621,6 +621,8 @@ def test_git_build_identity_normalizes_commit_time_to_utc_z(monkeypatch, tmp_pat
 
 def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / "biomodstack"
+    telemetry_db = tmp_path / "telemetry.sqlite3"
+    monkeypatch.setenv("BMS_TELEMETRY_DB_PATH", str(telemetry_db))
     monkeypatch.setattr(
         services,
         "git_build_identity",
@@ -672,7 +674,7 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path, mo
 
     telemetry_unit = units[services.TELEMETRY_SERVICE]
     assert f"ExecStart={project_root / 'platform' / 'api' / '.venv' / 'bin' / 'python'} -m tools.telemetry_collector" in telemetry_unit
-    assert "Environment=BMS_TELEMETRY_DB_PATH=/mnt/BioModStack/telemetry/telemetry.sqlite3" in telemetry_unit
+    assert f"Environment=BMS_TELEMETRY_DB_PATH={telemetry_db}" in telemetry_unit
     assert f"WorkingDirectory={project_root / 'platform' / 'api'}" in telemetry_unit
     assert f"ExecStartPre=/usr/bin/env python3 {project_root / 'scripts' / 'rotate_biomodstack_logs.py'}" in telemetry_unit
     assert f"StandardOutput=append:{services.TELEMETRY_LOG}" in telemetry_unit
