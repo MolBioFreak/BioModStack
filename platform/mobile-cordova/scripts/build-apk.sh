@@ -162,6 +162,9 @@ if [[ ! -d node_modules ]]; then
   npm install
 fi
 
+# Cordova identifies a project only after its local web root exists.
+node ./scripts/prepare-bms-assets.mjs --config "$CONFIG_PATH"
+
 if [[ ! -d platforms/android ]]; then
   npx cordova platform add "android@$ANDROID_PLATFORM_VERSION"
 fi
@@ -179,7 +182,6 @@ if [[ -d "$LOCAL_UI_BUNDLE_PLUGIN_DIR" ]]; then
   fi
 fi
 
-node ./scripts/prepare-bms-assets.mjs --config "$CONFIG_PATH"
 node ./scripts/patch-android-main-activity.mjs
 if ! npx cordova requirements android; then
   echo "cordova requirements reported issues; attempting build anyway because the Android platform ships a Gradle wrapper." >&2
