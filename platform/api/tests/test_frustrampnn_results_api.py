@@ -693,6 +693,90 @@ async def test_statistics_query_is_bounded_closed_and_rejects_wrong_level_filter
 
 
 @pytest.mark.asyncio
+async def test_retained_effective_settings_read_preserves_exact_json_and_digest(api) -> None:
+    from services.frustrampnn.settings import _effective_payload_sha256
+
+    client, sessions, _root = api
+    await _mark_job_2_as_v2(sessions)
+    retained = _effective_settings_fixture()
+    retained["schema_version"] = 1
+    from services.frustrampnn.settings import FrustraMPNNRequestedSettings, requested_settings_sha256
+    requested = retained["requested_settings"]
+    requested["schema_version"] = 1
+    for key in ("batching_enabled", "structures_per_job"):
+        requested.pop(key)
+        retained["value_sources"].pop(key)
+    requested["protein_selection"].pop("regions")
+    retained["value_sources"]["protein_selection"].pop("regions")
+    retained["settings_sha256"] = requested_settings_sha256(FrustraMPNNRequestedSettings.model_validate(requested))
+    for chain in retained["resolved_chains"]:
+        for residue in chain["residues"]:
+            for key in ("label_seq_id", "pdb_residue_id", "pdb_insertion_code", "residue_name"):
+                residue.pop(key)
+    retained["effective_settings_sha256"] = _effective_payload_sha256(retained)
+    original = copy.deepcopy(retained)
+    async with sessions() as session:
+        result = await session.get(FrustraMPNNResult, ("job-2", "invoke-1"))
+        result.effective_settings_json = retained
+        result.effective_settings_sha256 = retained["effective_settings_sha256"]
+        await session.commit()
+
+    for url in (
+        "/api/frustrampnn/jobs/job-2/results",
+        "/api/frustrampnn/results/invoke-1?job_id=job-2",
+        "/api/frustrampnn/results/invoke-1/statistics?job_id=job-2",
+    ):
+        response = await client.get(url)
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        payload = payload["items"][0] if "items" in payload else payload
+        assert payload["effective_settings_json"] == original
+        assert payload["effective_settings_sha256"] == original["effective_settings_sha256"]
+        assert _effective_payload_sha256(payload["effective_settings_json"]) == original["effective_settings_sha256"]
+    async with sessions() as session:
+        result = await session.get(FrustraMPNNResult, ("job-2", "invoke-1"))
+        assert result.effective_settings_json == original
+        assert result.effective_settings_sha256 == original["effective_settings_sha256"]
+
+
+@pytest.mark.parametrize("mutation", [
+    "modern_missing", "unknown_version", "missing_version", "missing_identity", "wrong_entity", "wrong_chain",
+    "duplicate_residue", "digest", "settings_digest", "unknown_field", "null_pdb",
+    "invalid_pdb", "invalid_label", "invalid_insertion", "invalid_name",
+])
+def test_retained_effective_settings_rejects_corruption_and_current_omissions(mutation) -> None:
+    from services.frustrampnn.settings import FrustraMPNNEffectiveSettings, _effective_payload_sha256
+
+    payload = _effective_settings_fixture()
+    payload["schema_version"] = 1
+    residue = payload["resolved_chains"][0]["residues"][0]
+    for key in ("label_seq_id", "pdb_residue_id", "pdb_insertion_code", "residue_name"):
+        residue.pop(key)
+    payload["effective_settings_sha256"] = _effective_payload_sha256(payload)
+    with pytest.raises(ValueError):
+        FrustraMPNNEffectiveSettings.model_validate(payload)
+    if mutation == "modern_missing": payload["schema_version"] = 2
+    elif mutation == "unknown_version": payload["schema_version"] = 99
+    elif mutation == "missing_version": payload.pop("schema_version")
+    elif mutation == "missing_identity": residue.pop("auth_seq_id")
+    elif mutation == "wrong_entity": residue["entity_instance_id"] = "other"
+    elif mutation == "wrong_chain": residue["pdb_chain_id"] = "Z"
+    elif mutation == "duplicate_residue": payload["resolved_chains"][0]["residues"].append(copy.deepcopy(residue))
+    elif mutation == "digest": payload["effective_settings_sha256"] = "0" * 64
+    elif mutation == "settings_digest": payload["settings_sha256"] = "0" * 64
+    elif mutation == "unknown_field": residue["extra"] = 1
+    elif mutation == "null_pdb": residue["pdb_residue_id"] = None
+    elif mutation == "invalid_pdb": residue["pdb_residue_id"] = 10000
+    elif mutation == "invalid_label": residue["label_seq_id"] = "1"
+    elif mutation == "invalid_insertion": residue["pdb_insertion_code"] = "AB"
+    elif mutation == "invalid_name": residue["residue_name"] = "G"
+    if mutation != "digest":
+        payload["effective_settings_sha256"] = _effective_payload_sha256(payload)
+    with pytest.raises(ValueError):
+        frustrampnn_router.FrustraMPNNRetainedEffectiveSettingsDocument.model_validate(payload)
+
+
+@pytest.mark.asyncio
 async def test_result_list_and_detail_expose_persisted_phase4_hashes(api) -> None:
     client, sessions, _root = api
     statistics = await _mark_job_2_as_v2(sessions)
