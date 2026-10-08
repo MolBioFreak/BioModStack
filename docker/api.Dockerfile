@@ -77,7 +77,7 @@ ENV BMS_HOME=/app \
 
 EXPOSE 8000
 
-CMD ["/app/platform/api/.venv/bin/uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"]
+CMD ["/bin/sh", "-ec", "/app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000"]
 
 FROM api-base AS api-runtime-prepared
 
@@ -165,4 +165,4 @@ USER 1000:1000
 
 EXPOSE 8000
 
-CMD ["/app/platform/api/.venv/bin/uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"]
+CMD ["/bin/sh", "-ec", "/app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000"]
