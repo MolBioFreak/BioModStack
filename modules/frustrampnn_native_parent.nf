@@ -54,6 +54,7 @@ process RunNativeParentFrustraMPNN {
     def gpu = params.frustrampnn_physical_gpu_id?.toString()
     if (!(gpu ==~ /(?:0|[1-9][0-9]*)/)) error('Native FrustraMPNN requires scheduler assigned GPU')
     def apptainer = params.get('apptainer_bin') ?: 'apptainer'
+    def container = params.get('frustrampnn_container_path') ?: "${params.container_dir}/frustrampnn.sif"
     def attempt = params.get('component_attempt_id') ?: System.getenv('BMS_REMOTE_ATTEMPT_ID') ?: params.job_id
     """
     set -euo pipefail
@@ -61,7 +62,7 @@ process RunNativeParentFrustraMPNN {
     candidates=()
     for candidate in '${group}'/candidate_*; do candidates+=(--candidate "\$candidate"); done
     '${params.api_python}' '${params.code_root}/scripts/native_frustrampnn_parent.py' run "\${candidates[@]}" \
-      --container '${params.container_dir}/frustrampnn.sif' --gpu '${gpu}' --apptainer '${apptainer}' \
+      --container '${container}' --gpu '${gpu}' --apptainer '${apptainer}' \
       --diagnostic-root '${params.out_dir}/frustrampnn/component_runtime/failed/${attempt}/${group.name}'
     """
 }
