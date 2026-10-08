@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from biomodstack_msa_handoff import validate_a3m
+from biomodstack_boltz_msa import validate_boltz_msa
 
 
 def resolve_yaml(path: Path) -> None:
@@ -22,7 +22,7 @@ def resolve_yaml(path: Path) -> None:
         alignment = Path(value)
         if not alignment.is_absolute():
             alignment = path.parent / alignment
-        validate_a3m(alignment, protein['sequence'])
+        validate_boltz_msa(alignment, protein['sequence'])
         protein['msa'] = str(alignment.resolve())
     path.write_text(yaml.safe_dump(payload, sort_keys=False))
 
