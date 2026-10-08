@@ -1442,14 +1442,15 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         }
     }, [initialValues, isRefinementMode, mergeQualitySettingsFromParams, queueRestoredSelection, restoreFrameworkPreview, restoreTargetFromSaved]);
 
-    // Parse the uploaded/selected target structure, preserving all available models.
+    // Parse the uploaded/selected target structure once per source, preserving all available models.
     useEffect(() => {
-        const generation = targetParseControllerRef.current.begin();
+        const parseToken = targetParseControllerRef.current.begin();
         if (!targetPdb) {
             setParsedTargetStructure(null);
             setParsedChains([]);
             setSelectedChain(null);
             setSelectedTargetModel(1);
+            setIsParsing(false);
             if (!restoringSelectionRef.current) {
                 setSelectedResidues(new Set());
             }
@@ -1460,31 +1461,29 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
         parsePDBFile(targetPdb)
             .then((result) => {
-                if (!targetParseControllerRef.current.isCurrent(generation)) return;
+                if (!targetParseControllerRef.current.isCurrent(parseToken)) return;
                 setParsedTargetStructure(result);
                 const queuedModel = restoringSelectionRef.current?.modelNumber ?? null;
-                const preferredModel =
-                    queuedModel
-                    ?? getSavedTargetModelNumber(initialValues || {})
-                    ?? selectedTargetModel;
-                const resolvedModel = getModelByNumber(result, preferredModel) ?? result.models[0] ?? null;
-                setSelectedTargetModel(resolvedModel?.modelNumber ?? 1);
-                if (!uploadedPath && !initialValues) setUploadedPath(null);
+                setSelectedTargetModel((currentModel) => {
+                    const preferredModel = queuedModel ?? currentModel;
+                    const resolvedModel = getModelByNumber(result, preferredModel) ?? result.models[0] ?? null;
+                    return resolvedModel?.modelNumber ?? 1;
+                });
                 console.log(
                     '[ANTIBODY_DENOVO] Parsed target PDB models:',
                     result.models.map((model) => `${model.label}:${model.chains.map((c) => `${c.id}:${c.length}aa`).join('|')}`)
                 );
             })
             .catch((err) => {
-                if (!targetParseControllerRef.current.isCurrent(generation)) return;
+                if (!targetParseControllerRef.current.isCurrent(parseToken)) return;
                 console.error('[ANTIBODY_DENOVO] Failed to parse PDB:', err);
                 setParsedTargetStructure(null);
                 setParsedChains([]);
             })
             .finally(() => {
-                if (targetParseControllerRef.current.isCurrent(generation)) setIsParsing(false);
+                if (targetParseControllerRef.current.isCurrent(parseToken)) setIsParsing(false);
             });
-    }, [getSavedTargetModelNumber, initialValues, selectedTargetModel, targetPdb, uploadedPath]);
+    }, [targetPdb]);
 
     // Keep the active target chains/viewer content aligned to the currently selected model.
     // This effect depends only on its input model; functional updates prevent a

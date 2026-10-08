@@ -89,7 +89,7 @@ workflow ONT_FASTQ_QC {
         FastqDimerAnalysis.out.breakpoint_screen,
         FastqDimerAnalysis.out.dimer_reference,
     )
-    BuildDimerCanonicalOutputs.out.breakpoint_call.subscribe { ignoredValue ->
+    BuildDimerCanonicalOutputs.out.breakpoint_call.subscribe { _ ->
         reportStage(params, "dimer_qc", [
             "${params.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
             "${params.out_dir}/multimer_qc/dimer_evidence_by_position.tsv",

@@ -712,6 +712,74 @@ export function buildUpdateLoaderScript(bundledDescriptor = { version: 'bundled'
 `;
 }
 
+export function reduceNativeApkState(previousSequence, detail) {
+  const tones = {
+    checking: 'pending',
+    available: 'success',
+    up_to_date: 'success',
+    downloading: 'pending',
+    verifying: 'pending',
+    awaiting_install_permission: 'pending',
+    install_permission_denied: 'pending',
+    installer_opened: 'pending',
+    error: 'error',
+  };
+  const rejected = {
+    accepted: false,
+    sequence: Number.isSafeInteger(previousSequence) && previousSequence >= 0 ? previousSequence : 0,
+    status: 'error',
+    message: 'Ignored malformed or stale native APK update state.',
+    tone: 'error',
+    manifest: null,
+  };
+  if (!detail || typeof detail !== 'object' || Array.isArray(detail)) {
+    return rejected;
+  }
+  if (!Object.keys(detail).every((key) => ['sequence', 'status', 'message', 'manifest'].includes(key))) {
+    return rejected;
+  }
+  if (!Number.isSafeInteger(detail.sequence) || detail.sequence <= rejected.sequence ||
+      typeof detail.status !== 'string' || !(detail.status in tones) ||
+      typeof detail.message !== 'string' || detail.message.trim().length < 1 || detail.message.length > 1000) {
+    return rejected;
+  }
+
+  const manifestStatuses = new Set([
+    'available', 'downloading', 'verifying', 'awaiting_install_permission',
+    'install_permission_denied', 'installer_opened',
+  ]);
+  const rawManifest = detail.manifest;
+  if (manifestStatuses.has(detail.status) && (!rawManifest || typeof rawManifest !== 'object')) {
+    return rejected;
+  }
+  let manifest = null;
+  if (rawManifest !== undefined) {
+    if (!rawManifest || typeof rawManifest !== 'object' || Array.isArray(rawManifest) ||
+        !Object.keys(rawManifest).every((key) => [
+          'channel', 'versionCode', 'versionName', 'minSdk', 'sizeBytes', 'publishedAt', 'changelog',
+        ].includes(key)) ||
+        rawManifest.channel !== 'stable' ||
+        !Number.isSafeInteger(rawManifest.versionCode) || rawManifest.versionCode < 1 || rawManifest.versionCode > 2100000000 ||
+        typeof rawManifest.versionName !== 'string' || rawManifest.versionName.length < 1 || rawManifest.versionName.length > 128 ||
+        !Number.isInteger(rawManifest.minSdk) || rawManifest.minSdk < 1 || rawManifest.minSdk > 100 ||
+        !Number.isSafeInteger(rawManifest.sizeBytes) || rawManifest.sizeBytes < 1 || rawManifest.sizeBytes > 250 * 1024 * 1024 ||
+        typeof rawManifest.publishedAt !== 'string' || rawManifest.publishedAt.length > 64 ||
+        !Array.isArray(rawManifest.changelog) || rawManifest.changelog.length > 50 ||
+        rawManifest.changelog.some((item) => typeof item !== 'string' || item.length > 1000)) {
+      return rejected;
+    }
+    manifest = rawManifest;
+  }
+  return {
+    accepted: true,
+    sequence: detail.sequence,
+    status: detail.status,
+    message: detail.message,
+    tone: tones[detail.status],
+    manifest,
+  };
+}
+
 export function buildPreflightScript() {
   return `(() => {
   const runtime = window.__BMS_CORDOVA_RUNTIME__ || {};
@@ -731,6 +799,8 @@ export function buildPreflightScript() {
   const downloadedBasePath = '/__bms_ui__/active/';
   const overlayId = 'bms-cordova-preflight';
   const toggleId = 'bms-cordova-preflight-toggle';
+  const reduceNativeApkState = ${reduceNativeApkState.toString()};
+  let lastNativeApkSequence = 0;
 
   function clampNumber(value, minimum, maximum, fallback) {
     const numericValue = Number(value);
@@ -1004,6 +1074,23 @@ export function buildPreflightScript() {
     });
   }
 
+  function callNativeApkUpdater(command) {
+    const bridge = window.BmsAndroidUpdater;
+    if (!bridge || typeof bridge.postMessage !== 'function') {
+      throw new Error('Secure native APK updater is not available in this shell.');
+    }
+    bridge.postMessage(JSON.stringify({ action: command }));
+  }
+
+  function runNativeApkAction(panel, command) {
+    setStatus(panel, command === 'installApkUpdate' ? 'Preparing the verified Android package installer…' : 'Checking for a native APK update…', 'pending');
+    try {
+      callNativeApkUpdater(command);
+    } catch (error) {
+      setStatus(panel, 'Native APK update failed: ' + (error && error.message ? error.message : String(error)), 'error');
+    }
+  }
+
   async function fetchManifest(panel, apiBaseUrl, uiUpdateChannel) {
     const manifestUrl = getUiManifestUrl(apiBaseUrl, uiUpdateChannel);
     setStatus(panel, 'Checking UI update…', 'pending');
@@ -1202,10 +1289,11 @@ export function buildPreflightScript() {
       '    <span>UI update channel</span>',
       '    <input data-role="ui-update-channel" type="text" inputmode="text" autocomplete="off" spellcheck="false" pattern="[A-Za-z0-9._-]{1,64}" value="' + escapeAttribute(draft.uiUpdateChannel) + '" />',
       '  </label>',
-      '  <div class="bms-cordova-preflight__hint">APK stays bundled/stable unless you explicitly install a compatible channel update.</div>',
+      '  <div class="bms-cordova-preflight__hint"><strong>UI bundle updates</strong> replace web assets only; they never replace the installed Android app.</div>',
       '  <div class="bms-cordova-preflight__hint">Update manifest: <span class="bms-cordova-preflight__mono">' + escapeHtml(resolveUiUpdateManifestPath(draft.uiUpdateChannel)) + '</span></div>',
       '  <div class="bms-cordova-preflight__hint">Bundled UI: <span class="bms-cordova-preflight__mono">' + escapeHtml(describeDescriptor(bundledDescriptor, defaults.bundledUiVersion || 'bundled')) + '</span></div>',
       '  <div class="bms-cordova-preflight__hint">Active UI: <span class="bms-cordova-preflight__mono" data-role="active-ui-label">' + escapeHtml(currentSnapshot.source + ' · ' + describeDescriptor(currentSnapshot.descriptor, defaults.bundledUiVersion || 'bundled')) + '</span></div>',
+      '  <div class="bms-cordova-preflight__hint"><strong>Native APK update</strong> replaces the Android shell only after package, signer, version, size, minSdk, and SHA-256 verification and Android user approval.</div>',
       '  <label class="bms-cordova-preflight__field">',
       '    <span>Global UI scale <strong data-role="scale-value">' + draft.mobileInitialScale.toFixed(2) + '</strong></span>',
       '    <input data-role="mobile-scale" type="range" min="0.55" max="1.00" step="0.01" value="' + draft.mobileInitialScale.toFixed(2) + '" />',
@@ -1215,12 +1303,14 @@ export function buildPreflightScript() {
       '    <span>Use compact mobile shell overrides</span>',
       '  </label>',
       '  <div class="bms-cordova-preflight__hint">Saved override keys: <span class="bms-cordova-preflight__mono">' + escapeHtml(Object.keys(overrides).join(', ')) + '</span></div>',
-      '  <div class="bms-cordova-preflight__status" data-role="status" data-status="idle">Ready. Test connection, Check UI update, Update UI, or Revert to bundled UI.</div>',
+      '  <div class="bms-cordova-preflight__status" data-role="status" data-status="idle">Ready. UI-bundle and native-APK update controls are intentionally separate.</div>',
       '  <div class="bms-cordova-preflight__actions">',
       '    <button type="button" data-action="probe">Test connection</button>',
       '    <button type="button" data-action="check-ui-update">Check UI update</button>',
       '    <button type="button" data-action="update-ui">Update UI</button>',
       '    <button type="button" data-action="revert-ui">Revert to bundled UI</button>',
+      '    <button type="button" data-action="check-apk-update">Check native APK</button>',
+      '    <button type="button" data-action="install-apk-update">Install native APK</button>',
       '    <button type="button" data-action="reset">Reset defaults</button>',
       '    <button type="button" data-action="save-reload" data-variant="primary">Save + reload</button>',
       '    <button type="button" data-action="launch">Launch app</button>',
@@ -1287,6 +1377,15 @@ export function buildPreflightScript() {
         return;
       }
 
+      const nativeApkCommands = {
+        'check-apk-update': 'checkForApkUpdate',
+        'install-apk-update': 'installApkUpdate',
+      };
+      if (nativeApkCommands[button.dataset.action]) {
+        runNativeApkAction(panel, nativeApkCommands[button.dataset.action]);
+        return;
+      }
+
       if (button.dataset.action === 'reset') {
         apiBaseUrlInput.value = normalizeApiBaseUrl(defaults.apiBaseUrl, '');
         uiUpdateChannelInput.value = normalizeUiUpdateChannel(defaults.uiUpdateChannel || 'phone', 'phone');
@@ -1321,6 +1420,16 @@ export function buildPreflightScript() {
     document.addEventListener('deviceready', () => {
       refreshActiveUiFromPlugin(panel);
     }, { once: true });
+
+    window.addEventListener('biomodstack-apk-update-state', (event) => {
+      const nextState = reduceNativeApkState(lastNativeApkSequence, event && event.detail);
+      if (!nextState.accepted) {
+        setStatus(panel, nextState.message, nextState.tone);
+        return;
+      }
+      lastNativeApkSequence = nextState.sequence;
+      setStatus(panel, nextState.message, nextState.tone);
+    });
 
     setTimeout(() => {
       probeHealth(panel, draft.apiBaseUrl);

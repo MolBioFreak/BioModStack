@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plugin xmlns="http://apache.org/cordova/ns/plugins/1.0"
+        xmlns:android="http://schemas.android.com/apk/res/android"
+        id="cordova-plugin-bms-apk-updater" version="1.0.0">
+  <name>BioModStack Secure Native APK Updater</name>
+  <description>Native-only, origin-bound APK updater. It intentionally has no JavaScript module or cordova.exec surface.</description>
+  <license>Apache-2.0</license>
+  <engines><engine name="cordova-android" version=">=13.0.0" /></engines>
+  <platform name="android">
+    <config-file target="res/xml/config.xml" parent="/*">
+      <feature name="BmsApkUpdatePlugin">
+        <param name="android-package" value="org.biomodstack.mobile.apkupdate.BmsApkUpdatePlugin" />
+        <param name="onload" value="true" />
+      </feature>
+    </config-file>
+    <config-file target="AndroidManifest.xml" parent="/*">
+      <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    </config-file>
+    <config-file target="AndroidManifest.xml" parent="/manifest/application">
+      <provider android:name="androidx.core.content.FileProvider"
+                android:authorities="${applicationId}.fileprovider"
+                android:exported="false" android:grantUriPermissions="true">
+        <meta-data android:name="android.support.FILE_PROVIDER_PATHS"
+                   android:resource="@xml/apk_update_paths" />
+      </provider>
+    </config-file>
+    <source-file src="src/android/BmsApkUpdatePlugin.kt" target-dir="app/src/main/java/org/biomodstack/mobile/apkupdate" />
+    <source-file src="src/android/ApkUpdatePolicy.kt" target-dir="app/src/main/java/org/biomodstack/mobile/apkupdate" />
+    <source-file src="src/android/BmsApkUpdater.kt" target-dir="app/src/main/java/org/biomodstack/mobile/apkupdate" />
+    <source-file src="src/test/ApkUpdatePolicyTest.kt" target-dir="app/src/test/java/org/biomodstack/mobile/apkupdate" />
+    <source-file src="src/androidTest/BmsPackageManagerIntegrationTest.kt" target-dir="app/src/androidTest/java/org/biomodstack/mobile/apkupdate" />
+    <resource-file src="res/xml/apk_update_paths.xml" target="res/xml/apk_update_paths.xml" />
+    <framework src="androidx.webkit:webkit:1.12.1" />
+    <framework src="androidx.core:core:1.13.1" />
+  </platform>
+</plugin>

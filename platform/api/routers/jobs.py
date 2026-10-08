@@ -51,10 +51,10 @@ from paths import (
 from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
 from schemas import JobCreate, JobResponse, JobList, JobStatus
 from services.job_control import cancel_job_lineage
+from services import alignment_access, ont_submission_trust
 from services.md.chemistry_catalog import ChemistryCatalogError, ChemistryProfileSelectionError
 from services.md.feature_gate import require_molecular_dynamics_feature
 from services.md.launch_contract import MDLaunchError, materialize_md_job_spec, normalize_md_job_spec
-from services import alignment_access, ont_submission_trust
 from services.proteinbase_importer import import_proteinbase_bundle
 
 from model_registry import get_registry

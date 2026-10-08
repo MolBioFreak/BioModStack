@@ -90,10 +90,11 @@ def test_ont_fastq_qc_runtime_emits_core_artifacts(tmp_path: Path):
     mode = _detect_execution_mode()
     assert mode in ("container", "local"), f"unexpected mode: {mode}"
 
-    # Keep runtime artifacts under pytest's isolated, user-writable directory.
-    # /tmp is visible to the supported local and Apptainer test runtimes.
-    fixture_dir = tmp_path / "ngs_runtime_fixtures"
-    fixture_dir.mkdir(exist_ok=True)
+    # Explicit worktree-safe launchers can use pytest's disposable directory.
+    # The legacy container wrapper only mounts /tmp and its configured checkout,
+    # so retain the repository fixture path for that compatibility mode.
+    fixture_dir = tmp_path if configured_nextflow else REPO_ROOT / "platform/api/tests/ngs_runtime_fixtures"
+    fixture_dir.mkdir(parents=True, exist_ok=True)
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     ref = fixture_dir / f"ref_{ts}.fasta"
