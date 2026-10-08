@@ -314,10 +314,6 @@ def _normalize_confornets_settings(settings: Mapping[str, Any]) -> dict[str, Any
         raise ConformationalMappingRequestError(
             "ConforNets MSE requires a non-null staged reference"
         )
-    if task == "mse" and len(normalized_steps) != 1:
-        raise ConformationalMappingRequestError(
-            "ConforNets MSE requires exactly one saved step"
-        )
     if task == "mse" and confornet_count != 1:
         raise ConformationalMappingRequestError(
             "ConforNets MSE requires exactly one ConforNet"
@@ -645,6 +641,10 @@ def validate_request_params(params: Mapping[str, Any]) -> ValidatedRequest:
         if not isinstance(target, Mapping) or not isinstance(target.get("target_id"), str):
             raise ConformationalMappingRequestError("ConforNets target identity is invalid")
         settings = _normalize_confornets_settings(values["confornets"])
+        if settings["task"] == "mse" and len(settings["saved_steps"]) != 1:
+            raise ConformationalMappingRequestError(
+                "ConforNets MSE requires exactly one saved step"
+            )
         if (
             target.get("sequence") != settings["sequence"]
             or target.get("molecule_type") != "protein"
