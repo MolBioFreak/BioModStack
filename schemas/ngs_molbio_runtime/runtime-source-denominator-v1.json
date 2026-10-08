@@ -21,6 +21,8 @@
     "platform/api/experiment_operations.py",
     "platform/api/experiment_services.py",
     "platform/api/main.py",
+    "platform/api/migrations/add_ont_external_move_bam_receipts.py",
+    "platform/api/migrations/add_ont_move_source_attempt_lineage.py",
     "platform/api/migrations/add_ont_signal_workbench.py",
     "platform/api/migrations/runner.py",
     "platform/api/migrations/sqlite_sha256.py",
@@ -115,5 +117,5 @@
     "scripts/ont_signal_runtime.py",
     "scripts/run_ngs_molbio_payload_ownership_audit.py"
   ],
-  "content_sha256": "dce7ba145daa72a2ef5bda759c1e729c28e40f95dc4e1a5bf2fa3f467e9357ec"
+  "content_sha256": "b8f7ded9b2a299db17bb1a32b8bc55728dbdba12a8773ec7ab60c0c0ab05fd34"
 }
