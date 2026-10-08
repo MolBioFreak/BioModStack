@@ -227,6 +227,9 @@ def _build_plotly_metrics(design: Design) -> Dict[str, float]:
         "binder_length": design.binder_length,
         "epitope_contact_count": design.epitope_contact_count,
         "epitope_min_distance": design.epitope_min_distance,
+        "frustration_high_count": design.frustration_high_count,
+        "frustration_min_count": design.frustration_min_count,
+        "frustration_pct_high": design.frustration_pct_high,
         "maturation_delta_interface": design.maturation_delta_interface,
         "maturation_interface_score": design.maturation_interface_score,
         "maturation_rmsd": design.maturation_rmsd,
@@ -362,6 +365,8 @@ async def list_designs(
         'backbone': Design.backbone_id,
         'rog': Design.rog,
         'rfd_rog': Design.rfd_rog,
+        'frustration_high_count': Design.frustration_high_count,
+        'frustration_pct_high': Design.frustration_pct_high,
     }
     
     order_col = sort_field_map.get(sort_by, Design.created_at)

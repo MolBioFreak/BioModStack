@@ -17,8 +17,8 @@ interface Props {
     setSelectedDesignId: (id: string) => void;
     designs: Design[];
     selectedDesign: Design | null | undefined;
-    colorMode: 'default' | 'plddt' | 'cdr';
-    setColorMode: (mode: 'default' | 'plddt' | 'cdr') => void;
+    colorMode: 'default' | 'plddt' | 'cdr' | 'frustration';
+    setColorMode: (mode: 'default' | 'plddt' | 'cdr' | 'frustration') => void;
     structureFormat: 'pdb' | 'cif';
     antibodySelections?: Selection[];
     structureAnalysis: StructureAnalysis | null | undefined;
@@ -38,10 +38,10 @@ function getDesignOriginLabel(design: Design | null | undefined): string | null 
         }
         return 'Validated Structure';
     }
-    if (path.includes('/fampnn_filtered/')) {
+    if (path.includes('/collected/fampnn/') || path.includes('/collected/fampnn_filtered/') || path.includes('/fampnn_filtered/')) {
         return 'FAMPNN Candidate';
     }
-    if (path.includes('/rfantibody/')) {
+    if (path.includes('/collected/rfantibody/') || path.includes('/collected/rfantibody_raw/') || path.includes('/collected/rfantibody_filtered/') || path.includes('/rfantibody/')) {
         return 'RFantibody Backbone';
     }
     return null;
@@ -52,6 +52,12 @@ function plddtColor(value: number): { r: number; g: number; b: number } {
     if (value >= 70) return { r: 34, g: 211, b: 238 };
     if (value >= 50) return { r: 250, g: 204, b: 21 };
     return { r: 249, g: 115, b: 22 };
+}
+
+function frustrationColor(value: number): { r: number; g: number; b: number } {
+    if (value <= -1.0) return { r: 239, g: 68, b: 68 };
+    if (value >= 0.58) return { r: 34, g: 197, b: 94 };
+    return { r: 148, g: 163, b: 184 };
 }
 
 export default function StructureViewerPane({
@@ -155,6 +161,41 @@ export default function StructureViewerPane({
             }
         }
         return colorMap.size > 0 ? colorMap : undefined;
+    })();
+
+    const frustrationResidueColors = (() => {
+        if (colorMode !== 'frustration' || !selectedDesign?.frustration_residues?.length) return undefined;
+        const colorMap = new Map<string, { r: number; g: number; b: number }>();
+        for (const residue of selectedDesign.frustration_residues) {
+            const chainId = residue.chain;
+            if (!chainId) continue;
+            const residueNumbers = chainMetrics[chainId]?.residue_numbers || [];
+            const actualResidueNumber =
+                residueNumbers[residue.pos] ??
+                residueNumbers[residue.pos - 1] ??
+                (typeof residue.pos === 'number' ? residue.pos + 1 : null);
+            if (actualResidueNumber == null) continue;
+            colorMap.set(`${chainId}${actualResidueNumber}`, frustrationColor(residue.frust));
+        }
+        return colorMap.size > 0 ? colorMap : undefined;
+    })();
+
+    const topFrustratedResidues = (() => {
+        if (!selectedDesign?.frustration_residues?.length) return [];
+        return [...selectedDesign.frustration_residues]
+            .sort((a, b) => a.frust - b.frust)
+            .slice(0, 8)
+            .map((residue) => {
+                const residueNumbers = chainMetrics[residue.chain]?.residue_numbers || [];
+                const actualResidueNumber =
+                    residueNumbers[residue.pos] ??
+                    residueNumbers[residue.pos - 1] ??
+                    (typeof residue.pos === 'number' ? residue.pos + 1 : residue.pos);
+                return {
+                    ...residue,
+                    actualResidueNumber,
+                };
+            });
     })();
 
     // Draw PAE heatmap on canvas
@@ -645,6 +686,24 @@ export default function StructureViewerPane({
                             <span className="text-red-400 mr-1">●</span>high (≤-1.0)
                         </span>
                     </div>
+                    {topFrustratedResidues.length > 0 && (
+                        <div className="mt-3 pt-3 border-t border-slate-700/50">
+                            <div className="text-[11px] uppercase tracking-wider text-slate-500 mb-2">Most Frustrated Positions</div>
+                            <div className="grid grid-cols-2 gap-2 text-[11px]">
+                                {topFrustratedResidues.map((residue) => (
+                                    <div
+                                        key={`${residue.chain}-${residue.actualResidueNumber}`}
+                                        className="flex items-center justify-between rounded bg-slate-900/50 px-2 py-1"
+                                    >
+                                        <span className="text-slate-300">
+                                            {residue.chain}{residue.actualResidueNumber}
+                                        </span>
+                                        <span className="font-mono text-red-300">{residue.frust.toFixed(2)}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -707,11 +766,14 @@ export default function StructureViewerPane({
             {/* Color Mode */}
             <select
                 value={colorMode}
-                onChange={(e) => setColorMode(e.target.value as 'default' | 'plddt' | 'cdr')}
+                onChange={(e) => setColorMode(e.target.value as 'default' | 'plddt' | 'cdr' | 'frustration')}
                 className={`appearance-none border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white cursor-pointer hover:bg-slate-700 ${isCompact ? 'bg-slate-800/90 backdrop-blur-sm' : 'bg-slate-800'}`}
             >
                 <option value="default">Chain Colors</option>
                 <option value="plddt">{bfactorLabel}</option>
+                <option value="frustration" disabled={!selectedDesign?.frustration_residues?.length}>
+                    Frustration
+                </option>
                 <option value="cdr" disabled={!((designs.find(d => d.id === selectedDesignId) as any)?.cdr_h1_length)}>
                     CDR Regions
                 </option>
@@ -724,6 +786,13 @@ export default function StructureViewerPane({
                     <span className="text-cyan-400 ml-1">■</span>≥70
                     <span className="text-yellow-400 ml-1">■</span>≥50
                     <span className="text-orange-400 ml-1">■</span>&lt;50
+                </div>
+            )}
+            {colorMode === 'frustration' && !isCompact && (
+                <div className="flex items-center gap-1 text-xs text-slate-400">
+                    <span className="text-red-400">■</span>high
+                    <span className="text-slate-400 ml-1">■</span>neutral
+                    <span className="text-green-400 ml-1">■</span>minimal
                 </div>
             )}
 
@@ -767,7 +836,13 @@ export default function StructureViewerPane({
                             format={structureFormat}
                             alphafoldView={colorMode === 'plddt' && !plddtResidueColors}
                             selections={colorMode === 'cdr' ? antibodySelections : undefined}
-                            residueColors={colorMode === 'plddt' ? plddtResidueColors : undefined}
+                            residueColors={
+                                colorMode === 'plddt'
+                                    ? plddtResidueColors
+                                    : colorMode === 'frustration'
+                                        ? frustrationResidueColors
+                                        : undefined
+                            }
                             height="100%"
                             backgroundColor={themeColors.bgPrimary}
                         />

@@ -22,9 +22,11 @@ params.epitope_residues = ''
 params.rfantibody_num_designs = 10
 params.gpu_id = null  // Optional: orchestrator may pass, otherwise uses Nextflow GPU assignment
 params.framework_pdb = null
+params.framework_type = params.framework_type ?: 'standard-fv'
 params.sequence_name = 'rfantibody_child'
 params.antigen_chains = params.antigen_chains ?: ''
-if (!params.containsKey('rfantibody_design_loops_custom')) params.rfantibody_design_loops_custom = null
+params.rfantibody_design_loops_custom = params.containsKey('rfantibody_design_loops_custom') ? params.rfantibody_design_loops_custom : null
+params.rfantibody_loop_length_ranges = params.containsKey('rfantibody_loop_length_ranges') ? params.rfantibody_loop_length_ranges : null
 
 process NormalizeTargetPDB {
     label 'process_low'

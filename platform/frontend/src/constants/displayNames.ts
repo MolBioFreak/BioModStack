@@ -79,6 +79,7 @@ export const MODEL_DISPLAY_NAMES: Record<string, string> = {
 // Pipeline stage display names
 export const STAGE_DISPLAY_NAMES: Record<string, string> = {
     'rfantibody': 'RFantibody',
+    'post_rfantibody': 'RFantibody Review',
     'fampnn': 'FAMPNN',
     'antifold': 'AntiFold',
     'proteinmpnn': 'ProteinMPNN',

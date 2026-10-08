@@ -28,6 +28,27 @@ import re
 from collections import defaultdict
 
 
+def _normalize_pinned_gpus(raw_value):
+    if raw_value in (None, "", []):
+        return None
+    if isinstance(raw_value, list):
+        values = raw_value
+    else:
+        text = str(raw_value).strip()
+        if not text:
+            return None
+        if text.startswith("[") and text.endswith("]"):
+            text = text[1:-1]
+        values = [part.strip() for part in text.split(",") if part.strip()]
+    normalized = []
+    for value in values:
+        try:
+            normalized.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    return normalized or None
+
+
 def check_existing_children(parent_job_id: str, stage: str, api_url: str, batch_name: str = None):
     """
     Check if completed children already exist for this parent job and stage.
@@ -138,6 +159,19 @@ def spawn_children(
             print(f"[SPAWN] Forwarding {len(extra_params)} params from parent workflow")
         except json.JSONDecodeError as e:
             print(f"[SPAWN] Warning: Failed to parse params_json: {e}", file=sys.stderr)
+
+    pinned_gpus = _normalize_pinned_gpus(extra_params.get("pinned_gpus"))
+    if pinned_gpus is not None:
+        extra_params["pinned_gpus"] = pinned_gpus
+    raw_pinned_gpu = extra_params.get("pinned_gpu")
+    pinned_gpu = None
+    if raw_pinned_gpu not in (None, ""):
+        try:
+            pinned_gpu = int(raw_pinned_gpu)
+        except (TypeError, ValueError):
+            pinned_gpu = None
+    if pinned_gpu is None and pinned_gpus and len(pinned_gpus) == 1:
+        pinned_gpu = pinned_gpus[0]
     
     # Calculate number of jobs based on ratio
     total_seqs = len(pdbs)
@@ -225,6 +259,8 @@ def spawn_children(
                 "child_stage": child_stage,
                 "sequence_length": seq_length,  # Single sequence, not multiplied!
             }
+            if pinned_gpu is not None:
+                job_data["pinned_gpu"] = pinned_gpu
 
             
             resp = requests.post(

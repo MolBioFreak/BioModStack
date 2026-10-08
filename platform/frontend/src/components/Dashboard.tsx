@@ -194,7 +194,9 @@ export function Dashboard() {
         const p = job.params || {};
         setResumeSettingsJob(job);
         setResumeSettingsFromStage(
-            job.awaiting_stage === 'post_fampnn'
+            job.awaiting_stage === 'post_rfantibody'
+                ? 'rfantibody'
+                : job.awaiting_stage === 'post_fampnn'
                 ? 'fampnn'
                 : job.awaiting_stage === 'post_structure_validation'
                     ? 'structure_validation'

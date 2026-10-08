@@ -19,6 +19,60 @@ interface AntibodyDenovoTemplateProps {
     initialValues?: Record<string, any>;
 }
 
+type DesignMode = 'cdr_only' | 'cdr_selective' | 'framework_allowed' | 'full_design';
+type LoopLengthMode = 'defaults' | 'custom_ranges';
+type LoopLengthRange = { min: number; max: number };
+type InteractiveGateStage = 'post_rfantibody' | 'post_fampnn' | 'post_structure_validation';
+
+const DEFAULT_RFA_LOOP_LENGTH_RANGES: Record<string, LoopLengthRange> = {
+    H1: { min: 7, max: 10 },
+    H2: { min: 6, max: 8 },
+    H3: { min: 5, max: 15 },
+    L1: { min: 8, max: 13 },
+    L2: { min: 7, max: 7 },
+    L3: { min: 9, max: 11 },
+};
+
+const cloneDefaultLoopRanges = (): Record<string, LoopLengthRange> =>
+    Object.fromEntries(
+        Object.entries(DEFAULT_RFA_LOOP_LENGTH_RANGES).map(([loopId, range]) => [
+            loopId,
+            { ...range },
+        ])
+    );
+
+const parseLoopLengthRanges = (raw: unknown): Record<string, LoopLengthRange> => {
+    const parsed = cloneDefaultLoopRanges();
+
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        Object.entries(raw as Record<string, any>).forEach(([loopId, value]) => {
+            if (!parsed[loopId] || !value || typeof value !== 'object') return;
+            const min = Number((value as any).min);
+            const max = Number((value as any).max);
+            if (Number.isFinite(min) && Number.isFinite(max) && min >= 1 && max >= min) {
+                parsed[loopId] = { min, max };
+            }
+        });
+        return parsed;
+    }
+
+    if (typeof raw === 'string') {
+        const body = raw.trim().replace(/^\[/, '').replace(/\]$/, '');
+        body.split(',').map((token) => token.trim()).filter(Boolean).forEach((token) => {
+            const match = token.match(/^([HL][123]):(\d+)(?:-(\d+))?$/i);
+            if (!match) return;
+            const loopId = match[1].toUpperCase();
+            const min = Number(match[2]);
+            const max = Number(match[3] || match[2]);
+            if (parsed[loopId] && Number.isFinite(min) && Number.isFinite(max) && min >= 1 && max >= min) {
+                parsed[loopId] = { min, max };
+            }
+        });
+    }
+
+    return parsed;
+};
+
 export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ onBack, initialValues }) => {
     const restoringSelectionRef = useRef<{ chain: string | null; residues: string[] } | null>(null);
 
@@ -65,8 +119,12 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [interactiveWorkflow, setInteractiveWorkflow] = useState(
         initialValues?.interactive_swa ?? initialValues?.interactive_gating ?? false
     );
-    const [interactiveGateStage, setInteractiveGateStage] = useState<'post_fampnn' | 'post_structure_validation'>(
-        initialValues?.interactive_gate_stage === 'post_structure_validation' ? 'post_structure_validation' : 'post_fampnn'
+    const [interactiveGateStage, setInteractiveGateStage] = useState<InteractiveGateStage>(
+        initialValues?.interactive_gate_stage === 'post_structure_validation'
+            ? 'post_structure_validation'
+            : initialValues?.interactive_gate_stage === 'post_rfantibody'
+                ? 'post_rfantibody'
+                : 'post_fampnn'
     );
     const [structureValidator, setStructureValidator] = useState<'boltz2' | 'protenix'>(
         initialValues?.structure_validator === 'protenix' ? 'protenix' : 'boltz2'
@@ -84,10 +142,48 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [showTemplateManager, setShowTemplateManager] = useState(false);
 
     // Design mode settings
-    type DesignMode = 'cdr_only' | 'cdr_selective' | 'framework_allowed' | 'full_design';
     const [designMode, setDesignMode] = useState<DesignMode>('cdr_only');
     const [selectedCDRLoops, setSelectedCDRLoops] = useState<Set<string>>(new Set(['H1', 'H2', 'H3', 'L1', 'L2', 'L3']));
     const [protectTetrad, setProtectTetrad] = useState(true);
+    const [rfantibodyLoopLengthMode, setRfantibodyLoopLengthMode] = useState<LoopLengthMode>(
+        initialValues?.rfantibody_loop_length_mode === 'custom_ranges' ? 'custom_ranges' : 'defaults'
+    );
+    const [rfantibodyLoopLengthRanges, setRfantibodyLoopLengthRanges] = useState<Record<string, LoopLengthRange>>(
+        () => parseLoopLengthRanges(initialValues?.rfantibody_loop_length_ranges_config || initialValues?.rfantibody_loop_length_ranges)
+    );
+    const [enableRfantibodyFilter, setEnableRfantibodyFilter] = useState<boolean>(
+        initialValues?.enable_rfantibody_filter === true
+    );
+    const [rfantibodyMinEpitopeContacts, setRfantibodyMinEpitopeContacts] = useState<number>(
+        Number.isFinite(Number(initialValues?.rfantibody_min_epitope_contacts))
+            ? Math.max(0, Number(initialValues?.rfantibody_min_epitope_contacts))
+            : 1
+    );
+    const [rfantibodyMaxEpitopeDistance, setRfantibodyMaxEpitopeDistance] = useState<number>(
+        Number.isFinite(Number(initialValues?.rfantibody_max_epitope_distance))
+            ? Math.max(0, Number(initialValues?.rfantibody_max_epitope_distance))
+            : 20
+    );
+    const [rfantibodyMinTargetContacts, setRfantibodyMinTargetContacts] = useState<number>(
+        Number.isFinite(Number(initialValues?.rfantibody_min_target_contacts))
+            ? Math.max(0, Number(initialValues?.rfantibody_min_target_contacts))
+            : 3
+    );
+    const [rfantibodyMaxEpitopeCentroidDistance, setRfantibodyMaxEpitopeCentroidDistance] = useState<number>(
+        Number.isFinite(Number(initialValues?.rfantibody_max_epitope_centroid_distance))
+            ? Math.max(0, Number(initialValues?.rfantibody_max_epitope_centroid_distance))
+            : 40
+    );
+    const [rfantibodyContactDistanceThreshold, setRfantibodyContactDistanceThreshold] = useState<number>(
+        Number.isFinite(Number(initialValues?.rfantibody_contact_distance_threshold))
+            ? Math.max(0, Number(initialValues?.rfantibody_contact_distance_threshold))
+            : 8
+    );
+    const [rfantibodyTargetContactDistanceThreshold, setRfantibodyTargetContactDistanceThreshold] = useState<number>(
+        Number.isFinite(Number(initialValues?.rfantibody_target_contact_distance_threshold))
+            ? Math.max(0, Number(initialValues?.rfantibody_target_contact_distance_threshold))
+            : 12
+    );
     // Manual CDR definitions (for custom loop positions)
     const [manualCDRDefinitions, setManualCDRDefinitions] = useState<CDRDefinition[]>([]);
     const [showCDREditor, setShowCDREditor] = useState(false);
@@ -350,7 +446,11 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             if (initialValues.anarcii_include_children !== undefined) setAnarciiIncludeChildren(initialValues.anarcii_include_children);
             if (initialValues.interactive_swa !== undefined) setInteractiveWorkflow(initialValues.interactive_swa);
             else if (initialValues.interactive_gating !== undefined) setInteractiveWorkflow(initialValues.interactive_gating);
-            if (initialValues.interactive_gate_stage === 'post_structure_validation' || initialValues.interactive_gate_stage === 'post_fampnn') {
+            if (
+                initialValues.interactive_gate_stage === 'post_rfantibody' ||
+                initialValues.interactive_gate_stage === 'post_structure_validation' ||
+                initialValues.interactive_gate_stage === 'post_fampnn'
+            ) {
                 setInteractiveGateStage(initialValues.interactive_gate_stage);
             }
             // Handling renamed/mapped boolean params if any
@@ -385,6 +485,35 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 setSelectedCDRLoops(new Set(initialValues.selected_cdr_loops));
             } else if (initialValues.antibody_design_loops) {
                 setSelectedCDRLoops(new Set(String(initialValues.antibody_design_loops).split(',').map((v: string) => v.trim()).filter(Boolean)));
+            }
+            if (initialValues.rfantibody_loop_length_mode === 'custom_ranges' || initialValues.rfantibody_loop_length_mode === 'defaults') {
+                setRfantibodyLoopLengthMode(initialValues.rfantibody_loop_length_mode);
+            }
+            if (initialValues.rfantibody_loop_length_ranges_config || initialValues.rfantibody_loop_length_ranges) {
+                setRfantibodyLoopLengthRanges(
+                    parseLoopLengthRanges(initialValues.rfantibody_loop_length_ranges_config || initialValues.rfantibody_loop_length_ranges)
+                );
+            }
+            if (typeof initialValues.enable_rfantibody_filter === 'boolean') {
+                setEnableRfantibodyFilter(initialValues.enable_rfantibody_filter);
+            }
+            if (initialValues.rfantibody_min_epitope_contacts !== undefined) {
+                setRfantibodyMinEpitopeContacts(Math.max(0, Number(initialValues.rfantibody_min_epitope_contacts) || 0));
+            }
+            if (initialValues.rfantibody_max_epitope_distance !== undefined) {
+                setRfantibodyMaxEpitopeDistance(Math.max(0, Number(initialValues.rfantibody_max_epitope_distance) || 0));
+            }
+            if (initialValues.rfantibody_min_target_contacts !== undefined) {
+                setRfantibodyMinTargetContacts(Math.max(0, Number(initialValues.rfantibody_min_target_contacts) || 0));
+            }
+            if (initialValues.rfantibody_max_epitope_centroid_distance !== undefined) {
+                setRfantibodyMaxEpitopeCentroidDistance(Math.max(0, Number(initialValues.rfantibody_max_epitope_centroid_distance) || 0));
+            }
+            if (initialValues.rfantibody_contact_distance_threshold !== undefined) {
+                setRfantibodyContactDistanceThreshold(Math.max(0, Number(initialValues.rfantibody_contact_distance_threshold) || 0));
+            }
+            if (initialValues.rfantibody_target_contact_distance_threshold !== undefined) {
+                setRfantibodyTargetContactDistanceThreshold(Math.max(0, Number(initialValues.rfantibody_target_contact_distance_threshold) || 0));
             }
             if (typeof initialValues.protect_tetrad === 'boolean') setProtectTetrad(initialValues.protect_tetrad);
             else if (typeof initialValues.protect_vhh_tetrad === 'boolean') setProtectTetrad(initialValues.protect_vhh_tetrad);
@@ -698,6 +827,18 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
             // Step 3: Submit job with uploaded file path
             const selectedLoops = Array.from(selectedCDRLoops).sort();
+            const applicableLoops = selectedLoops.filter((loopId) => {
+                if (frameworkType === 'nanobody') return loopId.startsWith('H');
+                return true;
+            });
+            const rfantibodyLoopLengthSpec = rfantibodyLoopLengthMode === 'custom_ranges' && applicableLoops.length > 0
+                ? `[${applicableLoops.map((loopId) => {
+                    const range = rfantibodyLoopLengthRanges[loopId] || DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId];
+                    const min = Math.max(1, Number(range?.min) || DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId]?.min || 1);
+                    const max = Math.max(min, Number(range?.max) || DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId]?.max || min);
+                    return `${loopId}:${min}${max !== min ? `-${max}` : ''}`;
+                }).join(',')}]`
+                : undefined;
             // Serialize manualCDRDefinitions strictly, dropping the generic 'H1' logic
             // RFA/FAMPNN needs format: ['H27-H38', 'L56-L65']
             let customRfalLoopsSpec: string | undefined = undefined;
@@ -759,6 +900,15 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     antibody_design_loops: selectedLoops.join(','),
                     // Use explicit ranges from manualCDRDefinitions built off the true PDB index
                     rfantibody_design_loops_custom: customRfalLoopsSpec,
+                    rfantibody_loop_length_mode: rfantibodyLoopLengthMode,
+                    rfantibody_loop_length_ranges: rfantibodyLoopLengthSpec,
+                    enable_rfantibody_filter: enableRfantibodyFilter,
+                    rfantibody_min_epitope_contacts: enableRfantibodyFilter ? rfantibodyMinEpitopeContacts : undefined,
+                    rfantibody_max_epitope_distance: enableRfantibodyFilter ? rfantibodyMaxEpitopeDistance : undefined,
+                    rfantibody_min_target_contacts: enableRfantibodyFilter ? rfantibodyMinTargetContacts : undefined,
+                    rfantibody_max_epitope_centroid_distance: enableRfantibodyFilter ? rfantibodyMaxEpitopeCentroidDistance : undefined,
+                    rfantibody_contact_distance_threshold: enableRfantibodyFilter ? rfantibodyContactDistanceThreshold : undefined,
+                    rfantibody_target_contact_distance_threshold: enableRfantibodyFilter ? rfantibodyTargetContactDistanceThreshold : undefined,
                     protect_vhh_tetrad: protectTetrad,
                     antibody_chains: effectiveAntibodyType === 'vhh' ? 'H' : 'H,L',
                     // Quality settings - RFantibody (backbone diffusion)
@@ -1546,6 +1696,203 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         frameworkType={frameworkType}
                     />
 
+                    <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4 space-y-4">
+                        <div>
+                            <h3 className="text-sm font-semibold text-slate-200">Initial Loop Length Variability</h3>
+                            <p className="text-xs text-slate-500 mt-1">
+                                Control RFantibody’s initial CDR loop-length search space independently from the downstream manual CDR position map used by FAMPNN.
+                            </p>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3">
+                            <button
+                                type="button"
+                                onClick={() => setRfantibodyLoopLengthMode('defaults')}
+                                className={`rounded-lg border px-3 py-2 text-sm transition-colors ${rfantibodyLoopLengthMode === 'defaults'
+                                    ? 'border-emerald-400 bg-emerald-400/10 text-emerald-300'
+                                    : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-600'
+                                    }`}
+                            >
+                                Default Ranges
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setRfantibodyLoopLengthMode('custom_ranges')}
+                                className={`rounded-lg border px-3 py-2 text-sm transition-colors ${rfantibodyLoopLengthMode === 'custom_ranges'
+                                    ? 'border-cyan-400 bg-cyan-400/10 text-cyan-300'
+                                    : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-600'
+                                    }`}
+                            >
+                                Custom Ranges
+                            </button>
+                        </div>
+
+                        <p className="text-xs text-slate-500">
+                            {rfantibodyLoopLengthMode === 'defaults'
+                                ? 'Use RFantibody’s standard loop-length priors for the selected CDRs.'
+                                : 'Expand or tighten the initial de novo backbone search space per selected loop. This affects RFantibody generation, not the later fixed-position FAMPNN constraint map.'}
+                        </p>
+
+                        {rfantibodyLoopLengthMode === 'custom_ranges' && (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                {Array.from(selectedCDRLoops)
+                                    .sort()
+                                    .filter((loopId) => frameworkType !== 'nanobody' || loopId.startsWith('H'))
+                                    .map((loopId) => {
+                                        const range = rfantibodyLoopLengthRanges[loopId] || DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId];
+                                        return (
+                                            <div key={loopId} className="rounded-lg border border-slate-700/60 bg-slate-950/40 p-3">
+                                                <div className="flex items-center justify-between mb-2">
+                                                    <div className="text-sm font-medium text-slate-200">{loopId}</div>
+                                                    <div className="text-[11px] text-slate-500">
+                                                        default {DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId]?.min}
+                                                        {DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId]?.max !== DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId]?.min
+                                                            ? `-${DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId]?.max}`
+                                                            : ''}
+                                                    </div>
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-3">
+                                                    <label className="text-xs text-slate-500">
+                                                        Min
+                                                        <input
+                                                            type="number"
+                                                            min={1}
+                                                            value={range.min}
+                                                            onChange={(e) => {
+                                                                const min = Math.max(1, Number(e.target.value) || 1);
+                                                                setRfantibodyLoopLengthRanges((current) => ({
+                                                                    ...current,
+                                                                    [loopId]: {
+                                                                        min,
+                                                                        max: Math.max(min, current[loopId]?.max ?? DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId]?.max ?? min),
+                                                                    },
+                                                                }));
+                                                            }}
+                                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-cyan-500 outline-none"
+                                                        />
+                                                    </label>
+                                                    <label className="text-xs text-slate-500">
+                                                        Max
+                                                        <input
+                                                            type="number"
+                                                            min={range.min}
+                                                            value={range.max}
+                                                            onChange={(e) => {
+                                                                const max = Math.max(range.min, Number(e.target.value) || range.min);
+                                                                setRfantibodyLoopLengthRanges((current) => ({
+                                                                    ...current,
+                                                                    [loopId]: {
+                                                                        min: current[loopId]?.min ?? DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId]?.min ?? 1,
+                                                                        max,
+                                                                    },
+                                                                }));
+                                                            }}
+                                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-cyan-500 outline-none"
+                                                        />
+                                                    </label>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4 space-y-4">
+                        <div>
+                            <h3 className="text-sm font-semibold text-slate-200">RFantibody Backbone Screening</h3>
+                            <p className="text-xs text-slate-500 mt-1">
+                                Coarse pre-FAMPNN screen for obviously bad backbones. This is intentionally simple: keep backbones that at least approach the selected epitope before spending sequence-design and validator compute on them.
+                            </p>
+                        </div>
+
+                        <label className="flex items-center justify-between rounded-lg border border-slate-700/50 bg-slate-950/40 px-3 py-2 text-sm text-slate-300">
+                            <span>Enable Automatic Screening</span>
+                            <input
+                                type="checkbox"
+                                checked={enableRfantibodyFilter}
+                                onChange={(e) => setEnableRfantibodyFilter(e.target.checked)}
+                                className="rounded border-slate-600 bg-slate-900 text-emerald-500 focus:ring-emerald-500"
+                            />
+                        </label>
+
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <label className="text-xs text-slate-500">
+                                Min epitope contacts
+                                <input
+                                    type="number"
+                                    min={0}
+                                    step={1}
+                                    value={rfantibodyMinEpitopeContacts}
+                                    onChange={(e) => setRfantibodyMinEpitopeContacts(Math.max(0, Number(e.target.value) || 0))}
+                                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                                />
+                            </label>
+                            <label className="text-xs text-slate-500">
+                                Max epitope distance (A)
+                                <input
+                                    type="number"
+                                    min={0}
+                                    step={0.5}
+                                    value={rfantibodyMaxEpitopeDistance}
+                                    onChange={(e) => setRfantibodyMaxEpitopeDistance(Math.max(0, Number(e.target.value) || 0))}
+                                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                                />
+                            </label>
+                            <label className="text-xs text-slate-500">
+                                Min whole-target contacts
+                                <input
+                                    type="number"
+                                    min={0}
+                                    step={1}
+                                    value={rfantibodyMinTargetContacts}
+                                    onChange={(e) => setRfantibodyMinTargetContacts(Math.max(0, Number(e.target.value) || 0))}
+                                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                                />
+                            </label>
+                            <label className="text-xs text-slate-500">
+                                Max epitope centroid distance (A)
+                                <input
+                                    type="number"
+                                    min={0}
+                                    step={0.5}
+                                    value={rfantibodyMaxEpitopeCentroidDistance}
+                                    onChange={(e) => setRfantibodyMaxEpitopeCentroidDistance(Math.max(0, Number(e.target.value) || 0))}
+                                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                                />
+                            </label>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <label className="text-xs text-slate-500">
+                                Epitope contact cutoff (A)
+                                <input
+                                    type="number"
+                                    min={0}
+                                    step={0.5}
+                                    value={rfantibodyContactDistanceThreshold}
+                                    onChange={(e) => setRfantibodyContactDistanceThreshold(Math.max(0, Number(e.target.value) || 0))}
+                                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                                />
+                            </label>
+                            <label className="text-xs text-slate-500">
+                                Whole-target contact cutoff (A)
+                                <input
+                                    type="number"
+                                    min={0}
+                                    step={0.5}
+                                    value={rfantibodyTargetContactDistanceThreshold}
+                                    onChange={(e) => setRfantibodyTargetContactDistanceThreshold(Math.max(0, Number(e.target.value) || 0))}
+                                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                                />
+                            </label>
+                        </div>
+
+                        <p className="text-xs text-slate-500">
+                            Recommended coarse screen: at least `1` epitope contact within `8 A`, minimum epitope distance below `20 A`, at least `3` loose whole-target contacts within `12 A`, and epitope centroid distance below `40 A`. This is meant to reject obviously detached or badly placed backbones, not to rank binders. If you pause at RFantibody review, screening summaries are still generated even when automatic filtering is off.
+                        </p>
+                    </div>
+
                     {/* Manual CDR Definition - Toggle */}
                     {designMode === 'cdr_only' && (
                         <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4">
@@ -1645,7 +1992,17 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         {interactiveWorkflow && (
                             <div className="space-y-2 rounded-lg border border-slate-700/50 bg-slate-950/40 p-3">
                                 <label className="block text-xs text-slate-500">Pause After</label>
-                                <div className="grid grid-cols-2 gap-3">
+                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                                    <button
+                                        type="button"
+                                        onClick={() => setInteractiveGateStage('post_rfantibody')}
+                                        className={`rounded-lg border px-3 py-2 text-sm transition-colors ${interactiveGateStage === 'post_rfantibody'
+                                            ? 'border-emerald-400 bg-emerald-400/10 text-emerald-300'
+                                            : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-600'
+                                            }`}
+                                    >
+                                        RFantibody Review
+                                    </button>
                                     <button
                                         type="button"
                                         onClick={() => setInteractiveGateStage('post_fampnn')}
@@ -1668,7 +2025,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     </button>
                                 </div>
                                 <p className="text-xs text-slate-500">
-                                    {interactiveGateStage === 'post_fampnn'
+                                    {interactiveGateStage === 'post_rfantibody'
+                                        ? 'Pause immediately after RFantibody backbone generation so you can reject visibly detached or malformed backbones before FAMPNN, MSA, and validator compute.'
+                                        : interactiveGateStage === 'post_fampnn'
                                         ? 'Pause immediately after FAMPNN candidate generation/filtering so you can inspect the initial sequence pool before any structure validator is called.'
                                         : 'Pause after Boltz-2 or Protenix validation so the Results Viewer can be used to inspect metrics and launch the next refinement round.'}
                                 </p>
@@ -2103,7 +2462,11 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         if (typeof p.anarcii_include_children === 'boolean') { setAnarciiIncludeChildren(p.anarcii_include_children); loaded.push('anarcii_include_children'); }
             if (typeof p.interactive_swa === 'boolean') { setInteractiveWorkflow(p.interactive_swa); loaded.push('interactive_swa'); }
                         else if (typeof p.interactive_gating === 'boolean') { setInteractiveWorkflow(p.interactive_gating); loaded.push('interactive_gating'); }
-                        if (p.interactive_gate_stage === 'post_structure_validation' || p.interactive_gate_stage === 'post_fampnn') {
+                        if (
+                            p.interactive_gate_stage === 'post_rfantibody' ||
+                            p.interactive_gate_stage === 'post_structure_validation' ||
+                            p.interactive_gate_stage === 'post_fampnn'
+                        ) {
                             setInteractiveGateStage(p.interactive_gate_stage);
                             loaded.push('interactive_gate_stage');
                         }
@@ -2119,6 +2482,44 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         // Design mode
                         if (p.design_mode) { setDesignMode(p.design_mode); loaded.push('design_mode'); } else { skipped.push('design_mode'); }
                         if (Array.isArray(p.selected_cdr_loops)) { setSelectedCDRLoops(new Set(p.selected_cdr_loops)); loaded.push('selected_cdr_loops'); }
+                        if (p.rfantibody_loop_length_mode === 'custom_ranges' || p.rfantibody_loop_length_mode === 'defaults') {
+                            setRfantibodyLoopLengthMode(p.rfantibody_loop_length_mode);
+                            loaded.push('rfantibody_loop_length_mode');
+                        }
+                        if (p.rfantibody_loop_length_ranges_config || p.rfantibody_loop_length_ranges) {
+                            setRfantibodyLoopLengthRanges(
+                                parseLoopLengthRanges(p.rfantibody_loop_length_ranges_config || p.rfantibody_loop_length_ranges)
+                            );
+                            loaded.push('rfantibody_loop_length_ranges');
+                        }
+                        if (typeof p.enable_rfantibody_filter === 'boolean') {
+                            setEnableRfantibodyFilter(p.enable_rfantibody_filter);
+                            loaded.push('enable_rfantibody_filter');
+                        }
+                        if (p.rfantibody_min_epitope_contacts !== undefined) {
+                            setRfantibodyMinEpitopeContacts(Math.max(0, Number(p.rfantibody_min_epitope_contacts) || 0));
+                            loaded.push('rfantibody_min_epitope_contacts');
+                        }
+                        if (p.rfantibody_max_epitope_distance !== undefined) {
+                            setRfantibodyMaxEpitopeDistance(Math.max(0, Number(p.rfantibody_max_epitope_distance) || 0));
+                            loaded.push('rfantibody_max_epitope_distance');
+                        }
+                        if (p.rfantibody_min_target_contacts !== undefined) {
+                            setRfantibodyMinTargetContacts(Math.max(0, Number(p.rfantibody_min_target_contacts) || 0));
+                            loaded.push('rfantibody_min_target_contacts');
+                        }
+                        if (p.rfantibody_max_epitope_centroid_distance !== undefined) {
+                            setRfantibodyMaxEpitopeCentroidDistance(Math.max(0, Number(p.rfantibody_max_epitope_centroid_distance) || 0));
+                            loaded.push('rfantibody_max_epitope_centroid_distance');
+                        }
+                        if (p.rfantibody_contact_distance_threshold !== undefined) {
+                            setRfantibodyContactDistanceThreshold(Math.max(0, Number(p.rfantibody_contact_distance_threshold) || 0));
+                            loaded.push('rfantibody_contact_distance_threshold');
+                        }
+                        if (p.rfantibody_target_contact_distance_threshold !== undefined) {
+                            setRfantibodyTargetContactDistanceThreshold(Math.max(0, Number(p.rfantibody_target_contact_distance_threshold) || 0));
+                            loaded.push('rfantibody_target_contact_distance_threshold');
+                        }
                         if (typeof p.protect_tetrad === 'boolean') { setProtectTetrad(p.protect_tetrad); loaded.push('protect_tetrad'); }
                         else if (typeof p.protect_vhh_tetrad === 'boolean') { setProtectTetrad(p.protect_vhh_tetrad); loaded.push('protect_vhh_tetrad'); }
                         if (p.uploaded_path) { loaded.push('uploaded_path'); } else { skipped.push('uploaded_path'); }
@@ -2211,6 +2612,27 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     antibody_design_mode: designMode,
                     selected_cdr_loops: Array.from(selectedCDRLoops),
                     antibody_design_loops: Array.from(selectedCDRLoops).join(','),
+                    rfantibody_loop_length_mode: rfantibodyLoopLengthMode,
+                    rfantibody_loop_length_ranges_config: rfantibodyLoopLengthRanges,
+                    rfantibody_loop_length_ranges: rfantibodyLoopLengthMode === 'custom_ranges'
+                        ? `[${Array.from(selectedCDRLoops)
+                            .sort()
+                            .filter((loopId) => frameworkType !== 'nanobody' || loopId.startsWith('H'))
+                            .map((loopId) => {
+                                const range = rfantibodyLoopLengthRanges[loopId] || DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId];
+                                const min = Math.max(1, Number(range?.min) || 1);
+                                const max = Math.max(min, Number(range?.max) || min);
+                                return `${loopId}:${min}${max !== min ? `-${max}` : ''}`;
+                            })
+                            .join(',')}]`
+                        : undefined,
+                    enable_rfantibody_filter: enableRfantibodyFilter,
+                    rfantibody_min_epitope_contacts: rfantibodyMinEpitopeContacts,
+                    rfantibody_max_epitope_distance: rfantibodyMaxEpitopeDistance,
+                    rfantibody_min_target_contacts: rfantibodyMinTargetContacts,
+                    rfantibody_max_epitope_centroid_distance: rfantibodyMaxEpitopeCentroidDistance,
+                    rfantibody_contact_distance_threshold: rfantibodyContactDistanceThreshold,
+                    rfantibody_target_contact_distance_threshold: rfantibodyTargetContactDistanceThreshold,
                     protect_tetrad: protectTetrad,
                     protect_vhh_tetrad: protectTetrad,
                     // Framework protection (for framework_allowed and full_design modes)

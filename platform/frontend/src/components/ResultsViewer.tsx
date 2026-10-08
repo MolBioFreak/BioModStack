@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate } from 'react-router-dom';
 
 import { fetchJobs, fetchDesigns, fetchStructureAnalysis, fetchAntibodyData, fetchBackboneSummary, launchAntibodyIteration } from '../lib/api';
-import type { AntibodyIterationAction, Job } from '../lib/api';
+import type { AntibodyCdrIndelConfig, AntibodyIterationAction, Job } from '../lib/api';
 import MolstarViewer from './MolstarViewer';
 // FloatingViewer - unused, kept for reference
 import { StabilityHeatmap } from './MetricCharts';
@@ -77,9 +77,9 @@ const isNgsJob = (job: Pick<Job, 'model_id' | 'mode'>): boolean => {
 const inferDesignOutputSource = (design: { pdb_path?: string | null; confidence_metrics?: Record<string, any> | null }): OutputSourceFilter => {
     const path = design.pdb_path || '';
     const metrics = design.confidence_metrics || {};
-    if (path.includes('/validated_designs/')) return 'validation';
-    if (path.includes('/fampnn_filtered/')) return 'fampnn';
-    if (path.includes('/rfantibody/')) return 'rfantibody';
+    if (path.includes('/validated_designs/') || path.includes('/collected/structure_validation/')) return 'validation';
+    if (path.includes('/collected/fampnn/') || path.includes('/collected/fampnn_filtered/') || path.includes('/fampnn_filtered/')) return 'fampnn';
+    if (path.includes('/collected/rfantibody/') || path.includes('/collected/rfantibody_raw/') || path.includes('/collected/rfantibody_filtered/') || path.includes('/rfantibody/')) return 'rfantibody';
     if (metrics && typeof metrics === 'object' && ('ranking_score' in metrics || 'gpde' in metrics || 'chain_pair_iptm' in metrics)) return 'validation';
     return 'all';
 };
@@ -137,6 +137,18 @@ const parseCustomCdrLengths = (job: Job | null | undefined): Record<string, numb
     return out;
 };
 
+const getAvailableCdrLoopIds = (job: Job | null | undefined): string[] => {
+    const selectedLoops = job?.params?.selected_cdr_loops;
+    if (Array.isArray(selectedLoops) && selectedLoops.length > 0) {
+        return selectedLoops.map((loopId) => String(loopId).trim().toUpperCase()).filter(Boolean);
+    }
+    const rawLoops = job?.params?.antibody_design_loops;
+    if (typeof rawLoops === 'string' && rawLoops.trim()) {
+        return rawLoops.split(',').map((loopId) => loopId.trim().toUpperCase()).filter(Boolean);
+    }
+    return ['H1', 'H2', 'H3'];
+};
+
 export function ResultsViewer() {
     const { jobId } = useParams();
     const navigate = useNavigate();
@@ -149,11 +161,24 @@ export function ResultsViewer() {
     const [selectedDesignIds, setSelectedDesignIds] = useState<string[]>([]);
     const [iterationMessage, setIterationMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
     const [outputSourceFilter, setOutputSourceFilter] = useState<OutputSourceFilter>('all');
+    const [showCdrIndelModal, setShowCdrIndelModal] = useState(false);
+    const [cdrIndelConfig, setCdrIndelConfig] = useState<AntibodyCdrIndelConfig>({
+        loop_ids: ['H3'],
+        variants_per_design: 8,
+        allow_insertions: true,
+        allow_deletions: true,
+        indel_sizes: [1],
+        indel_probability: 1,
+        allowed_aas: [],
+        blocked_aas: [],
+        predictor: 'protenix',
+        msa_provider: 'local',
+    });
 
     const [sortField, setSortField] = useState<string>('name');
     const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
     const [filterText, setFilterText] = useState('');
-    const [colorMode, setColorMode] = useState<'default' | 'plddt' | 'cdr'>('plddt');  // Structure coloring mode
+    const [colorMode, setColorMode] = useState<'default' | 'plddt' | 'cdr' | 'frustration'>('plddt');  // Structure coloring mode
     // Compare feature disabled for now:
     // const [showReferencePanel, setShowReferencePanel] = useState(false);
     // const [referenceStructures, setReferenceStructures] = useState<Array<{ url: string; format: 'pdb' | 'cif'; name: string }>>([]);
@@ -197,6 +222,20 @@ export function ResultsViewer() {
             rfdMode === 'antibody_denovo_pipeline'
         );
     }, [activeJob]);
+    const availableCdrLoopIds = useMemo(() => getAvailableCdrLoopIds(activeJob), [activeJob]);
+
+    useEffect(() => {
+        const heavyLoops = availableCdrLoopIds.filter((loopId) => loopId.startsWith('H'));
+        const preferredLoop = heavyLoops.includes('H3') ? ['H3'] : heavyLoops.slice(0, 1);
+        const fallbackLoops = preferredLoop.length > 0 ? preferredLoop : availableCdrLoopIds.slice(0, 1);
+        setCdrIndelConfig((current) => ({
+            ...current,
+            loop_ids: (() => {
+                const kept = current.loop_ids.filter((loopId) => availableCdrLoopIds.includes(loopId));
+                return kept.length > 0 ? kept : fallbackLoops;
+            })(),
+        }));
+    }, [availableCdrLoopIds]);
 
     // Sync URL with selection
     useEffect(() => {
@@ -261,7 +300,7 @@ export function ResultsViewer() {
             include_children: true, // Include designs from child jobs (mutagenesis variants, exploration spawns)
             limit: pageSize === 0 ? 10000 : pageSize, // 0 = All (fetch up to 10000)
             offset: pageSize === 0 ? 0 : (currentPage - 1) * pageSize,
-            sort_by: sortField as 'plddt' | 'iptm' | 'ptm' | 'pae' | 'rog' | 'rfd_rog' | 'backbone' | undefined,
+            sort_by: sortField as 'plddt' | 'iptm' | 'ptm' | 'pae' | 'rog' | 'rfd_rog' | 'backbone' | 'frustration_high_count' | 'frustration_pct_high' | undefined,
             sort_desc: sortDir === 'desc',
             backbone_id: selectedBackboneId ?? undefined,
             rog_min: rogMinValue,
@@ -420,10 +459,12 @@ export function ResultsViewer() {
     useEffect(() => {
         if (isOligoJob) {
             setColorMode('default');
+        } else if ((activeJob?.name || '').toLowerCase().includes('frustrampnn')) {
+            setColorMode('frustration');
         } else {
             setColorMode('plddt');
         }
-    }, [selectedJobId, isOligoJob]);
+    }, [selectedJobId, isOligoJob, activeJob?.name]);
     const selectedDesign = designs.find(d => d.id === selectedDesignId);
     // Detect structure format from file extension
     const structureFormat = selectedDesign?.pdb_path?.endsWith('.cif') ? 'cif' : 'pdb';
@@ -439,6 +480,8 @@ export function ResultsViewer() {
         const binderProbs = designs.map(d => d.binder_probability).filter((v): v is number => v != null);
         const epitopeContacts = designs.map(d => d.epitope_contact_count).filter((v): v is number => v != null);
         const psces = designs.map(d => d.fampnn_psce).filter((v): v is number => v != null);
+        const frustrationHigh = designs.map(d => d.frustration_high_count).filter((v): v is number => v != null);
+        const frustrationPct = designs.map(d => d.frustration_pct_high).filter((v): v is number => v != null);
 
         // Binding tier distribution
         const tierCounts = { A: 0, B: 0, C: 0, D: 0, none: 0 };
@@ -462,6 +505,9 @@ export function ResultsViewer() {
             avgBinderProb: binderProbs.length ? binderProbs.reduce((a, b) => a + b, 0) / binderProbs.length : null,
             avgEpitopeContacts: epitopeContacts.length ? epitopeContacts.reduce((a, b) => a + b, 0) / epitopeContacts.length : null,
             avgPsce: psces.length ? psces.reduce((a, b) => a + b, 0) / psces.length : null,
+            avgFrustrationHigh: frustrationHigh.length ? frustrationHigh.reduce((a, b) => a + b, 0) / frustrationHigh.length : null,
+            avgFrustrationPctHigh: frustrationPct.length ? frustrationPct.reduce((a, b) => a + b, 0) / frustrationPct.length : null,
+            annotatedWithFrustration: frustrationHigh.length,
             highConfidence: plddts.filter(v => v >= 80).length,
             lowError: paes.filter(v => v <= 5).length,
             highContacts: epitopeContacts.filter(v => v >= 5).length,
@@ -516,7 +562,13 @@ export function ResultsViewer() {
     };
 
     const launchIterationMutation = useMutation({
-        mutationFn: async (action: AntibodyIterationAction) => {
+        mutationFn: async ({
+            action,
+            cdrIndelConfig,
+        }: {
+            action: AntibodyIterationAction;
+            cdrIndelConfig?: AntibodyCdrIndelConfig;
+        }) => {
             if (!selectedJobId) {
                 throw new Error('Select a job before launching a new round.');
             }
@@ -527,6 +579,7 @@ export function ResultsViewer() {
                 source_job_id: selectedJobId,
                 design_ids: selectedDesignIds,
                 action,
+                cdr_indel_config: cdrIndelConfig,
             });
         },
         onSuccess: (response) => {
@@ -535,6 +588,7 @@ export function ResultsViewer() {
                 kind: 'success',
                 text: `${response.data.message} New job: ${launchedJob.name} (${launchedJob.id}).`,
             });
+            setShowCdrIndelModal(false);
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
             queryClient.invalidateQueries({ queryKey: ['jobs', 'include_children'] });
         },
@@ -783,7 +837,7 @@ export function ResultsViewer() {
                                             </span>
                                             {launchIterationMutation.isPending && (
                                                 <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-200">
-                                                    Launching {launchIterationMutation.variables}...
+                                                    Launching {launchIterationMutation.variables?.action}...
                                                 </span>
                                             )}
                                         </div>
@@ -818,7 +872,7 @@ export function ResultsViewer() {
                                                 type="button"
                                                 onClick={() => {
                                                     setIterationMessage(null);
-                                                    launchIterationMutation.mutate(action);
+                                                    launchIterationMutation.mutate({ action });
                                                 }}
                                                 disabled={selectedDesignIds.length === 0 || launchIterationMutation.isPending}
                                                 className={`rounded-lg border px-3 py-2 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
@@ -847,6 +901,18 @@ export function ResultsViewer() {
                                                 {label}
                                             </button>
                                         ))}
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setIterationMessage(null);
+                                                setShowCdrIndelModal(true);
+                                            }}
+                                            disabled={selectedDesignIds.length === 0 || launchIterationMutation.isPending}
+                                            className="rounded-lg border border-fuchsia-500/40 bg-fuchsia-500/10 px-3 py-2 text-xs text-fuchsia-200 transition-colors hover:border-fuchsia-400 disabled:cursor-not-allowed disabled:opacity-50"
+                                            title="Generate explicit CDR insertion/deletion variants from the selected set, then validate them as a new round."
+                                        >
+                                            CDR Indels
+                                        </button>
                                     </div>
                                 </div>
 
@@ -861,6 +927,227 @@ export function ResultsViewer() {
                                         {iterationMessage.text}
                                     </div>
                                 )}
+                            </div>
+                        )}
+
+                        {showCdrIndelModal && isAntibodyContext && (
+                            <div className="mb-4 rounded-xl border border-fuchsia-500/30 bg-slate-950/95 p-4 shadow-2xl">
+                                <div className="flex items-start justify-between gap-4">
+                                    <div>
+                                        <div className="text-sm font-medium text-fuchsia-200">CDR Indel Round</div>
+                                        <p className="mt-1 text-xs text-slate-400">
+                                            Generate explicit insertion/deletion variants on the selected CDR loops, preserve the full complex context, then launch a new validation round.
+                                        </p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowCdrIndelModal(false)}
+                                        className="rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:border-slate-600"
+                                    >
+                                        Close
+                                    </button>
+                                </div>
+
+                                <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                    <div className="space-y-4">
+                                        <div>
+                                            <div className="text-xs text-slate-500 mb-2">Target loops</div>
+                                            <div className="flex flex-wrap gap-2">
+                                                {availableCdrLoopIds.map((loopId) => {
+                                                    const selected = cdrIndelConfig.loop_ids.includes(loopId);
+                                                    return (
+                                                        <button
+                                                            key={loopId}
+                                                            type="button"
+                                                            onClick={() => {
+                                                                setCdrIndelConfig((current) => {
+                                                                    const next = new Set(current.loop_ids);
+                                                                    if (next.has(loopId)) next.delete(loopId);
+                                                                    else next.add(loopId);
+                                                                    return { ...current, loop_ids: Array.from(next).sort() };
+                                                                });
+                                                            }}
+                                                            className={`rounded-lg border px-3 py-2 text-xs transition-colors ${selected
+                                                                ? 'border-fuchsia-400 bg-fuchsia-400/10 text-fuchsia-200'
+                                                                : 'border-slate-700 bg-slate-800/70 text-slate-300 hover:border-slate-600'
+                                                                }`}
+                                                        >
+                                                            {loopId}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                            <p className="mt-2 text-[11px] text-slate-500">
+                                                Keep all loops on one chain family per round. Mixed H/L indels are rejected because variant generation is chain-specific.
+                                            </p>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <label className="text-xs text-slate-500">
+                                                Variants / design
+                                                <input
+                                                    type="number"
+                                                    min={1}
+                                                    max={200}
+                                                    value={cdrIndelConfig.variants_per_design}
+                                                    onChange={(e) => setCdrIndelConfig((current) => ({
+                                                        ...current,
+                                                        variants_per_design: Math.max(1, Math.min(200, Number(e.target.value) || 1)),
+                                                    }))}
+                                                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-fuchsia-500 outline-none"
+                                                />
+                                            </label>
+                                            <label className="text-xs text-slate-500">
+                                                Indel sizes
+                                                <input
+                                                    type="text"
+                                                    value={cdrIndelConfig.indel_sizes.join(',')}
+                                                    onChange={(e) => {
+                                                        const sizes = e.target.value
+                                                            .split(',')
+                                                            .map((token) => Number(token.trim()))
+                                                            .filter((value) => Number.isFinite(value) && value > 0)
+                                                            .map((value) => Math.floor(value));
+                                                        setCdrIndelConfig((current) => ({
+                                                            ...current,
+                                                            indel_sizes: sizes.length > 0 ? Array.from(new Set(sizes)).sort((a, b) => a - b) : [1],
+                                                        }));
+                                                    }}
+                                                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-fuchsia-500 outline-none"
+                                                    placeholder="1,2,3"
+                                                />
+                                            </label>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={cdrIndelConfig.allow_insertions}
+                                                    onChange={(e) => setCdrIndelConfig((current) => ({ ...current, allow_insertions: e.target.checked }))}
+                                                    className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-fuchsia-500"
+                                                />
+                                                Allow insertions
+                                            </label>
+                                            <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={cdrIndelConfig.allow_deletions}
+                                                    onChange={(e) => setCdrIndelConfig((current) => ({ ...current, allow_deletions: e.target.checked }))}
+                                                    className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-fuchsia-500"
+                                                />
+                                                Allow deletions
+                                            </label>
+                                        </div>
+
+                                        <label className="block text-xs text-slate-500">
+                                            Allowed insertion amino acids
+                                            <input
+                                                type="text"
+                                                value={(cdrIndelConfig.allowed_aas || []).join('')}
+                                                onChange={(e) => {
+                                                    const aas = Array.from(new Set(
+                                                        e.target.value.toUpperCase().replace(/[^A-Z]/g, '').split('')
+                                                    )).filter((aa) => 'ACDEFGHIKLMNPQRSTVWY'.includes(aa));
+                                                    setCdrIndelConfig((current) => ({ ...current, allowed_aas: aas }));
+                                                }}
+                                                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-fuchsia-500 outline-none"
+                                                placeholder="Leave blank for full AA set"
+                                            />
+                                        </label>
+                                    </div>
+
+                                    <div className="space-y-4">
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <label className="text-xs text-slate-500">
+                                                Validator
+                                                <select
+                                                    value={cdrIndelConfig.predictor}
+                                                    onChange={(e) => setCdrIndelConfig((current) => ({
+                                                        ...current,
+                                                        predictor: e.target.value === 'boltz2' ? 'boltz2' : 'protenix',
+                                                    }))}
+                                                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-fuchsia-500 outline-none"
+                                                >
+                                                    <option value="protenix">Protenix</option>
+                                                    <option value="boltz2">Boltz-2</option>
+                                                </select>
+                                            </label>
+                                            <label className="text-xs text-slate-500">
+                                                MSA provider
+                                                <select
+                                                    value={cdrIndelConfig.msa_provider}
+                                                    onChange={(e) => setCdrIndelConfig((current) => ({
+                                                        ...current,
+                                                        msa_provider: e.target.value === 'colabfold_api' ? 'colabfold_api' : 'local',
+                                                    }))}
+                                                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-fuchsia-500 outline-none"
+                                                >
+                                                    <option value="local">Local</option>
+                                                    <option value="colabfold_api">ColabFold API</option>
+                                                </select>
+                                            </label>
+                                        </div>
+
+                                        <label className="block text-xs text-slate-500">
+                                            Indel probability
+                                            <input
+                                                type="number"
+                                                min={0}
+                                                max={1}
+                                                step={0.05}
+                                                value={cdrIndelConfig.indel_probability}
+                                                onChange={(e) => setCdrIndelConfig((current) => ({
+                                                    ...current,
+                                                    indel_probability: Math.max(0, Math.min(1, Number(e.target.value) || 0)),
+                                                }))}
+                                                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-fuchsia-500 outline-none"
+                                            />
+                                        </label>
+
+                                        <div className="rounded-lg border border-slate-700/60 bg-slate-900/60 p-3 text-xs text-slate-400">
+                                            <div className="text-slate-200 font-medium mb-1">Launch summary</div>
+                                            <div>{selectedDesignIds.length} selected design{selectedDesignIds.length === 1 ? '' : 's'}</div>
+                                            <div>{cdrIndelConfig.variants_per_design} variant{cdrIndelConfig.variants_per_design === 1 ? '' : 's'} per design</div>
+                                            <div className="mt-1 text-fuchsia-200">
+                                                {selectedDesignIds.length * cdrIndelConfig.variants_per_design} total variant predictions
+                                            </div>
+                                            {cdrIndelConfig.msa_provider === 'colabfold_api' && selectedDesignIds.length * cdrIndelConfig.variants_per_design > 1 && (
+                                                <div className="mt-2 text-amber-300">
+                                                    Multi-variant indel rounds are automatically downgraded to local MSA.
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        <div className="flex justify-end gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowCdrIndelModal(false)}
+                                                className="rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-2 text-xs text-slate-300 transition-colors hover:border-slate-600"
+                                            >
+                                                Cancel
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setIterationMessage(null);
+                                                    launchIterationMutation.mutate({
+                                                        action: 'cdr_indel_round',
+                                                        cdrIndelConfig,
+                                                    });
+                                                }}
+                                                disabled={
+                                                    launchIterationMutation.isPending ||
+                                                    cdrIndelConfig.loop_ids.length === 0 ||
+                                                    (!cdrIndelConfig.allow_insertions && !cdrIndelConfig.allow_deletions)
+                                                }
+                                                className="rounded-lg border border-fuchsia-500/40 bg-fuchsia-500/10 px-3 py-2 text-xs text-fuchsia-200 transition-colors hover:border-fuchsia-400 disabled:cursor-not-allowed disabled:opacity-50"
+                                            >
+                                                Launch CDR Indel Round
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         )}
 
@@ -885,6 +1172,12 @@ export function ResultsViewer() {
                                                 <StatCard label="Avg pTM" value={formatMetric(stats.avgPtm, 2)} color="text-violet-400" />
                                                 <StatCard label="Avg Contacts" value={formatMetric(stats.avgEpitopeContacts, 1)} color="text-lime-400" />
                                                 <StatCard label="High Contacts" value={stats.highContacts} subtitle="≥5 epitope" color="text-lime-400" />
+                                                {stats.annotatedWithFrustration > 0 && (
+                                                    <>
+                                                        <StatCard label="Avg High Frust" value={formatMetric(stats.avgFrustrationHigh, 1)} color="text-red-400" />
+                                                        <StatCard label="Avg % High Frust" value={stats.avgFrustrationPctHigh != null ? `${stats.avgFrustrationPctHigh.toFixed(1)}%` : '—'} color="text-orange-400" />
+                                                    </>
+                                                )}
                                             </div>
 
                                             {/* Binding Tier Distribution */}
@@ -1326,6 +1619,8 @@ export function ResultsViewer() {
                                                                 { key: 'conf_score', label: 'Conf' },
                                                                 { key: 'rmsd_binder', label: 'Val RMSD Bd' },
                                                                 { key: 'rmsd_overall', label: 'Val RMSD All' },
+                                                                { key: 'frustration_high_count', label: 'Frust High' },
+                                                                { key: 'frustration_pct_high', label: '% High Frust' },
                                                                 { key: 'has_clash', label: 'Clash' },
                                                                 { key: 'maturation_delta_interface', label: 'ΔIface' },
                                                                 { key: 'maturation_rmsd', label: 'Mat RMSD' },
@@ -1381,6 +1676,11 @@ export function ResultsViewer() {
                                                                         }`}>
                                                                             {getOutputSourceLabel(d as any)}
                                                                         </span>
+                                                                        {d.frustration_high_count != null && (
+                                                                            <span className="px-2 py-0.5 text-[10px] font-semibold rounded border border-amber-500/40 bg-amber-500/10 text-amber-200">
+                                                                                Frustra
+                                                                            </span>
+                                                                        )}
                                                                         <span className="font-medium truncate">{getFriendlyDesignName(d as any)}</span>
                                                                     </div>
                                                                     <div className="mt-1 truncate text-[11px] text-slate-500" title={d.name}>
@@ -1474,6 +1774,24 @@ export function ResultsViewer() {
                                                                 </td>
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rmsd_binder, 2)}</td>
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rmsd_overall, 2)}</td>
+                                                                <td className={`px-3 py-2 font-mono ${
+                                                                    d.frustration_high_count != null
+                                                                        ? d.frustration_high_count > 5
+                                                                            ? 'text-red-400'
+                                                                            : 'text-emerald-400'
+                                                                        : 'text-slate-500'
+                                                                }`}>
+                                                                    {d.frustration_high_count ?? '—'}
+                                                                </td>
+                                                                <td className={`px-3 py-2 font-mono ${
+                                                                    d.frustration_pct_high != null
+                                                                        ? d.frustration_pct_high > 10
+                                                                            ? 'text-orange-400'
+                                                                            : 'text-emerald-400'
+                                                                        : 'text-slate-500'
+                                                                }`}>
+                                                                    {d.frustration_pct_high != null ? `${d.frustration_pct_high.toFixed(1)}%` : '—'}
+                                                                </td>
                                                                 <td className={`px-3 py-2 font-mono ${d.has_clash ? 'text-red-400' : d.has_clash === false ? 'text-green-400' : 'text-slate-500'}`}>
                                                                     {d.has_clash == null ? '—' : d.has_clash ? '✗' : '✓'}
                                                                 </td>

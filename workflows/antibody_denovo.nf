@@ -132,6 +132,7 @@ process SpawnRFantibodyJobs {
     
     script:
     def customLoopSpec = params.get('rfantibody_design_loops_custom')
+    def loopLengthSpec = params.get('rfantibody_loop_length_ranges')
     def params_json = groovy.json.JsonOutput.toJson([
         rfantibody_diffusion_steps: params.rfantibody_diffusion_steps ?: 50,
         rfantibody_noise_scale_ca: params.rfantibody_noise_scale_ca ?: 1.0,
@@ -139,7 +140,9 @@ process SpawnRFantibodyJobs {
         rfantibody_guide_scale: params.rfantibody_guide_scale ?: 10,
         // Pass UI CDR loop selection - prefer custom UI index over general string flag if available
         antibody_design_loops: customLoopSpec ?: (params.antibody_design_loops ?: ''),
-        antibody_chains: params.antibody_chains ?: 'H,L'
+        rfantibody_loop_length_ranges: loopLengthSpec,
+        antibody_chains: params.antibody_chains ?: 'H,L',
+        pinned_gpus: params.pinned_gpus
     ])
     def frameworkArg = params.framework_pdb ? "--framework_pdb \"${params.framework_pdb}\" \\\n        " : ""
     """
@@ -179,6 +182,125 @@ process NormalizeTargetPDB {
         --first-model-only \\
         ${chainArg}\
         2>&1 | tee normalize_target.log
+    """
+}
+
+process StageRFantibodyBackbones {
+    label 'process_low'
+
+    publishDir "${params.out_dir}/collected/rfantibody_raw", mode: 'copy', pattern: "staged_output/*.pdb", saveAs: { fn -> fn.replace('staged_output/', '') }
+
+    input:
+    path pdb_files
+
+    output:
+    path "staged_output", emit: dir
+    path "staged_output/*.pdb", emit: pdbs, optional: true
+    path "rfantibody_stage_summary.json", emit: summary
+
+    script:
+    """
+    set -euo pipefail
+    mkdir -p staged_output
+    count=0
+    for pdb in ${pdb_files}; do
+        [ -f "\$pdb" ] || continue
+        base="\$(basename "\$pdb")"
+        dest="staged_output/\$base"
+        if [ -e "\$dest" ]; then
+            dest="staged_output/\${count}_\$base"
+        fi
+        cp "\$pdb" "\$dest"
+        count=\$((count + 1))
+    done
+    cat > rfantibody_stage_summary.json <<EOF
+{
+  "total_designs": \$count
+}
+EOF
+    """
+}
+
+process ScreenRFantibodyBackbones {
+    label 'process_low'
+
+    publishDir "${params.out_dir}/run/rfantibody_screen", mode: 'copy', pattern: '*.log'
+    publishDir "${params.out_dir}/collected/rfantibody_filtered", mode: 'copy', pattern: 'screened_output/*.pdb', saveAs: { fn -> fn.replace('screened_output/', '') }
+    publishDir "${params.out_dir}/collected/rfantibody_filtered", mode: 'copy', pattern: 'screened_output/*.json', saveAs: { fn -> fn.replace('screened_output/', '') }
+    publishDir "${params.out_dir}/collected/rfantibody_filtered", mode: 'copy', pattern: 'screened_output/*.csv', saveAs: { fn -> fn.replace('screened_output/', '') }
+
+    input:
+    path staged_dir
+    val epitope_residues
+    val antibody_chains
+    val target_chain
+
+    output:
+    path "screened_output", emit: dir
+    path "screened_output/*.pdb", emit: pdbs, optional: true
+    path "screened_output/*.json", emit: jsons, optional: true
+    path "screened_output/*.csv", emit: csvs, optional: true
+    path "screening_summary.json", emit: summary
+    path "screen_rfantibody_${task.index}.log", emit: log
+
+    script:
+    def minContactsArg = params.rfantibody_min_epitope_contacts != null ? "--min-epitope-contacts ${params.rfantibody_min_epitope_contacts}" : ""
+    def maxDistanceArg = params.rfantibody_max_epitope_distance != null ? "--max-epitope-distance ${params.rfantibody_max_epitope_distance}" : ""
+    def contactCutoffArg = params.rfantibody_contact_distance_threshold != null ? "--contact-distance-threshold ${params.rfantibody_contact_distance_threshold}" : ""
+    def minTargetContactsArg = params.rfantibody_min_target_contacts != null ? "--min-target-contacts ${params.rfantibody_min_target_contacts}" : ""
+    def maxEpitopeCentroidArg = params.rfantibody_max_epitope_centroid_distance != null ? "--max-epitope-centroid-distance ${params.rfantibody_max_epitope_centroid_distance}" : ""
+    def targetContactCutoffArg = params.rfantibody_target_contact_distance_threshold != null ? "--target-contact-distance-threshold ${params.rfantibody_target_contact_distance_threshold}" : ""
+    def targetChainArg = target_chain ? "--target-chain \"${target_chain}\"" : ""
+    """
+    python3 ${params.code_root}/scripts/screen_rfantibody_backbones.py \\
+        --pdb-dir "\$(readlink -f ${staged_dir})" \\
+        --output-dir screened_output \\
+        --summary-json screening_summary.json \\
+        --epitope-residues "${epitope_residues ?: ''}" \\
+        --antibody-chains "${antibody_chains ?: ''}" \\
+        ${targetChainArg} \\
+        ${minContactsArg} \\
+        ${maxDistanceArg} \\
+        ${contactCutoffArg} \\
+        ${minTargetContactsArg} \\
+        ${maxEpitopeCentroidArg} \\
+        ${targetContactCutoffArg} \\
+        2>&1 | tee screen_rfantibody_${task.index}.log
+    """
+}
+
+process CheckRFantibodyYield {
+    label 'process_low'
+
+    input:
+    val candidate_count
+
+    output:
+    path "rfantibody_yield_guard.ok", emit: ok
+
+    script:
+    def reportJson = groovy.json.JsonOutput.prettyPrint(
+        groovy.json.JsonOutput.toJson([
+            status: "completed_zero_yield",
+            reason: "No RFantibody backbones survived coarse screening or backbone generation failed upstream",
+            min_epitope_contacts: params.rfantibody_min_epitope_contacts,
+            max_epitope_distance: params.rfantibody_max_epitope_distance,
+            min_target_contacts: params.rfantibody_min_target_contacts,
+            max_epitope_centroid_distance: params.rfantibody_max_epitope_centroid_distance,
+            recommendation: "Inspect RFantibody review artifacts, relax the coarse screen, or pause after RFantibody to review backbones manually before FAMPNN."
+        ])
+    )
+    """
+    set -euo pipefail
+    if [ "${candidate_count}" -le 0 ]; then
+        mkdir -p "${params.out_dir}"
+        cat > "${params.out_dir}/rfantibody_zero_yield_report.json" <<'JSON'
+${reportJson}
+JSON
+        echo "ZERO-YIELD: no RFantibody backbones passed coarse screening" >&2
+        exit 1
+    fi
+    touch rfantibody_yield_guard.ok
     """
 }
 
@@ -242,7 +364,9 @@ process SpawnFAMPNNJobs {
         fampnn_num_steps: params.fampnn_num_steps ?: 500,
         fampnn_psce_threshold: params.fampnn_psce_threshold ?: 0.15,
         fampnn_constraint_mode: params.fampnn_constraint_mode,
-        rfantibody_design_loops_custom: params.get('rfantibody_design_loops_custom')
+        rfantibody_design_loops_custom: params.get('rfantibody_design_loops_custom'),
+        rfantibody_loop_length_ranges: params.get('rfantibody_loop_length_ranges'),
+        pinned_gpus: params.pinned_gpus
     ])
     """
     python3 ${params.code_root}/scripts/spawn_fampnn_children.py \\
@@ -506,7 +630,9 @@ process SpawnMaturationJobs {
         fampnn_repack_last: params.fampnn_repack_last,
         fampnn_seq_only: params.fampnn_seq_only,
         fampnn_extra_config: params.fampnn_extra_config,
-        rfantibody_design_loops_custom: params.get('rfantibody_design_loops_custom')
+        rfantibody_design_loops_custom: params.get('rfantibody_design_loops_custom'),
+        rfantibody_loop_length_ranges: params.get('rfantibody_loop_length_ranges'),
+        pinned_gpus: params.pinned_gpus
     ])
     """
     python3 ${params.code_root}/scripts/spawn_maturation_children.py \\
@@ -634,7 +760,9 @@ process SpawnValidatedMaturationJobs {
         fampnn_repack_last: params.fampnn_repack_last,
         fampnn_seq_only: params.fampnn_seq_only,
         fampnn_extra_config: params.fampnn_extra_config,
-        rfantibody_design_loops_custom: params.get('rfantibody_design_loops_custom')
+        rfantibody_design_loops_custom: params.get('rfantibody_design_loops_custom'),
+        rfantibody_loop_length_ranges: params.get('rfantibody_loop_length_ranges'),
+        pinned_gpus: params.pinned_gpus
     ])
     """
     python3 ${params.code_root}/scripts/spawn_maturation_children.py \\
@@ -1005,6 +1133,18 @@ if (!params.containsKey('job_id')) params.job_id = "job_${new java.text.SimpleDa
 if (!params.containsKey('job_name')) params.job_name = 'antibody_batch'
 if (!params.containsKey('fampnn_constraint_mode')) params.fampnn_constraint_mode = 'antibody'
 if (!params.containsKey('rfantibody_design_loops_custom')) params.rfantibody_design_loops_custom = null
+if (!params.containsKey('rfantibody_loop_length_ranges')) params.rfantibody_loop_length_ranges = null
+if (!params.containsKey('seq_design_fampnn')) params.seq_design_fampnn = null
+if (!params.containsKey('seq_design_antifold')) params.seq_design_antifold = null
+if (!params.containsKey('seq_design_proteinmpnn')) params.seq_design_proteinmpnn = null
+if (!params.containsKey('enable_rfantibody_filter')) params.enable_rfantibody_filter = false
+if (!params.containsKey('rfantibody_min_epitope_contacts')) params.rfantibody_min_epitope_contacts = null
+if (!params.containsKey('rfantibody_max_epitope_distance')) params.rfantibody_max_epitope_distance = null
+if (!params.containsKey('rfantibody_contact_distance_threshold')) params.rfantibody_contact_distance_threshold = 8.0
+if (!params.containsKey('rfantibody_min_target_contacts')) params.rfantibody_min_target_contacts = null
+if (!params.containsKey('rfantibody_max_epitope_centroid_distance')) params.rfantibody_max_epitope_centroid_distance = null
+if (!params.containsKey('rfantibody_target_contact_distance_threshold')) params.rfantibody_target_contact_distance_threshold = 12.0
+if (!params.containsKey('run_structure_validation')) params.run_structure_validation = true
 if (!params.containsKey('interactive_gating')) params.interactive_gating = false
 if (!params.containsKey('interactive_swa')) params.interactive_swa = false
 if (!params.containsKey('interactive_gate_stage') || !params.interactive_gate_stage) params.interactive_gate_stage = 'post_fampnn'
@@ -1209,26 +1349,98 @@ workflow ANTIBODY_DENOVO {
     } // End of else block (standard mode)
     } // End of skip_rfantibody else block
 
-    // Step 2: CDR Sequence Design (Cross-Validation Mode)
-    // ---------------------------------------------------------------------------
-    log.info("Step 2: Designing CDR sequences...")
+    def interactiveGateEnabled = params.interactive_gating == true || params.interactive_swa == true
+    def rfantibodyRawDir = params.out_dir ? "${params.out_dir}/collected/rfantibody_raw" : null
+    def rfantibodyFilteredDir = params.out_dir ? "${params.out_dir}/collected/rfantibody_filtered" : null
+    def rfantibodyScreenEnabled = params.enable_rfantibody_filter == true
+    def shouldPauseAfterRFantibody = interactiveGateEnabled &&
+        (params.interactive_gate_stage ?: 'post_fampnn') == 'post_rfantibody' &&
+        params.interactive_gate_continue != true
+    def shouldScreenRFantibody = shouldPauseAfterRFantibody ||
+        rfantibodyScreenEnabled ||
+        params.rfantibody_min_epitope_contacts != null ||
+        params.rfantibody_max_epitope_distance != null ||
+        params.rfantibody_min_target_contacts != null ||
+        params.rfantibody_max_epitope_centroid_distance != null
 
-    // Determine which sequence design methods to run
-    // Note: Use explicit null check because ?: treats false as falsy
-    def run_fampnn = (params.seq_design_fampnn != null) ? params.seq_design_fampnn : true
-    def run_antifold = (params.seq_design_antifold != null) ? params.seq_design_antifold : true
-    def run_proteinmpnn = (params.seq_design_proteinmpnn != null) ? params.seq_design_proteinmpnn : true
+    staged_rfantibody_pdbs = backbone_designs
+        .map { meta, files -> files }
+        .flatten()
+        .collect()
 
-    // Initialize sequence channels
-    fampnn_seqs = Channel.empty()
-    antifold_seqs = Channel.empty()
-    proteinmpnn_seqs = Channel.empty()
-    def fampnnRawDir = params.out_dir ? "${params.out_dir}/collected/fampnn" : null
-    def fampnnFilteredDir = params.out_dir ? "${params.out_dir}/collected/fampnn_filtered" : null
-    def fampnnCandidateDir = params.fampnn_collected_pdbs ? params.fampnn_collected_pdbs.toString() : null
+    StageRFantibodyBackbones(staged_rfantibody_pdbs)
 
-    // FAMPNN branch - using GPU orchestrator spawn-wait-aggregate pattern
-    if (run_fampnn) {
+    if (shouldScreenRFantibody) {
+        ScreenRFantibodyBackbones(
+            StageRFantibodyBackbones.out.dir,
+            epitope_residues ?: "",
+            params.antibody_chains ?: "",
+            params.antigen_chains ?: ""
+        )
+        rfantibody_ready_dir = ScreenRFantibodyBackbones.out.dir
+        rfantibody_candidate_count = ScreenRFantibodyBackbones.out.summary.map { summary_file ->
+            def data = new groovy.json.JsonSlurper().parse(summary_file)
+            (data.passed_designs ?: 0) as Integer
+        }
+        rfantibodyCandidateDir = rfantibodyFilteredDir ?: rfantibodyRawDir
+    } else {
+        rfantibody_ready_dir = StageRFantibodyBackbones.out.dir
+        rfantibody_candidate_count = StageRFantibodyBackbones.out.summary.map { summary_file ->
+            def data = new groovy.json.JsonSlurper().parse(summary_file)
+            (data.total_designs ?: 0) as Integer
+        }
+        rfantibodyCandidateDir = rfantibodyRawDir
+    }
+
+    reviewed_backbone_designs = rfantibody_ready_dir.map { dir ->
+        def pdbs = dir.toFile().listFiles()?.findAll { it.name.toLowerCase().endsWith('.pdb') }?.sort { it.name } ?: []
+        def meta = [id: params.name ?: "antibody"]
+        [meta, pdbs]
+    }
+
+    if (shouldPauseAfterRFantibody) {
+        log.info("Interactive SWA gate: pausing after RFantibody backbone generation at ${rfantibodyCandidateDir}")
+        OpenInteractiveGate(
+            params.job_id ?: "unknown",
+            "post_rfantibody",
+            rfantibodyCandidateDir,
+            rfantibodyRawDir ?: "",
+            shouldScreenRFantibody ? (rfantibodyFilteredDir ?: "") : "",
+            params.framework_type ?: "standard-fv",
+            params.antibody_chains ?: "",
+            params.structure_validator ?: "boltz2"
+        )
+        final_designs = Channel.empty()
+        immunogenicity_scores = Channel.empty()
+        stability_scores_early = Channel.empty()
+        mutations = Channel.empty()
+        backbone_designs = reviewed_backbone_designs
+    } else {
+        CheckRFantibodyYield(rfantibody_candidate_count)
+        backbone_designs = reviewed_backbone_designs
+            .combine(CheckRFantibodyYield.out.ok)
+            .map { meta, pdbs, _guard -> [meta, pdbs] }
+
+        // Step 2: CDR Sequence Design (Cross-Validation Mode)
+        // ---------------------------------------------------------------------------
+        log.info("Step 2: Designing CDR sequences...")
+
+        // Determine which sequence design methods to run
+        // Note: Use explicit null check because ?: treats false as falsy
+        def run_fampnn = (params.seq_design_fampnn != null) ? params.seq_design_fampnn : true
+        def run_antifold = (params.seq_design_antifold != null) ? params.seq_design_antifold : true
+        def run_proteinmpnn = (params.seq_design_proteinmpnn != null) ? params.seq_design_proteinmpnn : true
+
+        // Initialize sequence channels
+        fampnn_seqs = Channel.empty()
+        antifold_seqs = Channel.empty()
+        proteinmpnn_seqs = Channel.empty()
+        def fampnnRawDir = params.out_dir ? "${params.out_dir}/collected/fampnn" : null
+        def fampnnFilteredDir = params.out_dir ? "${params.out_dir}/collected/fampnn_filtered" : null
+        def fampnnCandidateDir = params.fampnn_collected_pdbs ? params.fampnn_collected_pdbs.toString() : null
+
+        // FAMPNN branch - using GPU orchestrator spawn-wait-aggregate pattern
+        if (run_fampnn) {
         // =====================================================================
         // CHECK: Skip FAMPNN if pre-collected PDBs are provided
         // This allows resuming from filtering without re-running FAMPNN
@@ -1363,7 +1575,6 @@ workflow ANTIBODY_DENOVO {
         } // End of else block (standard FAMPNN mode)
     }
 
-    def interactiveGateEnabled = params.interactive_gating == true || params.interactive_swa == true
     def shouldPauseAfterFampnn = interactiveGateEnabled &&
         (params.interactive_gate_stage ?: 'post_fampnn') == 'post_fampnn' &&
         params.interactive_gate_continue != true &&
@@ -2020,7 +2231,13 @@ workflow ANTIBODY_DENOVO {
     // Step 4.x: FrustraMPNN QC (Post-pipeline annotation)
     if (params.run_frustrampnn == true) {
         log.info("Step 4.x: Running FrustraMPNN QC on final candidates...")
-        frustrampnn_input = final_designs.map { meta, pdb -> [meta, pdb] }
+        frustrampnn_input = final_designs.flatMap { meta, pdb_or_pdbs ->
+            def pdb_list = pdb_or_pdbs instanceof List ? pdb_or_pdbs : [pdb_or_pdbs]
+            pdb_list.collect { pdb ->
+                def frustra_meta = [id: pdb.baseName]
+                tuple(frustra_meta, pdb)
+            }
+        }
         FrustrampnnQC(frustrampnn_input)
         // Extract just the path from (meta, path) tuples before collecting
         AggregateFrustrationReports(FrustrampnnQC.out.summary.map { meta, summary -> summary }.collect())
@@ -2036,13 +2253,14 @@ workflow ANTIBODY_DENOVO {
             TriggerANARCIIAnnotation(params.job_id, includeChildren)
         }
     }
+    }
 
     emit:
     designs = final_designs // Final antibody designs
     immunogenicity = immunogenicity_scores // AntiBERTy PLL scores
     stability = stability_scores_early // ThermoMPNN ddG scores
     mutations = mutations // IgGM suggested mutations
-    backbones = backbone_designs // Original RFantibody backbones
+    backbones = backbone_designs // RFantibody backbones after optional coarse screening/review staging
 }
 
 // =============================================================================

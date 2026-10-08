@@ -20,7 +20,103 @@ from paths import get_data_root
 from .structure_utils import calculate_epitope_contacts
 
 
-def parse_frustration_csv(csv_path: Path) -> Optional[Dict[str, Any]]:
+def _summarize_frustration_rows(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not rows:
+        return None
+
+    pos_values: Dict[tuple[int, str], List[float]] = {}
+    for row in rows:
+        try:
+            position = int(row["position"])
+            chain = str(row["chain"])
+            value = float(row["frustration_pred"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        key = (position, chain)
+        pos_values.setdefault(key, []).append(value)
+
+    if not pos_values:
+        return None
+
+    residues = []
+    high_count = 0
+    min_count = 0
+    for (pos, chain), values in sorted(pos_values.items(), key=lambda item: (item[0][1], item[0][0])):
+        frust = sum(values) / len(values)
+        if frust <= -1.0:
+            frust_class = "high"
+            high_count += 1
+        elif frust >= 0.58:
+            frust_class = "min"
+            min_count += 1
+        else:
+            frust_class = "neutral"
+        residues.append({
+            "pos": pos,
+            "chain": chain,
+            "frust": round(float(frust), 3),
+            "frustClass": frust_class,
+        })
+
+    total = len(pos_values)
+    pct_high = round(high_count / total * 100, 1) if total > 0 else 0.0
+    return {
+        "high_count": high_count,
+        "min_count": min_count,
+        "pct_high": pct_high,
+        "residues": residues,
+    }
+
+
+def _normalize_frustration_target_name(value: str) -> str:
+    raw = str(value).strip()
+    return Path(raw).stem if raw else raw
+
+
+def extract_frustration_targets(csv_path: Path) -> List[str]:
+    """
+    Return distinct design/PDB identifiers embedded in a frustration CSV.
+
+    FrustraMPNN can emit one CSV per structure or a batch CSV with a `pdb` column.
+    """
+    try:
+        import pandas as pd
+
+        df = pd.read_csv(csv_path, usecols=lambda c: c in {"pdb"})
+        if "pdb" not in df.columns:
+            return []
+        seen: List[str] = []
+        for value in df["pdb"].dropna().astype(str).tolist():
+            normalized = _normalize_frustration_target_name(value)
+            if normalized and normalized not in seen:
+                seen.append(normalized)
+        return seen
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"[Ingester] Error extracting frustration targets from {csv_path}: {e}")
+        return []
+
+    try:
+        with open(csv_path, "r") as f:
+            reader = csv.DictReader(f)
+            if "pdb" not in (reader.fieldnames or []):
+                return []
+            seen: List[str] = []
+            for row in reader:
+                value = row.get("pdb")
+                if not value:
+                    continue
+                normalized = _normalize_frustration_target_name(value)
+                if normalized and normalized not in seen:
+                    seen.append(normalized)
+            return seen
+    except Exception as e:
+        print(f"[Ingester] Error extracting frustration targets without pandas from {csv_path}: {e}")
+        return []
+
+
+def parse_frustration_csv(csv_path: Path, pdb_name_filter: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Parse FrustraMPNN output CSV into structured frustration data.
     
@@ -36,79 +132,29 @@ def parse_frustration_csv(csv_path: Path) -> Optional[Dict[str, Any]]:
     try:
         import pandas as pd
         df = pd.read_csv(csv_path)
-        
-        # Average frustration per position (ensemble averaging)
-        pos_avg = df.groupby(['position', 'chain'])['frustration_pred'].mean()
-        
-        # Classify residues
-        high_frust = (pos_avg <= -1.0).sum()
-        min_frust = (pos_avg >= 0.58).sum()
-        total = len(pos_avg)
-        pct_high = round(high_frust / total * 100, 1) if total > 0 else 0.0
-        
-        # Create per-residue list
-        residues = []
-        for (position, chain), frust in pos_avg.items():
-            if frust <= -1.0:
-                frust_class = 'high'
-            elif frust >= 0.58:
-                frust_class = 'min'
-            else:
-                frust_class = 'neutral'
-            residues.append({
-                'pos': int(position),
-                'chain': chain,
-                'frust': round(float(frust), 3),
-                'frustClass': frust_class
-            })
-        
-        return {
-            'high_count': int(high_frust),
-            'min_count': int(min_frust),
-            'pct_high': pct_high,
-            'residues': residues
-        }
+
+        if pdb_name_filter and "pdb" in df.columns:
+            target = _normalize_frustration_target_name(pdb_name_filter)
+            df = df[df["pdb"].astype(str).map(_normalize_frustration_target_name) == target]
+            if df.empty:
+                return None
+
+        rows = df[["position", "chain", "frustration_pred"]].to_dict("records")
+        return _summarize_frustration_rows(rows)
     except ImportError:
         # Fallback without pandas
         try:
             with open(csv_path, 'r') as f:
                 reader = csv.DictReader(f)
-                pos_values = {}
+                rows = []
+                target = _normalize_frustration_target_name(pdb_name_filter) if pdb_name_filter else None
                 for row in reader:
-                    key = (int(row['position']), row['chain'])
-                    if key not in pos_values:
-                        pos_values[key] = []
-                    pos_values[key].append(float(row['frustration_pred']))
-                
-                residues = []
-                high_count = 0
-                min_count = 0
-                for (pos, chain), values in pos_values.items():
-                    frust = sum(values) / len(values)
-                    if frust <= -1.0:
-                        frust_class = 'high'
-                        high_count += 1
-                    elif frust >= 0.58:
-                        frust_class = 'min'
-                        min_count += 1
-                    else:
-                        frust_class = 'neutral'
-                    residues.append({
-                        'pos': pos,
-                        'chain': chain,
-                        'frust': round(frust, 3),
-                        'frustClass': frust_class
-                    })
-                
-                total = len(pos_values)
-                pct_high = round(high_count / total * 100, 1) if total > 0 else 0.0
-                
-                return {
-                    'high_count': high_count,
-                    'min_count': min_count,
-                    'pct_high': pct_high,
-                    'residues': residues
-                }
+                    if target and row.get("pdb"):
+                        if _normalize_frustration_target_name(row["pdb"]) != target:
+                            continue
+                    rows.append(row)
+
+                return _summarize_frustration_rows(rows)
         except Exception as e:
             print(f"[Ingester] Error parsing frustration CSV without pandas: {e}")
             return None
@@ -449,51 +495,74 @@ async def ingest_frustration_data(
     
     print(f"[Ingester] Found {len(frustration_csvs)} frustration CSVs to process")
     
+    child_result = await session.execute(
+        select(Job.id).where(Job.parent_job_id == job_id)
+    )
+    child_ids = [row[0] for row in child_result.all()]
+    design_job_ids = [job_id] + child_ids
+
+    async def find_matching_design(design_token: str) -> Optional[Design]:
+        normalized = _normalize_frustration_target_name(design_token)
+        if not normalized:
+            return None
+
+        candidate_names = [normalized]
+        exact_result = await session.execute(
+            select(Design).where(
+                Design.job_id.in_(design_job_ids),
+                Design.name.in_(candidate_names)
+            )
+        )
+        design = exact_result.scalar_one_or_none()
+        if design:
+            return design
+
+        prefix_result = await session.execute(
+            select(Design).where(
+                Design.job_id.in_(design_job_ids),
+                Design.name.like(f"{normalized}%")
+            )
+        )
+        design = prefix_result.scalars().first()
+        if design:
+            return design
+
+        pdb_result = await session.execute(
+            select(Design).where(
+                Design.job_id.in_(design_job_ids),
+                Design.pdb_path.like(f"%/{normalized}.pdb")
+            )
+        )
+        return pdb_result.scalars().first()
+
     updated_count = 0
     
     for csv_path in frustration_csvs:
-        # Extract design name: "designname_frustration.csv" -> "designname"
-        design_name = csv_path.stem.replace("_frustration", "")
-        
-        # Find matching design in DB
-        result = await session.execute(
-            select(Design).where(
-                Design.job_id == job_id,
-                Design.name == design_name
+        csv_targets = extract_frustration_targets(csv_path)
+        target_names = csv_targets or [csv_path.stem.replace("_frustration", "")]
+
+        for target_name in target_names:
+            design = await find_matching_design(target_name)
+            if not design:
+                print(f"[Ingester] No matching design for frustration target: {target_name}")
+                continue
+
+            frust_data = parse_frustration_csv(csv_path, pdb_name_filter=target_name if csv_targets else None)
+            if not frust_data:
+                print(f"[Ingester] Failed to parse frustration CSV: {csv_path} (target={target_name})")
+                continue
+
+            design.frustration_high_count = frust_data['high_count']
+            design.frustration_min_count = frust_data['min_count']
+            design.frustration_pct_high = frust_data['pct_high']
+            design.frustration_residues = frust_data['residues']
+            design.frustration_csv_path = str(csv_path)
+
+            updated_count += 1
+            print(
+                f"[Ingester] Updated {design.name} with frustration data: "
+                f"{frust_data['high_count']} high, {frust_data['min_count']} min"
             )
-        )
-        design = result.scalar_one_or_none()
-        
-        if not design:
-            # Try partial match (design name might have different suffixes)
-            result = await session.execute(
-                select(Design).where(
-                    Design.job_id == job_id,
-                    Design.name.like(f"{design_name}%")
-                )
-            )
-            design = result.scalars().first()
-        
-        if not design:
-            print(f"[Ingester] No matching design for frustration file: {design_name}")
-            continue
-        
-        # Parse the frustration CSV
-        frust_data = parse_frustration_csv(csv_path)
-        if not frust_data:
-            print(f"[Ingester] Failed to parse frustration CSV: {csv_path}")
-            continue
-        
-        # Update design with frustration data
-        design.frustration_high_count = frust_data['high_count']
-        design.frustration_min_count = frust_data['min_count']
-        design.frustration_pct_high = frust_data['pct_high']
-        design.frustration_residues = frust_data['residues']
-        design.frustration_csv_path = str(csv_path)
-        
-        updated_count += 1
-        print(f"[Ingester] Updated {design_name} with frustration data: "
-              f"{frust_data['high_count']} high, {frust_data['min_count']} min")
     
     if updated_count > 0:
         await session.commit()
