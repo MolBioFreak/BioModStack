@@ -22,10 +22,16 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [targetSource, setTargetSource] = useState<{ type: string; url?: string; path?: string; designId?: string; pdbId?: string; name?: string } | null>(null);
     const [numDesigns, setNumDesigns] = useState(10);
     const [seqDesigner, setSeqDesigner] = useState<'fampnn' | 'antifold' | 'proteinmpnn'>('fampnn');
-    const [useAntiberty, setUseAntiberty] = useState(true);
-    const [useThermoMPNN, setUseThermoMPNN] = useState(true);
+    const [useAntiberty, setUseAntiberty] = useState(false);  // Disabled by default, planned for removal
+    const [useThermoMPNN, setUseThermoMPNN] = useState(true);  // Controlled via qualitySettings.run_thermompnn
     const [explorationMode, setExplorationMode] = useState(true); // Parallel GPU distribution
     const [seqsPerDesign, setSeqsPerDesign] = useState(8); // Number of sequence variants per backbone
+
+    // Orchestrator parallelism settings
+    type ParallelMode = 'standard' | 'full_orchestrator';
+    const [parallelMode, setParallelMode] = useState<ParallelMode>('standard');
+    const [designsPerJob, setDesignsPerJob] = useState(5); // Backbones per child job
+    const [pdBsPerJob, setPdBsPerJob] = useState(5); // FAMPNN PDBs per child job
 
     // Design mode settings
     type DesignMode = 'cdr_only' | 'cdr_selective' | 'framework_allowed' | 'full_design';
@@ -304,6 +310,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     // Pre-Boltz filtering (saves compute)
                     fampnn_max_psce: qualitySettings.fampnn_max_psce,
                     fampnn_max_residue_psce: qualitySettings.fampnn_max_residue_psce,
+                    // ThermoMPNN stability scoring (before Boltz when enabled)
+                    run_thermompnn: qualitySettings.run_thermompnn,
+                    thermompnn_max_ddg: qualitySettings.thermompnn_max_ddg,
+                    // Orchestrator parallelism mode
+                    parallel_mode: parallelMode,
+                    designs_per_job: designsPerJob,
+                    seqs_per_job: pdBsPerJob,
                 }
             };
 
@@ -720,30 +733,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     </div>
                 </div>
 
-                {/* Validation Options */}
-                <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-2">Validation Steps</label>
-                    <div className="flex gap-4">
-                        <label className="flex items-center gap-2 cursor-pointer">
-                            <input
-                                type="checkbox"
-                                checked={useAntiberty}
-                                onChange={(e) => setUseAntiberty(e.target.checked)}
-                                className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-blue-600 focus:ring-blue-500"
-                            />
-                            <span className="text-sm text-slate-300">AntiBERTy (Immunogenicity)</span>
-                        </label>
-                        <label className="flex items-center gap-2 cursor-pointer">
-                            <input
-                                type="checkbox"
-                                checked={useThermoMPNN}
-                                onChange={(e) => setUseThermoMPNN(e.target.checked)}
-                                className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-blue-600 focus:ring-blue-500"
-                            />
-                            <span className="text-sm text-slate-300">ThermoMPNN (Stability)</span>
-                        </label>
-                    </div>
-                </div>
+                {/* Validation Options - removed, now controlled via QualitySettingsPanel */}
 
                 {/* GPU Processing Mode */}
                 <div>
@@ -773,6 +763,65 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             ? "Parallel: Jobs queue through scheduler for multi-GPU distribution"
                             : "Serial: Run each validation one-by-one on assigned GPU"}
                     </p>
+                </div>
+
+                {/* Orchestrator Parallelism Settings */}
+                <div className="border-t border-slate-700/50 pt-4 mt-4">
+                    <label className="block text-sm font-medium text-slate-400 mb-2">Orchestrator Mode</label>
+                    <div className="flex gap-3 mb-3">
+                        <button
+                            onClick={() => setParallelMode('standard')}
+                            className={`px-4 py-2 rounded-lg font-medium transition-all ${parallelMode === 'standard'
+                                ? 'bg-blue-600 text-white'
+                                : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                }`}
+                        >
+                            Nextflow Split
+                        </button>
+                        <button
+                            onClick={() => setParallelMode('full_orchestrator')}
+                            className={`px-4 py-2 rounded-lg font-medium transition-all ${parallelMode === 'full_orchestrator'
+                                ? 'bg-orange-600 text-white'
+                                : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                }`}
+                        >
+                            Orchestrator Jobs
+                        </button>
+                    </div>
+                    <p className="text-xs text-slate-500 mb-3">
+                        {parallelMode === 'standard'
+                            ? "Standard: Split work across pinned GPUs within Nextflow"
+                            : "Orchestrator: Spawn child jobs that go through GPU queue"}
+                    </p>
+
+                    {parallelMode === 'full_orchestrator' && (
+                        <div className="grid grid-cols-2 gap-4 mt-3">
+                            <div>
+                                <label className="text-xs text-slate-500">Backbones per job</label>
+                                <input
+                                    type="range"
+                                    min="1"
+                                    max="20"
+                                    value={designsPerJob}
+                                    onChange={(e) => setDesignsPerJob(parseInt(e.target.value))}
+                                    className="w-full accent-orange-500"
+                                />
+                                <span className="text-sm text-slate-300">{designsPerJob}</span>
+                            </div>
+                            <div>
+                                <label className="text-xs text-slate-500">PDBs per FAMPNN job</label>
+                                <input
+                                    type="range"
+                                    min="1"
+                                    max="20"
+                                    value={pdBsPerJob}
+                                    onChange={(e) => setPdBsPerJob(parseInt(e.target.value))}
+                                    className="w-full accent-orange-500"
+                                />
+                                <span className="text-sm text-slate-300">{pdBsPerJob}</span>
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
 

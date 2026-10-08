@@ -13,6 +13,7 @@ process PrepBoltzGenInput {
     val dna_primer_seq
     val secondary_structure
     val protocol
+    val covalent_bonds
     path input_pdb
     path ligand_pdb
     path dna_structure
@@ -38,10 +39,20 @@ process PrepBoltzGenInput {
         ${dna_primer_seq ? "--dna_primer_seq '${dna_primer_seq}'" : ''} \\
         ${secondary_structure ? "--secondary_structure '${secondary_structure}'" : ''} \\
         ${protocol ? "--protocol '${protocol}'" : '--protocol protein-anything'} \\
+        ${covalent_bonds ? "--covalent_bonds '${covalent_bonds}'" : ''} \\
         ${input_pdb.name != 'NO_INPUT_PDB' ? "--input_pdb '${input_pdb}'" : ''} \\
         ${ligand_pdb.name != 'NO_LIGAND_PDB' ? "--ligand_pdb '${ligand_pdb}'" : ''} \\
         ${dna_structure.name != 'NO_DNA_STRUCT' ? "--dna_structure '${dna_structure}'" : ''} \\
         --output_yaml boltzgen_input.yaml
+
+    # Validate generated YAML using boltzgen check (fail-fast on bad config)
+    echo "Validating BoltzGen YAML..."
+    boltzgen check boltzgen_input.yaml || {
+        echo "ERROR: BoltzGen YAML validation failed"
+        cat boltzgen_input.yaml
+        exit 1
+    }
+    echo "YAML validation passed"
     """
 }
 

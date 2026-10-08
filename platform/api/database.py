@@ -74,6 +74,14 @@ class Job(Base):
     msa_manifest_path = Column(String(500), nullable=True)  # Path to MSA outputs manifest
     
     # ═══════════════════════════════════════════════════════════════════════════
+    # ORCHESTRATOR CHILD JOBS: Spawn-Wait-Aggregate Pattern
+    # ═══════════════════════════════════════════════════════════════════════════
+    child_stage = Column(String(50), nullable=True)  # Stage this child handles: 'rfantibody', 'fampnn', 'boltz2'
+    child_output_dir = Column(String(500), nullable=True)  # Absolute path to child's outputs for aggregation
+    aggregated_by_parent = Column(Boolean, default=False)  # Flag to prevent double-collection
+    child_design_count = Column(Integer, nullable=True)  # Number of designs/sequences this child processed
+    
+    # ═══════════════════════════════════════════════════════════════════════════
     # STAGE CHECKPOINTING: Multi-stage pipeline tracking
     # ═══════════════════════════════════════════════════════════════════════════
     current_stage = Column(String(50), nullable=True)  # Currently running stage: 'rfantibody', 'fampnn', etc.

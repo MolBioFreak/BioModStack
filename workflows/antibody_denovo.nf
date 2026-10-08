@@ -9,12 +9,12 @@ nextflow.enable.dsl = 2
 // PHASE 1: Generation
 //   Step 1: RFantibody - CDR backbone generation
 //   Step 2: Sequence Design - FAMPNN/AntiFold/ProteinMPNN (cross-validation)
+//   Step 2.5: Stability Filtering - ThermoMPNN (optional, pre-Boltz)
 //
 // PHASE 2: Validation & Scoring
 //   Step 3: Structure Validation - Boltz2 (ipTM, pLDDT)
 //   Step 4: Immunogenicity - AntiBERTy (pseudo-log-likelihood)
-//   Step 5: Stability - ThermoMPNN (ddG)
-//   Step 6: Affinity Maturation - IgGM (optional)
+//   Step 5: Affinity Maturation - IgGM (optional)
 // =============================================================================
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -74,6 +74,169 @@ include { PrepBoltz ; PrepBoltzWithMSA ; RunBoltz } from '../modules/boltz'
 include { GenerateLocalMSA ; BoltzFromSequenceWithMSA } from '../modules/structure_prediction'
 include { ANARCI } from '../modules/utils/anarci'
 include { PredictTargetComplex } from '../modules/predict_target_complex'
+
+// =============================================================================
+// ORCHESTRATOR SPAWN-WAIT-COLLECT PROCESSES
+// These enable per-job GPU assignment via the Python GPU orchestrator
+// =============================================================================
+
+process SpawnRFantibodyJobs {
+    label 'process_low'
+    
+    publishDir "${params.out_dir}/spawn", mode: 'copy', pattern: "*.json"
+    publishDir "${params.out_dir}/spawn", mode: 'copy', pattern: "*.log"
+    
+    input:
+    path target_pdb
+    val epitope_residues
+    val framework_type
+    val total_designs
+    val designs_per_job
+    val parent_job_id
+    val batch_name
+    
+    output:
+    path "spawn_rfa_result.json", emit: result
+    
+    script:
+    def params_json = groovy.json.JsonOutput.toJson([
+        rfantibody_diffusion_steps: params.rfantibody_diffusion_steps ?: 50,
+        rfantibody_noise_scale_ca: params.rfantibody_noise_scale_ca ?: 1.0,
+        rfantibody_noise_scale_frame: params.rfantibody_noise_scale_frame ?: 1.0,
+        rfantibody_guide_scale: params.rfantibody_guide_scale ?: 10,
+        rfantibody_design_loops: params.rfantibody_design_loops ?: ''
+    ])
+    """
+    python3 ${projectDir}/scripts/spawn_rfantibody_children.py \\
+        --parent_job_id "${parent_job_id}" \\
+        --total_designs ${total_designs} \\
+        --designs_per_job ${designs_per_job} \\
+        --target_pdb "\$(readlink -f ${target_pdb})" \\
+        --epitope_residues "${epitope_residues}" \\
+        --framework_type "${framework_type}" \\
+        --batch_name "${batch_name}" \\
+        --params_json '${params_json}' \\
+        --api_url "http://localhost:8000" \\
+        --output spawn_rfa_result.json \\
+        2>&1 | tee spawn_rfa.log
+    """
+}
+
+process SpawnFAMPNNJobs {
+    label 'process_low'
+    
+    publishDir "${params.out_dir}/spawn", mode: 'copy', pattern: "*.json"
+    publishDir "${params.out_dir}/spawn", mode: 'copy', pattern: "*.log"
+    
+    input:
+    path pdb_dir
+    val seqs_per_design
+    val pdbs_per_job
+    val parent_job_id
+    val batch_name
+    
+    output:
+    path "spawn_fampnn_result.json", emit: result
+    
+    script:
+    def params_json = groovy.json.JsonOutput.toJson([
+        fampnn_temperature: params.fampnn_temperature ?: 0.0001,
+        fampnn_num_steps: params.fampnn_num_steps ?: 500,
+        fampnn_psce_threshold: params.fampnn_psce_threshold ?: 0.15
+    ])
+    """
+    python3 ${projectDir}/scripts/spawn_fampnn_children.py \\
+        --parent_job_id "${parent_job_id}" \\
+        --pdb_dir "${pdb_dir}" \\
+        --pdbs_per_job ${pdbs_per_job} \\
+        --seqs_per_design ${seqs_per_design} \\
+        --batch_name "${batch_name}" \\
+        --params_json '${params_json}' \\
+        --api_url "http://localhost:8000" \\
+        --output spawn_fampnn_result.json \\
+        2>&1 | tee spawn_fampnn.log
+    """
+}
+
+process WaitForChildren {
+    label 'process_low'
+    
+    input:
+    val parent_job_id
+    val stage_name
+    val poll_interval_seconds
+    
+    output:
+    path "child_outputs.json", emit: child_outputs
+    
+    script:
+    """
+    python3 ${projectDir}/scripts/wait_for_children.py \\
+        --parent_job_id "${parent_job_id}" \\
+        --stage "${stage_name}" \\
+        --poll_interval ${poll_interval_seconds} \\
+        --timeout 14400 \\
+        --api_url "http://localhost:8000" \\
+        --output child_outputs.json
+    """
+}
+
+process CollectChildOutputs {
+    label 'process_low'
+    
+    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.pdb"
+    
+    input:
+    path child_outputs_json
+    val stage_name
+    
+    output:
+    path "*.pdb", emit: pdbs, optional: true
+    path "collection_manifest.json", emit: manifest
+    
+    script:
+    """
+    #!/usr/bin/env python3
+    import json
+    import shutil
+    from pathlib import Path
+    
+    with open("${child_outputs_json}") as f:
+        data = json.load(f)
+    
+    output_dirs = data.get("child_output_dirs", [])
+    collected = []
+    
+    for output_dir in output_dirs:
+        dir_path = Path(output_dir)
+        if not dir_path.exists():
+            print(f"Warning: Output dir not found: {output_dir}")
+            continue
+        
+        # Look for PDBs in standard locations
+        for subdir in ["pdb_files", "run/rfantibody/output", "run/fampnn/results", ""]:
+            search_path = dir_path / subdir if subdir else dir_path
+            if not search_path.exists():
+                continue
+            for pdb in search_path.glob("*.pdb"):
+                dest = Path(pdb.name)
+                if not dest.exists():
+                    shutil.copy(pdb, dest)
+                    collected.append(str(dest))
+    
+    manifest = {
+        "stage": "${stage_name}",
+        "source_dirs": output_dirs,
+        "collected_pdbs": collected,
+        "count": len(collected)
+    }
+    
+    with open("collection_manifest.json", "w") as f:
+        json.dump(manifest, f, indent=2)
+    
+    print(f"Collected {len(collected)} PDBs from {len(output_dirs)} child jobs")
+    """
+}
 
 // =============================================================================
 // Process to spawn child validation jobs via API
@@ -159,6 +322,13 @@ if (!params.containsKey('run_affinity_maturation')) params.run_affinity_maturati
 if (!params.containsKey('exploration_mode') || params.exploration_mode == null) params.exploration_mode = false
 if (!params.containsKey('job_id')) params.job_id = "job_${new java.text.SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date())}"
 if (!params.containsKey('job_name')) params.job_name = 'antibody_batch'
+
+// Orchestrator-based parallelism settings
+// 'standard' = Nextflow-internal parallelism (current behavior)
+// 'full_orchestrator' = Spawn child jobs via API for per-job GPU assignment
+if (!params.containsKey('parallel_mode')) params.parallel_mode = 'standard'
+if (!params.containsKey('designs_per_job')) params.designs_per_job = 5
+if (!params.containsKey('seqs_per_job')) params.seqs_per_job = 50
 
 
 workflow ANTIBODY_DENOVO {
@@ -398,6 +568,79 @@ workflow ANTIBODY_DENOVO {
         .mix(antifold_seqs) 
         .mix(proteinmpnn_seqs)
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // Step 2.5: Pre-Boltz Stability Scoring (ThermoMPNN)
+    // Filters unstable sequences BEFORE expensive Boltz-2 validation
+    // ═══════════════════════════════════════════════════════════════════════
+    if (params.run_thermompnn == true) {
+        log.info("Step 2.5: Scoring sequence stability with ThermoMPNN...")
+        
+        // Flatten sequences for per-design ThermoMPNN scoring
+        thermompnn_input = all_sequences.flatMap { meta, pdbs ->
+            def pdb_list = pdbs instanceof List ? pdbs : [pdbs]
+            pdb_list.collect { pdb ->
+                def design_meta = [id: pdb.baseName]
+                [design_meta, pdb]
+            }
+        }
+        
+        THERMOMPNN(thermompnn_input)
+        
+        // REPORT STAGE: thermompnn
+        THERMOMPNN.out.stability.subscribe { meta, csv ->
+            try {
+                def args = [params.job_id, "thermompnn", "complete", csv.toString()]
+                def proc = ["python3", "${projectDir}/scripts/stage_reporter.py", *args].execute()
+                proc.waitFor()
+            } catch (Exception e) {
+                println "Warning: Failed to report stage thermompnn: ${e.message}"
+            }
+        }
+        
+        // Filter by ddG threshold if set
+        if (params.thermompnn_max_ddg != null) {
+            log.info("  Filtering by ThermoMPNN ddG <= ${params.thermompnn_max_ddg}...")
+            
+            // Parse stability CSV and filter designs
+            stable_sequences = THERMOMPNN.out.stability.filter { meta, csv ->
+                try {
+                    def lines = csv.text.split('\n')
+                    if (lines.size() > 1) {
+                        // CSV format: sequence_id,ddG_pred
+                        def ddg = lines[1].split(',')[1]?.trim()
+                        if (ddg && ddg != 'N/A' && ddg != 'ERROR') {
+                            return Float.parseFloat(ddg) <= params.thermompnn_max_ddg
+                        }
+                    }
+                } catch (Exception e) {
+                    log.warn("Could not parse ThermoMPNN output for ${meta.id}: ${e.message}")
+                }
+                return true // Pass through if parsing fails
+            }.map { meta, csv ->
+                // Re-associate with PDB file for downstream
+                def pdb_file = file("${csv.parent}/${meta.id}.pdb")
+                [meta, pdb_file.exists() ? pdb_file : csv]
+            }
+            
+            // Collect filtered PDBs back into batched format
+            sequences_for_boltz = stable_sequences.map { meta, pdb -> pdb }
+                .collect()
+                .map { pdbs -> 
+                    def meta = [id: "thermompnn_filtered"]
+                    [meta, pdbs]
+                }
+        } else {
+            // No ddG filtering, pass through original sequences
+            sequences_for_boltz = all_sequences
+        }
+        
+        stability_scores_early = THERMOMPNN.out.stability
+    } else {
+        log.info("ThermoMPNN stability scoring disabled (enable with run_thermompnn=true)")
+        sequences_for_boltz = all_sequences
+        stability_scores_early = Channel.empty()
+    }
+
     // =========================================================================
     // PHASE 2: VALIDATION & SCORING
     // =========================================================================
@@ -414,7 +657,7 @@ workflow ANTIBODY_DENOVO {
         // =========================================================================
         
         // Step 1: Extract sequences from FAMPNN PDB outputs
-        design_sequences = all_sequences
+        design_sequences = sequences_for_boltz
             .flatMap { meta, files ->
                 def pdbs = files instanceof List ? files : [files]
                 pdbs.collect { pdb ->
@@ -442,7 +685,7 @@ workflow ANTIBODY_DENOVO {
             log.info("Exploration Mode: Spawning child jobs for parallel GPU processing...")
             
             // Collect all PDB files from sequence design into a single list
-            collected_pdbs = all_sequences
+            collected_pdbs = sequences_for_boltz
                 .flatMap { meta, files -> files instanceof List ? files : [files] }
                 .collect()
             
@@ -549,24 +792,10 @@ workflow ANTIBODY_DENOVO {
         immunogenicity_scores = Channel.empty()
     }
 
-    // Step 5: Stability Scoring with ThermoMPNN
-    // ---------------------------------------------------------------------------
-    log.info("Step 5: Scoring stability with ThermoMPNN...")
-
-    if (params.run_stability_scoring != false) {
-        THERMOMPNN(filtered_structures)
-        stability_scores = THERMOMPNN.out.stability
-
-        // Filter by ddG threshold
-        stable_designs = stability_scores.filter { meta, score_file ->
-            // Parse score and filter - actual implementation reads the file
-            true
-        }
-    }
-    else {
-        stable_designs = filtered_structures
-        stability_scores = Channel.empty()
-    }
+    // NOTE: ThermoMPNN stability scoring moved to Step 2.5 (before Boltz-2)
+    // This runs AFTER FAMPNN but BEFORE expensive Boltz validation for compute savings
+    // Results are in stability_scores_early channel
+    stable_designs = filtered_structures
 
     // Step 6: Affinity Maturation with IgGM (Optional)
     // ---------------------------------------------------------------------------

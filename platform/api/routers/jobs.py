@@ -669,6 +669,118 @@ async def report_stage_complete(
     }
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHILD JOB TRACKING (Spawn-Wait-Aggregate Pattern)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/{parent_id}/children/status")
+async def get_children_status(
+    parent_id: str,
+    stage: Optional[str] = None,
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Get aggregate status of all children spawned by a parent job.
+    
+    Used by wait_for_children.py to poll until all children complete.
+    Optionally filter by child_stage (e.g., 'rfantibody', 'fampnn', 'boltz2').
+    
+    Returns:
+        - total: Total child count
+        - completed/failed/running/pending: Status breakdown
+        - all_done: True when all children finished (completed or failed)
+        - child_output_dirs: List of output directories for aggregation
+        - success_rate: Percentage of children that completed successfully
+    """
+    # Build query for children of this parent
+    query = select(Job).where(Job.parent_job_id == parent_id)
+    
+    if stage:
+        query = query.where(Job.child_stage == stage)
+    
+    result = await session.execute(query)
+    children = result.scalars().all()
+    
+    if not children:
+        return {
+            "parent_id": parent_id,
+            "stage": stage,
+            "total": 0,
+            "completed": 0,
+            "failed": 0,
+            "running": 0,
+            "pending": 0,
+            "all_done": True,
+            "child_output_dirs": [],
+            "success_rate": 100.0
+        }
+    
+    completed = [c for c in children if c.status == "completed"]
+    failed = [c for c in children if c.status == "failed"]
+    running = [c for c in children if c.status == "running"]
+    pending = [c for c in children if c.status in ["queued", "pending"]]
+    
+    all_done = all(c.status in ["completed", "failed", "cancelled"] for c in children)
+    
+    # Collect output directories from completed children
+    output_dirs = [
+        c.child_output_dir or c.output_dir 
+        for c in completed 
+        if (c.child_output_dir or c.output_dir) and not c.aggregated_by_parent
+    ]
+    
+    total = len(children)
+    success_rate = (len(completed) / total * 100) if total > 0 else 0
+    
+    return {
+        "parent_id": parent_id,
+        "stage": stage,
+        "total": total,
+        "completed": len(completed),
+        "failed": len(failed),
+        "running": len(running),
+        "pending": len(pending),
+        "all_done": all_done,
+        "child_output_dirs": output_dirs,
+        "success_rate": round(success_rate, 1),
+        "child_ids": [c.id for c in children]
+    }
+
+
+@router.post("/{parent_id}/children/mark-aggregated")
+async def mark_children_aggregated(
+    parent_id: str,
+    stage: Optional[str] = None,
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Mark all completed children as aggregated by parent.
+    Prevents double-collection when polling multiple times.
+    """
+    query = select(Job).where(
+        Job.parent_job_id == parent_id,
+        Job.status == "completed",
+        Job.aggregated_by_parent == False
+    )
+    
+    if stage:
+        query = query.where(Job.child_stage == stage)
+    
+    result = await session.execute(query)
+    children = result.scalars().all()
+    
+    for child in children:
+        child.aggregated_by_parent = True
+    
+    await session.commit()
+    
+    return {
+        "marked_count": len(children),
+        "parent_id": parent_id,
+        "stage": stage
+    }
+
+
 @router.post("/{job_id}/stage-start")
 async def report_stage_start(
     job_id: str,
