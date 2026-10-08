@@ -485,6 +485,13 @@ async def test_result_list_detail_and_artifact_metadata_are_job_scoped(api) -> N
     assert body["items"][0]["manifest_sha256"]
     assert body["items"][0]["request_sha256"]
     assert body["items"][0]["runtime_identity"]["checkpoint_sha256"]
+    assert body["items"][0]["operator_label"] == "candidate-1"
+    assert body["items"][0]["source_identity"] == {
+        "design_id": "design-1",
+        "artifact_id": "design-1",
+        "artifact_sha256": body["items"][0]["source_artifact_sha256"],
+        "candidate_id": "candidate-1",
+    }
 
     filtered = await client.get(
         "/api/frustrampnn/jobs/job-1/results",

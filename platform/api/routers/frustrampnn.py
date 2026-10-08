@@ -1018,12 +1018,22 @@ class FrustraMPNNExecutionReceiptResponse(BaseModel):
     duration_seconds: float | None = Field(default=None, ge=0)
 
 
+class FrustraMPNNResultSourceIdentityResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    design_id: str | None
+    artifact_id: str | None
+    artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    candidate_id: str
+
+
 class FrustraMPNNResultItemResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     invocation_id: str
     parent_job_id: str
     parent_workflow_id: str
     candidate_id: str
+    operator_label: str = Field(min_length=1, max_length=160)
+    source_identity: FrustraMPNNResultSourceIdentityResponse
     design_id: str | None
     requiredness: str
     source_artifact_id: str | None
@@ -3360,6 +3370,20 @@ def _safe_execution_receipt(
 
 def _result_payload(result: FrustraMPNNResult, *, detail: bool = False) -> dict[str, Any]:
     payload = {name: getattr(result, name) for name in _RESULT_FIELDS}
+    parent_metadata = result.parent_metadata_json if isinstance(result.parent_metadata_json, Mapping) else {}
+    raw_operator_label = result.candidate_id
+    for key in ("operator_label", "display_label", "name"):
+        candidate_label = parent_metadata.get(key)
+        if isinstance(candidate_label, str) and candidate_label.strip():
+            raw_operator_label = candidate_label
+            break
+    payload["operator_label"] = str(raw_operator_label).strip()[:160]
+    payload["source_identity"] = {
+        "design_id": result.design_id,
+        "artifact_id": result.source_artifact_id,
+        "artifact_sha256": result.source_artifact_sha256,
+        "candidate_id": result.candidate_id,
+    }
     payload.update(_result_authority(result))
     payload["reopen_destination"] = {
         "surface": "frustrampnn-workbench",

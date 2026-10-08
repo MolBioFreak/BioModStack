@@ -21,14 +21,23 @@ async def _add_receipt(
     index: int,
     generation_or_revision: str | None = None,
     acknowledgement_revision: str | None = None,
+    availability: str = "available",
+    metadata_overrides: dict | None = None,
 ) -> tuple[str, dict]:
     receipt_id = f"frustra-receipt-{index}"
     metadata = {
         "parent_job_id": f"job-{index}",
         "invocation_id": f"invocation-{index}",
         "candidate_id": f"candidate-{index}",
+        "operator_label": f"Structure {index}",
+        "design_id": f"design-{index}",
+        "source_artifact_id": f"artifact-{index}",
+        "source_artifact_sha256": f"{index + 20:064x}",
+        "canonical_state": "succeeded",
+        "statistics_analysis_state": "completed",
         "manifest_sha256": f"{index:064x}",
     }
+    metadata.update(metadata_overrides or {})
     revision = acknowledgement_revision or f"revision-{index}"
     acknowledgement = {
         "schema": "bms.global.external-entity-receipt.v1",
@@ -37,7 +46,7 @@ async def _add_receipt(
         "entity_id": f"parent_job_id=job-{index}&invocation_id=invocation-{index}",
         "entity_revision_id": revision,
         "content_digest": f"{index:064x}",
-        "availability": "available",
+        "availability": availability,
         "contract_digest": f"{index + 10:064x}",
         "source_build_revision": "test-build",
         "verified_at": "2026-08-26T12:00:00Z",
@@ -62,7 +71,7 @@ async def _add_receipt(
         entity_id=acknowledgement["entity_id"],
         generation_or_revision=generation_or_revision or revision,
         content_digest=acknowledgement["content_digest"],
-        availability="available",
+        availability=availability,
         verification_authority=acknowledgement["verifier_id"],
         acknowledgement_json=canonical_json(acknowledgement),
         created_at="2026-08-26T12:00:00Z",
@@ -195,6 +204,16 @@ async def test_frustrampnn_scope_requires_exact_revisions_and_uses_only_selected
             "parent_job_id": "job-1",
             "invocation_id": "invocation-1",
             "candidate_id": "candidate-1",
+            "operator_label": "Structure 1",
+            "source_identity": {
+                "design_id": "design-1",
+                "artifact_id": "artifact-1",
+                "artifact_sha256": f"{21:064x}",
+                "candidate_id": "candidate-1",
+            },
+            "state": "completed",
+            "diagnostic": None,
+            "statistics_analysis": {"state": "completed", "diagnostic": None},
             "manifest_sha256": f"{1:064x}",
             "content_digest": f"{1:064x}",
             "reopen_uri": "/designs/job-1?frustrampnn_invocation_id=invocation-1",
@@ -244,3 +263,65 @@ async def test_frustrampnn_scope_rejects_receipt_revision_acknowledgement_mismat
 
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "frustrampnn_scope_receipt_invalid"
+
+
+@pytest.mark.asyncio
+async def test_frustrampnn_scope_projects_all_selected_revision_terminal_and_analysis_states(
+    read_model_store,
+) -> None:
+    factory = read_model_store
+    cases = [
+        (10, "available", {"canonical_state": "succeeded", "statistics_analysis_state": "completed"}, "completed"),
+        (11, "available", {"canonical_state": "failed", "diagnostic": "inference failed", "statistics_analysis_state": "not_started"}, "failed"),
+        (12, "unavailable", {"canonical_state": "missing", "diagnostic": "expected result absent", "statistics_analysis_state": "not_started"}, "missing"),
+        (13, "available", {"canonical_state": "not_run", "diagnostic": "policy skipped", "statistics_analysis_state": "not_started"}, "skipped"),
+        (14, "available", {"canonical_state": "succeeded", "statistics_analysis_state": "failed", "statistics_analysis_diagnostic": "bounded analysis failure"}, "completed"),
+    ]
+    async with factory() as session:
+        project, experiment, domain = await _hierarchy(session)
+        for ordinal, (index, availability, metadata, _expected_state) in enumerate(cases):
+            receipt_id, acknowledgement = await _add_receipt(
+                session,
+                project_id=project.id,
+                index=index,
+                availability=availability,
+                metadata_overrides=metadata,
+            )
+            session.add(ExperimentRevisionEdge(
+                revision_id=domain.current_revision_id,
+                target_resource_id=receipt_id,
+                role="source_receipt",
+                ordinal=ordinal,
+                expected_sha256=acknowledgement["content_digest"],
+                metadata_json='{"authority":"server_resolved"}',
+            ))
+        await session.commit()
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_app(factory)),
+        base_url="http://test",
+    ) as client:
+        response = await _request_scope(
+            client,
+            project=project,
+            experiment=experiment,
+            domain=domain,
+            global_experiment_revision_id=experiment.current_revision_id,
+            domain_revision_id=domain.current_revision_id,
+        )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert [item["state"] for item in payload["items"]] == [case[3] for case in cases]
+    assert [item["statistics_analysis"]["state"] for item in payload["items"]] == [
+        "completed", "not_started", "not_started", "not_started", "failed"
+    ]
+    assert payload["items"][0]["source_identity"] == {
+        "design_id": "design-10",
+        "artifact_id": "artifact-10",
+        "artifact_sha256": f"{30:064x}",
+        "candidate_id": "candidate-10",
+    }
+    assert payload["items"][0]["operator_label"] == "Structure 10"
+    assert payload["items"][1]["diagnostic"] == "inference failed"
+    assert payload["items"][4]["statistics_analysis"]["diagnostic"] == "bounded analysis failure"

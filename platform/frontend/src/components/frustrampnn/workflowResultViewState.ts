@@ -1,4 +1,4 @@
-export type WorkflowResultModel = 'workflow' | 'frustrampnn';
+export type WorkflowResultModel = string;
 export type FrustraMpnnResultScope = 'this-job' | 'whole-experiment';
 
 export interface WorkflowResultViewState {
@@ -7,8 +7,8 @@ export interface WorkflowResultViewState {
 }
 
 interface WorkflowResultViewAvailability {
-    frustraMpnnAvailable: boolean;
-    directFrustraMpnnJob: boolean;
+    availableModelIds: readonly string[];
+    primaryModelId: string;
 }
 
 export const parseWorkflowResultViewState = (
@@ -16,17 +16,10 @@ export const parseWorkflowResultViewState = (
     availability: WorkflowResultViewAvailability,
 ): WorkflowResultViewState => {
     const params = new URLSearchParams(search);
-    const requestedModel = params.get('result_model');
-    const defaultModel: WorkflowResultModel = availability.frustraMpnnAvailable
-        && availability.directFrustraMpnnJob
-        ? 'frustrampnn'
-        : 'workflow';
-    const model: WorkflowResultModel = requestedModel === 'frustrampnn'
-        && availability.frustraMpnnAvailable
-        ? 'frustrampnn'
-        : requestedModel === 'workflow' && !availability.directFrustraMpnnJob
-            ? 'workflow'
-            : defaultModel;
+    const requestedModel = params.get('result_model')?.trim().toLowerCase() ?? '';
+    const model = availability.availableModelIds.includes(requestedModel)
+        ? requestedModel
+        : availability.primaryModelId;
     const scope: FrustraMpnnResultScope = model === 'frustrampnn'
         && params.get('frustrampnn_scope') === 'whole-experiment'
         ? 'whole-experiment'
@@ -38,6 +31,8 @@ export interface FrustraMpnnExperimentContext {
     projectId: string;
     globalExperimentId: string;
     domainExperimentId: string;
+    globalExperimentRevisionId: string;
+    domainRevisionId: string;
 }
 
 export const parseFrustraMpnnExperimentContext = (
@@ -47,8 +42,10 @@ export const parseFrustraMpnnExperimentContext = (
     const projectId = params.get('workspace_id')?.trim() ?? '';
     const globalExperimentId = params.get('global_experiment_id')?.trim() ?? '';
     const domainExperimentId = params.get('domain_experiment_id')?.trim() ?? '';
-    return projectId && globalExperimentId && domainExperimentId
-        ? { projectId, globalExperimentId, domainExperimentId }
+    const globalExperimentRevisionId = params.get('global_experiment_revision_id')?.trim() ?? '';
+    const domainRevisionId = params.get('domain_revision_id')?.trim() ?? '';
+    return projectId && globalExperimentId && domainExperimentId && globalExperimentRevisionId && domainRevisionId
+        ? { projectId, globalExperimentId, domainExperimentId, globalExperimentRevisionId, domainRevisionId }
         : null;
 };
 

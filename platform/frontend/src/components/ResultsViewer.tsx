@@ -74,6 +74,7 @@ import {
     type WorkflowResultModel,
 } from './frustrampnn/workflowResultViewState';
 import { hasFrustraMpnnResultSurface } from './frustraMpnnResultSurface';
+import { buildWorkflowModelResults, filterDesignsForResultModel } from './frustrampnn/workflowModelResults';
 import { buildResultsViewerMolecularDynamicsRoute } from './gen2StartingStructureState.js';
 import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelIntegrationControl';
 import {
@@ -1841,24 +1842,6 @@ export function ResultsViewer() {
         () => parseFrustraMpnnExperimentContext(location.search),
         [location.search],
     );
-    useEffect(() => {
-        const viewState = parseWorkflowResultViewState(location.search, {
-            frustraMpnnAvailable: frustraMpnnSurfaceAvailable,
-            directFrustraMpnnJob: activeJob?.model_id === 'frustrampnn',
-        });
-        setResultSurfaceState(viewState.model);
-        setFrustraMpnnScopeState(viewState.scope);
-    }, [activeJob?.id, activeJob?.model_id, frustraMpnnSurfaceAvailable, location.search]);
-    const setResultSurface = useCallback((model: WorkflowResultModel) => {
-        const scope = model === 'frustrampnn' ? frustraMpnnScope : 'this-job';
-        navigate(`${location.pathname}${updateWorkflowResultViewSearch(location.search, { model, scope })}`, { replace: true });
-    }, [frustraMpnnScope, location.pathname, location.search, navigate]);
-    const setFrustraMpnnScope = useCallback((scope: FrustraMpnnResultScope) => {
-        navigate(`${location.pathname}${updateWorkflowResultViewSearch(location.search, {
-            model: 'frustrampnn',
-            scope,
-        })}`, { replace: true });
-    }, [location.pathname, location.search, navigate]);
     const activeParentJob = useMemo(
         () => activeJob?.parent_job_id ? nonNgsJobs.find((j: Job) => j.id === activeJob.parent_job_id) : undefined,
         [nonNgsJobs, activeJob?.parent_job_id]
@@ -2468,6 +2451,31 @@ export function ResultsViewer() {
         if (!canClientSortLoadedDesigns) return designs;
         return [...designs].sort((left, right) => compareDesignsByField(left, right, sortField, sortDir));
     }, [canClientSortLoadedDesigns, designs, sortDir, sortField]);
+    const resultModelHierarchy = useMemo(() => activeJob ? buildWorkflowModelResults({
+        job: activeJob,
+        designs: orderedDesigns,
+        frustraMpnnAvailable: frustraMpnnSurfaceAvailable,
+    }) : [], [activeJob, frustraMpnnSurfaceAvailable, orderedDesigns]);
+    const primaryResultModelId = resultModelHierarchy[0]?.modelId ?? activeJob?.model_id ?? '';
+    useEffect(() => {
+        if (!activeJob || !primaryResultModelId) return;
+        const viewState = parseWorkflowResultViewState(location.search, {
+            availableModelIds: resultModelHierarchy.map((item) => item.modelId),
+            primaryModelId: primaryResultModelId,
+        });
+        setResultSurfaceState(viewState.model);
+        setFrustraMpnnScopeState(viewState.scope);
+    }, [activeJob, location.search, primaryResultModelId, resultModelHierarchy]);
+    const setResultSurface = useCallback((model: WorkflowResultModel) => {
+        const scope = model === 'frustrampnn' ? frustraMpnnScope : 'this-job';
+        navigate(`${location.pathname}${updateWorkflowResultViewSearch(location.search, { model, scope })}`, { replace: true });
+    }, [frustraMpnnScope, location.pathname, location.search, navigate]);
+    const setFrustraMpnnScope = useCallback((scope: FrustraMpnnResultScope) => {
+        navigate(`${location.pathname}${updateWorkflowResultViewSearch(location.search, {
+            model: 'frustrampnn',
+            scope,
+        })}`, { replace: true });
+    }, [location.pathname, location.search, navigate]);
     const showPpiflowColumns = orderedDesigns.some((design) =>
         supportsViewerCapability(design, 'ppiflow_maturation_metrics')
     );
@@ -3055,9 +3063,12 @@ export function ResultsViewer() {
         const sourceFiltered = outputSourceFilter === 'all'
             ? orderedDesigns
             : orderedDesigns.filter((design) => inferDesignOutputSource(design as UntypedApiValue) === outputSourceFilter);
-        if (resultSetFilter === 'all') return sourceFiltered;
-        return sourceFiltered.filter((design) => inferDesignResultSet(design as UntypedApiValue) === resultSetFilter);
-    }, [clientDerivedResultsBlocked, orderedDesigns, outputSourceFilter, resultSetFilter]);
+        const resultSetFiltered = resultSetFilter === 'all'
+            ? sourceFiltered
+            : sourceFiltered.filter((design) => inferDesignResultSet(design as UntypedApiValue) === resultSetFilter);
+        if (resultSurface === primaryResultModelId || resultSurface === 'frustrampnn') return resultSetFiltered;
+        return filterDesignsForResultModel(resultSetFiltered, resultSurface);
+    }, [clientDerivedResultsBlocked, orderedDesigns, outputSourceFilter, primaryResultModelId, resultSetFilter, resultSurface]);
     const boltzgenScopedDesigns = useMemo(
         () => sourceScopedDesigns.filter((design) => inferDesignOutputSource(design as UntypedApiValue) === 'boltzgen'),
         [sourceScopedDesigns],
@@ -5066,20 +5077,15 @@ export function ResultsViewer() {
     const selectedFrustraMpnnDesigns = selectedDesignIds
         .map((designId) => orderedDesigns.find((design) => design.id === designId))
         .filter((design): design is Design => Boolean(design));
-    const resultModelSelector = activeJob && frustraMpnnSurfaceAvailable ? (
-        <nav aria-label="Result model" className="flex flex-wrap gap-2 text-xs">
-            {activeJob.model_id !== 'frustrampnn' && <button
+    const resultModelSelector = activeJob && resultModelHierarchy.length > 1 ? (
+        <nav aria-label="Workflow model results" className="flex flex-wrap gap-2 text-xs">
+            {resultModelHierarchy.map((item) => <button
+                key={item.modelId}
                 type="button"
-                aria-pressed={resultSurface === 'workflow'}
-                onClick={() => setResultSurface('workflow')}
-                className={`rounded-lg border px-3 py-1.5 font-semibold ${resultSurface === 'workflow' ? 'border-cyan-400/60 bg-cyan-500/15 text-cyan-100' : 'border-slate-700 text-slate-300 hover:border-slate-500'}`}
-            >Workflow output</button>}
-            <button
-                type="button"
-                aria-pressed={resultSurface === 'frustrampnn'}
-                onClick={() => setResultSurface('frustrampnn')}
-                className={`rounded-lg border px-3 py-1.5 font-semibold ${resultSurface === 'frustrampnn' ? 'border-cyan-400/60 bg-cyan-500/15 text-cyan-100' : 'border-slate-700 text-slate-300 hover:border-slate-500'}`}
-            >FrustraMPNN</button>
+                aria-pressed={resultSurface === item.modelId}
+                onClick={() => setResultSurface(item.modelId)}
+                className={`rounded-lg border px-3 py-1.5 font-semibold ${resultSurface === item.modelId ? 'border-cyan-400/60 bg-cyan-500/15 text-cyan-100' : 'border-slate-700 text-slate-300 hover:border-slate-500'}`}
+            >{item.label}</button>)}
         </nav>
     ) : null;
 
@@ -5099,7 +5105,7 @@ export function ResultsViewer() {
                 job={activeJob}
                 onBack={activeJob.model_id === 'frustrampnn'
                     ? () => navigate('/results')
-                    : () => setResultSurface('workflow')}
+                    : () => setResultSurface(primaryResultModelId)}
                 backLabel={activeJob.model_id === 'frustrampnn' ? 'Jobs' : 'Workflow result'}
                 onOpenJob={handleSelectJob}
                 scope={frustraMpnnScope}

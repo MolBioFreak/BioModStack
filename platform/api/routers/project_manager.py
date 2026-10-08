@@ -712,6 +712,24 @@ async def _domain_hierarchy(session: AsyncSession, project_id: str, experiment_i
     return project, experiment, domain
 
 
+def _bounded_scope_diagnostic(value: Any) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()[:240]
+
+
+def _frustrampnn_scope_state(availability: str, canonical_state: str) -> str:
+    if availability != "available" or canonical_state == "missing":
+        return "missing"
+    if canonical_state in {"succeeded", "completed"}:
+        return "completed"
+    if canonical_state == "failed":
+        return "failed"
+    if canonical_state in {"not_run", "skipped"}:
+        return "skipped"
+    return "missing"
+
+
 @router.get(
     "/api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}/frustrampnn-results"
 )
@@ -748,8 +766,8 @@ async def list_domain_frustrampnn_results(
                 .where(
                     ExperimentExternalEntityReceipt.workspace_id == project_id,
                     ExperimentExternalEntityReceipt.entity_kind == "frustrampnn_result",
-                    ExperimentExternalEntityReceipt.availability == "available",
                     ExperimentRevisionEdge.revision_id == domain_revision_id,
+                    ExperimentRevisionEdge.role == "source_receipt",
                 )
                 .order_by(
                     ExperimentExternalEntityReceipt.created_at.asc(),
@@ -811,6 +829,12 @@ async def list_domain_frustrampnn_results(
         parent_job_id = metadata.get("parent_job_id")
         invocation_id = metadata.get("invocation_id")
         candidate_id = metadata.get("candidate_id")
+        operator_label = metadata.get("operator_label")
+        design_id = metadata.get("design_id")
+        source_artifact_id = metadata.get("source_artifact_id")
+        source_artifact_sha256 = metadata.get("source_artifact_sha256")
+        canonical_state = metadata.get("canonical_state")
+        statistics_analysis_state = metadata.get("statistics_analysis_state", "not_started")
         manifest_sha256 = metadata.get("manifest_sha256")
         reopen_uri = acknowledgement.get("reopen_uri")
         if (
@@ -820,6 +844,16 @@ async def list_domain_frustrampnn_results(
             or not invocation_id
             or not isinstance(candidate_id, str)
             or not candidate_id
+            or not isinstance(operator_label, str)
+            or not operator_label
+            or len(operator_label) > 160
+            or (design_id is not None and (not isinstance(design_id, str) or not design_id))
+            or not isinstance(source_artifact_id, str)
+            or not source_artifact_id
+            or not isinstance(source_artifact_sha256, str)
+            or len(source_artifact_sha256) != 64
+            or canonical_state not in {"succeeded", "completed", "failed", "missing", "not_run", "skipped"}
+            or statistics_analysis_state not in {"not_started", "queued", "running", "completed", "failed"}
             or not isinstance(manifest_sha256, str)
             or len(manifest_sha256) != 64
             or not isinstance(reopen_uri, str)
@@ -837,6 +871,21 @@ async def list_domain_frustrampnn_results(
             "parent_job_id": parent_job_id,
             "invocation_id": invocation_id,
             "candidate_id": candidate_id,
+            "operator_label": operator_label,
+            "source_identity": {
+                "design_id": design_id,
+                "artifact_id": source_artifact_id,
+                "artifact_sha256": source_artifact_sha256,
+                "candidate_id": candidate_id,
+            },
+            "state": _frustrampnn_scope_state(row.availability, canonical_state),
+            "diagnostic": _bounded_scope_diagnostic(metadata.get("diagnostic")),
+            "statistics_analysis": {
+                "state": statistics_analysis_state,
+                "diagnostic": _bounded_scope_diagnostic(
+                    metadata.get("statistics_analysis_diagnostic")
+                ),
+            },
             "manifest_sha256": manifest_sha256,
             "content_digest": row.content_digest,
             "reopen_uri": reopen_uri,
