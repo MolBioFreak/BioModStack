@@ -48,10 +48,12 @@ export default defineConfig(({ mode }) => ({
     }
   },
   server: {
-    // Tailscale Serve proxies https://compute-node.taileb3a90.ts.net → 127.0.0.1:5173
-    // HMR disabled: WebSocket can't negotiate wss↔ws through the TLS proxy,
-    // causing remote clients to hang.  Local edits still trigger a full reload.
-    hmr: false,
+    // Browser development owns Vite's documented default port. Keep it strict
+    // so the stable hosted /bms/ surface cannot silently occupy the dev port.
+    host: '127.0.0.1',
+    port: 5173,
+    origin: 'http://127.0.0.1:5173',
+    strictPort: true,
     allowedHosts: ['compute-node.taileb3a90.ts.net'],
     // Prevent watching pipeline directories that can have millions of files
     watch: {
