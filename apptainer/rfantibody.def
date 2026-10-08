@@ -36,7 +36,8 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
     # Install ALL RFantibody dependencies from pyproject.toml with UV
     # Core deps: torch, numpy, hydra-core, icecream, opt-einsum, e3nn, pyrsistent
     # Runtime deps (not listed but needed): pandas, scipy
-    uv pip install numpy pandas scipy hydra-core icecream opt-einsum e3nn pyrsistent pyyaml biopython
+    # DGL hidden deps: pydantic, pyarrow, fsspec
+    uv pip install numpy pandas scipy hydra-core icecream opt-einsum e3nn pyrsistent pyyaml biopython pydantic pyarrow fsspec
     
     # Install RFantibody as editable package from src/
     uv pip install -e /opt/RFantibody 2>/dev/null || true
