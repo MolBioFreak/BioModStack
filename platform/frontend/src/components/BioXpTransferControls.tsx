@@ -67,8 +67,9 @@ export function BioXpTransferControls({ generation, connected }: {
     const command = job?.command;
     const currentLive = command?.command_id === id && job?.execution?.dry_run === false;
     const [submitting, setSubmitting] = useState(false);
-    const listedLive = !!activeJob && !(activeJob.job_id === id && currentLive && command?.terminal);
-    const busy = submitting || listedLive || (currentLive && command?.terminal === false);
+    // The jobs list and receipt can lag a completed robot command. They are
+    // evidence, not a second resource lock; the robot excludes live conflicts.
+    const busy = submitting;
     const submit = useSubmitBioXpProtocol();
     // The robot decides live admission; unrelated cockpit requests and
     // retained status observations do not lock this independent intent.
@@ -117,7 +118,8 @@ export function BioXpTransferControls({ generation, connected }: {
         <button type="button" className="ml-3 rounded bg-teal-700 px-3 py-2 disabled:opacity-35" disabled={!enabled} onClick={() => void run(true)}>Inspect covers (may move covers)</button>
         {id && <p className="break-all text-xs">Job {id}</p>}
         {!sameConnection && <p role="alert">Connection changed. Check the earlier job.</p>}
-        {busy && <p role="status">Robot operation running.</p>}
+        {busy && <p role="status">Submitting…</p>}
+        {activeJob && <p role="status">Listed job {activeJob.job_id} · {activeJob.command?.status ?? 'status unknown'}</p>}
         {identityMismatch && <p role="alert">Job identity mismatch. Check robot status.</p>}
         {(query.isError || jobs.isError) && <p role="alert">Robot status unavailable.</p>}
         {currentLive && <p role="status">{command?.status} · {job?.execution?.runtime_state.workflow?.phase ?? 'phase unavailable'}</p>}
