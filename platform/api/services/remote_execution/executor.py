@@ -171,30 +171,55 @@ def _parse_status(payload: str) -> RemoteAttemptStatus:
         raise RemoteExecutionError("Remote worker returned an invalid attempt status") from exc
 
 
+def _intent_digest(intent):
+    from services.remote_resource_evidence import digest
+    return digest(intent)
+
+
+def _stage_argv(connection, intent, argv):
+    return _worker_argv(connection, "stage-command", intent["storage_path"],
+        "--intent-sha256", _intent_digest(intent), "--", *argv)
+
+
+async def _stage_run(connection, intent, argv, **kwargs):
+    return await run_remote(connection, _stage_argv(connection, intent, argv), **kwargs)
+
+
+async def _stage_upload(connection, intent, source, destination, **kwargs):
+    import shlex
+    if not (destination == intent["storage_path"] or destination.startswith(intent["storage_path"] + "/")):
+        raise RemoteExecutionError("staging transfer escaped its owned namespace")
+    await rsync_to_remote(connection, source, destination,
+        rsync_path=shlex.join(_stage_argv(connection, intent, ["rsync"])), **kwargs)
+
+
 async def _mkdir_for_transfer(
     connection: RemoteConnection,
     transfer: TransferPlan,
+    intent: dict,
 ) -> None:
     destination = PurePosixPath(transfer.remote_destination)
     directory = destination if transfer.source.is_dir() else destination.parent
-    await run_remote(connection, ["mkdir", "-p", str(directory)])
+    await _stage_run(connection, intent, ["mkdir", "-p", str(directory)])
 
 
 async def _transfer_plan(
     connection: RemoteConnection,
     transfer: TransferPlan,
+    intent: dict,
 ) -> None:
-    await _mkdir_for_transfer(connection, transfer)
-    await rsync_to_remote(connection, transfer.source, transfer.remote_destination)
+    await _mkdir_for_transfer(connection, transfer, intent)
+    await _stage_upload(connection, intent, transfer.source, transfer.remote_destination)
 
 
 async def _stage_bundle(
     connection: RemoteConnection,
     bundle: PreparedRemoteBundle,
+    intent: dict,
 ) -> None:
-    await _transfer_plan(connection, bundle.source_transfer)
-    await run_remote(
-        connection,
+    await _transfer_plan(connection, bundle.source_transfer, intent)
+    await _stage_run(
+        connection, intent,
         [
             "mkdir",
             "-p",
@@ -204,9 +229,9 @@ async def _stage_bundle(
         ],
     )
     for transfer in bundle.runtime_transfers:
-        await _transfer_plan(connection, transfer)
-    await run_remote(
-        connection,
+        await _transfer_plan(connection, transfer, intent)
+    await _stage_run(
+        connection, intent,
         [
             "mkdir",
             "-p",
@@ -218,16 +243,16 @@ async def _stage_bundle(
             f"{bundle.remote_attempt_dir}/data",
         ],
     )
-    await rsync_to_remote(
-        connection,
+    await _stage_upload(
+        connection, intent,
         bundle.local_attempt_dir,
         bundle.remote_attempt_dir,
         delete=False,
     )
     for transfer in bundle.input_transfers:
-        await _transfer_plan(connection, transfer)
-    await run_remote(
-        connection,
+        await _transfer_plan(connection, transfer, intent)
+    await _stage_run(
+        connection, intent,
         [
             "ln",
             "-sfn",
@@ -235,8 +260,8 @@ async def _stage_bundle(
             f"{bundle.remote_attempt_dir}/bundle/source",
         ],
     )
-    await run_remote(
-        connection,
+    await _stage_run(
+        connection, intent,
         [
             "ln",
             "-sfn",
@@ -250,6 +275,7 @@ async def _stage_secret_environment(
     connection: RemoteConnection,
     bundle: PreparedRemoteBundle,
     secret_environment: dict[str, str] | None,
+    intent: dict,
 ) -> None:
     secrets = dict(secret_environment or {})
     if not secrets:
@@ -265,8 +291,8 @@ async def _stage_secret_environment(
         "fd=os.open(p,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600); "
         "os.write(fd,data); os.fsync(fd); os.close(fd)"
     )
-    await run_remote(
-        connection,
+    await _stage_run(
+        connection, intent,
         ["python3", "-c", writer, secret_path],
         input_bytes=payload,
     )
@@ -336,9 +362,12 @@ def _remote_compute_released(job: Job) -> bool:
     authority = (job.provenance or {}).get("remote_execution_receipt") or {}
     if authority.get("compute_released") is not True:
         return False
-    from services.remote_resource_evidence import validate_for_job
+    from services.remote_resource_evidence import validate_for_job, validate_fence
     try:
-        validate_for_job(job, authority.get("resource_receipt"), require_complete=False)
+        if authority.get("fence_receipt") is not None:
+            validate_fence((job.provenance or {}).get("remote_resource_intent"), authority["fence_receipt"])
+        else:
+            validate_for_job(job, authority.get("resource_receipt"), require_complete=False)
     except (ValueError, TypeError):
         return False
     return True
@@ -352,7 +381,15 @@ async def _publish_remote_transition(
         ExecutionTarget.id == job.execution_target_id,
         ExecutionTarget.leased_job_id == str(job.id),
     ).exists()]
-    if _remote_compute_released(job):
+    intent_staging = ((job.provenance or {}).get("remote_resource_intent")
+        and job.remote_state == "staging" and job.queue_status in {"preparing", "cancelling"})
+    fenced_publication = False
+    fence = ((values.get("provenance") or {}).get("remote_execution_receipt") or {}).get("fence_receipt")
+    if fence is not None:
+        from services.remote_resource_evidence import validate_fence
+        validate_fence((job.provenance or {}).get("remote_resource_intent"), fence)
+        fenced_publication = True
+    if _remote_compute_released(job) or intent_staging or fenced_publication:
         lease_authority = []  # Delivery CAS is attempt/provenance-owned, not a compute lease.
     with session.no_autoflush:
         result = await session.execute(
@@ -382,6 +419,8 @@ async def _publish_remote_transition(
 
 
 async def fail_remote_prestart(session: AsyncSession, job: Job, error: str) -> bool:
+    if (job.provenance or {}).get("remote_resource_intent"):
+        return await _recover_remote_intent(session, job)
     if (job.status != "queued" or job.queue_status != "preparing"
             or job.remote_state not in {"preparing", "staging"}):
         return False
@@ -457,105 +496,152 @@ async def launch_remote_job(
             environment=environment, secret_environment=secret_environment)
 
 
+def _attempt_snapshot(job):
+    from copy import deepcopy
+    from types import SimpleNamespace
+    return SimpleNamespace(**{key: deepcopy(getattr(job, key)) for key in (
+        "id", "execution_target_id", "remote_attempt_id", "nextflow_run_id", "provenance", "params",
+        "status", "queue_status", "remote_state")})
+
+
 async def _launch_remote_job_owned(
-    session: AsyncSession,
-    job: Job,
-    *,
-    command: list[str],
+    session: AsyncSession, job: Job, *, command: list[str],
     environment: dict[str, str] | None = None,
     secret_environment: dict[str, str] | None = None,
 ) -> str:
     if (not job.execution_target_id or job.status != "queued" or job.queue_status != "preparing"
             or job.remote_state != "preparing" or job.remote_attempt_id or job.nextflow_run_id):
         raise RemoteExecutionError("Remote launch requires a fresh durable preparing claim")
-    bundle: PreparedRemoteBundle | None = None
+    from dataclasses import replace
+    from services.global_resource_admission import reserve_remote_attempt
+    from .transport import probe_readiness
+    bundle = None
+    intent = None
+    recovery_snapshot = None
+    claim_lost = False
     requested_attempt_id = str(uuid.uuid4())
-    start_requested = False
-    remote_staging_started = False
-    allocation = None
-    fenced = False
     try:
         target = await get_ready_target(session, str(job.execution_target_id))
         connection = RemoteConnection.from_target(target)
         await _verify_launch_runner(session, job, connection, target)
-        bundle = await asyncio.to_thread(
-            prepare_remote_bundle, job=job, target=target, command=command,
-            environment=environment, attempt_id=requested_attempt_id,
-        )
-        from dataclasses import replace
-        from services.global_resource_admission import reserve_remote_attempt
-        from .transport import probe_readiness
-        actual = await probe_readiness(connection)
+        bundle = await asyncio.to_thread(prepare_remote_bundle, job=job, target=target,
+            command=command, environment=environment, attempt_id=requested_attempt_id)
         policy = dict((target.capabilities or {}).get("resource_policy") or {})
-        measured = actual.get("resources", {})
+        measured = (await probe_readiness(connection)).get("resources", {})
         if any(measured.get(key) != policy.get(key) for key in ("machine_id", "storage_device", "storage_root")):
             raise RemoteExecutionError("Remote admitted machine/storage identity changed; repeat readiness")
         for key in ("cpu_threads", "dram_bytes", "free_disk_bytes"):
             policy[key] = measured[key]
-        allocation = reserve_remote_attempt(
-            target_id=str(target.id), policy=policy, attempt_id=bundle.attempt_id,
-            job_id=str(job.id), storage_path=bundle.remote_attempt_dir)
-        if sum(record.size_bytes for record in bundle.envelope.files) > allocation["effective"]["disk_bytes"]:
-            raise RemoteExecutionError("Remote staged inputs/runtime exceed admitted disk")
-        envelope = bundle.envelope.model_copy(update={"resource_allocation": allocation})
-        payload = json.dumps(envelope.model_dump(mode="json", by_alias=True),
-            sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
-        (bundle.local_attempt_dir / "execution-envelope.json").write_bytes(payload)
-        bundle = replace(bundle, envelope=envelope, envelope_sha256=hashlib.sha256(payload).hexdigest())
-        run_id = f"{REMOTE_RUN_PREFIX}{bundle.attempt_id}"
+        intent = {"schema": "bms.remote-attempt-intent.v1", "job_id": str(job.id),
+            "attempt_id": bundle.attempt_id, "target_id": str(target.id),
+            "machine_id": policy["machine_id"], "storage_device": policy["storage_device"],
+            "storage_path": bundle.remote_attempt_dir, "policy": policy,
+            "staging_reservation_id": uuid.uuid4().hex, "compute_reservation_id": uuid.uuid4().hex,
+            # Explicit metadata headroom, not scientific compute or whole-disk reservation.
+            "staging_disk_bytes": sum(record.size_bytes for record in bundle.envelope.files)
+                + (bundle.local_attempt_dir / "execution-envelope.json").stat().st_size + 65536}
         provenance = dict(job.provenance or {})
+        provenance["remote_resource_intent"] = intent
         provenance["remote_execution_receipt"] = _remote_receipt(bundle, target, state="staging")
+        run_id = REMOTE_RUN_PREFIX + bundle.attempt_id
+        # Both reservation identities and authenticated endpoint are durable
+        # BEFORE either allocation insertion or a remote command can have effect.
         if not await _publish_remote_transition(session, job, {
             "nextflow_run_id": run_id, "remote_attempt_id": bundle.attempt_id,
             "remote_state": "staging", "execution_source_revision": bundle.envelope.source_revision,
             "execution_source_tree": bundle.envelope.source_tree,
             "execution_bundle_sha256": bundle.envelope_sha256, "provenance": provenance,
-        }):
-            fenced = True
+        }, release_lease=True):
+            intent = None
+            claim_lost = True
             raise RemoteExecutionError("Remote preparing claim was superseded")
-        await asyncio.to_thread(_archive_envelope, bundle)
-        remote_staging_started = True
-        await _stage_bundle(connection, bundle)
-        await _stage_secret_environment(connection, bundle, secret_environment)
-        await run_remote(connection, _worker_argv(connection, "prepare", bundle.remote_attempt_dir), timeout=300)
-        if not await _publish_remote_transition(session, job, {"remote_state": "launch_requested"}):
-            fenced = True
-            raise RemoteExecutionError("Remote start claim was superseded")
-        start_requested = True
-        try:
-            response = await run_remote(connection, _worker_argv(connection, "run", bundle.remote_attempt_dir), timeout=60)
-            status = _parse_status(response.stdout)
-            if (status.job_id != str(job.id) or status.attempt_id != bundle.attempt_id
-                    or status.state not in {"running", *TERMINAL_REMOTE_STATES}
-                    or status.started_at is None):
-                raise RemoteExecutionError("Remote worker did not publish a valid started receipt")
-        except Exception as exc:
-            # Start may have arrived. Never release its lease or declare failure.
-            await _publish_remote_transition(session, job, {
-                "remote_state": "launch_uncertain", "error_message": str(exc)[:1500],
-            })
-            return run_id
+        recovery_snapshot = _attempt_snapshot(job)
+        reserve_remote_attempt(target_id=str(target.id), policy=policy, attempt_id=bundle.attempt_id,
+            job_id=str(job.id), storage_path=bundle.remote_attempt_dir,
+            reservation_id=intent["staging_reservation_id"], staging_disk_bytes=intent["staging_disk_bytes"])
+        await _verify_remote_runner(connection, target)
+        await run_remote(connection, _worker_argv(connection, "intent", bundle.remote_attempt_dir),
+            input_bytes=json.dumps(intent, sort_keys=True, separators=(",", ":")).encode())
+        await _stage_bundle(connection, bundle, intent)
+        await _stage_secret_environment(connection, bundle, secret_environment, intent)
+        # Acquire only now. A staging operation never occupies the scientific slot.
+        result = await session.execute(update(ExecutionTarget).where(
+            ExecutionTarget.id == str(target.id), ExecutionTarget.leased_job_id.is_(None),
+            ExecutionTarget.active.is_(True), ExecutionTarget.state == "ready",
+            ExecutionTarget.host == target.host, ExecutionTarget.port == target.port,
+            ExecutionTarget.username == target.username, ExecutionTarget.remote_root == target.remote_root,
+            ExecutionTarget.activated_at == target.activated_at, ExecutionTarget.capabilities == target.capabilities,
+            select(Job.id).where(Job.id == str(job.id), Job.status == job.status,
+                Job.queue_status == job.queue_status, Job.remote_state == "staging",
+                Job.remote_attempt_id == bundle.attempt_id, Job.nextflow_run_id == run_id,
+                Job.execution_target_id == str(target.id), Job.provenance == job.provenance,
+                Job.params == job.params).exists(),
+        ).values(leased_job_id=str(job.id), lease_acquired_at=datetime.utcnow())
+            .execution_options(synchronize_session=False))
+        if result.rowcount != 1:
+            await session.commit()  # No mutation; do not expire the recovery snapshot.
+            raise RemoteExecutionError("Remote compute slot unavailable after staging")
+        await session.commit()
+        measured = (await probe_readiness(connection)).get("resources", {})
+        if any(measured.get(key) != policy.get(key) for key in ("machine_id", "storage_device", "storage_root")):
+            raise RemoteExecutionError("Remote resource identity changed during staging")
+        compute_policy = {**policy, **{key: measured[key] for key in ("cpu_threads", "dram_bytes", "free_disk_bytes")}}
+        allocation = reserve_remote_attempt(target_id=str(target.id), policy=compute_policy,
+            attempt_id=bundle.attempt_id, job_id=str(job.id), storage_path=bundle.remote_attempt_dir,
+            reservation_id=intent["compute_reservation_id"], staging_reservation_id=intent["staging_reservation_id"])
+        envelope = bundle.envelope.model_copy(update={"resource_allocation": allocation})
+        payload = json.dumps(envelope.model_dump(mode="json", by_alias=True),
+            sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+        (bundle.local_attempt_dir / "execution-envelope.json").write_bytes(payload)
+        bundle = replace(bundle, envelope=envelope, envelope_sha256=hashlib.sha256(payload).hexdigest())
         provenance = dict(job.provenance or {})
-        provenance["remote_execution_receipt"] = _remote_receipt(
-            bundle, target, state=status.state, started_at=status.started_at,
-        )
-        published = await _publish_started_receipt(
-            session, job, status, provenance["remote_execution_receipt"],
-        )
-        if not published:
-            # Only this immutable old attempt is stopped; no successor DB writes.
+        provenance["remote_execution_receipt"] = _remote_receipt(bundle, target, state="launch_requested")
+        if not await _publish_remote_transition(session, job, {
+            "remote_state": "launch_requested", "execution_bundle_sha256": bundle.envelope_sha256,
+            "provenance": provenance,
+        }):
+            raise RemoteExecutionError("Remote start claim was superseded")
+        recovery_snapshot = _attempt_snapshot(job)
+        await asyncio.to_thread(_archive_envelope, bundle)
+        await _stage_upload(connection, intent, bundle.local_attempt_dir / "execution-envelope.json",
+            bundle.remote_attempt_dir + "/execution-envelope.json", delete=False)
+        await _stage_run(connection, intent, _worker_argv(connection, "prepare", bundle.remote_attempt_dir), timeout=300)
+        await _verify_remote_runner(connection, target)
+        await run_remote(connection, _worker_argv(connection, "arm", bundle.remote_attempt_dir,
+            "--intent-sha256", _intent_digest(intent)))
+        response = await run_remote(connection, _worker_argv(connection, "run", bundle.remote_attempt_dir), timeout=60)
+        status = _parse_status(response.stdout)
+        if (status.job_id != str(job.id) or status.attempt_id != bundle.attempt_id
+                or status.state not in {"running", *TERMINAL_REMOTE_STATES} or status.started_at is None):
+            raise RemoteExecutionError("Remote worker did not publish a valid started receipt")
+        if not await _publish_started_receipt(session, job, status):
+            # A newer Job/lease owns publication. Stop/reconcile only the old
+            # immutable remote generation; never leave its compute orphaned.
             await run_remote(connection, _worker_argv(connection, "cancel", bundle.remote_attempt_dir), timeout=60)
+            await _recover_remote_intent(session, recovery_snapshot)
         return run_id
     except Exception as exc:
-        if not fenced and not start_requested:
+        if intent is not None:
+            # Authenticated remote fence, not local lock/time/process inference.
+            # Busy receiver/supervisor or ambiguous descendants retains ownership.
+            try:
+                await _recover_remote_intent(session, recovery_snapshot)
+            except (RemoteExecutionError, RemoteTransportError, ResourceCapacityUnavailable):
+                # Remote work may still own receivers/descendants. The durable
+                # Job stays recoverable rather than a caller terminalizing it.
+                await session.rollback()
+                current = await session.get(Job, intent["job_id"], populate_existing=True)
+                if (current is not None and current.remote_attempt_id == intent["attempt_id"]
+                        and current.remote_state == "launch_requested"):
+                    await _publish_remote_transition(session, current, {
+                        "remote_state": "launch_uncertain", "error_message": str(exc)[:1500]})
+                return REMOTE_RUN_PREFIX + intent["attempt_id"]
+        elif not claim_lost:
             await fail_remote_prestart(session, job, str(exc))
         if isinstance(exc, RemoteExecutionError):
             raise
         raise RemoteExecutionError(str(exc)) from exc
     finally:
-        if allocation is not None and not remote_staging_started:
-            from services.global_resource_admission import abandon_unstaged_remote_attempt
-            abandon_unstaged_remote_attempt(allocation)
         if bundle is not None:
             await asyncio.to_thread(_cleanup_local_bundle, bundle)
         else:
@@ -594,6 +680,99 @@ def _connection_for_attempt(target: ExecutionTarget, job: Job) -> tuple[RemoteCo
         )
         return connection, receipt_attempt_dir
     return connection, f"{connection.remote_root}/attempts/{job.remote_attempt_id}"
+
+
+async def _authenticated_remote_fence(session, job, *, remove=False):
+    intent = (job.provenance or {}).get("remote_resource_intent")
+    if not isinstance(intent, dict) or intent.get("attempt_id") != str(job.remote_attempt_id):
+        raise RemoteExecutionError("This remote generation has no durable owner protocol")
+    target = await session.get(ExecutionTarget, str(job.execution_target_id), populate_existing=True)
+    if target is None:
+        raise RemoteExecutionError("Remote execution target is missing")
+    connection, attempt_dir = _connection_for_attempt(target, job)
+    authority = (job.provenance or {}).get("remote_execution_receipt") or {}
+    if any(authority.get(key) != (target.capabilities or {}).get(key)
+           for key in ("runner_sha256", "nextflow_launcher_sha256")):
+        raise RemoteExecutionError("Attempt runner generation changed; cleanup refused")
+    await _verify_remote_runner(connection, target)
+    # If the controller crashed before first remote publication, initialize the
+    # SAME durable intent and immediately fence it. Never invent a new retry ID.
+    await run_remote(connection, _worker_argv(connection, "intent", attempt_dir),
+        input_bytes=json.dumps(intent, sort_keys=True, separators=(",", ":")).encode())
+    response = await run_remote(connection, _worker_argv(connection,
+        "remove-storage" if remove else "fence", attempt_dir,
+        "--intent-sha256", _intent_digest(intent)), timeout=300)
+    try:
+        proof = json.loads(response.stdout.strip().splitlines()[-1])
+        from services.remote_resource_evidence import validate_fence, validate_for_job
+        validate_fence(intent, proof)
+        if not proof["nonexecution"]:
+            validate_for_job(job, proof["resource_receipt"], require_complete=False)
+    except (IndexError, ValueError, TypeError) as exc:
+        raise RemoteExecutionError("Authenticated remote fence has invalid generation evidence") from exc
+    return proof
+
+
+async def _recover_remote_intent(session, job):
+    identity = (str(job.id), str(job.remote_attempt_id), str(job.nextflow_run_id), str(job.execution_target_id))
+    intent = (job.provenance or {}).get("remote_resource_intent")
+    assignment = (job.provenance or {}).get("remote_execution_assignment")
+    proof = await _authenticated_remote_fence(session, job)
+    from services.global_resource_admission import reconcile_remote_storage
+    # Exact old-generation accounting is safe even if the Job was retried while
+    # SSH was in flight. Publication below must still win the current Job CAS.
+    reconcile_remote_storage((job.provenance or {})["remote_resource_intent"], proof)
+    await session.rollback()
+    current = await session.get(Job, identity[0], populate_existing=True)
+    if (current is None or (str(current.id), str(current.remote_attempt_id), str(current.nextflow_run_id),
+            str(current.execution_target_id)) != identity
+            or (current.provenance or {}).get("remote_resource_intent") != intent
+            or (current.provenance or {}).get("remote_execution_assignment") != assignment):
+        return False
+    if not proof["nonexecution"]:
+        from services.remote_resource_evidence import validate_for_job
+        validate_for_job(current, proof["resource_receipt"], require_complete=False)
+    provenance = dict(current.provenance or {})
+    receipt = dict(provenance.get("remote_execution_receipt") or {})
+    receipt.update(fence_receipt=proof, compute_released=True,
+        peak_retained_disk_bytes=max(receipt.get("peak_retained_disk_bytes", 0), proof["resident_disk_bytes"]))
+    if proof["resource_receipt"] is not None:
+        receipt["resource_receipt"] = proof["resource_receipt"]
+    provenance["remote_execution_receipt"] = receipt
+    values = {"provenance": provenance}
+    if proof["nonexecution"] and current.status not in {"completed", "failed", "cancelled"}:
+        values.update(status="cancelled" if current.queue_status == "cancelling" else "failed",
+            queue_status="cancelled" if current.queue_status == "cancelling" else "failed",
+            remote_state="cancelled" if current.queue_status == "cancelling" else "launch_failed",
+            completed_at=datetime.utcnow(), assigned_gpu=None,
+            params=release_scheduler_gpu_assignment(current.params),
+            error_message="Remote generation fenced before scientific execution; staged bytes retained")
+    return await _publish_remote_transition(session, current, values, release_lease=True)
+
+
+async def reconcile_remote_retained_storage(session, job, *, attempt_id, intent_sha256, remove=False):
+    """Authorized router/owner seam. No implicit pull/cancel/success deletion."""
+    with _controller_attempt_guard(str(job.id)) as owned:
+        intent = (job.provenance or {}).get("remote_resource_intent")
+        if (not owned or not isinstance(intent, dict) or attempt_id != str(job.remote_attempt_id)
+                or intent_sha256 != _intent_digest(intent)):
+            raise RemoteExecutionError("Remote storage generation changed or owner is busy")
+        if not _remote_compute_released(job):
+            raise RemoteExecutionError("Active or ambiguous remote storage requires owner recovery before cleanup")
+        proof = await _authenticated_remote_fence(session, job, remove=remove)
+        from services.global_resource_admission import reconcile_remote_storage
+        reconcile_remote_storage(intent, proof)
+        provenance = dict(job.provenance or {})
+        receipt = dict(provenance.get("remote_execution_receipt") or {})
+        receipt.update(storage_state=proof["phase"], retained_disk_bytes=proof["resident_disk_bytes"],
+            fence_receipt=proof)
+        provenance["remote_execution_receipt"] = receipt
+        # Complete snapshot CAS; never touch a successor Job or reacquire compute.
+        await _publish_remote_transition(session, job, {"provenance": provenance})
+        return {"job_id": str(job.id), "attempt_id": attempt_id,
+            "intent_sha256": intent_sha256, "state": proof["phase"],
+            "resident_disk_bytes": proof["resident_disk_bytes"],
+            "payload_removed": proof["phase"] == "removed", "boundary_cleanup": proof["boundary_cleanup"]}
 
 
 async def _acquire_remote_terminal_fence(session: AsyncSession, job: Job) -> bool:
@@ -805,11 +984,12 @@ async def _fetch_result_manifest(
         "(_ for _ in ()).throw(RuntimeError('manifest too large')) if len(b)>n else None; "
         "sys.stdout.buffer.write(b)"
     )
-    response = await run_remote(
-        connection,
-        ["python3", "-c", reader, manifest_path, str(MAX_RESULT_MANIFEST_BYTES)],
-        timeout=30,
-    )
+    intent = (job.provenance or {}).get("remote_resource_intent")
+    argv = ["python3", "-c", reader, manifest_path, str(MAX_RESULT_MANIFEST_BYTES)]
+    if intent:
+        argv = _worker_argv(connection, "read-command", intent["storage_path"],
+            "--intent-sha256", _intent_digest(intent), "--", *argv)
+    response = await run_remote(connection, argv, timeout=30)
     manifest_bytes = response.stdout.encode("utf-8")
     if not manifest_bytes or len(manifest_bytes) > MAX_RESULT_MANIFEST_BYTES:
         raise RemoteExecutionError("Remote result manifest exceeds the bounded size")
@@ -888,10 +1068,14 @@ async def collect_remote_results(
         # Bound each receive by its own declaration, not the largest sibling.
         # rsync uses a private temporary then rename, so no previous generation
         # shares this admitted namespace.
+        intent = (job.provenance or {}).get("remote_resource_intent")
+        import shlex
+        reader = (shlex.join(_worker_argv(connection, "read-command", intent["storage_path"],
+            "--intent-sha256", _intent_digest(intent), "--", "rsync")) if intent else None)
         for artifact in manifest.artifacts:
             await rsync_selected_from_remote(
                 connection, remote_results_dir, incoming, [artifact.relative_path],
-                max_file_bytes=artifact.size_bytes,
+                max_file_bytes=artifact.size_bytes, rsync_path=reader, owner_fd=allocation._descriptor,
             )
         manifest = await _quiescent_thread(_verify_result_package, incoming, job, status)
     except (RemoteTransportError, RemoteExecutionError, ResourceCapacityUnavailable, OSError, ValueError) as exc:
@@ -902,7 +1086,7 @@ async def collect_remote_results(
     finally:
         if allocation is not None:
             try:
-                allocation.retain(disk_bytes=owned_storage_bytes(incoming))
+                allocation.retain_observed(disk_bytes=owned_storage_bytes(incoming))
             finally:
                 allocation.release()
     return manifest, incoming
@@ -982,6 +1166,8 @@ async def reconcile_remote_job(session: AsyncSession, job: Job, *, pull_results:
 async def _reconcile_remote_job_owned(session: AsyncSession, job: Job, *, pull_results: bool = False) -> bool:
     """Reconcile one running remote Job. Return true when local state changed."""
     job_id = str(job.id)
+    if ((job.provenance or {}).get("remote_execution_receipt") or {}).get("storage_state") == "removed":
+        return False
     if job.status in {"completed", "failed", "cancelled"}:
         return False
     expected_run_id = str(job.nextflow_run_id or "")
@@ -993,10 +1179,23 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job, *, pull_r
         if job.queue_status == "preparing" and _preparation_expired(job):
             return await fail_remote_prestart(session, job, "Remote preparation expired before durable attempt identity")
         return False
+    if (job.provenance or {}).get("remote_resource_intent") and job.remote_state == "staging":
+        return await _recover_remote_intent(session, job)
     try:
         status = await remote_status(session, job)
-    except RemoteStagingIncomplete as exc:
-        return await fail_remote_prestart(session, job, str(exc))
+    except (RemoteStagingIncomplete, RemoteExecutionError):
+        if (job.provenance or {}).get("remote_resource_intent"):
+            return await _recover_remote_intent(session, job)
+        raise
+    if ((job.provenance or {}).get("remote_resource_intent") and status.state == "prepared"
+            and job.remote_state in {"launch_requested", "launch_uncertain"}):
+        return await _recover_remote_intent(session, job)
+    if ((job.provenance or {}).get("remote_resource_intent") and status.state not in TERMINAL_REMOTE_STATES
+            and status.state != "prepared"):
+        try:
+            return await _recover_remote_intent(session, job)
+        except RemoteTransportError:
+            pass  # Remote owner/descendants remain active, not zero usage.
     # Remote I/O can outlive a concurrent operator action. End the current read
     # transaction and reload local authority before any resume or publication.
     await session.rollback()
@@ -1012,6 +1211,8 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job, *, pull_r
     if job.status in {"cancelled", "completed", "failed"}:
         return False
     if status.state in TERMINAL_REMOTE_STATES and not _remote_compute_released(job):
+        if (job.provenance or {}).get("remote_resource_intent"):
+            return await _recover_remote_intent(session, job)
         from services.remote_resource_evidence import validate_for_job
         from services.global_resource_admission import retain_remote_attempt
         try:
@@ -1295,8 +1496,21 @@ async def cancel_remote_job(job: Job, *, graceful_timeout_seconds: float = 30.0)
         status = _parse_status(response.stdout)
         if status.job_id != str(job.id) or status.attempt_id != str(job.remote_attempt_id):
             return False
-        # A terminal worker is stopped. It cannot revoke durable local intent.
-        return status.state in TERMINAL_REMOTE_STATES
+        if status.state not in TERMINAL_REMOTE_STATES:
+            return False
+        # Terminal status text is not descendant quiescence. Release through
+        # the same exact-generation owner before confirming cancellation.
+        try:
+            if (job.provenance or {}).get("remote_resource_intent"):
+                return await _recover_remote_intent(session, job)
+            from services.remote_resource_evidence import validate_for_job
+            from services.global_resource_admission import retain_remote_attempt
+            proof = validate_for_job(job, status.resource_receipt, require_complete=False)
+            retain_remote_attempt(proof["allocation"], quiescence_receipt=proof,
+                resident_disk_bytes=status.resident_disk_bytes)
+        except (RemoteTransportError, RemoteExecutionError, ResourceCapacityUnavailable, ValueError, TypeError):
+            return False
+        return True
 
 
 async def cancel_remote_run_id(

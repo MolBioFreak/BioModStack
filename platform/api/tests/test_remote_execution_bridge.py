@@ -41,7 +41,8 @@ def _sha256(path: Path) -> str:
 
 def _worker_attempt(tmp_path: Path, command: list[str]) -> Path:
     attempt_id = str(uuid4())
-    attempt_dir = tmp_path / "attempt"
+    attempt_dir = tmp_path / "attempts" / attempt_id
+    command = [part.replace(str(tmp_path / "attempt"), str(attempt_dir)) for part in command]
     source_dir = attempt_dir / "bundle" / "source"
     source_dir.mkdir(parents=True)
     source_archive = source_dir / ".bms-source.tar"
@@ -74,10 +75,26 @@ def _worker_attempt(tmp_path: Path, command: list[str]) -> Path:
         }],
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    from services.global_resource_admission import SCHEMA
+    from tests.test_remote_intent_recovery import intent_for
+    policy = {"target_id": "vast:123", "storage_root": str(tmp_path),
+        "machine_id": Path("/etc/machine-id").read_text().strip(),
+        "storage_device": str(tmp_path.stat().st_dev)}
+    intent = intent_for(policy, path=str(attempt_dir))
+    intent.update(attempt_id=attempt_id, job_id="job-1", staging_disk_bytes=10000000)
+    envelope["resource_allocation"] = {"schema": SCHEMA, "reservation_id": intent["compute_reservation_id"],
+        "target_id": "vast:123", "machine_id": policy["machine_id"], "storage_device": policy["storage_device"],
+        "policy_id": "execution-target:vast:123", "policy_version": "fixture", "policy_generation": 1,
+        "storage_path": str(attempt_dir), "owner": "remote-attempt:job-1:" + attempt_id,
+        "requested": {"cpu_threads": 1, "dram_bytes": 32000000, "disk_bytes": 10000000},
+        "effective": {"cpu_threads": 1, "dram_bytes": 32000000, "disk_bytes": 10000000}}
     (attempt_dir / worker.ENVELOPE_FILE).write_text(
         json.dumps(envelope, sort_keys=True, separators=(",", ":")),
         encoding="utf-8",
     )
+    worker.initialize_owner(attempt_dir, intent)
+    worker.prepare(attempt_dir)
+    worker.arm_owner(attempt_dir, hashlib.sha256(worker.canonical_bytes(intent)).hexdigest())
     return attempt_dir
 
 
@@ -116,6 +133,7 @@ def test_native_manifest_echoes_exact_staging_authority(tmp_path):
     authority = {"schema": "bms.ngs.remote-execution-authority.v1", "input_files": [], "setting": "α"}
     envelope["native_execution_authority"] = authority
     worker.atomic_json(attempt / worker.ENVELOPE_FILE, envelope)
+    worker.atomic_json(attempt / "results" / "_remote" / "resource-usage.json", {"fixture": "hash-binding-only"})
     manifest = worker.build_result_manifest(attempt, envelope, 0)
     assert manifest["native_execution_authority_sha256"] == hashlib.sha256(worker.canonical_bytes(authority)).hexdigest()
     assert manifest["execution_envelope_sha256"] == _sha256(attempt / worker.ENVELOPE_FILE)
@@ -394,7 +412,9 @@ def test_bundle_preserves_committed_source_and_relocates_managed_paths(
         shutil.rmtree(bundle.local_attempt_dir, ignore_errors=True)
 
 
-def test_remote_worker_detaches_and_publishes_hash_bound_manifest(tmp_path: Path) -> None:
+def test_remote_worker_detaches_and_publishes_hash_bound_manifest(tmp_path: Path, monkeypatch) -> None:
+    # Offline process/publication fixture; no systemd or fake kernel acceptance.
+    monkeypatch.setattr(worker, "__file__", str(Path(__file__).with_name("remote_worker_process_fixture.py")))
     output_file = tmp_path / "attempt" / "results" / "result.txt"
     attempt_dir = _worker_attempt(
         tmp_path,
@@ -412,7 +432,9 @@ def test_remote_worker_detaches_and_publishes_hash_bound_manifest(tmp_path: Path
     assert worker.start(attempt_dir)["state"] == "succeeded"
 
 
-def test_remote_worker_cancellation_is_durable_and_terminal(tmp_path: Path) -> None:
+def test_remote_worker_cancellation_is_durable_and_terminal(tmp_path: Path, monkeypatch) -> None:
+    # Offline process/publication fixture; no systemd or fake kernel acceptance.
+    monkeypatch.setattr(worker, "__file__", str(Path(__file__).with_name("remote_worker_process_fixture.py")))
     attempt_dir = _worker_attempt(
         tmp_path,
         [sys.executable, "-c", "import time; time.sleep(60)"],
@@ -499,7 +521,12 @@ async def test_stage_bundle_never_uploads_existing_local_results(
     monkeypatch.setattr(executor_module, "rsync_to_remote", fake_rsync)
     monkeypatch.setattr(executor_module, "_transfer_plan", fake_remote)
 
-    await executor_module._stage_bundle(SimpleNamespace(), bundle)  # type: ignore[arg-type]
+    intent = {"storage_path": bundle.remote_attempt_dir}
+    monkeypatch.setattr(executor_module, "_stage_run", fake_remote)
+    async def upload(connection, intent, source, destination, **kwargs):
+        await fake_rsync(connection, source, destination, **kwargs)
+    monkeypatch.setattr(executor_module, "_stage_upload", upload)
+    await executor_module._stage_bundle(SimpleNamespace(), bundle, intent)  # type: ignore[arg-type]
 
     assert local_attempt in copied_sources
     assert local_output not in copied_sources

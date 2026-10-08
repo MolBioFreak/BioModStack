@@ -1,4 +1,4 @@
-from test_remote_lifecycle_gaps import store, receipt
+from test_remote_lifecycle_gaps import store, receipt, released_resource_fixture
 from database import Job, ExecutionTarget
 from services.remote_execution import executor as ex
 from services import result_ingester, analysis_autorun
@@ -15,6 +15,7 @@ async def test_real_completion_schedules_viewer_analysis(store, monkeypatch, tmp
         job = await s.get(Job, 'job')
         job.model_id = 'custom_file_workflow'
         job.provenance = {'remote_execution_receipt': {'expected_result_contract_sha256': hashlib.sha256(json.dumps(ex.resolve_job_result_contract(job), sort_keys=True, separators=(',', ':')).encode()).hexdigest()}}
+        released_resource_fixture(job)
         await s.commit()
     async def status(*_):
         return receipt().model_copy(update={'result_manifest_sha256': 'a'*64})

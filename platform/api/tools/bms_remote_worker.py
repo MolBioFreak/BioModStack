@@ -209,6 +209,188 @@ def base_status(envelope: dict[str, Any], state: str) -> dict[str, Any]:
     }
 
 
+def owner_paths(attempt_dir):
+    import uuid
+    if str(uuid.UUID(attempt_dir.name)) != attempt_dir.name or attempt_dir.parent.name != "attempts":
+        raise RuntimeError("invalid owned attempt namespace")
+    root = attempt_dir.parent.parent / "attempt-owners" / attempt_dir.name
+    if any(part.is_symlink() for part in (root, *root.parents, attempt_dir)):
+        raise RuntimeError("unsafe attempt owner namespace")
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return root, root / "intent.json"
+
+
+def owner_guard(attempt_dir, *, exclusive=False):
+    # Lock/tombstone are OUTSIDE the removable payload and never unlinked.
+    # Receivers inherit this descriptor: wrapper death is not receiver death.
+    from contextlib import contextmanager
+    @contextmanager
+    def held():
+        root, path = owner_paths(attempt_dir)
+        fd = os.open(root / "operations.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            fcntl.flock(fd, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+            yield fd, path
+        finally:
+            os.close(fd)
+    return held()
+
+
+def check_owner(path, expected=None, phases=None):
+    record = load_json(path)
+    intent = record["intent"]
+    if (expected is not None and hashlib.sha256(canonical_bytes(intent)).hexdigest() != expected
+            or intent["machine_id"] != Path("/etc/machine-id").read_text().strip()
+            or intent["storage_device"] != str(path.parent.stat().st_dev)
+            or intent["attempt_id"] != path.parent.name
+            or intent["storage_path"] != str(path.parents[2] / "attempts" / path.parent.name)
+            or Path(intent["storage_path"]).exists() and str(Path(intent["storage_path"]).stat().st_dev) != intent["storage_device"]
+            or phases is not None and record["phase"] not in phases):
+        raise RuntimeError("remote attempt generation is fenced or changed")
+    return record
+
+
+def initialize_owner(attempt_dir, intent):
+    with owner_guard(attempt_dir, exclusive=True) as (_, path):
+        if (intent["attempt_id"] != attempt_dir.name or intent["storage_path"] != str(attempt_dir)
+                or intent["machine_id"] != Path("/etc/machine-id").read_text().strip()
+                or intent["storage_device"] != str(attempt_dir.parent.parent.stat().st_dev)):
+            raise RuntimeError("remote staging intent identity mismatch")
+        if path.exists():
+            record = check_owner(path)
+            if record["intent"] != intent:
+                raise RuntimeError("remote staging intent already belongs to another generation")
+            return record
+        record = {"intent": intent, "phase": "staging"}
+        atomic_json(path, record)  # Before the first mkdir/receive, even on empty recovery.
+        return record
+
+
+def stage_command(attempt_dir, expected, argv, *, reading=False):
+    with owner_guard(attempt_dir) as (fd, path):
+        record = check_owner(path, expected, {"fenced"} if reading else {"staging"})
+        os.set_inheritable(fd, True)
+        process = subprocess.Popen(argv, pass_fds=(fd,))
+        # Sample-abort is not a filesystem quota; partial receives stay charged.
+        while process.poll() is None:
+            if not reading and owned_disk_bytes(attempt_dir) > record["intent"]["staging_disk_bytes"]:
+                process.terminate()
+                process.wait()
+                raise RuntimeError("staging disk observation exceeded admission")
+            time.sleep(0.2)
+        if process.returncode:
+            raise RuntimeError("owned staging command failed")
+
+
+def arm_owner(attempt_dir, expected):
+    with owner_guard(attempt_dir, exclusive=True) as (_, path):
+        record = check_owner(path, expected, {"staging", "armed"})
+        envelope = verify_bundle(attempt_dir)
+        if envelope["resource_allocation"]["reservation_id"] != record["intent"]["compute_reservation_id"]:
+            raise RuntimeError("scientific launch requires the exact compute admission")
+        digest = sha256_file(envelope_path(attempt_dir))
+        if record["phase"] == "armed" and record["envelope_sha256"] != digest:
+            raise RuntimeError("armed envelope changed")
+        record.update(phase="armed", envelope_sha256=digest)
+        atomic_json(path, record)
+        return record
+
+
+def retire_fenced_anchor(record, path):
+    creation = record.get("boundary_creation")
+    if record["nonexecution"] and creation and not record.get("anchor_removed"):
+        boundary = OwnedBoundary(record["intent"]["attempt_id"], {})
+        boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        if creation["unit"] != boundary.unit:
+            raise RuntimeError("interrupted boundary creation identity changed")
+        # No science was ever authorized, independently of manager state.
+        # A reboot cannot authorize stopping a replacement invocation.
+        if creation["boot_id"] == boot:
+            state = boundary.control("show", boundary.unit, "--property=LoadState", "--value")
+            if state != "not-found":
+                marker = boundary.control("show", boundary.unit, "--property=Description", "--value")
+                invocation = boundary.control("show", boundary.unit, "--property=InvocationID", "--value")
+                if marker != creation["marker"] or not invocation or (
+                        creation["invocation_id"] is not None and invocation != creation["invocation_id"]):
+                    raise RuntimeError("interrupted boundary invocation is ambiguous")
+                creation["invocation_id"] = invocation
+                atomic_json(path, record)
+                boundary.control("stop", boundary.unit)
+        record["anchor_removed"] = True
+        atomic_json(path, record)
+    if not record["nonexecution"] and not record.get("anchor_removed"):
+        identity = record["evidence"]["execution"]
+        boundary = OwnedBoundary(record["intent"]["attempt_id"], record["evidence"]["allocation"]["effective"])
+        if identity["boot_id"] == Path("/proc/sys/kernel/random/boot_id").read_text().strip():
+            state = boundary.control("show", boundary.unit, "--property=LoadState", "--value")
+            if state != "not-found":
+                invocation = boundary.control("show", boundary.unit, "--property=InvocationID", "--value")
+                active = boundary.control("show", boundary.unit, "--property=ActiveState", "--value")
+                if invocation and invocation != identity["invocation_id"]:
+                    raise RuntimeError("fenced boundary invocation changed")
+                if active not in {"inactive", "failed"}:
+                    if invocation != identity["invocation_id"]:
+                        raise RuntimeError("fenced boundary invocation is ambiguous")
+                    boundary.identity, boundary.path = identity, Path(identity["control_group"])
+                    if boundary.sample()["populated"] != 0:
+                        raise RuntimeError("fenced boundary is not quiescent")
+                    boundary.close()
+        record["anchor_removed"] = True
+        atomic_json(path, record)
+
+
+def fence_owner(attempt_dir, expected, *, remove=False):
+    with owner_guard(attempt_dir, exclusive=True) as (_, path):
+        record = check_owner(path, expected)
+        if record["phase"] not in {"fenced", "removing", "removed"}:
+            # Exclusive remote ownership excludes all receivers and supervisors.
+            # It does NOT prove descendants dead; scientific authorization below
+            # requires the original cgroup receipt/counters as a separate proof.
+            evidence = None
+            if record.get("execution_authorized"):
+                current = status(attempt_dir)
+                evidence = current.get("resource_receipt")
+                if not evidence or evidence.get("quiescent") is not True:
+                    raise RuntimeError("active or ambiguous scientific storage cannot be fenced")
+            record.update(phase="fenced", evidence=evidence,
+                nonexecution=not record.get("execution_authorized", False))
+            atomic_json(path, record)  # Durable late-launch and late-receive fence.
+        try:
+            retire_fenced_anchor(record, path)
+            record.pop("anchor_error", None)
+            atomic_json(path, record)
+        except Exception as exc:
+            # The durable launch fence + nonexecution/original empty-science
+            # proof releases COMPUTE even if manager anchor retirement fails.
+            # Explicit deletion still refuses ambiguous boundary cleanup.
+            record["anchor_error"] = f"{type(exc).__name__}: {exc}"[:1000]
+            atomic_json(path, record)
+            if remove:
+                raise
+        if remove:
+            record["phase"] = "removing"
+            atomic_json(path, record)
+            if attempt_dir.exists():
+                if attempt_dir.is_symlink():
+                    raise RuntimeError("unsafe attempt payload")
+                shutil.rmtree(attempt_dir)
+            directory = os.open(attempt_dir.parent, os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+            record["phase"] = "removed"
+            atomic_json(path, record)
+        proof = {"schema": "bms.remote-attempt-fence.v1", "intent": record["intent"],
+            "intent_sha256": expected, "machine_id": Path("/etc/machine-id").read_text().strip(),
+            "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+            "nonexecution": record["nonexecution"], "resource_receipt": record["evidence"],
+            "phase": record["phase"], "quiescent": True,
+            "boundary_cleanup": "pending" if record.get("anchor_error") else "complete",
+            "resident_disk_bytes": owned_disk_bytes(attempt_dir) + owned_disk_bytes(path.parent)}
+        return proof
+
+
 def prepare(attempt_dir: Path) -> dict[str, Any]:
     envelope = verify_bundle(attempt_dir)
     status = base_status(envelope, "prepared")
@@ -318,19 +500,35 @@ class OwnedBoundary:
         return subprocess.run(self.priv + ["systemctl", *args], check=True,
                               capture_output=True, text=True, timeout=30).stdout.strip()
 
-    def create(self) -> dict[str, Any]:
+    def create(self, owner_path=None, owner_record=None, owner_fd=None) -> dict[str, Any]:
         for name in ("cpu_threads", "dram_bytes"):
             if type(self.limits.get(name)) is not int or self.limits[name] < 1:
                 raise RuntimeError("invalid owned boundary allocation")
+        if owner_record is not None:
+            creation = {"unit": self.unit,
+                "marker": "bms-owner:" + hashlib.sha256(canonical_bytes(owner_record["intent"])).hexdigest(),
+                "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+                "invocation_id": None}
+            owner_record["boundary_creation"] = creation
+            atomic_json(owner_path, owner_record)
+        else:
+            creation = None
         # systemd refuses a pre-existing unit. Never adopt by name alone.
         subprocess.run(self.priv + ["systemd-run", "--quiet", "--unit=" + self.unit,
             "--property=Type=exec", "--property=Delegate=cpu memory pids",
             "--property=User=" + str(os.getuid()), "--property=Group=" + str(os.getgid()),
-            "--property=KillMode=control-group", "--property=TasksMax=infinity",
-            "/bin/sleep", "infinity"], check=True, capture_output=True, timeout=30)
+            "--property=KillMode=control-group", "--property=TasksMax=infinity", "--property=Restart=no",
+            *(["--property=Description=" + creation["marker"]] if creation else []),
+            "/bin/sleep", "infinity"], check=True, capture_output=True, timeout=30,
+            pass_fds=(() if owner_fd is None else (owner_fd,)))
         try:
             group = self.control("show", self.unit, "--property=ControlGroup", "--value")
             invocation = self.control("show", self.unit, "--property=InvocationID", "--value")
+            if creation:
+                if self.control("show", self.unit, "--property=Description", "--value") != creation["marker"]:
+                    raise RuntimeError("owned creation generation changed")
+                creation["invocation_id"] = invocation
+                atomic_json(owner_path, owner_record)  # Original invocation, before child mkdir/counters.
             anchor = int(self.control("show", self.unit, "--property=MainPID", "--value"))
             if not group.startswith("/") or ".." in PurePosixPath(group).parts or not invocation or anchor <= 0:
                 raise RuntimeError("systemd delegation identity unavailable")
@@ -356,7 +554,10 @@ class OwnedBoundary:
             self.sample()
             return self.identity
         except BaseException:
-            self.control("stop", self.unit)
+            # Recovery owns interrupted creation through its durable marker and
+            # original invocation. Never stop a replacement unit by name alone.
+            if not creation:
+                self.control("stop", self.unit)
             raise
 
     def sample(self) -> dict[str, Any]:
@@ -397,6 +598,8 @@ class OwnedBoundary:
             time.sleep(0.1)
 
     def close(self):
+        if self.identity and self.control("show", self.unit, "--property=InvocationID", "--value") != self.identity["invocation_id"]:
+            raise RuntimeError("refusing to stop a replacement systemd invocation")
         self.control("stop", self.unit)
 
 
@@ -405,12 +608,17 @@ def owned_disk_bytes(root: Path) -> int:
     # follow bundle aliases into shared storage or count hard links twice.
     seen = set()
     total = 0
-    for directory, dirs, files in os.walk(root, followlinks=False):
-        dirs[:] = [name for name in dirs if not (Path(directory) / name).is_symlink()]
-        for name in files:
+    if root.is_symlink():
+        raise RuntimeError("unsafe observed storage root")
+    def refuse(error):
+        raise error
+    for directory, dirs, files in os.walk(root, followlinks=False, onerror=refuse):
+        links = [name for name in dirs if (Path(directory) / name).is_symlink()]
+        dirs[:] = [name for name in dirs if name not in links]
+        for name in [*files, *links]:
             info = (Path(directory) / name).lstat()
             key = (info.st_dev, info.st_ino)
-            if stat.S_ISREG(info.st_mode) and key not in seen:
+            if (stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)) and key not in seen:
                 seen.add(key)
                 total += info.st_size
     return total
@@ -425,6 +633,7 @@ def resource_capability() -> dict[str, Any]:
         return {"schema": "bms.remote-owned-capability.v1", "backend": "systemd-delegated-cgroup-v2",
             "cpu": "kernel-quota", "dram": "kernel-memory-max-no-swap",
             "disk": "observed-logical-bytes-not-quota", "idle_reservation": False,
+            "owner_protocol": "bms.remote-attempt-intent.v1",
             "machine_id": boundary.identity["machine_id"], "boot_id": boundary.identity["boot_id"],
             "quiescence": observed["populated"] == 0}
     finally:
@@ -496,6 +705,21 @@ def make_resource_receipt(attempt_dir, envelope, boundary, observed, *, exit_cod
 
 
 def supervise(attempt_dir: Path) -> int:
+    with owner_guard(attempt_dir) as (owner_fd, path):
+        record = check_owner(path, phases={"armed"})
+        if sha256_file(envelope_path(attempt_dir)) != record["envelope_sha256"]:
+            raise RuntimeError("armed execution envelope changed")
+        with (path.parent / "supervisor.lock").open("a+b") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            record = check_owner(path, phases={"armed"})
+            if record.get("supervisor_started") or record.get("execution_authorized"):
+                raise RuntimeError("this generation already started a supervisor; recover, do not relaunch")
+            record["supervisor_started"] = True
+            atomic_json(path, record)
+            return _supervise_owned(attempt_dir, path, record, owner_fd)
+
+
+def _supervise_owned(attempt_dir: Path, owner_path, owner_record, owner_fd) -> int:
     envelope = load_json(envelope_path(attempt_dir))
     if envelope.get("native_execution_authority") is not None:
         envelope = verify_bundle(attempt_dir)
@@ -525,7 +749,7 @@ def supervise(attempt_dir: Path) -> int:
             or allocation.get("storage_device") != str(attempt_dir.stat().st_dev)):
         raise RuntimeError("remote resource admission identity mismatch")
     boundary = OwnedBoundary(envelope["attempt_id"], allocation["effective"])
-    boundary.create()
+    boundary.create(owner_path, owner_record, owner_fd)
     atomic_json(attempt_dir / "resource-boundary.json", {"execution": boundary.identity, "allocation": allocation})
     environment = os.environ.copy()
     log_path = attempt_dir / "nextflow.log"
@@ -553,6 +777,8 @@ def supervise(attempt_dir: Path) -> int:
             exit_code = -15
         else:
             with log_path.open("ab", buffering=0) as log:
+                owner_record["execution_authorized"] = True
+                atomic_json(owner_path, owner_record)
                 process = spawn_owned(boundary, envelope, environment, log)
                 latest = load_json(status_path(attempt_dir))
                 latest.update(
@@ -693,7 +919,8 @@ def status(attempt_dir: Path) -> dict[str, Any]:
                 )
             _write_atomic_json(status_path(attempt_dir), value)
         if value.get("resource_receipt", {}).get("quiescent") is True:
-            value["resident_disk_bytes"] = owned_disk_bytes(attempt_dir)
+            owner_root, _ = owner_paths(attempt_dir)
+            value["resident_disk_bytes"] = owned_disk_bytes(attempt_dir) + owned_disk_bytes(owner_root)
         return value
 
 
@@ -741,6 +968,12 @@ def cancel(attempt_dir: Path, timeout_seconds: float) -> dict[str, Any]:
 def parser() -> argparse.ArgumentParser:
     value = argparse.ArgumentParser()
     sub = value.add_subparsers(dest="command", required=True)
+    for name in ("intent", "arm", "fence", "remove-storage", "stage-command", "read-command"):
+        command = sub.add_parser(name)
+        command.add_argument("--attempt-dir", required=True)
+        command.add_argument("--intent-sha256", required=name != "intent")
+        if name in {"stage-command", "read-command"}:
+            command.add_argument("argv", nargs=argparse.REMAINDER)
     for name in ("prepare", "run", "status", "collect", "supervise"):
         command = sub.add_parser(name)
         command.add_argument("--attempt-dir", required=True)
@@ -771,23 +1004,44 @@ def main() -> int:
             raise RuntimeError("supervisor disappeared before scientific launch authorization")
         argv = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
         os.execvpe(argv[0], argv, os.environ)
-    attempt_dir = Path(args.attempt_dir).resolve()
+    attempt_dir = Path(os.path.abspath(args.attempt_dir))
+    if any(part.is_symlink() for part in (attempt_dir, *attempt_dir.parents)):
+        raise RuntimeError("attempt namespace traverses a symlink")
+    if args.command == "intent":
+        result = initialize_owner(attempt_dir, json.load(sys.stdin))
+    elif args.command in {"fence", "remove-storage"}:
+        result = fence_owner(attempt_dir, args.intent_sha256, remove=args.command == "remove-storage")
+    elif args.command == "arm":
+        result = arm_owner(attempt_dir, args.intent_sha256)
+    elif args.command in {"stage-command", "read-command"}:
+        argv = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
+        stage_command(attempt_dir, args.intent_sha256, argv, reading=args.command == "read-command")
+        return 0
+    else:
+        result = None
+    if result is not None:
+        print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+        return 0
     if not attempt_dir.is_dir():
         raise RuntimeError("attempt directory is unavailable")
-    if args.command == "prepare":
-        result = prepare(attempt_dir)
-    elif args.command == "run":
-        result = start(attempt_dir)
-    elif args.command == "status":
-        result = status(attempt_dir)
-    elif args.command == "cancel":
-        result = cancel(attempt_dir, args.timeout_seconds)
-    elif args.command == "collect":
-        result = load_json(Path(load_json(envelope_path(attempt_dir))["output_directory"]) / RESULT_MANIFEST_FILE)
-    elif args.command == "supervise":
+    if args.command == "supervise":
         return supervise(attempt_dir)
-    else:
-        raise RuntimeError("unsupported command")
+    with owner_guard(attempt_dir) as (_, owner_path):
+        phases = {"staging"} if args.command == "prepare" else (
+            {"armed"} if args.command == "run" else {"staging", "armed", "fenced"})
+        check_owner(owner_path, phases=phases)
+        if args.command == "prepare":
+            result = prepare(attempt_dir)
+        elif args.command == "run":
+            result = start(attempt_dir)
+        elif args.command == "status":
+            result = status(attempt_dir)
+        elif args.command == "cancel":
+            result = cancel(attempt_dir, args.timeout_seconds)
+        elif args.command == "collect":
+            result = load_json(Path(load_json(envelope_path(attempt_dir))["output_directory"]) / RESULT_MANIFEST_FILE)
+        else:
+            raise RuntimeError("unsupported command")
     print(json.dumps(result, sort_keys=True, separators=(",", ":")))
     return 0
 

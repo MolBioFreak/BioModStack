@@ -109,13 +109,15 @@ def _ssh_base(connection: RemoteConnection) -> list[str]:
     ]
 
 
-async def _run(argv: Sequence[str], *, input_bytes: bytes | None = None, timeout: float = 60) -> CommandResult:
+async def _run(argv: Sequence[str], *, input_bytes: bytes | None = None, timeout: float = 60,
+               pass_fds: tuple[int, ...] = ()) -> CommandResult:
     process = await asyncio.create_subprocess_exec(
         *argv,
         stdin=asyncio.subprocess.PIPE if input_bytes is not None else asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         start_new_session=True,
+        pass_fds=pass_fds,
     )
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(input_bytes), timeout=timeout)
@@ -236,6 +238,7 @@ async def rsync_to_remote(
     destination: str,
     *,
     delete: bool = True,
+    rsync_path: str | None = None,
     timeout: float = 3600,
 ) -> None:
     source = source.resolve()
@@ -249,6 +252,8 @@ async def rsync_to_remote(
         "--partial",
         "--protect-args",
     ]
+    if rsync_path is not None:
+        rsync_options.extend(["--rsync-path", rsync_path])
     if source.is_dir() and delete:
         rsync_options.append("--delete")
     result = await _run(
@@ -298,6 +303,8 @@ async def rsync_selected_from_remote(
     relative_paths: list[str],
     *,
     max_file_bytes: int,
+    rsync_path: str | None = None,
+    owner_fd: int | None = None,
     timeout: float = 3600,
 ) -> None:
     destination.mkdir(parents=True, exist_ok=True)
@@ -315,6 +322,7 @@ async def rsync_selected_from_remote(
                 "--archive",
                 "--partial",
                 "--protect-args",
+                *(["--rsync-path", rsync_path] if rsync_path is not None else []),
                 "--from0",
                 f"--files-from={list_path}",
                 f"--max-size={int(max_file_bytes)}",
@@ -324,6 +332,7 @@ async def rsync_selected_from_remote(
                 str(destination.resolve()) + "/",
             ],
             timeout=timeout,
+            pass_fds=(() if owner_fd is None else (owner_fd,)),
         )
     finally:
         if list_path is not None:

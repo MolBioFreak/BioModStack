@@ -190,7 +190,7 @@ def test_disk_observation_does_not_follow_sibling_aliases(worker, tmp_path):
     (owned / "science").write_bytes(b"abc")
     (sibling / "other-job").write_bytes(b"not ours")
     (owned / "alias").symlink_to(sibling, target_is_directory=True)
-    assert worker.owned_disk_bytes(owned) == 3
+    assert worker.owned_disk_bytes(owned) == 3 + (owned / "alias").lstat().st_size
 
 
 @pytest.mark.asyncio
@@ -253,6 +253,16 @@ def test_capability_releases_its_temporary_boundary(worker, monkeypatch):
     assert events[-1] == "closed"
 
 
+def test_final_metadata_overage_blocks_scientific_acceptance(delivery_resources):
+    resources, _ = delivery_resources
+    proof = proof_for(allocation(resources))
+    job = job_for(proof)
+    job.provenance["remote_execution_receipt"]["peak_retained_disk_bytes"] = proof["allocation"]["effective"]["disk_bytes"] + 1
+    assert evidence.validate_for_job(job, proof, require_complete=False) == proof
+    with pytest.raises(ValueError, match="incomplete"):
+        evidence.validate_for_job(job, proof)
+
+
 def test_controller_flock_cannot_recover_remote_science(delivery_resources, monkeypatch):
     resources, db = delivery_resources
     allocated = allocation(resources)
@@ -261,13 +271,6 @@ def test_controller_flock_cannot_recover_remote_science(delivery_resources, monk
         resources._recover(transaction, allocated["target_id"], allocated["machine_id"])
     assert db.execute("SELECT state FROM derived_resource_reservations").fetchone()[0] == "active"
 
-
-def test_unstaged_abort_releases_without_deleting_storage(delivery_resources):
-    resources, db = delivery_resources
-    allocated = allocation(resources)
-    resources.abandon_unstaged_remote_attempt(allocated)
-    row = db.execute("SELECT state,cpu_threads,dram_bytes,disk_bytes FROM derived_resource_reservations").fetchone()
-    assert tuple(row) == ("released", 0, 0, 0)
 
 
 @pytest.mark.parametrize("stage", ["dorado_align", "fastq_qc", "dorado_basecall", "wf_clone_validation"])

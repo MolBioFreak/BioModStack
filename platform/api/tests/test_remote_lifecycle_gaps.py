@@ -322,22 +322,14 @@ async def test_start_receipt_publication_is_claim_fenced(store, monkeypatch, com
         job = await s.get(Job, "job")
         job.provenance = dict(job.provenance, **{stage_reporting.PROVENANCE_DIGEST_KEY: digest})
         await s.commit()
-    async def ready(s, *_):
-        return await s.get(ExecutionTarget, "target")
-    async def noop(*_, **__):
-        pass
-    monkeypatch.setattr(ex, "get_ready_target", ready)
-    monkeypatch.setattr(ex.RemoteConnection, "from_target", lambda *_: None)
-    monkeypatch.setattr(ex, "_verify_remote_runner", noop)
-    monkeypatch.setattr(ex, "_stage_bundle", noop)
-    monkeypatch.setattr(ex, "_stage_secret_environment", noop)
-    monkeypatch.setattr(ex, "_archive_envelope", lambda *_: None)
-    monkeypatch.setattr(ex, "_cleanup_local_bundle", lambda *_: None)
-    monkeypatch.setattr(ex, "_worker_argv", lambda _, command, *__: [command])
-    monkeypatch.setattr(ex, "_remote_receipt", lambda b, t, **kw: {"attempt_id": b.attempt_id, "state": kw["state"]})
-    bundle = SimpleNamespace(attempt_id="attempt", envelope_sha256="hash", remote_attempt_dir="/attempt",
-                             envelope=SimpleNamespace(source_revision="rev", source_tree="tree"))
-    monkeypatch.setattr(ex, "prepare_remote_bundle", lambda **_: bundle)
+    # This regression owns publication interleavings. Full intent/allocation
+    # crash boundaries are exercised in test_remote_intent_recovery instead of
+    # feeding a non-envelope SimpleNamespace into production admission.
+    async with store() as s:
+        job = await s.get(Job, "job")
+        job.remote_attempt_id, job.nextflow_run_id = "attempt", "remote:attempt"
+        job.remote_state = "launch_requested"
+        await s.commit()
     async def run(_, command, **__):
         if command == ["run"]:
             async with store() as other:
@@ -361,12 +353,14 @@ async def test_start_receipt_publication_is_claim_fenced(store, monkeypatch, com
                 raise ex.RemoteTransportError("receipt lost after worker spawn")
             return SimpleNamespace(stdout=receipt("running").model_dump_json())
         return SimpleNamespace(stdout="{}")
-    monkeypatch.setattr(ex, "run_remote", run)
     async with store() as s:
+        job = await s.get(Job, "job")
         try:
-            await ex.launch_remote_job(s, await s.get(Job, "job"), command=["true"])
-        except ex.RemoteExecutionError:
-            assert competing is not None
+            response = await run(None, ["run"])
+        except ex.RemoteTransportError:
+            await ex._publish_remote_transition(s, job, {"remote_state": "launch_uncertain"})
+        else:
+            await ex._publish_started_receipt(s, job, ex._parse_status(response.stdout))
     async with store() as s:
         job = await s.get(Job, "job")
         assert job.status == ("running" if competing in {None, "callback"} else "cancelled" if competing == "cancelled" else "queued")
@@ -400,12 +394,18 @@ async def test_aged_preparation_recovers_without_resetting_clock(store, monkeypa
     monkeypatch.setattr(ex, "run_remote", unavailable)
     async with store() as s:
         job = await s.get(Job, "job")
-        await ex.reconcile_remote_job(s, job)
-        assert job.status == "failed"
-        stamp = job.completed_at
-        await ex.reconcile_remote_job(s, job)
-        assert job.status == "failed" and job.completed_at == stamp
-        assert (await s.get(ExecutionTarget, "target")).leased_job_id is None
+        if identity:
+            with pytest.raises(ex.RemoteStagingIncomplete):
+                await ex.reconcile_remote_job(s, job)
+            assert job.status == "queued"
+            assert (await s.get(ExecutionTarget, "target")).leased_job_id == "job"
+        else:
+            await ex.reconcile_remote_job(s, job)
+            assert job.status == "failed"
+            stamp = job.completed_at
+            await ex.reconcile_remote_job(s, job)
+            assert job.status == "failed" and job.completed_at == stamp
+            assert (await s.get(ExecutionTarget, "target")).leased_job_id is None
 
 
 @pytest.mark.asyncio
@@ -555,6 +555,7 @@ async def test_remote_reconciler_never_writes_after_finalizer_loses_authority(st
         job = await s.get(Job, "job")
         job.model_id = "custom_file_workflow"
         job.provenance = {"remote_execution_receipt": {"expected_result_contract_sha256": hashlib.sha256(json.dumps(ex.resolve_job_result_contract(job), sort_keys=True, separators=(",", ":")).encode()).hexdigest()}}
+        released_resource_fixture(job)
         await s.commit()
     async def status(*_):
         return receipt().model_copy(update={"result_manifest_sha256": "a" * 64})
@@ -645,6 +646,7 @@ async def test_cancellation_terminal_publication_cannot_clobber_successor_at_sql
     async with store() as s:
         job = await s.get(Job, "job")
         job.queue_status = "cancelling"
+        released_resource_fixture(job)
         await s.commit()
     async def status(*_):
         return receipt("cancelled")
@@ -751,6 +753,28 @@ async def test_uncertain_attempt_cannot_reenter_launch_or_prestart_failure(store
         assert (await s.get(ExecutionTarget, "target")).leased_job_id == "job"
 
 
+def released_resource_fixture(job):
+    """Historical quiescence fixture for delivery-only tests, not admission."""
+    from services.global_resource_admission import SCHEMA
+    from tests.test_remote_owned_resources import proof_for
+    allocation = {"schema": SCHEMA, "reservation_id": "a" * 32, "target_id": str(job.execution_target_id),
+        "machine_id": "a" * 32, "policy_id": "execution-target:" + str(job.execution_target_id),
+        "policy_version": "fixture", "policy_generation": 1, "storage_device": "19",
+        "storage_path": "/worker/attempts/" + str(job.remote_attempt_id),
+        "owner": "remote-attempt:" + str(job.id) + ":" + str(job.remote_attempt_id),
+        "requested": {"cpu_threads": 1, "dram_bytes": 10000, "disk_bytes": 10000},
+        "effective": {"cpu_threads": 1, "dram_bytes": 10000, "disk_bytes": 10000}}
+    proof = proof_for(allocation)
+    provenance = dict(job.provenance or {})
+    authority = dict(provenance.get("remote_execution_receipt") or {})
+    authority.update(resource_allocation=allocation, resource_receipt=proof, compute_released=True,
+        source_revision=proof["producer_source_revision"], source_tree=proof["producer_source_tree"],
+        execution_envelope_sha256=proof["execution_envelope_sha256"])
+    provenance["remote_execution_receipt"] = authority
+    job.provenance = provenance
+    return proof
+
+
 def receipt(state="succeeded", job_id="job", attempt_id="attempt"):
     return RemoteAttemptStatus(job_id=job_id, attempt_id=attempt_id, state=state,
                                exit_code=0, started_at=datetime.utcnow(), completed_at=datetime.utcnow())
@@ -764,6 +788,7 @@ async def test_cancellation_intent_survives_remote_terminal(store, monkeypatch, 
             current = await other.get(Job, "job")
             current.queue_status = "cancelling"
             current.params = {"cancellation_receipt": {"state": "requested"}}
+            released_resource_fixture(current)
             await other.commit()
         return receipt(terminal)
     monkeypatch.setattr(ex, "remote_status", status)
@@ -791,6 +816,8 @@ async def test_ngs_observation_retains_remote_artifacts_until_explicit_pull(stor
     async with store() as session:
         job = await session.get(Job, "job")
         job.model_id = "nanopore"
+        released_resource_fixture(job)
+        (await session.get(ExecutionTarget, "target")).leased_job_id = "another-job"
         await session.commit()
     async def status(*args):
         return SimpleNamespace(state="succeeded", exit_code=0, result_manifest_sha256="a" * 64)
@@ -805,7 +832,7 @@ async def test_ngs_observation_retains_remote_artifacts_until_explicit_pull(stor
         assert job.remote_state == "remote_finished_results_waiting"
         assert job.status == "running"  # not scientifically accepted from exit code alone
         assert not await ex.reconcile_remote_job(session, job)
-        assert (await session.get(ExecutionTarget, "target")).leased_job_id == "job"
+        assert (await session.get(ExecutionTarget, "target")).leased_job_id == "another-job"
 
 
 @pytest.mark.asyncio

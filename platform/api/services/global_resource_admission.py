@@ -283,6 +283,30 @@ class Allocation:
         self.cpu_threads, self.dram_bytes, self.disk_bytes = 0, dram_bytes, disk_bytes
         self._resident = True
 
+    def retain_observed(self, *, disk_bytes):
+        """Quiescent receive observation, including partial/metadata overage.
+
+        Additional immutable disk debt is not retroactive admission. Caller
+        must have stopped/waited all receivers before this operation.
+        """
+        _positive(disk_bytes, "observed disk", zero=True)
+        if self._closed:
+            raise ResourceCapacityUnavailable("resource observation owner closed")
+        if disk_bytes > self.disk_bytes:
+            excess = disk_bytes - self.disk_bytes
+            receipt = dict(self.receipt)
+            receipt.update(reservation_id=uuid.uuid4().hex,
+                requested={"cpu_threads": 0, "dram_bytes": 0, "disk_bytes": excess},
+                effective={"cpu_threads": 0, "dram_bytes": 0, "disk_bytes": excess})
+            stamp = _now()
+            with _transaction() as db:
+                db.execute("INSERT INTO derived_resource_reservations VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (receipt["reservation_id"], receipt["policy_id"], receipt["policy_version"], receipt["target_id"],
+                     receipt["machine_id"], receipt["owner"], uuid.uuid4().hex, "orphaned", 0, 0, excess,
+                     receipt["storage_device"], receipt["storage_path"], json.dumps(receipt, sort_keys=True, separators=(",", ":")),
+                     stamp, stamp, "quiescent_owned_storage_reconciled"))
+        self.retain(disk_bytes=min(disk_bytes, self.disk_bytes))
+
     def move_storage(self, destination):
         """Journal an owner-controlled same-filesystem rename before moving bytes.
 
@@ -596,7 +620,8 @@ def configure_execution_target_policy(*, target_id, cpu_thread_limit, dram_byte_
                    (policy_id, policy_version, cpu_thread_limit, dram_byte_limit, disk_byte_limit, _now()))
 
 
-def reserve_remote_attempt(*, target_id, policy, attempt_id, job_id, storage_path):
+def reserve_remote_attempt(*, target_id, policy, attempt_id, job_id, storage_path,
+                           reservation_id=None, staging_disk_bytes=None, staging_reservation_id=None):
     """Controller-side admission in the existing owner transaction.
 
     No controller flock can release this row. Remote quiescence must be supplied
@@ -606,8 +631,24 @@ def reserve_remote_attempt(*, target_id, policy, attempt_id, job_id, storage_pat
             or policy.get("policy_id") != "execution-target:" + target_id
             or storage_path != policy.get("storage_root", "").rstrip("/") + "/attempts/" + attempt_id):
         raise ResourceCapacityUnavailable("remote allocation target/path mismatch")
-    identifier = uuid.uuid4().hex
+    identifier = reservation_id or uuid.uuid4().hex
+    if re.fullmatch(r"[0-9a-f]{32}", identifier) is None:
+        raise ResourceCapacityUnavailable("invalid durable reservation identity")
     with _transaction() as db:
+        existing = db.execute("SELECT * FROM derived_resource_reservations WHERE reservation_id=?", (identifier,)).fetchone()
+        if existing is not None:
+            receipt = json.loads(existing["receipt_json"])
+            if (existing["state"] != "active" or receipt["owner"] != "remote-attempt:" + job_id + ":" + attempt_id
+                    or receipt["target_id"] != target_id or receipt["storage_path"] != storage_path):
+                raise ResourceCapacityUnavailable("durable remote allocation was fenced or changed")
+            return receipt
+        staged = None
+        if staging_reservation_id:
+            staged = db.execute("SELECT * FROM derived_resource_reservations WHERE reservation_id=?", (staging_reservation_id,)).fetchone()
+            if (staged is None or staged["state"] != "active" or staged["cpu_threads"] or staged["dram_bytes"]
+                    or staged["owner"] != "remote-attempt:" + job_id + ":" + attempt_id
+                    or staged["storage_path"] != storage_path or staged["target_id"] != target_id):
+                raise ResourceCapacityUnavailable("staging ownership changed before compute admission")
         current = db.execute("SELECT * FROM resource_admission_policy WHERE policy_id=?",
                              (policy["policy_id"],)).fetchone()
         if current is None or current["policy_version"] != policy.get("policy_version"):
@@ -626,7 +667,18 @@ def reserve_remote_attempt(*, target_id, policy, attempt_id, job_id, storage_pat
             "WHERE machine_id=? AND storage_device=? AND state='active'",
             (policy["machine_id"], policy["storage_device"])).fetchone()[0]
         disk = min(disk, policy["free_disk_bytes"] - pending)
-        if min(cpu, ram, disk) <= 0:
+        if staged is not None:
+            # Move the already charged staging bytes in this same transaction.
+            disk += staged["disk_bytes"]
+        if staging_disk_bytes is not None:
+            cpu = ram = 0
+            requested_disk = _positive(staging_disk_bytes, "staging disk")
+            if requested_disk > disk:
+                raise ResourceCapacityUnavailable("remote staging disk capacity unavailable")
+            disk = requested_disk
+        elif min(cpu, ram) <= 0:
+            raise ResourceCapacityUnavailable("remote compute capacity unavailable")
+        if disk <= 0:
             raise ResourceCapacityUnavailable("remote global allocation capacity unavailable")
         receipt = {"schema": SCHEMA, "reservation_id": identifier, "target_id": target_id,
             "machine_id": policy["machine_id"], "policy_id": policy["policy_id"],
@@ -640,6 +692,9 @@ def reserve_remote_attempt(*, target_id, policy, attempt_id, job_id, storage_pat
             (identifier, policy["policy_id"], policy["policy_version"], target_id, policy["machine_id"],
              receipt["owner"], uuid.uuid4().hex, "active", cpu, ram, disk, policy["storage_device"], storage_path,
              json.dumps(receipt, sort_keys=True, separators=(",", ":")), stamp, stamp, "remote_quiescence_required"))
+        if staged is not None:
+            db.execute("UPDATE derived_resource_reservations SET state='released',disk_bytes=0,updated_at=?,release_reason=? "
+                "WHERE reservation_id=?", (stamp, "remote_staging_transferred:" + identifier, staging_reservation_id))
     return receipt
 
 
@@ -686,18 +741,66 @@ def retain_remote_attempt(allocation, *, quiescence_receipt, resident_disk_bytes
             (min(disk, row["disk_bytes"]), _now(), "remote_quiescent:" + proof["receipt_sha256"], allocation["reservation_id"]))
 
 
-def abandon_unstaged_remote_attempt(allocation):
-    """Launch owner only: no remote staging/start command has been issued.
+def reconcile_remote_storage(intent, proof):
+    """Authenticated owner caller only; exact generation, observed bytes/debt.
 
-    Never call on a transport exception after staging began. This operation is
-    not recovery by heartbeat/lease age and is not exposed to API callers.
+    Covers allocation insertion before Job receipt publication and repeated
+    cleanup after remote deletion before the controller transaction commits.
+    The remote permanent tombstone remains a small, truthful retained charge.
     """
-    validate_receipt(allocation)
+    from services.remote_resource_evidence import validate_fence
+    validate_fence(intent, proof)
+    remaining = proof["resident_disk_bytes"]
+    owner = "remote-attempt:" + intent["job_id"] + ":" + intent["attempt_id"]
+    ids = (intent["staging_reservation_id"], intent["compute_reservation_id"])
     with _transaction() as db:
-        row = db.execute("SELECT * FROM derived_resource_reservations WHERE reservation_id=?",
-                         (allocation["reservation_id"],)).fetchone()
-        if row is None or json.loads(row["receipt_json"]) != allocation:
-            raise ResourceCapacityUnavailable("unstaged remote allocation ownership changed")
-        db.execute("UPDATE derived_resource_reservations SET state='released',cpu_threads=0,dram_bytes=0,"
-            "disk_bytes=0,updated_at=?,release_reason=? WHERE reservation_id=? AND state='active'",
-            (_now(), "remote_launch_owner_no_staging_issued", allocation["reservation_id"]))
+        # Fence absent allocations too: a delayed insert cannot create phantom
+        # compute after a remote nonexecution proof has already released it.
+        for identifier in ids:
+            receipt = {"schema": SCHEMA, "reservation_id": identifier, "target_id": intent["target_id"],
+                "machine_id": intent["machine_id"], "policy_id": intent["policy"]["policy_id"],
+                "policy_version": intent["policy"]["policy_version"], "policy_generation": 1,
+                "requested": {"cpu_threads": 0, "dram_bytes": 0, "disk_bytes": 0},
+                "effective": {"cpu_threads": 0, "dram_bytes": 0, "disk_bytes": 0},
+                "storage_device": intent["storage_device"], "storage_path": intent["storage_path"], "owner": owner}
+            stamp = _now()
+            db.execute("INSERT OR IGNORE INTO derived_resource_reservations VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (identifier, receipt["policy_id"], receipt["policy_version"], receipt["target_id"], receipt["machine_id"],
+                 owner, uuid.uuid4().hex, "released", 0, 0, 0, receipt["storage_device"], receipt["storage_path"],
+                 json.dumps(receipt, sort_keys=True, separators=(",", ":")), stamp, stamp,
+                 "remote_fenced_storage:" + proof["phase"]))
+        rows = list(db.execute("SELECT * FROM derived_resource_reservations WHERE reservation_id IN (?,?) "
+            "OR (owner=? AND storage_path=?) ORDER BY created_at,reservation_id",
+            (*ids, owner + ":observed-overage", intent["storage_path"])))
+        for row in rows:
+            if (row["owner"] not in {owner, owner + ":observed-overage"}
+                    or row["target_id"] != intent["target_id"] or row["machine_id"] != intent["machine_id"]
+                    or row["storage_device"] != intent["storage_device"] or row["storage_path"] != intent["storage_path"]):
+                raise ResourceCapacityUnavailable("remote storage accounting generation changed")
+        if proof["phase"] != "removed" and any(row["release_reason"] == "remote_fenced_storage:removed" for row in rows):
+            raise ResourceCapacityUnavailable("stale observation predates explicit storage removal")
+        for row in rows:
+            if row["state"] == "released":
+                continue  # Existing immutable terminal-row trigger remains intact.
+            charge = min(remaining, row["disk_bytes"])
+            remaining -= charge
+            db.execute("UPDATE derived_resource_reservations SET state=?,cpu_threads=0,dram_bytes=0,disk_bytes=?,"
+                "updated_at=?,release_reason=? WHERE reservation_id=?",
+                ("retained" if charge else "released", charge, _now(),
+                 "remote_fenced_storage:" + proof["phase"], row["reservation_id"]))
+        if remaining:
+            # Also accounts the tombstone if recovery preceded any allocation.
+            identifier = uuid.uuid4().hex
+            receipt = {"schema": SCHEMA, "reservation_id": identifier, "target_id": intent["target_id"],
+                "machine_id": intent["machine_id"], "policy_id": intent["policy"]["policy_id"],
+                "policy_version": intent["policy"]["policy_version"], "policy_generation": 1,
+                "requested": {"cpu_threads": 0, "dram_bytes": 0, "disk_bytes": remaining},
+                "effective": {"cpu_threads": 0, "dram_bytes": 0, "disk_bytes": remaining},
+                "storage_device": intent["storage_device"], "storage_path": intent["storage_path"],
+                "owner": owner + ":observed-overage"}
+            stamp = _now()
+            db.execute("INSERT INTO derived_resource_reservations VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (identifier, receipt["policy_id"], receipt["policy_version"], receipt["target_id"], receipt["machine_id"],
+                 receipt["owner"], uuid.uuid4().hex, "retained", 0, 0, remaining, receipt["storage_device"],
+                 receipt["storage_path"], json.dumps(receipt, sort_keys=True, separators=(",", ":")), stamp, stamp,
+                 "observed_remote_disk_overage:not_admission"))

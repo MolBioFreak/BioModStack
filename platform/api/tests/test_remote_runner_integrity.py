@@ -48,6 +48,9 @@ async def test_attachment_never_transfers_over_published_artifacts(attachment_st
             return SimpleNamespace(stdout='')
         if argv[0] == 'env': return SimpleNamespace(stdout='nextflow version 25.10.1')
         if argv[0] == 'apptainer': return SimpleNamespace(stdout='BMS_CUDA_OK')
+        if 'resource-capability' in argv:
+            import json
+            return SimpleNamespace(stdout=json.dumps(remote_readiness(conn.remote_root)['owned_boundary']))
         result = subprocess.run(argv, capture_output=True, text=True)
         if result.returncode:
             raise targets.RemoteTransportError('local simulated remote command failed')

@@ -99,6 +99,39 @@ def validate_document(candidate):
     return value
 
 
+def validate_fence(intent, candidate):
+    """Control evidence, never a scientific resource-usage receipt.
+
+    Digest is byte binding, not authentication. Only the pinned SSH/runner owner
+    may supply this document; no user-supplied proof is an admission credential.
+    """
+    keys = {"schema", "intent", "intent_sha256", "machine_id", "boot_id", "nonexecution",
+            "resource_receipt", "phase", "quiescent", "resident_disk_bytes", "boundary_cleanup"}
+    if (not isinstance(candidate, dict) or set(candidate) != keys
+            or candidate["schema"] != "bms.remote-attempt-fence.v1"
+            or candidate["intent"] != intent or candidate["intent_sha256"] != digest(intent)
+            or candidate["machine_id"] != intent["machine_id"]
+            or candidate["phase"] not in {"fenced", "removing", "removed"}
+            or candidate["boundary_cleanup"] not in {"pending", "complete"}
+            or candidate["phase"] == "removed" and candidate["boundary_cleanup"] != "complete"
+            or candidate["quiescent"] is not True or type(candidate["nonexecution"]) is not bool
+            or type(candidate["resident_disk_bytes"]) is not int or candidate["resident_disk_bytes"] < 0
+            or re.fullmatch(r"[0-9a-f-]{36}", str(candidate["boot_id"])) is None):
+        raise ValueError("remote generation fence evidence is invalid")
+    if candidate["nonexecution"]:
+        if candidate["resource_receipt"] is not None:
+            raise ValueError("nonexecution cannot masquerade as scientific measurement")
+    else:
+        proof = validate_document(candidate["resource_receipt"])
+        if (proof["job_id"] != intent["job_id"] or proof["run_attempt_id"] != intent["attempt_id"]
+                or proof["admission_id"] != intent["compute_reservation_id"]
+                or proof["allocation"]["target_id"] != intent["target_id"]
+                or proof["allocation"]["storage_path"] != intent["storage_path"]
+                or proof["allocation"]["machine_id"] != intent["machine_id"]):
+            raise ValueError("remote fence carries another scientific generation")
+    return candidate
+
+
 def validate_for_job(job, candidate, *, require_complete=True):
     value = validate_document(candidate)
     authority = (job.provenance or {}).get("remote_execution_receipt") or {}
@@ -110,6 +143,7 @@ def validate_for_job(job, candidate, *, require_complete=True):
             or value["producer_source_tree"] != authority.get("source_tree")):
         raise ValueError("remote resource receipt differs from sealed Job attempt")
     if require_complete and (value["complete"] is not True or value["outcome"] != "completed"
-            or value["observed"]["pids_peak"] < 1):
+            or value["observed"]["pids_peak"] < 1
+            or authority.get("peak_retained_disk_bytes", 0) > value["allocation"]["effective"]["disk_bytes"]):
         raise ValueError("remote producer evidence is incomplete")
     return value

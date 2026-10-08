@@ -63,7 +63,7 @@ async def test_incoming_transfer_stages_on_results_filesystem(tmp_path, monkeypa
     with tempfile.TemporaryDirectory(prefix='bms-return-', dir='/dev/shm') as directory:
         output = Path(directory)/'results/job'
         output.parent.mkdir()
-        job = SimpleNamespace(id='job', execution_target_id='target', remote_attempt_id='attempt', output_dir=str(output), child_output_dir=None)
+        job = SimpleNamespace(id='job', execution_target_id='target', remote_attempt_id='attempt', output_dir=str(output), child_output_dir=None, provenance={})
         class Session:
             async def get(self, *args, **kwargs):
                 return SimpleNamespace()

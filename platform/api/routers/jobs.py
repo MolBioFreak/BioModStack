@@ -10377,6 +10377,39 @@ async def get_docking_comparison(
     }
 
 
+class RemoteRetainedStorageRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    attempt_id: str
+    intent_sha256: str
+    remove: bool = False
+
+
+@router.post("/{job_id}/remote-storage/reconcile")
+async def reconcile_remote_storage(job_id: str, body: RemoteRetainedStorageRequest,
+        request: Request, session: AsyncSession = Depends(get_session)):
+    """Explicit exact-generation remote storage control; no scientific launch."""
+    from services import alignment_access as access
+    from routers.ngs_alignment_sessions import _mutation_principal
+    from services.remote_execution.executor import reconcile_remote_retained_storage, RemoteExecutionError
+    from services.remote_execution.transport import RemoteTransportError
+    from services.global_resource_admission import ResourceCapacityUnavailable
+    _mutation_principal(request)
+    job = await session.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not access.request_is_authorized(request, str(job.id), job.provenance):
+        raise HTTPException(status_code=403, detail="Result owner access is required")
+    if not job.execution_target_id or job.remote_attempt_id != body.attempt_id:
+        raise HTTPException(status_code=409, detail="The remote attempt changed")
+    try:
+        return await reconcile_remote_retained_storage(session, job, attempt_id=body.attempt_id,
+            intent_sha256=body.intent_sha256, remove=body.remove)
+    except (RemoteExecutionError, ResourceCapacityUnavailable) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RemoteTransportError as exc:
+        raise HTTPException(status_code=409, detail="Remote storage is active, ambiguous or unavailable; no release confirmed") from exc
+
+
 class RemoteNgsPullRequest(BaseModel):
     model_config = {"extra": "forbid"}
     attempt_id: str
@@ -10400,6 +10433,8 @@ async def pull_remote_ngs_results(job_id: str, body: RemoteNgsPullRequest,
         raise HTTPException(status_code=409, detail="The remote NGS attempt changed")
     if job.remote_state == "ingested":
         return {"job_id": job_id, "attempt_id": body.attempt_id, "state": "ingested"}
+    if ((job.provenance or {}).get("remote_execution_receipt") or {}).get("storage_state") == "removed":
+        raise HTTPException(status_code=409, detail="Remote payload was explicitly removed")
     if job.remote_state != "remote_finished_results_waiting":
         raise HTTPException(status_code=409, detail="Remote results are not waiting for transfer")
     try:
