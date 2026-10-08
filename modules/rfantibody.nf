@@ -11,49 +11,53 @@ process RFANTIBODY {
     tag "${meta.id}"
     label 'process_gpu'
     container 'apptainer/rfantibody.sif'
-    
+
     // Mount entire RFantibody repo from host (includes src, scripts, weights, examples)
     // Container now supports RTX 5090 (Blackwell) via compiled DGL
     // Use params.gpu_id from orchestrator for GPU assignment
     containerOptions "--nv --env CUDA_DEVICE_ORDER=PCI_BUS_ID --env CUDA_VISIBLE_DEVICES=${params.gpu_id} --bind /mnt/BioModStack/weights/rfantibody/rfantibody_repo:/opt/RFantibody --writable-tmpfs"
-    
+
     publishDir "${params.out_dir}/run/rfantibody", mode: 'copy', pattern: "*.log"
     publishDir "${params.out_dir}/run/rfantibody", mode: 'copy', pattern: "output/*.pdb"
 
     input:
     tuple val(meta), path(target_pdb), val(hotspot_residues)
-    path framework_pdb  // Optional: HLT-formatted antibody framework
+    path framework_pdb
 
     output:
     tuple val(meta), path("output/*.pdb"), emit: designs
     path "rfantibody_${meta.id}.log", emit: log
 
     script:
-    // Format hotspots for RFantibody (expects [T305,T456] format in HLT)
-    // Input format from UI: "A45,A46,A52" -> Need to convert chain prefix to 'T' for HLT format
-    // RFantibody uses HLT format where H=Heavy, L=Light, T=Target (all target chains get 'T')
-    def convertedHotspots = hotspot_residues 
-        ? hotspot_residues.split(',').collect { it.replaceAll(/^[A-Za-z]/, 'T') }.join(',')
-        : ""
-    def hotspots = convertedHotspots ? "[${convertedHotspots}]" : "[]"
-    
-    // Design loops - default to designing all CDRs with flexible lengths
-    def design_loops = params.rfantibody_design_loops ?: "[H1:7-10,H2:6-8,H3:5-15,L1:8-13,L2:7,L3:9-11]"
-    
+    // Format hotspots for RFantibody ppi.hotspot_res parameter
+    // IMPORTANT: Use original chain IDs from the input PDB file!
+    // Input format from UI: "A45,A46,A52" -> Keep as-is for ppi.hotspot_res
+    // RFantibody will find these residues in the target PDB and guide design there
+    // (The HLT naming is for OUTPUT chains, not the input hotspot parameter)
+    def hotspots = hotspot_residues ? "[${hotspot_residues}]" : "[]"
+
+    // Design loops - auto-select based on framework type
+    // VHH/Nanobodies: H-chain loops only (no light chain)
+    // Fab/scFv: Both H and L chain loops
+    def defaultLoops = params.framework_type == 'nanobody'
+        ? "[H1:7-10,H2:6-8,H3:5-15]"
+        : "[H1:7-10,H2:6-8,H3:5-15,L1:8-13,L2:7,L3:9-11]"
+    def design_loops = params.rfantibody_design_loops ?: defaultLoops
+
     // Number of designs
     def num_designs = params.rfantibody_num_designs ?: 10
-    
+
     // Framework selection based on framework_type param
     // Options: 'standard-fv', 'nanobody', 'custom'
     def frameworkType = params.framework_type ?: 'standard-fv'
     def presetFrameworks = [
         'standard-fv': '/opt/RFantibody/scripts/examples/example_inputs/hu-4D5-8_Fv.pdb',
-        'nanobody': '/opt/RFantibody/scripts/examples/example_inputs/h-NbBCII10.pdb'
+        'nanobody': '/opt/RFantibody/scripts/examples/example_inputs/h-NbBCII10.pdb',
     ]
-    def framework = framework_pdb.name != 'NO_FRAMEWORK' 
-        ? framework_pdb 
+    def framework = framework_pdb.name != 'NO_FRAMEWORK'
+        ? framework_pdb
         : presetFrameworks[frameworkType] ?: presetFrameworks['standard-fv']
-    
+
     """
     set -euo pipefail
     

@@ -8,6 +8,7 @@ import { SequenceManagerModal } from './SequenceManagerModal';
 import { TemplateManagerModal } from './TemplateManagerModal';
 import { MutagenesisTemplate } from './MutagenesisTemplate';
 import { AntibodyDenovoTemplate } from './AntibodyDenovoTemplate';
+import { StructurePredictionTemplate } from './StructurePredictionTemplate';
 import { PresetSelector } from './PresetSelector';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
 import { StructureInput } from './StructureInput';
@@ -647,6 +648,11 @@ export function JobSubmission() {
                                     }}
                                     initialValues={clonedValues}
                                 />
+                            ) : selectedTemplateId === 'structure_prediction' ? (
+                                <StructurePredictionTemplate
+                                    onBack={() => setSelectedTemplateId(null)}
+                                    initialValues={clonedValues}
+                                />
                             ) : (
                                 <>
                                     <p className="text-slate-400 text-sm">Choose a preset workflow for your experiment goal:</p>
@@ -765,8 +771,8 @@ export function JobSubmission() {
                     )}
                 </section>
 
-                {/* 3. Template Configuration - Only show if template selected and NOT mutagenesis */}
-                {selectedTemplateId && selectedTemplateId !== 'mutagenesis' && selectedTemplateData?.data && (
+                {/* 3. Template Configuration - Only show if template selected and NOT a dedicated template */}
+                {selectedTemplateId && selectedTemplateId !== 'mutagenesis' && selectedTemplateId !== 'antibody_denovo' && selectedTemplateId !== 'structure_prediction' && selectedTemplateData?.data && (
                     <section className="animate-in fade-in slide-in-from-bottom-4 duration-500">
                         <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-6">
                             <h2 className="text-lg font-semibold text-slate-200 mb-4 flex items-center gap-2">
@@ -1023,8 +1029,8 @@ export function JobSubmission() {
                     </section>
                 )}
 
-                {/* Submit Button - Hide if Mutagenesis or Antibody De Novo Template is active (they have their own) */}
-                {selectedTemplateId !== 'mutagenesis' && selectedTemplateId !== 'antibody_denovo' && (
+                {/* Submit Button - Hide if Mutagenesis, Antibody De Novo, or Structure Prediction Template is active (they have their own) */}
+                {selectedTemplateId !== 'mutagenesis' && selectedTemplateId !== 'antibody_denovo' && selectedTemplateId !== 'structure_prediction' && (
                     <div className="flex justify-end gap-3 pt-4 pb-12">
                         {/* Save as Template Button */}
                         {(wizardMode === 'templates' || (wizardMode === 'manual' && selectedModelId)) && (

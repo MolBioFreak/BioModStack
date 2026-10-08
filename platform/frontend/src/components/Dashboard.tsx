@@ -23,7 +23,7 @@ export function Dashboard() {
 
     const { data: jobsData, isLoading: jobsLoading } = useQuery({
         queryKey: ['jobs'],
-        queryFn: fetchJobs,
+        queryFn: () => fetchJobs(),
         refetchInterval: 5000,
     });
 
@@ -217,8 +217,8 @@ export function Dashboard() {
                                                 key={n}
                                                 onClick={() => setVisibleCount(n)}
                                                 className={`px-2 py-1 text-xs rounded transition-colors ${visibleCount === n
-                                                        ? 'bg-purple-500/30 text-purple-300'
-                                                        : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'
+                                                    ? 'bg-purple-500/30 text-purple-300'
+                                                    : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'
                                                     }`}
                                             >
                                                 {n}
@@ -227,8 +227,8 @@ export function Dashboard() {
                                         <button
                                             onClick={() => setVisibleCount(filteredJobs.length)}
                                             className={`px-2 py-1 text-xs rounded transition-colors ${visibleCount >= filteredJobs.length
-                                                    ? 'bg-purple-500/30 text-purple-300'
-                                                    : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'
+                                                ? 'bg-purple-500/30 text-purple-300'
+                                                : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'
                                                 }`}
                                         >
                                             All

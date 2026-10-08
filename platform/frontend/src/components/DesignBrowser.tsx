@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchDesigns, toggleDesignFavorite, downloadDesignPdb, fetchJobs } from '../lib/api';
-import type { Design, DesignFilters } from '../lib/api';
+import type { Design, DesignFilters, Job } from '../lib/api';
 
 export function DesignBrowser() {
     const queryClient = useQueryClient();
@@ -29,7 +29,7 @@ export function DesignBrowser() {
     // Fetch jobs for filter dropdown
     const { data: jobsData } = useQuery({
         queryKey: ['jobs'],
-        queryFn: fetchJobs,
+        queryFn: () => fetchJobs(),
     });
 
     // Favorite mutation
@@ -84,7 +84,7 @@ export function DesignBrowser() {
                             className="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-white text-sm min-w-[200px]"
                         >
                             <option value="">All Jobs</option>
-                            {jobs.map((job) => (
+                            {jobs.map((job: Job) => (
                                 <option key={job.id} value={job.id}>
                                     {job.name} ({job.status})
                                 </option>

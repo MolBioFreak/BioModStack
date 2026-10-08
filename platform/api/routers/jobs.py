@@ -470,6 +470,168 @@ async def resubmit_job(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# RE-INGESTION ENDPOINT
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/{job_id}/reingest")
+async def reingest_job_results(
+    job_id: str,
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Re-ingest design results for a job.
+    
+    Deletes all existing Design entries for this job and re-runs the result
+    ingester to pick up any new metrics from confidence JSON files.
+    
+    Useful when:
+    - Job was ingested with old code that didn't extract all metrics
+    - New metric extraction logic was added
+    - Need to refresh design data without re-running the pipeline
+    """
+    from sqlalchemy import delete
+    from services.result_ingester import ingest_job_results
+    
+    # Fetch job
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    if not job.output_dir:
+        raise HTTPException(status_code=400, detail="Job has no output directory")
+    
+    # Count existing designs
+    existing_count = (await session.execute(
+        select(func.count(Design.id)).where(Design.job_id == job_id)
+    )).scalar()
+    
+    # Delete existing designs for this job
+    await session.execute(delete(Design).where(Design.job_id == job_id))
+    await session.commit()
+    
+    logger.info(f"[REINGEST] Deleted {existing_count} existing designs for job {job_id}")
+    
+    # Re-run ingestion
+    try:
+        new_count = await ingest_job_results(job_id, job.output_dir, session)
+        logger.info(f"[REINGEST] Re-ingested {new_count} designs for job {job_id}")
+        
+        return {
+            "message": f"Re-ingested {new_count} designs (deleted {existing_count} old entries)",
+            "job_id": job_id,
+            "designs_deleted": existing_count,
+            "designs_created": new_count
+        }
+    except Exception as e:
+        logger.error(f"[REINGEST] Error re-ingesting job {job_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Re-ingestion failed: {str(e)}")
+
+
+@router.post("/{job_id}/annotate-cdr")
+async def annotate_cdr_regions(
+    job_id: str,
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Annotate CDR regions for all designs in a job using ANARCII.
+    
+    This runs in the background (~1-2 minutes for large jobs).
+    Returns immediately with status "started".
+    """
+    import threading
+    from services.cdr_annotator import batch_annotate_pdbs
+    
+    # Fetch job
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Get all designs for this job
+    designs_result = await session.execute(
+        select(Design).where(Design.job_id == job_id)
+    )
+    designs = designs_result.scalars().all()
+    
+    if not designs:
+        raise HTTPException(status_code=400, detail="No designs found for this job")
+    
+    # Filter to designs that need annotation
+    designs_to_annotate = [d for d in designs if not (d.cdr_h1 and d.cdr_h1_length)]
+    already_annotated = len(designs) - len(designs_to_annotate)
+    
+    if not designs_to_annotate:
+        return {
+            "message": f"All {len(designs)} designs already annotated",
+            "job_id": job_id,
+            "status": "complete",
+            "annotated": len(designs),
+            "total": len(designs)
+        }
+    
+    # Collect PDB paths and design IDs for background processing
+    pdb_paths = [d.pdb_path for d in designs_to_annotate]
+    design_ids = [d.id for d in designs_to_annotate]
+    total_count = len(designs)
+    
+    logger.info(f"[CDR ANNOTATE] Starting background annotation on {len(pdb_paths)} designs for job {job_id}")
+    
+    # Background worker function
+    def run_annotation_sync():
+        import sqlite3
+        
+        # Run ANARCII batch annotation
+        annotations = batch_annotate_pdbs(pdb_paths, batch_size=500)
+        
+        # Update database directly with sqlite (sync)
+        db_path = Path(__file__).parent.parent / "biomodstack.db"
+        conn = sqlite3.connect(str(db_path))
+        cursor = conn.cursor()
+        
+        annotated = 0
+        for pdb_path, design_id in zip(pdb_paths, design_ids):
+            annot = annotations.get(pdb_path)
+            if annot:
+                cursor.execute("""
+                    UPDATE designs SET
+                        antibody_type = ?,
+                        binder_length = ?,
+                        cdr_h1 = ?, cdr_h2 = ?, cdr_h3 = ?,
+                        cdr_l1 = ?, cdr_l2 = ?, cdr_l3 = ?,
+                        cdr_h1_length = ?, cdr_h2_length = ?, cdr_h3_length = ?,
+                        cdr_l1_length = ?, cdr_l2_length = ?, cdr_l3_length = ?
+                    WHERE id = ?
+                """, (
+                    annot.antibody_type, annot.binder_length,
+                    annot.cdr_h1, annot.cdr_h2, annot.cdr_h3,
+                    annot.cdr_l1, annot.cdr_l2, annot.cdr_l3,
+                    annot.cdr_h1_length, annot.cdr_h2_length, annot.cdr_h3_length,
+                    annot.cdr_l1_length, annot.cdr_l2_length, annot.cdr_l3_length,
+                    design_id
+                ))
+                annotated += 1
+        
+        conn.commit()
+        conn.close()
+        logger.info(f"[CDR ANNOTATE] Completed: {annotated}/{len(pdb_paths)} designs annotated for job {job_id}")
+    
+    # Start background thread
+    thread = threading.Thread(target=run_annotation_sync, daemon=True)
+    thread.start()
+    
+    return {
+        "message": f"CDR annotation started for {len(pdb_paths)} designs (running in background)",
+        "job_id": job_id,
+        "status": "started",
+        "pending": len(pdb_paths),
+        "total": total_count
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # STAGE CHECKPOINTING ENDPOINTS
 # ═══════════════════════════════════════════════════════════════════════════════
 

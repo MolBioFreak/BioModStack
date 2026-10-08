@@ -19,10 +19,11 @@ process PrepFAMPNN {
         --out_dir "fampnn_input"
     
     # Define residue ranges to be fixed during sequence generation in CSV
-    python /scripts/prep_fampnn_csv.py \
+    # Define residue ranges to be fixed (Fix chains != H, L)
+    python /scripts/prep_antibody_constraints.py \
         --input_dir "./" \
-        --out_csv "fampnn.csv" \
-        ${params.fampnn_fix_target_sidechains ? "--fix_target_sidechains" : ''}
+        --out_fampnn "fampnn.csv" \
+        --out_mpnn "mpnn_fixed_chains_unused.json"
     """
 }
 

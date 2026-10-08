@@ -36,6 +36,16 @@ export default defineConfig({
   },
   server: {
     allowedHosts: ['compute-node.taileb3a90.ts.net'],
+    // Prevent watching pipeline directories that can have millions of files
+    watch: {
+      ignored: [
+        '**/work/**',
+        '**/pdj_results/**',
+        '**/models/**',
+        '**/apptainer/**',
+        '**/binderscaffolds/**',
+      ]
+    },
     proxy: {
       // Proxy /api requests to backend server
       '/api': {

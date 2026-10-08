@@ -47,7 +47,7 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
     // Fetch jobs
     const { data: jobsData } = useQuery({
         queryKey: ['jobs'],
-        queryFn: fetchJobs,
+        queryFn: () => fetchJobs(),
         refetchInterval: 10000,
     });
 

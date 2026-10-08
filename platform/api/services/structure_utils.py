@@ -341,3 +341,97 @@ def get_per_chain_metrics(path: Union[str, Path]) -> dict:
     except Exception as e:
         logger.error(f"[structure_utils] Error extracting chain metrics from {path}: {e}")
         return {}
+
+
+def calculate_epitope_contacts(
+    pdb_path: Union[str, Path],
+    epitope_residues: List[str],
+    antibody_chain: str = "A",
+    target_chain: str = "B",
+    distance_threshold: float = 8.0
+) -> Tuple[int, Optional[float]]:
+    """
+    Calculate antibody-epitope contact metrics.
+    
+    Counts how many antibody residues are within distance_threshold of epitope
+    residues, and returns the minimum distance to the epitope.
+    
+    Args:
+        pdb_path: Path to structure file (PDB or CIF)
+        epitope_residues: List of epitope residue specs (e.g., ["A111", "A112", ...])
+        antibody_chain: Chain ID for antibody (default "A")
+        target_chain: Chain ID for target protein (default "B")
+        distance_threshold: Distance cutoff in Angstroms (default 8.0)
+        
+    Returns:
+        Tuple of (contact_count, min_distance)
+        - contact_count: Number of antibody CA atoms within threshold of any epitope CA
+        - min_distance: Minimum CA-CA distance to epitope (Angstroms)
+        Returns (0, None) on error
+    """
+    try:
+        structure = load_structure(pdb_path)
+        
+        # Parse epitope residue numbers
+        epitope_resnums = set()
+        for res_spec in epitope_residues:
+            # Format: "A111" or "B52" - extract chain and number
+            if len(res_spec) < 2:
+                continue
+            chain_id = res_spec[0]
+            try:
+                resnum = int(res_spec[1:])
+                epitope_resnums.add(resnum)
+            except ValueError:
+                continue
+        
+        if not epitope_resnums:
+            logger.warning(f"[structure_utils] No valid epitope residues parsed from {epitope_residues}")
+            return 0, None
+        
+        # Get CA atoms for antibody and target chains
+        ab_ca = structure[
+            (structure.chain_id == antibody_chain) & 
+            (structure.atom_name == "CA")
+        ]
+        target_ca = structure[
+            (structure.chain_id == target_chain) & 
+            (structure.atom_name == "CA")
+        ]
+        
+        if len(ab_ca) == 0 or len(target_ca) == 0:
+            logger.warning(f"[structure_utils] Missing chains: Ab({antibody_chain})={len(ab_ca)}, Target({target_chain})={len(target_ca)}")
+            return 0, None
+        
+        # Filter target to only epitope residues
+        epitope_mask = np.isin(target_ca.res_id, list(epitope_resnums))
+        epitope_ca = target_ca[epitope_mask]
+        
+        if len(epitope_ca) == 0:
+            logger.warning(f"[structure_utils] No epitope residues found in chain {target_chain}")
+            return 0, None
+        
+        # Calculate distances between all antibody CA and epitope CA
+        ab_coords = ab_ca.coord
+        epitope_coords = epitope_ca.coord
+        
+        # Compute pairwise distances
+        min_distances = []
+        for ab_coord in ab_coords:
+            distances = np.sqrt(np.sum((epitope_coords - ab_coord) ** 2, axis=1))
+            min_dist = np.min(distances)
+            min_distances.append(min_dist)
+        
+        min_distances = np.array(min_distances)
+        
+        # Count contacts (antibody residues within threshold)
+        contact_count = int(np.sum(min_distances < distance_threshold))
+        
+        # Overall minimum distance
+        overall_min = float(np.min(min_distances)) if len(min_distances) > 0 else None
+        
+        return contact_count, overall_min
+        
+    except Exception as e:
+        logger.error(f"[structure_utils] Error calculating epitope contacts: {e}")
+        return 0, None

@@ -71,6 +71,9 @@ export function Layout({ children }: LayoutProps) {
 
                             {/* Eco Mode Toggle */}
                             <EcoModeToggle />
+
+                            {/* Debug Menu */}
+                            <DebugMenu />
                         </div>
                     </div>
                 </div>
@@ -80,6 +83,101 @@ export function Layout({ children }: LayoutProps) {
             <main>
                 {children}
             </main>
+        </div>
+    );
+}
+
+function DebugMenu() {
+    const [isOpen, setIsOpen] = useState(false);
+    const [loading, setLoading] = useState<string | null>(null);
+    const [result, setResult] = useState<string | null>(null);
+
+    const runCleanup = async (days: number) => {
+        const label = days === 0 ? 'full' : `${days}d`;
+        setLoading(label);
+        setResult(null);
+        try {
+            const res = await fetch(`/api/system/cleanup-work?days=${days}`, {
+                method: 'POST'
+            });
+            const data = await res.json();
+            if (data.success) {
+                setResult(`✓ ${data.message}: ${data.files_before - data.files_after} files removed`);
+            } else {
+                setResult(`✗ ${data.message}`);
+            }
+        } catch (error) {
+            setResult(`✗ Error: ${error}`);
+        } finally {
+            setLoading(null);
+        }
+    };
+
+    return (
+        <div className="relative">
+            <button
+                onClick={() => setIsOpen(!isOpen)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-white hover:bg-slate-700/50 transition-all border border-slate-700/50"
+            >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+                </svg>
+                Debug
+            </button>
+
+            {isOpen && (
+                <>
+                    {/* Backdrop */}
+                    <div
+                        className="fixed inset-0 z-40"
+                        onClick={() => setIsOpen(false)}
+                    />
+
+                    {/* Dropdown */}
+                    <div className="absolute right-0 top-full mt-2 w-64 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 py-2">
+                        <div className="px-3 py-2 border-b border-slate-700">
+                            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Cache Cleanup</p>
+                        </div>
+
+                        <div className="p-2 space-y-1">
+                            <button
+                                onClick={() => runCleanup(7)}
+                                disabled={loading !== null}
+                                className="w-full px-3 py-2 text-left text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition-all flex items-center justify-between disabled:opacity-50"
+                            >
+                                <span>Purge 7+ day old cache</span>
+                                {loading === '7d' && <span className="text-xs text-purple-400">Running...</span>}
+                            </button>
+
+                            <button
+                                onClick={() => runCleanup(30)}
+                                disabled={loading !== null}
+                                className="w-full px-3 py-2 text-left text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition-all flex items-center justify-between disabled:opacity-50"
+                            >
+                                <span>Purge 30+ day old cache</span>
+                                {loading === '30d' && <span className="text-xs text-purple-400">Running...</span>}
+                            </button>
+
+                            <button
+                                onClick={() => runCleanup(0)}
+                                disabled={loading !== null}
+                                className="w-full px-3 py-2 text-left text-sm text-red-400 hover:bg-red-500/10 rounded-lg transition-all flex items-center justify-between disabled:opacity-50"
+                            >
+                                <span>⚠️ Full Purge (clear all)</span>
+                                {loading === 'full' && <span className="text-xs text-red-400">Running...</span>}
+                            </button>
+                        </div>
+
+                        {result && (
+                            <div className="px-3 py-2 border-t border-slate-700">
+                                <p className={`text-xs ${result.startsWith('✓') ? 'text-green-400' : 'text-red-400'}`}>
+                                    {result}
+                                </p>
+                            </div>
+                        )}
+                    </div>
+                </>
+            )}
         </div>
     );
 }

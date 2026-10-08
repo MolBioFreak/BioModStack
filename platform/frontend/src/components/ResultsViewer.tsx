@@ -2,7 +2,8 @@ import { useState, useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useParams, useNavigate } from 'react-router-dom';
 
-import { fetchJobs, fetchJobAnalytics, fetchDesigns, fetchDesignResidueMetrics, fetchChainMetrics, fetchStructureAnalysis, fetchAntibodyData } from '../lib/api';
+import { fetchJobs, fetchJobAnalytics, fetchDesigns, fetchDesignResidueMetrics, fetchChainMetrics, fetchStructureAnalysis, fetchAntibodyData, fetchBackboneSummary } from '../lib/api';
+import type { Job } from '../lib/api';
 import MolstarViewer from './MolstarViewer';
 import FloatingViewer from './FloatingViewer';
 import { Histogram, MetricScatter, ResidueLineChart, StabilityHeatmap } from './MetricCharts';
@@ -57,13 +58,22 @@ export function ResultsViewer() {
     const [filterText, setFilterText] = useState('');
     const [showPlddt, setShowPlddt] = useState(true);  // pLDDT coloring on by default
     const [showReferencePanel, setShowReferencePanel] = useState(false);
-    const [referenceStructures, setReferenceStructures] = useState<Array<{ url: string; format: 'pdb' | 'cif'; name: string }>>([]); // Array for multi-compare
+    const [referenceStructures, setReferenceStructures] = useState<Array<{ url: string; format: 'pdb' | 'cif'; name: string }>>([]);
+    const [selectedBackboneId, setSelectedBackboneId] = useState<number | null>(null);
+    const [plddtMin, setPlddtMin] = useState<number>(0);
+    const [iptmMin, setIptmMin] = useState<number>(0);
+    const [contactsMin, setContactsMin] = useState<number>(0);
     const MAX_COMPARE_VIEWERS = 3;
+
+    // Pagination state for large design sets
+    const [pageSize, setPageSize] = useState<number>(100);
+    const [currentPage, setCurrentPage] = useState<number>(1);
+    const PAGE_SIZE_OPTIONS = [50, 100, 250, 500, 1000, 0]; // 0 = All
 
     // Fetch jobs list
     const { data: jobsData } = useQuery({
         queryKey: ['jobs'],
-        queryFn: fetchJobs,
+        queryFn: () => fetchJobs(),
     });
     const jobs = jobsData?.data.jobs ?? [];
 
@@ -72,7 +82,7 @@ export function ResultsViewer() {
         if (jobId && jobId !== selectedJobId) {
             setSelectedJobId(jobId);
         } else if (!jobId && jobs.length > 0 && !selectedJobId) {
-            const completedJobs = jobs.filter(j => j.status === 'completed');
+            const completedJobs = jobs.filter((j: Job) => j.status === 'completed');
             if (completedJobs.length > 0) {
                 const recent = completedJobs[0];
                 setSelectedJobId(recent.id);
@@ -85,6 +95,7 @@ export function ResultsViewer() {
         const newId = e.target.value;
         setSelectedJobId(newId);
         setSelectedDesignId('');
+        setCurrentPage(1); // Reset pagination when switching jobs
         if (newId) navigate(`/designs/${newId}`);
         else navigate('/designs');
     };
@@ -97,13 +108,29 @@ export function ResultsViewer() {
     });
     const analytics = analyticsData?.data;
 
-    // Fetch Designs
     const { data: designsData, isLoading: designsLoading } = useQuery({
-        queryKey: ['designs', selectedJobId],
-        queryFn: () => fetchDesigns({ job_id: selectedJobId, limit: 500 }),
+        queryKey: ['designs', selectedJobId, currentPage, pageSize, sortField, sortDir, selectedBackboneId],
+        queryFn: () => fetchDesigns({
+            job_id: selectedJobId,
+            limit: pageSize === 0 ? 10000 : pageSize, // 0 = All (fetch up to 10000)
+            offset: pageSize === 0 ? 0 : (currentPage - 1) * pageSize,
+            sort_by: sortField as 'plddt' | 'iptm' | 'ptm' | 'pae' | 'backbone' | undefined,
+            sort_desc: sortDir === 'desc',
+            backbone_id: selectedBackboneId ?? undefined,
+        }),
         enabled: !!selectedJobId,
     });
     const designs = designsData?.data.designs ?? [];
+    const totalDesigns = designsData?.data.total ?? 0;
+    const totalPages = pageSize === 0 ? 1 : Math.ceil(totalDesigns / pageSize);
+
+    // Fetch backbone summary for toggle UI
+    const { data: backboneSummaryData } = useQuery({
+        queryKey: ['backboneSummary', selectedJobId],
+        queryFn: () => fetchBackboneSummary(selectedJobId),
+        enabled: !!selectedJobId,
+    });
+    const backboneSummary = backboneSummaryData?.data;
 
     // Fetch per-residue metrics for selected design (for line chart)
     const { data: residueMetricsData } = useQuery({
@@ -154,9 +181,26 @@ export function ResultsViewer() {
     // Sorted & Filtered designs for table
     const sortedDesigns = useMemo(() => {
         let filtered = designs;
+        // Backbone filter
+        if (selectedBackboneId !== null) {
+            filtered = filtered.filter(d => d.backbone_id === selectedBackboneId);
+        }
+        // pLDDT filter
+        if (plddtMin > 0) {
+            filtered = filtered.filter(d => (d.plddt_overall ?? 0) >= plddtMin);
+        }
+        // iPTM filter
+        if (iptmMin > 0) {
+            filtered = filtered.filter(d => (d.iptm ?? 0) >= iptmMin);
+        }
+        // Epitope contacts filter
+        if (contactsMin > 0) {
+            filtered = filtered.filter(d => (d.epitope_contact_count ?? 0) >= contactsMin);
+        }
+        // Text filter
         if (filterText) {
             const lower = filterText.toLowerCase();
-            filtered = designs.filter(d => d.name.toLowerCase().includes(lower));
+            filtered = filtered.filter(d => d.name.toLowerCase().includes(lower));
         }
         return [...filtered].sort((a, b) => {
             const aVal = (a as any)[sortField];
@@ -164,11 +208,14 @@ export function ResultsViewer() {
             if (aVal == null) return 1;
             if (bVal == null) return -1;
             if (typeof aVal === 'string') {
-                return sortDir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+                // Use natural sort for strings with numbers (antibody_job_2 before antibody_job_10)
+                return sortDir === 'asc'
+                    ? aVal.localeCompare(bVal, undefined, { numeric: true, sensitivity: 'base' })
+                    : bVal.localeCompare(aVal, undefined, { numeric: true, sensitivity: 'base' });
             }
             return sortDir === 'asc' ? aVal - bVal : bVal - aVal;
         });
-    }, [designs, sortField, sortDir, filterText]);
+    }, [designs, sortField, sortDir, filterText, selectedBackboneId, plddtMin, iptmMin, contactsMin]);
 
     // Fetch PDB content when design selected
     // Note: MolstarViewer now fetches structure directly from API URL
@@ -180,7 +227,7 @@ export function ResultsViewer() {
         }
     }, [designs, selectedDesignId]);
 
-    const activeJob = jobs.find(j => j.id === selectedJobId);
+    const activeJob = jobs.find((j: Job) => j.id === selectedJobId);
     const selectedDesign = designs.find(d => d.id === selectedDesignId);
     // Detect structure format from file extension
     const structureFormat = selectedDesign?.pdb_path?.endsWith('.cif') ? 'cif' : 'pdb';
@@ -196,7 +243,8 @@ export function ResultsViewer() {
         const binderProbs = designs.map(d => d.binder_probability).filter((v): v is number => v != null);
 
         return {
-            total: designs.length,
+            total: totalDesigns, // Use API total, not current page length
+            pageSize: designs.length, // Current page count
             favorites: designs.filter(d => d.is_favorite).length,
             avgPlddt: plddts.length ? plddts.reduce((a, b) => a + b, 0) / plddts.length : null,
             avgPae: paes.length ? paes.reduce((a, b) => a + b, 0) / paes.length : null,
@@ -206,7 +254,7 @@ export function ResultsViewer() {
             highConfidence: plddts.filter(v => v >= 80).length,
             lowError: paes.filter(v => v <= 5).length,
         };
-    }, [designs]);
+    }, [designs, totalDesigns]);
 
     const handleSort = (field: string) => {
         if (sortField === field) {
@@ -337,6 +385,70 @@ export function ResultsViewer() {
                             ))}
                         </div>
 
+                        {/* Global Pagination Bar - visible on all tabs */}
+                        {totalDesigns > 0 && (
+                            <div className="flex items-center justify-between px-4 py-2 mb-2 bg-gradient-to-r from-slate-800/60 to-slate-900/60 rounded-lg border border-slate-700/50">
+                                <div className="flex items-center gap-3">
+                                    <span className="text-xs text-slate-400">
+                                        {pageSize === 0 ? (
+                                            <>Showing <span className="text-blue-400 font-semibold">all {totalDesigns.toLocaleString()}</span> designs</>
+                                        ) : (
+                                            <>Showing <span className="text-white font-medium">{((currentPage - 1) * pageSize) + 1}-{Math.min(currentPage * pageSize, totalDesigns)}</span> of <span className="text-blue-400 font-semibold">{totalDesigns.toLocaleString()}</span> designs</>
+                                        )}
+                                        {sortField !== 'name' && <span className="ml-2 text-emerald-400">(sorted by {sortField} {sortDir})</span>}
+                                    </span>
+                                    <select
+                                        value={pageSize}
+                                        onChange={(e) => {
+                                            setPageSize(Number(e.target.value));
+                                            setCurrentPage(1);
+                                        }}
+                                        className="bg-slate-700 border border-slate-600 rounded px-2 py-0.5 text-xs text-white cursor-pointer"
+                                    >
+                                        {PAGE_SIZE_OPTIONS.map(size => (
+                                            <option key={size} value={size}>{size === 0 ? 'All' : `${size} per page`}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                {/* Only show nav if not viewing all */}
+                                {pageSize !== 0 && totalPages > 1 && (
+                                    <div className="flex items-center gap-1">
+                                        <button
+                                            onClick={() => setCurrentPage(1)}
+                                            disabled={currentPage === 1}
+                                            className="px-2 py-0.5 text-xs bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed rounded"
+                                        >
+                                            ⏮
+                                        </button>
+                                        <button
+                                            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                                            disabled={currentPage === 1}
+                                            className="px-2 py-0.5 text-xs bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed rounded"
+                                        >
+                                            ←
+                                        </button>
+                                        <span className="px-2 py-0.5 text-xs text-white bg-blue-600/30 rounded border border-blue-500/40">
+                                            {currentPage} / {totalPages}
+                                        </span>
+                                        <button
+                                            onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                                            disabled={currentPage >= totalPages}
+                                            className="px-2 py-0.5 text-xs bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed rounded"
+                                        >
+                                            →
+                                        </button>
+                                        <button
+                                            onClick={() => setCurrentPage(totalPages)}
+                                            disabled={currentPage >= totalPages}
+                                            className="px-2 py-0.5 text-xs bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed rounded"
+                                        >
+                                            ⏭
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
                         {/* Content */}
                         <div className="bg-slate-900/50 rounded-xl border border-slate-800 min-h-[600px]">
                             {isLoading ? (
@@ -349,7 +461,7 @@ export function ResultsViewer() {
                                     {activeTab === 'overview' && stats && (
                                         <div className="p-6 space-y-6">
                                             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
-                                                <StatCard label="Total Designs" value={stats.total} />
+                                                <StatCard label="Total Designs" value={stats.total.toLocaleString()} />
                                                 <StatCard label="Favorites" value={stats.favorites} color="text-yellow-400" />
                                                 <StatCard label="Avg pLDDT" value={formatMetric(stats.avgPlddt, 1)} color="text-blue-400" />
                                                 <StatCard label="Avg Affinity" value={formatMetric(stats.avgAffinity, 2)} color="text-emerald-400" />
@@ -612,9 +724,9 @@ export function ResultsViewer() {
                                                         title="Switch Job"
                                                     >
                                                         {jobs
-                                                            .filter(j => j.status === 'completed' && j.design_count > 0)
+                                                            .filter((j: Job) => j.status === 'completed' && j.design_count > 0)
                                                             .slice(0, 50)
-                                                            .map(job => (
+                                                            .map((job: Job) => (
                                                                 <option key={job.id} value={job.id}>
                                                                     {job.name} ({job.design_count})
                                                                 </option>
@@ -634,7 +746,7 @@ export function ResultsViewer() {
                                                         onChange={(e) => setSelectedDesignId(e.target.value)}
                                                         className="appearance-none bg-slate-800/60 backdrop-blur-sm border border-slate-600/50 rounded-lg px-3 py-1.5 pr-8 text-sm text-white cursor-pointer hover:bg-slate-700/60 transition-colors min-w-[180px]"
                                                     >
-                                                        {designs.map(d => (
+                                                        {[...designs].sort((a, b) => (b.plddt_overall ?? 0) - (a.plddt_overall ?? 0)).map(d => (
                                                             <option key={d.id} value={d.id}>
                                                                 {d.name} {d.plddt_overall ? `(${d.plddt_overall.toFixed(0)})` : ''}
                                                             </option>
@@ -914,8 +1026,81 @@ export function ResultsViewer() {
                                     {/* DATA TABLE TAB */}
                                     {activeTab === 'table' && (
                                         <div className="p-4">
-                                            {/* Filter */}
-                                            <div className="mb-4">
+                                            {/* Backbone Toggle Bar */}
+                                            {backboneSummary && Object.keys(backboneSummary.backbones).length > 0 && (
+                                                <div className="mb-4 p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
+                                                    <div className="flex items-center gap-2 mb-2 flex-wrap overflow-x-auto max-h-24">
+                                                        <span className="text-xs text-slate-400 font-medium shrink-0">Backbone:</span>
+                                                        <button
+                                                            onClick={() => setSelectedBackboneId(null)}
+                                                            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${selectedBackboneId === null
+                                                                ? 'bg-blue-500/30 text-blue-400 border border-blue-500/40'
+                                                                : 'bg-slate-700/50 text-slate-400 hover:bg-slate-600/50'
+                                                                }`}
+                                                        >
+                                                            All ({backboneSummary.total})
+                                                        </button>
+                                                        {Object.entries(backboneSummary.backbones).map(([id, data]) => (
+                                                            <button
+                                                                key={id}
+                                                                onClick={() => setSelectedBackboneId(Number(id))}
+                                                                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${selectedBackboneId === Number(id)
+                                                                    ? 'bg-emerald-500/30 text-emerald-400 border border-emerald-500/40'
+                                                                    : 'bg-slate-700/50 text-slate-400 hover:bg-slate-600/50'
+                                                                    }`}
+                                                                title={`pLDDT: ${data.avg_plddt ?? '—'} | iPTM: ${data.avg_iptm ?? '—'}`}
+                                                            >
+                                                                #{id} ({data.count})
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                    {/* Quality Filters */}
+                                                    <div className="flex items-center gap-4 pt-2 border-t border-slate-700/50">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-xs text-slate-500">pLDDT ≥</span>
+                                                            <input
+                                                                type="range"
+                                                                min="0"
+                                                                max="100"
+                                                                value={plddtMin}
+                                                                onChange={(e) => setPlddtMin(Number(e.target.value))}
+                                                                className="w-24 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                                                            />
+                                                            <span className="text-xs text-blue-400 font-mono w-8">{plddtMin}</span>
+                                                        </div>
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-xs text-slate-500">iPTM ≥</span>
+                                                            <input
+                                                                type="range"
+                                                                min="0"
+                                                                max="1"
+                                                                step="0.05"
+                                                                value={iptmMin}
+                                                                onChange={(e) => setIptmMin(Number(e.target.value))}
+                                                                className="w-24 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                                                            />
+                                                            <span className="text-xs text-emerald-400 font-mono w-8">{iptmMin.toFixed(2)}</span>
+                                                        </div>
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-xs text-slate-500">Contacts ≥</span>
+                                                            <input
+                                                                type="range"
+                                                                min="0"
+                                                                max="20"
+                                                                value={contactsMin}
+                                                                onChange={(e) => setContactsMin(Number(e.target.value))}
+                                                                className="w-24 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                                                            />
+                                                            <span className="text-xs text-amber-400 font-mono w-8">{contactsMin}</span>
+                                                        </div>
+                                                        <span className="text-xs text-slate-500 ml-auto">
+                                                            Page {currentPage} • Showing {sortedDesigns.length} of {totalDesigns.toLocaleString()} designs
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            )}
+                                            {/* Text Filter + Annotate CDRs */}
+                                            <div className="mb-4 flex items-center gap-4">
                                                 <input
                                                     type="text"
                                                     placeholder="Filter by name..."
@@ -923,6 +1108,24 @@ export function ResultsViewer() {
                                                     onChange={e => setFilterText(e.target.value)}
                                                     className="bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-sm w-64"
                                                 />
+                                                <button
+                                                    onClick={async () => {
+                                                        const jobIdToUse = activeJob?.id || selectedJobId;
+                                                        if (!jobIdToUse) return;
+                                                        try {
+                                                            const res = await fetch(`/api/jobs/${jobIdToUse}/annotate-cdr`, { method: 'POST' });
+                                                            const data = await res.json();
+                                                            alert(data.message || 'CDR annotation complete');
+                                                            // Refetch designs to show updated data
+                                                            window.location.reload();
+                                                        } catch (err) {
+                                                            alert('CDR annotation failed: ' + err);
+                                                        }
+                                                    }}
+                                                    className="px-4 py-2 text-sm bg-violet-600 hover:bg-violet-500 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
+                                                >
+                                                    🧬 Annotate CDRs
+                                                </button>
                                             </div>
                                             {/* Table */}
                                             <div className="overflow-x-auto">
@@ -931,15 +1134,16 @@ export function ResultsViewer() {
                                                         <tr className="border-b border-slate-700">
                                                             {[
                                                                 { key: 'name', label: 'Name' },
-                                                                { key: 'affinity_score', label: 'Affinity (-log IC50)' },
+                                                                { key: 'binder_length', label: 'Size' },
+                                                                { key: 'cdr_h3_length', label: 'CDR-H3' },
+                                                                { key: 'affinity_score', label: 'Affinity' },
                                                                 { key: 'binder_probability', label: 'Binder %' },
                                                                 { key: 'plddt_overall', label: 'pLDDT' },
                                                                 { key: 'pae_overall', label: 'PAE' },
                                                                 { key: 'ptm', label: 'pTM' },
                                                                 { key: 'ligand_iptm', label: 'Lig iPTM' },
                                                                 { key: 'conf_score', label: 'Conf' },
-                                                                { key: 'rmsd_binder', label: 'RMSD Binder' },
-                                                                { key: 'rog', label: 'RoG' },
+                                                                { key: 'rmsd_binder', label: 'RMSD' },
                                                                 { key: 'is_favorite', label: '★' },
                                                             ].map(col => (
                                                                 <th
@@ -966,6 +1170,16 @@ export function ResultsViewer() {
                                                                 }}
                                                             >
                                                                 <td className="px-3 py-2 font-medium truncate max-w-[200px]">{d.name}</td>
+
+                                                                {/* Binder Size (AA count) */}
+                                                                <td className="px-3 py-2 font-mono text-slate-400">
+                                                                    {(d as any).binder_length ?? '—'}
+                                                                </td>
+
+                                                                {/* CDR-H3 Length */}
+                                                                <td className="px-3 py-2 font-mono text-violet-400">
+                                                                    {(d as any).cdr_h3_length ?? '—'}
+                                                                </td>
 
                                                                 {/* Affinity */}
                                                                 <td className={`px-3 py-2 font-mono ${d.affinity_score != null && d.affinity_score > 6 ? 'text-emerald-400' :
@@ -1004,6 +1218,66 @@ export function ResultsViewer() {
                                                         ))}
                                                     </tbody>
                                                 </table>
+                                            </div>
+
+                                            {/* Pagination Controls */}
+                                            <div className="mt-4 flex items-center justify-between px-4 py-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
+                                                {/* Page Size Selector */}
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-xs text-slate-400">Per page:</span>
+                                                    <select
+                                                        value={pageSize}
+                                                        onChange={(e) => {
+                                                            setPageSize(Number(e.target.value));
+                                                            setCurrentPage(1); // Reset to page 1 on size change
+                                                        }}
+                                                        className="bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-white cursor-pointer"
+                                                    >
+                                                        {PAGE_SIZE_OPTIONS.map(size => (
+                                                            <option key={size} value={size}>{size}</option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+
+                                                {/* Page Info */}
+                                                <div className="text-xs text-slate-400">
+                                                    Showing {((currentPage - 1) * pageSize) + 1} - {Math.min(currentPage * pageSize, totalDesigns)} of {totalDesigns.toLocaleString()}
+                                                </div>
+
+                                                {/* Navigation Buttons */}
+                                                <div className="flex items-center gap-2">
+                                                    <button
+                                                        onClick={() => setCurrentPage(1)}
+                                                        disabled={currentPage === 1}
+                                                        className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed rounded border border-slate-600"
+                                                    >
+                                                        ⏮
+                                                    </button>
+                                                    <button
+                                                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                                                        disabled={currentPage === 1}
+                                                        className="px-3 py-1 text-xs bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed rounded border border-slate-600"
+                                                    >
+                                                        ← Prev
+                                                    </button>
+                                                    <span className="px-3 py-1 text-xs text-white bg-blue-600/30 rounded border border-blue-500/40">
+                                                        Page {currentPage} / {totalPages}
+                                                    </span>
+                                                    <button
+                                                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                                                        disabled={currentPage >= totalPages}
+                                                        className="px-3 py-1 text-xs bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed rounded border border-slate-600"
+                                                    >
+                                                        Next →
+                                                    </button>
+                                                    <button
+                                                        onClick={() => setCurrentPage(totalPages)}
+                                                        disabled={currentPage >= totalPages}
+                                                        className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed rounded border border-slate-600"
+                                                    >
+                                                        ⏭
+                                                    </button>
+                                                </div>
                                             </div>
                                         </div>
                                     )}

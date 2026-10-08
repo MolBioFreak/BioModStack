@@ -3,7 +3,7 @@ import { OligoBuilderModal } from './OligoBuilderModal';
 
 export interface LigandEntry {
     id: string;
-    type: 'ligand' | 'ion' | 'dna' | 'rna' | 'peptide';
+    type: 'ligand' | 'ion' | 'dna' | 'rna' | 'peptide' | 'protein';
     ccd?: string;
     smiles?: string;
     sequence?: string;  // For DNA/RNA/peptide sequences
@@ -309,7 +309,9 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false }
                                     ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
                                     : lig.type === 'ion'
                                         ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                                        : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                        : lig.type === 'protein'
+                                            ? 'bg-blue-600/20 text-blue-300 border border-blue-600/30'
+                                            : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                                 }`}
                         >
                             <span className="font-mono text-xs opacity-60">[{lig.id}]</span>
@@ -331,8 +333,9 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false }
                         </button>
                     )}
                 </div>
-            )}
-        </section>
+            )
+            }
+        </section >
     );
 }
 
