@@ -117,6 +117,8 @@ class RuntimeAcquisitionArtifact(BaseModel):
     source_authority: str = Field(min_length=1)
     approval_ref: str = Field(min_length=1)
     license_id: Optional[str] = None
+    redirect_policy: Optional[Dict[str, Any]] = None
+    member_path: Optional[str] = None
 
 
 def model_acquisition_plan(model_id: str) -> dict:
@@ -148,8 +150,9 @@ def model_acquisition_plan(model_id: str) -> dict:
             blockers.append({"code": "approved_acquisition_metadata_missing",
                              **ref.model_dump()})
         for entry in entries:
-            artifacts.append({"dependency": ref.model_dump(), "manifest": {
-                **entry.model_dump(exclude={"dependency"}), "kind": ref.kind}})
+            artifacts.append({"dependency": ref.model_dump(), "member_path": entry.member_path,
+                              "manifest": {
+                **entry.model_dump(exclude={"dependency", "member_path"}), "kind": ref.kind}})
     return {"model_id": model_id, "artifacts": artifacts, "blockers": blockers}
 
 
