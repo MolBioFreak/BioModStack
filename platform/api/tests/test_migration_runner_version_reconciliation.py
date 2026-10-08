@@ -55,6 +55,8 @@ def test_migration_versions_are_unique_with_md_before_ont() -> None:
         (32, "add_ont_signal_workbench"),
         (33, "add_ont_external_move_bam_receipts"),
         (34, "add_ont_move_source_attempt_lineage"),
+        (35, "add_scientific_artifact_receipts"),
+        (36, "add_frustrampnn_landscape_index_slimming"),
     ]
     assert len({migration.version for migration in MIGRATIONS}) == len(MIGRATIONS)
 

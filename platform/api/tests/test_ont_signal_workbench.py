@@ -559,10 +559,10 @@ async def test_upgraded_database_startup_applies_and_attests_migrations_33_and_3
         )
         connection.execute(
             "UPDATE schema_migrations SET content_sha256=? WHERE version=34",
-            (migration_runner._migration_content_sha256(MIGRATIONS[-1]),),
+            (migration_runner._migration_content_sha256(next(item for item in MIGRATIONS if item.version == 34)),),
         )
         connection.commit()
-    MIGRATIONS[-1].fn(str(db_path))
+    next(item for item in MIGRATIONS if item.version == 34).fn(str(db_path))
     monkeypatch.setattr(database_models, "engine", startup_engine)
     try:
         await database_models.init_db()
@@ -601,10 +601,10 @@ async def test_upgraded_database_startup_rejects_same_name_altered_migration_33_
         )
         connection.execute(
             "UPDATE schema_migrations SET content_sha256=? WHERE version=34",
-            (migration_runner._migration_content_sha256(MIGRATIONS[-1]),),
+            (migration_runner._migration_content_sha256(next(item for item in MIGRATIONS if item.version == 34)),),
         )
         connection.commit()
-    MIGRATIONS[-1].fn(str(db_path))
+    next(item for item in MIGRATIONS if item.version == 34).fn(str(db_path))
     with sqlite3.connect(db_path) as connection:
         connection.execute("DROP TRIGGER trg_ont_move_source_exact_producer_insert")
         connection.execute(
