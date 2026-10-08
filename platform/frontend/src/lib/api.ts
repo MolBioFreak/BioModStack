@@ -822,6 +822,8 @@ export interface Design {
     artifact_schema_version?: number | null;
     result_set?: string | null;
     result_set_label?: string | null;
+    analysis_contract_id?: string | null;
+    supported_analyzers?: string[];
     lineage_root_job_id?: string | null;
     parent_design_id?: string | null;
     origin_design_id?: string | null;

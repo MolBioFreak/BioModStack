@@ -20,6 +20,8 @@ type OutputSourceDesign = {
     source_stage_mode?: string | null;
     result_set?: string | null;
     result_set_label?: string | null;
+    analysis_contract_id?: string | null;
+    supported_analyzers?: string[] | null;
     ppiflow_filter_passed?: boolean | null;
     passed_screen?: boolean | null;
 };
@@ -79,6 +81,32 @@ const asRecord = (value: unknown): Record<string, unknown> | null => (
 
 const normalizeArtifactClass = (value: unknown): string => String(value || '').trim().toLowerCase();
 const isValidatedArtifactClass = (artifactClass: string): boolean => artifactClass === 'validated_complex';
+
+const hasSupportedAnalyzer = (design: OutputSourceDesign, analyzer: string): boolean => (
+    Array.isArray(design.supported_analyzers) && design.supported_analyzers.includes(analyzer)
+);
+
+const hasAnyExplicitResultContract = (design: OutputSourceDesign): boolean => {
+    if (typeof design.analysis_contract_id === 'string' && design.analysis_contract_id.trim()) return true;
+    if (Array.isArray(design.supported_analyzers) && design.supported_analyzers.length > 0) return true;
+    if (typeof design.result_set === 'string' && design.result_set.trim()) return true;
+    const artifactClass = normalizeArtifactClass(design.artifact_class);
+    const stageFamily = String(design.stage_family || '').trim().toLowerCase();
+    const stageMode = String(design.stage_mode || '').trim().toLowerCase();
+    const sourceStageFamily = String(design.source_stage_family || '').trim().toLowerCase();
+    const sourceStageMode = String(design.source_stage_mode || '').trim().toLowerCase();
+    const artifactGroup = String(design.artifact_group || '').trim().toLowerCase();
+    const provenance = asRecord(design.provenance);
+    const modelId = String(provenance?.model_id || '').trim().toLowerCase();
+    const knownTokens = [
+        'rfantibody', 'boltzgen', 'fampnn', 'proteinmpnn', 'antifold', 'frustrampnn', 'caliby',
+        'ppiflow', 'maturation', 'validation', 'boltz2', 'boltz_cp', 'protenix', 'esmfold2', 'confornets',
+    ];
+    return (
+        ['backbone_complex', 'sequence_designed_complex', 'validated_complex', 'post_validation_refined_complex'].includes(artifactClass) ||
+        [stageFamily, stageMode, sourceStageFamily, sourceStageMode, artifactGroup, modelId].some((value) => containsAny(value, knownTokens))
+    );
+};
 
 export const inferDesignResultSet = (design: OutputSourceDesign): ResultSetFilter | null => {
     const direct = String(design.result_set || '').trim().toLowerCase();
@@ -476,6 +504,10 @@ export const inferDesignOutputSource = (design: OutputSourceDesign): OutputSourc
         return 'rfantibody';
     }
 
+    if (!hasAnyExplicitResultContract(design)) {
+        return 'all';
+    }
+
     if (hasMetricKeys(design as AnalysisLensDesign, ['backbone_id', 'epitope_contact_count', 'target_contact_count', 'rfd_rog'])) {
         return 'rfantibody';
     }
@@ -515,7 +547,11 @@ export const inferDesignAnalysisLens = (design: AnalysisLensDesign): AnalysisLen
         return 'validation';
     }
 
-    if (
+    if (!hasAnyExplicitResultContract(design)) {
+        return null;
+    }
+
+    if (hasSupportedAnalyzer(design, 'ppiflow_maturation_v1') ||
         containsAny(path, ['/ppiflow/', '/ppiflow_maturation/', '/ppiflow_backbone/', '/ppiflow_repair/', '/maturation/']) ||
         hasMetricKeys(design, ['maturation_delta_interface', 'maturation_interface_score', 'maturation_rmsd'])
     ) {

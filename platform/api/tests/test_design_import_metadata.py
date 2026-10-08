@@ -140,3 +140,30 @@ def test_design_response_separates_ppiflow_pass_and_reject_result_sets() -> None
     assert _design_to_response(passed).result_set_label == "PPIFlow passed"
     assert _design_to_response(rejected).result_set == "ppiflow_rejected"
     assert _design_to_response(rejected).result_set_label == "PPIFlow rejected"
+
+
+def test_design_response_fails_closed_for_unknown_model_contract() -> None:
+    design = Design(
+        id="unknown-model-design-1",
+        job_id="unknown-model-job-1",
+        name="new_model_candidate_001",
+        stage_family="new_public_model",
+        stage_mode="predict",
+        artifact_class="novel_structure",
+        fampnn_psce=0.7,
+        confidence_metrics={
+            "plddt": 81.2,
+            "ranking_score": 0.93,
+            "fampnn": {"fampnn_avg_psce": 0.7},
+        },
+        provenance={"model_id": "new_public_model"},
+        is_favorite=False,
+        created_at=datetime(2026, 4, 14, 18, 0, 0),
+    )
+
+    response = _design_to_response(design)
+
+    assert response.result_set is None
+    assert response.result_set_label is None
+    assert response.analysis_contract_id is None
+    assert response.supported_analyzers == []
