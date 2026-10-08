@@ -1,56 +1,98 @@
 /**
- * HPLC Data Processor Page
+ * BMS Chromatography Workbench Page
  */
 
 import { useState } from 'react';
+import {
+    AssayPanel,
+    AssayStatusStrip,
+    AssaySubnavGrid,
+    AssayWorkbenchIntro,
+    type AssayNavItem,
+} from '../assay/AssayWorkbenchPrimitives';
 import { ChromatogramAnalysis, CalibrationCurve, HplcQuantification } from './ChromatogramAnalysis';
 import { EmpowerImport } from './EmpowerImport';
 
 type AnalysisType = 'chromatogram' | 'calibration' | 'quantify' | 'empower';
 
-export function HplcPage() {
-    const [activeAnalysis, setActiveAnalysis] = useState<AnalysisType>('chromatogram');
+const analysisOptions: Array<AssayNavItem<AnalysisType>> = [
+    {
+        id: 'empower',
+        label: 'Empower AIA/ARW/CSV Import',
+        status: 'Waters chromatogram review',
+        description: 'Import real Empower AIA .cdf, ARW chromatogram text, ZIP batches, or CSV/ASCII peak-table exports; review chromatograms, peaks, SST summaries, and plasmid tracking logs.',
+    },
+    {
+        id: 'chromatogram',
+        label: 'Chromatogram Analysis',
+        status: 'Signal + peak picking',
+        description: 'Analyze real time/signal arrays with baseline correction, peak detection, integration, and Plotly traces.',
+    },
+    {
+        id: 'calibration',
+        label: 'Calibration Curve',
+        status: 'Explicit standards',
+        description: 'Fit concentration versus area from pasted standard levels with optional through-origin regression.',
+    },
+    {
+        id: 'quantify',
+        label: 'Sample Quantification',
+        status: 'Sample IDs required',
+        description: 'Quantify real sample peak areas against a calibration series; each unknown must carry a real identifier.',
+    },
+];
 
-    const analysisOptions: { id: AnalysisType; label: string }[] = [
-        { id: 'empower', label: 'Empower Import' },
-        { id: 'chromatogram', label: 'Chromatogram Analysis' },
-        { id: 'calibration', label: 'Calibration Curve' },
-        { id: 'quantify', label: 'Sample Quantification' },
-    ];
+const statusItems = [
+    {
+        title: 'Source of truth',
+        value: '/api/assay-analytics chromatography routes',
+        tone: 'accent' as const,
+    },
+    {
+        title: 'Unsupported containers',
+        value: 'Proprietary Empower DB/RAW files: export AIA .cdf/.arw or CSV/ASCII first',
+        tone: 'warning' as const,
+    },
+    {
+        title: 'Visualization',
+        value: 'Plotly chromatograms, calibration fits, SST and isoform tables',
+    },
+];
+
+export function HplcPage() {
+    const [activeAnalysis, setActiveAnalysis] = useState<AnalysisType>('empower');
 
     return (
-        <div className="p-6">
-            <div className="mb-6">
-                <h2 className="text-2xl font-bold text-text-primary">HPLC Data Processor</h2>
-                <p className="text-text-secondary">Peak detection, baseline correction, fitting, integration, and quantification</p>
-            </div>
+        <div className="space-y-6 p-6">
+            <AssayWorkbenchIntro
+                eyebrow="BMS Chromatography Workbench"
+                title="Waters / Empower chromatography and plasmid isoform review"
+                description="Work from real Empower 3 AIA .cdf, ARW chromatogram text, ZIP batches, CSV/ASCII exports, or pasted chromatogram/calibration data. Proprietary Empower database/RAW containers still require an Empower-side export to AIA .cdf/.arw or CSV/ASCII before BMS analysis."
+            >
+                <AssayStatusStrip items={statusItems} />
+            </AssayWorkbenchIntro>
 
-            {/* Analysis Type Selector */}
-            <div className="mb-6 flex flex-wrap gap-2">
-                {analysisOptions.map(option => (
-                    <button
-                        key={option.id}
-                        onClick={() => setActiveAnalysis(option.id)}
-                        className={`px-4 py-2 text-sm font-medium transition-colors ${activeAnalysis === option.id
-                                ? 'bg-accent-primary text-white'
-                                : 'bg-bg-secondary text-text-secondary hover:text-text-primary border border-border-primary'
-                            }`}
-                    >
-                        {option.label}
-                    </button>
-                ))}
-            </div>
+            <AssaySubnavGrid
+                items={analysisOptions}
+                activeId={activeAnalysis}
+                onChange={setActiveAnalysis}
+                columnsClass="sm:grid-cols-2 xl:grid-cols-4"
+            />
 
-            {/* Active Analysis Panel */}
-            <div className="border border-border-primary bg-bg-secondary p-4">
-                {activeAnalysis === 'chromatogram' && <ChromatogramAnalysis />}
-                {activeAnalysis === 'calibration' && <CalibrationCurve />}
-                {activeAnalysis === 'quantify' && <HplcQuantification />}
-                {activeAnalysis === 'empower' && <EmpowerImport />}
-            </div>
+            <AssayPanel className="p-4">
+                <div hidden={activeAnalysis !== 'empower'}>
+                    <EmpowerImport />
+                </div>
+                <div hidden={activeAnalysis !== 'chromatogram'}>
+                    <ChromatogramAnalysis />
+                </div>
+                <div hidden={activeAnalysis !== 'calibration'}>
+                    <CalibrationCurve />
+                </div>
+                <div hidden={activeAnalysis !== 'quantify'}>
+                    <HplcQuantification />
+                </div>
+            </AssayPanel>
         </div>
     );
 }
-
-export { ChromatogramAnalysis, CalibrationCurve, HplcQuantification } from './ChromatogramAnalysis';
-export { EmpowerImport } from './EmpowerImport';

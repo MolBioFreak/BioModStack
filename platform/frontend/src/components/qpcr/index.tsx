@@ -1,62 +1,121 @@
 /**
- * qPCR Data Processor Page
+ * BMS qPCR Workbench Page
  */
 
 import { useState } from 'react';
+import {
+    AssayPanel,
+    AssayStatusStrip,
+    AssaySubnavGrid,
+    AssayWorkbenchIntro,
+    type AssayNavItem,
+} from '../assay/AssayWorkbenchPrimitives';
 import { RawDataImport } from './RawDataImport';
 import { DeltaCqPanel, DeltaDeltaCqPanel } from './DeltaCqPanels';
 import { StandardCurvePanel, QuantificationPanel, AnovaDunnettPanel } from './QuantificationPanels';
 
 type AnalysisType = 'import' | 'deltacq' | 'deltadeltacq' | 'stdcurve' | 'quantify' | 'anova';
 
+const analysisOptions: Array<AssayNavItem<AnalysisType>> = [
+    {
+        id: 'import',
+        label: 'Instrument Import',
+        status: 'QuantStudio / StepOnePlus',
+        description: 'Parse real EDS, Excel, or CSV exports into plate heatmaps, well tables, standard-curve QC, replicate QC, NTCs, and spike recovery.',
+    },
+    {
+        id: 'deltacq',
+        label: 'ΔCq Analysis',
+        status: 'Reference-normalized',
+        description: 'Paste real Cq rows with sample, gene, Cq, and group metadata; BMS requires explicit reference and target genes.',
+    },
+    {
+        id: 'deltadeltacq',
+        label: 'ΔΔCq & Fold Change',
+        status: 'Control-group required',
+        description: 'Compute relative expression and fold-change from explicit control/treatment groups without inventing group labels.',
+    },
+    {
+        id: 'stdcurve',
+        label: 'Standard Curve',
+        status: 'MIQE metrics',
+        description: 'Fit log-quantity versus Cq, report slope, efficiency, R², residuals, QC flags, and Plotly fit visualization.',
+    },
+    {
+        id: 'quantify',
+        label: 'Absolute Quantification',
+        status: 'Sample IDs required',
+        description: 'Quantify unknowns against a real standard curve; each sample value must carry a real identifier.',
+    },
+    {
+        id: 'anova',
+        label: 'ANOVA + Dunnett',
+        status: 'Named groups only',
+        description: 'Run group comparison statistics with an explicit control group and named treatment groups.',
+    },
+];
+
+const statusItems = [
+    {
+        title: 'Source of truth',
+        value: '/api/assay-analytics qPCR routes',
+        tone: 'accent' as const,
+    },
+    {
+        title: 'Supported inputs',
+        value: 'EDS, XLS/XLSX, or CSV instrument exports',
+    },
+    {
+        title: 'Visualization',
+        value: 'Plotly plate maps, curves, standard curves, and QC tables',
+    },
+    {
+        title: 'Data policy',
+        value: 'BMS does not preload built-in assay rows',
+        tone: 'warning' as const,
+    },
+];
+
 export function QpcrPage() {
     const [activeAnalysis, setActiveAnalysis] = useState<AnalysisType>('import');
 
-    const analysisOptions: { id: AnalysisType; label: string }[] = [
-        { id: 'import', label: 'Raw Data Import' },
-        { id: 'deltacq', label: 'ΔCq Analysis' },
-        { id: 'deltadeltacq', label: 'ΔΔCq & Fold Change' },
-        { id: 'stdcurve', label: 'Standard Curve' },
-        { id: 'quantify', label: 'Absolute Quantification' },
-        { id: 'anova', label: 'ANOVA + Dunnett' },
-    ];
-
     return (
-        <div className="p-6">
-            <div className="mb-6">
-                <h2 className="text-2xl font-bold text-text-primary">qPCR Data Processor</h2>
-                <p className="text-text-secondary">Import raw instrument data, view amplification curves, and perform relative/absolute quantification</p>
-            </div>
+        <div className="space-y-6 p-6">
+            <AssayWorkbenchIntro
+                eyebrow="BMS qPCR Workbench"
+                title="QuantStudio / StepOnePlus analysis on real assay data"
+                description="Import actual instrument exports or paste explicit Cq tables for standard curves, spike recovery, replicate QC, ΔCq, ΔΔCq, fold-change, ANOVA, and MIQE-style metrics. The panels start empty by design; BMS does not preload built-in assay rows."
+            >
+                <AssayStatusStrip items={statusItems} columnsClass="sm:grid-cols-2 xl:grid-cols-4" />
+            </AssayWorkbenchIntro>
 
-            {/* Analysis Type Selector */}
-            <div className="mb-6 flex flex-wrap gap-2">
-                {analysisOptions.map(option => (
-                    <button
-                        key={option.id}
-                        onClick={() => setActiveAnalysis(option.id)}
-                        className={`px-4 py-2 text-sm font-medium transition-colors ${activeAnalysis === option.id
-                                ? 'bg-accent-primary text-white'
-                                : 'bg-bg-secondary text-text-secondary hover:text-text-primary border border-border-primary'
-                            }`}
-                    >
-                        {option.label}
-                    </button>
-                ))}
-            </div>
+            <AssaySubnavGrid
+                items={analysisOptions}
+                activeId={activeAnalysis}
+                onChange={setActiveAnalysis}
+                columnsClass="sm:grid-cols-2 xl:grid-cols-3"
+            />
 
-            {/* Active Analysis Panel */}
-            <div className="border border-border-primary bg-bg-secondary p-4">
-                {activeAnalysis === 'import' && <RawDataImport />}
-                {activeAnalysis === 'deltacq' && <DeltaCqPanel />}
-                {activeAnalysis === 'deltadeltacq' && <DeltaDeltaCqPanel />}
-                {activeAnalysis === 'stdcurve' && <StandardCurvePanel />}
-                {activeAnalysis === 'quantify' && <QuantificationPanel />}
-                {activeAnalysis === 'anova' && <AnovaDunnettPanel />}
-            </div>
+            <AssayPanel className="p-4">
+                <div hidden={activeAnalysis !== 'import'}>
+                    <RawDataImport />
+                </div>
+                <div hidden={activeAnalysis !== 'deltacq'}>
+                    <DeltaCqPanel />
+                </div>
+                <div hidden={activeAnalysis !== 'deltadeltacq'}>
+                    <DeltaDeltaCqPanel />
+                </div>
+                <div hidden={activeAnalysis !== 'stdcurve'}>
+                    <StandardCurvePanel />
+                </div>
+                <div hidden={activeAnalysis !== 'quantify'}>
+                    <QuantificationPanel />
+                </div>
+                <div hidden={activeAnalysis !== 'anova'}>
+                    <AnovaDunnettPanel />
+                </div>
+            </AssayPanel>
         </div>
     );
 }
-
-export { RawDataImport } from './RawDataImport';
-export { DeltaCqPanel, DeltaDeltaCqPanel } from './DeltaCqPanels';
-export { StandardCurvePanel, QuantificationPanel, AnovaDunnettPanel } from './QuantificationPanels';
