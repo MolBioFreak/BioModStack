@@ -19,6 +19,7 @@ These files are still useful as current rollout, guardrail, or follow-on impleme
 - [BioXP OEM control-surface replacement implementation plan](2026-05-04-bioxp-oem-control-surface-replacement-spec.md)
 - [BioXP current-control removal and OEM integration path](2026-05-04-bioxp-current-control-removal-and-oem-integration-path.md)
 - [BioXP robot ↔ workstation interlink control panel spec](2026-05-08-bioxp-workstation-interlink-control-panel-spec.md)
+- [ONT MinKNOW instrument-control integration spec and gap assessment](2026-06-08-ont-minknow-instrument-control-integration-spec.md)
 
 ## Archived plans and historical specs
 
