@@ -5,6 +5,7 @@ import {
     cancelOntSignalCalibration,
     cancelOntSignalMapping,
     cancelOntSignalView,
+    createOntFreshMoveSourceAttempt,
     createOntSignalCalibration,
     createOntSignalMapping,
     createOntSignalMappingProfile,
@@ -642,6 +643,26 @@ export function ReadAndSignalWorkbench({
         }
     };
 
+    const createFreshExternalMoveSourceAttempt = async (predecessorMoveSourceId: string) => {
+        const generation = identityRef.current;
+        setBusy(true);
+        setError(null);
+        try {
+            const created = await createOntFreshMoveSourceAttempt(predecessorMoveSourceId);
+            if (generation !== identityRef.current) return;
+            setRegisteredExternalMoveSourceId(created.move_source_id);
+            setMoveSources((current) => [
+                ...current.filter((item) => item.move_source_id !== created.move_source_id),
+                created,
+            ]);
+            if (created.state === 'ready') await refreshAuthorities();
+        } catch (reason) {
+            if (generation === identityRef.current) setError(message(reason));
+        } finally {
+            if (generation === identityRef.current) setBusy(false);
+        }
+    };
+
     const prepareMapping = async (mappingMode: OntSignalMappingMode) => {
         const rawRepresentationId = activeRawRepresentationId;
         if (!rawRepresentationId || !compatibleSource) {
@@ -1016,8 +1037,20 @@ export function ReadAndSignalWorkbench({
                         {externalMoveBamAvailability || 'Selection binds immutable bytes to this exact run, generation, and raw representation before independent move-tag validation.'}
                     </div>
                     {moveSources.filter((item) => item.external_registration_receipt_id).map((item) => (
-                        <div key={item.move_source_id} className="break-all text-[10px] text-[var(--text-secondary)]">
-                            External source <code>{item.move_source_id}</code> · <span className={`rounded px-1 ${stateBadge(item.state)}`}>{item.state}</span> · {item.reason_code}
+                        <div key={item.move_source_id} className="flex flex-wrap items-center gap-1 break-all text-[10px] text-[var(--text-secondary)]">
+                            <span>External source <code>{item.move_source_id}</code> · <span className={`rounded px-1 ${stateBadge(item.state)}`}>{item.state}</span> · {item.reason_code}</span>
+                            {item.state === 'failed'
+                                && !moveSources.some((candidate) => candidate.predecessor_move_source_id === item.move_source_id)
+                                && (
+                                    <button
+                                        type="button"
+                                        onClick={() => void createFreshExternalMoveSourceAttempt(item.move_source_id)}
+                                        disabled={busy}
+                                        className="rounded border border-[var(--border-primary)] px-2 py-1 disabled:opacity-40"
+                                    >
+                                        Create fresh attempt
+                                    </button>
+                                )}
                         </div>
                     ))}
                 </section>

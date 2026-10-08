@@ -14,6 +14,7 @@ const apiMocks = vi.hoisted(() => ({
     createCalibration: vi.fn(),
     createMapping: vi.fn(),
     createProfile: vi.fn(),
+    createFreshMoveSourceAttempt: vi.fn(),
     createView: vi.fn(),
     createViewerSession: vi.fn(),
     fetchExternalMoveBamCandidates: vi.fn(),
@@ -76,6 +77,7 @@ vi.mock('../../src/lib/api', () => ({
     createOntSignalCalibration: apiMocks.createCalibration,
     createOntSignalMapping: apiMocks.createMapping,
     createOntSignalMappingProfile: apiMocks.createProfile,
+    createOntFreshMoveSourceAttempt: apiMocks.createFreshMoveSourceAttempt,
     createOntSignalView: apiMocks.createView,
     createOntSignalViewerSession: apiMocks.createViewerSession,
     fetchOntExternalMoveBamCandidates: apiMocks.fetchExternalMoveBamCandidates,
@@ -591,6 +593,16 @@ beforeEach(() => {
         external_registration_receipt_id: 'ont-external-move-receipt-1',
         state: 'requested',
     });
+    apiMocks.createFreshMoveSourceAttempt.mockResolvedValue({
+        ...moveSource,
+        move_source_id: 'external-moves-successor',
+        attempt_number: 2,
+        predecessor_move_source_id: 'external-moves-failed',
+        source_job_id: null,
+        external_registration_receipt_id: 'ont-external-move-receipt-1',
+        state: 'requested',
+        reason_code: 'external_move_source_validation_requested',
+    });
     apiMocks.updateViewerSession.mockResolvedValue(viewerSession({ revision: 8 }));
     alignmentMocks.fetchRead.mockResolvedValue(selectedRead);
     alignmentMocks.fetchReads.mockResolvedValue({ reads: [selectedRead], next_cursor: null, limit: 50, sequence_included: false, scan_truncated: false });
@@ -653,6 +665,52 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         const publicCandidate = apiMocks.fetchExternalMoveBamCandidates.mock.results[0]?.value;
         expect(JSON.stringify(publicCandidate)).not.toContain('/mnt/');
         expect(JSON.stringify(publicCandidate)).not.toContain('path');
+    });
+
+    it('creates one fresh successor from a terminal failed external move source', async () => {
+        const failedExternalSource: OntMoveTableSource = {
+            ...moveSource,
+            move_source_id: 'external-moves-failed',
+            source_job_id: null,
+            external_registration_receipt_id: 'ont-external-move-receipt-1',
+            state: 'failed',
+            reason_code: 'external_move_source_validation_failed',
+        };
+        const readySuccessor: OntMoveTableSource = {
+            ...failedExternalSource,
+            move_source_id: 'external-moves-successor',
+            attempt_number: 2,
+            predecessor_move_source_id: failedExternalSource.move_source_id,
+            state: 'ready',
+            reason_code: 'external_move_source_validated',
+        };
+        apiMocks.createFreshMoveSourceAttempt.mockResolvedValue({
+            ...readySuccessor,
+            state: 'requested',
+            reason_code: 'external_move_source_validation_requested',
+        });
+        apiMocks.fetchMoveSources
+            .mockResolvedValueOnce({ items: [failedExternalSource] })
+            .mockResolvedValue({ items: [failedExternalSource, readySuccessor] });
+
+        vi.useFakeTimers();
+        await renderWorkbench({ viewerSession: null });
+        await settlePromises();
+        await waitUntil(() => expect(container.textContent).toContain('external-moves-failed'));
+        await act(async () => {
+            button('Create fresh attempt').click();
+            await Promise.resolve();
+        });
+        await settlePromises();
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(1600);
+        });
+        await settlePromises();
+
+        expect(apiMocks.createFreshMoveSourceAttempt).toHaveBeenCalledWith('external-moves-failed');
+        expect(container.textContent).toContain('external-moves-successor');
+        expect(apiMocks.fetchMoveSources.mock.calls.length).toBeGreaterThanOrEqual(2);
+        expect(container.textContent).toContain('external_move_source_validated');
     });
 
     it('polls a requested external move source through running and refreshes capabilities after ready', async () => {
