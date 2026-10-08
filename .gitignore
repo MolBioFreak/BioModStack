@@ -74,3 +74,12 @@ containers/
 # Environment
 .venv/
 gpu_debug.log
+
+# Additional runtime files
+api.log
+completion_log.txt
+submission_log.txt
+NO_MSA
+verify_parsing.nf
+*.db
+!*.db.example

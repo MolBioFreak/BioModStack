@@ -274,3 +274,31 @@ export const fetchJobDesignMetrics = (jobId: string) =>
 
 export const fetchBatchAnalytics = (jobIds: string[]) =>
     api.post<BatchAnalytics>('/api/analytics/batch', { job_ids: jobIds });
+
+// Structure Analysis (Biotite-powered)
+export interface StructureAnalysis {
+    design_id: string;
+    design_name: string;
+    residue_count: number;
+    chain_ids: string[];
+    gyration_radius: number | null;
+    secondary_structure: {
+        helix: number;
+        sheet: number;
+        coil: number;
+    };
+}
+
+export interface StructureComparison {
+    design_id: string;
+    other_design_id: string;
+    rmsd_backbone: number | null;
+    rmsd_all_atom: number | null;
+}
+
+export const fetchStructureAnalysis = (designId: string) =>
+    api.get<StructureAnalysis>(`/api/designs/${designId}/structure-analysis`);
+
+export const fetchStructureComparison = (id1: string, id2: string) =>
+    api.get<StructureComparison>(`/api/designs/${id1}/compare/${id2}`);
+

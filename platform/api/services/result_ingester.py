@@ -455,14 +455,33 @@ def safe_int(value) -> Optional[int]:
 
 def extract_plddt_from_pdb(pdb_path):
     """
-    Extract pLDDT from PDB B-factors.
+    Extract pLDDT from structure B-factors.
+    Supports both PDB and CIF files via Biotite, with fallback to manual parsing.
     Returns (avg_plddt, per_residue_array).
     """
+    path = Path(pdb_path) if not isinstance(pdb_path, Path) else pdb_path
+    
+    # Try Biotite first (handles PDB and CIF)
+    try:
+        from .structure_utils import get_residue_plddt
+        avg_plddt, per_residue = get_residue_plddt(path)
+        if avg_plddt is not None:
+            return avg_plddt, per_residue
+    except ImportError:
+        pass  # Biotite not available, fall through to manual
+    except Exception as e:
+        print(f"[Ingester] Biotite extraction failed for {path}, trying manual: {e}")
+    
+    # Fallback: Manual PDB parsing (only works for .pdb files)
+    if not str(path).lower().endswith('.pdb'):
+        print(f"[Ingester] Cannot manually parse non-PDB file: {path}")
+        return None, None
+        
     try:
         residue_scores = []  # One score per residue (CA atom)
         all_scores = []  # All atom scores for average
         
-        with open(pdb_path, 'r') as f:
+        with open(path, 'r') as f:
             for line in f:
                 if line.startswith("ATOM  ") or line.startswith("HETATM"):
                     # B-factor is columns 61-66 (1-indexed) -> 60-66 (0-indexed)

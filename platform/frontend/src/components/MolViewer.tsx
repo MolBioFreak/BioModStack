@@ -34,7 +34,9 @@ export interface MolViewerProps {
     /** Show surface representation */
     showSurface?: boolean;
     /** Color scheme for protein */
-    colorScheme?: 'rainbow' | 'plddt' | 'chain';
+    colorScheme?: 'rainbow' | 'plddt' | 'sse';
+    /** Representation style */
+    representationStyle?: 'cartoon' | 'sticks' | 'sphere' | 'ball-stick';
 }
 
 export interface MolViewerRef {
@@ -49,7 +51,8 @@ export const MolViewer = forwardRef<MolViewerRef, MolViewerProps>(({
     height = 500,
     backgroundColor = '#0f172a',
     showSurface = false,
-    colorScheme = 'plddt'
+    colorScheme = 'plddt',
+    representationStyle = 'cartoon'
 }, ref) => {
     const viewerRef = useRef<HTMLDivElement>(null);
     const viewerInstance = useRef<any>(null);
@@ -113,40 +116,36 @@ export const MolViewer = forwardRef<MolViewerRef, MolViewerProps>(({
                     viewer.addModel(content, format);
                     const model = viewer.getModel(isOverlay ? -1 : 0); // -1 is last added
 
-                    // Styling
-                    const style: any = {};
 
                     if (colorScheme === 'plddt') {
-                        // AlphaFold pLDDT colors: Very High (Blue), High (Cyan), Low (Yellow), Very Low (Orange)
-                        // B-factors in AF2 PDBs are pLDDT scores (0-100)
-                        style.cartoon = {
-                            colorscheme: {
-                                prop: 'b',
-                                gradient: new window.$3Dmol.Gradient.Sinebow(0, 100), // Fallback if custom gradient fails
-                            }
-                        };
-                        // Use explicit mapped coloring for accuracy if sinebow isn't desired
-                        model.setStyle({}, {
-                            cartoon: {
-                                colorscheme: {
-                                    prop: 'b',
-                                    map: window.$3Dmol.Gradient.Rwb
-                                }
-                            }
-                        });
-                        // Custom AF2-like coloring manually
+                        // pLDDT coloring: Fuchsia (high) → Red (low)
+                        // Auto-detect 0-1 vs 0-100 B-factor scale (CIF uses 0-1)
+                        model.setStyle({}, { cartoon: {} });
                         model.setColorByFunction({}, (atom: any) => {
-                            const b = atom.b;
-                            if (b >= 90) return '#3b82f6'; // Very High (Blue)
-                            if (b >= 70) return '#60a5fa'; // High (Light Blue)
-                            if (b >= 50) return '#fbbf24'; // Low (Yellow)
-                            return '#f97316'; // Very Low (Orange)
+                            let b = atom.b;
+                            if (b <= 1) b = b * 100; // Scale 0-1 to 0-100
+                            if (b >= 90) return '#d946ef'; // Very High (Fuchsia)
+                            if (b >= 70) return '#f472b6'; // High (Pink)
+                            if (b >= 50) return '#fb923c'; // Low (Orange)
+                            return '#ef4444'; // Very Low (Red)
                         });
-                    } else if (colorScheme === 'chain') {
-                        model.setStyle({}, { cartoon: { colorscheme: 'chain' } });
+                    } else if (colorScheme === 'sse') {
+                        // Secondary Structure Element coloring (PyMOL-style)
+                        model.setStyle({}, { cartoon: { colorscheme: 'ssPyMOL' } });
                     } else {
                         // Rainbow
                         model.setStyle({}, { cartoon: { color: 'spectrum' } });
+                    }
+                    // Apply non-cartoon representation styles
+                    if (representationStyle === 'sticks') {
+                        model.setStyle({}, { stick: { radius: 0.15 } });
+                    } else if (representationStyle === 'sphere') {
+                        model.setStyle({}, { sphere: { scale: 0.25 } });
+                    } else if (representationStyle === 'ball-stick') {
+                        model.setStyle({}, {
+                            stick: { radius: 0.1 },
+                            sphere: { scale: 0.18 }
+                        });
                     }
 
                     // Ghost opacity for overlay
@@ -179,6 +178,48 @@ export const MolViewer = forwardRef<MolViewerRef, MolViewerProps>(({
 
                 viewer.zoomTo();
                 viewer.render();
+
+                // Hover labels for amino acid info
+                let hoverLabel: any = null;
+                viewer.setHoverable({}, true,
+                    function (atom: any) {
+                        if (atom && !hoverLabel) {
+                            const aaMap: { [key: string]: string } = {
+                                'ALA': 'A', 'ARG': 'R', 'ASN': 'N', 'ASP': 'D', 'CYS': 'C',
+                                'GLN': 'Q', 'GLU': 'E', 'GLY': 'G', 'HIS': 'H', 'ILE': 'I',
+                                'LEU': 'L', 'LYS': 'K', 'MET': 'M', 'PHE': 'F', 'PRO': 'P',
+                                'SER': 'S', 'THR': 'T', 'TRP': 'W', 'TYR': 'Y', 'VAL': 'V'
+                            };
+                            const oneLetter = aaMap[atom.resn] || '?';
+                            hoverLabel = viewer.addLabel(`${atom.resn} (${oneLetter}) #${atom.resi}`, {
+                                position: { x: atom.x, y: atom.y, z: atom.z },
+                                backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                                fontColor: '#f8fafc',
+                                fontSize: 11,
+                                showBackground: true
+                            });
+                            viewer.render();
+                        }
+                    },
+                    function () {
+                        if (hoverLabel) {
+                            viewer.removeLabel(hoverLabel);
+                            hoverLabel = null;
+                            viewer.render();
+                        }
+                    }
+                );
+
+                // Click handler to highlight residue
+                viewer.setClickable({}, true, function (atom: any, v: any) {
+                    if (atom) {
+                        v.addStyle({ resi: atom.resi, chain: atom.chain }, {
+                            stick: { radius: 0.2, color: '#22d3ee' }
+                        });
+                        v.render();
+                    }
+                });
+
                 setLoading(false);
 
             } catch (e) {
@@ -187,7 +228,7 @@ export const MolViewer = forwardRef<MolViewerRef, MolViewerProps>(({
                 setLoading(false);
             }
         }
-    }, [pdbContent, overlayPdbContent, sdfContent, backgroundColor, showSurface, colorScheme, structureFormat]);
+    }, [pdbContent, overlayPdbContent, sdfContent, backgroundColor, showSurface, colorScheme, structureFormat, representationStyle]);
 
     // Spin effect
     useEffect(() => {
@@ -225,8 +266,8 @@ export const MolViewer = forwardRef<MolViewerRef, MolViewerProps>(({
                     <button
                         onClick={() => setIsSpinning(!isSpinning)}
                         className={`px-3 py-1.5 rounded-lg backdrop-blur-md border transition-colors text-xs font-medium ${isSpinning
-                                ? 'bg-blue-500/80 text-white border-blue-400'
-                                : 'bg-slate-800/80 text-slate-300 border-slate-700 hover:bg-slate-700'
+                            ? 'bg-blue-500/80 text-white border-blue-400'
+                            : 'bg-slate-800/80 text-slate-300 border-slate-700 hover:bg-slate-700'
                             }`}
                         title="Toggle Spin"
                     >

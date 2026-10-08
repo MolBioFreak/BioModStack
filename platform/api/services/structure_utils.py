@@ -25,24 +25,43 @@ from biotite.structure.io.pdbx import CIFFile
 
 def load_structure(path: Union[str, Path]) -> struc.AtomArray:
     """
-    Load a structure from PDB or CIF file.
+    Load a structure from PDB or CIF file, including B-factors.
     
     Args:
         path: Path to structure file (.pdb or .cif)
         
     Returns:
-        AtomArray representing the structure
+        AtomArray representing the structure (first model if multi-model)
         
     Raises:
         FileNotFoundError: If file doesn't exist
         ValueError: If format not supported
     """
+    import biotite.structure.io.pdbx as pdbx
+    
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Structure file not found: {path}")
     
-    # Biotite auto-detects format from extension
-    return strucio.load_structure(str(path))
+    suffix = path.suffix.lower()
+    
+    if suffix == ".pdb":
+        # Use PDB reader with extra fields to capture B-factors
+        pdb_file = PDBFile.read(str(path))
+        structure = pdb_file.get_structure(extra_fields=["b_factor", "occupancy"])
+    elif suffix in (".cif", ".mmcif"):
+        # Use CIF reader - correct API: read file then use get_structure function
+        cif_file = pdbx.CIFFile.read(str(path))
+        structure = pdbx.get_structure(cif_file, extra_fields=["b_factor"])
+    else:
+        # Fallback to auto-detection
+        structure = strucio.load_structure(str(path))
+    
+    # If we got a stack (multi-model), take the first model
+    if isinstance(structure, struc.AtomArrayStack):
+        structure = structure[0]
+    
+    return structure
 
 
 def get_residue_plddt(path: Union[str, Path]) -> Tuple[Optional[float], Optional[List[float]]]:
@@ -62,6 +81,11 @@ def get_residue_plddt(path: Union[str, Path]) -> Tuple[Optional[float], Optional
     try:
         structure = load_structure(path)
         
+        # Check if B-factors are available (stored in 'b_factor' annotation)
+        if 'b_factor' not in structure.get_annotation_categories():
+            print(f"[structure_utils] No B-factors in {path}")
+            return None, None
+        
         # Get CA atoms for per-residue values
         ca_mask = structure.atom_name == "CA"
         ca_atoms = structure[ca_mask]
@@ -69,9 +93,10 @@ def get_residue_plddt(path: Union[str, Path]) -> Tuple[Optional[float], Optional
         if len(ca_atoms) == 0:
             return None, None
         
-        # B-factors contain pLDDT values
-        per_residue = [round(float(b), 2) for b in ca_atoms.b_factor]
-        avg_plddt = float(np.mean(ca_atoms.b_factor))
+        # B-factors accessed via annotation array
+        b_factors = ca_atoms.get_annotation("b_factor")
+        per_residue = [round(float(b), 2) for b in b_factors]
+        avg_plddt = float(np.mean(b_factors))
         
         return avg_plddt, per_residue
         
