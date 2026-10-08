@@ -548,6 +548,11 @@ export interface SequenceQcArtifact {
     missing_reason?: string | null;
     unavailable_reason?: string | null;
     source_stage?: string | null;
+    declared_sha256?: string | null;
+    actual_sha256?: string | null;
+    integrity_valid?: boolean;
+    declared_size_bytes?: number | null;
+    semantic_validation?: SequenceQcSemanticValidation;
     [key: string]: unknown;
 }
 
@@ -567,10 +572,79 @@ export interface SequenceQcPathSection {
     [key: string]: unknown;
 }
 
+export type ConstructVerificationVerdict = 'PASS' | 'FAIL' | 'REVIEW';
+export type ConstructVerificationCheckStatus = 'pass' | 'fail' | 'review' | 'not_evaluated';
+
+export interface ConstructVerificationCheck {
+    status: ConstructVerificationCheckStatus;
+    reason_codes: string[];
+    metrics: Record<string, unknown>;
+}
+
+export interface ConstructVerificationVariant {
+    id?: string;
+    kind?: 'SNV' | 'INS' | 'DEL' | 'MNV' | 'COMPLEX';
+    position_1based?: number;
+    end_1based?: number;
+    ref?: string;
+    alt?: string;
+    support_status?: 'supported' | 'ambiguous' | 'unsupported' | 'not_evaluated';
+    depth?: number | null;
+    support_fraction?: number | null;
+    circular_event_id?: string | null;
+    [key: string]: unknown;
+}
+
+export interface SequenceQcSemanticValidation {
+    status?: 'valid' | 'invalid' | 'unavailable' | 'not_applicable' | string;
+    validator?: string;
+    reason?: string | null;
+}
+
+export interface ConstructVerificationInputEvidence {
+    state?: string;
+    role?: string;
+    declared_path?: string | null;
+    sha256?: string | null;
+    size_bytes?: number | null;
+    source_kind?: string | null;
+    independent_from_expected?: boolean | null;
+    reason?: string | null;
+    semantic_validation?: SequenceQcSemanticValidation;
+    normalized_sequence_sha256?: string | null;
+    declared_sequence_sha256?: string | null;
+    [key: string]: unknown;
+}
+
+export interface ConstructVerificationThresholdProfile {
+    id?: string;
+    version?: string;
+    sha256?: string;
+    calibration_status?: 'experimental' | 'calibrated';
+    public_accuracy_validated?: boolean;
+    values?: Record<string, unknown>;
+    [key: string]: unknown;
+}
+
 export interface SequenceQcManifest {
     artifact_schema_version: number;
+    schema?: string;
     job_id: string;
     sample_name?: string | null;
+    execution?: {
+        status?: string;
+        exit_code?: number;
+        reason_codes?: string[];
+        [key: string]: unknown;
+    };
+    verdict?: ConstructVerificationVerdict;
+    reason_codes?: string[];
+    threshold_profile?: ConstructVerificationThresholdProfile;
+    inputs?: Partial<Record<'reference' | 'observed' | 'support' | 'alignment' | 'alignment_index' | 'topology', ConstructVerificationInputEvidence>>;
+    checks?: Record<string, ConstructVerificationCheck>;
+    variants?: ConstructVerificationVariant[];
+    summary?: Record<string, unknown>;
+    provenance?: Record<string, unknown>;
     reference?: SequenceQcPathSection;
     consensus?: SequenceQcPathSection;
     artifacts: SequenceQcArtifact[];

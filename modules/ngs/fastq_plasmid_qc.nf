@@ -3,6 +3,11 @@
  * Process names are preserved to avoid behavior-changing call-site churn.
  */
 
+def shellQuote(value) {
+    String text = value == null ? '' : value.toString()
+    return "'${text.replace("'", "'\"'\"'")}'"
+}
+
 process FastqPlasmidQC {
     label 'local_cpu'
     publishDir "${params.out_dir}/fastq_qc", mode: 'copy'
@@ -10,7 +15,7 @@ process FastqPlasmidQC {
 
     input:
     tuple path(bam), path(bai)
-    path reference
+    path reference, stageAs: 'expected-reference-source.fasta'
     path fastq
 
     output:
@@ -22,6 +27,7 @@ process FastqPlasmidQC {
     path "fastq_coverage.tsv", emit: coverage
     path "per_base_support.tsv", emit: per_base_support
     path "qc_manifest.json", emit: qc_manifest
+    path "construct_verification_input", emit: verification_input
     path "reference_qc.fasta", emit: reference
     path "reference_qc.fasta.fai", emit: reference_index
     path "igv_coverage_depth.bedgraph", emit: igv_coverage_depth
@@ -36,8 +42,8 @@ process FastqPlasmidQC {
     path "igv_track_config.json", emit: igv_track_config
     path "igv_report.html", emit: igv_report
     path "igv_report.log", emit: igv_report_log
-    path "fastq_consensus.fasta", emit: consensus
-    path "fastq_consensus.fasta.fai", emit: consensus_index
+    path "fastq_consensus.fasta", optional: true, emit: consensus
+    path "fastq_consensus.fasta.fai", optional: true, emit: consensus_index
     path "fastq_consensus.log", emit: consensus_log
     path "fastq_qc.log", emit: log
 
@@ -51,6 +57,7 @@ process FastqPlasmidQC {
     def igvReportFlankingBp = (params.igv_report_flanking_bp ?: 200) as Integer
     def codeRoot = params.code_root ?: projectDir
     def manifestJobId = params.job_id ?: 'nanopore-fastq-qc'
+    def referenceSequenceSha256 = shellQuote(params.reference_sequence_sha256 ?: '')
     """
     set -euo pipefail
 
@@ -169,27 +176,42 @@ process FastqPlasmidQC {
         else printf "0"
     }')
 
+    has_called_consensus_base() {
+        awk 'NR > 1 { line = toupper(\$0); if (line ~ /[ACGT]/) found = 1 } END { exit(found ? 0 : 1) }' "\$1"
+    }
+
     consensus_status="not_run"
-    if "\${SAMTOOLS_CMD[@]}" consensus -f fasta "${bam}" > fastq_consensus.fasta 2> fastq_consensus.log; then
+    workflow_status="completed"
+    verification_reason_code="phase1_manual_review_required"
+    if "\${SAMTOOLS_CMD[@]}" consensus -f fasta "${bam}" > fastq_consensus.fasta 2> fastq_consensus.log && \
+       has_called_consensus_base fastq_consensus.fasta; then
         consensus_status="ok"
     else
-        echo "samtools consensus unavailable or failed; attempting mpileup-majority fallback" >> fastq_consensus.log
+        echo "samtools consensus unavailable, failed, or contained no called A/C/G/T bases; attempting mpileup-majority fallback" >> fastq_consensus.log
         if [[ -f "${codeRoot}/scripts/mpileup_majority_consensus.awk" ]] && \
            "\${SAMTOOLS_CMD[@]}" mpileup -aa -A -d 1000000 -f reference_qc.fasta "${bam}" 2>> fastq_consensus.log | \
            awk -f "${codeRoot}/scripts/mpileup_majority_consensus.awk" > fastq_consensus.fasta.tmp && \
-           [[ -s fastq_consensus.fasta.tmp ]]; then
+           [[ -s fastq_consensus.fasta.tmp ]] && \
+           has_called_consensus_base fastq_consensus.fasta.tmp; then
             mv fastq_consensus.fasta.tmp fastq_consensus.fasta
             consensus_status="pileup_majority_fallback"
         else
-            rm -f fastq_consensus.fasta.tmp
-            cp reference_qc.fasta fastq_consensus.fasta
-            consensus_status="reference_copy_fallback"
+            rm -f fastq_consensus.fasta.tmp fastq_consensus.fasta fastq_consensus.fasta.fai
+            consensus_status="unavailable"
+            workflow_status="completed_with_unavailable_observation"
+            verification_reason_code="observed_consensus_unavailable"
+            echo "Unable to derive observed consensus from aligned reads; refusing expected-reference substitution" | tee -a fastq_consensus.log >&2
         fi
     fi
-    "\${SAMTOOLS_CMD[@]}" faidx fastq_consensus.fasta
 
-    consensus_name=\$(awk 'NR == 1 {gsub(/^>/, "", \$0); print \$0; exit}' fastq_consensus.fasta)
-    consensus_length=\$(awk 'NR > 1 {gsub(/\\r/, "", \$0); s += length(\$0)} END {print s + 0}' fastq_consensus.fasta)
+    if [[ -s fastq_consensus.fasta ]]; then
+        "\${SAMTOOLS_CMD[@]}" faidx fastq_consensus.fasta
+        consensus_name=\$(awk 'NR == 1 {gsub(/^>/, "", \$0); print \$0; exit}' fastq_consensus.fasta)
+        consensus_length=\$(awk 'NR > 1 {gsub(/\\r/, "", \$0); s += length(\$0)} END {print s + 0}' fastq_consensus.fasta)
+    else
+        consensus_name="unavailable"
+        consensus_length=0
+    fi
     igv_report_status="not_generated"
     igv_report_cli_available=0
 
@@ -430,6 +452,14 @@ JSON
         echo "Consensus: \${consensus_status} (\${consensus_length} bp)"
     } > fastq_qc.log
 
+    "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/build_construct_verification_input.py" \\
+        --reference-fasta reference_qc.fasta \\
+        --expected-reference-sha256 ${referenceSequenceSha256} \\
+        --source-reads "${fastq}" \\
+        --consensus-fasta fastq_consensus.fasta \\
+        --consensus-method bcftools_consensus \\
+        --out-dir construct_verification_input
+
     "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/build_sequence_qc_manifest.py" \\
         --out qc_manifest.json \\
         --job-id "${manifestJobId}" \\
@@ -437,14 +467,28 @@ JSON
         --reference-fasta reference_qc.fasta \\
         --reference-index reference_qc.fasta.fai \\
         --summary fastq_qc_summary.tsv \\
+        --read-lengths read_lengths.tsv \\
         --alignment-stats fastq_alignment_stats.tsv \\
         --coverage fastq_coverage.tsv \\
         --per-base-support per_base_support.tsv \\
         --consensus fastq_consensus.fasta \\
         --consensus-index fastq_consensus.fasta.fai \\
+        --consensus-log fastq_consensus.log \\
         --consensus-status "\${consensus_status}" \\
+        --workflow-status "\${workflow_status}" \\
+        --verification-status review_required \\
+        --verification-reason-code "\${verification_reason_code}" \\
         --alignment-bam "\${bam_local}" \\
         --alignment-bai "\${bai_local}" \\
+        --igv-coverage-depth igv_coverage_depth.bedgraph \\
+        --igv-position-gradient igv_position_gradient.bedgraph \\
+        --igv-gc-content igv_gc_content.bedgraph \\
+        --igv-gc-zscore igv_gc_zscore.bedgraph \\
+        --igv-split-read-density igv_split_read_density.bedgraph \\
+        --igv-softclip-density igv_softclip_density.bedgraph \\
+        --igv-junction-hotspots igv_junction_hotspots.bed \\
+        --igv-report-sites-bed igv_report_sites.bed \\
+        --igv-report-sites-tsv igv_report_sites.tsv \\
         --igv-track-config igv_track_config.json \\
         --igv-report igv_report.html \\
         --igv-report-log igv_report.log \\

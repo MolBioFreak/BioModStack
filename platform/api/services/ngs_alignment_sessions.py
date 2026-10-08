@@ -1,0 +1,695 @@
+"""Job-scoped, fail-closed ONT alignment-session and bounded read helpers."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import mimetypes
+import os
+import re
+import stat
+import subprocess
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Iterator
+
+from paths import get_results_dir
+
+SAFE_JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,255}$")
+SAFE_CONTIG_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,255}$")
+DIMER_TOKENS = ("dimer", "multimer", "concatemer")
+MAX_MANIFESTS = 64
+MAX_READ_PAGE = 200
+MAX_SEQUENCE_PAGE = 20
+MAX_READ_CURSOR = 9_999
+MAX_READ_SCAN = 10_000
+
+
+class AlignmentSessionError(ValueError):
+    """Raised when a requested session or artifact is unsafe or unavailable."""
+
+
+def _safe_job_root(
+    job_id: str,
+    results_dir: str | Path | None = None,
+    job_output_dir: str | Path | None = None,
+) -> tuple[str, Path]:
+    normalized = job_id.strip()
+    if (
+        not normalized
+        or "/" in normalized
+        or "\\" in normalized
+        or ".." in normalized
+        or not SAFE_JOB_ID_RE.fullmatch(normalized)
+    ):
+        raise AlignmentSessionError(f"unsafe job_id: {job_id!r}")
+    root = Path(results_dir) if results_dir is not None else get_results_dir()
+    root = root.expanduser().resolve()
+    if job_output_dir is None:
+        declared_job_root = root / normalized
+    else:
+        supplied = Path(job_output_dir).expanduser()
+        declared_job_root = supplied if supplied.is_absolute() else root / supplied
+    if declared_job_root.is_symlink():
+        raise AlignmentSessionError(f"unsafe symlink job root for {job_id!r}")
+    job_root = declared_job_root.resolve()
+    try:
+        job_root.relative_to(root)
+    except ValueError as exc:
+        raise AlignmentSessionError(f"unsafe job root for {job_id!r}") from exc
+    if not job_root.exists() or not job_root.is_dir():
+        raise AlignmentSessionError(f"alignment sessions not found for job_id: {normalized}")
+    return normalized, job_root
+
+
+@lru_cache(maxsize=256)
+def _sha256_file_cached(path_text: str, size_bytes: int, mtime_ns: int) -> str:
+    del size_bytes, mtime_ns  # cache-key material; path is the authoritative input below.
+    digest = hashlib.sha256()
+    with Path(path_text).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    file_stat = path.stat()
+    return _sha256_file_cached(str(path), file_stat.st_size, file_stat.st_mtime_ns)
+
+
+def _regular_file_inside(path: Path, job_root: Path) -> tuple[Path | None, str | None]:
+    try:
+        root = job_root.resolve(strict=True)
+        lexical = Path(os.path.abspath(path))
+        relative = lexical.relative_to(root)
+        current = root
+        for component in relative.parts:
+            current = current / component
+            mode = current.lstat().st_mode
+            if stat.S_ISLNK(mode):
+                return None, "unsafe artifact: symlink component"
+        if not stat.S_ISREG(current.lstat().st_mode):
+            return None, "unsafe artifact: non-regular file"
+        resolved = current.resolve(strict=True)
+        resolved.relative_to(root)
+        return resolved, None
+    except (FileNotFoundError, OSError, ValueError, RuntimeError):
+        return None, "unsafe or missing artifact"
+
+
+def _manifest_records(job_root: Path) -> list[dict[str, Any]]:
+    manifests = sorted(job_root.glob("**/qc_manifest.json"))
+    if len(manifests) > MAX_MANIFESTS:
+        raise AlignmentSessionError(f"too many manifests below job root ({len(manifests)} > {MAX_MANIFESTS})")
+    records: list[dict[str, Any]] = []
+    for manifest_path in manifests:
+        safe_manifest, error = _regular_file_inside(manifest_path, job_root)
+        if safe_manifest is None:
+            continue
+        try:
+            payload = json.loads(safe_manifest.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict) or not isinstance(payload.get("artifacts"), list):
+            continue
+        rel_manifest = safe_manifest.relative_to(job_root).as_posix()
+        for item in payload["artifacts"]:
+            if not isinstance(item, dict):
+                continue
+            raw_path = item.get("path")
+            if item.get("state") not in (None, "present") or not isinstance(raw_path, str) or not raw_path.strip():
+                continue
+            declared = Path(raw_path)
+            if declared.is_absolute():
+                records.append(
+                    {
+                        "kind": str(item.get("kind") or "artifact"),
+                        "manifest": rel_manifest,
+                        "declared_path": raw_path,
+                        "path": None,
+                        "error": "unsafe artifact: absolute path",
+                    }
+                )
+                continue
+            candidate = safe_manifest.parent / declared
+            safe_path, path_error = _regular_file_inside(candidate, job_root)
+            records.append(
+                {
+                    "kind": str(item.get("kind") or "artifact"),
+                    "manifest": rel_manifest,
+                    "declared_path": declared.as_posix(),
+                    "declared_sha256": item.get("sha256"),
+                    "declared_size_bytes": item.get("size_bytes"),
+                    "session_mode": (
+                        payload.get("alignment_session", {}).get("mode")
+                        if isinstance(payload.get("alignment_session"), dict)
+                        else None
+                    ),
+                    "reference_sequence_sha256": (
+                        payload.get("alignment_session", {}).get("reference_sequence_sha256")
+                        if isinstance(payload.get("alignment_session"), dict)
+                        else None
+                    ),
+                    "path": safe_path,
+                    "error": path_error,
+                }
+            )
+    return records
+
+
+def _is_dimer(record: dict[str, Any]) -> bool:
+    mode = record.get("session_mode")
+    if mode == "dimer_candidates":
+        return True
+    if mode == "primary":
+        return False
+    if str(record.get("kind") or "").lower() in {"dimer_alignment_bam", "dimer_alignment_bai"}:
+        return True
+    label = f"{record.get('manifest', '')}/{record.get('declared_path', '')}".lower()
+    return any(token in label for token in DIMER_TOKENS)
+
+
+def _dimer_mode_conflict(record: dict[str, Any]) -> bool:
+    if record.get("session_mode") != "primary":
+        return False
+    if str(record.get("kind") or "").lower() in {"dimer_alignment_bam", "dimer_alignment_bai"}:
+        return True
+    label = f"{record.get('manifest', '')}/{record.get('declared_path', '')}".lower()
+    return any(token in label for token in DIMER_TOKENS)
+
+
+def _artifact_role(kind: str) -> str | None:
+    normalized = kind.lower()
+    if normalized in {"alignment_bam", "bam", "dimer_alignment_bam"}:
+        return "alignment"
+    if normalized in {"alignment_bai", "alignment_index", "bam_index", "dimer_alignment_bai"}:
+        return "alignment_index"
+    if normalized in {"reference", "reference_fasta"}:
+        return "reference"
+    if normalized in {"reference_index", "fasta_index", "reference_fai"}:
+        return "reference_index"
+    if normalized == "igv_coverage_depth":
+        return "coverage_depth"
+    if normalized == "igv_gc_content":
+        return "gc_content"
+    if normalized == "igv_position_gradient":
+        return "position_gradient"
+    if normalized == "igv_gc_zscore":
+        return "gc_zscore"
+    if normalized == "igv_split_read_density":
+        return "split_read_density"
+    if normalized == "igv_softclip_density":
+        return "soft_clip_density"
+    if normalized == "igv_junction_hotspots":
+        return "junction_hotspots"
+    if normalized == "igv_report":
+        return "report"
+    if normalized == "igv_track_config":
+        return "track_config"
+    return None
+
+
+def _pick_bundle(records: list[dict[str, Any]], mode: str) -> tuple[dict[str, dict[str, Any]], str | None]:
+    scoped = [record for record in records if _is_dimer(record) == (mode == "dimer_candidates")]
+    manifests = sorted(
+        {record["manifest"] for record in scoped},
+        key=lambda value: ("fastq_qc" not in value.lower(), value),
+    )
+    unsafe_reason: str | None = None
+    for manifest in manifests:
+        by_role: dict[str, dict[str, Any]] = {}
+        for record in scoped:
+            if record["manifest"] != manifest:
+                continue
+            if _dimer_mode_conflict(record):
+                unsafe_reason = "contradictory primary session mode and dimer artifact metadata"
+                continue
+            role = _artifact_role(record["kind"])
+            if role is None or role in by_role:
+                continue
+            if record.get("path") is None:
+                unsafe_reason = str(record.get("error") or "unsafe artifact")
+            by_role[role] = record
+        if "alignment" in by_role or unsafe_reason:
+            return by_role, unsafe_reason
+    return {}, None
+
+
+def _bam_header_contigs(bam: Path, samtools: str) -> dict[str, tuple[int, str | None]]:
+    result = subprocess.run(
+        [samtools, "view", "-H", str(bam)],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    contigs: dict[str, tuple[int, str | None]] = {}
+    for line in result.stdout.splitlines():
+        if not line.startswith("@SQ\t"):
+            continue
+        fields = dict(field.split(":", 1) for field in line.split("\t")[1:] if ":" in field)
+        if fields.get("SN") and fields.get("LN", "").isdigit():
+            contigs[fields["SN"]] = (int(fields["LN"]), fields.get("M5"))
+    return contigs
+
+
+def _fasta_contigs(reference: Path) -> dict[str, tuple[int, str]]:
+    contigs: dict[str, tuple[int, str]] = {}
+    current: str | None = None
+    length = 0
+    digest = hashlib.md5(usedforsecurity=False)
+    with reference.open("r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith(">"):
+                if current is not None:
+                    contigs[current] = (length, digest.hexdigest())
+                current = line[1:].split()[0]
+                length = 0
+                digest = hashlib.md5(usedforsecurity=False)
+            elif current is None:
+                raise AlignmentSessionError("reference FASTA sequence precedes header")
+            else:
+                normalized = line.upper().encode("ascii")
+                length += len(normalized)
+                digest.update(normalized)
+    if current is not None:
+        contigs[current] = (length, digest.hexdigest())
+    return contigs
+
+
+@lru_cache(maxsize=128)
+def _validate_alignment_bundle_cached(
+    bam_text: str,
+    bam_signature: tuple[int, int],
+    index_text: str,
+    index_signature: tuple[int, int],
+    reference_text: str,
+    reference_signature: tuple[int, int],
+    manifest_reference_sha256: str | None,
+    samtools: str,
+) -> tuple[bool, str | None]:
+    del bam_signature, index_signature, reference_signature
+    bam = Path(bam_text)
+    index = Path(index_text)
+    reference = Path(reference_text)
+    try:
+        subprocess.run([samtools, "quickcheck", "-v", str(bam)], check=True, capture_output=True, timeout=30)
+        subprocess.run(
+            [samtools, "idxstats", "-X", str(bam), str(index)],
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
+        bam_contigs = _bam_header_contigs(bam, samtools)
+        reference_contigs = _fasta_contigs(reference)
+    except (AlignmentSessionError, OSError, subprocess.SubprocessError, UnicodeError) as exc:
+        return False, f"alignment bundle validation failed: {type(exc).__name__}"
+    if not bam_contigs or set(bam_contigs) != set(reference_contigs):
+        return False, "alignment/reference contig names or lengths do not match"
+    for contig, (bam_length, bam_md5) in bam_contigs.items():
+        reference_length, reference_md5 = reference_contigs[contig]
+        if bam_length != reference_length:
+            return False, "alignment/reference contig names or lengths do not match"
+        if not isinstance(bam_md5, str) or not re.fullmatch(r"[0-9a-fA-F]{32}", bam_md5):
+            normalized_reference = "".join(
+                line.strip().upper()
+                for line in reference.read_text(encoding="utf-8").splitlines()
+                if line.strip() and not line.startswith(">")
+            )
+            observed_sha256 = hashlib.sha256(normalized_reference.encode("ascii")).hexdigest()
+            if (
+                not isinstance(manifest_reference_sha256, str)
+                or re.fullmatch(r"[0-9a-f]{64}", manifest_reference_sha256) is None
+                or manifest_reference_sha256 != observed_sha256
+            ):
+                return False, f"exact reference identity cannot be proven for contig {contig}: BAM @SQ M5 and manifest binding are absent"
+            continue
+        if bam_md5.lower() != reference_md5:
+            return False, f"exact reference identity mismatch for contig {contig}"
+    return True, None
+
+
+def _validate_alignment_bundle(
+    bam: Path,
+    index: Path,
+    reference: Path,
+    manifest_reference_sha256: str | None,
+) -> tuple[bool, str | None]:
+    samtools = os.environ.get("SAMTOOLS", "samtools")
+    signatures = []
+    for path in (bam, index, reference):
+        file_stat = path.stat()
+        signatures.append((file_stat.st_size, file_stat.st_mtime_ns))
+    return _validate_alignment_bundle_cached(
+        str(bam), signatures[0],
+        str(index), signatures[1],
+        str(reference), signatures[2],
+        manifest_reference_sha256,
+        samtools,
+    )
+
+
+def _artifact_descriptor(job_id: str, record: dict[str, Any], role: str) -> dict[str, Any]:
+    path = record["path"]
+    if not isinstance(path, Path):
+        raise AlignmentSessionError(str(record.get("error") or "unsafe artifact"))
+    observed_digest = _sha256_file(path)
+    observed_size = path.stat().st_size
+    declared_digest = record.get("declared_sha256")
+    declared_size = record.get("declared_size_bytes")
+    integrity_valid = (
+        isinstance(declared_digest, str)
+        and re.fullmatch(r"[0-9a-f]{64}", declared_digest) is not None
+        and declared_digest == observed_digest
+        and isinstance(declared_size, int)
+        and declared_size == observed_size
+    )
+    identity = hashlib.sha256(
+        f"{job_id}\0{record['manifest']}\0{role}\0{record['declared_path']}\0{observed_digest}".encode("utf-8")
+    ).hexdigest()
+    mime_type = "application/octet-stream" if path.suffix.lower() in {".bam", ".bai", ".csi"} else (
+        mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    )
+    return {
+        "artifact_id": identity,
+        "url": f"/api/jobs/{job_id}/alignment-artifacts/{identity}",
+        "sha256": observed_digest,
+        "size_bytes": observed_size,
+        "declared_sha256": declared_digest,
+        "declared_size_bytes": declared_size,
+        "observed_sha256": observed_digest,
+        "observed_size_bytes": observed_size,
+        "integrity_valid": integrity_valid,
+        "manifest": record["manifest"],
+        "mime_type": mime_type,
+        "range_capable": True,
+        "_path": path,
+    }
+
+
+def _session_records(job_id: str, job_root: Path) -> list[dict[str, Any]]:
+    records = _manifest_records(job_root)
+    modes = ["primary"]
+    if any(_is_dimer(record) for record in records):
+        modes.append("dimer_candidates")
+    sessions: list[dict[str, Any]] = []
+    for mode in modes:
+        bundle, unsafe_reason = _pick_bundle(records, mode)
+        artifacts: dict[str, dict[str, Any]] = {}
+        errors: list[str] = []
+        if unsafe_reason:
+            errors.append(unsafe_reason)
+        for role, record in bundle.items():
+            try:
+                artifacts[role] = _artifact_descriptor(job_id, record, role)
+                if artifacts[role]["integrity_valid"] is not True:
+                    errors.append(f"{role.replace('_', ' ')} manifest integrity is missing or invalid")
+            except AlignmentSessionError as exc:
+                errors.append(str(exc))
+        for required_role in ("alignment", "alignment_index", "reference"):
+            if required_role not in artifacts:
+                errors.append(f"missing {required_role.replace('_', ' ')}")
+        if not errors:
+            valid, reason = _validate_alignment_bundle(
+                artifacts["alignment"]["_path"],
+                artifacts["alignment_index"]["_path"],
+                artifacts["reference"]["_path"],
+                bundle["alignment"].get("reference_sequence_sha256"),
+            )
+            if not valid:
+                errors.append(reason or "alignment bundle validation failed")
+        reference_contig: str | None = None
+        reference_artifact = artifacts.get("reference")
+        if reference_artifact is not None:
+            try:
+                reference_contigs = _fasta_contigs(reference_artifact["_path"])
+                if len(reference_contigs) == 1:
+                    reference_contig = next(iter(reference_contigs))
+                elif not errors:
+                    errors.append("a single authoritative reference contig is required")
+            except (AlignmentSessionError, OSError, UnicodeError) as exc:
+                if not errors:
+                    errors.append(f"reference contig inspection failed: {type(exc).__name__}")
+        session_seed = f"{job_id}\0{mode}\0" + "\0".join(
+            artifacts[role]["artifact_id"] for role in sorted(artifacts)
+        )
+        session_id = hashlib.sha256(session_seed.encode("utf-8")).hexdigest()[:24]
+        sessions.append(
+            {
+                "session_id": session_id,
+                "job_id": job_id,
+                "mode": mode,
+                "reference_contig": reference_contig,
+                "ready": not errors,
+                "unavailable_reason": "; ".join(dict.fromkeys(errors)) or None,
+                "artifacts": artifacts,
+                "reads_url": f"/api/jobs/{job_id}/reads?session_id={session_id}",
+            }
+        )
+    return sessions
+
+
+def _public_session(session: dict[str, Any]) -> dict[str, Any]:
+    public = {key: value for key, value in session.items() if key != "artifacts"}
+    public["artifacts"] = {
+        role: {key: value for key, value in artifact.items() if key != "_path"}
+        for role, artifact in session["artifacts"].items()
+    }
+    return public
+
+
+def build_alignment_sessions(
+    job_id: str,
+    *,
+    results_dir: str | Path | None = None,
+    job_output_dir: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    safe_job_id, job_root = _safe_job_root(job_id, results_dir, job_output_dir)
+    return [_public_session(session) for session in _session_records(safe_job_id, job_root)]
+
+
+def resolve_alignment_session(
+    job_id: str,
+    session_id: str,
+    *,
+    results_dir: str | Path | None = None,
+    job_output_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    safe_job_id, job_root = _safe_job_root(job_id, results_dir, job_output_dir)
+    for session in _session_records(safe_job_id, job_root):
+        if session["session_id"] == session_id:
+            return _public_session(session)
+    raise AlignmentSessionError(f"alignment session not found for job_id: {safe_job_id}")
+
+
+def _resolve_internal_artifact(
+    job_id: str,
+    artifact_id: str,
+    *,
+    results_dir: str | Path | None = None,
+    job_output_dir: str | Path | None = None,
+) -> tuple[Path, dict[str, Any]]:
+    if not re.fullmatch(r"[0-9a-f]{64}", artifact_id):
+        raise AlignmentSessionError("alignment artifact not found")
+    safe_job_id, job_root = _safe_job_root(job_id, results_dir, job_output_dir)
+    for session in _session_records(safe_job_id, job_root):
+        for artifact in session["artifacts"].values():
+            if artifact["artifact_id"] == artifact_id:
+                return artifact["_path"], artifact
+    raise AlignmentSessionError("alignment artifact not found")
+
+
+def resolve_alignment_artifact(
+    job_id: str,
+    artifact_id: str,
+    *,
+    results_dir: str | Path | None = None,
+    job_output_dir: str | Path | None = None,
+) -> Path:
+    return _resolve_internal_artifact(
+        job_id,
+        artifact_id,
+        results_dir=results_dir,
+        job_output_dir=job_output_dir,
+    )[0]
+
+
+def resolve_session_bam(
+    job_id: str,
+    session_id: str,
+    *,
+    results_dir: str | Path | None = None,
+    job_output_dir: str | Path | None = None,
+) -> Path:
+    safe_job_id, job_root = _safe_job_root(job_id, results_dir, job_output_dir)
+    for session in _session_records(safe_job_id, job_root):
+        if session["session_id"] == session_id and session["ready"]:
+            return session["artifacts"]["alignment"]["_path"]
+    raise AlignmentSessionError("ready alignment session not found")
+
+
+def _iter_sam_lines(
+    bam: Path,
+    *,
+    contig: str | None = None,
+    start: int | None = None,
+    end: int | None = None,
+) -> Iterator[str]:
+    samtools = os.environ.get("SAMTOOLS", "samtools")
+    command = [samtools, "view", str(bam)]
+    if contig is not None:
+        if not SAFE_CONTIG_RE.fullmatch(contig):
+            raise AlignmentSessionError("unsafe contig")
+        if start is not None or end is not None:
+            if start is None or end is None or start < 1 or end < start:
+                raise AlignmentSessionError("invalid read locus")
+            command.append(f"{contig}:{start}-{end}")
+        else:
+            command.append(contig)
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    assert process.stdout is not None
+    completed = False
+    try:
+        for line in process.stdout:
+            yield line.rstrip("\n")
+        completed = True
+    finally:
+        process.stdout.close()
+        if completed:
+            stderr = process.stderr.read() if process.stderr is not None else ""
+            return_code = process.wait(timeout=5)
+            if return_code != 0:
+                raise AlignmentSessionError(f"samtools read inspection failed: {stderr.strip() or 'unknown error'}")
+        elif process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        if process.stderr is not None:
+            process.stderr.close()
+
+
+def _mean_quality(quality: str) -> float | None:
+    if not quality or quality == "*":
+        return None
+    return sum(ord(char) - 33 for char in quality) / len(quality)
+
+
+def _sam_line_to_read(line: str, *, include_sequence: bool) -> dict[str, Any] | None:
+    fields = line.split("\t")
+    if len(fields) < 11:
+        return None
+    flag = int(fields[1])
+    sequence = fields[9]
+    quality = fields[10]
+    row: dict[str, Any] = {
+        "read_id": fields[0],
+        "length": None if sequence == "*" else len(sequence),
+        "mean_quality": _mean_quality(quality),
+        "contig": None if fields[2] == "*" else fields[2],
+        "start_1based": int(fields[3]) if fields[3].isdigit() and int(fields[3]) > 0 else None,
+        "strand": "-" if flag & 16 else "+",
+        "mapq": int(fields[4]) if fields[4].isdigit() else None,
+        "cigar": None if fields[5] == "*" else fields[5],
+        "flags": flag,
+        "unmapped": bool(flag & 4),
+    }
+    if include_sequence:
+        row["sequence"] = None if sequence == "*" else sequence
+        row["quality"] = None if quality == "*" else quality
+    return row
+
+
+def read_bam_page(
+    bam: Path,
+    *,
+    contig: str | None = None,
+    start: int | None = None,
+    end: int | None = None,
+    q: str | None = None,
+    cursor: str | None = None,
+    limit: int = 50,
+    include_sequence: bool = False,
+) -> dict[str, Any]:
+    if limit < 1 or limit > MAX_READ_PAGE:
+        raise AlignmentSessionError(f"limit must be between 1 and {MAX_READ_PAGE}")
+    if include_sequence and limit > MAX_SEQUENCE_PAGE:
+        raise AlignmentSessionError(f"sequence detail limit must not exceed {MAX_SEQUENCE_PAGE}")
+    offset = 0
+    if cursor not in (None, ""):
+        if not str(cursor).isdigit():
+            raise AlignmentSessionError("invalid read cursor")
+        offset = int(str(cursor))
+        if offset > MAX_READ_CURSOR:
+            raise AlignmentSessionError(f"read cursor must not exceed {MAX_READ_CURSOR}")
+    query = (q or "").strip().lower()
+    reads: list[dict[str, Any]] = []
+    matched = 0
+    scanned = 0
+    has_more = False
+    scan_truncated = False
+    iterator = _iter_sam_lines(bam, contig=contig, start=start, end=end)
+    try:
+        for line in iterator:
+            row = _sam_line_to_read(line, include_sequence=include_sequence)
+            if row is None:
+                continue
+            scanned += 1
+            if scanned > MAX_READ_SCAN:
+                scan_truncated = True
+                break
+            read_id = row["read_id"]
+            if query and query not in read_id.lower():
+                continue
+            if matched < offset:
+                matched += 1
+                continue
+            if len(reads) >= limit:
+                has_more = True
+                break
+            reads.append(row)
+            matched += 1
+    finally:
+        close = getattr(iterator, "close", None)
+        if callable(close):
+            close()
+    return {
+        "reads": reads,
+        "next_cursor": str(offset + len(reads)) if has_more else None,
+        "limit": limit,
+        "sequence_included": include_sequence,
+        "scan_truncated": scan_truncated,
+    }
+
+
+def read_bam_exact(
+    bam: Path,
+    read_id: str,
+    *,
+    contig: str | None = None,
+    start: int | None = None,
+    end: int | None = None,
+) -> dict[str, Any]:
+    """Find one exact read name without confusing bounded scan exhaustion with absence."""
+    scanned = 0
+    iterator = _iter_sam_lines(bam, contig=contig, start=start, end=end)
+    try:
+        for line in iterator:
+            row = _sam_line_to_read(line, include_sequence=True)
+            if row is None:
+                continue
+            scanned += 1
+            if scanned > MAX_READ_SCAN:
+                return {"read": None, "scan_truncated": True}
+            if row["read_id"] == read_id:
+                return {"read": row, "scan_truncated": False}
+    finally:
+        close = getattr(iterator, "close", None)
+        if callable(close):
+            close()
+    return {"read": None, "scan_truncated": False}

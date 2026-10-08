@@ -7,6 +7,10 @@ from pydantic import BaseModel, Field
 from antibody_pipeline_contract import normalize_antibody_artifact_class
 
 
+REVIEW_ARTIFACT_SCHEMA = "bms.review-artifacts.v1"
+REVIEW_CONTRACT_VERSION = 1
+
+
 class ResultContract(BaseModel):
     analysis_contract_id: Optional[str] = None
     supported_analyzers: List[str] = Field(default_factory=list)
