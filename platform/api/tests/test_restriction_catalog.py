@@ -49,6 +49,7 @@ def _run_generator(catalog: Path, manifest: Path, change_report: Path) -> None:
             str(manifest),
             "--change-report-output",
             str(change_report),
+            "--initial-release",
         ],
         cwd=REPO_ROOT,
         env=environment,
@@ -154,7 +155,7 @@ def test_catalog_uses_bms_identity_and_keeps_source_ids_as_provenance() -> None:
     missing_source_ids = [row for row in base_records if row["source"]["record_id"] is None]
     assert len(missing_source_ids) == 5
     assert all(row["enzyme_id"] and row["canonical_name"] for row in missing_source_ids)
-    assert all(row["id_policy"] == "canonical_name_with_deterministic_collision_suffix" for row in records)
+    assert all(row["id_policy"] == "canonical_name_v1_casefold_unique" for row in records)
     assert all(row["aliases"] == [] for row in records)
     assert all(row["supplier_provenance"]["availability_claim"] == "not_evaluated" for row in records)
 
@@ -263,7 +264,10 @@ def test_change_report_discriminates_every_review_class() -> None:
     assert report["changes"]["removals"] == ["EcoRI"]
     assert report["changes"]["cleavage_geometry_changes"] == ["BsaI"]
     assert report["changes"]["relationship_changes"] == ["FokI"]
-    assert report["changes"]["historical_supplier_code_changes"] == ["BcgI"]
+    assert report["changes"]["historical_supplier_code_commercial_report_changes"] == ["BcgI"]
+    assert {row["enzyme_id"] for row in report["changes"]["record_changes"]} == {
+        "BsaI", "FokI", "BcgI"
+    }
 
 
 def test_checked_initial_release_change_report_is_canonical_and_truthful() -> None:
@@ -280,16 +284,26 @@ def test_checked_initial_release_change_report_is_canonical_and_truthful() -> No
     assert report["summary"] == {
         "additions": 1092,
         "removals": 0,
+        "recognition_changes": 0,
+        "identity_changes": 0,
         "cleavage_geometry_changes": 0,
         "relationship_changes": 0,
-        "historical_supplier_code_changes": 0,
+        "source_provenance_changes": 0,
+        "historical_supplier_code_commercial_report_changes": 0,
+        "enzyme_kind_capability_exclusion_changes": 0,
+        "record_changes": 0,
     }
     assert len(report["changes"]["additions"]) == 1092
     for change_class in (
         "removals",
         "cleavage_geometry_changes",
         "relationship_changes",
-        "historical_supplier_code_changes",
+        "recognition_changes",
+        "identity_changes",
+        "source_provenance_changes",
+        "historical_supplier_code_commercial_report_changes",
+        "enzyme_kind_capability_exclusion_changes",
+        "record_changes",
     ):
         assert report["changes"][change_class] == []
     assert report["content_sha256"] == _canonical_digest(report, "content_sha256")
