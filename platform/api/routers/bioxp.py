@@ -255,6 +255,9 @@ ROBOT_LOCAL_EXPECTED_ROUTES: Dict[str, bool] = {
     "/motion/oem/home_xy": True,
     "/motion/oem/rehome": True,
     "/motion/oem/initialize_motion": True,
+    "/motion/oem/programs": True,
+    "/motion/oem/programs/{program_name}": True,
+    "/motion/oem/{program_name}/dry_run": True,
     "/motion/range/status": True,
     "/motion/interlock/prepare": True,
     "/motion/interlock/override": True,
@@ -868,6 +871,38 @@ async def proxy_request(
         except Exception:
             error_detail = e.response.text
         raise HTTPException(status_code=e.response.status_code, detail=error_detail)
+
+
+@router.get("/motion/oem/programs")
+async def oem_homing_programs():
+    """Read-only proxy to robot-local fresh OEM homing source/dry-run inventory."""
+    payload = await proxy_request("GET", "/motion/oem/programs", timeout=12.0)
+    if isinstance(payload, dict):
+        payload = dict(payload)
+        payload.setdefault("bms_role", "thin_proxy_only")
+        payload.setdefault("live_homing", "blocked")
+    return payload
+
+
+@router.get("/motion/oem/programs/{program_name}")
+async def oem_homing_program_detail(program_name: str):
+    payload = await proxy_request("GET", f"/motion/oem/programs/{program_name}", timeout=12.0)
+    if isinstance(payload, dict):
+        payload = dict(payload)
+        payload.setdefault("bms_role", "thin_proxy_only")
+        payload.setdefault("live_homing", "blocked")
+    return payload
+
+
+@router.post("/motion/oem/{program_name}/dry_run")
+async def oem_homing_program_dry_run(program_name: str, request: Request):
+    json_data = await _request_json_or_empty(request)
+    payload = await proxy_request("POST", f"/motion/oem/{program_name}/dry_run", json_data=json_data, timeout=20.0)
+    if isinstance(payload, dict):
+        payload = dict(payload)
+        payload.setdefault("bms_role", "thin_proxy_only")
+        payload.setdefault("live_homing", "blocked")
+    return payload
 
 
 async def _request_json_or_empty(request: Request) -> Dict[str, Any]:

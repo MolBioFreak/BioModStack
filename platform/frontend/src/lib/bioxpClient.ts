@@ -584,6 +584,37 @@ const invalidateBioXp = (queryClient: ReturnType<typeof useQueryClient>) => {
 
 const bioxpHardwareMutationKey = (...parts: string[]) => ['bioxp', 'hardware', ...parts] as const;
 
+export interface BioXpOemProgramSummary {
+    name: string;
+    oem_symbol?: string;
+    source_mode?: string;
+    live_allowed_default?: boolean;
+    parity_label?: string;
+    blockers?: string[];
+    dry_run_route?: string;
+}
+
+export interface BioXpOemProgramsResponse {
+    ok: boolean;
+    opened_usb?: boolean;
+    physical_motion?: boolean;
+    bms_role?: string;
+    live_homing?: string;
+    programs: BioXpOemProgramSummary[];
+}
+
+export const useBioXpOemPrograms = (enabled = true) =>
+    useQuery<BioXpOemProgramsResponse, Error>({
+        queryKey: ['bioxp', 'motion', 'oem', 'programs'],
+        queryFn: async () => {
+            const res = await api.get('/api/bioxp/motion/oem/programs', { timeout: 8000 });
+            return res.data;
+        },
+        enabled,
+        refetchInterval: false,
+        retry: false,
+    });
+
 export const useBioXpInterlinkState = (probe = false, refetchIntervalMs: number | false = false) =>
     useQuery<BioXpInterlinkState, Error>({
         queryKey: ['bioxp', 'interlink', 'state', probe],
