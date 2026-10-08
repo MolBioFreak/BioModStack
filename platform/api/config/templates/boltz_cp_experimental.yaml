@@ -41,6 +41,7 @@ preset_params:
   bcp_triattn_backend: reference
   bcp_context_store_mode: evidence-only
   bcp_context_query_tile_tokens: 512
+  bcp_context_store_projection_cache_byte_budget: 0
   bcp_shard_plan_id: 2x2
   bcp_input_format: config_files
   bcp_output_format: mmcif

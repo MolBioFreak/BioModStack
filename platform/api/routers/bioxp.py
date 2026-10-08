@@ -265,6 +265,25 @@ DISABLED_ROUTES: Dict[str, bool] = {
     "/daemon/stop": True,
 }
 
+OPERATION_REQUIRED_ROUTES: Dict[str, list[str]] = {
+    "prepare_safe": [
+        "/status",
+        "/motion/power/status",
+        "/latch/status",
+        "/motion/axes/status",
+        "/motion/power/enable",
+        "/motion/interlock/prepare",
+        "/motion/arm/strict_startup",
+    ],
+    "latch_lock": ["/latch/status", "/latch/lock"],
+    "latch_unlock": ["/latch/status", "/latch/unlock"],
+    "head_clear_lock": ["/motion/axis/{axis}/status", "/motion/clear_lock"],
+    "head_lift_increment": ["/motion/axis/{axis}/status", "/motion/axis/relative"],
+    "micro_move_proof": ["/motion/axis/{axis}/status", "/motion/axis/relative"],
+    "reference_mark": ["/motion/reference/status", "/motion/reference/mark_referenced", "/motion/reference/mark_desynced"],
+    "emergency_stop": ["/oem/runtime/emergency_stop"],
+}
+
 
 def _runtime_status_payload(
     *,
@@ -345,7 +364,7 @@ async def daemon_status():
         )
 
     try:
-        payload = await proxy_request("GET", "/status", timeout=10.0)
+        payload = await proxy_request("GET", "/status", timeout=35.0)
         if not isinstance(payload, dict):
             payload = {"status": "error", "raw_payload": payload}
         hardware_connected = bool(payload.get("hardware_connected"))
@@ -429,6 +448,74 @@ async def proxy_request(
         raise HTTPException(status_code=e.response.status_code, detail=error_detail)
 
 
+async def _request_json_or_empty(request: Request) -> Dict[str, Any]:
+    try:
+        payload = await request.json()
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _operator_ack(payload: Dict[str, Any]) -> bool:
+    return bool(payload.get("operator_ack") or payload.get("acknowledged") or payload.get("operator_confirmed"))
+
+
+def _require_operator_ack(payload: Dict[str, Any], operation: str) -> None:
+    if not _operator_ack(payload):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{operation} requires operator_ack=true after physical clear-path confirmation.",
+        )
+
+
+def _operation_report(
+    operation: str,
+    *,
+    risk: str,
+    payload: Dict[str, Any],
+    before: Optional[Dict[str, Any]] = None,
+    actions: Optional[list[Dict[str, Any]]] = None,
+    after: Optional[Dict[str, Any]] = None,
+    notes: Optional[list[str]] = None,
+) -> Dict[str, Any]:
+    return {
+        "schema_version": "bioxp.bms_operation_report.v1",
+        "operation": operation,
+        "risk": risk,
+        "operator_ack": _operator_ack(payload),
+        "operator": payload.get("operator") or payload.get("operator_id") or "bms-cockpit",
+        "physical_confirmation_required": True,
+        "truth_level": "controller_only_until_operator_confirms",
+        "before": before or {},
+        "actions": actions or [],
+        "after": after or {},
+        "notes": notes or [
+            "BMS proxied named operation over the robot-local BioXP API; BMS did not supervise or restart the robot daemon.",
+            "Controller readbacks do not prove physical motion; operator observation remains authoritative.",
+        ],
+    }
+
+
+async def _probe_operation(path: str, *, method: str = "GET", json_data: Optional[Dict[str, Any]] = None, params: Optional[Dict[str, Any]] = None, timeout: float = 12.0) -> Dict[str, Any]:
+    try:
+        data = await proxy_request(method, path, json_data=json_data, params=params, timeout=timeout)
+        return {"ok": True, "path": path, "data": data}
+    except HTTPException as exc:
+        return {"ok": False, "path": path, "error": {"status_code": exc.status_code, "detail": exc.detail}}
+
+
+def _is_axis_idle(axis_payload: Dict[str, Any]) -> bool:
+    try:
+        speed = axis_payload.get("status", {}).get("speed", {}).get("speed")
+    except Exception:
+        return False
+    return speed in (0, 0.0, None)
+
+
+def _skipped_probe(path: str, reason: str) -> Dict[str, Any]:
+    return {"ok": None, "path": path, "skipped": True, "reason": reason}
+
+
 async def proxy_stream(path: str, request: Request, params: Optional[Dict[str, Any]] = None):
     base_url = get_current_url()
     url = f"{base_url}{path}"
@@ -507,7 +594,7 @@ async def get_status():
         }
 
     try:
-        payload = await proxy_request("GET", "/status")
+        payload = await proxy_request("GET", "/status", timeout=18.0)
         if not isinstance(payload, dict):
             payload = {"status": "error", "raw_payload": payload}
         payload["linkage_configured"] = True
@@ -515,14 +602,27 @@ async def get_status():
         payload["recommended_url"] = _recommended_linkage_url()
         return payload
     except HTTPException as exc:
+        # /status is a slow, hardware-touching aggregate on this robot and can time out
+        # even while the robot-local FastAPI and specific controller routes are alive.
+        # Keep the cockpit usable by falling back to the cheap OpenAPI control-plane probe;
+        # do not claim hardware motion readiness from this fallback.
+        control_plane_reachable = False
+        try:
+            openapi = await proxy_request("GET", "/openapi.json", timeout=5.0)
+            control_plane_reachable = isinstance(openapi, dict) and isinstance(openapi.get("paths"), dict)
+        except HTTPException:
+            control_plane_reachable = False
         return {
-            "status": "offline" if exc.status_code in (503, 504) else "error",
+            "status": "degraded" if control_plane_reachable else ("offline" if exc.status_code in (503, 504) else "error"),
             "transport": "proxy",
+            "runtime_available": control_plane_reachable,
+            "control_plane_reachable": control_plane_reachable,
             "hardware_connected": False,
             "linkage_configured": True,
             "linkage_url": _GLOBAL_LINKAGE_URL,
             "recommended_url": _recommended_linkage_url(),
             "startup_error": None,
+            "status_error": "Hardware aggregate /status timed out; use OEM recover/arm or targeted readbacks. This is not physical-motion proof.",
             "proxy_error": {
                 "status_code": exc.status_code,
                 "detail": exc.detail,
@@ -563,6 +663,201 @@ async def bioxp_capabilities():
             "The robot is treated as functional under OEM control; BMS should not present unresolved Linux parity work as a bad-component verdict.",
         ],
     }
+
+
+@router.get("/operations/capabilities")
+async def bioxp_operations_capabilities():
+    openapi_paths: Dict[str, bool] = {}
+    openapi_error: Optional[Dict[str, Any]] = None
+    if _GLOBAL_LINKAGE_URL:
+        try:
+            openapi = await proxy_request("GET", "/openapi.json", timeout=35.0)
+            raw_paths = openapi.get("paths", {}) if isinstance(openapi, dict) else {}
+            if isinstance(raw_paths, dict):
+                openapi_paths = {str(path): True for path in raw_paths.keys()}
+        except HTTPException as exc:
+            openapi_error = {"status_code": exc.status_code, "detail": exc.detail}
+    route_source = openapi_paths or {**BMS_PROXIED_ROUTES, "/motion/axis/{axis}/status": True}
+
+    def route_available(route: str) -> bool:
+        if route_source.get(route):
+            return True
+        if "{axis}" in route:
+            return any(route_source.get(route.replace("{axis}", axis)) for axis in ("x", "y", "z", "g", "door"))
+        for axis in ("x", "y", "z", "g", "door"):
+            templated = route.replace(f"/{axis}/", "/{axis}/")
+            axis_prefix_templated = route.replace(f"/{axis}/", "/{axis}/")
+            if templated != route and route_source.get(templated):
+                return True
+            if axis_prefix_templated != route and route_source.get(axis_prefix_templated):
+                return True
+        return False
+
+    operations: Dict[str, Dict[str, Any]] = {}
+    for name, routes in OPERATION_REQUIRED_ROUTES.items():
+        availability = {route: route_available(route) for route in routes}
+        operations[name] = {
+            "available": all(availability.values()),
+            "required_routes": availability,
+            "risk": "high" if name in {"head_clear_lock", "head_lift_increment", "micro_move_proof"} else "medium",
+            "operator_ack_required": name != "emergency_stop",
+        }
+
+    return {
+        "schema_version": "bioxp.bms_operations_capabilities.v1",
+        "linkage_url": _GLOBAL_LINKAGE_URL,
+        "linkage_configured": bool(_GLOBAL_LINKAGE_URL),
+        "robot_openapi_reachable": bool(openapi_paths),
+        "openapi_error": openapi_error,
+        "operations": operations,
+        "safety_boundary": "robot-local FastAPI owns hardware/runtime; BMS exposes named, gated service operations only.",
+    }
+
+
+@router.get("/operations/readiness")
+async def bioxp_operations_readiness(request: Request):
+    # Keep the default service-tab readiness light. The robot-local API serializes
+    # hardware access behind a USB runtime lock; continuously polling every slow
+    # status/latch/axes endpoint from the UI can occupy that lock and make user
+    # operations look hung. Use ?full=true only for an explicit deep diagnostic.
+    full_probe = (request.query_params.get("full") or request.query_params.get("mode") or "").lower() in {"1", "true", "full", "hardware"}
+    status = await _probe_operation("/status", timeout=35.0) if full_probe else _skipped_probe("/status", "lightweight readiness avoids occupying the robot USB runtime lock; pass ?full=true for a deep hardware poll.")
+    power = await _probe_operation("/motion/power/status", timeout=45.0) if full_probe else _skipped_probe("/motion/power/status", "skipped in default readiness so the cockpit stays responsive; explicit service operations collect power readback before movement.")
+    latch = await _probe_operation("/latch/status", timeout=35.0) if full_probe else _skipped_probe("/latch/status", "skipped in lightweight readiness; service operations collect before/after latch readback when invoked.")
+    axes = await _probe_operation("/motion/axes/status", params={"axes": "x,y,z,g,door"}, timeout=45.0) if full_probe else _skipped_probe("/motion/axes/status", "skipped in lightweight readiness; movement operations collect axis readback when invoked.")
+    reference = await _probe_operation("/motion/reference/status", params={"axes": "x,y,z,g,door"}, timeout=20.0) if full_probe else _skipped_probe("/motion/reference/status", "skipped in default readiness; use full=true or a named motion recipe for hardware reference readback.")
+    status_data = status.get("data") if isinstance(status.get("data"), dict) else {}
+    power_data = power.get("data") if isinstance(power.get("data"), dict) else {}
+    return {
+        "schema_version": "bioxp.bms_operations_readiness.v1",
+        "linkage_url": _GLOBAL_LINKAGE_URL,
+        "runtime_reachable": bool(power.get("ok") or reference.get("ok") or status.get("ok")),
+        "hardware_connected": bool(power_data.get("hardware_connected") or status_data.get("hardware_connected")),
+        "full_probe": full_probe,
+        "layers": {"status": status, "power": power, "latch": latch, "axes": axes, "reference": reference},
+        "notes": [
+            "Default readiness intentionally avoids hammering every hardware endpoint.",
+            "Readiness is a bundle of controller readbacks, not physical proof.",
+            "Movement operations still require operator clear-path acknowledgement.",
+        ],
+    }
+
+
+@router.post("/operations/motion/prepare-safe")
+async def bioxp_operation_prepare_safe(request: Request):
+    payload = await _request_json_or_empty(request)
+    _require_operator_ack(payload, "prepare_safe")
+    before = {
+        "axes": await _probe_operation("/motion/axes/status", params={"axes": "x,y,z,g,door"}, timeout=25.0),
+        "reference": await _probe_operation("/motion/reference/status", params={"axes": "x,y,z,g,door"}, timeout=10.0),
+        "latch": await _probe_operation("/latch/status", timeout=18.0),
+    }
+    axes_data = before["axes"].get("data", {}) if before["axes"].get("ok") else {}
+    rows = axes_data.get("rows", {}) if isinstance(axes_data, dict) else {}
+    moving_axes = [axis for axis, row in rows.items() if isinstance(row, dict) and not _is_axis_idle(row)] if isinstance(rows, dict) else []
+    if moving_axes:
+        raise HTTPException(status_code=409, detail={"message": "Refusing prepare-safe while axes report nonzero speed.", "moving_axes": moving_axes})
+
+    actions = [
+        {"name": "strict_startup_no_homing", "result": await proxy_request("POST", "/motion/arm/strict_startup", json_data={"run_homing": False, "operator": payload.get("operator", "bms-cockpit"), "source": "bms-operation-prepare-safe"}, timeout=190.0)},
+    ]
+    after = {
+        "axes": await _probe_operation("/motion/axes/status", params={"axes": "x,y,z,g,door"}, timeout=25.0),
+        "reference": await _probe_operation("/motion/reference/status", params={"axes": "x,y,z,g,door"}, timeout=10.0),
+        "latch": await _probe_operation("/latch/status", timeout=18.0),
+    }
+    return _operation_report(
+        "prepare_safe",
+        risk="medium",
+        payload=payload,
+        before=before,
+        actions=actions,
+        after=after,
+        notes=[
+            "Uses the robot-local strict-startup/no-homing recipe directly; avoids the slow /motion/power/status aggregate that is currently timing out.",
+            "No intentional axis travel is commanded by this recipe, but it energizes/arms the motion gate.",
+            "Controller arm/readback success is not physical movement proof.",
+        ],
+    )
+
+
+@router.post("/operations/head/clear-lock")
+async def bioxp_operation_head_clear_lock(request: Request):
+    payload = await _request_json_or_empty(request)
+    _require_operator_ack(payload, "head_clear_lock")
+    before = {"z": await _probe_operation("/motion/axis/z/status", timeout=25.0), "reference": await _probe_operation("/motion/reference/status", params={"axes": "z"}, timeout=10.0)}
+    actions = [{"name": "clear_lock", "result": await proxy_request("POST", "/motion/clear_lock", timeout=120.0)}]
+    after = {"z": await _probe_operation("/motion/axis/z/status", timeout=25.0), "reference": await _probe_operation("/motion/reference/status", params={"axes": "z"}, timeout=10.0)}
+    return _operation_report(
+        "head_clear_lock",
+        risk="medium_high",
+        payload=payload,
+        before=before,
+        actions=actions,
+        after=after,
+        notes=[
+            "Calls the robot-local all-up/clear-lock primitive instead of a generic single-direction jog.",
+            "This is live Z/head motion; operator physical observation is authoritative.",
+        ],
+    )
+
+
+@router.post("/operations/head/lift-increment")
+async def bioxp_operation_head_lift_increment(request: Request):
+    payload = await _request_json_or_empty(request)
+    _require_operator_ack(payload, "head_lift_increment")
+    steps_abs = int(payload.get("steps_abs") or 500)
+    if steps_abs not in {500, 1000, 2500}:
+        raise HTTPException(status_code=400, detail="steps_abs must be one of 500, 1000, or 2500 for supervised head lift increments.")
+    before = {"z": await _probe_operation("/motion/axis/z/status", timeout=35.0)}
+    move_payload = {"axis": "z", "steps": -abs(steps_abs), "reuse_prepared": False, "capture_bundle": True, "operator_note": payload.get("operator_note") or "BMS head lift increment"}
+    actions = [{"name": "z_lift_increment", "result": await proxy_request("POST", "/motion/axis/relative", json_data=move_payload, timeout=65.0)}]
+    after = {"z": await _probe_operation("/motion/axis/z/status", timeout=35.0)}
+    return _operation_report("head_lift_increment", risk="medium_high", payload=payload, before=before, actions=actions, after=after)
+
+
+@router.post("/operations/motion/micro-move-proof")
+async def bioxp_operation_micro_move_proof(request: Request):
+    payload = await _request_json_or_empty(request)
+    _require_operator_ack(payload, "micro_move_proof")
+    axis = str(payload.get("axis") or "x").lower()
+    if axis not in {"x", "y", "z", "g", "door"}:
+        raise HTTPException(status_code=400, detail="axis must be one of x, y, z, g, or door.")
+    steps = int(payload.get("steps") or 100)
+    if abs(steps) > 500:
+        raise HTTPException(status_code=400, detail="micro_move_proof is capped at +/-500 steps.")
+    before = {"axis": await _probe_operation(f"/motion/axis/{axis}/status", timeout=35.0)}
+    move_payload = {"axis": axis, "steps": steps, "reuse_prepared": False, "capture_bundle": True, "operator_note": payload.get("operator_note") or "BMS micro-move proof"}
+    actions = [{"name": "micro_move", "result": await proxy_request("POST", "/motion/axis/relative", json_data=move_payload, timeout=65.0)}]
+    after = {"axis": await _probe_operation(f"/motion/axis/{axis}/status", timeout=35.0)}
+    return _operation_report("micro_move_proof", risk="high", payload=payload, before=before, actions=actions, after=after)
+
+
+async def _latch_operation(action: str, payload: Dict[str, Any]):
+    _require_operator_ack(payload, f"latch_{action}")
+    before = {"latch": await _probe_operation("/latch/status", timeout=35.0)}
+    actions = [{"name": f"latch_{action}", "result": await proxy_request("POST", f"/latch/{action}", timeout=20.0)}]
+    after = {"latch": await _probe_operation("/latch/status", timeout=35.0)}
+    return _operation_report(f"latch_{action}", risk="medium", payload=payload, before=before, actions=actions, after=after)
+
+
+@router.post("/operations/latch/lock")
+async def bioxp_operation_latch_lock(request: Request):
+    return await _latch_operation("lock", await _request_json_or_empty(request))
+
+
+@router.post("/operations/latch/unlock")
+async def bioxp_operation_latch_unlock(request: Request):
+    return await _latch_operation("unlock", await _request_json_or_empty(request))
+
+
+@router.post("/operations/emergency-stop")
+async def bioxp_operation_emergency_stop(request: Request):
+    payload = await _request_json_or_empty(request)
+    before = {"runtime": await _probe_operation("/oem/runtime/status", timeout=35.0)}
+    actions = [{"name": "oem_runtime_emergency_stop", "result": await proxy_request("POST", "/oem/runtime/emergency_stop", json_data={"operator": payload.get("operator", "bms-cockpit"), "source": "bms-operation-emergency-stop"}, timeout=30.0)}]
+    after = {"runtime": await _probe_operation("/oem/runtime/status", timeout=35.0)}
+    return _operation_report("emergency_stop", risk="emergency", payload={**payload, "operator_ack": True}, before=before, actions=actions, after=after, notes=["Emergency stop proxied to robot-local OEM runtime. Verify actual motion stop physically."])
 
 
 @router.get("/capabilities/oem-test-prep")
@@ -822,7 +1117,23 @@ async def move_axis_absolute(request: Request):
 
 @router.post("/motion/axis/home")
 async def home_axis(request: Request):
-    return await proxy_request("POST", "/motion/axis/home", await request.json())
+    payload = await request.json()
+    # Temporary BMS safety shim: Home means return to controller coordinate 0 for that axis.
+    # The robot-local switch-search homing routine currently vibrates/stalls on this unit.
+    # Keep the public BMS endpoint stable for the cockpit while routing it through the
+    # already-working absolute-position command path.
+    axis = str(payload.get("axis", "")).lower()
+    if axis not in {"x", "y", "z", "g", "door"}:
+        raise HTTPException(status_code=400, detail="axis must be one of x, y, z, g, or door")
+    absolute_payload = {
+        **payload,
+        "axis": axis,
+        "position_steps": int(payload.get("position_steps", 0) or 0),
+        "wait_timeout_s": float(payload.get("wait_timeout_s", 60.0) or 60.0),
+        "source_command": "bms_home_to_absolute_zero",
+        "home_semantics": "absolute_zero_not_switch_search",
+    }
+    return await proxy_request("POST", "/motion/axis/absolute", absolute_payload)
 
 @router.post("/thermal/baseline")
 async def thermal_baseline():

@@ -13,6 +13,7 @@ import {
     type PersistedAnalysisRun,
 } from '../lib/api';
 import { inferDesignAnalysisLens, type AnalysisLens } from './designOutputSource';
+import { BMS_FULLSCREEN_FLUSH, BMS_PANEL_SURFACE } from './ui/bmsStyle';
 
 type MetricFamily = AnalysisLens | 'dynamic';
 type ColorScaleName =
@@ -273,7 +274,7 @@ function PlotCard({
     return (
         <div
             ref={cardRef}
-            className={`${isFullscreen ? 'flex h-full w-full flex-col overflow-auto rounded-none border-0 bg-slate-950 p-6' : 'rounded-2xl border border-slate-700/60 bg-slate-900/55 p-4 shadow-xl shadow-slate-950/20'}`}
+            className={`${isFullscreen ? `flex h-full w-full flex-col overflow-auto ${BMS_FULLSCREEN_FLUSH} bg-surface p-6` : `${BMS_PANEL_SURFACE} p-4`}`}
         >
             <div className="mb-3 flex items-start justify-between gap-4">
                 <div>

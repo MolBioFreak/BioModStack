@@ -1,3 +1,8 @@
+def shellQuote(value) {
+    String text = value == null ? '' : value.toString()
+    return "'${text.replace("'", "'\"'\"'")}'"
+}
+
 def normalizeGpuCsvValue(raw) {
     if (raw == null) {
         return ''
@@ -43,7 +48,8 @@ process BatchBoltzValidation {
     def anchor_strict = (params.boltz_anchor_strict == true || params.boltz_anchor_strict == 'true')
     def anchor_target_rmsd = params.boltz_anchor_target_max_rmsd ?: 1.5
     def boltzAnchorArgs = anchor_target ? "--anchor_target --target_chains \"${resolvedTargetChains}\" --template_manifest target_templates/manifest.json" : ""
-    def boltzStrictArgs = (anchor_target && anchor_strict) ? "--strict_target_rmsd ${anchor_target_rmsd}" : ""
+    def boltzBatchCache = shellQuote(params.get('boltz_models', '') ?: '')
+    def boltzBatchCacheFallback = shellQuote("${params.get('data_root', '') ?: params.get('code_root', '.')}/cache/boltz")
     """
     set -euo pipefail
     shopt -s nullglob
@@ -69,15 +75,22 @@ process BatchBoltzValidation {
         ${boltzAnchorArgs}
         
     # Run Boltz on the directory of YAMLs (Batch Mode)
-    # This loads the model ONCE and processes all sequences
-    # Using specific cache directory to avoid conflicts
-    export BOLTZ_CACHE_DIR="\$(pwd)/.boltz_cache"
+    # This loads the model ONCE and processes all sequences.
+    # Keep heavyweight Boltz checkpoints in the shared BMS model/cache path;
+    # never let Boltz repopulate HOME/.boltz inside each Nextflow task work dir.
+    BOLTZ_SHARED_CACHE=${boltzBatchCache}
+    if [ -z "\$BOLTZ_SHARED_CACHE" ]; then
+        BOLTZ_SHARED_CACHE=${boltzBatchCacheFallback}
+    fi
+    export BOLTZ_CACHE_DIR="\$BOLTZ_SHARED_CACHE"
+    export BOLTZ_CACHE="\$BOLTZ_SHARED_CACHE"
     export NUMBA_CACHE_DIR="\$(pwd)/.numba_cache"
     export XDG_CACHE_HOME="\$(pwd)/.cache_home"
-    export HOME="\$(pwd)/.fake_home"
-    mkdir -p \$BOLTZ_CACHE_DIR \$NUMBA_CACHE_DIR \$XDG_CACHE_HOME \$HOME
+    export HOME="\$BOLTZ_SHARED_CACHE/home"
+    mkdir -p "\$BOLTZ_CACHE_DIR" "\$NUMBA_CACHE_DIR" "\$XDG_CACHE_HOME" "\$HOME"
     
     boltz predict yamls/ \\
+        --cache "\$BOLTZ_CACHE_DIR" \\
         --output_format pdb \\
         --diffusion_samples 1 \\
         ${params.boltz_max_parallel_samples ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \\

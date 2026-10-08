@@ -22,7 +22,7 @@ def load_module(monkeypatch):
         Orientation=SimpleNamespace(HORIZONTAL=0, VERTICAL=1),
         WrapMode=SimpleNamespace(WORD_CHAR=0),
     )
-    fake_adw = types.SimpleNamespace(Application=type("Application", (), {}))
+    fake_adw = types.SimpleNamespace(Application=type("Application", (), {"__init__": lambda self, *args, **kwargs: None}))
     fake_glib = types.SimpleNamespace(timeout_add_seconds=lambda *args, **kwargs: None, idle_add=lambda *args, **kwargs: None)
     fake_gio = types.SimpleNamespace(ApplicationFlags=SimpleNamespace(FLAGS_NONE=0))
     fake_pango = types.SimpleNamespace()
@@ -152,3 +152,49 @@ def test_panel_apply_runtime_ports_persists_dev_and_prod_ports(monkeypatch) -> N
     assert saved == [(5180, 19090)]
     assert row.subtitle == "Dev http://127.0.0.1:5180/  |  Stable http://127.0.0.1:19090/bms/"
     assert notifications == [("Runtime Ports Saved", "Restart the selected surfaces, then reload Electron/browser to apply the new ports.")]
+
+
+def test_panel_defaults_to_api_backend_log_and_has_plain_labels(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+
+    panel = module.BioModStackPanel()
+
+    assert panel.current_log == "api"
+    assert module.LOG_LABELS["api"] == "API Backend Log"
+    assert module.LOG_LABELS["frontend"] == "Frontend/Web Log"
+    assert module.LOG_LABELS["core-runtime"] == "Container Runtime Log"
+    assert "docker logs for biomodstack-api" in module.LOG_HELP_TEXT["api"]
+    assert "not the API request log" in module.LOG_HELP_TEXT["core-runtime"]
+
+
+def test_panel_api_log_tails_container_before_file_fallback(monkeypatch, tmp_path: Path) -> None:
+    module = load_module(monkeypatch)
+    fallback = tmp_path / "api.log"
+    fallback.write_text("file fallback\n", encoding="utf-8")
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout="api container line\n", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.read_container_log_tail("biomodstack-api", fallback, 7) == "api container line"
+    assert calls == [["docker", "logs", "--tail", "7", "biomodstack-api"]]
+
+
+def test_panel_api_log_falls_back_when_docker_is_unavailable(monkeypatch, tmp_path: Path) -> None:
+    module = load_module(monkeypatch)
+    fallback = tmp_path / "api.log"
+    fallback.write_text("dev api line\n", encoding="utf-8")
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["docker", "logs"]:
+            raise FileNotFoundError("docker")
+        return SimpleNamespace(returncode=0, stdout="dev api line\n", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    content = module.read_container_log_tail("biomodstack-api", fallback, 7)
+    assert "docker command not available" in content
+    assert "dev api line" in content

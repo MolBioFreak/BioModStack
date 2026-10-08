@@ -148,13 +148,25 @@ def test_runtime_descriptor_for_container_mode(tmp_path: Path, monkeypatch) -> N
     }
     assert descriptor["logs"] == [
         {
+            "id": "api",
+            "label": "API backend log",
+            "path": "docker:biomodstack-api",
+            "fallback_path": str(services.API_LOG),
+        },
+        {
+            "id": "frontend",
+            "label": "Frontend/web log",
+            "path": "docker:biomodstack-web",
+            "fallback_path": str(services.FRONTEND_LOG),
+        },
+        {
             "id": "workflow-adapter",
             "label": "Workflow adapter log",
             "path": str(services.WORKFLOW_ADAPTER_LOG),
         },
         {
-            "id": "runtime",
-            "label": "Core runtime log",
+            "id": "core-runtime",
+            "label": "Container runtime log",
             "path": str(services.CORE_RUNTIME_LOG),
         }
     ]

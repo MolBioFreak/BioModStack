@@ -8,6 +8,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import MolstarViewer from './MolstarViewer';
+import { BMS_CONTROL, BMS_CONTROL_GROUP, BMS_FULLSCREEN_FLUSH, BMS_PANEL_SURFACE, BMS_SMALL_CONTROL, BMS_VIEWER_WELL } from './ui/bmsStyle';
 import { fetchJobs } from '../lib/api';
 import type { Job } from '../lib/api';
 
@@ -234,10 +235,10 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
             className={isFullscreen ? 'h-full w-full bg-slate-950 p-4 md:p-6' : `mx-auto w-full transition-all duration-300 ${layout.panelMaxWidthClass}`}
         >
             <div
-                className={`border border-slate-700 bg-slate-800/50 backdrop-blur-sm transition-all duration-300 ${
+                className={`${BMS_PANEL_SURFACE} transition-all duration-300 ${
                     isFullscreen
-                        ? 'flex h-full flex-col rounded-none p-4 md:p-6'
-                        : `rounded-xl ${layout.panelPaddingClass}`
+                        ? `flex h-full flex-col ${BMS_FULLSCREEN_FLUSH} p-4 md:p-6`
+                        : `${layout.panelPaddingClass}`
                 }`}
                 style={{ position: 'relative' }}
             >
@@ -256,7 +257,7 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
                             {selectedStructure.type}
                         </span>
                     )}
-                    <div className="inline-flex flex-wrap items-center gap-1 rounded-lg border border-slate-600/70 bg-slate-900/60 p-1">
+                    <div className={`inline-flex flex-wrap items-center gap-1 p-1 ${BMS_CONTROL_GROUP}`}>
                         {QUICK_VIEWER_SIZE_OPTIONS.map((option) => {
                             const active = viewerSize === option.value;
                             return (
@@ -264,10 +265,10 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
                                     key={option.value}
                                     type="button"
                                     onClick={() => setViewerSizePreference(option.value)}
-                                    className={`min-w-9 rounded border px-2 py-1 text-[11px] font-semibold transition-colors ${
+                                    className={`min-w-9 px-2 py-1 text-[11px] font-semibold transition-colors ${
                                         active
-                                            ? 'border-accent bg-accent/20 text-white'
-                                            : 'border-slate-600 bg-slate-800/80 text-slate-300 hover:bg-slate-700'
+                                            ? 'rounded border border-accent bg-accent/20 text-white'
+                                            : `${BMS_SMALL_CONTROL} text-slate-300 hover:bg-slate-700`
                                     }`}
                                     title={option.title}
                                 >
@@ -279,7 +280,7 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
                     <button
                         type="button"
                         onClick={() => void toggleFullscreen()}
-                        className="rounded-lg border border-slate-600 bg-slate-800/80 px-3 py-1.5 text-[11px] font-semibold text-slate-200 transition-colors hover:bg-slate-700"
+                        className={`${BMS_CONTROL} px-3 py-1.5 text-[11px] font-semibold text-slate-200 transition-colors hover:bg-slate-700`}
                         title={isFullscreen ? 'Exit fullscreen' : 'Open fullscreen'}
                     >
                         {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
@@ -332,7 +333,7 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
 
             {/* Viewer */}
             <div
-                className={`bg-slate-900/50 overflow-hidden transition-all duration-300 ${isFullscreen ? 'min-h-0 flex-1 rounded-xl' : 'rounded-lg'}`}
+                className={`${BMS_VIEWER_WELL} overflow-hidden transition-all duration-300 ${isFullscreen ? 'min-h-0 flex-1 rounded-xl' : ''}`}
                 style={{ position: 'relative', zIndex: 0 }}
             >
                 {structureUrl ? (

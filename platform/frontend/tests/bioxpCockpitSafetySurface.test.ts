@@ -69,7 +69,7 @@ test('default handler controls preserve readback and thermal surfaces while dire
     assert.doesNotMatch(controlsTab, /\{liquidCommissioningPanel\}/);
     assert.match(cockpitSource, /OEM Runtime & Startup/);
     assert.match(cockpitSource, /Handler Controls/);
-    assert.match(cockpitSource, /Request OEM Startup/);
+    assert.match(cockpitSource, /Startup Preflight \/ No Motion/);
     assert.match(cockpitSource, /EMERGENCY STOP/);
     assert.doesNotMatch(cockpitSource, /label: 'Manual Movement'/);
     assert.doesNotMatch(liquidPanel, />\s*Aspirate\s*</);
@@ -78,4 +78,28 @@ test('default handler controls preserve readback and thermal surfaces while dire
     assert.match(liquidCommissioningPanel, />\s*Aspirate\s*</);
     assert.match(liquidCommissioningPanel, />\s*Dispense\s*</);
     assert.match(liquidCommissioningPanel, />\s*Mix\s*</);
+});
+
+test('service operations tab exposes named operation wrappers without acknowledgement form clutter', () => {
+    const tabList = sourceBetween('<div className="flex gap-1 border-b border-border-secondary flex-wrap">', "{activeTab === 'connection'");
+    const servicePanel = sourceBetween('const serviceOperationsPanel = (', 'const referencePanel = (');
+    const serviceTab = sourceBetween("{activeTab === 'service'", "{activeTab === 'manual'");
+
+    assert.match(tabList, /label: 'Gated Service Recipes'/);
+    assert.match(servicePanel, /Ready-Made Robot Recipes/);
+    assert.doesNotMatch(servicePanel, /Operator acknowledgement required/);
+    assert.doesNotMatch(servicePanel, /controller readback is not being treated as physical proof/);
+    assert.doesNotMatch(servicePanel, /operation note \/ physical observation/);
+    assert.match(servicePanel, /Prepare Motion Safely/);
+    assert.match(servicePanel, /Lock Latch/);
+    assert.match(servicePanel, /Unlock Latch/);
+    assert.match(servicePanel, /Clear Head Lock/);
+    assert.match(servicePanel, /Lift Z Up/);
+    assert.match(servicePanel, /Micro-move Proof/);
+    assert.match(servicePanel, /Readiness Bundle/);
+    assert.match(servicePanel, /Operation Capabilities/);
+    assert.match(servicePanel, /Latest Operation Report/);
+    assert.match(serviceTab, /\{serviceOperationsPanel\}/);
+    assert.match(serviceTab, /\{motionPowerPanel\}/);
+    assert.match(serviceTab, /\{referencePanel\}/);
 });

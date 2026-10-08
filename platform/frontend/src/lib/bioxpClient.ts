@@ -253,6 +253,53 @@ export interface BioXpCapabilities {
     notes?: string[];
 }
 
+export interface BioXpOperationCapabilities {
+    schema_version?: string;
+    linkage_url?: string | null;
+    linkage_configured?: boolean;
+    robot_openapi_reachable?: boolean;
+    openapi_error?: Record<string, any> | null;
+    operations?: Record<string, {
+        available?: boolean;
+        required_routes?: Record<string, boolean>;
+        risk?: string;
+        operator_ack_required?: boolean;
+    }>;
+    safety_boundary?: string;
+}
+
+export interface BioXpOperationReadiness {
+    schema_version?: string;
+    linkage_url?: string | null;
+    runtime_reachable?: boolean;
+    hardware_connected?: boolean;
+    layers?: Record<string, any>;
+    notes?: string[];
+}
+
+export interface BioXpOperationReport {
+    schema_version?: string;
+    operation?: string;
+    risk?: string;
+    operator_ack?: boolean;
+    operator?: string;
+    physical_confirmation_required?: boolean;
+    truth_level?: string;
+    before?: Record<string, any>;
+    actions?: Array<Record<string, any>>;
+    after?: Record<string, any>;
+    notes?: string[];
+}
+
+export interface BioXpOperationPayload extends BioXpPayload {
+    operator_ack?: boolean;
+    operator?: string;
+    operator_note?: string;
+    axis?: AxisName;
+    steps?: number;
+    steps_abs?: number;
+}
+
 export type OemStatusPayload = Record<string, any>;
 
 export interface MotionReferenceStatus {
@@ -421,7 +468,10 @@ export const useRuntimeStatus = () =>
             const res = await api.get('/api/bioxp/runtime/status');
             return res.data;
         },
-        refetchInterval: 10000,
+        // Robot-local status probes use the same serialized runtime path as live
+        // controls. Do not auto-poll this from the cockpit; repeated background
+        // GETs were enough to make arming/motor testing unstable.
+        refetchInterval: false,
         retry: false,
     });
 
@@ -447,9 +497,53 @@ export const useBioXpCapabilities = (enabled = true) =>
             return res.data;
         },
         enabled,
-        refetchInterval: enabled ? 15000 : false,
+        refetchInterval: false,
         retry: false,
     });
+
+export const useBioXpOperationCapabilities = (enabled = true) =>
+    useQuery<BioXpOperationCapabilities, Error>({
+        queryKey: ['bioxp', 'operations', 'capabilities'],
+        queryFn: async () => {
+            const res = await api.get('/api/bioxp/operations/capabilities');
+            return res.data;
+        },
+        enabled,
+        refetchInterval: false,
+        retry: false,
+    });
+
+export const useBioXpOperationReadiness = (enabled = true, refetchIntervalMs: number | false = 5000) =>
+    useQuery<BioXpOperationReadiness, Error>({
+        queryKey: ['bioxp', 'operations', 'readiness'],
+        queryFn: async () => {
+            const res = await api.get('/api/bioxp/operations/readiness');
+            return res.data;
+        },
+        enabled,
+        refetchInterval: enabled ? refetchIntervalMs : false,
+        retry: false,
+    });
+
+const useBioXpOperation = (operationPath: string, mutationName: string) => {
+    const queryClient = useQueryClient();
+    return useMutation<BioXpOperationReport, Error, BioXpOperationPayload | void>({
+        mutationKey: bioxpHardwareMutationKey('operations', mutationName),
+        mutationFn: async (payload = {}) => {
+            const res = await api.post(`/api/bioxp/operations/${operationPath}`, payload);
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient),
+    });
+};
+
+export const usePrepareSafeOperation = () => useBioXpOperation('motion/prepare-safe', 'prepare-safe');
+export const useHeadClearLockOperation = () => useBioXpOperation('head/clear-lock', 'head-clear-lock');
+export const useHeadLiftIncrementOperation = () => useBioXpOperation('head/lift-increment', 'head-lift-increment');
+export const useMicroMoveProofOperation = () => useBioXpOperation('motion/micro-move-proof', 'micro-move-proof');
+export const useLatchLockOperation = () => useBioXpOperation('latch/lock', 'latch-lock');
+export const useLatchUnlockOperation = () => useBioXpOperation('latch/unlock', 'latch-unlock');
+export const useEmergencyStopOperation = () => useBioXpOperation('emergency-stop', 'emergency-stop');
 
 export const useOemStartupLatest = (enabled = true, refetchIntervalMs: number | false = 5000) =>
     useQuery<OemStatusPayload, Error>({
@@ -932,11 +1026,15 @@ export const useMoveAbsolute = () => {
 export const useHomeAxis = () => {
     const queryClient = useQueryClient();
     return useMutation<AxisMotionResult, Error, { axis: AxisName } & MotionArtifactOptions>({
-        mutationKey: bioxpHardwareMutationKey('motion', 'home'),
+        mutationKey: bioxpHardwareMutationKey('motion', 'home-to-zero'),
         mutationFn: async ({ axis, capture_bundle = false, dry_run_bundle = false, operator_note, snapshot_refs = [] }) => {
+            // Temporary operator-safe semantics: Home means return this axis to controller coordinate 0.
+            // Do not call the robot-local switch-search homing routine here; it currently vibrates/stalls.
             const res = await api.post('/api/bioxp/motion/axis/home', {
                 axis,
-                timeout_s: 20.0,
+                mode: 'absolute_zero',
+                position_steps: 0,
+                wait_timeout_s: 60.0,
                 capture_bundle,
                 dry_run_bundle,
                 operator_note,

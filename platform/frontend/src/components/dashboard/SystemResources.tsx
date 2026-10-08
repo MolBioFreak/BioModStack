@@ -15,6 +15,7 @@ import {
     listGpuCatalogEntries,
     type GpuCatalogLike,
 } from '../gpuCatalog';
+import { BMS_PANEL_SURFACE_SOFT } from '../ui/bmsStyle';
 
 // --- Helper Components ---
 
@@ -986,7 +987,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
         localMaxLaunchesPerCycle !== (config.global.max_launches_per_cycle ?? 3);
 
     return (
-        <div className="bg-slate-800/30 backdrop-blur-sm border border-slate-700 rounded-xl p-4 mb-4">
+        <div className={`${BMS_PANEL_SURFACE_SOFT} p-4 mb-4`}>
             <div
                 className="flex items-center justify-between cursor-pointer"
                 onClick={() => setExpanded(!expanded)}

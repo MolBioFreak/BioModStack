@@ -2966,6 +2966,8 @@ def build_nextflow_command(
             'context_store_logical_size_cp': 'bcp_context_store_logical_size_cp',
             'context_store_pair_tile_tokens': 'bcp_context_store_pair_tile_tokens',
             'context_store_key_tile_tokens': 'bcp_context_store_key_tile_tokens',
+            'context_store_projection_cache_byte_budget': 'bcp_context_store_projection_cache_byte_budget',
+            'projection_cache_byte_budget': 'bcp_context_store_projection_cache_byte_budget',
             'repo_path': 'bcp_repo_path',
         }
         for src_key, dest_key in boltz_cp_mappings.items():
