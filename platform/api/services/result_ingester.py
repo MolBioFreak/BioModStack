@@ -88,6 +88,41 @@ def _normalize_boltzgen_design_name(design_name: str) -> str:
     return f"{base_name}_{int(rank)}"
 
 
+def _native_boltzgen_filtered_dirs(output_path: Path, job_id: str) -> list[Path]:
+    """Read completed native campaign children without requiring host child Jobs."""
+    root = output_path / 'components' / 'boltzgen' / 'campaign'
+    if not (root / 'collection_manifest.json').exists():
+        return []
+    from component_runtime import digest
+    receipt = canonical_json_loads(read_frustrampnn_regular(root, 'collection_manifest.json'))
+    plan = receipt.get('plan')
+    if (receipt.get('schema_name') != 'bms.boltzgen.native-campaign.v1'
+            or receipt.get('schema_version') != 1 or receipt.get('status') != 'complete'
+            or receipt.get('partial_failure_policy') != 'at_least_one_completed_child'
+            or not isinstance(plan, dict) or plan.get('parent_job_id') != job_id
+            or receipt.get('plan_sha256') != digest(plan)):
+        raise ValueError('Invalid native BoltzGen campaign receipt')
+    expected = [child['index'] for child in plan['children']]
+    children = receipt['children']
+    observed = [child['index'] for child in children]
+    if (any(type(index) is not int or index < 0 for index in expected)
+            or len(expected) != len(set(expected)) or sorted(observed) != sorted(expected)):
+        raise ValueError('Native BoltzGen campaign child join differs from its plan')
+    completed = []
+    for child in children:
+        if child['status'] == 'completed' and child['stage'] == 'filter' and child['exit_code'] == 0:
+            completed.append(root / 'native' / f"job{child['index']}")
+        elif child['status'] != 'failed' or type(child['exit_code']) is not int or child['exit_code'] <= 0:
+            raise ValueError('Invalid native BoltzGen child terminal state')
+    if not completed:
+        raise ValueError('Native BoltzGen campaign has no completed child')
+    for artifact in receipt['artifacts']:
+        payload = read_frustrampnn_regular(root, artifact['relative_path'])
+        if len(payload) != artifact['size_bytes'] or hashlib.sha256(payload).hexdigest() != artifact['sha256']:
+            raise ValueError('Native BoltzGen campaign artifact integrity differs')
+    return completed
+
+
 def _boltzgen_filtered_output_dir(output_path: Path) -> Optional[Path]:
     filtered = output_path / "collected" / "boltzgen_filtered"
     return filtered if filtered.is_dir() else None
@@ -3846,6 +3881,34 @@ def _strict_canonical_json_equal(left: Any, right: Any) -> bool:
         return False
 
 
+def _native_frustrampnn_stage_paths(output_path: Path, job_id: str) -> list[str] | None:
+    """Project the sealed native join into the ordinary canonical importer."""
+    receipt_relative = 'frustrampnn/component_runtime/terminal.json'
+    if not (output_path / receipt_relative).exists():
+        return None
+    from component_runtime import digest
+    import re
+    receipt = canonical_json_loads(read_frustrampnn_regular(output_path, receipt_relative))
+    checksum = receipt.get('receipt_sha256')
+    payload = {key: value for key, value in receipt.items() if key != 'receipt_sha256'}
+    candidates = receipt.get('candidate_ids')
+    if (receipt.get('schema_name') != 'bms.frustrampnn.native-parent-terminal.v1'
+            or receipt.get('schema_version') != 1 or receipt.get('status') != 'complete'
+            or receipt.get('requiredness') != 'required' or receipt.get('parent_job_id') != job_id
+            or checksum != digest(payload) or not isinstance(candidates, list) or not candidates
+            or any(not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}', value)
+                   for value in candidates) or len(candidates) != len(set(candidates))):
+        raise FrustraMPNNPersistenceError('Invalid native FrustraMPNN parent terminal receipt')
+    paths = []
+    for candidate in candidates:
+        root = f'frustrampnn/results/{candidate}'
+        terminal = canonical_json_loads(read_frustrampnn_regular(output_path, root + '/workflow_component_result_v3.json'))
+        if terminal.get('candidate_id') != candidate:
+            raise FrustraMPNNPersistenceError('Native FrustraMPNN candidate path identity differs')
+        paths.extend([root + '/frustrampnn_result_manifest_v3.json', root + '/workflow_component_result_v3.json'])
+    return paths
+
+
 def _enrich_protein_design_from_metadata(
     design: Design, row: dict[str, Any]
 ) -> None:
@@ -3907,6 +3970,8 @@ async def _ingest_explicit_frustrampnn_results(
         if isinstance(state, dict) and state.get("status") == "not_requested"
     ]
     if not_requested_entries:
+        if (output_path / 'frustrampnn/component_runtime/terminal.json').exists():
+            raise FrustraMPNNPersistenceError('Native FrustraMPNN completion conflicts with not-requested stage')
         if (
             len(frustrampnn_terminal_entries) != 1
             or frustrampnn_terminal_entries[0]
@@ -3936,15 +4001,27 @@ async def _ingest_explicit_frustrampnn_results(
         # canonical candidate count and bypassing the parent workflow's Designs.
         return None
 
-    if not isinstance(current_job.stage_outputs, dict):
-        return None
     explicit: list[str] = []
     discovered_stage = False
-    for stage, outputs in current_job.stage_outputs.items():
+    reported_outputs = current_job.stage_outputs if isinstance(current_job.stage_outputs, dict) else {}
+    for stage, outputs in reported_outputs.items():
         if str(stage).strip().lower() not in _FRUSTRAMPNN_TERMINAL_STAGES:
             continue
         discovered_stage = True
         explicit.extend(_explicit_stage_paths(outputs))
+    native_paths = _native_frustrampnn_stage_paths(output_path, str(current_job.id))
+    if native_paths is not None:
+        canonical_names = set(_FRUSTRAMPNN_RESULT_MANIFESTS) | set(_FRUSTRAMPNN_TERMINAL_RESULTS)
+        reported = {_stage_path(path, output_path).absolute() for path in explicit
+                    if Path(path).name in canonical_names}
+        native_set = {_stage_path(path, output_path).absolute() for path in native_paths}
+        if reported and reported != native_set:
+            raise FrustraMPNNPersistenceError('Native FrustraMPNN join conflicts with reported bundle outputs')
+        # Native computation does not depend on callback-created host child rows
+        # or live stage reports. Continue through the same full bundle validation,
+        # canonical persistence and ordinary parent Design projection below.
+        explicit = native_paths
+        discovered_stage = True
     if not discovered_stage:
         return None
 
@@ -6264,6 +6341,10 @@ async def ingest_loose_files(
             if candidate.exists():
                 plr_final_path = candidate
 
+    native_boltzgen_paths = (
+        _native_boltzgen_filtered_dirs(output_path, str(current_job.id))
+        if current_job is not None else []
+    )
     boltzgen_filtered_path = None
     if current_job is not None and str(getattr(current_job, "model_id", "")).strip().lower() == "boltzgen":
         boltzgen_filtered_path = _boltzgen_filtered_output_dir(output_path)
@@ -6273,6 +6354,8 @@ async def ingest_loose_files(
     # RF3 outputs in pdb_files/rf3/output/*/
     if plr_final_path is not None:
         search_paths = [plr_final_path]
+    elif native_boltzgen_paths:
+        search_paths = native_boltzgen_paths
     elif boltzgen_filtered_path is not None:
         search_paths = [boltzgen_filtered_path]
     else:
@@ -6285,7 +6368,7 @@ async def ingest_loose_files(
         ]
     
     # Also search RF3 nested output directories
-    if plr_final_path is None and boltzgen_filtered_path is None:
+    if plr_final_path is None and boltzgen_filtered_path is None and not native_boltzgen_paths:
         rf3_base = output_path / "pdb_files" / "rf3" / "output"
         if rf3_base.exists():
             for subdir in rf3_base.iterdir():
@@ -6297,7 +6380,7 @@ async def ingest_loose_files(
                             search_paths.append(sample_dir)
 
     # Protenix outputs: predictions/{design_name}/ containing .cif + confidence.json
-    if plr_final_path is None and boltzgen_filtered_path is None:
+    if plr_final_path is None and boltzgen_filtered_path is None and not native_boltzgen_paths:
         protenix_base = output_path / "pdb_files" / "predictions"
         if not protenix_base.exists():
             protenix_base = output_path / "run" / "protenix" / "predictions"
@@ -6341,10 +6424,14 @@ async def ingest_loose_files(
                     else artifact_name
                 )
                 
+                if search_dir in native_boltzgen_paths:
+                    # Preserve campaign component identity across identically
+                    # named native outputs; never merge two children by filename.
+                    design_name = f"{search_dir.name}_{_normalize_boltzgen_design_name(artifact_name)}"
                 # Skip input templates (no numeric suffix) - these are not actual designs
                 # Actual designs are named like: boltzgen_input_0, boltzgen_input_1, etc.
                 import re
-                if not re.search(r'_\d+$', design_name):
+                if search_dir not in native_boltzgen_paths and not re.search(r'_\d+$', design_name):
                     print(f"[Ingester] Skipping input template: {design_name}")
                     continue
                 
