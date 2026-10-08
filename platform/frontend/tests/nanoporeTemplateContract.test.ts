@@ -110,5 +110,19 @@ test('NGS instrument mode is separated from file-analysis launch', () => {
     assert.match(panel, /No instrument run button is enabled without a real available position/u);
     assert.match(panel, /Analyze existing data/u);
     assert.match(panel, /Start instrument run/u);
-    assert.doesNotMatch(panel, /fake device/iu);
+});
+
+test('NGS instrument panel exposes an explicit fake Mk1D test mode without claiming real MinKNOW connectivity', () => {
+    const panel = readSource('src/components/ngs/OntInstrumentPanel.tsx');
+    const api = readSource('src/lib/api.ts');
+
+    assert.match(panel, /TEST_MODE_MK1D_DEVICE/u);
+    assert.match(panel, /position: 'TEST-MK1D'/u);
+    assert.match(panel, /fake_or_demo_device: true/u);
+    assert.match(panel, /Test mode: fake Mk1D/u);
+    assert.match(panel, /FAKE TEST CONNECTION/u);
+    assert.match(panel, /does not prove MinKNOW connectivity or start a real instrument run/u);
+    assert.match(panel, /Start fake test run/u);
+    assert.match(panel, /fake_or_demo_devices: true/u);
+    assert.match(api, /fake_or_demo_device\?: boolean/u);
 });
