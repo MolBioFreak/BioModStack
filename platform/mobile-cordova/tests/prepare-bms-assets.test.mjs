@@ -37,7 +37,7 @@ function exactSelectionReceipt(environment) {
     },
     readiness: {
       ready: true,
-      mode: 'full',
+      mode: 'container',
       checks: {
         core_database: { ...readinessCheck }, frontend: { ...readinessCheck },
         molbio_database: { ...readinessCheck }, process_liveness: { ...readinessCheck },
@@ -157,6 +157,7 @@ function exactSelectionReceipt(environment) {
       bind_addresses: ['127.0.0.1'],
       listener_inodes: [80011],
       listener_inode_owners: { 80011: [301] },
+      listener_pids: [301],
       listener_reports: [adapterReport],
       systemd_service: 'biomodstack-workflow-adapter.service',
       source_root: '/srv/selector',
@@ -251,6 +252,7 @@ function exactSelectionReceipt(environment) {
       bind_addresses: ['127.0.0.1'],
       listener_inodes: [51731],
       listener_inode_owners: { 51731: [201] },
+      listener_pids: [201],
       listener_reports: [frontendReport],
       systemd_service: 'biomodstack-frontend.service',
       source_root: '/srv/selector/platform/frontend',
@@ -583,6 +585,15 @@ test('selection response contract accepts exact development and production recei
   assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
     receipt('production'), 'production', 'https://compute-node.taileb3a90.ts.net',
   ));
+  const reorderedMount = receipt('development');
+  const mount = reorderedMount.managed_api_runtime.containers[0].mounts[0];
+  reorderedMount.managed_api_runtime.containers[0].mounts[0] = {
+    propagation: mount.propagation, rw: mount.rw, mode: mount.mode,
+    destination: mount.destination, source: mount.source, type: mount.type,
+  };
+  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
+    reorderedMount, 'development', 'https://compute-node.taileb3a90.ts.net',
+  ));
   const fractionalTimestamp = receipt('production');
   fractionalTimestamp.health.local_api.payload.build.build_time = '2026-07-27T05:29:07.904235Z';
   fractionalTimestamp.health.tailnet_api.payload.build.build_time = '2026-07-27T05:29:07.904235Z';
@@ -661,6 +672,8 @@ test('selection response contract accepts exact development and production recei
     (value) => { value.health.local_api.payload.build.build_time = '2026-02-30T00:00:00Z'; },
     (value) => { value.health.local_api.payload.status = 'degraded'; },
     (value) => { value.health.local_api.payload.readiness.ready = false; },
+    (value) => { value.health.local_api.payload.readiness.mode = 'native'; },
+    (value) => { value.workflow_adapter_listener.listener_pids = [999]; },
     (value) => { value.project_revision = 'b'.repeat(40); },
     (value) => { delete value.selector_revision; },
     (value) => { value.managed_api_runtime.validated_revision = 'b'.repeat(40); },

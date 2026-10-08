@@ -652,6 +652,16 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
           cwd: '/',
           mounts: [],
         };
+      const validMounts = name === 'biomodstack-api'
+        ? Array.isArray(container?.mounts)
+          && container.mounts.length === 1
+          && hasExactKeys(container.mounts[0], [
+            'type', 'source', 'destination', 'mode', 'rw', 'propagation',
+          ])
+          && Object.entries(expectedIdentity.mounts[0]).every(
+            ([key, value]) => container.mounts[0][key] === value,
+          )
+        : Array.isArray(container?.mounts) && container.mounts.length === 0;
       if (
         !hasExactKeys(container, [
           'name', 'container_id', 'revision', 'compose_working_dir', 'pid', 'cgroup',
@@ -668,7 +678,7 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
         || container.cmdline !== expectedIdentity.cmdline
         || container.cwd !== expectedIdentity.cwd
         || container.readonly_rootfs !== false
-        || JSON.stringify(container.mounts) !== JSON.stringify(expectedIdentity.mounts)
+        || !validMounts
         || !sortedUniquePositiveIntegers(container.host_pids)
         || !container.host_pids.includes(container.pid)
         || (name === 'biomodstack-api'
@@ -885,9 +895,12 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
     const expectedVite = `${sourceRoot}/node_modules/vite/bin/vite.js`;
     return hasExactKeys(listener, [
       'port', 'bind_addresses', 'listener_inodes', 'listener_inode_owners',
-      'listener_reports', 'systemd_service', 'source_root', 'source_revision',
+      'listener_pids', 'listener_reports', 'systemd_service', 'source_root', 'source_revision',
     ])
       && validListenerClosure(listener, 5173, ['127.0.0.1'])
+      && sortedUniquePositiveIntegers(listener.listener_pids)
+      && JSON.stringify(listener.listener_pids)
+        === JSON.stringify(listener.listener_reports.map((report) => report?.pid))
       && listener.systemd_service === 'biomodstack-frontend.service'
       && listener.source_root === sourceRoot
       && listener.source_revision === revision
@@ -912,9 +925,12 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
     const apiRoot = `${projectRoot}/platform/api`;
     return hasExactKeys(listener, [
       'port', 'bind_addresses', 'listener_inodes', 'listener_inode_owners',
-      'listener_reports', 'systemd_service', 'source_root', 'source_revision',
+      'listener_pids', 'listener_reports', 'systemd_service', 'source_root', 'source_revision',
     ])
       && validListenerClosure(listener, 8001, ['127.0.0.1'])
+      && sortedUniquePositiveIntegers(listener.listener_pids)
+      && JSON.stringify(listener.listener_pids)
+        === JSON.stringify(listener.listener_reports.map((report) => report?.pid))
       && listener.systemd_service === 'biomodstack-workflow-adapter.service'
       && listener.source_root === projectRoot
       && listener.source_revision === selectorRevision
@@ -955,7 +971,7 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
     const validApiPayload = (payload) => (
       hasExactKeys(payload, ['build', 'liveness', 'molbio', 'readiness', 'service', 'status'])
       && payload.status === 'healthy'
-      && nonEmptyBounded(payload.service, 256)
+      && payload.service === 'biomodstack-api'
       && validBuild(payload.build)
       && hasExactKeys(payload.liveness, ['alive', 'status'])
       && payload.liveness.alive === true
@@ -972,9 +988,17 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
         'migration_count', 'sequence_parent_cycle_count'].every((key) => Number.isInteger(payload.molbio[key]))
       && ['database_kind', 'latest_migration', 'owner', 'quick_check', 'status']
         .every((key) => nonEmptyBounded(payload.molbio[key], 512))
+      && payload.molbio.status === 'healthy'
+      && payload.molbio.database_schema_current === true
+      && payload.molbio.immutable_triggers_current === true
+      && payload.molbio.migrations_current === true
+      && payload.molbio.sequence_parent_foreign_key_current === true
+      && payload.molbio.database_schema_issue_count === 0
+      && payload.molbio.foreign_key_violations === 0
+      && payload.molbio.sequence_parent_cycle_count === 0
       && hasExactKeys(payload.readiness, ['checks', 'mode', 'ready'])
       && payload.readiness.ready === true
-      && nonEmptyBounded(payload.readiness.mode, 128)
+      && payload.readiness.mode === 'container'
       && hasExactKeys(payload.readiness.checks, [
         'core_database', 'frontend', 'molbio_database', 'process_liveness',
         'workflow_adapter', 'workflow_launch',
@@ -982,6 +1006,7 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       && ['core_database', 'frontend', 'molbio_database', 'process_liveness', 'workflow_adapter']
         .every((key) => validReadinessCheck(payload.readiness.checks[key]))
       && validReadinessCheck(payload.readiness.checks.workflow_launch, true)
+      && payload.readiness.checks.workflow_launch.allowed === true
     );
     const validProbe = (report, requestedUrl, finalUrl, expectApi) => (
       hasExactKeys(report, ['url', 'final_url', 'status', 'payload'])
