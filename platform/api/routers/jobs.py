@@ -5716,6 +5716,23 @@ class JobExecutionPlanPreview(BaseModel):
     blockers: list[dict]
 
 
+class PreparedJobReview(BaseModel):
+    code: Literal['remote_prepared_job_review_required'] = 'remote_prepared_job_review_required'
+    job_request: JobCreate
+    response_context: dict[str, Any]
+
+
+def _require_prepared_remote_review(request: JobCreate, response_context: dict[str, Any]) -> None:
+    """An explicit action may prepare selections, but cannot approve new science.
+
+    The caller forwards this exact request to the pure shared preview/submit path;
+    it must not repeat selection materialization or silently copy old approval.
+    """
+    if request.execution_target_id:
+        raise HTTPException(status_code=409, detail=PreparedJobReview(
+            job_request=request, response_context=response_context).model_dump(mode='json'))
+
+
 @dataclass(frozen=True)
 class ApprovedExecutionPlan:
     """Server-only native preview handoff; never a public parent-id bypass."""
@@ -6719,6 +6736,17 @@ async def _create_job(
             job_phase='inference',
         )
         session.add(job)
+        if (execution_preview is not None and original_requested_params.get('interactive_gate_continue') is True
+                and original_requested_params.get('selection_source_type') == 'review_gate'):
+            review_source = await session.get(Job, original_requested_params.get('selection_source_job_id'))
+            if review_source is None or not review_source.awaiting_input:
+                raise HTTPException(status_code=409, detail='The source review gate is no longer available')
+            review_source.decision_history = [*(review_source.decision_history or []), {
+                'stage': review_source.awaiting_stage, 'timestamp': datetime.utcnow().isoformat() + 'Z',
+                'new_job_id': job.id, 'resume_mode': 'spawn_refinement',
+                'from_stage': _awaiting_stage_to_resume_hint(review_source.awaiting_stage) or 'generator',
+                'approval_digest': execution_preview['approval_digest'],
+            }]
         if normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign":
             local_request = job_params.get("rfd3_request") if isinstance(job_params, dict) else None
             local_request_id = job_params.get("rfd3_request_id") if isinstance(job_params, dict) else None
@@ -7559,6 +7587,11 @@ async def launch_antibody_iteration_from_designs(
             **source_stage_payload,
         })
     launch_selection_dir = str(launch_request.params.get("iteration_selection_dir") or selection_dir)
+    _require_prepared_remote_review(launch_request, {
+        'message': f"Launched antibody iteration action '{action}' from {len(ordered_designs)} selected designs.",
+        'action': action, 'source_job_id': source_job.id, 'root_job_id': root_job.id,
+        'selection_dir': launch_selection_dir, 'selected_design_count': len(ordered_designs),
+    })
     launched_job = await create_job(launch_request, background_tasks, session)
     selection_source_note = (
         f" using saved dataset '{saved_filter_set.name}'"
@@ -7627,6 +7660,11 @@ async def launch_manual_mutagenesis_from_designs(
         name_suffix=request.name_suffix,
         param_overrides=request.param_overrides,
     )
+    _require_prepared_remote_review(launch_request, {
+        'message': f'Launched manual mutagenesis from {len(ordered_designs)} selected designs. Generated {variant_count} explicit variants.',
+        'source_job_id': source_job.id, 'selected_design_count': len(ordered_designs),
+        'variant_count': variant_count,
+    })
     launched_job = await create_job(launch_request, background_tasks, session)
     selection_source_note = (
         f" using saved dataset '{saved_filter_set.name}'"
@@ -9897,6 +9935,13 @@ async def resume_job(
                 **source_stage_payload,
             })
 
+        _require_prepared_remote_review(launch_request, {
+            'message': f'{resume_source_label} review resumed into Antibody Refinement.',
+            'original_job_id': job_id, 'resume_from_stage': resume_source_hint,
+            'resume_stage_mode': 'spawn_refinement', 'preserved_stages': [],
+            'resume_stage_note': f'Paused {resume_source_label} review launches a refinement-compatible follow-on job using the filtered review cohort.',
+            'applied_overrides': sorted(param_overrides.keys()),
+        })
         launched_job = await create_job(launch_request, background_tasks, session)
         history = list(job.decision_history or [])
         history.append({

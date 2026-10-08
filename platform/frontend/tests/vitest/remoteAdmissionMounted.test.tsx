@@ -1,3 +1,4 @@
+import './preparedRemoteAdmissionMounted.test';
 import React, { act } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { api, submitJob } from '../../src/lib/api';
