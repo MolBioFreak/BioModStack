@@ -242,7 +242,10 @@ async def test_actual_ticket_pending_and_recovery(context, tmp_path, provider):
     transport.responses = [fixture.response({'id': 'retained-ticket', 'status': 'PENDING'}),
                            fixture.response(b'', status=503)]
     async def fence(): pass
-    assert await handoff.prepare_generated_msa_on_controller(request, tmp_path / 'first', fence) is None
+    with pytest.raises(api.PendingMSA) as pending:
+        await handoff.prepare_generated_msa_on_controller(request, tmp_path / 'first', fence)
+    assert pending.value.operation['provider'] == 'colabfold_api'
+    assert pending.value.operation['tickets']
     assert owner.pending_external_services()[0] == request
     transport.responses = fixture.cf_success(sequences=['ACDE', 'FGHI'], use_env=False)[1:]
     sha = await handoff.prepare_generated_msa_on_controller(request, tmp_path / 'second', fence)
@@ -293,7 +296,8 @@ def test_worker_service_rejects_foreign_authority(context, tmp_path, field):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('interference', ['none', 'settings', 'cancel', 'lease'])
+@pytest.mark.parametrize('interference', ['none', 'settings', 'cancel', 'lease',
+    'retry-seconds', 'retry-date', 'retry-cancel', 'retry-lease', 'retry-default', 'retry-transport'])
 async def test_controller_worker_native_delivery_with_real_database(context, tmp_path, provider, monkeypatch, interference):
     from datetime import datetime, timezone
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
@@ -353,6 +357,87 @@ async def test_controller_worker_native_delivery_with_real_database(context, tmp
     monkeypatch.setattr(ex, 'run_remote', command)
     monkeypatch.setattr(ex, 'rsync_to_remote', transfer)
     try:
+        if interference.startswith('retry-'):
+            import biomodstack_msa_api as api
+            from datetime import timedelta
+            from email.utils import format_datetime
+            from unittest.mock import AsyncMock
+            clock = [epoch]
+            class Clock(datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    return clock[0] if tz else clock[0].replace(tzinfo=None)
+            monkeypatch.setattr(ex, 'datetime', Clock)
+            monkeypatch.setattr(api, 'datetime', Clock)
+            delay = 1 if interference == 'retry-default' else 600
+            if interference == 'retry-transport':
+                delay = api.ClientConfig().poll_seconds
+            deadline = epoch + timedelta(seconds=delay)
+            retry_after = format_datetime(deadline, usegmt=True) if interference == 'retry-date' else '600'
+            if interference == 'retry-default':
+                retry_after = None
+            transport, fixture = provider
+            transport.responses = [fixture.response({'id': 'retained-ticket', 'status': 'PENDING'}),
+                                   api.HTTPResponse(429, b'', retry_after=retry_after)]
+            if interference == 'retry-transport':
+                transport.responses[-1] = api.MSATransportError('offline unavailable')
+            from unittest.mock import Mock
+            preparation = Mock(wraps=handoff.prepare_generated_msa)
+            monkeypatch.setattr(handoff, 'prepare_generated_msa', preparation)
+            status = SimpleNamespace(state='running', boot_id=worker.boot_id(), activity=None)
+            monkeypatch.setattr(ex, 'remote_status', AsyncMock(return_value=status))
+            # The real reconciler and database publication are used on each fresh
+            # session. Only HTTP/SSH transport and the wall clock are controlled.
+            for elapsed in (0, 0, delay - .001):
+                clock[0] = epoch + timedelta(seconds=elapsed)
+                async with sessions() as db:
+                    job = await db.get(Job, 'root')
+                    await ex._reconcile_remote_job_owned(db, job)
+                    pending = job.provenance['remote_execution_receipt']['generated_msa_pending']
+                    request_id = owner.pending_external_services()[0]['request_id']
+                    assert pending[request_id]['retry_at'] == deadline.isoformat()
+                    operation = pending[request_id]['operation']
+                    if interference == 'retry-transport':
+                        assert 'retry_after_seconds' not in operation
+                    else:
+                        assert operation['retry_after_seconds'] == (0 if interference == 'retry-default' else 600)
+                    assert operation['provider'] == 'colabfold_api'
+                    assert operation['tickets']
+                assert len(transport.calls) == 2
+                assert preparation.call_count == 1
+                assert 'external-service-deliver' not in calls
+            if interference in {'retry-cancel', 'retry-lease'}:
+                async with sessions() as db:
+                    if interference == 'retry-cancel':
+                        (await db.get(Job, 'root')).queue_status = 'cancelling'
+                    else:
+                        (await db.get(ExecutionTarget, 'remote-target')).lease_acquired_at = epoch.replace(second=1)
+                    await db.commit()
+                clock[0] = deadline
+                async with sessions() as db:
+                    with pytest.raises(asyncio.CancelledError):
+                        await ex._service_remote_external_inputs(db, await db.get(Job, 'root'), status)
+                assert len(transport.calls) == 2
+                assert 'external-service-deliver' not in calls
+                assert owner.pending_external_services()
+                return
+            transport.responses = fixture.cf_success(sequences=['ACDE', 'FGHI'], use_env=False)[1:]
+            clock[0] = deadline
+            async with sessions() as db:
+                job = await db.get(Job, 'root')
+                await ex._reconcile_remote_job_owned(db, job)
+                assert not job.provenance['remote_execution_receipt'].get('generated_msa_pending')
+            async with sessions() as db:
+                await ex._reconcile_remote_job_owned(db, await db.get(Job, 'root'))
+            assert [call[0] for call in transport.calls].count('POST') == 1
+            assert len(transport.calls) == 4
+            assert preparation.call_count == 2
+            assert calls.count('external-service-deliver') == 1
+            assert not owner.pending_external_services()
+            process = native_waiter(context, tmp_path)
+            out, err = process.communicate(timeout=10)
+            assert process.returncode == 0, out + err
+            return
         async with sessions() as db:
             job = await db.get(Job, 'root')
             status = SimpleNamespace(state='running', boot_id=worker.boot_id())
