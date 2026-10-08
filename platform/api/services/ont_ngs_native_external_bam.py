@@ -12,8 +12,8 @@ from pathlib import Path
 import re
 
 import pysam
-import rfc8785
 
+from services.ont_ngs_native_settings import seal_native_settings
 from services import ngs_alignment_sessions as files
 from services.ont_ngs_native_completion import _digest, _identity, _require, _resolve_terminal_output
 
@@ -228,5 +228,5 @@ def validate_external_bam(root, persisted, job):
                  'reference_sequence_sha256': params.get('reference_sequence_sha256') if reference else None}
     return {'state': 'validated', 'partial': False, 'input_mode': 'bam',
             'workflow_id': params['ont_workflow_id'], 'read_count': count,
-            'effective_params_sha256': hashlib.sha256(rfc8785.dumps(params)).hexdigest(),
+            **seal_native_settings(params),
             'alignment': alignment, 'alignment_state': 'validated', 'artifacts': artifacts}, source_id, reference_id

@@ -17,6 +17,7 @@ import re
 import pysam
 import rfc8785
 
+from services.ont_ngs_native_settings import seal_native_settings
 from services import ngs_alignment_sessions as files
 from services.job_result_roots import resolve_persisted_job_result_root
 from services.ont_ngs_completion import OntNgsCompletionError, _REQUIRED_STAGE_OUTPUT_SUFFIXES, _read_manifest
@@ -536,7 +537,7 @@ def validate_native_plasmid(job):
         _require((before.st_dev, before.st_ino) == (after.st_dev, after.st_ino), "native result root changed before publication")
         result.update(result_kind="ont_native_clone_validation" if workflow == "wf_clone_validation" else "ont_native_plasmid", alignment_state="validated",
                       assembly=assembly,
-                      effective_params_sha256=hashlib.sha256(rfc8785.dumps(params)).hexdigest(),
+                      **seal_native_settings(params),
                       artifact_set_sha256=hashlib.sha256(rfc8785.dumps(result["artifacts"])).hexdigest())
         return result
     except OntNgsCompletionError:

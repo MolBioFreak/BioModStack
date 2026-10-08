@@ -20,6 +20,7 @@ from typing import Any, BinaryIO
 import pysam
 import rfc8785
 
+from services.ont_ngs_native_settings import seal_native_settings
 from services import ngs_alignment_sessions
 from services.job_result_roots import resolve_persisted_job_result_root
 from services.ont_ngs_contract import DORADO_LOCK_PATH
@@ -435,7 +436,7 @@ def _validate_basecall(root: Path, persisted: Path, job: Any) -> dict[str, Any]:
                                "model_aggregate_sha256": mod_model["aggregate_sha256"],
                                "probability_count": modification_probabilities}} if mod_model else {}),
         **({"pairs_sha256": pairs_sha, "duplex_read_counts": duplex_counts} if duplex else {}),
-        "effective_params_sha256": hashlib.sha256(rfc8785.dumps(params)).hexdigest(),
+        **seal_native_settings(params),
         "summary_state": summary_state, "summary_read_count": read_count if summary_artifact else None,
         "artifacts": artifacts,
         "artifact_set_sha256": hashlib.sha256(rfc8785.dumps(artifacts)).hexdigest(),

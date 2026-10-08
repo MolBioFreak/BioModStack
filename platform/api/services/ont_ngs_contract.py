@@ -399,6 +399,19 @@ def resolve_ont_workflow_alias(workflow_id: str) -> str:
     return ONT_WORKFLOW_ALIASES.get(normalized, normalized)
 
 
+def ont_workflow_identity_values(params: Mapping[str, Any]) -> set[str]:
+    """Compare operation identity without rewriting original launch spelling.
+
+    Only registry-recognized aliases are normalized. Unknown names remain
+    distinct so they cannot conceal a conflicting canonical operation.
+    """
+    return {
+        resolve_ont_workflow_alias(params[key])
+        for key in ("ont_workflow_id", "ont_request_workflow_id", "workflow_id")
+        if params.get(key) is not None and str(params[key]).strip()
+    }
+
+
 def get_ont_workflow_spec(workflow_id: str) -> OntWorkflowSpec:
     """Return a canonical ONT workflow spec, accepting legacy aliases."""
     canonical_id = resolve_ont_workflow_alias(workflow_id)

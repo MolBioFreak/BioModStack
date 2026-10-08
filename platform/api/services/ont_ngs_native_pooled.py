@@ -16,7 +16,7 @@ from starlette.concurrency import run_in_threadpool
 from services import ngs_alignment_sessions
 from services.job_result_roots import resolve_persisted_job_result_root
 from services.ont_ngs_completion import OntNgsCompletionError
-from services.ont_ngs_contract import DORADO_LOCK_PATH
+from services.ont_ngs_contract import DORADO_LOCK_PATH, ont_workflow_identity_values
 from services.ont_ngs_native_completion import _digest, _identity, _document, _require, validate_pooled_producer
 from services.ont_pooled_reference_assignment import (
     PooledAssignmentError, _validate_assignment_evidence,
@@ -25,9 +25,7 @@ from services.ont_pooled_reference_assignment import (
 
 
 def _validate_native(job, manifest_row, targets):
-    identities = {str(job.params[key]).strip() for key in
-                  ("ont_workflow_id", "ont_request_workflow_id", "workflow_id")
-                  if job.params.get(key) is not None and str(job.params[key]).strip()}
+    identities = ont_workflow_identity_values(job.params)
     inputs = {str(job.params[key]).strip() for key in ("ont_input_mode", "input_mode")
               if job.params.get(key) is not None and str(job.params[key]).strip()}
     _require(identities == {"ont_pooled_reference_assignment"} and inputs <= {"fastq"},

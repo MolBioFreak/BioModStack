@@ -15,6 +15,8 @@ import rfc8785
 
 from services import ngs_alignment_sessions as storage
 from services.job_result_roots import resolve_persisted_job_result_root
+from services.ont_ngs_contract import ont_workflow_identity_values
+from services.ont_ngs_native_settings import accepted_native_settings
 from services.ngs_alignment_derived_products import source_identity, identity_sha256, catalog_request_id
 
 KINDS = frozenset({"ont_native_basecall", "ont_native_methylation", "ont_native_plasmid",
@@ -47,7 +49,9 @@ def accepted_artifacts(job):
     artifacts = receipt.get("artifacts")
     if not isinstance(artifacts, list) or hashlib.sha256(rfc8785.dumps(artifacts)).hexdigest() != receipt.get("artifact_set_sha256"):
         raise storage.AlignmentSessionError("native artifact-set integrity mismatch")
-    if receipt.get("workflow_id") != params.get("ont_workflow_id") or receipt.get("input_mode") != params.get("ont_input_mode"):
+    if (ont_workflow_identity_values(params) != {receipt.get("workflow_id")}
+            or receipt.get("input_mode") != params.get("ont_input_mode")
+            or params.get("input_mode", receipt.get("input_mode")) != receipt.get("input_mode")):
         raise storage.AlignmentSessionError("native workflow/input authority mismatch")
     by_path = {}
     for artifact in artifacts:
@@ -60,8 +64,10 @@ def accepted_artifacts(job):
                 or type(artifact["size_bytes"]) is not int or artifact["size_bytes"] < 0):
             raise storage.AlignmentSessionError("native artifact identity is unsafe or ambiguous")
         by_path[name] = artifact
-    if hashlib.sha256(rfc8785.dumps(params)).hexdigest() != receipt.get("effective_params_sha256"):
-        raise storage.AlignmentSessionError("native effective settings authority changed")
+    try:
+        accepted_native_settings(params, receipt)
+    except (ValueError, TypeError) as exc:
+        raise storage.AlignmentSessionError("native effective settings authority changed") from exc
     return receipt, by_path
 
 
@@ -101,8 +107,8 @@ def sources(job, root):
     topology = reference_authority.get("topology") if isinstance(reference_authority, dict) else params.get("reference_topology")
     if topology not in {"linear", "circular"}:
         raise storage.AlignmentSessionError("native reference topology authority is missing")
-    if hashlib.sha256(rfc8785.dumps(params)).hexdigest() != receipt.get("effective_params_sha256"):
-        raise storage.AlignmentSessionError("native effective settings authority changed")
+    # accepted_artifacts already checked the sealed execution settings and the
+    # exact global scheduler release transition. Never rehash mutable lease state.
     ref, fai = by_path[ARTIFACTS["reference"]], by_path[ARTIFACTS["reference_index"]]
     if reference_authority is not None and (
             reference_authority.get("schema") != "bms.ngs.native-catalog-reference.v1"

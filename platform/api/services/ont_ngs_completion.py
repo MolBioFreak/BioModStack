@@ -15,6 +15,7 @@ from database import Job
 from services import ngs_alignment_sessions
 from services import ngs_alignment_derived_products as derived_products
 from services.job_result_roots import resolve_persisted_job_result_root
+from services.ont_ngs_contract import ont_workflow_identity_values
 from services.resource_usage_evidence import (
     ResourceUsageEvidenceError,
     attach_resource_usage_receipt,
@@ -80,11 +81,7 @@ def ont_completion_lane(job: Job) -> str | None:
     if str(job.model_id or "").strip().lower() != "nanopore":
         return None
     params = job.params if isinstance(job.params, dict) else {}
-    identities = {
-        str(params[key]).strip()
-        for key in ("ont_workflow_id", "ont_request_workflow_id", "workflow_id")
-        if params.get(key) is not None and str(params[key]).strip()
-    }
+    identities = ont_workflow_identity_values(params)
     inputs = {
         str(params[key]).strip()
         for key in ("ont_input_mode", "input_mode")
@@ -208,11 +205,7 @@ async def validate_and_prepare_ont_native_basecall_completion(job: Job, *, sessi
 
 def is_ont_fastq_qc_job(job: Job) -> bool:
     params = job.params if isinstance(job.params, dict) else {}
-    workflow_values = {
-        str(params[key]).strip()
-        for key in ("ont_workflow_id", "ont_request_workflow_id", "workflow_id")
-        if params.get(key) is not None and str(params[key]).strip()
-    }
+    workflow_values = ont_workflow_identity_values(params)
     input_values = {
         str(params[key]).strip()
         for key in ("ont_input_mode", "input_mode")
@@ -233,11 +226,7 @@ def is_ont_signal_alignment_job(job: Job) -> bool:
     """Return whether one Job is the bounded external move-BAM alignment lane."""
 
     params = job.params if isinstance(job.params, dict) else {}
-    workflow_values = {
-        str(params[key]).strip()
-        for key in ("ont_workflow_id", "ont_request_workflow_id", "workflow_id")
-        if params.get(key) is not None and str(params[key]).strip()
-    }
+    workflow_values = ont_workflow_identity_values(params)
     input_values = {
         str(params[key]).strip()
         for key in ("ont_input_mode", "input_mode")

@@ -54,7 +54,7 @@ process FastqPlasmidQC {
     def minimapAllowSecondary = (params.fastq_minimap2_allow_secondary == true) ? 'true' : 'false'
     def igvTrackWindowBp = (params.igv_track_window_bp ?: 100) as Integer
     def igvReportMaxSites = (params.igv_report_max_sites ?: 40) as Integer
-    def igvReportFlankingBp = (params.igv_report_flanking_bp ?: 200) as Integer
+    def igvReportFlankingBp = (params.igv_report_flanking_bp != null ? params.igv_report_flanking_bp : 200) as Integer
     def codeRoot = params.code_root ?: projectDir
     def manifestJobId = ((params.job_id ?: '') as String).trim()
     if (!manifestJobId) {
