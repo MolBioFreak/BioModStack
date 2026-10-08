@@ -179,3 +179,19 @@ def test_direct_workflow_entrypoints_expose_unnamed_workflows() -> None:
     for workflow_id, rel_path in DIRECT_ENTRYPOINTS.items():
         entrypoint_text = (REPO_ROOT / rel_path).read_text(encoding="utf-8", errors="ignore")
         assert re.search(r"(?m)^\s*workflow\s*\{", entrypoint_text), workflow_id
+
+
+def test_terminal_antibody_closeout_skips_nextflow_self_staged_pdb_list_copy() -> None:
+    workflow_text = (REPO_ROOT / "workflows" / "antibody_denovo.nf").read_text(
+        encoding="utf-8",
+        errors="ignore",
+    )
+    process_start = workflow_text.index("process FinalizeTerminalAntibodyOutputs")
+    process_end = workflow_text.index("workflow ANTIBODY_DENOVO", process_start)
+    process_body = workflow_text[process_start:process_end]
+
+    assert "terminal_pdb_list_file" in process_body
+    assert "terminal_pdbs.list" in process_body
+    assert " -ef terminal_pdbs.list" in process_body
+    assert 'readlink -f "${terminal_pdb_list_file}"' not in process_body
+    assert '$(pwd)/terminal_pdbs.list' not in process_body

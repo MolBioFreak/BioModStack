@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
 
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -13,15 +19,168 @@ REPO_ROOT = API_ROOT.parent.parent
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
+from database import Base, Design, Job  # noqa: E402
 from model_registry import ModelRegistry  # noqa: E402
 from routers.models import router as models_router  # noqa: E402
 from routers.templates import router as templates_router  # noqa: E402
 from services.nextflow import WORKFLOW_ENTRYPOINTS, build_nextflow_command, resolve_nextflow_entrypoint  # noqa: E402
+from services.result_ingester import ingest_job_results  # noqa: E402
 from template_registry import TemplateRegistry  # noqa: E402
 
 
 def _flag_value(cmd: list[str], flag: str) -> str:
     return cmd[cmd.index(flag) + 1]
+
+
+async def _build_session_factory(tmp_path: Path) -> tuple[sessionmaker, object]:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'esmfold2_ingest.db'}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    return sessionmaker(engine, class_=AsyncSession, expire_on_commit=False), engine
+
+
+def _write_minimal_esmfold2_cif(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "data_rnaseh_000\n"
+        "#\n"
+        "loop_\n"
+        "_atom_site.group_PDB\n"
+        "_atom_site.id\n"
+        "_atom_site.type_symbol\n"
+        "_atom_site.label_atom_id\n"
+        "_atom_site.label_comp_id\n"
+        "_atom_site.label_asym_id\n"
+        "_atom_site.label_seq_id\n"
+        "_atom_site.Cartn_x\n"
+        "_atom_site.Cartn_y\n"
+        "_atom_site.Cartn_z\n"
+        "_atom_site.B_iso_or_equiv\n"
+        "ATOM 1 C CA MET A 1 0.0 0.0 0.0 71.0\n"
+        "ATOM 2 C CA GLY A 2 1.0 0.0 0.0 72.0\n"
+        "ATOM 3 P P A B 1 2.0 0.0 0.0 26.0\n"
+        "#\n",
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.asyncio
+async def test_esmfold2_result_ingestion_uses_manifest_metrics_without_fampnn_synthesis(tmp_path: Path) -> None:
+    session_factory, engine = await _build_session_factory(tmp_path)
+    output_root = tmp_path / "rnaseh_esmfold2_full"
+    final_root = output_root / "final" / "esmfold2"
+    cif_path = final_root / "rnaseh_000.cif"
+    metrics_path = final_root / "rnaseh_000.metrics.json"
+    manifest_path = final_root / "manifest.json"
+    _write_minimal_esmfold2_cif(cif_path)
+    metrics_payload = {
+        "sample_id": "rnaseh_000",
+        "sequence_name": "rnaseh",
+        "sequence_length": 539,
+        "total_polymer_residues": 677,
+        "component_count": 2,
+        "components": [
+            {"type": "protein", "id": "A", "sequence": "MG", "name": "protein"},
+            {"type": "rna", "id": "B", "sequence": "ACGU", "name": "ncRNA"},
+        ],
+        "model_variant": "full",
+        "model_id_or_path": "biohub/ESMFold2",
+        "local_files_only": True,
+        "num_loops": 5,
+        "num_sampling_steps": 100,
+        "num_diffusion_samples": 1,
+        "plddt_mean": 0.6226916909217834,
+        "ptm": 0.74803227186203,
+        "iptm": 0.15889352560043335,
+        "cif": "rnaseh_000.cif",
+    }
+    metrics_path.write_text(json.dumps(metrics_payload), encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "workflow": "esmfold2_experimental",
+                "sample_count": 1,
+                "sequence_name": "rnaseh",
+                "model_variant": "full",
+                "model_id_or_path": "biohub/ESMFold2",
+                "local_files_only": True,
+                "samples": [{"sample_id": "rnaseh_000", "cif": "rnaseh_000.cif", "metrics": "rnaseh_000.metrics.json"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    async with session_factory() as session:
+        session.add(
+            Job(
+                id="job-esmf2-ingest",
+                name="rnaseh-esmfold2-full",
+                model_id="esmfold2_experimental",
+                mode="predict",
+                params={"model_variant": "full", "sequence_name": "rnaseh"},
+                output_dir=str(output_root),
+                status="completed",
+                created_at=datetime.utcnow(),
+            )
+        )
+        await session.commit()
+
+        created = await ingest_job_results("job-esmf2-ingest", str(output_root), session)
+        assert created == 1
+
+        designs = (await session.execute(select(Design).where(Design.job_id == "job-esmf2-ingest"))).scalars().all()
+        assert len(designs) == 1
+        design = designs[0]
+        assert design.name == "rnaseh_000"
+        assert Path(design.pdb_path) == cif_path
+        assert design.json_path == str(metrics_path)
+        assert design.stage_family == "esmfold2"
+        assert design.stage_mode == "predict"
+        assert design.provenance["artifact_group"] == "esmfold2"
+        assert design.provenance["model_id"] == "esmfold2_experimental"
+        assert design.provenance["model_variant"] == "full"
+        assert design.provenance["model_id_or_path"] == "biohub/ESMFold2"
+        assert design.confidence_metrics is not None
+        assert "esmfold2" in design.confidence_metrics
+        assert "fampnn" not in design.confidence_metrics
+        assert design.fampnn_psce is None
+        assert design.mpnn_score is None
+        assert design.plddt_overall == pytest.approx(62.26916909217834)
+        assert design.ptm == pytest.approx(0.74803227186203)
+        assert design.iptm == pytest.approx(0.15889352560043335)
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_esmfold2_ingestion_does_not_fall_through_to_loose_fampnn_synthesis(tmp_path: Path) -> None:
+    session_factory, engine = await _build_session_factory(tmp_path)
+    output_root = tmp_path / "partial_esmfold2"
+    loose_structure = output_root / "pdb_files" / "partial_000.cif"
+    _write_minimal_esmfold2_cif(loose_structure)
+
+    async with session_factory() as session:
+        session.add(
+            Job(
+                id="job-esmf2-partial",
+                name="partial-esmfold2-output",
+                model_id="esmfold2_experimental",
+                mode="predict",
+                params={"model_variant": "fast"},
+                output_dir=str(output_root),
+                status="completed",
+                created_at=datetime.utcnow(),
+            )
+        )
+        await session.commit()
+
+        created = await ingest_job_results("job-esmf2-partial", str(output_root), session)
+        assert created == 0
+        designs = (await session.execute(select(Design).where(Design.job_id == "job-esmf2-partial"))).scalars().all()
+        assert designs == []
+
+    await engine.dispose()
 
 
 def test_model_registry_loads_standalone_esmfold2_experimental() -> None:
@@ -302,6 +461,12 @@ def test_esmfold2_experimental_static_runtime_contract() -> None:
     assert "params.esmf_" not in workflow_text
     assert "label 'ESMFold2'" in module_text
     assert "run_esmfold2_inference.py" in module_text
+    assert "bms_gpu_run_telemetry.py" in module_text
+    assert "bms_run_telemetry_RunESMFold2Experimental.json" in module_text
+    assert "${params.out_dir}/run/telemetry" in module_text
+    assert "path 'bms_run_telemetry_*.json'" in module_text
+    assert "--label RunESMFold2Experimental" in module_text
+    assert "-- python3 /scripts/run_esmfold2_inference.py" in module_text
     assert "cp -R esmfold2_results/." in module_text
     assert "pdb_files" in module_text
     assert "params.esmf_" not in module_text
