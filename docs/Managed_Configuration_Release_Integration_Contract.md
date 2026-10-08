@@ -67,8 +67,13 @@ rather than rebuilding over an interrupted candidate.
 
 ## Failure policy
 
-`commit_known_good` now runs inside the release transaction's exception boundary.
-Failures before acceptance intent use the existing rollback path (a first install
+Managed `commit_known_good` runs inside the release transaction's exception
+boundary, including configuration-lock context exit. Unlock/close errors after
+acceptance intent return recovery-required even if acceptance is already committed.
+Legacy receipt publication retains its prior post-validation exception semantics:
+its nontransactional env publication must not trigger runtime rollback without
+restoring that env as well. Failures before managed acceptance intent use the
+existing rollback path (a first install
 remains stopped with no known-good runtime to restart). After intent publication,
 errors return `managed_release_recovery_required`, not a misleading rollback or
 accepted status. This preserves the validated candidate for explicit recovery.

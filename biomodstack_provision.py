@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 
 import biomodstack_runtime_profile as profiles
 from biomodstack_configuration import (
-    configuration_lock, assert_configuration_readable, _write,
+    configuration_lock, configuration_identity, assert_configuration_readable, _write,
 )
 
 
@@ -39,6 +39,7 @@ def _authority(project_root):
 
 
 def _plan(project_root, models):
+    before = configuration_identity()
     assert_configuration_readable()
     profile_path = profiles.get_install_profile_path()
     profile = {}
@@ -73,7 +74,11 @@ def _plan(project_root, models):
                 plan['blockers'].append({'code': 'weight_member_layout_required', 'relative_path': name})
             if kind == 'image' and (len(entries) != 1 or entries[0].get('member_path')):
                 plan['blockers'].append({'code': 'ambiguous_image_binding', 'relative_path': name})
+    assert_configuration_readable()
+    if before != configuration_identity():
+        raise ProvisionBlocked('configuration_changed: retry planning')
     plan = {'schema_version': 'bms.provision-plan.v1', 'source': str(project_root.resolve()),
+            'configuration': {'generation': before, 'profile_digest': _digest(profile)},
             'selected_models': sorted(set(models)), 'store_roots': roots, 'models': plans}
     return {**plan, 'plan_digest': _digest(plan)}
 
@@ -134,11 +139,16 @@ def provision_report(action, *, project_root, models=(), expected_plan_digest=No
                             journal = json.load(stream)
                 except FileNotFoundError:
                     raise ProvisionBlocked('operation_not_found: resume requires an existing journal') from None
+                if not isinstance(journal, dict):
+                    raise ProvisionBlocked('invalid_provision_journal')
                 if (journal.get('schema_version') != 'bms.provision-journal.v1'
                         or journal.get('operation_id') != operation_id
                         or journal.get('plan') != plan):
                     raise ProvisionBlocked('journal_plan_mismatch: explicit reconciliation required')
                 acceptance = journal.get('license_acceptance', {})
+                if (not isinstance(acceptance, dict)
+                        or not isinstance(journal.get('events'), list)):
+                    raise ProvisionBlocked('invalid_provision_journal')
                 licenses = acceptance.get('licenses')
                 if (not isinstance(licenses, list) or not all(isinstance(x, str) for x in licenses)
                         or acceptance.get('plan_digest') != plan['plan_digest']
@@ -173,7 +183,7 @@ def provision_report(action, *, project_root, models=(), expected_plan_digest=No
                             weights_root=Path(plan['store_roots']['weights_root']),
                             expected_plan_digest=model_plan['plan_digest'], accepted_licenses=licenses)
                         row.update(status='bytes-materialized', receipt=receipt, bindings=receipt_bindings(receipt))
-                    except (RuntimeError, OSError, ValueError, TypeError) as exc:
+                    except (RuntimeError, OSError, ValueError, TypeError, KeyError) as exc:
                         row.update(status='blocked', blockers=[{'code': 'materialization_failed', 'detail': str(exc)}])
                 journal['models'] = report['models']
                 journal['events'].append({'model_id': row['model_id'], 'status': row['status']})
@@ -181,7 +191,11 @@ def provision_report(action, *, project_root, models=(), expected_plan_digest=No
             report['journal_path'] = str(journal_path)
             report['status'] = 'bytes-materialized' if all(r['status'] == 'bytes-materialized' for r in report['models']) else 'blocked'
     except (RuntimeError, OSError, ValueError, TypeError, KeyError, ImportError) as exc:
+        report['status'] = 'blocked'
         report['blockers'].append({'code': 'provision_blocked', 'detail': str(exc)})
+        # A later journal/receipt failure cannot erase an earlier verified
+        # model outcome. The aggregate remains blocked and never ready.
         for row in report['models']:
-            row['status'] = 'blocked'
+            if row['status'] != 'bytes-materialized':
+                row['status'] = 'blocked'
     return report

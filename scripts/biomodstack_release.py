@@ -176,7 +176,8 @@ def _execute_release_locked(backend: ReleaseBackend, identity: BuildIdentity) ->
         backend.install_units(identity)
         backend.start_candidate()
         backend.validate_candidate_release(identity)
-        backend.commit_known_good(snapshot, identity)
+        if getattr(backend, "managed_base", None) is not None:
+            backend.commit_known_good(snapshot, identity)
     except BaseException as release_error:
         from biomodstack_configuration import ManagedReleaseRecoveryRequired
         if isinstance(release_error, ManagedReleaseRecoveryRequired):
@@ -196,6 +197,11 @@ def _execute_release_locked(backend: ReleaseBackend, identity: BuildIdentity) ->
                 f"release failed ({release_error}); rollback also failed ({rollback_error})"
             ) from rollback_error
         raise
+    # Legacy receipt publication is not transactionally rolled back. Preserve
+    # its existing post-validation failure semantics rather than restart an old
+    # runtime behind a newly published candidate receipt.
+    if getattr(backend, "managed_base", None) is None:
+        backend.commit_known_good(snapshot, identity)
 
 
 def _atomic_json_write(path: Path, payload: Mapping[str, Any]) -> None:

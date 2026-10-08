@@ -21,6 +21,11 @@ import paths as api_paths
 def clear_inherited_runtime_environment(monkeypatch) -> None:
     """Install-profile tests must not inherit the operator's active runtime."""
     for name in (
+        "DATABASE_URL",
+        "BMS_EXPERIMENT_DB_PATH",
+        "BMS_MOLBIO_NGS_DB_PATH",
+        "BMS_RESULTS_DIR",
+        "BMS_RESULTS_ROOT",
         "BMS_DATA",
         "BMS_INPUTS",
         "BMS_DB_PATH",
@@ -73,6 +78,7 @@ def test_authoritative_port_registry_owns_the_approved_fixed_listener_neighborho
         "development_workflow_adapter": 18001,
         "production_workflow_adapter": 18101,
         "development_api": 18002,
+        "mobile_update_publisher": 18003,
         "production_web": 18080,
         "production_tailnet_proxy": 18081,
         "development_web": 18082,

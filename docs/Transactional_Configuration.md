@@ -110,10 +110,11 @@ external writers that ignore the lock, hand-run Compose, manually sourced raw en
 files, filesystem loss, malicious same-user mutation, and old checkouts lacking
 these guards are outside the supported reader/writer consistency boundary.
 Do not move HOME/XDG/config destinations or edit the journal/generation manually.
-**The existing first-install release path is still blocked for this format.**
-Configure success is not a usable released installation. Do not remove the
-managed-write guard or edit committed exports to work around it. The exact
-remaining reader/writer, receipt, recovery, and fault-test contract is in
+**The managed first-install release receipt transition is implemented.**
+Configure success alone is not a usable released installation. Use the supported
+authorized release path; do not remove the managed-write guard or edit committed
+exports. General migration and scientific qualification remain separate gates.
+The reader/writer, receipt, recovery, and fault-test contract is in
 [Managed Configuration Release Integration Contract](Managed_Configuration_Release_Integration_Contract.md).
 
 ## Verification

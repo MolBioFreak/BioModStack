@@ -46,7 +46,8 @@ fully approved independent model can materialize; the aggregate exit stays 3.
 
 Journals live at the configured BMS configuration directory under
 `provision-v1/<operation-id>/journal.json`. They bind source checkout location,
-selected models, complete trusted registry plans, effective store roots, explicit
+selected models, complete trusted registry plans, managed generation identity,
+normalized profile digest, effective store roots, explicit
 license IDs and acceptance timestamp, plus per-model events/results. Writes use
 the existing fsync/atomic configuration writer. Provision holds the existing
 configuration lock throughout root resolution, stale-plan checks, acceptance
@@ -58,7 +59,12 @@ It rehashes completed objects and full layouts rather than trusting saved receip
 success. Changed metadata, roots, selection, mismatched journals, corruption,
 unsafe paths or conflicting manifest identities fail closed. A changed plan must
 be reviewed anew; a new operation does not override corrupt artifact checkpoints
-or changed-manifest reconciliation blockers. No automatic deletion/repair command
+or changed-manifest reconciliation blockers. A managed release switches generation
+identity, so pre-release plans fail with `stale_plan`. Preview again and use a new
+operation ID with reviewed acceptance; resuming an old journal with a new plan
+fails `journal_plan_mismatch`. The new operation rehashes and reuses the same
+verified image/layout bindings without downloading again. A generation switch
+during planning fails rather than producing a mixed plan. No automatic deletion/repair command
 is supplied. An interrupted state write never constitutes committed acceptance.
 Stores and configuration state must remain operator/service-owned; this is not a
 security boundary against a hostile actor with the same filesystem principal.
