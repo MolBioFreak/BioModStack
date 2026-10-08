@@ -153,7 +153,7 @@ class Design(Base):
     __tablename__ = "designs"
     
     id = Column(String(36), primary_key=True)
-    job_id = Column(String(36), ForeignKey("jobs.id"), nullable=False)
+    job_id = Column(String(36), ForeignKey("jobs.id"), nullable=False, index=True)
     name = Column(String(255), nullable=False)
     pdb_path = Column(String(500), nullable=False)
     json_path = Column(String(500), nullable=True)
@@ -551,6 +551,12 @@ async def _ensure_schema(conn):
     await _ensure_table_columns(conn, "analysis_runs", AnalysisRun.__table__.columns)
     await _ensure_table_columns(conn, "nucleotide_sequences", NucleotideSequence.__table__.columns)
     await _ensure_table_columns(conn, "primers", Primer.__table__.columns)
+    await _ensure_sqlite_indexes(conn)
+
+
+async def _ensure_sqlite_indexes(conn):
+    """Install indexes required by high-volume list/count paths on legacy DBs."""
+    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_designs_job_id ON designs (job_id)"))
 
 
 async def _ensure_table_columns(conn, table_name: str, columns):

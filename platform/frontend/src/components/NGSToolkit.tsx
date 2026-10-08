@@ -5,6 +5,7 @@ import Plot from 'react-plotly.js';
 import type { Data, Layout, PlotMouseEvent } from 'plotly.js';
 import type { IGV as IgvLibrary } from 'igv';
 import { fetchJobLogs, fetchJobStages, fetchJobs, type Job, type JobLogs } from '../lib/api';
+import { jobPollingInterval } from '../lib/queryPolling';
 import { NanoporeTemplate } from './NanoporeTemplate';
 import { OntInstrumentPanel } from './ngs/OntInstrumentPanel';
 import { SequenceQcManifestPanel } from './ngs/SequenceQcManifestPanel';
@@ -2233,8 +2234,8 @@ export function NGSToolkit() {
 
     const { data: jobsData, isLoading } = useQuery({
         queryKey: ['jobs', 'ngs'],
-        queryFn: () => fetchJobs({ include_children: true, model_id: 'nanopore', limit: 100 }),
-        refetchInterval: 5000,
+        queryFn: () => fetchJobs({ include_children: true, model_id: 'nanopore', limit: 100, summary: true }),
+        refetchInterval: () => jobPollingInterval(5000),
     });
 
     const nanoporeJobs = useMemo(() => {

@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.exc import OperationalError
 from typing import Optional, List, Dict, Any
+from types import SimpleNamespace
 from copy import deepcopy
 import asyncio
 import uuid
@@ -4477,8 +4478,8 @@ async def list_jobs(
     q: Optional[str] = None,
     model_id: Optional[str] = None,
     mode: Optional[str] = None,
-    limit: int = 500,
-    offset: int = 0,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     include_children: bool = False,  # New param: show child jobs if True
     summary: bool = False,  # Mobile/list views: omit heavyweight detail fields until a job is opened
     session: AsyncSession = Depends(get_session)
@@ -4493,8 +4494,41 @@ async def list_jobs(
     """
     # Optimized query: fetch jobs and design counts in one go
     # This replaces the N+1 query loop with a single GROUP BY query
+    summary_columns = (
+        Job.id,
+        Job.name,
+        Job.status,
+        Job.model_id,
+        Job.mode,
+        Job.created_at,
+        Job.started_at,
+        Job.completed_at,
+        Job.output_dir,
+        Job.error_message,
+        Job.batch_id,
+        Job.batch_name,
+        Job.parent_job_id,
+        Job.child_stage,
+        Job.lineage_root_job_id,
+        Job.stage_family,
+        Job.stage_mode,
+        Job.source_stage_job_id,
+        Job.source_stage_family,
+        Job.source_stage_mode,
+        Job.source_selection_count,
+        Job.selected_input_artifact_class,
+        Job.selected_input_schema_version,
+        Job.selection_source_type,
+        Job.selection_source_job_id,
+        Job.selection_dataset_name,
+        Job.current_stage,
+        Job.completed_stages,
+        Job.awaiting_input,
+        Job.awaiting_stage,
+    )
+    selected_entities = summary_columns if summary else (Job,)
     query = (
-        select(Job, func.count(Design.id).label("design_count"))
+        select(*selected_entities, func.count(Design.id).label("design_count"))
         .outerjoin(Design, Design.job_id == Job.id)
         .group_by(Job.id)
         .order_by(Job.created_at.desc())
@@ -4518,7 +4552,16 @@ async def list_jobs(
     
     query = query.limit(limit).offset(offset)
     result = await session.execute(query)
-    rows = result.all()
+    if summary:
+        rows = [
+            (
+                SimpleNamespace(**{key: value for key, value in row.items() if key != "design_count"}),
+                row["design_count"],
+            )
+            for row in result.mappings().all()
+        ]
+    else:
+        rows = result.all()
 
     listed_job_ids = [job.id for job, _design_count in rows]
     child_design_count_by_parent: dict[str, int] = {}
@@ -4553,8 +4596,8 @@ async def list_jobs(
     job_responses = []
     for job, design_count in rows:
         completed_stages = _dedupe_preserve_order(list(job.completed_stages or []))
-        stage_outputs = dict(job.stage_outputs or {})
-        if job.status in {JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value}:
+        stage_outputs = {} if summary else dict(job.stage_outputs or {})
+        if not summary and job.status in {JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value}:
             review_count = _review_candidate_count_cached(job)
             if (design_count or 0) == 0 and review_count is not None:
                 design_count = review_count
@@ -4576,7 +4619,7 @@ async def list_jobs(
             output_dir=job.output_dir,
             error_message=job.error_message,
             design_count=design_count,  # Now joined from DB
-            requested_design_count=_resolve_requested_design_count(job),
+            requested_design_count=None if summary else _resolve_requested_design_count(job),
             batch_id=job.batch_id,
             batch_name=job.batch_name,
             parent_job_id=job.parent_job_id,
@@ -5549,8 +5592,6 @@ async def get_job(
     
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-
-    job_changed = _repair_job_for_response(job)
     
     # Get design count
     design_count_query = select(func.count(Design.id)).where(Design.job_id == job.id)
@@ -5571,17 +5612,6 @@ async def get_job(
     if (design_count or 0) == 0 and job.status in [JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value] and job.output_dir:
         design_count = count_structure_files(job.output_dir)
     completed_stages, stage_outputs = _resolve_stage_state_for_response(job)
-
-    if job_changed:
-        await session.commit()
-
-    if job.status in {JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value}:
-        try:
-            from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
-
-            schedule_viewer_minimum_analyses_for_job(str(job.id))
-        except Exception:
-            pass
     
     return JobResponse(
         id=job.id,

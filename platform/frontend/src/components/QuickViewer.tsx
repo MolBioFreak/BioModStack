@@ -11,6 +11,7 @@ import MolstarViewer from './MolstarViewer';
 import { BMS_CONTROL, BMS_CONTROL_GROUP, BMS_FULLSCREEN_FLUSH, BMS_PANEL_SURFACE, BMS_SMALL_CONTROL, BMS_VIEWER_WELL } from './ui/bmsStyle';
 import { fetchJobs } from '../lib/api';
 import type { Job } from '../lib/api';
+import { jobPollingInterval } from '../lib/queryPolling';
 
 const QUICK_VIEWER_COMPACT_KEY = 'bms_dashboard_quick_viewer_compact_v1';
 type QuickViewerSize = 'micro' | 'compact' | 'standard' | 'large' | 'xlarge';
@@ -139,7 +140,7 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
     const { data: jobsData } = useQuery({
         queryKey: ['jobs', 'quick-viewer-summary'],
         queryFn: () => fetchJobs({ status: 'completed', limit: 100, summary: true }),
-        refetchInterval: 3000,
+        refetchInterval: () => jobPollingInterval(3000),
     });
 
     // Get completed jobs with structures

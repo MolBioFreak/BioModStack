@@ -472,8 +472,13 @@ class PlotlyMetricsResponse(BaseModel):
 class PlotlyMetricsRequest(BaseModel):
     include_children: bool = True
     design_ids: Optional[List[str]] = None
-    limit: int = 10000
-    offset: int = 0
+    limit: int = Field(10000, ge=1, le=10000)
+    offset: int = Field(0, ge=0)
+
+
+# Analytics may return a larger, still bounded payload because this path uses
+# a narrow numeric SQL projection rather than the ordinary design-list schema.
+ANALYTICS_MAX_DESIGNS = 10000
 
 
 ANALYTICS_LOAD_ONLY_COLUMNS = (
@@ -2101,8 +2106,8 @@ async def list_designs(
     source_stage_family: Optional[str] = Query(None, description="Filter by source stage family"),
     sort_by: Optional[str] = Query(None, description="Sort field for table ordering"),
     sort_desc: bool = Query(True, description="Sort descending"),
-    limit: int = Query(100, le=50000),
-    offset: int = Query(0),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session)
 ):
     """
@@ -2662,8 +2667,8 @@ async def update_notes(
 async def get_designs_for_job(
     job_id: str,
     include_children: bool = Query(True, description="Include designs from child jobs (for parent jobs)"),
-    limit: int = Query(100, le=50000),
-    offset: int = Query(0),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session)
 ):
     """
@@ -2718,7 +2723,7 @@ async def get_plotly_metrics_for_job(
     job_id: str,
     include_children: bool = Query(True, description="Include child jobs when collecting metrics"),
     design_ids: Optional[str] = Query(None, description="Comma-separated design ids to restrict the analytics payload"),
-    limit: int = Query(10000, ge=1, le=50000),
+    limit: int = Query(ANALYTICS_MAX_DESIGNS, ge=1, le=ANALYTICS_MAX_DESIGNS),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session)
 ):
@@ -2745,7 +2750,7 @@ async def post_plotly_metrics_for_job(
         job_id=job_id,
         include_children=request.include_children,
         requested_design_ids=request.design_ids,
-        limit=max(1, min(request.limit, 50000)),
+        limit=request.limit,
         offset=max(0, request.offset),
         session=session,
     )

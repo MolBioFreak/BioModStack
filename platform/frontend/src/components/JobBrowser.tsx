@@ -31,7 +31,8 @@ export const JobBrowser: React.FC<JobBrowserProps> = ({ onSelect, selectedJobId,
             q: debouncedSearch,
             limit: PAGE_SIZE,
             offset: page * PAGE_SIZE,
-            status: 'completed' // Typically we want completed jobs for results
+            status: 'completed', // Typically we want completed jobs for results
+            summary: true,
         })
     });
 

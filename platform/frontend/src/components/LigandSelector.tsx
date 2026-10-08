@@ -51,7 +51,7 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false, 
         if (!showImportPicker) return;
         setImportLoading(true);
         setImportError(null);
-        fetchJobs({ status: 'completed', limit: 50 })
+        fetchJobs({ status: 'completed', limit: 50, summary: true })
             .then(res => {
                 const oligoOnly = res.data.jobs.filter(j => j.model_id === 'oligo_design');
                 setOligoJobs(oligoOnly);

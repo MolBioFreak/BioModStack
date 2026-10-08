@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchJobs, fetchJobById, cancelJob, resubmitJob, fetchJobLogs, resumeJob, deleteJobPermanently, forceRunJob } from '../lib/api';
 import type { JobLogs, Job } from '../lib/api';
+import { jobPollingInterval } from '../lib/queryPolling';
 
 import { QuickViewer } from './QuickViewer';
 import { JobQueuePanel } from './JobQueuePanel';
@@ -173,7 +174,7 @@ export function Dashboard() {
     const { data: jobsData, isLoading: jobsLoading } = useQuery({
         queryKey: ['jobs', 'dashboard-summary'],
         queryFn: () => fetchJobs({ limit: 100, summary: true }),
-        refetchInterval: 3000,
+        refetchInterval: () => jobPollingInterval(3000),
         refetchIntervalInBackground: false,
         refetchOnWindowFocus: false,
     });
