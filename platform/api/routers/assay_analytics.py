@@ -606,28 +606,74 @@ def chromatography_analyze(request: ChromatographyAnalyzeRequest) -> Dict[str, A
     signal = np.asarray(request.signal, dtype=float)
     if not np.all(np.isfinite(time)) or not np.all(np.isfinite(signal)):
         raise HTTPException(status_code=400, detail="time and signal must be finite")
+    analysis_engine = "scipy.signal"
+    engine_package = "scipy"
     if request.baseline_method == "none":
         baseline = np.zeros_like(signal)
     elif request.baseline_method == "linear":
         baseline = np.linspace(signal[0], signal[-1], len(signal))
+    elif request.baseline_method.startswith("mocca2"):
+        try:
+            import mocca2
+        except ImportError as exc:  # pragma: no cover - dependency is required by pyproject
+            raise HTTPException(status_code=500, detail="mocca2 is not installed in the BMS API environment") from exc
+        method = request.baseline_method.removeprefix("mocca2_") or "flatfit"
+        if method not in {"flatfit", "arpls", "asls"}:
+            method = "flatfit"
+        baseline = np.asarray(mocca2.estimate_baseline(signal, method=method), dtype=float)
+        analysis_engine = "MOCCA2"
+        engine_package = "mocca2"
     else:
         window = max(3, min(len(signal), len(signal) // 20 or 3))
         baseline = np.array([np.min(signal[max(0, i - window): min(len(signal), i + window + 1)]) for i in range(len(signal))])
     corrected = signal - baseline
     prominence = max(float(request.peak_prominence), float(np.nanmax(corrected)) * 0.02 if len(corrected) else 0.0)
-    peak_indices, props = find_peaks(corrected, prominence=prominence)
-    widths = peak_widths(corrected, peak_indices, rel_height=0.5) if len(peak_indices) else ([], [], [], [])
+
+    peak_spans: List[Dict[str, Any]] = []
+    if analysis_engine == "MOCCA2":
+        import mocca2
+        mocca_peaks = mocca2.find_peaks(corrected, min_rel_height=max(float(request.peak_prominence), 0.0), min_height=0.0)
+        for peak in mocca_peaks:
+            idx = int(peak.maximum)
+            peak_spans.append(
+                {
+                    "idx": idx,
+                    "left": int(max(0, peak.left)),
+                    "right": int(min(len(time) - 1, peak.right)),
+                    "height": float(peak.height),
+                    "prominence": float(getattr(peak, "prominence", peak.height)),
+                    "peak_engine": "MOCCA2",
+                }
+            )
+    else:
+        peak_indices, props = find_peaks(corrected, prominence=prominence)
+        widths = peak_widths(corrected, peak_indices, rel_height=0.5) if len(peak_indices) else ([], [], [], [])
+        for rank, idx in enumerate(peak_indices):
+            left = int(max(0, math.floor(widths[2][rank]))) if len(peak_indices) else int(idx)
+            right = int(min(len(time) - 1, math.ceil(widths[3][rank]))) if len(peak_indices) else int(idx)
+            peak_spans.append(
+                {
+                    "idx": int(idx),
+                    "left": left,
+                    "right": right,
+                    "height": float(corrected[idx]),
+                    "prominence": float(props.get("prominences", [None] * len(peak_indices))[rank]) if len(peak_indices) else None,
+                    "peak_engine": "scipy.signal.find_peaks",
+                }
+            )
+
     total_positive_area = float(np.trapezoid(np.maximum(corrected, 0), time))
     peaks = []
-    for rank, idx in enumerate(peak_indices):
-        left = int(max(0, math.floor(widths[2][rank]))) if len(peak_indices) else idx
-        right = int(min(len(time) - 1, math.ceil(widths[3][rank]))) if len(peak_indices) else idx
+    for rank, span in enumerate(peak_spans):
+        idx = int(span["idx"])
+        left = int(span["left"])
+        right = int(span["right"])
         if right <= left:
             left = max(0, idx - 1)
             right = min(len(time) - 1, idx + 1)
         area = float(np.trapezoid(np.maximum(corrected[left : right + 1], 0), time[left : right + 1]))
         width_time = float(time[right] - time[left]) if right > left else 0.0
-        height = float(corrected[idx])
+        height = float(span["height"])
         rt = float(time[idx])
         plates = 5.54 * (rt / width_time) ** 2 if width_time > 0 else None
         peaks.append(
@@ -644,6 +690,8 @@ def chromatography_analyze(request: ChromatographyAnalyzeRequest) -> Dict[str, A
                 "resolution": None,
                 "tailing_factor": None,
                 "fit_model": request.fit_model,
+                "peak_engine": span["peak_engine"],
+                "prominence": span.get("prominence"),
             }
         )
     peaks.sort(key=lambda p: p["retention_time"])
@@ -654,6 +702,8 @@ def chromatography_analyze(request: ChromatographyAnalyzeRequest) -> Dict[str, A
         cur["resolution"] = 2 * (cur["retention_time"] - prev["retention_time"]) / denom if denom else None
     return _json_clean(
         {
+            "analysis_engine": analysis_engine,
+            "engine_package": engine_package,
             "baseline_method": request.baseline_method,
             "fit_model": request.fit_model,
             "n_peaks": len(peaks),
