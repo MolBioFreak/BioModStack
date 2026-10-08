@@ -95,34 +95,43 @@ logger = logging.getLogger(__name__)
 
 def extract_sequence_from_pdb(pdb_path: str, chain_id: Optional[str] = None) -> Dict[str, str]:
     """
-    Extract amino acid sequences from PDB file.
+    Extract amino acid sequences from a PDB or CIF file.
     
     Returns dict of {chain_id: sequence}
     """
-    from Bio.PDB import PDBParser
-    from Bio.SeqUtils import seq1
-    
-    parser = PDBParser(QUIET=True)
-    structure = parser.get_structure("protein", pdb_path)
-    
-    sequences = {}
-    for model in structure:
-        for chain in model:
-            if chain_id and chain.id != chain_id:
+    import numpy as np
+    import biotite.structure as struc
+    from biotite.sequence import ProteinSequence
+
+    from services.structure_utils import load_structure
+
+    structure = load_structure(pdb_path)
+    protein = structure[struc.filter_amino_acids(structure)]
+
+    sequences: Dict[str, str] = {}
+    if len(protein) == 0:
+        return sequences
+
+    for current_chain_id in np.unique(protein.chain_id):
+        current_chain_id = str(current_chain_id)
+        if chain_id and current_chain_id != chain_id:
+            continue
+
+        chain_atoms = protein[protein.chain_id == current_chain_id]
+        _, residue_names = struc.get_residues(chain_atoms)
+
+        residues = []
+        for res_name in residue_names:
+            try:
+                aa = ProteinSequence.convert_letter_3to1(str(res_name))
+            except Exception:
                 continue
-            
-            residues = []
-            for res in chain.get_residues():
-                if res.id[0] == " ":  # Standard residue, not heteroatom
-                    try:
-                        aa = seq1(res.resname)
-                        residues.append(aa)
-                    except:
-                        pass
-            
-            if residues:
-                sequences[chain.id] = "".join(residues)
-    
+            if aa and aa != "?":
+                residues.append(aa)
+
+        if residues:
+            sequences[current_chain_id] = "".join(residues)
+
     return sequences
 
 
@@ -143,8 +152,9 @@ def identify_binder_chains(sequences: Dict[str, str], pdb_path: str) -> Dict[str
     Returns dict of {chain_type: chain_id} where chain_type is 'H' or 'L'
     (H for heavy/beta, L for light/alpha)
     """
-    # Common VH/VHH framework 1 signatures
-    vh_signatures = ["QVQLV", "EVQLV", "QVKLV", "QVQLQ", "EVQLQ", "QVTLK", "QVQLK"]
+    # Common VH/VHH framework 1 signatures.
+    # Include common camelid VHH starts such as VQLQE... used by many nanobodies.
+    vh_signatures = ["MQLQE", "MQVQL", "MEVQL", "VQLVE", "VQLQE", "LQLQE", "QVQLV", "EVQLV", "QVKLV", "QVQLQ", "EVQLQ", "QVQLK", "EVQLK", "QVTLK", "VQLEQ"]
     vl_signatures = ["DIVMT", "DIQMT", "EIVLT", "DIVLT", "EIVMT", "QSVLT", "QSVVS"]
     # TCR variable region signatures
     tcr_beta_signatures = ["NAGVT", "GAVVS", "DGVTQ", "LGVTQ", "LGHDT", "GVTQS"]
@@ -152,10 +162,11 @@ def identify_binder_chains(sequences: Dict[str, str], pdb_path: str) -> Dict[str
     
     found_chains = {}  # {chain_type: chain_id}
     
-    # Detect by sequence signature (most reliable)
+    # Detect by sequence signature or explicit H/L chain IDs.
     for chain_id, seq in sequences.items():
         seq_upper = seq.upper()[:10]  # Check first 10 residues
-        
+        chain_id_upper = chain_id.upper()
+
         # Check for VH/VHH signature
         for sig in vh_signatures:
             if seq_upper.startswith(sig):
@@ -183,37 +194,29 @@ def identify_binder_chains(sequences: Dict[str, str], pdb_path: str) -> Dict[str
                 print(f"[CDR Annotator] Chain {chain_id} identified as TCR Alpha (signature: {sig})")
                 found_chains['L'] = chain_id
                 break
-    
+
+        # Respect explicit chain IDs when they are present, but do not invent
+        # additional antibody chains from unrelated target chains.
+        if 'H' not in found_chains and chain_id_upper == 'H' and 80 <= len(seq) <= 150:
+            print(f"[CDR Annotator] Chain {chain_id} identified as H by chain ID")
+            found_chains['H'] = chain_id
+        if 'L' not in found_chains and chain_id_upper in {'L', 'K'} and 80 <= len(seq) <= 150:
+            print(f"[CDR Annotator] Chain {chain_id} identified as L by chain ID")
+            found_chains['L'] = chain_id
+
     # If found at least one chain by signature, return
     if found_chains:
         return found_chains
-    
-    # Fallback: select ALL chains in typical variable domain length range
-    # This lets ANARCII auto-detect what they are
-    print(f"[CDR Annotator] No signature match, using length-based selection...")
-    for chain_id, seq in sequences.items():
-        if 80 <= len(seq) <= 150:  # Variable domain typical range
-            # Assign as H if none found yet, else as L
-            if 'H' not in found_chains:
-                print(f"[CDR Annotator] Chain {chain_id} selected as H by length ({len(seq)} AA)")
-                found_chains['H'] = chain_id
-            elif 'L' not in found_chains:
-                print(f"[CDR Annotator] Chain {chain_id} selected as L by length ({len(seq)} AA)")
-                found_chains['L'] = chain_id
-    
-    if found_chains:
-        return found_chains
-    
-    # Last resort: if only two chains, guess smaller is antibody/TCR
-    if len(sequences) == 2:
-        smallest = min(sequences.keys(), key=lambda k: len(sequences[k]))
-        return {'H': smallest}
-    
-    # Final fallback: any chain
-    if sequences:
-        first_chain = list(sequences.keys())[0]
-        return {'H': first_chain}
-    
+
+    # Conservative fallback: only accept an unlabeled single variable-domain-sized
+    # chain. Do not guess a second light chain from a target chain.
+    candidates = [chain_id for chain_id, seq in sequences.items() if 80 <= len(seq) <= 150]
+    if len(candidates) == 1:
+        print(f"[CDR Annotator] Single variable-domain candidate {candidates[0]} selected as H")
+        return {'H': candidates[0]}
+
+    if candidates:
+        print(f"[CDR Annotator] Ambiguous binder chains in {pdb_path}; refusing to guess: {candidates}")
     return {}
 
 
@@ -255,7 +258,21 @@ for seq_name, data in result.items():
     if not chain_type:
         continue
     
-    numbering = data.get("numbering", [])
+    numbering = data.get("numbering") or []
+    if not numbering:
+        output[chain_type] = {{
+            "cdr1": "",
+            "cdr2": "",
+            "cdr3": "",
+            "cdr1_range": None,
+            "cdr2_range": None,
+            "cdr3_range": None,
+            "cdr1_seq_range": None,
+            "cdr2_seq_range": None,
+            "cdr3_seq_range": None,
+            "scheme": data.get("scheme", "imgt"),
+        }}
+        continue
     
     # Extract CDRs based on IMGT position ranges
     # Track both residues and position ranges
@@ -467,6 +484,20 @@ def annotate_pdb(
     return annotation
 
 
+def _fallback_annotate_individually(pdb_paths: list[str]) -> Dict[str, CDRAnnotation]:
+    """Slow but reliable fallback when batched ANARCII fails."""
+    annotations: Dict[str, CDRAnnotation] = {}
+    for pdb_path in pdb_paths:
+        try:
+            annot = annotate_pdb(pdb_path)
+        except Exception as exc:
+            print(f"[CDR Annotator] Individual fallback failed for {pdb_path}: {exc}")
+            annot = None
+        if annot:
+            annotations[pdb_path] = annot
+    return annotations
+
+
 def batch_annotate_pdbs(pdb_paths: list, batch_size: int = 500) -> Dict[str, CDRAnnotation]:
     """
     Batch annotate multiple PDB files for CDR regions.
@@ -538,7 +569,7 @@ from anarcii import Anarcii
 
 # Use 24 CPU cores and batch size 500
 numberer = Anarcii(seq_type='unknown', cpu=True, batch_size=500, ncpu=24)  # Auto-detect antibody vs TCR
-results = numberer.number(sequences)
+results = numberer.number(sequences) or []
 
 # FR contact hotspot IMGT positions (Zavrtanik et al. 2018)
 FR2_POSITIONS = {37, 42, 44, 45, 47}  # VHH tetrad + contacts
@@ -546,10 +577,47 @@ DE_LOOP_RANGE = (72, 75)              # DE loop
 FR3_RANGE = (82, 87)                  # FR3 contacts
 FR4_RANGE = (101, 103)                # C-terminal contacts
 
+if isinstance(results, dict):
+    ordered_results = list(results.values())
+elif isinstance(results, list):
+    ordered_results = results
+else:
+    ordered_results = []
+
 output = []
-for seq_name, data in results.items():
+for data in ordered_results:
+    if data is None:
+        output.append({
+            "chain_type": "",
+            "cdr1": "",
+            "cdr2": "",
+            "cdr3": "",
+            "cdr1_seq_range": None,
+            "cdr2_seq_range": None,
+            "cdr3_seq_range": None,
+            "fr2_contacts": "",
+            "de_loop": "",
+            "fr3_contacts": "",
+            "fr4_contacts": "",
+        })
+        continue
     chain_type = data.get("chain_type", "")
-    numbering = data.get("numbering", [])
+    numbering = data.get("numbering") or []
+    if not numbering:
+        output.append({
+            "chain_type": chain_type,
+            "cdr1": "",
+            "cdr2": "",
+            "cdr3": "",
+            "cdr1_seq_range": None,
+            "cdr2_seq_range": None,
+            "cdr3_seq_range": None,
+            "fr2_contacts": "",
+            "de_loop": "",
+            "fr3_contacts": "",
+            "fr4_contacts": "",
+        })
+        continue
     
     cdr1_residues = []
     cdr2_residues = []
@@ -621,29 +689,33 @@ print(json.dumps(output))
         
         if result.returncode != 0:
             print(f"[CDR Annotator] Batch ANARCII error: {result.stderr[:500]}")
-            return {}
+            return _fallback_annotate_individually(pdb_paths)
         
         # Parse JSON output
         stdout = result.stdout.strip()
         if not stdout:
             print("[CDR Annotator] Empty output from ANARCII")
-            return {}
+            return _fallback_annotate_individually(pdb_paths)
         
         try:
             anarcii_results = json.loads(stdout)
         except json.JSONDecodeError as e:
             print(f"[CDR Annotator] JSON parse error: {e}")
             print(f"[CDR Annotator] Raw output (first 500 chars): {stdout[:500]}")
-            return {}
+            return _fallback_annotate_individually(pdb_paths)
         
     except subprocess.TimeoutExpired:
         print("[CDR Annotator] Batch ANARCII timeout")
-        return {}
+        return _fallback_annotate_individually(pdb_paths)
     except Exception as e:
         print(f"[CDR Annotator] Batch error: {e}")
-        return {}
+        return _fallback_annotate_individually(pdb_paths)
     finally:
         Path(seq_file).unlink(missing_ok=True)
+
+    if not isinstance(anarcii_results, list):
+        print(f"[CDR Annotator] Unexpected ANARCII batch payload type: {type(anarcii_results).__name__}")
+        return _fallback_annotate_individually(pdb_paths)
     
     print(f"[CDR Annotator] ANARCII returned {len(anarcii_results)} results")
     

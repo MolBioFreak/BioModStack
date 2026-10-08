@@ -32,6 +32,21 @@ export interface QualitySettings {
     protenix_use_template: boolean;
     protenix_enable_cache: boolean;
     protenix_enable_fusion: boolean;
+    protenix_auto_oom_retry: boolean;
+    protenix_oom_retry_attempts: number;
+    colabfold_api_host: string;
+    msa_use_gpu: boolean;
+    msa_local_db: string;
+    msa_cache_dir: string;
+    msa_threads: number | null;
+    msa_gpu_mode: string;
+    msa_gpu_threshold: number;
+    msa_preferred_gpus: string;
+    msa_excluded_gpus: string;
+    msa_gpu_server_mode: string;
+    msa_gpu_server_wait_timeout: number;
+    msa_gpu_server_db_load_mode: number;
+    msa_gpu_server_startup_wait: number;
 
     // FAMPNN settings (sequence design)
     fampnn_checkpoint: string;
@@ -120,6 +135,40 @@ const FAMPNN_CHECKPOINT_OPTIONS = [
 
 const DEFAULT_FAMPNN_CHECKPOINT = 'fampnn_0_0.pt';
 const DEFAULT_PPIFLOW_CHECKPOINT = 'nanobody';
+const DEFAULT_PROTENIX_RUNTIME_SETTINGS: Pick<
+    QualitySettings,
+    | 'protenix_auto_oom_retry'
+    | 'protenix_oom_retry_attempts'
+    | 'colabfold_api_host'
+    | 'msa_use_gpu'
+    | 'msa_local_db'
+    | 'msa_cache_dir'
+    | 'msa_threads'
+    | 'msa_gpu_mode'
+    | 'msa_gpu_threshold'
+    | 'msa_preferred_gpus'
+    | 'msa_excluded_gpus'
+    | 'msa_gpu_server_mode'
+    | 'msa_gpu_server_wait_timeout'
+    | 'msa_gpu_server_db_load_mode'
+    | 'msa_gpu_server_startup_wait'
+> = {
+    protenix_auto_oom_retry: false,
+    protenix_oom_retry_attempts: 2,
+    colabfold_api_host: 'https://api.colabfold.com',
+    msa_use_gpu: true,
+    msa_local_db: '',
+    msa_cache_dir: '',
+    msa_threads: null,
+    msa_gpu_mode: 'auto',
+    msa_gpu_threshold: 80,
+    msa_preferred_gpus: '',
+    msa_excluded_gpus: '',
+    msa_gpu_server_mode: 'persistent',
+    msa_gpu_server_wait_timeout: 120,
+    msa_gpu_server_db_load_mode: 0,
+    msa_gpu_server_startup_wait: 1.0,
+};
 const FAMPNN_TEMPERATURE_PRESETS = [
     { label: 'Deterministic', value: 0.03 },
     { label: 'Balanced', value: 0.1 },
@@ -154,6 +203,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         protenix_use_template: false,
         protenix_enable_cache: true,
         protenix_enable_fusion: true,
+        ...DEFAULT_PROTENIX_RUNTIME_SETTINGS,
         // FAMPNN
         fampnn_checkpoint: DEFAULT_FAMPNN_CHECKPOINT,
         fampnn_checkpoint_path: '',
@@ -233,6 +283,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         protenix_use_template: false,
         protenix_enable_cache: true,
         protenix_enable_fusion: true,
+        ...DEFAULT_PROTENIX_RUNTIME_SETTINGS,
         // FAMPNN
         fampnn_checkpoint: DEFAULT_FAMPNN_CHECKPOINT,
         fampnn_checkpoint_path: '',
@@ -312,6 +363,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         protenix_use_template: false,
         protenix_enable_cache: true,
         protenix_enable_fusion: true,
+        ...DEFAULT_PROTENIX_RUNTIME_SETTINGS,
         // FAMPNN
         fampnn_checkpoint: DEFAULT_FAMPNN_CHECKPOINT,
         fampnn_checkpoint_path: '',
@@ -391,6 +443,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         protenix_use_template: false,
         protenix_enable_cache: true,
         protenix_enable_fusion: true,
+        ...DEFAULT_PROTENIX_RUNTIME_SETTINGS,
         // FAMPNN
         fampnn_checkpoint: DEFAULT_FAMPNN_CHECKPOINT,
         fampnn_checkpoint_path: '',
@@ -450,6 +503,12 @@ const PRESET_INFO: Record<QualityPreset, { name: string; desc: string; time: str
     balanced: { name: 'Balanced', desc: 'Default settings', time: '~15 min', color: 'blue' },
     quality: { name: 'Quality', desc: 'Higher accuracy', time: '~45 min', color: 'purple' },
     maximum: { name: 'Maximum', desc: 'Best possible', time: '~2+ hrs', color: 'rose' },
+};
+
+const MSA_PRESET_INFO: Record<QualitySettings['msa_preset'], { label: string; description: string }> = {
+    maximum: { label: 'Maximum', description: 'Full ColabFold-style search with expansion. Highest coverage, slowest.' },
+    balanced: { label: 'Balanced', description: 'Environmental search without expansion. Good default tradeoff.' },
+    fast: { label: 'Fast', description: 'UniRef30-only style search. Best for quick screening.' },
 };
 
 interface QualitySettingsPanelProps {
@@ -978,6 +1037,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
     structureValidator = 'boltz2',
 }) => {
     const [isExpanded, setIsExpanded] = useState(false);
+    const [showMsaRuntimeOverrides, setShowMsaRuntimeOverrides] = useState(false);
 
     const handlePresetSelect = (newPreset: QualityPreset) => {
         onPresetChange(newPreset);
@@ -988,12 +1048,34 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
             fampnn_temperature: settings.fampnn_temperature,
             lock_target_chains: settings.lock_target_chains,
             lock_antibody_framework: settings.lock_antibody_framework,
+            protenix_use_template: settings.protenix_use_template,
+            protenix_msa_backend: settings.protenix_msa_backend,
+            protenix_auto_oom_retry: settings.protenix_auto_oom_retry,
+            protenix_oom_retry_attempts: settings.protenix_oom_retry_attempts,
+            colabfold_api_host: settings.colabfold_api_host,
+            msa_use_gpu: settings.msa_use_gpu,
+            msa_local_db: settings.msa_local_db,
+            msa_cache_dir: settings.msa_cache_dir,
+            msa_threads: settings.msa_threads,
+            msa_gpu_mode: settings.msa_gpu_mode,
+            msa_gpu_threshold: settings.msa_gpu_threshold,
+            msa_preferred_gpus: settings.msa_preferred_gpus,
+            msa_excluded_gpus: settings.msa_excluded_gpus,
+            msa_gpu_server_mode: settings.msa_gpu_server_mode,
+            msa_gpu_server_wait_timeout: settings.msa_gpu_server_wait_timeout,
+            msa_gpu_server_db_load_mode: settings.msa_gpu_server_db_load_mode,
+            msa_gpu_server_startup_wait: settings.msa_gpu_server_startup_wait,
         });
     };
 
     const updateSetting = <K extends keyof QualitySettings>(key: K, value: QualitySettings[K]) => {
         onSettingsChange({ ...settings, [key]: value });
     };
+
+    const msaEnabled = structureValidator === 'protenix' ? settings.protenix_use_msa : settings.boltz_use_msa;
+    const showProtenixMsaProvider = structureValidator === 'protenix' && settings.protenix_use_msa;
+    const showRemoteMsaHost = showProtenixMsaProvider && settings.protenix_msa_backend !== 'local';
+    const showLocalMsaRuntime = msaEnabled && (structureValidator === 'boltz2' || settings.protenix_msa_backend !== 'colabfold_api');
 
     // Color classes for Tailwind
     const colorClasses: Record<string, { selected: string; unselected: string }> = {
@@ -1166,9 +1248,10 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                     </a>
                                 </div>
                                 <p className="text-xs text-slate-500">
-                                    These controls map directly to the Protenix inference CLI flags used by the workflow:
+                                    These controls cover the Protenix inference CLI plus template DB usage and optional OOM retry behavior:
                                     <code className="ml-1">--model_name</code>, <code>--sample</code>, <code>--step</code>, <code>--cycle</code>,
                                     <code> --use_msa</code>, <code>--use_template</code>, <code>--enable_cache</code>, and <code>--enable_fusion</code>.
+                                    Shared workflow MSA settings live in the separate MSA section below.
                                 </p>
 
                                 <div className="grid grid-cols-2 gap-4">
@@ -1320,25 +1403,35 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                     </label>
                                 </div>
 
-                                {settings.protenix_use_msa && (
-                                    <div>
-                                        <label className="block text-xs text-slate-500 mb-1">
-                                            Protenix MSA Backend
+                                <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3 space-y-3">
+                                    <div className="text-xs font-medium text-slate-400">OOM Retry Guardrail (default off)</div>
+                                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                        <label className="flex items-center gap-2 cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                checked={settings.protenix_auto_oom_retry}
+                                                onChange={(e) => updateSetting('protenix_auto_oom_retry', e.target.checked)}
+                                                className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500"
+                                            />
+                                            <span className="text-sm text-slate-300">
+                                                Auto OOM Retry <span className="text-xs text-slate-500">(downshifts samples/MSA on retry)</span>
+                                            </span>
                                         </label>
-                                        <select
-                                            value={settings.protenix_msa_backend}
-                                            onChange={(e) => updateSetting('protenix_msa_backend', e.target.value as QualitySettings['protenix_msa_backend'])}
-                                            className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300"
-                                        >
-                                            <option value="auto">Auto</option>
-                                            <option value="colabfold_api">ColabFold Server</option>
-                                            <option value="local">Local MMseqs/ColabFold DB</option>
-                                        </select>
-                                        <p className="mt-1 text-[10px] text-slate-600">
-                                            `Maximum` defaults to `ColabFold Server`; `Auto` keeps the backend-size heuristic.
-                                        </p>
+
+                                        <div>
+                                            <label className="block text-xs text-slate-500 mb-1">Retry Attempts</label>
+                                            <input
+                                                type="number"
+                                                min={0}
+                                                max={3}
+                                                value={settings.protenix_oom_retry_attempts}
+                                                onChange={(e) => updateSetting('protenix_oom_retry_attempts', Math.max(0, Math.min(3, parseInt(e.target.value, 10) || 0)))}
+                                                disabled={!settings.protenix_auto_oom_retry}
+                                                className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300 disabled:opacity-50"
+                                            />
+                                        </div>
                                     </div>
-                                )}
+                                </div>
 
                                 {settings.protenix_use_template && (
                                     <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
@@ -1454,6 +1547,262 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                             </>
                         )}
                     </div>
+
+                    {msaEnabled && (
+                        <div className="space-y-3 pt-3 border-t border-slate-700/50">
+                            <div className="flex items-center gap-2 text-sm font-medium text-sky-400">
+                                MSA Settings
+                            </div>
+                            <p className="text-xs text-slate-500">
+                                {structureValidator === 'protenix'
+                                    ? 'Shared MSA controls for the Protenix validator path. These affect MSA preparation and provider/runtime behavior, not the core Protenix diffusion sampler.'
+                                    : 'Shared MSA controls for the Boltz-2 validator path. These affect the representative MSA generated upstream of validation.'}
+                            </p>
+
+                            <div>
+                                <label className="block text-xs text-slate-500 mb-2">MSA Quality Preset</label>
+                                <div className="grid grid-cols-3 gap-2">
+                                    {(['maximum', 'balanced', 'fast'] as const).map((msaPreset) => {
+                                        const isActive = settings.msa_preset === msaPreset;
+                                        return (
+                                            <button
+                                                key={msaPreset}
+                                                type="button"
+                                                onClick={() => updateSetting('msa_preset', msaPreset)}
+                                                className={`rounded-lg border p-3 text-left transition-colors ${isActive
+                                                    ? 'border-sky-500 bg-sky-500/10 text-sky-200'
+                                                    : 'border-slate-700 bg-slate-900/60 text-slate-300 hover:border-slate-600'
+                                                    }`}
+                                            >
+                                                <div className="text-sm font-medium">{MSA_PRESET_INFO[msaPreset].label}</div>
+                                                <div className="mt-1 text-[10px] opacity-80">{MSA_PRESET_INFO[msaPreset].description}</div>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+
+                            {showProtenixMsaProvider && (
+                                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                    <div>
+                                        <label className="block text-xs text-slate-500 mb-1">MSA Provider</label>
+                                        <select
+                                            value={settings.protenix_msa_backend}
+                                            onChange={(e) => updateSetting('protenix_msa_backend', e.target.value as QualitySettings['protenix_msa_backend'])}
+                                            className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300"
+                                        >
+                                            <option value="auto">Auto (workflow heuristic)</option>
+                                            <option value="local">Local MMseqs2 (recommended)</option>
+                                            <option value="colabfold_api">ColabFold API</option>
+                                        </select>
+                                        <p className="mt-1 text-[10px] text-slate-600">
+                                            {settings.protenix_msa_backend === 'auto'
+                                                ? 'Auto picks local or ColabFold API based on job size.'
+                                                : settings.protenix_msa_backend === 'colabfold_api'
+                                                    ? 'Use the configured ColabFold-compatible endpoint for Protenix MSA prep.'
+                                                    : 'Use the local MMseqs/ColabFold DB stack mounted in BMS.'}
+                                        </p>
+                                    </div>
+
+                                    {showRemoteMsaHost && (
+                                        <div>
+                                            <label className="block text-xs text-slate-500 mb-1">ColabFold API Host</label>
+                                            <input
+                                                type="text"
+                                                value={settings.colabfold_api_host}
+                                                onChange={(e) => updateSetting('colabfold_api_host', e.target.value)}
+                                                className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300 font-mono"
+                                            />
+                                            <p className="mt-1 text-[10px] text-slate-600">
+                                                Used when the provider resolves to `colabfold_api`.
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {showLocalMsaRuntime && (
+                                <div className="rounded-lg border border-slate-800 overflow-hidden">
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowMsaRuntimeOverrides((prev) => !prev)}
+                                        className="w-full flex items-center justify-between px-3 py-2 bg-slate-950/40 hover:bg-slate-900/60 transition-colors"
+                                    >
+                                        <span className="text-xs font-medium text-slate-300">
+                                            {structureValidator === 'protenix' ? 'Local MSA Runtime Overrides' : 'MSA Runtime Overrides'}
+                                        </span>
+                                        <span className="text-[10px] text-slate-500">
+                                            {showMsaRuntimeOverrides ? 'Hide' : 'Show'} advanced
+                                        </span>
+                                    </button>
+
+                                    {showMsaRuntimeOverrides && (
+                                        <div className="p-3 space-y-3 bg-slate-950/30">
+                                            <p className="text-[10px] text-slate-500">
+                                                These are workflow runtime overrides for the local MSA path. Leave them blank/default unless you are debugging scheduler or DB behavior.
+                                            </p>
+
+                                            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                                <div>
+                                                    <label className="block text-xs text-slate-500 mb-1">Threads Override</label>
+                                                    <input
+                                                        type="number"
+                                                        min={1}
+                                                        value={settings.msa_threads ?? ''}
+                                                        onChange={(e) => updateSetting('msa_threads', e.target.value ? Math.max(1, parseInt(e.target.value, 10) || 1) : null)}
+                                                        placeholder="task default"
+                                                        className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300"
+                                                    />
+                                                </div>
+
+                                                <div>
+                                                    <label className="block text-xs text-slate-500 mb-1">Use GPU for Local MSA</label>
+                                                    <label className="flex items-center gap-2 rounded border border-slate-700 bg-slate-900 px-3 py-2 cursor-pointer">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={settings.msa_use_gpu}
+                                                            onChange={(e) => updateSetting('msa_use_gpu', e.target.checked)}
+                                                            className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500"
+                                                        />
+                                                        <span className="text-sm text-slate-300">Enable GPU path</span>
+                                                    </label>
+                                                </div>
+                                            </div>
+
+                                            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                                <div>
+                                                    <label className="block text-xs text-slate-500 mb-1">Local DB Path Override</label>
+                                                    <input
+                                                        type="text"
+                                                        value={settings.msa_local_db}
+                                                        onChange={(e) => updateSetting('msa_local_db', e.target.value)}
+                                                        placeholder="system default"
+                                                        className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300 font-mono"
+                                                    />
+                                                </div>
+
+                                                <div>
+                                                    <label className="block text-xs text-slate-500 mb-1">MSA Cache Dir Override</label>
+                                                    <input
+                                                        type="text"
+                                                        value={settings.msa_cache_dir}
+                                                        onChange={(e) => updateSetting('msa_cache_dir', e.target.value)}
+                                                        placeholder="system default"
+                                                        className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300 font-mono"
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                                <div>
+                                                    <label className="block text-xs text-slate-500 mb-1">GPU Mode</label>
+                                                    <select
+                                                        value={settings.msa_gpu_mode}
+                                                        onChange={(e) => updateSetting('msa_gpu_mode', e.target.value)}
+                                                        className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300"
+                                                    >
+                                                        <option value="auto">Auto</option>
+                                                        <option value="opportunistic">Opportunistic</option>
+                                                        <option value="required">Required</option>
+                                                        <option value="cpu">CPU Only</option>
+                                                    </select>
+                                                </div>
+
+                                                <div>
+                                                    <label className="block text-xs text-slate-500 mb-1">GPU Threshold (%)</label>
+                                                    <input
+                                                        type="number"
+                                                        min={0}
+                                                        max={100}
+                                                        value={settings.msa_gpu_threshold}
+                                                        onChange={(e) => updateSetting('msa_gpu_threshold', Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0)))}
+                                                        className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300"
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                                <div>
+                                                    <label className="block text-xs text-slate-500 mb-1">Preferred GPUs</label>
+                                                    <input
+                                                        type="text"
+                                                        value={settings.msa_preferred_gpus}
+                                                        onChange={(e) => updateSetting('msa_preferred_gpus', e.target.value.replace(/[^0-9,]/g, ''))}
+                                                        placeholder="0,1"
+                                                        className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300"
+                                                    />
+                                                </div>
+
+                                                <div>
+                                                    <label className="block text-xs text-slate-500 mb-1">Excluded GPUs</label>
+                                                    <input
+                                                        type="text"
+                                                        value={settings.msa_excluded_gpus}
+                                                        onChange={(e) => updateSetting('msa_excluded_gpus', e.target.value.replace(/[^0-9,]/g, ''))}
+                                                        placeholder="2,3"
+                                                        className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300"
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                                                <div>
+                                                    <label className="block text-xs text-slate-500 mb-1">GPU Server Mode</label>
+                                                    <select
+                                                        value={settings.msa_gpu_server_mode}
+                                                        onChange={(e) => updateSetting('msa_gpu_server_mode', e.target.value)}
+                                                        className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300"
+                                                    >
+                                                        <option value="auto">Auto</option>
+                                                        <option value="required">Required</option>
+                                                        <option value="persistent">Persistent</option>
+                                                        <option value="off">Off</option>
+                                                    </select>
+                                                </div>
+
+                                                <div>
+                                                    <label className="block text-xs text-slate-500 mb-1">GPU Server Wait Timeout (s)</label>
+                                                    <input
+                                                        type="number"
+                                                        min={-1}
+                                                        value={settings.msa_gpu_server_wait_timeout}
+                                                        onChange={(e) => {
+                                                            const parsed = parseInt(e.target.value, 10);
+                                                            updateSetting('msa_gpu_server_wait_timeout', Number.isFinite(parsed) ? Math.max(-1, parsed) : 120);
+                                                        }}
+                                                        className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300"
+                                                    />
+                                                </div>
+
+                                                <div>
+                                                    <label className="block text-xs text-slate-500 mb-1">GPU Server Startup Wait (s)</label>
+                                                    <input
+                                                        type="number"
+                                                        min={0}
+                                                        step={0.1}
+                                                        value={settings.msa_gpu_server_startup_wait}
+                                                        onChange={(e) => updateSetting('msa_gpu_server_startup_wait', Math.max(0, parseFloat(e.target.value) || 0))}
+                                                        className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300"
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            <div>
+                                                <label className="block text-xs text-slate-500 mb-1">GPU Server DB Load Mode</label>
+                                                <input
+                                                    type="number"
+                                                    min={0}
+                                                    value={settings.msa_gpu_server_db_load_mode}
+                                                    onChange={(e) => updateSetting('msa_gpu_server_db_load_mode', Math.max(0, Math.min(3, parseInt(e.target.value, 10) || 0)))}
+                                                    className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300"
+                                                />
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    )}
 
                     {/* FAMPNN Settings */}
                     <div className="space-y-3 pt-3 border-t border-slate-700/50">

@@ -767,14 +767,15 @@ export function JobSubmission() {
                                             {
                                                 id: 'antibody_denovo',
                                                 name: 'RFantibody+',
-                                                description: 'Generate novel antibodies targeting an antigen. Uses RFantibody for backbone generation, FAMPNN for sequence design, and Boltz2 for validation.',
+                                                description: 'Generate and iteratively refine antibody binders with RFantibody backbones, FAMPNN sequence design, optional PPIFlow maturation, and validator-driven review.',
                                                 icon: 'flask',
                                                 color: '#14B8A6', // Teal (was Emerald)
                                                 stages: [
-                                                    { tool: 'RFantibody' },
+                                                    { tool: 'RFantibody Backbones' },
                                                     { tool: 'FAMPNN' },
-                                                    { tool: 'Boltz2' },
-                                                    { tool: 'AntiBERTy' }
+                                                    { tool: 'PPIFlow (Opt.)' },
+                                                    { tool: 'Protenix / Boltz2' },
+                                                    { tool: 'Review + QC' }
                                                 ]
                                             },
                                             // BoltzGEN (Ligand-Aware Binder Design)

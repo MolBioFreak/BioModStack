@@ -149,7 +149,8 @@ process BatchProtenixValidation {
     def n_sample = params.protenix_n_sample ?: 5
     def n_step = params.protenix_n_step ?: 200
     def n_cycle = params.protenix_n_cycle ?: 10
-    def use_template = (params.protenix_use_template == true || params.protenix_use_template == 'true')
+    def requested_template = (params.protenix_use_template == true || params.protenix_use_template == 'true')
+    def use_template = requested_template
     def enable_cache = (params.protenix_enable_cache == true || params.protenix_enable_cache == 'true' || params.protenix_enable_cache == null)
     def enable_fusion = (params.protenix_enable_fusion == true || params.protenix_enable_fusion == 'true' || params.protenix_enable_fusion == null)
     def use_msa = (params.protenix_use_msa == true || params.protenix_use_msa == 'true' || params.protenix_use_msa == null)
@@ -202,6 +203,11 @@ process BatchProtenixValidation {
         --pdb_files ${pdbs} \\
         --out_json input.json \\
         --seeds "${seeds}"
+
+    echo "[BatchProtenixValidation] Antibody validator mode: sequence-only complex co-fold with original chain IDs preserved in input.json." | tee -a protenix_batch.log
+    if [ "${use_template}" = "true" ]; then
+        echo "[BatchProtenixValidation] Template DB conditioning enabled for this run; no target/binder coordinate locking is applied." | tee -a protenix_batch.log
+    fi
 
     PROTENIX_INPUT_JSON="input.json"
     if [ "${use_msa}" = "true" ]; then

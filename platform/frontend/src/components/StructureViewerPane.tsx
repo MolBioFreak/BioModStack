@@ -3,6 +3,7 @@ import MolstarViewer from './MolstarViewer';
 import ChainDetailsPanel from './ChainDetailsPanel';
 import { useThemeColors } from './useThemeColors';
 import type { Design, Job, StructureAnalysis, ChainMetric } from '../lib/api';
+import { inferDesignOutputSource } from './designOutputSource';
 
 interface Selection {
     chain_id?: string;
@@ -29,19 +30,14 @@ interface Props {
 type OverlayView = 'metrics' | 'plddt' | 'pae';
 
 function getDesignOriginLabel(design: Design | null | undefined): string | null {
-    const path = design?.pdb_path || '';
-    const metrics = design?.confidence_metrics || {};
-
-    if (path.includes('/validated_designs/')) {
-        if (typeof metrics === 'object' && metrics && ('gpde' in metrics || 'ranking_score' in metrics || 'chain_pair_iptm' in metrics)) {
-            return 'Protenix Validation';
-        }
-        return 'Validated Structure';
+    const source = inferDesignOutputSource(design || {});
+    if (source === 'validation') {
+        return 'Protenix Validation';
     }
-    if (path.includes('/collected/fampnn/') || path.includes('/collected/fampnn_filtered/') || path.includes('/fampnn_filtered/')) {
+    if (source === 'fampnn') {
         return 'FAMPNN Candidate';
     }
-    if (path.includes('/collected/rfantibody/') || path.includes('/collected/rfantibody_raw/') || path.includes('/collected/rfantibody_filtered/') || path.includes('/rfantibody/')) {
+    if (source === 'rfantibody') {
         return 'RFantibody Backbone';
     }
     return null;

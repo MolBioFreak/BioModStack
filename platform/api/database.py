@@ -132,6 +132,7 @@ class Design(Base):
     pae_overall = Column(Float, nullable=True)
     rmsd_overall = Column(Float, nullable=True)
     rmsd_binder = Column(Float, nullable=True)
+    rmsd_target = Column(Float, nullable=True)
     
     # Boltz-2 specific
     conf_score = Column(Float, nullable=True)
@@ -170,6 +171,8 @@ class Design(Base):
     backbone_id = Column(Integer, nullable=True, index=True)  # Job number from design name (antibody_job_X)
     epitope_contact_count = Column(Integer, nullable=True)    # CDR residues within 8Å of epitope
     epitope_min_distance = Column(Float, nullable=True)       # Closest CDR-epitope distance (Å)
+    target_contact_count = Column(Integer, nullable=True)     # Total target-contact count from RFA screening
+    screening_reason = Column(String(255), nullable=True)     # RFantibody screening pass/fail summary
 
     # ═══════════════════════════════════════════════════════════════════════════
     # ANTIBODY / DISCOVERY METRICS

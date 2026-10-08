@@ -856,9 +856,24 @@ def _build_manual_mutagenesis_iteration_job(
             "protenix_enable_cache",
             "protenix_enable_fusion",
             "protenix_msa_backend",
+            "protenix_auto_oom_retry",
+            "protenix_oom_retry_attempts",
+            "msa_preset",
+            "msa_use_gpu",
+            "msa_local_db",
+            "msa_cache_dir",
+            "msa_threads",
             "colabfold_api_host",
             "colabfold_api_min_interval",
             "colabfold_api_poll_interval",
+            "msa_gpu_mode",
+            "msa_gpu_threshold",
+            "msa_preferred_gpus",
+            "msa_excluded_gpus",
+            "msa_gpu_server_mode",
+            "msa_gpu_server_wait_timeout",
+            "msa_gpu_server_db_load_mode",
+            "msa_gpu_server_startup_wait",
         ):
             if key in base_params:
                 launch_params[key] = base_params[key]
@@ -872,9 +887,22 @@ def _build_manual_mutagenesis_iteration_job(
             "boltz_step_scale",
             "boltz_predict_affinity",
             "boltz_diffusion_samples_affinity",
+            "msa_preset",
+            "msa_use_gpu",
+            "msa_local_db",
+            "msa_cache_dir",
+            "msa_threads",
             "colabfold_api_host",
             "colabfold_api_min_interval",
             "colabfold_api_poll_interval",
+            "msa_gpu_mode",
+            "msa_gpu_threshold",
+            "msa_preferred_gpus",
+            "msa_excluded_gpus",
+            "msa_gpu_server_mode",
+            "msa_gpu_server_wait_timeout",
+            "msa_gpu_server_db_load_mode",
+            "msa_gpu_server_startup_wait",
         ):
             if key in base_params:
                 launch_params[key] = base_params[key]
@@ -1093,9 +1121,24 @@ def _build_cdr_indel_iteration_job(
             "protenix_enable_cache",
             "protenix_enable_fusion",
             "protenix_msa_backend",
+            "protenix_auto_oom_retry",
+            "protenix_oom_retry_attempts",
+            "msa_preset",
+            "msa_use_gpu",
+            "msa_local_db",
+            "msa_cache_dir",
+            "msa_threads",
             "colabfold_api_host",
             "colabfold_api_min_interval",
             "colabfold_api_poll_interval",
+            "msa_gpu_mode",
+            "msa_gpu_threshold",
+            "msa_preferred_gpus",
+            "msa_excluded_gpus",
+            "msa_gpu_server_mode",
+            "msa_gpu_server_wait_timeout",
+            "msa_gpu_server_db_load_mode",
+            "msa_gpu_server_startup_wait",
         ):
             if key in base_params:
                 launch_params[key] = base_params[key]
@@ -1109,9 +1152,22 @@ def _build_cdr_indel_iteration_job(
             "boltz_step_scale",
             "boltz_predict_affinity",
             "boltz_diffusion_samples_affinity",
+            "msa_preset",
+            "msa_use_gpu",
+            "msa_local_db",
+            "msa_cache_dir",
+            "msa_threads",
             "colabfold_api_host",
             "colabfold_api_min_interval",
             "colabfold_api_poll_interval",
+            "msa_gpu_mode",
+            "msa_gpu_threshold",
+            "msa_preferred_gpus",
+            "msa_excluded_gpus",
+            "msa_gpu_server_mode",
+            "msa_gpu_server_wait_timeout",
+            "msa_gpu_server_db_load_mode",
+            "msa_gpu_server_startup_wait",
         ):
             if key in base_params:
                 launch_params[key] = base_params[key]
@@ -1877,6 +1933,8 @@ async def list_jobs(
             design_count=design_count,  # Now joined from DB
             batch_id=job.batch_id,
             batch_name=job.batch_name,
+            parent_job_id=job.parent_job_id,
+            child_stage=job.child_stage,
             current_stage=job.current_stage,
             completed_stages=completed_stages,
             stage_outputs=stage_outputs,
@@ -1960,6 +2018,10 @@ async def create_job(
                 output_dir=existing_child.output_dir,
                 error_message=existing_child.error_message,
                 design_count=0,
+                batch_id=existing_child.batch_id,
+                batch_name=existing_child.batch_name,
+                parent_job_id=existing_child.parent_job_id,
+                child_stage=existing_child.child_stage,
                 awaiting_input=existing_child.awaiting_input,
                 awaiting_stage=existing_child.awaiting_stage,
                 awaiting_payload=existing_child.awaiting_payload,
@@ -2330,6 +2392,10 @@ async def create_job(
         output_dir=first_job.output_dir,
         error_message=first_job.error_message,
         design_count=0,
+        batch_id=first_job.batch_id,
+        batch_name=first_job.batch_name,
+        parent_job_id=first_job.parent_job_id,
+        child_stage=first_job.child_stage,
         awaiting_input=first_job.awaiting_input,
         awaiting_stage=first_job.awaiting_stage,
         awaiting_payload=first_job.awaiting_payload,
@@ -2483,6 +2549,10 @@ async def get_job(
         output_dir=job.output_dir,
         error_message=job.error_message,
         design_count=design_count or 0,
+        batch_id=job.batch_id,
+        batch_name=job.batch_name,
+        parent_job_id=job.parent_job_id,
+        child_stage=job.child_stage,
         current_stage=job.current_stage,
         completed_stages=completed_stages,
         stage_outputs=stage_outputs,
@@ -2850,7 +2920,13 @@ async def annotate_cdr_regions(
     designs = designs_result.scalars().all()
     
     if not designs:
-        raise HTTPException(status_code=400, detail="No designs found for this job")
+        return {
+            "message": "No designs available for CDR annotation yet",
+            "job_id": job_id,
+            "status": "skipped",
+            "pending": 0,
+            "total": 0
+        }
     
     # Always re-annotate ALL designs (allows fixing bad annotations)
     designs_to_annotate = list(designs)
