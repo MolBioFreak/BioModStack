@@ -25,6 +25,7 @@ from services.conformational_mapping.contracts import (  # noqa: E402
     validate_schema,
 )
 from services.conformational_mapping.request_builder import (  # noqa: E402
+    bind_materialized_source_snapshot,
     ConformationalMappingRequestError,
     build_confornets_coordinate_plan,
     materialize_trusted_internal_request,
@@ -34,6 +35,75 @@ from template_registry import TemplateRegistry  # noqa: E402
 
 
 BACKENDS = ("protenix_v2_ensemble", "confornets", "external_import")
+
+
+def test_snapshot_reseal_rejects_invalid_existing_request_and_plan_authority(tmp_path: Path) -> None:
+    request_materialized = materialize_trusted_internal_request(
+        _request_params("external_import"),
+        output_dir=tmp_path / "request",
+        request_id="00000000-0000-4000-8000-000000000701",
+    )
+    request = json.loads(request_materialized.request_path.read_text())
+    request["request_sha256"] = "0" * 64
+    request_materialized.request_path.write_bytes(canonical_json_bytes(request))
+    with pytest.raises(ConformationalMappingRequestError, match="request_sha256"):
+        bind_materialized_source_snapshot(
+            request_materialized, source_snapshot_sha256="a" * 64,
+        )
+
+    plan_materialized = materialize_trusted_internal_request(
+        _request_params("external_import"),
+        output_dir=tmp_path / "plan",
+        request_id="00000000-0000-4000-8000-000000000702",
+    )
+    plan = json.loads(plan_materialized.coordinate_plan_path.read_text())
+    plan["request_id"] = "00000000-0000-4000-8000-000000000799"
+    plan["coordinate_plan_sha256"] = canonical_sha256({
+        key: value for key, value in plan.items() if key != "coordinate_plan_sha256"
+    })
+    plan_materialized.coordinate_plan_path.write_bytes(canonical_json_bytes(plan))
+    with pytest.raises(ConformationalMappingRequestError, match="trusted authority"):
+        bind_materialized_source_snapshot(plan_materialized, source_snapshot_sha256="a" * 64)
+
+    coordinate_materialized = materialize_trusted_internal_request(
+        _request_params("external_import"),
+        output_dir=tmp_path / "coordinates",
+        request_id="00000000-0000-4000-8000-000000000703",
+    )
+    coordinate_plan = json.loads(coordinate_materialized.coordinate_plan_path.read_text())
+    coordinate_plan["coordinates"][0]["staged_index"] = 99
+    coordinate_plan["coordinate_plan_sha256"] = canonical_sha256({
+        key: value for key, value in coordinate_plan.items() if key != "coordinate_plan_sha256"
+    })
+    coordinate_materialized.coordinate_plan_path.write_bytes(canonical_json_bytes(coordinate_plan))
+    with pytest.raises(ConformationalMappingRequestError, match="trusted authority"):
+        bind_materialized_source_snapshot(
+            coordinate_materialized, source_snapshot_sha256="a" * 64,
+        )
+
+    for suffix, request_id, mutation in (
+        (
+            "extra", "00000000-0000-4000-8000-000000000704",
+            lambda coordinate: coordinate.__setitem__("unexpected", "value"),
+        ),
+        (
+            "source", "00000000-0000-4000-8000-000000000705",
+            lambda coordinate: coordinate.__setitem__("source_content_sha256", "f" * 64),
+        ),
+    ):
+        tampered = materialize_trusted_internal_request(
+            _request_params("external_import"),
+            output_dir=tmp_path / suffix,
+            request_id=request_id,
+        )
+        tampered_plan = json.loads(tampered.coordinate_plan_path.read_text())
+        mutation(tampered_plan["coordinates"][0])
+        tampered_plan["coordinate_plan_sha256"] = canonical_sha256({
+            key: value for key, value in tampered_plan.items() if key != "coordinate_plan_sha256"
+        })
+        tampered.coordinate_plan_path.write_bytes(canonical_json_bytes(tampered_plan))
+        with pytest.raises(ConformationalMappingRequestError, match="trusted authority"):
+            bind_materialized_source_snapshot(tampered, source_snapshot_sha256="a" * 64)
 
 
 def _request_params(backend: str = "protenix_v2_ensemble") -> dict[str, object]:

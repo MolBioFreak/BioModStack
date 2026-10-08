@@ -18,6 +18,7 @@ process CanonicalConformationalImport {
     set -euo pipefail
     python3 ${params.code_root}/scripts/finalize_import_conformational_mapping.py \
       --request ${request_root}/cm_request_v1.json \
+      --snapshot ${request_root}/cm_complex_snapshots_v1.json \
       --staged-root ${request_root}/registered_import \
       --out canonical_import
     """

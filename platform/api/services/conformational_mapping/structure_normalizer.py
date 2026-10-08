@@ -29,6 +29,45 @@ from .contracts import (
 
 
 BACKBONE_ATOMS = ("N", "CA", "C", "O")
+
+
+def _protein_atom_names(
+    heavy_atoms: str, hydrogen_atoms: str,
+) -> frozenset[str]:
+    names = set(heavy_atoms.split()) | set(hydrogen_atoms.split())
+    names.add("HXT")
+    # Accept both current suffix-numbered and legacy PDB prefix-numbered
+    # hydrogen spelling (HB2 / 2HB, HH11 / 1HH1).
+    names.update(
+        f"{name[-1]}{name[:-1]}"
+        for name in tuple(names)
+        if name.startswith("H") and name[-1].isdigit()
+    )
+    return frozenset(names)
+
+
+STANDARD_PROTEIN_ATOMS = {
+    "ALA": _protein_atom_names("N CA C O OXT CB", "H H1 H2 H3 HA HB1 HB2 HB3"),
+    "ARG": _protein_atom_names("N CA C O OXT CB CG CD NE CZ NH1 NH2", "H H1 H2 H3 HA HB2 HB3 HG2 HG3 HD2 HD3 HE HH11 HH12 HH21 HH22"),
+    "ASN": _protein_atom_names("N CA C O OXT CB CG OD1 ND2", "H H1 H2 H3 HA HB2 HB3 HD21 HD22"),
+    "ASP": _protein_atom_names("N CA C O OXT CB CG OD1 OD2", "H H1 H2 H3 HA HB2 HB3 HD2"),
+    "CYS": _protein_atom_names("N CA C O OXT CB SG", "H H1 H2 H3 HA HB2 HB3 HG"),
+    "GLN": _protein_atom_names("N CA C O OXT CB CG CD OE1 NE2", "H H1 H2 H3 HA HB2 HB3 HG2 HG3 HE21 HE22"),
+    "GLU": _protein_atom_names("N CA C O OXT CB CG CD OE1 OE2", "H H1 H2 H3 HA HB2 HB3 HG2 HG3 HE2"),
+    "GLY": _protein_atom_names("N CA C O OXT", "H H1 H2 H3 HA2 HA3"),
+    "HIS": _protein_atom_names("N CA C O OXT CB CG ND1 CD2 CE1 NE2", "H H1 H2 H3 HA HB2 HB3 HD1 HD2 HE1 HE2"),
+    "ILE": _protein_atom_names("N CA C O OXT CB CG1 CG2 CD1", "H H1 H2 H3 HA HB HG12 HG13 HG21 HG22 HG23 HD11 HD12 HD13"),
+    "LEU": _protein_atom_names("N CA C O OXT CB CG CD1 CD2", "H H1 H2 H3 HA HB2 HB3 HG HD11 HD12 HD13 HD21 HD22 HD23"),
+    "LYS": _protein_atom_names("N CA C O OXT CB CG CD CE NZ", "H H1 H2 H3 HA HB2 HB3 HG2 HG3 HD2 HD3 HE2 HE3 HZ1 HZ2 HZ3"),
+    "MET": _protein_atom_names("N CA C O OXT CB CG SD CE", "H H1 H2 H3 HA HB2 HB3 HG2 HG3 HE1 HE2 HE3"),
+    "PHE": _protein_atom_names("N CA C O OXT CB CG CD1 CD2 CE1 CE2 CZ", "H H1 H2 H3 HA HB2 HB3 HD1 HD2 HE1 HE2 HZ"),
+    "PRO": _protein_atom_names("N CA C O OXT CB CG CD", "H1 H2 H3 HA HB2 HB3 HG2 HG3 HD2 HD3"),
+    "SER": _protein_atom_names("N CA C O OXT CB OG", "H H1 H2 H3 HA HB2 HB3 HG"),
+    "THR": _protein_atom_names("N CA C O OXT CB OG1 CG2", "H H1 H2 H3 HA HB HG1 HG21 HG22 HG23"),
+    "TRP": _protein_atom_names("N CA C O OXT CB CG CD1 CD2 NE1 CE2 CE3 CZ2 CZ3 CH2", "H H1 H2 H3 HA HB2 HB3 HD1 HE1 HE3 HZ2 HZ3 HH2"),
+    "TYR": _protein_atom_names("N CA C O OXT CB CG CD1 CD2 CE1 CE2 CZ OH", "H H1 H2 H3 HA HB2 HB3 HD1 HD2 HE1 HE2 HH"),
+    "VAL": _protein_atom_names("N CA C O OXT CB CG1 CG2", "H H1 H2 H3 HA HB HG11 HG12 HG13 HG21 HG22 HG23"),
+}
 STANDARD_PROTEIN_RESIDUES = frozenset(
     {
         "ALA",
@@ -664,13 +703,75 @@ def _pdb_atom_name(atom_name: str, element: str) -> str:
     return f"{atom_name:>4}"
 
 
+def validate_pdb_atom_representability(
+    *,
+    atom_name: str,
+    element: str,
+    residue_name: str,
+    residue_id: int,
+    insertion_code: str,
+    x: float,
+    y: float,
+    z: float,
+    occupancy: float,
+    b_factor: float,
+) -> None:
+    """Reject atom fields that the mandatory fixed-width ASCII PDB cannot encode."""
+
+    for field, value in (
+        ("atom name", atom_name),
+        ("element", element),
+        ("residue name", residue_name),
+        ("insertion code", insertion_code),
+    ):
+        if not value.isascii():
+            raise StructureMapError(f"PDB {field} must be ASCII")
+    if len(element) > 2:
+        raise StructureMapError(f"PDB element field cannot represent {element!r}")
+    if len(residue_name) > 3:
+        raise StructureMapError(f"PDB residue name cannot represent {residue_name!r}")
+    if len(insertion_code) > 1:
+        raise StructureMapError("PDB insertion code exceeds one character")
+    allowed_atoms = STANDARD_PROTEIN_ATOMS.get(residue_name)
+    if allowed_atoms is not None:
+        if atom_name not in allowed_atoms:
+            raise StructureMapError(
+                f"atom name {atom_name!r} is not valid for standard residue {residue_name}"
+            )
+        expected_element = next(
+            (character for character in atom_name if character.isalpha()), ""
+        )
+        if expected_element != element:
+            raise StructureMapError(
+                f"atom name {atom_name!r} is inconsistent with element {element!r}"
+            )
+    if not -999 <= residue_id <= 9999:
+        raise StructureMapError(f"PDB residue number field cannot represent {residue_id}")
+    _pdb_atom_name(atom_name, element)
+    _pdb_field(x, 8, 3, "x coordinate")
+    _pdb_field(y, 8, 3, "y coordinate")
+    _pdb_field(z, 8, 3, "z coordinate")
+    _pdb_field(occupancy, 6, 2, "occupancy")
+    _pdb_field(b_factor, 6, 2, "B factor")
+
+
 def _pdb_atom_line(
     atom: _AtomSite, *, serial: int, chain_id: str, residue_id: int, insertion_code: str
 ) -> str:
     if not 1 <= serial <= 99999:
         raise StructureMapError(f"PDB atom serial field overflow: {serial}")
-    if not -999 <= residue_id <= 9999:
-        raise StructureMapError(f"PDB residue number field cannot represent {residue_id}")
+    validate_pdb_atom_representability(
+        atom_name=atom.atom_name,
+        element=atom.element,
+        residue_name=atom.residue_name,
+        residue_id=residue_id,
+        insertion_code=insertion_code,
+        x=atom.x,
+        y=atom.y,
+        z=atom.z,
+        occupancy=atom.occupancy,
+        b_factor=atom.b_factor,
+    )
     record = "HETATM" if atom.record_type == "HETATM" else "ATOM  "
     line = (
         f"{record}{serial:5d} "

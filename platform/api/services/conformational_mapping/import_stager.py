@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import stat
 import shutil
@@ -13,6 +14,12 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
 from .contracts import candidate_id, canonical_json_bytes, canonical_sha256, validate_schema
+from .import_snapshot import (
+    ImportSnapshotError,
+    MAX_IMPORT_MMCIF_BYTES,
+    normalized_import_snapshot_sha256,
+    read_staged_import_file_at,
+)
 
 
 MAX_IMPORT_FILES = 256
@@ -23,13 +30,6 @@ _ALLOWED_SUFFIXES = {".cif", ".mmcif", ".pdb"}
 class ImportStagingError(ValueError):
     """An import could not be authenticated and copied without ambiguity."""
 
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 @dataclass(frozen=True)
@@ -58,11 +58,11 @@ def verify_registered_artifact(
         raise ImportStagingError("registered artifact is not authorized for this principal")
     descriptor, before = _open_registered(artifact)
     try:
-        digest, size_bytes, _prefix = _digest_fd(descriptor)
+        if before.st_size > maximum_bytes:
+            raise ImportStagingError("registered artifact exceeds the allowed byte limit")
+        digest, size_bytes, _prefix = _digest_fd(descriptor, maximum_bytes=maximum_bytes)
         after = os.fstat(descriptor)
         fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
-        if size_bytes > maximum_bytes:
-            raise ImportStagingError("registered artifact exceeds the allowed byte limit")
         if any(getattr(before, field) != getattr(after, field) for field in fields):
             raise ImportStagingError("registered artifact changed during verification")
         if digest != artifact.content_sha256 or size_bytes != artifact.size_bytes:
@@ -81,9 +81,9 @@ def read_registered_artifact(
         raise ImportStagingError("registered artifact is not authorized for this principal")
     descriptor, before = _open_registered(artifact)
     try:
-        digest, size_bytes, _prefix = _digest_fd(descriptor)
-        if size_bytes > maximum_bytes:
+        if before.st_size > maximum_bytes:
             raise ImportStagingError("registered artifact exceeds the allowed byte limit")
+        digest, size_bytes, _prefix = _digest_fd(descriptor, maximum_bytes=maximum_bytes)
         if digest != artifact.content_sha256 or size_bytes != artifact.size_bytes:
             raise ImportStagingError("registered artifact identity changed")
         os.lseek(descriptor, 0, os.SEEK_SET)
@@ -109,6 +109,7 @@ def stage_registered_assets(
     *,
     principal_id: str,
     destination_root: Path | str,
+    maximum_bytes: int = MAX_IMPORT_BYTES,
 ) -> dict[str, Path]:
     """Copy authenticated non-structure runtime assets by registered identity."""
 
@@ -121,7 +122,9 @@ def stage_registered_assets(
                 raise ImportStagingError("runtime asset identity is unauthorized or duplicated")
             descriptor, before = _open_registered(artifact)
             try:
-                digest, size_bytes, _prefix = _digest_fd(descriptor)
+                if before.st_size > maximum_bytes:
+                    raise ImportStagingError("registered runtime asset exceeds the allowed byte limit")
+                digest, size_bytes, _prefix = _digest_fd(descriptor, maximum_bytes=maximum_bytes)
                 if digest != artifact.content_sha256 or size_bytes != artifact.size_bytes:
                     raise ImportStagingError("registered runtime asset identity changed")
                 suffix = Path(artifact.relative_path).suffix.lower()
@@ -139,6 +142,10 @@ def stage_registered_assets(
                         chunk = os.read(descriptor, 1024 * 1024)
                         if not chunk:
                             break
+                        if copied_size + len(chunk) > maximum_bytes:
+                            raise ImportStagingError(
+                                "registered runtime asset exceeds the byte limit during staging"
+                            )
                         _write_all(output_fd, chunk)
                         copied.update(chunk)
                         copied_size += len(chunk)
@@ -164,7 +171,7 @@ def stage_registered_assets(
         raise
 
 
-def _digest_fd(descriptor: int) -> tuple[str, int, bytes]:
+def _digest_fd(descriptor: int, *, maximum_bytes: int = MAX_IMPORT_BYTES) -> tuple[str, int, bytes]:
     digest = hashlib.sha256()
     total = 0
     prefix = bytearray()
@@ -176,7 +183,7 @@ def _digest_fd(descriptor: int) -> tuple[str, int, bytes]:
         total += len(chunk)
         if len(prefix) < 8192:
             prefix.extend(chunk[: 8192 - len(prefix)])
-        if total > MAX_IMPORT_BYTES:
+        if total > maximum_bytes:
             raise ImportStagingError("registered artifact exceeds the import byte limit")
         digest.update(chunk)
     os.lseek(descriptor, 0, os.SEEK_SET)
@@ -271,6 +278,7 @@ def stage_registered_artifacts(
     principal_id: str,
     request_id: str,
     destination_root: Path | str,
+    maximum_bytes: int = MAX_IMPORT_BYTES,
 ) -> StagedImport:
     """Copy registered IDs into an immutable request-owned directory.
 
@@ -299,7 +307,9 @@ def stage_registered_artifacts(
                 raise ImportStagingError("registered artifact is not authorized for this principal")
             descriptor, before = _open_registered(artifact)
             try:
-                digest, size_bytes, prefix = _digest_fd(descriptor)
+                if before.st_size > maximum_bytes:
+                    raise ImportStagingError("registered artifact exceeds the import byte limit")
+                digest, size_bytes, prefix = _digest_fd(descriptor, maximum_bytes=maximum_bytes)
                 suffix = Path(artifact.relative_path).suffix.lower()
                 _inspect_structure(suffix, prefix)
                 if digest != artifact.content_sha256 or size_bytes != artifact.size_bytes:
@@ -320,6 +330,10 @@ def stage_registered_artifacts(
                         chunk = os.read(descriptor, 1024 * 1024)
                         if not chunk:
                             break
+                        if copied_size + len(chunk) > maximum_bytes:
+                            raise ImportStagingError(
+                                "registered artifact exceeds the import byte limit during staging"
+                            )
                         _write_all(output_fd, chunk)
                         copied_digest.update(chunk)
                         copied_size += len(chunk)
@@ -372,28 +386,79 @@ def stage_registered_artifacts(
         raise
 
 
+def _read_staged_finalization_inputs(
+    root: Path,
+    *,
+    request_id: object,
+) -> tuple[bytes, dict[str, Any], bytes]:
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        root_descriptor = os.open(root, directory_flags)
+    except OSError as exc:
+        raise ImportStagingError("immutable import root is missing or unsafe") from exc
+    try:
+        receipt_bytes = read_staged_import_file_at(
+            root_descriptor, PurePosixPath("cm_import_receipt_v1.json"), maximum_bytes=1024 * 1024,
+        )
+        receipt = json.loads(receipt_bytes.decode("utf-8"))
+        supplied_hash = receipt.get("receipt_sha256")
+        expected_hash = canonical_sha256({key: value for key, value in receipt.items() if key != "receipt_sha256"})
+        entries = receipt.get("entries")
+        if (
+            supplied_hash != expected_hash or receipt.get("request_id") != request_id
+            or not isinstance(entries, list) or len(entries) != 1
+        ):
+            raise ImportStagingError("import receipt identity or cardinality mismatch")
+        relative = _canonical_relative(str(entries[0].get("destination_relative_path") or ""))
+        artifact_bytes = read_staged_import_file_at(
+            root_descriptor, relative, maximum_bytes=MAX_IMPORT_MMCIF_BYTES,
+        )
+        return receipt_bytes, receipt, artifact_bytes
+    except (ImportSnapshotError, UnicodeDecodeError, ValueError, TypeError) as exc:
+        if isinstance(exc, ImportStagingError):
+            raise
+        raise ImportStagingError("immutable import receipt or artifact is invalid") from exc
+    finally:
+        os.close(root_descriptor)
+
+
 def finalize_staged_import(
     request: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
     staged_root: Path | str,
     output_root: Path | str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Publish import manifests solely from the immutable staging receipt."""
 
-    root = Path(staged_root).resolve(strict=True)
-    receipt_path = root / "cm_import_receipt_v1.json"
-    if not receipt_path.is_file() or receipt_path.is_symlink():
-        raise ImportStagingError("immutable import receipt is missing")
-    receipt = __import__("json").loads(receipt_path.read_text(encoding="utf-8"))
+    root = Path(staged_root)
+    receipt_bytes, receipt, artifact_bytes = _read_staged_finalization_inputs(
+        root, request_id=request.get("request_id"),
+    )
     supplied_hash = receipt.get("receipt_sha256")
     expected_hash = canonical_sha256({key: value for key, value in receipt.items() if key != "receipt_sha256"})
     if supplied_hash != expected_hash or receipt.get("request_id") != request.get("request_id"):
         raise ImportStagingError("import receipt identity mismatch")
+    validate_schema("cm_request_v1", request)
+    if request.get("import_receipt_id") != supplied_hash:
+        raise ImportStagingError("request import receipt identity does not match staged receipt")
+    validate_schema("cm_complex_snapshot_v1", snapshot)
+    snapshot_hash = canonical_sha256(snapshot)
+    if request.get("source_snapshot_sha256") != snapshot_hash:
+        raise ImportStagingError("import snapshot does not match the request-bound identity")
+    if snapshot.get("normalized_source_sha256") != normalized_import_snapshot_sha256(snapshot):
+        raise ImportStagingError("import snapshot normalized identity mismatch")
     targets = request.get("targets")
     entries = receipt.get("entries")
-    if not isinstance(targets, list) or not isinstance(entries, list) or len(targets) != len(entries):
-        raise ImportStagingError("import target/receipt cardinality mismatch")
+    if (
+        not isinstance(entries, list) or not isinstance(targets, list)
+        or len(entries) != 1 or len(targets) != 1
+        or snapshot.get("target_id") != targets[0].get("target_id")
+        or snapshot.get("target_order") != targets[0].get("target_order")
+    ):
+        raise ImportStagingError("import receipt/target cardinality mismatch")
     files: list[dict[str, Any]] = []
     candidates: list[dict[str, Any]] = []
+    validated_artifact: tuple[str, bytes] | None = None
     for target, entry in zip(targets, entries, strict=True):
         coordinates = {
             "backend": "external_import",
@@ -404,19 +469,23 @@ def finalize_staged_import(
         }
         stable_id = candidate_id(coordinates)
         relative_path = str(entry["destination_relative_path"])
-        artifact = (root / relative_path).resolve(strict=True)
-        artifact.relative_to(root)
-        if not artifact.is_file() or artifact.is_symlink():
-            raise ImportStagingError("staged import is not a safe regular file")
-        digest = _sha256_file(artifact)
-        if digest != entry["staged_content_sha256"] or artifact.stat().st_size != entry["staged_size_bytes"]:
+        if Path(relative_path).suffix.lower() not in {".cif", ".mmcif"}:
+            raise ImportStagingError("external import finalization accepts mmCIF only")
+        digest = hashlib.sha256(artifact_bytes).hexdigest()
+        if digest != entry["staged_content_sha256"] or len(artifact_bytes) != entry["staged_size_bytes"]:
             raise ImportStagingError("staged import byte identity mismatch")
+        if (
+            snapshot.get("original_source_path") != f"registered_import/{relative_path}"
+            or snapshot.get("original_source_sha256") != digest
+        ):
+            raise ImportStagingError("import snapshot source identity mismatch")
+        validated_artifact = (relative_path, artifact_bytes)
         files.append(
             {
                 "relative_path": relative_path,
                 "sha256": digest,
-                "bytes": artifact.stat().st_size,
-                "media_type": "chemical/x-mmcif" if artifact.suffix.lower() in {".cif", ".mmcif"} else "chemical/x-pdb",
+                "bytes": len(artifact_bytes),
+                "media_type": "chemical/x-mmcif",
                 "semantic_role": "authoritative_cif",
                 "candidate_id": stable_id,
                 "backend_coordinates": coordinates,
@@ -436,8 +505,8 @@ def finalize_staged_import(
     files.append(
         {
             "relative_path": "cm_import_receipt_v1.json",
-            "sha256": _sha256_file(receipt_path),
-            "bytes": receipt_path.stat().st_size,
+            "sha256": hashlib.sha256(receipt_bytes).hexdigest(),
+            "bytes": len(receipt_bytes),
             "media_type": "application/json",
             "semantic_role": "receipt",
             "candidate_id": None,
@@ -468,7 +537,7 @@ def finalize_staged_import(
         "schema_version": 1,
         "request_id": request["request_id"],
         "request_sha256": request["request_sha256"],
-        "source_snapshot_sha256": supplied_hash,
+        "source_snapshot_sha256": snapshot_hash,
         "backend": "external_import",
         "runtime_identity": "descriptor-safe-import-v1",
         "container_digest": "sha256:" + "0" * 64,
@@ -489,6 +558,9 @@ def finalize_staged_import(
         "resumable": False,
         "resume_descriptor": None,
     }
+    snapshot_candidate_ids = {item["candidate_id"] for item in snapshot["instance_mappings"]}
+    if snapshot_candidate_ids != {item["candidate_id"] for item in candidates}:
+        raise ImportStagingError("import snapshot candidate identity mismatch")
     validate_schema("cm_ensemble_v1", ensemble)
     output = Path(output_root)
     if output.exists():
@@ -496,7 +568,32 @@ def finalize_staged_import(
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=output.parent))
     try:
-        shutil.copytree(root, temporary / "native", copy_function=shutil.copy2)
+        if validated_artifact is None:
+            raise ImportStagingError("validated import artifact is missing")
+        relative_path, artifact_bytes = validated_artifact
+        native_artifact = temporary / "native" / relative_path
+        native_artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact_fd = os.open(
+            native_artifact,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o440,
+        )
+        try:
+            _write_all(artifact_fd, artifact_bytes)
+            os.fsync(artifact_fd)
+        finally:
+            os.close(artifact_fd)
+        receipt_output = temporary / "native" / "cm_import_receipt_v1.json"
+        receipt_fd = os.open(
+            receipt_output,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o440,
+        )
+        try:
+            _write_all(receipt_fd, receipt_bytes)
+            os.fsync(receipt_fd)
+        finally:
+            os.close(receipt_fd)
         _atomic_receipt(temporary / "cm_native_artifacts_v1.json", native)
         _atomic_receipt(temporary / "cm_ensemble_v1.json", ensemble)
         os.replace(temporary, output)
