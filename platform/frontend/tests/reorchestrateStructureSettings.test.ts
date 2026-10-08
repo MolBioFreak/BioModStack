@@ -120,7 +120,7 @@ test('builds focused overrides for re-orchestrating a boltz structure run', () =
     });
 });
 
-test('marks multi-predictor structure jobs as relevant and exposes only the active model families', () => {
+test('hydrates historical all-selector jobs as retired and blocks reinterpretation', () => {
     const job = {
         model_id: 'boltz2',
         mode: 'predict',
@@ -135,24 +135,44 @@ test('marks multi-predictor structure jobs as relevant and exposes only the acti
 
     const settings = deriveStructureReorchestrateSettings(job);
     assert.equal(isStructureReorchestrateJob(job), true);
-    assert.deepEqual(settings.predictors, ['boltz', 'rf3', 'protenix']);
+    assert.deepEqual(settings.predictors, ['boltz', 'protenix']);
+    assert.deepEqual(settings.retiredPredictors, ['rf3']);
     assert.equal(settings.skipMsa, false);
+    assert.throws(
+        () => buildStructureReorchestrateOverrides(job, settings),
+        /retired from Structure Prediction/i,
+    );
 });
 
-test('normalizes legacy complex all runs to boltz plus protenix for re-orchestration', () => {
+test('keeps a historical RF3-only job readable without a relaunch path', () => {
     const job = {
-        model_id: 'boltz2',
-        mode: 'complex',
+        model_id: 'rf3',
+        mode: 'predict',
         params: {
-            pred_method: 'all',
-            boltz_use_msa: true,
-            protenix_use_msa: true,
+            pred_method: 'rf3',
+            rf3_use_msa: true,
+            rf3_num_recycles: 10,
         },
     };
 
     const settings = deriveStructureReorchestrateSettings(job);
-    assert.deepEqual(settings.predictors, ['boltz', 'protenix']);
-    assert.equal(settings.msaProvider, 'colabfold_api');
+    assert.equal(isStructureReorchestrateJob(job), true);
+    assert.deepEqual(settings.predictors, []);
+    assert.deepEqual(settings.retiredPredictors, ['rf3']);
+    assert.throws(
+        () => buildStructureReorchestrateOverrides(job, settings),
+        /retired from Structure Prediction/i,
+    );
+});
+
+test('the Structure retry panel has no editable RF3 controls', () => {
+    const source = readFileSync(
+        new URL('../src/components/dashboard/StructureReorchestratePanel.tsx', import.meta.url),
+        'utf8',
+    );
+    assert.doesNotMatch(source, /updateRf3/);
+    assert.doesNotMatch(source, /RoseTTAFold 3 settings/);
+    assert.match(source, /retired historical predictor/i);
 });
 
 test('uses the 200-step Boltz default when retry metadata omitted sampling steps', () => {

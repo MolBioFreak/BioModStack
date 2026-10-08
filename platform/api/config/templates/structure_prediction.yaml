@@ -11,7 +11,7 @@ description: >
 
 stages:
   - name: Structure Prediction
-    tool: Boltz-2 / NVIDIA Fold-CP / RF3
+    tool: Boltz-2 / NVIDIA Fold-CP
     description: Run the selected predictor through the shared Structure launch surface.
   - name: Frustration Mapping
     tool: FrustraMPNN
@@ -27,12 +27,10 @@ user_params:
   - name: pred_method
     label: Structure Predictor
     type: enum
-    enum: [boltz, fold_cp, rf3, both]
+    enum: [boltz, fold_cp]
     enum_labels:
       boltz: Boltz-2 (Fast, SOTA accuracy)
       fold_cp: NVIDIA Fold-CP (OEM context parallelism)
-      rf3: RosettaFold3 (Open-source AF3 alternative)
-      both: Both (Run Boltz-2 and RF3 together)
     default: boltz
     required: true
     description: Deep learning model for structure prediction
@@ -83,7 +81,7 @@ user_params:
     description: Use the selected Structure MSA provider
     condition:
       param: pred_method
-      values: [boltz, fold_cp, both]
+      values: [boltz, fold_cp]
 
   - name: boltz_recycling_steps
     label: "[Boltz-2 / Fold-CP] Recycling Steps"
@@ -94,7 +92,7 @@ user_params:
     description: "Iterative refinement (Default: 3). Use 10 for difficult targets."
     condition:
       param: pred_method
-      values: [boltz, fold_cp, both]
+      values: [boltz, fold_cp]
     
   - name: boltz_sampling_steps
     label: "[Boltz-2 / Fold-CP] Sampling Steps"
@@ -105,7 +103,7 @@ user_params:
     description: "Diffusion steps (Default: 50). Higher = potential side-chain precision."
     condition:
       param: pred_method
-      values: [boltz, fold_cp, both]
+      values: [boltz, fold_cp]
     
   - name: boltz_num_samples
     label: "[Boltz-2 / Fold-CP] Number of Candidate Structures"
@@ -116,7 +114,7 @@ user_params:
     description: "Final ranked candidate structures generated from the same input; model_0 is shown as the top-ranked result."
     condition:
       param: pred_method
-      values: [boltz, fold_cp, both]
+      values: [boltz, fold_cp]
 
   # === NVIDIA Fold-CP OEM Parameters ===
   - name: bcp_size_cp
@@ -167,7 +165,7 @@ user_params:
     description: "Caps denoiser-forward chunk size for already-requested Boltz diffusion/FK particles; not a full one-at-a-time job guarantee."
     condition:
       param: pred_method
-      values: [boltz, both]
+      values: [boltz]
 
   - name: boltz_method
     label: "[Boltz-2] Conditioning Method"
@@ -197,115 +195,7 @@ user_params:
     description: Hint experimental context
     condition:
       param: pred_method
-      values: [boltz, both]
-    
-  # === RF3 Parameters ===
-  - name: rf3_use_msa
-    label: "[RF3] Use MSA"
-    type: boolean
-    default: true
-    description: Use local MSA database for accuracy (885GB UniRef30)
-    condition:
-      param: pred_method
-      values: [rf3, both]
-    
-  - name: rf3_num_recycles
-    label: "[RF3] Recycle Iterations"
-    type: integer
-    default: 10
-    minimum: 1
-    maximum: 20
-    description: "Structure refinement (Default: 10). Critical for accuracy."
-    condition:
-      param: pred_method
-      values: [rf3, both]
-    
-  - name: rf3_num_samples
-    label: "[RF3] Number of Samples"
-    type: integer
-    default: 1
-    minimum: 1
-    maximum: 32
-    description: Independent predictions (Seeds)
-    condition:
-      param: pred_method
-      values: [rf3, both]
-    
-  - name: rf3_early_stopping_plddt
-    label: "[RF3] Early Stop pLDDT"
-    type: number
-    default: 0.5
-    minimum: 0.0
-    maximum: 1.0
-    description: "Abort if quality < threshold (Default: 0.5)"
-    condition:
-      param: pred_method
-      values: [rf3, both]
-
-  # === RF3 Filter Thresholds ===
-  - name: rf3_min_plddt
-    label: "[RF3] Min pLDDT Filter"
-    type: number
-    default: null
-    minimum: 0.0
-    maximum: 100.0
-    description: "Filter results below this pLDDT threshold (0-100)"
-    condition:
-      param: pred_method
-      values: [rf3, both]
-
-  - name: rf3_min_ptm
-    label: "[RF3] Min pTM Filter"
-    type: number
-    default: null
-    minimum: 0.0
-    maximum: 1.0
-    description: "Filter results below this pTM threshold (0-1)"
-    condition:
-      param: pred_method
-      values: [rf3, both]
-
-  - name: rf3_max_pae
-    label: "[RF3] Max PAE Filter"
-    type: number
-    default: null
-    minimum: 0.0
-    maximum: 50.0
-    description: "Filter results above this PAE threshold (Ångströms)"
-    condition:
-      param: pred_method
-      values: [rf3, both]
-
-  - name: rf3_max_rmsd_overall
-    label: "[RF3] Max RMSD Filter"
-    type: number
-    default: null
-    minimum: 0.0
-    maximum: 20.0
-    description: "Filter results above this overall RMSD (Ångströms)"
-    condition:
-      param: pred_method
-      values: [rf3, both]
-
-  - name: rf3_max_rmsd_binder
-    label: "[RF3] Max Binder RMSD"
-    type: number
-    default: null
-    minimum: 0.0
-    maximum: 20.0
-    description: "Filter results above this binder RMSD (for complexes)"
-    condition:
-      param: pred_method
-      values: [rf3, both]
-
-  - name: rf3_extra_config
-    label: "[RF3] Advanced Config"
-    type: string
-    default: ""
-    description: "Hydra overrides for power users (e.g., num_recycles=20)"
-    condition:
-      param: pred_method
-      values: [rf3, both]
+      values: [boltz]
     
   # === Parallelization / Stress Test ===
   - name: num_parallel_jobs

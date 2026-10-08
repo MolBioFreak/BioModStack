@@ -77,7 +77,7 @@ Current registry-backed predictor families:
 
 - [Boltz-2](../platform/api/config/models/boltz2.yaml)
 - [AlphaFold2](../platform/api/config/models/af2.yaml)
-- [RF3](../platform/api/config/models/rf3.yaml)
+- [RF3](../platform/api/config/models/rf3.yaml), retained for historical compatibility and non-Structure internal references
 - [NVIDIA Fold-CP](../platform/api/config/models/boltz_cp_experimental.yaml)
 
 Workflow-level predictor/validator modules also include [Protenix](../modules/protenix.nf),
@@ -87,7 +87,9 @@ or an equivalent API registry entry exists again.
 
 Important distinction:
 
-- Boltz-2 / AF2 / RF3 remain registry-backed structure predictors
+- Boltz-2 and AF2 remain registry-backed structure predictors
+- RF3 remains registry-backed for historical compatibility, but it is retired from
+  new Structure Prediction launches and cannot be resumed through that workflow
 - NVIDIA Fold-CP is selected inside Structure Prediction when OEM context
   parallelism is appropriate for the target and compute placement
 

@@ -199,7 +199,6 @@ workflow {{
         f"""params.out_dir = '/run/out'
 params.code_root = '/run'
 params.pred_method = {json.dumps(predictor)}
-params.rf3_use_msa = false
 params.protenix_use_msa = false
 process.executor = 'local'
 env.PATH = "/run/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -319,7 +318,7 @@ def test_boltz_sequence_boundary_preserves_duplicate_sequence_submission_identit
 
 
 @pytest.mark.runtime_integration
-@pytest.mark.parametrize("predictor", ["rf3", "protenix", "esmfold2"])
+@pytest.mark.parametrize("predictor", ["protenix", "esmfold2"])
 def test_nonboltz_sequence_boundaries_preserve_equal_byte_submission_identity_and_reordering(
     tmp_path: Path, predictor: str
 ) -> None:

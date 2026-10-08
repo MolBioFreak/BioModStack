@@ -11,7 +11,7 @@ description: >
 
 stages:
   - name: Structure Prediction
-    tool: AlphaFold2 / Boltz-2 / RF3
+    tool: AlphaFold2 / Boltz-2
     description: Predict 3D structure and confidence metrics for your designs.
 
 preset_params:
@@ -35,11 +35,9 @@ user_params:
     enum:
       - af2
       - boltz
-      - rf3
     enum_labels:
       af2: AlphaFold2 (Most accurate)
       boltz: Boltz-2 (Fast, good for complexes)
-      rf3: RosettaFold3 (Alternative)
     description: Choose your structure prediction tool.
 
 enabled: true

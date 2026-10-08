@@ -1511,7 +1511,11 @@ def _normalize_structure_runtime_paths(model_id: str, params: dict) -> dict:
 
 MIN_BOLTZ_NO_MSA_RECYCLING_STEPS = 3
 MIN_BOLTZ_NO_MSA_SAMPLING_STEPS = 50
-STRUCTURE_PREDICTION_COMPLEX_RF3_ERROR = "RF3 is predict-only and cannot be launched in complex mode."
+STRUCTURE_RF3_RETIRED_ERROR = (
+    "RoseTTAFold3 is retired from Structure Prediction. Historical RF3, Boltz + RF3, "
+    "and All Three jobs remain readable but cannot be launched or resumed."
+)
+RETIRED_STRUCTURE_PRED_METHODS = frozenset({"rf3", "both", "all"})
 BOLTZ_CP_STRUCTURE_LAUNCHER_INPUT_SENTINEL = "__boltz_cp_structure_launcher_input__"
 
 
@@ -1564,13 +1568,14 @@ def _normalize_structure_prediction_pred_method(
     if not requested_pred_method:
         requested_pred_method = _default_structure_prediction_pred_method(normalized_model_id)
 
+    if requested_pred_method in RETIRED_STRUCTURE_PRED_METHODS or normalized_model_id == "rf3":
+        raise HTTPException(
+            status_code=422,
+            detail={"validation_errors": [STRUCTURE_RF3_RETIRED_ERROR]},
+        )
+
     if normalized_mode == "complex":
-        if requested_pred_method == "rf3" or normalized_model_id == "rf3":
-            raise HTTPException(
-                status_code=422,
-                detail={"validation_errors": [STRUCTURE_PREDICTION_COMPLEX_RF3_ERROR]},
-            )
-        if requested_pred_method in {"both", "all", "boltz_protenix"}:
+        if requested_pred_method == "boltz_protenix":
             normalized["pred_method"] = "boltz_protenix"
             return normalized
         if requested_pred_method == "protenix":
@@ -1581,6 +1586,17 @@ def _normalize_structure_prediction_pred_method(
 
     normalized["pred_method"] = requested_pred_method
     return normalized
+
+
+def _job_has_retired_structure_predictor(job: Any) -> bool:
+    params = job.params if isinstance(getattr(job, "params", None), dict) else {}
+    requested = str(params.get("pred_method") or "").strip().lower()
+    if requested in RETIRED_STRUCTURE_PRED_METHODS:
+        return True
+    return (
+        str(getattr(job, "model_id", "") or "").strip().lower() == "rf3"
+        and str(getattr(job, "mode", "") or "").strip().lower() in {"predict", "complex", "structure_prediction"}
+    )
 
 
 def _frustrampnn_param_error(
@@ -7568,6 +7584,8 @@ async def resubmit_job(
     
     if not original_job:
         raise HTTPException(status_code=404, detail="Job not found")
+    if _job_has_retired_structure_predictor(original_job):
+        raise HTTPException(status_code=422, detail=STRUCTURE_RF3_RETIRED_ERROR)
     if original_job.model_id == "nanopore":
         if not alignment_access.request_is_authorized(request, original_job.id, original_job.provenance):
             raise HTTPException(status_code=403, detail="alignment access denied")
@@ -8790,7 +8808,10 @@ async def get_job_stages(
         "completed_stages": completed,
         "stage_outputs": stage_outputs,
         # Allow resume if failed/cancelled, even if no stages fully completed (rely on cache)
-        "can_resume": job.status in ["failed", "cancelled", JobStatus.AWAITING_INPUT.value] or bool(job.awaiting_input)
+        "can_resume": (
+            not _job_has_retired_structure_predictor(job)
+            and (job.status in ["failed", "cancelled", JobStatus.AWAITING_INPUT.value] or bool(job.awaiting_input))
+        )
     }
 
 
@@ -8817,6 +8838,8 @@ async def resume_job(
     
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    if _job_has_retired_structure_predictor(job):
+        raise HTTPException(status_code=422, detail=STRUCTURE_RF3_RETIRED_ERROR)
     if job.model_id == "nanopore":
         if not alignment_access.request_is_authorized(request_context, job.id, job.provenance):
             raise HTTPException(status_code=403, detail="alignment access denied")

@@ -60,40 +60,40 @@ type PredictorOption = {
     disabledReason?: string;
 };
 
-test('predict mode keeps all surfaced predictor combinations available', () => {
+test('predict mode omits every retired RF3 launch choice', () => {
     const options = getStructurePredictorOptions('predict');
 
-    assert.deepEqual(options.map((option: PredictorOption) => option.id), ['boltz', 'fold_cp', 'boltz_api', 'rf3', 'protenix', 'esmfold2', 'both', 'all']);
+    assert.deepEqual(options.map((option: PredictorOption) => option.id), ['boltz', 'fold_cp', 'boltz_api', 'protenix', 'esmfold2']);
     assert.equal(options.every((option: PredictorOption) => option.disabled !== true), true);
+    assert.equal(options.some((option: PredictorOption) => ['rf3', 'both', 'all'].includes(option.id)), false);
 });
 
-test('complex mode only exposes truthful predictor choices and disables RF3 explicitly', () => {
+test('complex mode omits RF3 while retaining the truthful Boltz plus Protenix ensemble', () => {
     const options = getStructurePredictorOptions('complex');
-    const rf3Option = options.find((option: PredictorOption) => option.id === 'rf3');
 
-    assert.deepEqual(options.map((option: PredictorOption) => option.id), ['boltz', 'fold_cp', 'boltz_api', 'rf3', 'protenix', 'esmfold2', 'boltz_protenix']);
-    assert.equal(rf3Option?.disabled, true);
-    assert.match(rf3Option?.disabledReason || '', /predict-only/i);
+    assert.deepEqual(options.map((option: PredictorOption) => option.id), ['boltz', 'fold_cp', 'boltz_api', 'protenix', 'esmfold2', 'boltz_protenix']);
+    assert.equal(options.some((option: PredictorOption) => option.id === 'rf3'), false);
 });
 
-test('complex mode resolves legacy ensemble aliases to the canonical boltz_protenix token', () => {
-    const resolvedFromAll = resolveStructurePredictorSelection('complex', 'all');
-    const resolvedFromBoth = resolveStructurePredictorSelection('complex', 'both');
+test('historical RF3 selector tokens remain identifiable but cannot launch', () => {
+    for (const mode of ['predict', 'complex'] as const) {
+        for (const selection of ['rf3', 'both', 'all'] as const) {
+            const resolved = resolveStructurePredictorSelection(mode, selection);
+            assert.equal(resolved.valid, false);
+            assert.equal(resolved.canonicalSelection, selection);
+            assert.deepEqual(resolved.families, []);
+            assert.match(resolved.error || '', /retired from Structure Prediction/i);
+        }
+    }
+});
 
-    assert.equal(resolvedFromAll.valid, true);
-    assert.equal(resolvedFromAll.canonicalSelection, 'boltz_protenix');
-    assert.deepEqual(resolvedFromAll.families, ['boltz', 'protenix']);
+test('complex mode accepts the explicit boltz_protenix token', () => {
+    const resolved = resolveStructurePredictorSelection('complex', 'boltz_protenix');
 
-    assert.equal(resolvedFromBoth.valid, true);
-    assert.equal(resolvedFromBoth.canonicalSelection, 'boltz_protenix');
+    assert.equal(resolved.valid, true);
+    assert.equal(resolved.canonicalSelection, 'boltz_protenix');
+    assert.deepEqual(resolved.families, ['boltz', 'protenix']);
     assert.deepEqual(getPredictorFamiliesForSelection('complex', 'boltz_protenix'), ['boltz', 'protenix']);
-});
-
-test('complex mode rejects RF3-only selections instead of silently lying about support', () => {
-    const resolved = resolveStructurePredictorSelection('complex', 'rf3');
-
-    assert.equal(resolved.valid, false);
-    assert.match(resolved.error || '', /predict-only/i);
 });
 
 test('legacy boltz cp jobs reopen as an editable Fold-CP predictor inside Structure Prediction', () => {

@@ -248,6 +248,13 @@ export function Dashboard() {
 
     const handleResume = async (job: Job) => {
         const detailedJob = await hydrateJobForDetail(job);
+        if (
+            isStructureReorchestrateJob(detailedJob)
+            && deriveStructureReorchestrateSettings(detailedJob).retiredPredictors.length > 0
+        ) {
+            alert('RoseTTAFold3 is retired from Structure Prediction. This historical job remains readable and cannot be resumed or relaunched.');
+            return;
+        }
         if (detailedJob.status === 'awaiting_input' && detailedJob.awaiting_payload?.resume_direct) {
             setResumeDialogMode('resume');
             resumeMutation.mutate({ jobId: detailedJob.id });
@@ -338,6 +345,10 @@ export function Dashboard() {
         if (isStructureReorchestrateJob(resumeSettingsJob)) {
             if (!structureReorchestrateSettings) {
                 setResumeSettingsError('Structure retry settings are missing. Close and reopen the re-orchestrate dialog.');
+                return;
+            }
+            if (structureReorchestrateSettings.retiredPredictors.length > 0) {
+                setResumeSettingsError('RoseTTAFold3 is retired from Structure Prediction. Historical RF3 jobs cannot be relaunched.');
                 return;
             }
             parsedOverrides = buildStructureReorchestrateOverrides(resumeSettingsJob, structureReorchestrateSettings);
@@ -848,7 +859,7 @@ export function Dashboard() {
                             <button
                                 onClick={submitResumeWithSettings}
                                 className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors disabled:opacity-50"
-                                disabled={resumeMutation.isPending}
+                                disabled={resumeMutation.isPending || Boolean(structureReorchestrateSettings?.retiredPredictors.length)}
                             >
                                 {resumeMutation.isPending
                                     ? (isStructureReorchestrateModal ? 'Re-orchestrating...' : 'Resuming...')

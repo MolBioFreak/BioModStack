@@ -12,7 +12,6 @@ interface StructureReorchestratePanelProps {
 const predictorLabel: Record<StructurePredictor, string> = {
     boltz: 'Boltz-2',
     fold_cp: 'NVIDIA Fold-CP',
-    rf3: 'RoseTTAFold 3',
     protenix: 'Protenix',
     esmfold2: 'ESMFold2',
 };
@@ -42,10 +41,6 @@ export function StructureReorchestratePanel({
         update({ boltzCp: { ...settings.boltzCp, ...patch } });
     };
 
-    const updateRf3 = (patch: Partial<StructureReorchestrateSettings['rf3']>) => {
-        update({ rf3: { ...settings.rf3, ...patch } });
-    };
-
     const updateProtenix = (patch: Partial<StructureReorchestrateSettings['protenix']>) => {
         update({ protenix: { ...settings.protenix, ...patch } });
     };
@@ -57,6 +52,7 @@ export function StructureReorchestratePanel({
             fallbackGpuIds: boltzCpFallbackGpuIds,
         })
         : null;
+    const controlsDisabled = disabled || settings.retiredPredictors.length > 0;
 
     return (
         <div className="space-y-4">
@@ -65,7 +61,9 @@ export function StructureReorchestratePanel({
                     <div>
                         <h3 className="text-base font-semibold text-slate-100">Structure retry controls</h3>
                         <p className="mt-1 text-sm text-slate-400">
-                            Active predictors: {settings.predictors.map((predictor) => predictorLabel[predictor]).join(', ')}
+                            Active predictors: {settings.predictors.length > 0
+                                ? settings.predictors.map((predictor) => predictorLabel[predictor]).join(', ')
+                                : 'None'}
                         </p>
                     </div>
                     <label className="inline-flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
@@ -74,11 +72,20 @@ export function StructureReorchestratePanel({
                             checked={settings.skipMsa}
                             onChange={(event) => update({ skipMsa: event.target.checked })}
                             className="rounded border-slate-600 bg-slate-950"
-                            disabled={disabled}
+                            disabled={controlsDisabled}
                         />
                         Skip MSA on retry
                     </label>
                 </div>
+
+                {settings.retiredPredictors.length > 0 && (
+                    <div role="alert" className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+                        <div className="font-semibold">Retired historical predictor: RoseTTAFold 3</div>
+                        <p className="mt-1 text-xs text-amber-100/80">
+                            This Structure record remains readable. RF3 and RF3 ensemble jobs cannot be relaunched.
+                        </p>
+                    </div>
+                )}
 
                 <div className="mt-4 grid gap-4 md:grid-cols-[minmax(0,1fr)_14rem]">
                     <div>
@@ -92,7 +99,7 @@ export function StructureReorchestratePanel({
                                         ? 'bg-emerald-500/20 text-emerald-200'
                                         : 'text-slate-300 hover:text-slate-100'
                                 }`}
-                                disabled={disabled}
+                                disabled={controlsDisabled}
                             >
                                 Local MMseqs2
                             </button>
@@ -104,7 +111,7 @@ export function StructureReorchestratePanel({
                                         ? 'bg-cyan-500/20 text-cyan-200'
                                         : 'text-slate-300 hover:text-slate-100'
                                 }`}
-                                disabled={disabled}
+                                disabled={controlsDisabled}
                             >
                                 ColabFold API
                             </button>
@@ -120,7 +127,7 @@ export function StructureReorchestratePanel({
                             value={settings.msaPreset}
                             onChange={(event) => update({ msaPreset: event.target.value as StructureReorchestrateSettings['msaPreset'] })}
                             className="mt-1 w-full rounded border border-slate-600 bg-slate-900 px-3 py-2 text-slate-100"
-                            disabled={disabled}
+                            disabled={controlsDisabled}
                         >
                             <option value="fast">Fast</option>
                             <option value="balanced">Balanced</option>
@@ -135,7 +142,7 @@ export function StructureReorchestratePanel({
                         checked={settings.msaAllowEmptyFallback}
                         onChange={(event) => update({ msaAllowEmptyFallback: event.target.checked })}
                         className="rounded border-slate-600 bg-slate-950"
-                        disabled={disabled}
+                        disabled={controlsDisabled}
                     />
                     Allow empty fallback if the selected MSA source returns zero depth
                 </label>
@@ -154,7 +161,7 @@ export function StructureReorchestratePanel({
                                 checked={settings.boltz.usePotentials}
                                 onChange={(event) => updateBoltz({ usePotentials: event.target.checked })}
                                 className="rounded border-slate-600 bg-slate-950"
-                                disabled={disabled}
+                                disabled={controlsDisabled}
                             />
                             Use potentials
                         </label>
@@ -168,7 +175,7 @@ export function StructureReorchestratePanel({
                                 value={settings.boltz.recyclingSteps}
                                 onChange={(event) => updateBoltz({ recyclingSteps: toPositiveInteger(event.target.value, settings.boltz.recyclingSteps) })}
                                 className={numberInputClass}
-                                disabled={disabled}
+                                disabled={controlsDisabled}
                             />
                         </label>
                         <label className="text-sm text-slate-300">
@@ -179,7 +186,7 @@ export function StructureReorchestratePanel({
                                 value={settings.boltz.samplingSteps}
                                 onChange={(event) => updateBoltz({ samplingSteps: toPositiveInteger(event.target.value, settings.boltz.samplingSteps) })}
                                 className={numberInputClass}
-                                disabled={disabled}
+                                disabled={controlsDisabled}
                             />
                         </label>
                         <label className="text-sm text-slate-300">
@@ -190,7 +197,7 @@ export function StructureReorchestratePanel({
                                 value={settings.boltz.numSamples}
                                 onChange={(event) => updateBoltz({ numSamples: toPositiveInteger(event.target.value, settings.boltz.numSamples) })}
                                 className={numberInputClass}
-                                disabled={disabled}
+                                disabled={controlsDisabled}
                             />
                         </label>
                         <label className="text-sm text-slate-300">
@@ -201,7 +208,7 @@ export function StructureReorchestratePanel({
                                 value={settings.boltz.maxParallelSamples}
                                 onChange={(event) => updateBoltz({ maxParallelSamples: toPositiveInteger(event.target.value, settings.boltz.maxParallelSamples) })}
                                 className={numberInputClass}
-                                disabled={disabled}
+                                disabled={controlsDisabled}
                             />
                         </label>
                     </div>
@@ -229,7 +236,7 @@ export function StructureReorchestratePanel({
                                     ? 'bg-slate-600 text-white ring-2 ring-slate-400'
                                     : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                                 }`}
-                                disabled={disabled}
+                                disabled={controlsDisabled}
                             >
                                 Auto
                             </button>
@@ -246,7 +253,7 @@ export function StructureReorchestratePanel({
                                         ? 'bg-blue-600 text-white ring-2 ring-blue-400'
                                         : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                                     }`}
-                                    disabled={disabled}
+                                    disabled={controlsDisabled}
                                 >
                                     {gpu.label}
                                 </button>
@@ -259,7 +266,7 @@ export function StructureReorchestratePanel({
                                     checked={settings.boltzCp.lockGpus}
                                     onChange={(event) => updateBoltzCp({ lockGpus: event.target.checked })}
                                     className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500"
-                                    disabled={disabled}
+                                    disabled={controlsDisabled}
                                 />
                                 <span className="text-sm text-slate-400">Lock selected GPU(s) exclusively during workflow</span>
                             </label>
@@ -277,7 +284,7 @@ export function StructureReorchestratePanel({
                                 sizeCp: Math.min(16, toPositiveInteger(event.target.value, settings.boltzCp.sizeCp)),
                             })}
                             className="w-full max-w-xs bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
-                            disabled={disabled}
+                            disabled={controlsDisabled}
                         />
                         <p className="mt-2 text-xs text-slate-400">
                             OEM Fold-CP uses a square context-parallel mesh. Current GPU resolution: {boltzCpGpuSettings.gpuIds || 'auto fallback'} → size_cp {boltzCpGpuSettings.sizeCp}.
@@ -293,7 +300,7 @@ export function StructureReorchestratePanel({
                                     outputFormat: (event.target.value === 'pdb' ? 'pdb' : 'mmcif') as StructureReorchestrateSettings['boltzCp']['outputFormat'],
                                 })}
                                 className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
-                                disabled={disabled}
+                                disabled={controlsDisabled}
                             >
                                 <option value="mmcif">mmCIF</option>
                                 <option value="pdb">PDB</option>
@@ -307,7 +314,7 @@ export function StructureReorchestratePanel({
                                 onChange={(event) => updateBoltzCp({ seed: event.target.value.replace(/[^0-9-]/g, '') })}
                                 placeholder="optional"
                                 className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
-                                disabled={disabled}
+                                disabled={controlsDisabled}
                             />
                         </div>
                         <label className="flex items-center gap-3 rounded-lg border border-slate-700/60 bg-slate-900/40 px-3 py-2 text-sm text-slate-200">
@@ -316,7 +323,7 @@ export function StructureReorchestratePanel({
                                 checked={settings.boltzCp.writeFullPae}
                                 onChange={(event) => updateBoltzCp({ writeFullPae: event.target.checked })}
                                 className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-orange-500"
-                                disabled={disabled}
+                                disabled={controlsDisabled}
                             />
                             <span>Write full PAE matrix</span>
                         </label>
@@ -324,38 +331,6 @@ export function StructureReorchestratePanel({
                 </div>
             )}
 
-            {settings.predictors.includes('rf3') && (
-                <div className={sectionClass}>
-                    <div>
-                        <h3 className="text-base font-semibold text-slate-100">RoseTTAFold 3 settings</h3>
-                        <p className="mt-1 text-sm text-slate-400">Expose only the RF3 knobs that matter for this retry.</p>
-                    </div>
-                    <div className="mt-4 grid gap-4 md:grid-cols-2">
-                        <label className="text-sm text-slate-300">
-                            Recycle iterations
-                            <input
-                                type="number"
-                                min={1}
-                                value={settings.rf3.numRecycles}
-                                onChange={(event) => updateRf3({ numRecycles: toPositiveInteger(event.target.value, settings.rf3.numRecycles) })}
-                                className={numberInputClass}
-                                disabled={disabled}
-                            />
-                        </label>
-                        <label className="text-sm text-slate-300">
-                            Num samples
-                            <input
-                                type="number"
-                                min={1}
-                                value={settings.rf3.numSamples}
-                                onChange={(event) => updateRf3({ numSamples: toPositiveInteger(event.target.value, settings.rf3.numSamples) })}
-                                className={numberInputClass}
-                                disabled={disabled}
-                            />
-                        </label>
-                    </div>
-                </div>
-            )}
 
             {settings.predictors.includes('protenix') && (
                 <div className={sectionClass}>
@@ -371,7 +346,7 @@ export function StructureReorchestratePanel({
                                 value={settings.protenix.modelWeights}
                                 onChange={(event) => updateProtenix({ modelWeights: event.target.value })}
                                 className={numberInputClass}
-                                disabled={disabled}
+                                disabled={controlsDisabled}
                             />
                         </label>
                         <label className="text-sm text-slate-300">
@@ -381,7 +356,7 @@ export function StructureReorchestratePanel({
                                 value={settings.protenix.seeds}
                                 onChange={(event) => updateProtenix({ seeds: event.target.value })}
                                 className={numberInputClass}
-                                disabled={disabled}
+                                disabled={controlsDisabled}
                             />
                         </label>
                         <label className="text-sm text-slate-300">
@@ -392,7 +367,7 @@ export function StructureReorchestratePanel({
                                 value={settings.protenix.nSample}
                                 onChange={(event) => updateProtenix({ nSample: toPositiveInteger(event.target.value, settings.protenix.nSample) })}
                                 className={numberInputClass}
-                                disabled={disabled}
+                                disabled={controlsDisabled}
                             />
                         </label>
                         <label className="text-sm text-slate-300">
@@ -403,7 +378,7 @@ export function StructureReorchestratePanel({
                                 value={settings.protenix.nStep}
                                 onChange={(event) => updateProtenix({ nStep: toPositiveInteger(event.target.value, settings.protenix.nStep) })}
                                 className={numberInputClass}
-                                disabled={disabled}
+                                disabled={controlsDisabled}
                             />
                         </label>
                         <label className="text-sm text-slate-300">
@@ -414,7 +389,7 @@ export function StructureReorchestratePanel({
                                 value={settings.protenix.nCycle}
                                 onChange={(event) => updateProtenix({ nCycle: toPositiveInteger(event.target.value, settings.protenix.nCycle) })}
                                 className={numberInputClass}
-                                disabled={disabled}
+                                disabled={controlsDisabled}
                             />
                         </label>
                     </div>

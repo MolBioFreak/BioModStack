@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 
 API_ROOT = Path(__file__).resolve().parents[1]
 
@@ -11,6 +13,7 @@ if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
 from routers.jobs import (
+    _job_has_retired_structure_predictor,
     _normalize_boltz_no_msa_quality_params,
     _normalize_structure_geometry_params,
     _normalize_structure_prediction_pred_method,
@@ -72,35 +75,52 @@ def test_normalize_boltz_no_msa_quality_params_leaves_msa_runs_unchanged() -> No
     assert params["boltz_recycling_steps"] == 1
 
 
-def test_normalize_structure_prediction_pred_method_maps_legacy_complex_ensemble_aliases() -> None:
+@pytest.mark.parametrize("mode", ["predict", "complex", "structure_prediction"])
+@pytest.mark.parametrize("pred_method", ["rf3", "both", "all"])
+def test_normalize_structure_prediction_pred_method_rejects_retired_structure_tokens(
+    mode: str,
+    pred_method: str,
+) -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        _normalize_structure_prediction_pred_method(
+            "template_structure_prediction",
+            mode,
+            {
+                "pred_method": pred_method,
+            },
+        )
+
+    assert exc_info.value.status_code == 422
+    detail = exc_info.value.detail
+    assert isinstance(detail, dict)
+    assert "retired from Structure Prediction" in detail["validation_errors"][0]
+
+
+def test_normalize_structure_prediction_pred_method_rejects_direct_rf3_predict_launch() -> None:
+    with pytest.raises(HTTPException, match="retired from Structure Prediction"):
+        _normalize_structure_prediction_pred_method("rf3", "predict", {})
+
+
+def test_normalize_structure_prediction_pred_method_accepts_explicit_boltz_protenix() -> None:
     params = _normalize_structure_prediction_pred_method(
         "boltz2",
         "complex",
-        {
-            "pred_method": "all",
-        },
+        {"pred_method": "boltz_protenix"},
     )
 
     assert params["pred_method"] == "boltz_protenix"
 
 
-def test_normalize_structure_prediction_pred_method_rejects_complex_rf3_only_runs() -> None:
-    try:
-        _normalize_structure_prediction_pred_method(
-            "rf3",
-            "complex",
-            {
-                "pred_method": "rf3",
-            },
-        )
-    except HTTPException as exc:
-        assert exc.status_code == 422
-        detail = exc.detail
-        assert isinstance(detail, dict)
-        assert "RF3" in detail["validation_errors"][0]
-        assert "predict-only" in detail["validation_errors"][0]
-    else:
-        raise AssertionError("Expected complex RF3 normalization to raise HTTPException")
+def test_historical_rf3_structure_jobs_are_non_resumable_without_retiring_other_rf3_modes() -> None:
+    assert _job_has_retired_structure_predictor(
+        SimpleNamespace(model_id="boltz2", mode="predict", params={"pred_method": "all"})
+    )
+    assert _job_has_retired_structure_predictor(
+        SimpleNamespace(model_id="rf3", mode="predict", params={})
+    )
+    assert not _job_has_retired_structure_predictor(
+        SimpleNamespace(model_id="rf3", mode="design", params={})
+    )
 
 
 def test_build_nextflow_command_routes_boltz_protenix_template_runs_through_boltz_profile(tmp_path: Path) -> None:

@@ -51,7 +51,7 @@ describe('workflow-only capability boundaries', () => {
         const mutagenesisTemplate = src('components/MutagenesisTemplate.tsx');
         const jobSubmission = src('components/JobSubmission.tsx');
 
-        assert.equal(structureState.includes("export type StructurePredictorFamily = 'boltz' | 'fold_cp' | 'rf3' | 'protenix' | 'esmfold2'"), true);
+        assert.equal(structureState.includes("export type StructurePredictorFamily = 'boltz' | 'fold_cp' | 'protenix' | 'esmfold2'"), true);
         assert.equal(structureState.includes("StructureLaunchVariant = 'default' | 'boltz_cp_experimental' | 'esmfold2'"), false);
         assert.equal(structureTemplate.includes("predictorFamilies.includes('esmfold2')"), true);
         assert.equal(mutagenesisTemplate.includes("setPredictor('esmfold2')"), true);
@@ -63,7 +63,7 @@ describe('workflow-only capability boundaries', () => {
         assert.equal(inventory.includes("id: 'boltzgen_design'"), false);
         assert.equal(inventory.includes("id: 'boltzgen_ligand'"), false);
         assert.equal(inventory.includes("id: 'esmfold2'"), false);
-        assert.equal(inventory.includes("modelTopics: ['boltz2', 'fold_cp', 'rf3', 'protenix', 'esmfold2', 'frustrampnn']"), true);
+        assert.equal(inventory.includes("modelTopics: ['boltz2', 'fold_cp', 'protenix', 'esmfold2', 'frustrampnn']"), true);
         assert.equal(inventory.includes("workflowId: 'boltz_cp_experimental'"), false);
     });
 

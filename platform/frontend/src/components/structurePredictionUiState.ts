@@ -4,8 +4,9 @@ import {
 } from './frustrampnn/frustraMpnnSettingsState.js';
 
 export type StructurePredictionMode = 'predict' | 'complex';
-export type StructurePredictorFamily = 'boltz' | 'fold_cp' | 'rf3' | 'protenix' | 'esmfold2';
-export type StructurePredictorSelection = StructurePredictorFamily | 'boltz_api' | 'both' | 'all' | 'boltz_protenix';
+export type StructurePredictorFamily = 'boltz' | 'fold_cp' | 'protenix' | 'esmfold2';
+export type RetiredStructurePredictorSelection = 'rf3' | 'both' | 'all';
+export type StructurePredictorSelection = StructurePredictorFamily | RetiredStructurePredictorSelection | 'boltz_api' | 'boltz_protenix';
 export type BoltzQualityPresetId = 'quick' | 'balanced' | 'max' | 'custom';
 export type StructureLaunchVariant = 'default' | 'boltz_cp_experimental';
 export type StructureMsaProvider = 'local' | 'colabfold_api';
@@ -74,7 +75,7 @@ export interface BoltzCpGpuLaunchInput {
 }
 
 export interface StructureSubmitTarget {
-    modelId: 'boltz2' | 'boltz_api' | 'rf3' | 'protenix' | 'esmfold2' | 'boltz_cp_experimental';
+    modelId: 'boltz2' | 'boltz_api' | 'protenix' | 'esmfold2' | 'boltz_cp_experimental';
     mode: 'predict' | 'complex' | 'design';
 }
 
@@ -119,7 +120,7 @@ export interface BoltzApiStructureRequestInput {
     };
 }
 
-const COMPLEX_RF3_DISABLED_REASON = 'RF3 is predict-only and cannot be launched in complex mode.';
+export const STRUCTURE_RF3_RETIRED_ERROR = 'RoseTTAFold3 is retired from Structure Prediction. Historical settings remain readable, but RF3, Boltz + RF3, and All Three jobs cannot be relaunched.';
 const TARGET_PREVIEW_HIGHLIGHT = { r: 59, g: 130, b: 246 };
 type StructureInitialValues = Record<string, unknown>;
 type BoltzCpSubmitParams = Record<string, string | number | boolean>;
@@ -290,8 +291,6 @@ export const resolveStructureSubmitTarget = ({
             ? 'boltz_api'
             : resolvedSelection.canonicalSelection === 'fold_cp'
                 ? 'boltz_cp_experimental'
-            : resolvedSelection.canonicalSelection === 'rf3'
-                ? 'rf3'
                 : resolvedSelection.canonicalSelection === 'protenix'
                     ? 'protenix'
                     : resolvedSelection.canonicalSelection === 'esmfold2'
@@ -375,18 +374,14 @@ const PREDICT_MODE_OPTIONS: StructurePredictorOption[] = [
     { id: 'boltz', name: 'Boltz-2', desc: 'Fast, SOTA accuracy', color: 'blue' },
     { id: 'fold_cp', name: 'NVIDIA Fold-CP', desc: 'OEM context-parallel Boltz', color: 'amber' },
     { id: 'boltz_api', name: 'Boltz API', desc: 'Remote Boltz-2.1 queue', color: 'blue' },
-    { id: 'rf3', name: 'RoseTTAFold3', desc: 'Open-source AF3 alt.', color: 'green' },
     { id: 'protenix', name: 'Protenix', desc: 'AF3-level, multi-modal', color: 'violet' },
     { id: 'esmfold2', name: 'ESMFold2', desc: 'Fast local all-atom folding', color: 'blue' },
-    { id: 'both', name: 'Boltz + RF3', desc: 'Ensemble (2)', color: 'purple' },
-    { id: 'all', name: 'All Three', desc: 'Full ensemble', color: 'amber' },
 ];
 
 const COMPLEX_MODE_OPTIONS: StructurePredictorOption[] = [
     { id: 'boltz', name: 'Boltz-2', desc: 'Complex prediction with target conditioning', color: 'blue' },
     { id: 'fold_cp', name: 'NVIDIA Fold-CP', desc: 'OEM context-parallel complex prediction', color: 'amber' },
     { id: 'boltz_api', name: 'Boltz API', desc: 'Remote Boltz-2.1 complex prediction', color: 'blue' },
-    { id: 'rf3', name: 'RoseTTAFold3', desc: 'Predict-only; unavailable for complexes', color: 'green', disabled: true, disabledReason: COMPLEX_RF3_DISABLED_REASON },
     { id: 'protenix', name: 'Protenix', desc: 'Template-guided complex prediction', color: 'violet' },
     { id: 'esmfold2', name: 'ESMFold2', desc: 'Fast MSA-free complex co-folding', color: 'blue' },
     { id: 'boltz_protenix', name: 'Boltz + Protenix', desc: 'Truthful complex ensemble', color: 'amber' },
@@ -410,6 +405,16 @@ export const resolveStructurePredictorSelection = (
 ): ResolvedStructurePredictorSelection => {
     const requestedSelection = toPredictorSelection(selection);
 
+    if (requestedSelection === 'rf3' || requestedSelection === 'both' || requestedSelection === 'all') {
+        return {
+            requestedSelection,
+            canonicalSelection: requestedSelection,
+            families: [],
+            valid: false,
+            error: STRUCTURE_RF3_RETIRED_ERROR,
+        };
+    }
+
     if (mode === 'complex') {
         if (requestedSelection === 'fold_cp') {
             return {
@@ -427,15 +432,7 @@ export const resolveStructurePredictorSelection = (
                 valid: true,
             };
         }
-        if (requestedSelection === 'rf3') {
-            return {
-                requestedSelection,
-                canonicalSelection: requestedSelection,
-                families: [],
-                valid: false,
-                error: COMPLEX_RF3_DISABLED_REASON,
-            };
-        }
+
         if (requestedSelection === 'esmfold2') {
             return {
                 requestedSelection,
@@ -444,7 +441,7 @@ export const resolveStructurePredictorSelection = (
                 valid: true,
             };
         }
-        if (requestedSelection === 'both' || requestedSelection === 'all' || requestedSelection === 'boltz_protenix') {
+        if (requestedSelection === 'boltz_protenix') {
             return {
                 requestedSelection,
                 canonicalSelection: 'boltz_protenix',
@@ -484,22 +481,7 @@ export const resolveStructurePredictorSelection = (
             valid: true,
         };
     }
-    if (requestedSelection === 'both') {
-        return {
-            requestedSelection,
-            canonicalSelection: 'both',
-            families: ['boltz', 'rf3'],
-            valid: true,
-        };
-    }
-    if (requestedSelection === 'all') {
-        return {
-            requestedSelection,
-            canonicalSelection: 'all',
-            families: ['boltz', 'rf3', 'protenix'],
-            valid: true,
-        };
-    }
+
     if (requestedSelection === 'protenix') {
         return {
             requestedSelection,
@@ -508,14 +490,7 @@ export const resolveStructurePredictorSelection = (
             valid: true,
         };
     }
-    if (requestedSelection === 'rf3') {
-        return {
-            requestedSelection,
-            canonicalSelection: 'rf3',
-            families: ['rf3'],
-            valid: true,
-        };
-    }
+
     if (requestedSelection === 'esmfold2') {
         return {
             requestedSelection,

@@ -629,7 +629,7 @@ const getTemplateDocumentationTopics = (
     if (identity.includes('protein_modification_experimental') || identity.includes('protein_local_redesign') || identity.includes('local redesign')) return ['laproteina', 'disco', 'rfdiffusion', 'fampnn', 'proteinmpnn', 'boltz2'];
     if (identity.includes('antibody_denovo') || identity.includes('nanobody') || identity.includes('rfantibody')) return ['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2', 'esmfold2'];
 
-    if (identity.includes('structure_prediction') || identity.includes('structure prediction')) return ['boltz2', 'rf3', 'protenix', 'esmfold2'];
+    if (identity.includes('structure_prediction') || identity.includes('structure prediction')) return ['boltz2', 'fold_cp', 'protenix', 'esmfold2'];
     if (identity.includes('boltz')) return ['boltz2'];
     if (identity.includes('rfdiffusion') || identity.includes('diffusion')) return ['rfdiffusion'];
     return [];
@@ -1031,7 +1031,7 @@ export function JobSubmission() {
             description: 'Predict proteins, nucleic acids, and complexes.',
             icon: 'microscope',
             color: '#F59E0B',
-            stages: [{ tool: 'Boltz-2 / RF3 / Protenix' }],
+            stages: [{ tool: 'Boltz-2 / NVIDIA Fold-CP / Protenix / ESMFold2' }],
         },
 
         {
@@ -1572,14 +1572,18 @@ export function JobSubmission() {
                 }
             } else if (mergedParams.pred_method) {
                 // Structure prediction templates - map pred_method to model_id and mode
+                const normalizedPredMethod = String(mergedParams.pred_method).trim().toLowerCase();
+                if (['rf3', 'both', 'all'].includes(normalizedPredMethod)) {
+                    alert('RoseTTAFold3 is retired from Structure Prediction. Historical RF3 templates cannot be launched.');
+                    return;
+                }
                 const predMethodMap: Record<string, { model_id: string; mode: string }> = {
                     'boltz': { model_id: 'boltz2', mode: 'predict' },
-                    'rf3': { model_id: 'rf3', mode: 'predict' },
                     'protenix': { model_id: 'protenix', mode: 'predict' },
-                    'both': { model_id: 'boltz2', mode: 'predict' }, // Primary model for "both" mode
-                    'all': { model_id: 'boltz2', mode: 'predict' },  // Primary model for "all" mode
+                    'esmfold2': { model_id: 'esmfold2', mode: 'predict' },
+                    'boltz_protenix': { model_id: 'boltz2', mode: 'complex' },
                 };
-                const mapping = predMethodMap[mergedParams.pred_method];
+                const mapping = predMethodMap[normalizedPredMethod];
                 if (mapping) {
                     effectiveModelId = mapping.model_id;
                     nextflowProfile = mapping.mode;
