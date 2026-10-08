@@ -37,19 +37,24 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             return;
         }
 
-        // For now, submit as a simple job - the full implementation will need file upload handling
+        // Submit with antibody_denovo model config
         try {
             await submitMutation.mutateAsync({
                 name: jobName,
-                model_id: 'rfantibody',
-                mode: 'antibody_denovo_pipeline',
+                model_id: 'antibody_denovo',  // Must match backend config id
+                mode: 'default',  // Uses workflow_type: pipeline from config
                 params: {
-                    target_pdb: targetPdb.name, // Will need proper file upload
+                    target_pdb: targetPdb.name, // TODO: Proper file upload
                     epitope_residues: epitopeResidues,
-                    num_designs: numDesigns,
-                    sequence_designer: seqDesigner,
-                    enable_antiberty: useAntiberty,
-                    enable_thermompnn: useThermoMPNN
+                    rfantibody_num_designs: numDesigns,
+                    // Sequence designers
+                    seq_design_fampnn: seqDesigner === 'fampnn',
+                    seq_design_antifold: seqDesigner === 'antifold',
+                    seq_design_proteinmpnn: seqDesigner === 'proteinmpnn',
+                    // Validation toggles
+                    run_immunogenicity_scoring: useAntiberty,
+                    run_stability_scoring: useThermoMPNN,
+                    run_structure_validation: true,
                 }
             });
         } catch (error) {
