@@ -2815,7 +2815,14 @@ def _index_bam_with_deadline(
     # during indexing, restart cleanup cannot remove its still-live workspace.
     pass_fds = tuple(dict.fromkeys((*pass_fds, *ownership_fds)))
     try:
-        with native.path_urls(path) as urls, native.compute():
+        # This is a newly generated, pinned derivative, not an immutable input
+        # path: temporary slot names are legitimately reused between builds.
+        # Import the exact open generation into a fully hashed managed lease;
+        # HTSlib still receives only the verified HTTP URL, never this descriptor.
+        with _open_regular_file_no_symlinks(path) as generated, \
+                native.snapshot_handle(generated) as snapshot, \
+                native.delivery.grant({"data.bam": snapshot}) as urls, native.compute():
+            native.require_bam_bytes(snapshot)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise _AlignmentDerivativeTimeout(f"{label} time limit exceeded")
@@ -2824,13 +2831,21 @@ def _index_bam_with_deadline(
                     sys.executable,
                     "-c",
                     (
-                        "import resource,sys,pysam; "
+                        "import ctypes,os,resource,sys,pysam,pysam.libchtslib; "
                         "from pysam.bms_native_build import IDENTITY; "
                         "assert pysam.__version__ == '0.23.3+bms1' and IDENTITY['binding_api'] == 1; "
                         "limit=int(sys.argv[2]); "
                         "resource.setrlimit(resource.RLIMIT_FSIZE,(limit,limit)) if limit else None; "
                         "pysam.set_verbosity(0); "
-                        "pysam.index('-o', sys.argv[1]+'.bai', sys.stdin.read())"
+                        # pysam.index's dispatcher performs os.path.exists on
+                        # its input and rejects managed HTTP before HTSlib can
+                        # open it. Call the same pinned HTSlib's public API,
+                        # retaining verified HTTP reads and explicit BAI output.
+                        "index=ctypes.CDLL(pysam.libchtslib.__file__).sam_index_build3; "
+                        "index.argtypes=[ctypes.c_char_p,ctypes.c_char_p,ctypes.c_int,ctypes.c_int]; "
+                        "index.restype=ctypes.c_int; "
+                        "status=index(sys.stdin.read().encode(),os.fsencode(sys.argv[1]+'.bai'),0,1); "
+                        "sys.exit(0 if status == 0 else 1)"
                     ),
                     os.fspath(path),
                     str(byte_limit or 0),
