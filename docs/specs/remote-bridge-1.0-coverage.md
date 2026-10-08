@@ -1,10 +1,11 @@
 # Remote Bridge implementation coverage
 
-This is an implementation tracking table, not an executable catalog or acceptance report. Source: existing model YAML registry. Public/enabled flags are raw definitions, not proof of launch admission. Entrypoint aliases, conditional rules and non-registry entrypoints must be resolved before the denominator is complete. No row is implicitly supported by omission from a denylist.
+This is an implementation tracking table, not an executable catalog or acceptance report. It binds the existing model YAML registry, explicit native entrypoint mappings, and the template/batch expansion rules below. Public/enabled flags are raw definitions, not proof of launch admission. Identified admission conflicts remain implementation work; no row is implicitly supported by omission from a denylist.
 
 ## Existing implementation owners
 
 - Request/entrypoint and native command compilation: `platform/api/services/nextflow.py` and existing model-specific validated request compilers.
+- Versioned project Workflow Plan/capability authority: `experiment_services.py`, `experiment_models.py::ExperimentWorkflowPlanAuthority`, `routers/project_manager.py`, and `services/global_experiments/launch_contexts.py`. P1 must connect execution projections to existing authority, not introduce a competing user-facing Plan store.
 - Model declarations and independent dependency references: `platform/api/model_registry.py`, `platform/api/config/models/`.
 - Candidate/group expansion and attempt-local journal: `platform/api/component_runtime.py`; currently contains scientific-family-specific grouping, not a complete generic coordinator.
 - Queue/placement: `platform/api/routers/queue.py`, `services/remote_execution/targets.py`, `executor.py`.
@@ -127,9 +128,9 @@ The table is a rule-based denominator, not a list of arbitrary numeric settings.
 - Tests, review passes and delegation remain prohibited; acceptance status stays unestablished.
 - Current acquisition direction is on-command host-to-worker push with existing authentication, as clarified by the owner. New release hosting/auth changes are not prerequisites. Compliant ColabFold fleet admission remains a separate scientific-service boundary; provider key availability is not acceptance.
 
-## Coverage expansion still required
+## Per-row connection and acceptance still required
 
-Resolve `WORKFLOW_ENTRYPOINTS`, `MODEL_MODE_WORKFLOW_ENTRYPOINTS`, conditional routing and registered API workflow surfaces against the rows above. PPIFLOW, template/child aliases, NGS canonical identities and embedded FrustraMPNN stages must not be lost by counting YAML modes alone. Record selected-stage rules and native contract owners as their implementations are connected.
+P1 and P6 must bind the enumerated request/entrypoint/expansion rules to complete dependencies, typed input/result contracts, and local/worker consumer connections. PPIFLOW, template/child aliases, NGS canonical identities, batch aggregation and embedded FrustraMPNN remain in scope. Record implementation and exact-release evidence per rule; the P0 source inventory is not runtime acceptance.
 
 
 ## Existing entrypoint rules (source-derived; not a new router)

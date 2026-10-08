@@ -51,6 +51,103 @@ def durable_write(path: Path, payload: bytes) -> None:
 
 
 @dataclass(frozen=True)
+class ArtifactReference:
+    """Placement-neutral identity; storage roots are supplied separately.
+
+    Native adapters supply format/schema and semantic ownership. A verified
+    byte reference does not assert that the native scientific result is valid.
+    """
+    logical_id: str
+    owner_kind: str
+    owner_id: str
+    role: str
+    relative_path: str
+    sha256: str
+    size_bytes: int
+    format_schema: str
+    job_id: str | None = None
+    component_id: str | None = None
+
+    def __post_init__(self) -> None:
+        for value in (self.logical_id, self.owner_id, self.format_schema):
+            if type(value) is not str or not value or '\x00' in value:
+                raise ValueError('artifact identity and format/schema must be nonempty text')
+        if self.owner_kind not in {'request', 'job', 'component', 'release'}:
+            raise ValueError('artifact owner kind is not supported')
+        if self.role not in {'source', 'input', 'runtime', 'result', 'log', 'receipt', 'review'}:
+            raise ValueError('artifact role is not supported')
+        for value in (self.job_id, self.component_id):
+            if value is not None and (type(value) is not str or not value or '\x00' in value):
+                raise ValueError('artifact lineage identifiers must be nonempty text')
+        if self.owner_kind == 'component' and self.component_id != self.owner_id:
+            raise ValueError('component artifact owner and lineage disagree')
+        if self.owner_kind == 'job' and self.job_id != self.owner_id:
+            raise ValueError('job artifact owner and lineage disagree')
+        if type(self.relative_path) is not str or '\x00' in self.relative_path:
+            raise ValueError('artifact path must be text without NUL')
+        path = PurePosixPath(self.relative_path)
+        if (not self.relative_path or path.is_absolute() or '..' in path.parts
+                or '\\' in self.relative_path or path.as_posix() != self.relative_path
+                or self.relative_path == '.'):
+            raise ValueError('artifact reference requires a contained relative path')
+        if (type(self.sha256) is not str or len(self.sha256) != 64
+                or any(c not in '0123456789abcdef' for c in self.sha256)
+                or type(self.size_bytes) is not int or self.size_bytes < 0):
+            raise ValueError('artifact reference requires a SHA256 and nonnegative byte size')
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return {'schema': 'bms.artifact-reference.v1', **asdict(self)}
+
+    @classmethod
+    def from_payload(cls, value: Mapping[str, Any]) -> ArtifactReference:
+        document = dict(value)
+        if document.pop('schema', None) != 'bms.artifact-reference.v1':
+            raise ValueError('unsupported artifact reference schema')
+        return cls(**document)
+
+    def resolve(self, root: Path) -> Path:
+        """Verify regular-file bytes through a no-follow directory binding.
+
+        The caller must retain its attempt/publication ownership fence while
+        consuming the returned path. Verification does not acquire that fence.
+        """
+        from stat import S_ISREG
+        root = Path(root).absolute()
+        if '..' in root.parts:
+            raise ValueError('artifact root must not contain parent traversal')
+        directory = os.open(root.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            parts = (*root.parts[1:], *PurePosixPath(self.relative_path).parts[:-1])
+            for part in parts:
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                dir_fd=directory)
+                os.close(directory)
+                directory = child
+            fd = os.open(PurePosixPath(self.relative_path).name,
+                         os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+            with os.fdopen(fd, 'rb') as handle:
+                before = os.fstat(handle.fileno())
+                if not S_ISREG(before.st_mode) or before.st_size != self.size_bytes:
+                    raise ValueError('artifact reference is not a regular file of the bound size')
+                checksum = hashlib.sha256()
+                size = 0
+                while block := handle.read(1024 * 1024):
+                    size += len(block)
+                    if size > self.size_bytes:
+                        raise ValueError('artifact grew during verification')
+                    checksum.update(block)
+                after = os.fstat(handle.fileno())
+                if (size != self.size_bytes or checksum.hexdigest() != self.sha256
+                        or (before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+                        != (after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
+                    raise ValueError('artifact reference byte binding mismatch')
+        finally:
+            os.close(directory)
+        return root / self.relative_path
+
+
+@dataclass(frozen=True)
 class GeneratedInput:
     """Compiler-produced bytes, materialized only by the execution owner."""
     relative_path: str
@@ -69,6 +166,15 @@ class GeneratedInput:
     def reference(self) -> dict[str, Any]:
         return {'relative_path': self.relative_path, 'size_bytes': len(self.payload),
                 'sha256': hashlib.sha256(self.payload).hexdigest(), 'role': 'input'}
+
+    def bind(self, *, owner_kind: str, owner_id: str,
+             format_schema: str, job_id: str | None = None,
+             component_id: str | None = None) -> ArtifactReference:
+        return ArtifactReference(logical_id=self.relative_path,
+            owner_kind=owner_kind, owner_id=owner_id, job_id=job_id,
+            component_id=component_id, role='input', relative_path=self.relative_path,
+            sha256=hashlib.sha256(self.payload).hexdigest(), size_bytes=len(self.payload),
+            format_schema=format_schema)
 
     def materialize(self, root: Path) -> None:
         from secrets import token_hex
@@ -181,7 +287,10 @@ class NativeInvocation:
             'effective_sha256': hashlib.sha256(self.effective_json).hexdigest(),
             'native_parameters': self.native_parameters,
             'native_parameters_sha256': hashlib.sha256(self.native_parameters_json).hexdigest(),
-            'generated_inputs': [item.reference for item in self.generated_inputs],
+            'generated_inputs': [item.bind(owner_kind='request',
+                owner_id=hashlib.sha256(self.requested_json).hexdigest(),
+                format_schema='application/octet-stream').payload
+                for item in self.generated_inputs],
         }
 
     def materialize_inputs(self, root: Path) -> None:
@@ -313,25 +422,18 @@ class ResultReference:
     schema: str
 
     def __post_init__(self) -> None:
-        path = PurePosixPath(self.relative_path)
-        if (not self.relative_path or path.is_absolute() or ".." in path.parts
-                or "\\" in self.relative_path or path.as_posix() != self.relative_path
-                or self.relative_path == "."):
-            raise ValueError("result reference must have a contained relative path")
-        if (len(self.sha256) != 64 or any(c not in "0123456789abcdef" for c in self.sha256)
-                or type(self.size_bytes) is not int or self.size_bytes < 0 or not self.schema):
-            raise ValueError("invalid result reference binding")
+        # Keep the historical wire shape while sharing the artifact contract.
+        self.as_artifact_reference()
+
+    def as_artifact_reference(self, *, job_id: str | None = None) -> ArtifactReference:
+        return ArtifactReference(
+            logical_id=self.relative_path, owner_kind='component',
+            owner_id=self.component_id, component_id=self.component_id,
+            job_id=job_id, role='result', relative_path=self.relative_path,
+            sha256=self.sha256, size_bytes=self.size_bytes, format_schema=self.schema)
 
     def resolve(self, root: Path) -> Path:
-        root = Path(root).resolve(strict=True)
-        candidate = root / self.relative_path
-        resolved = candidate.resolve(strict=True)
-        if not resolved.is_relative_to(root) or not resolved.is_file():
-            raise ValueError("result reference escapes artifact root")
-        payload = resolved.read_bytes()
-        if len(payload) != self.size_bytes or hashlib.sha256(payload).hexdigest() != self.sha256:
-            raise ValueError("result reference byte binding mismatch")
-        return resolved
+        return self.as_artifact_reference().resolve(root)
 
 
 class GroupingLedger:
@@ -376,6 +478,7 @@ class GroupingLedger:
     def seal(self, reference: ResultReference) -> None:
         if reference.component_id not in {self.plan.component_id(i) for i in range(len(self.plan.groups))}:
             raise ValueError("foreign component result")
+        reference.as_artifact_reference(job_id=self.plan.parent_job_id)
         payload = canonical_bytes(asdict(reference))
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
