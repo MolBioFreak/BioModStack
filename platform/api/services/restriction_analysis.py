@@ -574,7 +574,11 @@ def analyze_sequence(
         cached = _cache.get(cache_key)
         if cached is not None:
             _cache.move_to_end(cache_key)
-            return AnalysisResult.model_validate_json(cached.canonical_result, strict=True)
+            cached_bytes = cached.canonical_result
+        else:
+            cached_bytes = None
+    if cached_bytes is not None:
+        return AnalysisResult.model_validate_json(cached_bytes, strict=True)
 
     typed_limitations = tuple(
         AnalysisLimitation(
@@ -771,16 +775,18 @@ def analyze_sequence(
             concurrent = _cache.get(cache_key)
             if concurrent is not None:
                 _cache.move_to_end(cache_key)
-                return AnalysisResult.model_validate_json(
-                    concurrent.canonical_result, strict=True
-                )
-            _cache[cache_key] = entry
-            _cache.move_to_end(cache_key)
-            while (
-                len(_cache) > CACHE_MAX_ENTRIES
-                or _retained_weight(_cache) > CACHE_MAX_TOTAL_WEIGHT_BYTES
-            ):
-                _cache.popitem(last=False)
+                concurrent_bytes = concurrent.canonical_result
+            else:
+                concurrent_bytes = None
+                _cache[cache_key] = entry
+                _cache.move_to_end(cache_key)
+                while (
+                    len(_cache) > CACHE_MAX_ENTRIES
+                    or _retained_weight(_cache) > CACHE_MAX_TOTAL_WEIGHT_BYTES
+                ):
+                    _cache.popitem(last=False)
+        if concurrent_bytes is not None:
+            return AnalysisResult.model_validate_json(concurrent_bytes, strict=True)
     return result
 
 
