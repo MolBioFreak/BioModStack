@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, Design, ExternalResultImport, Job
+from services.external_imports import service as external_import_service
 from services.external_imports.boltz_api import BoltzImportError, preview_boltz_api_run
 from services.external_imports.service import process_external_import, queue_external_import, recover_external_imports
 from services.external_imports.worker import ExternalImportWorker
@@ -420,5 +421,63 @@ async def test_recovery_does_not_complete_a_linked_import_without_canonical_arti
             assert record.state == "failed"
             assert record.failure_code == "IMPORT_INTERRUPTED"
             assert (await session.execute(select(Design).where(Design.job_id == job.id))).scalar_one_or_none() is None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_import_completion_cannot_overwrite_concurrent_cancellation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _write_run(tmp_path / "source")
+    data_root = tmp_path / "data"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'cancel-import.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    BaseSession = async_sessionmaker(engine, expire_on_commit=False)
+    original_completion = external_import_service._complete_linked_job_if_active
+
+    async def cancel_then_complete(session, job_id: str, values: dict):
+        async with BaseSession() as cancellation_session:
+            cancelled = await cancellation_session.get(Job, "remote-import-cancel-race")
+            cancelled.status = "cancelled"
+            cancelled.queue_status = "cancelled"
+            await cancellation_session.commit()
+        return await original_completion(session, job_id, values)
+
+    monkeypatch.setattr(external_import_service, "_complete_linked_job_if_active", cancel_then_complete)
+    try:
+        preview = preview_boltz_api_run(source)
+        async with BaseSession() as session:
+            session.add(Job(
+                id="remote-import-cancel-race",
+                name="remote import cancel race",
+                status="running",
+                queue_status="running",
+                model_id="boltz_api",
+                mode="external_api",
+                params={"provider_state": "importing"},
+            ))
+            await session.commit()
+            queued = await queue_external_import(
+                session,
+                source_dir=source,
+                preview_fingerprint=preview.source_fingerprint,
+                dataset_name="cancel race",
+                job_name="cancel race",
+                bms_job_id="remote-import-cancel-race",
+            )
+
+        async with BaseSession() as session:
+            with pytest.raises(BoltzImportError, match="BMS_JOB_CANCELLED"):
+                await process_external_import(session, import_id=queued.id, data_root=data_root)
+
+        async with BaseSession() as session:
+            cancelled = await session.get(Job, "remote-import-cancel-race")
+            designs = list((await session.execute(select(Design).where(Design.job_id == cancelled.id))).scalars())
+            assert cancelled.status == "cancelled"
+            assert cancelled.queue_status == "cancelled"
+            assert designs == []
     finally:
         await engine.dispose()
