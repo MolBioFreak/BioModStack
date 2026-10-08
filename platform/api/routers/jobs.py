@@ -5085,7 +5085,7 @@ async def list_jobs(
             created_at=job.created_at,
             started_at=job.started_at,
             completed_at=job.completed_at,
-            output_dir=job.output_dir,
+            output_dir=_public_job_output_dir(job),
             error_message=job.error_message,
             design_count=design_count,  # Now joined from DB
             requested_design_count=None if summary else _resolve_requested_design_count(job),
@@ -5177,7 +5177,7 @@ async def import_proteinbase_bundle_job(
         created_at=job.created_at,
         started_at=job.started_at,
         completed_at=job.completed_at,
-        output_dir=job.output_dir,
+        output_dir=_public_job_output_dir(job),
         error_message=job.error_message,
         design_count=design_count or 0,
         requested_design_count=_resolve_requested_design_count(job),
@@ -5471,7 +5471,7 @@ async def _create_job(
                 created_at=existing_child.created_at,
                 started_at=existing_child.started_at,
                 completed_at=existing_child.completed_at,
-                output_dir=existing_child.output_dir,
+                output_dir=_public_job_output_dir(existing_child),
                 error_message=existing_child.error_message,
                 design_count=0,
                 batch_id=existing_child.batch_id,
@@ -6089,7 +6089,7 @@ async def _create_job(
         created_at=first_job.created_at,
         started_at=first_job.started_at,
         completed_at=first_job.completed_at,
-        output_dir=first_job.output_dir,
+        output_dir=_public_job_output_dir(first_job),
         error_message=first_job.error_message,
         design_count=0,
         batch_id=first_job.batch_id,
@@ -6552,9 +6552,19 @@ def _rfd3_public_json(value: Any, *, field: str | None = None) -> Any:
     return value
 
 
+def _is_native_rfd3_job(job: Any) -> bool:
+    return str(job.model_id or "").strip().lower() == "protein_local_redesign"
+
+
+def _public_job_output_dir(job: Any) -> str | None:
+    if _is_native_rfd3_job(job):
+        return None
+    return job.output_dir
+
+
 def _public_job_params(job: Any) -> dict[str, Any]:
     params = job.params if isinstance(job.params, dict) else {}
-    if str(job.model_id or "").strip().lower() == "protein_local_redesign":
+    if _is_native_rfd3_job(job):
         return _rfd3_public_json(params)
     return params
 
@@ -6784,7 +6794,7 @@ async def get_job(
         created_at=job.created_at,
         started_at=job.started_at,
         completed_at=job.completed_at,
-        output_dir=job.output_dir,
+        output_dir=_public_job_output_dir(job),
         error_message=job.error_message,
         design_count=design_count or 0,
         requested_design_count=_resolve_requested_design_count(job),
