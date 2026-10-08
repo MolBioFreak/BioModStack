@@ -210,7 +210,8 @@ def parse_chain_position_spec(spec):
 
 def compute_fixed_residues(mode, chains_data, cdr_dict, tetrad_positions, 
                            selected_loops, protect_tetrad, antibody_chains,
-                           extra_protected_positions=None, extra_fixed_by_chain=None):
+                           extra_protected_positions=None, extra_fixed_by_chain=None,
+                           cdr_override_by_chain=None):
     """
     Compute which residues should be fixed based on design mode.
     
@@ -224,6 +225,7 @@ def compute_fixed_residues(mode, chains_data, cdr_dict, tetrad_positions,
         antibody_chains: list of antibody chain IDs (e.g., ['H', 'L'])
         extra_protected_positions: list of additional PDB positions to protect on chain H
         extra_fixed_by_chain: dict of chain_id -> list of PDB positions to always fix
+        cdr_override_by_chain: optional dict of chain_id -> PDB residue numbers to treat as CDRs
     
     Returns:
         dict: chain_id -> list of FIXED residue numbers
@@ -237,16 +239,30 @@ def compute_fixed_residues(mode, chains_data, cdr_dict, tetrad_positions,
     for chain in target_chains:
         fixed_residues[chain] = chains_data[chain]
     
-    # Get all CDR residues as a set for quick lookup
-    all_cdr_residues = set()
-    for loop, residues in cdr_dict.items():
-        all_cdr_residues.update(residues)
-    
-    # Get selected CDR residues (for cdr_selective mode)
-    selected_cdr_residues = set()
-    for loop in selected_loops:
-        if loop in cdr_dict:
-            selected_cdr_residues.update(cdr_dict[loop])
+    cdr_override_by_chain = cdr_override_by_chain or {}
+
+    def build_cdr_sets_by_chain():
+        all_by_chain = {}
+        selected_by_chain = {}
+        heavy_chain = antibody_chains[0] if antibody_chains else None
+        light_chain = antibody_chains[1] if len(antibody_chains) > 1 else None
+
+        for loop, residues in cdr_dict.items():
+            loop_id = loop.upper()
+            if loop_id.startswith("H") and heavy_chain:
+                chain_id = heavy_chain
+            elif loop_id.startswith("L") and light_chain:
+                chain_id = light_chain
+            else:
+                continue
+
+            all_by_chain.setdefault(chain_id, set()).update(residues)
+            if loop_id in selected_loops:
+                selected_by_chain.setdefault(chain_id, set()).update(residues)
+
+        return all_by_chain, selected_by_chain
+
+    cdr_by_chain, selected_cdr_by_chain = build_cdr_sets_by_chain()
     
     # Process each antibody chain
     for chain in antibody_chains:
@@ -255,6 +271,14 @@ def compute_fixed_residues(mode, chains_data, cdr_dict, tetrad_positions,
             
         all_residues = set(chains_data[chain])
         
+        # Get CDR residues for this chain (override if provided)
+        if chain in cdr_override_by_chain and cdr_override_by_chain[chain]:
+            all_cdr_residues = set(cdr_override_by_chain[chain])
+            selected_cdr_residues = set(all_cdr_residues)
+        else:
+            all_cdr_residues = set(cdr_by_chain.get(chain, set()))
+            selected_cdr_residues = set(selected_cdr_by_chain.get(chain, set()))
+
         if mode == 'cdr_only':
             # Fix everything EXCEPT CDRs
             fixed = all_residues - all_cdr_residues
@@ -322,6 +346,10 @@ def main():
                         help="Comma-separated list of additional IMGT positions to protect (e.g., '23,72,73,104')")
     parser.add_argument("--extra_fixed_positions", default="",
                         help="Chain-specific PDB positions to always fix (e.g., 'H27,H30-33,L50')")
+    parser.add_argument("--cdr_positions", default="",
+                        help="Chain-specific CDR positions to use (e.g., 'H26-33,L50-58'). Overrides HLT labels.")
+    parser.add_argument("--cdr_positions_by_loop", default="",
+                        help="Path to JSON mapping loop IDs (H1,H2,...) to positions.")
     parser.add_argument("--protect_fr_contacts", default="false",
                         help="Protect all FR contact hotspots from Zavrtanik 2018 (default: false)")
     parser.add_argument("--protect_disulfides", default="true",
@@ -345,6 +373,14 @@ def main():
     # Build extra protected positions list (IMGT numbering)
     extra_protected_imgt = []
     extra_fixed_by_chain = parse_chain_position_spec(args.extra_fixed_positions)
+    cdr_override_by_chain = parse_chain_position_spec(args.cdr_positions)
+    cdr_positions_by_loop = {}
+    if args.cdr_positions_by_loop:
+        try:
+            with open(args.cdr_positions_by_loop, 'r') as f:
+                cdr_positions_by_loop = json.load(f)
+        except Exception as e:
+            print(f"Warning: Failed to read cdr_positions_by_loop: {e}")
     
     # Add user-specified positions
     if args.protected_positions.strip():
@@ -378,6 +414,10 @@ def main():
         print(f"Extra protected IMGT positions: {sorted(extra_protected_imgt)}")
     if extra_fixed_by_chain:
         print(f"Extra fixed positions by chain: {extra_fixed_by_chain}")
+    if cdr_override_by_chain:
+        print(f"CDR override positions by chain: {cdr_override_by_chain}")
+    if cdr_positions_by_loop:
+        print(f"CDR override positions by loop: {cdr_positions_by_loop.keys()}")
 
     for pdb in pdb_files:
         pdb_name = pdb.stem
@@ -385,9 +425,11 @@ def main():
         
         # Parse CDR labels from HLT format
         cdr_dict = parse_hlt_cdr_labels(pdb)
+        if cdr_positions_by_loop:
+            cdr_dict = {k: list(map(int, v)) for k, v in cdr_positions_by_loop.items() if v}
         
-        # Check if we found any CDR labels
-        has_cdr_labels = any(len(v) > 0 for v in cdr_dict.values())
+        # Check if we found any CDR labels or override positions
+        has_cdr_labels = any(len(v) > 0 for v in cdr_dict.values()) or bool(cdr_override_by_chain)
         
         if not has_cdr_labels:
             # Fallback: If no HLT labels, use heuristic (fix entire target chain)
@@ -447,7 +489,8 @@ def main():
             protect_tetrad=protect_tetrad,
             antibody_chains=antibody_chains,
             extra_protected_positions=extra_protected_pdb,
-            extra_fixed_by_chain=extra_fixed_by_chain
+            extra_fixed_by_chain=extra_fixed_by_chain,
+            cdr_override_by_chain=cdr_override_by_chain
         )
         
         # Generate FAMPNN constraints (chain + residue ranges)

@@ -16,6 +16,8 @@ from pydantic import BaseModel
 from datetime import datetime
 
 from database import Job, get_session
+from services.gpu_metadata import HARDWARE_LIMITS
+from services.job_control import force_launch_job as force_launch_job_service
 import logging
 
 logger = logging.getLogger(__name__)
@@ -236,8 +238,9 @@ async def pin_job_to_gpu(
         raise HTTPException(status_code=400, detail="Can only pin queued or paused jobs")
     
     # Validate GPU index
-    if request.gpu_id is not None and request.gpu_id not in [0, 1, 2, 3]:
-        raise HTTPException(status_code=400, detail="Invalid GPU index (must be 0-3)")
+    if request.gpu_id is not None and request.gpu_id not in HARDWARE_LIMITS:
+        valid = ",".join(str(idx) for idx in sorted(HARDWARE_LIMITS.keys()))
+        raise HTTPException(status_code=400, detail=f"Invalid GPU index (valid: {valid})")
     
     job.pinned_gpu = request.gpu_id
     await session.commit()
@@ -379,7 +382,7 @@ async def kill_active_nextflow_jobs():
 
 class ForceLaunchRequest(BaseModel):
     """Request to force-launch a job on a specific GPU."""
-    gpu_id: int  # GPU to launch on (0-3)
+    gpu_id: int  # GPU to launch on
 
 
 @router.post("/{job_id}/force-launch")
@@ -395,60 +398,28 @@ async def force_launch_job(
     the orchestrator's bin-packing algorithm. Use when you know there's
     enough VRAM and want to manually control job placement.
     """
-    import asyncio
-    from services.nextflow import launch_nextflow_job
-    from datetime import datetime
-    
     # Validate GPU index
-    if request.gpu_id not in [0, 1, 2, 3]:
-        raise HTTPException(status_code=400, detail="Invalid GPU index (must be 0-3)")
-    
-    # Get the job
-    result = await session.execute(select(Job).where(Job.id == job_id))
-    job = result.scalar_one_or_none()
-    
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    if job.queue_status not in ['queued', 'paused']:
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Can only force-launch queued/paused jobs (current: {job.queue_status})"
-        )
-    
+    if request.gpu_id not in HARDWARE_LIMITS:
+        valid = ",".join(str(idx) for idx in sorted(HARDWARE_LIMITS.keys()))
+        raise HTTPException(status_code=400, detail=f"Invalid GPU index (valid: {valid})")
+
     try:
-        # Get job params
-        import json
-        params = json.loads(job.params) if isinstance(job.params, str) else (job.params or {})
-        params['gpu_id'] = request.gpu_id
-        
-        # Update job status FIRST (before launching)
-        job.queue_status = "running"
-        job.status = "running"
-        job.assigned_gpu = request.gpu_id
-        job.started_at = datetime.utcnow()
-        job.paused = False
-        await session.commit()
-        
-        # Launch the job as a background task (don't await - it runs until completion)
-        asyncio.create_task(launch_nextflow_job(
-            job_id=job.id,
-            model_id=job.model_id,
-            mode=job.mode,
-            params=params,
-            output_dir=job.output_dir
-        ))
-        
+        job = await force_launch_job_service(
+            job_id=job_id,
+            gpu_id=request.gpu_id,
+            allowed_queue_statuses=["queued", "paused"],
+            session=session,
+        )
         logger.info(f"[FORCE-LAUNCH] {job.name} on GPU {request.gpu_id}")
-        
         return {
             "success": True,
             "message": f"Force-launched {job.name} on GPU {request.gpu_id}",
             "job_id": job_id,
             "gpu_id": request.gpu_id
         }
-        
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"[FORCE-LAUNCH FAILED] {job.name}: {e}")
+        logger.error(f"[FORCE-LAUNCH FAILED] {job_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Launch failed: {str(e)}")
 

@@ -33,6 +33,9 @@ import time
 from pathlib import Path
 from datetime import datetime, timedelta
 
+DEFAULT_DB_PATH = os.getenv("BMS_COLABFOLD_DB", "/mnt/BioModStack/colabfold_db")
+DEFAULT_CACHE_DIR = os.getenv("BMS_MSA_CACHE", "/mnt/BioModStack/msa_cache")
+
 
 def compute_sequence_hash(sequence: str) -> str:
     """Compute SHA256 hash of sequence for cache key."""
@@ -175,7 +178,7 @@ def run_local_mmseqs2(
     sequence: str,
     job_name: str,
     out_dir: str,
-    db_path: str = "/mnt/BioModStack/colabfold_db",
+    db_path: str = DEFAULT_DB_PATH,
     cache_dir: str = None,
     max_age_days: int = 0,  # Default: never expire
     force_refresh: bool = False,
@@ -353,10 +356,10 @@ if __name__ == "__main__":
     parser.add_argument("--name", required=True, help="Job name for output files")
     parser.add_argument("--out_dir", required=True, help="Output directory")
     parser.add_argument("--db_path", 
-                        default="/mnt/BioModStack/colabfold_db",
+                        default=DEFAULT_DB_PATH,
                         help="Path to ColabFold database directory")
     parser.add_argument("--cache_dir", 
-                        default="/mnt/BioModStack/msa_cache",
+                        default=DEFAULT_CACHE_DIR,
                         help="Cache directory (default: /mnt/BioModStack/msa_cache)")
     parser.add_argument("--max_age_days", type=int, default=0, 
                         help="Cache expiry in days (0 = never expire)")

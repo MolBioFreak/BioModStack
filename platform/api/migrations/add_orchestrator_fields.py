@@ -16,8 +16,10 @@ import sqlite3
 import sys
 from pathlib import Path
 
+from paths import get_db_path
+
 # Database path (same as in database.py)
-DB_PATH = Path(__file__).parent.parent / "biomodstack.db"
+DB_PATH = Path(get_db_path())
 
 MIGRATIONS = [
     # Queue Management
@@ -53,7 +55,9 @@ def run_migration():
         print("Run the API server first to create the database, then run this migration.")
         sys.exit(1)
     
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     cursor = conn.cursor()
     
     try:

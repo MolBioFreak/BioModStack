@@ -12,6 +12,8 @@ process ANTIFOLD {
     path "antifold.log"
 
     script:
+    def weightsRoot = params.weights_root ?: "/mnt/BioModStack/weights"
+    def antifoldModel = "${weightsRoot}/antifold/model.pt"
     """
     # Count number of chains in the PDB file and get chain IDs
     CHAINS=\$(grep "^ATOM" ${pdb_imgt} | awk '{print \$5}' | sort -u)
@@ -24,7 +26,7 @@ process ANTIFOLD {
             --pdb_file ${pdb_imgt} \\
             --nanobody_chain \$FIRST_CHAIN \\
             --nanobody_mode \\
-            --model_path /mnt/BioModStack/weights/antifold/model.pt \\
+            --model_path ${antifoldModel} \\
             --num_seq_per_target 10 \\
             --sampling_temp 0.2 \\
             --out_dir . \\
@@ -37,7 +39,7 @@ process ANTIFOLD {
             --pdb_file ${pdb_imgt} \\
             --heavy_chain \$FIRST_CHAIN \\
             --light_chain \$SECOND_CHAIN \\
-            --model_path /mnt/BioModStack/weights/antifold/model.pt \\
+            --model_path ${antifoldModel} \\
             --num_seq_per_target 10 \\
             --sampling_temp 0.2 \\
             --out_dir . \\

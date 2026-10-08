@@ -13,11 +13,12 @@ import json
 
 logger = logging.getLogger(__name__)
 
+from paths import get_code_root
+
 router = APIRouter()
 
 # Cache directory for RCSB downloads
-PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
-RCSB_CACHE_DIR = PROJECT_ROOT / "rcsb"
+RCSB_CACHE_DIR = get_code_root() / "rcsb"
 RCSB_CACHE_DIR.mkdir(exist_ok=True)
 
 RCSB_BASE_URL = "https://files.rcsb.org/download"

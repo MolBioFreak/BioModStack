@@ -13,27 +13,20 @@ import json
 import asyncio
 import time
 
+from paths import get_code_root
+from services.gpu_config import (
+    read_scheduler_config,
+    write_scheduler_config,
+    GPU_CONFIG_PATH,
+    DEFAULT_SCHEDULER_CONFIG,
+)
+from services.gpu_metadata import HARDWARE_LIMITS
+from services.job_control import force_launch_job as force_launch_job_service
+
 router = APIRouter()
 
-# Hardware power limits per GPU: (min, default, max, eco_preset)
-# Values from nvidia-smi -q -d POWER
-HARDWARE_LIMITS = {
-    0: {"min": 400, "default": 575, "max": 600, "eco": 500, "name": "RTX 5090"},
-    1: {"min": 150, "default": 180, "max": 200, "eco": 165, "name": "RTX 5060 Ti"},
-    2: {"min": 100, "default": 370, "max": 380, "eco": 300, "name": "RTX 3090"},
-    3: {"min": 100, "default": 390, "max": 480, "eco": 300, "name": "RTX 3090"},
-}
-
-# --- GPU Scheduler Config Endpoints ---
-# Config file path (in project root, read by Nextflow)
-GPU_CONFIG_PATH = Path(__file__).parent.parent.parent.parent / ".gpu_config.json"
-GPU_RESERVATIONS_PATH = Path(__file__).parent.parent.parent.parent / ".gpu_reservations.json"
-HARDWARE_LIMITS = {
-    0: {"min": 400, "default": 575, "max": 600, "eco": 500, "name": "RTX 5090"},
-    1: {"min": 150, "default": 180, "max": 200, "eco": 165, "name": "RTX 5060 Ti"},
-    2: {"min": 100, "default": 370, "max": 380, "eco": 300, "name": "RTX 3090"},
-    3: {"min": 100, "default": 390, "max": 480, "eco": 300, "name": "RTX 3090"},
-}
+PROJECT_ROOT = get_code_root()
+GPU_RESERVATIONS_PATH = PROJECT_ROOT / ".gpu_reservations.json"
 
 # Power control state (in-memory, resets on restart)
 _current_limits = {gpu_idx: limits["default"] for gpu_idx, limits in HARDWARE_LIMITS.items()}
@@ -559,34 +552,15 @@ async def set_power_control(request: PowerControlRequest):
     }
 
 
-# --- GPU Scheduler Config Endpoints ---
-# Config file path (in project root, read by Nextflow)
-GPU_CONFIG_PATH = Path(__file__).parent.parent.parent.parent / ".gpu_config.json"
-
-# Default scheduler config
-DEFAULT_SCHEDULER_CONFIG = {
-    "global": {
-        "busy_threshold": 0.5,       # 50% = GPU is busy
-        "cooldown_ms": 10000,        # 10 seconds after assignment
-        "enabled": True,             # Master switch for capacity lock
-        "target_vram_fill": 0.75,    # Target VRAM fill before preferring another GPU
-        "capacity_weight": 3.0,      # Weight for GPU capacity in scoring
-        "emptiness_weight": 5.0,     # Weight for GPU emptiness in scoring
-        "msa_concurrency_limit": 1,  # Max parallel MSA batch jobs
-    },
-    "overrides": {}  # Per-GPU: {"0": {"force_available": false, "threshold": null}}
-}
-
-
 class SchedulerGlobalConfig(BaseModel):
     """Global scheduler settings."""
-    busy_threshold: float = 0.5           # 0.0-1.0
-    cooldown_ms: int = 10000
-    enabled: bool = True
-    target_vram_fill: float = 0.75        # Target fill % before preferring another GPU
-    capacity_weight: float = 3.0          # Larger = prefer bigger GPUs more
-    emptiness_weight: float = 5.0         # Larger = prefer emptier GPUs more
-    msa_concurrency_limit: int = 1        # Max parallel MSA jobs
+    busy_threshold: float = DEFAULT_SCHEDULER_CONFIG["global"]["busy_threshold"]  # 0.0-1.0
+    cooldown_ms: int = DEFAULT_SCHEDULER_CONFIG["global"]["cooldown_ms"]
+    enabled: bool = DEFAULT_SCHEDULER_CONFIG["global"]["enabled"]
+    target_vram_fill: float = DEFAULT_SCHEDULER_CONFIG["global"]["target_vram_fill"]
+    capacity_weight: float = DEFAULT_SCHEDULER_CONFIG["global"]["capacity_weight"]
+    emptiness_weight: float = DEFAULT_SCHEDULER_CONFIG["global"]["emptiness_weight"]
+    msa_concurrency_limit: int = DEFAULT_SCHEDULER_CONFIG["global"]["msa_concurrency_limit"]
 
 
 class SchedulerGPUOverride(BaseModel):
@@ -605,33 +579,6 @@ class SchedulerConfigResponse(BaseModel):
     global_config: SchedulerGlobalConfig
     overrides: Dict[str, SchedulerGPUOverride]
     config_path: str
-
-
-def read_scheduler_config() -> Dict[str, Any]:
-    """Read scheduler config from file, or return defaults."""
-    if GPU_CONFIG_PATH.exists():
-        try:
-            with open(GPU_CONFIG_PATH, "r") as f:
-                config = json.load(f)
-                # Merge with defaults to ensure all keys exist
-                return {
-                    "global": {**DEFAULT_SCHEDULER_CONFIG["global"], **config.get("global", {})},
-                    "overrides": config.get("overrides", {})
-                }
-        except Exception as e:
-            print(f"Error reading GPU config: {e}")
-    return DEFAULT_SCHEDULER_CONFIG.copy()
-
-
-def write_scheduler_config(config: Dict[str, Any]) -> bool:
-    """Write scheduler config to file."""
-    try:
-        with open(GPU_CONFIG_PATH, "w") as f:
-            json.dump(config, f, indent=2)
-        return True
-    except Exception as e:
-        print(f"Error writing GPU config: {e}")
-        return False
 
 
 @router.get("/scheduler-config")
@@ -768,13 +715,14 @@ async def pin_workflow_to_gpu(workflow_type: str, gpu_id: int):
     
     Args:
         workflow_type: Model type (e.g., 'boltz', 'fampnn', 'rfantibody')
-        gpu_id: GPU index (0-3)
+        gpu_id: GPU index
     
     Example: POST /gpu/workflow-pins/boltz/gpu/2
              → All Boltz jobs will run on GPU 2
     """
-    if gpu_id < 0 or gpu_id > 3:
-        raise HTTPException(status_code=400, detail=f"Invalid GPU index: {gpu_id}. Must be 0-3.")
+    if gpu_id not in HARDWARE_LIMITS:
+        valid = ",".join(str(idx) for idx in sorted(HARDWARE_LIMITS.keys()))
+        raise HTTPException(status_code=400, detail=f"Invalid GPU index: {gpu_id}. Valid: {valid}.")
     
     config = read_scheduler_config()
     
@@ -850,10 +798,11 @@ async def lock_gpu_for_batch(batch_id: str, gpu_id: int):
     
     Args:
         batch_id: Unique batch identifier (e.g., parent job ID)
-        gpu_id: GPU index to lock (0-3)
+        gpu_id: GPU index to lock
     """
-    if gpu_id < 0 or gpu_id > 3:
-        raise HTTPException(status_code=400, detail=f"Invalid GPU index: {gpu_id}. Must be 0-3.")
+    if gpu_id not in HARDWARE_LIMITS:
+        valid = ",".join(str(idx) for idx in sorted(HARDWARE_LIMITS.keys()))
+        raise HTTPException(status_code=400, detail=f"Invalid GPU index: {gpu_id}. Valid: {valid}.")
     
     config = read_scheduler_config()
     
@@ -961,69 +910,36 @@ async def force_run_job(job_id: str, request: ForceRunRequest):
     Skips VRAM checks and concurrency limits. Use with caution.
     """
     import logging
-    from database import async_session, Job
-    from sqlalchemy import select
-    from datetime import datetime
-    from services.nextflow import launch_nextflow_job
-    
     logger = logging.getLogger("api.gpu")
-    
-    async with async_session() as session:
-        result = await session.execute(select(Job).where(Job.id == job_id))
-        job = result.scalar_one_or_none()
-        
-        if not job:
-            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-        
-        if job.queue_status != "queued":
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Job must be queued to force-run (current: {job.queue_status})"
-            )
-        
-        # Determine GPU
-        gpu_id = request.gpu_id
-        if gpu_id is None:
-            # Pick least-loaded GPU
-            try:
-                gpu_stats = get_gpu_stats()
-                enabled_gpus = [g for g in gpu_stats if g.index != 1]  # Skip GPU 1 (display)
-                if enabled_gpus:
-                    gpu_id = min(enabled_gpus, key=lambda g: g.memory_used_mb).index
-                else:
-                    gpu_id = 0
-            except Exception:
+
+    # Determine GPU
+    gpu_id = request.gpu_id
+    if gpu_id is None:
+        # Pick least-loaded GPU
+        try:
+            gpu_stats = get_gpu_stats()
+            enabled_gpus = [g for g in gpu_stats if g.index != 1]  # Skip GPU 1 (display)
+            if enabled_gpus:
+                gpu_id = min(enabled_gpus, key=lambda g: g.memory_used_mb).index
+            else:
                 gpu_id = 0
-        
-        # Update job status
-        job.queue_status = "running"
-        job.assigned_gpu = gpu_id
-        job.started_at = datetime.utcnow()
-        await session.commit()
-        
-        # Build params with gpu_id
-        import json
-        params = json.loads(job.params) if isinstance(job.params, str) else (job.params or {})
-        params["gpu_id"] = gpu_id
-        
-        logger.warning(f"[FORCE RUN] User forced {job.name} to GPU {gpu_id}")
-        
-        # Launch the job
-        import asyncio
-        asyncio.create_task(launch_nextflow_job(
-            job_id=job.id,
-            model_id=job.model_id,
-            mode=params.get("mode", "default"),
-            params=params,
-            output_dir=job.output_dir
-        ))
-        
-        return {
-            "success": True,
-            "message": f"Force-launched {job.name} on GPU {gpu_id}",
-            "job_id": job_id,
-            "gpu_id": gpu_id
-        }
+        except Exception:
+            gpu_id = 0
+
+    job = await force_launch_job_service(
+        job_id=job_id,
+        gpu_id=gpu_id,
+        allowed_queue_statuses=["queued"],
+    )
+
+    logger.warning(f"[FORCE RUN] User forced {job.name} to GPU {gpu_id}")
+
+    return {
+        "success": True,
+        "message": f"Force-launched {job.name} on GPU {gpu_id}",
+        "job_id": job_id,
+        "gpu_id": gpu_id
+    }
 
 
 class ConcurrencyLimitRequest(BaseModel):

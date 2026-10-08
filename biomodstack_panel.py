@@ -32,15 +32,19 @@ from gi.repository import Gtk, Adw, GLib, Gio, Pango
 # CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-PROJECT_ROOT = Path(__file__).parent
+API_ROOT = Path(__file__).parent / "platform" / "api"
+sys.path.insert(0, str(API_ROOT))
+from paths import get_code_root, get_db_path, get_results_dir  # noqa: E402
+
+PROJECT_ROOT = get_code_root()
 API_PORT = 8000
 FRONTEND_PORT = 5173
 API_URL = f"http://localhost:{API_PORT}"
 FRONTEND_URL = f"http://localhost:{FRONTEND_PORT}"
 
 # Paths
-DB_PATH = PROJECT_ROOT / "platform" / "api" / "biomodstack.db"
-RESULTS_DIR = PROJECT_ROOT / "pdj_results"
+DB_PATH = get_db_path()
+RESULTS_DIR = get_results_dir()
 API_LOG = Path("/tmp/biomodstack_api.log")
 FRONTEND_LOG = Path("/tmp/biomodstack_frontend.log")
 ICON_PATH = PROJECT_ROOT / "platform" / "assets" / "icons" / "biomodstack_tray.png"
@@ -111,7 +115,7 @@ def get_job_counts() -> tuple:
     try:
         if not DB_PATH.exists():
             return (0, 0, 0)
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = sqlite3.connect(str(DB_PATH), timeout=30)
         cur = conn.cursor()
         cur.execute("SELECT status, COUNT(*) FROM jobs GROUP BY status")
         counts = dict(cur.fetchall())
@@ -125,14 +129,22 @@ def get_db_info() -> dict:
         if not DB_PATH.exists():
             return {"error": "Not found"}
         size_mb = DB_PATH.stat().st_size / (1024 * 1024)
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = sqlite3.connect(str(DB_PATH), timeout=30)
         cur = conn.cursor()
         cur.execute("SELECT COUNT(*) FROM jobs")
         jobs = cur.fetchone()[0]
         cur.execute("SELECT COUNT(*) FROM designs")
         designs = cur.fetchone()[0]
+        journal_mode = cur.execute("PRAGMA journal_mode").fetchone()[0]
+        busy_timeout = cur.execute("PRAGMA busy_timeout").fetchone()[0]
         conn.close()
-        return {"size_mb": round(size_mb, 2), "jobs": jobs, "designs": designs}
+        return {
+            "size_mb": round(size_mb, 2),
+            "jobs": jobs,
+            "designs": designs,
+            "journal_mode": journal_mode,
+            "busy_timeout": busy_timeout,
+        }
     except Exception as e:
         return {"error": str(e)}
 
@@ -455,8 +467,10 @@ class BioModStackPanel(Adw.Application):
         if "error" in info:
             self.db_info_row.set_subtitle(f"Error: {info['error']}")
         else:
+            journal = info.get("journal_mode", "?")
+            busy = info.get("busy_timeout", "?")
             self.db_info_row.set_subtitle(
-                f"Jobs: {info['jobs']:,}  |  Designs: {info['designs']:,}  |  Size: {info['size_mb']} MB"
+                f"Jobs: {info['jobs']:,}  |  Designs: {info['designs']:,}  |  Size: {info['size_mb']} MB  |  {journal.upper()}  |  busy {busy}ms"
             )
     
     def _on_backup_db(self, button):

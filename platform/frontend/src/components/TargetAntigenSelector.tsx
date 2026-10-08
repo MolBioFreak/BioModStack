@@ -43,7 +43,7 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab }: 
     const [searchQuery, setSearchQuery] = useState('');
     const [debouncedSearch, setDebouncedSearch] = useState('');
     const [designsPage, setDesignsPage] = useState(0);
-    const [sortBy, setSortBy] = useState<'plddt' | 'iptm' | 'created_at'>('plddt');
+    const [sortBy, setSortBy] = useState<'plddt' | 'iptm' | 'ptm' | 'pae' | 'conf_score' | 'created_at'>('plddt');
     const [sortDesc, setSortDesc] = useState(true);
     const [reingestStatus, setReingestStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
     const [reingestMessage, setReingestMessage] = useState<string | null>(null);
@@ -318,6 +318,9 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab }: 
                                     >
                                         <option value="plddt">Sort by pLDDT</option>
                                         <option value="iptm">Sort by iPTM</option>
+                                        <option value="pae">Sort by pAE</option>
+                                        <option value="ptm">Sort by pTM</option>
+                                        <option value="conf_score">Sort by Confidence</option>
                                         <option value="created_at">Sort by Date</option>
                                     </select>
                                     <button

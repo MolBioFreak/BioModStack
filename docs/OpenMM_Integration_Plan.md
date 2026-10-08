@@ -35,7 +35,7 @@ Integrate **OpenMM** and **OpenMM-ML** into BioModStack as a **domain-aware** re
 | MACE Installation | https://github.com/ACEsuit/mace |
 | ANI-2x (TorchANI) | https://github.com/aiqm/torchani |
 | PDBFixer | https://github.com/openmm/pdbfixer |
-| ANARCI (CDR mapping) | https://github.com/oxpig/ANARCI |
+| ANARCII (CDR mapping) | https://github.com/oxpig/ANARCII |
 
 ### Installation (UV Policy Compliant)
 
@@ -120,7 +120,7 @@ withLabel: 'OpenMM' {
 | `--resolve_clashes` | bool | true | Pre-minimization clash resolution |
 | `--platform` | choice | `auto` | `auto`, `cuda`, `cpu` |
 
-**CDR-only requirements:** When `--cdr_only` is enabled, CDRs must be identified via ANARCI or an explicit `--cdr_definition` file. If CDR mapping fails, the script must fall back to whole-structure relaxation and emit a warning.
+**CDR-only requirements:** When `--cdr_only` is enabled, CDRs must be identified via ANARCII or an explicit `--cdr_definition` file. If CDR mapping fails, the script must fall back to whole-structure relaxation and emit a warning.
 
 **Output JSON fields:**
 ```json
@@ -717,7 +717,7 @@ python3 -c "import json; d=json.load(open('/tmp/relaxed.json')); print(f'CDR RMS
 
 #### 2b. Failure-Mode Tests
 ```bash
-# CDR mapping fallback (no ANARCI)
+# CDR mapping fallback (no ANARCII)
 apptainer exec --nv -B scripts:/scripts apptainer/openmm.sif \
     python3 /scripts/relax_openmm.py \
     --pdb data/test/nanobody.pdb \

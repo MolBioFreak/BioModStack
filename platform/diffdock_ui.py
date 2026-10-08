@@ -12,8 +12,9 @@ import shutil
 from pathlib import Path
 
 # Configuration
-CONTAINER_PATH = str(Path(__file__).parent.parent / "containers" / "diffdock.sif")
 PROJECT_DIR = str(Path(__file__).parent.parent)
+CONTAINER_PATH = str(Path(PROJECT_DIR) / "containers" / "diffdock.sif")
+HOME_DIR = str(Path.home())
 
 def run_diffdock(
     protein_file,
@@ -52,8 +53,8 @@ def run_diffdock(
             "--env", "HF_HOME=/cache/huggingface",
             "--env", "TORCH_HOME=/cache/torch",
             f"--pwd={PROJECT_DIR}",
-            "--bind", f"/home/dalab/.cache/huggingface:/cache/huggingface",
-            "--bind", f"/home/dalab/.cache/torch:/cache/torch",
+            "--bind", f"{HOME_DIR}/.cache/huggingface:/cache/huggingface",
+            "--bind", f"{HOME_DIR}/.cache/torch:/cache/torch",
             CONTAINER_PATH,
             "python3", "/app/DiffDock/inference.py",
             "--config", "/app/DiffDock/default_inference_args.yaml",

@@ -17,6 +17,14 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 from database import get_session, Job, Design
+from paths import (
+    get_code_root,
+    get_data_root,
+    get_results_dir,
+    get_work_dir,
+    resolve_allowed_path,
+    to_allowed_relative,
+)
 from schemas import JobCreate, JobResponse, JobList, JobStatus
 from services.nextflow import launch_nextflow_job, cancel_nextflow_job
 
@@ -24,15 +32,24 @@ from model_registry import get_registry
 
 router = APIRouter()
 
-# Project root for resolving relative output paths
-PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+# Project root for resolving code-relative paths
+CODE_ROOT = get_code_root()
+
+
+def resolve_output_dir(output_dir: str) -> Optional[Path]:
+    if not output_dir:
+        return None
+    output_path = Path(output_dir)
+    if output_path.is_absolute():
+        return output_path
+    return get_data_root() / output_dir
 
 
 def count_structure_files(output_dir: str) -> int:
     """Count PDB and CIF structure files in a job output directory."""
     try:
-        output_path = PROJECT_ROOT / output_dir
-        if not output_path.exists():
+        output_path = resolve_output_dir(output_dir)
+        if not output_path or not output_path.exists():
             return 0
         
         pdb_count = len(list(output_path.glob("**/*.pdb")))
@@ -159,7 +176,7 @@ async def create_job(
     
     # Create output directory (base for all jobs in batch)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base_output_dir = str(PROJECT_ROOT / "pdj_results" / f"{job_data.name}_{timestamp}")
+    base_output_dir = str(get_results_dir() / f"{job_data.name}_{timestamp}")
     os.makedirs(base_output_dir, exist_ok=True)
     
     # Extract sequence length for VRAM estimation (same for all jobs in batch)
@@ -526,8 +543,8 @@ async def delete_job_permanently(
     # Delete output directories
     deleted_paths = []
     if output_dir:
-        output_path = PROJECT_ROOT / output_dir if not Path(output_dir).is_absolute() else Path(output_dir)
-        if output_path.exists():
+        output_path = resolve_output_dir(output_dir)
+        if output_path and output_path.exists():
             try:
                 shutil.rmtree(output_path)
                 deleted_paths.append(str(output_path))
@@ -535,8 +552,8 @@ async def delete_job_permanently(
                 print(f"Warning: Failed to delete output dir {output_path}: {e}")
     
     for child_dir in child_output_dirs:
-        child_path = PROJECT_ROOT / child_dir if not Path(child_dir).is_absolute() else Path(child_dir)
-        if child_path.exists():
+        child_path = resolve_output_dir(child_dir)
+        if child_path and child_path.exists():
             try:
                 shutil.rmtree(child_path)
                 deleted_paths.append(str(child_path))
@@ -591,8 +608,7 @@ async def resubmit_job(
     
     # Create new output directory for resubmitted job
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    PROJECT_ROOT = Path(__file__).resolve().parents[3]
-    output_dir = str(PROJECT_ROOT / "pdj_results" / f"{new_name}_{timestamp}")
+    output_dir = str(get_results_dir() / f"{new_name}_{timestamp}")
     os.makedirs(output_dir, exist_ok=True)
     
     new_job = Job(
@@ -682,20 +698,20 @@ async def reingest_job_results(
 
         # Build job list (parent + children)
         job_ids = [job_id]
-        jobs_to_ingest = {job_id: job}
+        jobs_to_ingest = {job_id: job.output_dir}
         if include_children:
             child_result = await session.execute(select(Job).where(Job.parent_job_id == job_id))
             child_jobs = child_result.scalars().all()
             for child in child_jobs:
                 job_ids.append(child.id)
-                jobs_to_ingest[child.id] = child
+                jobs_to_ingest[child.id] = child.output_dir
         
         total_deleted = 0
         total_created = 0
         
         for jid in job_ids:
-            target_job = jobs_to_ingest.get(jid)
-            if not target_job or not target_job.output_dir:
+            output_dir = jobs_to_ingest.get(jid)
+            if not output_dir:
                 logger.warning(f"[REINGEST] Skipping job {jid}: no output_dir")
                 continue
             
@@ -703,7 +719,7 @@ async def reingest_job_results(
             total_deleted += deleted_count
             
             try:
-                new_count = await ingest_job_results(jid, target_job.output_dir, session)
+                new_count = await ingest_job_results(jid, output_dir, session)
                 total_created += new_count
                 logger.info(f"[REINGEST] Re-ingested {new_count} designs for job {jid}")
             except Exception as e:
@@ -736,8 +752,7 @@ async def annotate_cdr_regions(
     This runs in the background (~1-2 minutes for large jobs).
     Returns immediately with status "started".
     """
-    import threading
-    from services.cdr_annotator import batch_annotate_pdbs
+    from services.cdr_annotation_tasks import annotate_and_update_designs
     
     # Fetch job
     result = await session.execute(select(Job).where(Job.id == job_id))
@@ -776,51 +791,9 @@ async def annotate_cdr_regions(
     total_count = len(designs)
     
     logger.info(f"[CDR ANNOTATE] Starting background annotation on {len(pdb_paths)} designs for job {job_id}")
-    
-    # Background worker function
-    def run_annotation_sync():
-        import sqlite3
-        
-        # Run ANARCII batch annotation
-        annotations = batch_annotate_pdbs(pdb_paths, batch_size=500)
-        
-        # Update database directly with sqlite (sync)
-        db_path = Path(__file__).parent.parent / "biomodstack.db"
-        conn = sqlite3.connect(str(db_path))
-        cursor = conn.cursor()
-        
-        annotated = 0
-        for pdb_path, design_id in zip(pdb_paths, design_ids):
-            annot = annotations.get(pdb_path)
-            if annot:
-                cursor.execute("""
-                    UPDATE designs SET
-                        antibody_type = ?,
-                        binder_length = ?,
-                        cdr_h1 = ?, cdr_h2 = ?, cdr_h3 = ?,
-                        cdr_l1 = ?, cdr_l2 = ?, cdr_l3 = ?,
-                        cdr_h1_length = ?, cdr_h2_length = ?, cdr_h3_length = ?,
-                        cdr_l1_length = ?, cdr_l2_length = ?, cdr_l3_length = ?,
-                        fr2_contacts = ?, de_loop = ?, fr3_contacts = ?, fr4_contacts = ?
-                    WHERE id = ?
-                """, (
-                    annot.antibody_type, annot.binder_length,
-                    annot.cdr_h1, annot.cdr_h2, annot.cdr_h3,
-                    annot.cdr_l1, annot.cdr_l2, annot.cdr_l3,
-                    annot.cdr_h1_length, annot.cdr_h2_length, annot.cdr_h3_length,
-                    annot.cdr_l1_length, annot.cdr_l2_length, annot.cdr_l3_length,
-                    annot.fr2_contacts, annot.de_loop, annot.fr3_contacts, annot.fr4_contacts,
-                    design_id
-                ))
-                annotated += 1
-        
-        conn.commit()
-        conn.close()
-        logger.info(f"[CDR ANNOTATE] Completed: {annotated}/{len(pdb_paths)} designs annotated for job {job_id}")
-    
-    # Start background thread
-    thread = threading.Thread(target=run_annotation_sync, daemon=True)
-    thread.start()
+    asyncio.create_task(
+        annotate_and_update_designs(pdb_paths, design_ids, job_id=str(job_id))
+    )
     
     return {
         "message": f"CDR annotation started for {len(pdb_paths)} designs (running in background)",
@@ -1147,7 +1120,7 @@ async def resume_job(
     
     # Generate output directory for the resumed job
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = str(PROJECT_ROOT / "pdj_results" / f"{new_name}_{timestamp}")
+    output_dir = str(get_results_dir() / f"{new_name}_{timestamp}")
     os.makedirs(output_dir, exist_ok=True)
     
     new_job = Job(
@@ -1207,15 +1180,15 @@ async def list_structure_files(
     if not job.output_dir:
         return {"structures": []}
     
-    output_path = PROJECT_ROOT / job.output_dir
-    if not output_path.exists():
+    output_path = resolve_output_dir(job.output_dir)
+    if not output_path or not output_path.exists():
         return {"structures": []}
     
     structures = []
     
     # Find all PDB files
     for pdb_file in output_path.glob("**/*.pdb"):
-        rel_path = str(pdb_file.relative_to(PROJECT_ROOT))
+        rel_path = to_allowed_relative(pdb_file)
         structures.append({
             "name": pdb_file.stem,
             "filename": pdb_file.name,
@@ -1226,7 +1199,7 @@ async def list_structure_files(
     
     # Find all CIF files
     for cif_file in output_path.glob("**/*.cif"):
-        rel_path = str(cif_file.relative_to(PROJECT_ROOT))
+        rel_path = to_allowed_relative(cif_file)
         structures.append({
             "name": cif_file.stem,
             "filename": cif_file.name,
@@ -1271,8 +1244,7 @@ async def get_job_logs(
     }
     
     # Try to find work directory logs
-    # Work dirs are under PROJECT_ROOT/work/ with hash-based paths
-    work_dir = PROJECT_ROOT / "work"
+    work_dir = get_work_dir()
     
     if work_dir.exists():
         # Find most recent .command.log files (search by modification time)
@@ -1346,7 +1318,7 @@ async def get_job_logs(
             nf_log_path = Path(job.output_dir) / ".nextflow.log"
             
         if not nf_log_path.exists():
-            nf_log_path = PROJECT_ROOT / ".nextflow.log"
+            nf_log_path = CODE_ROOT / ".nextflow.log"
         
         if nf_log_path.exists():
             try:
@@ -1431,11 +1403,13 @@ async def get_docking_results(
     if not job.output_dir:
         return {"sdfs": [], "message": "No output directory configured"}
     
-    from services.nextflow import PROJECT_ROOT
+    output_path = resolve_output_dir(job.output_dir)
+    if not output_path:
+        return {"sdfs": [], "message": "No output directory configured"}
     
     # Check both DiffDock and Uni-Dock directories
-    diffdock_dir = PROJECT_ROOT / job.output_dir / "run" / "diffdock" / "results"
-    unidock_dir = PROJECT_ROOT / job.output_dir / "run" / "unidock" / "filtered"
+    diffdock_dir = output_path / "run" / "diffdock" / "results"
+    unidock_dir = output_path / "run" / "unidock" / "filtered"
     
     sdfs = []
     engines_used = []
@@ -1459,7 +1433,7 @@ async def get_docking_results(
             sdfs.append({
                 "engine": "diffdock",
                 "name": sdf_file.name,
-                "path": str(sdf_file.relative_to(PROJECT_ROOT)),
+                "path": to_allowed_relative(sdf_file),
                 "absolute_path": str(sdf_file),
                 "confidence": confidence,
                 "affinity": None,
@@ -1488,7 +1462,7 @@ async def get_docking_results(
             sdfs.append({
                 "engine": "unidock",
                 "name": pdb_file.name,
-                "path": str(pdb_file.relative_to(PROJECT_ROOT)),
+                "path": to_allowed_relative(pdb_file),
                 "absolute_path": str(pdb_file),
                 "confidence": None,
                 "affinity": entry.get('affinity_kcal_mol'),
@@ -1536,11 +1510,13 @@ async def get_sdf_content(
     if ".." in filename or "/" in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
     
-    from services.nextflow import PROJECT_ROOT
+    output_path = resolve_output_dir(job.output_dir)
+    if not output_path:
+        raise HTTPException(status_code=404, detail="No output directory configured")
     
     # Search both DiffDock and Uni-Dock directories
-    diffdock_dir = PROJECT_ROOT / job.output_dir / "run" / "diffdock" / "results"
-    unidock_dir = PROJECT_ROOT / job.output_dir / "run" / "unidock" / "filtered"
+    diffdock_dir = output_path / "run" / "diffdock" / "results"
+    unidock_dir = output_path / "run" / "unidock" / "filtered"
     
     found_files = []
     
@@ -1587,31 +1563,34 @@ async def get_protein_pdb(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    from services.nextflow import PROJECT_ROOT
-    
     # Try multiple locations for the PDB file
     pdb_content = None
     
     # 1. Check job params for explicit protein_pdb path
     if job.params and job.params.get('protein_pdb'):
-        pdb_path = Path(job.params['protein_pdb'])
-        if not pdb_path.is_absolute():
-            pdb_path = PROJECT_ROOT / pdb_path
+        try:
+            pdb_path = resolve_allowed_path(str(job.params['protein_pdb']))
+        except ValueError:
+            pdb_path = Path(job.params['protein_pdb'])
+            if not pdb_path.is_absolute():
+                pdb_path = CODE_ROOT / pdb_path
         if pdb_path.exists():
             pdb_content = pdb_path.read_text()
     
     # 2. Check inputs directory in output_dir
     if not pdb_content and job.output_dir:
-        inputs_dir = PROJECT_ROOT / job.output_dir / "inputs"
-        if inputs_dir.exists():
+        output_path = resolve_output_dir(job.output_dir)
+        inputs_dir = output_path / "inputs" if output_path else None
+        if inputs_dir and inputs_dir.exists():
             pdb_files = list(inputs_dir.glob("*.pdb"))
             if pdb_files:
                 pdb_content = pdb_files[0].read_text()
     
     # 3. Check diffdock prep directory
     if not pdb_content and job.output_dir:
-        prep_dir = PROJECT_ROOT / job.output_dir / "run" / "diffdock" / "prep"
-        if prep_dir.exists():
+        output_path = resolve_output_dir(job.output_dir)
+        prep_dir = output_path / "run" / "diffdock" / "prep" if output_path else None
+        if prep_dir and prep_dir.exists():
             pdb_files = list(prep_dir.rglob("*.pdb"))
             if pdb_files:
                 pdb_content = pdb_files[0].read_text()
@@ -1644,12 +1623,11 @@ async def get_docking_comparison(
     if not job.output_dir:
         raise HTTPException(status_code=404, detail="No output directory configured")
     
-    from services.nextflow import PROJECT_ROOT
-    
     # Look for comparison.json from dual docking
-    comparison_file = PROJECT_ROOT / job.output_dir / "run" / "docking_comparison" / "comparison.json"
+    output_path = resolve_output_dir(job.output_dir)
+    comparison_file = output_path / "run" / "docking_comparison" / "comparison.json" if output_path else None
     
-    if not comparison_file.exists():
+    if not comparison_file or not comparison_file.exists():
         raise HTTPException(status_code=404, detail="No comparison data found for this job")
     
     try:

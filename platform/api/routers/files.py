@@ -10,37 +10,21 @@ import os
 import shutil
 
 from schemas import DirectoryListing, DirectoryEntry
+from paths import get_allowed_roots, resolve_allowed_path, to_allowed_relative
 
 router = APIRouter()
 
-# Base directories that can be browsed
-ALLOWED_DIRECTORIES = [
-    "pdj_results",
-    "benchmarkdata",
-    "lib",
-    "rcsb",
-    "inputs",  # For antibody and other input file uploads
-]
-
-# Project root (parent of platform directory)
-PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
-
-
 def is_path_allowed(path: Path) -> bool:
-    """Check if path is within allowed directories."""
+    """Check if path is within allowed roots."""
     try:
         resolved = path.resolve()
-        project_root = PROJECT_ROOT.resolve()
-        
-        # Must be within project root
-        if not str(resolved).startswith(str(project_root)):
-            return False
-        
-        # Check if it's in an allowed subdirectory
-        rel_path = resolved.relative_to(project_root)
-        first_part = rel_path.parts[0] if rel_path.parts else ""
-        
-        return first_part in ALLOWED_DIRECTORIES
+        for root in get_allowed_roots().values():
+            try:
+                resolved.relative_to(root.resolve())
+                return True
+            except ValueError:
+                continue
+        return False
     except (ValueError, RuntimeError):
         return False
 
@@ -48,11 +32,10 @@ def is_path_allowed(path: Path) -> bool:
 @router.get("/browse")
 async def browse_directory(path: str = "") -> DirectoryListing:
     """Browse a directory within allowed paths."""
-    if not path:
+    if not path or path == "/":
         # Return list of allowed root directories
         entries = []
-        for dir_name in ALLOWED_DIRECTORIES:
-            dir_path = PROJECT_ROOT / dir_name
+        for dir_name, dir_path in get_allowed_roots().items():
             if dir_path.exists():
                 entries.append(DirectoryEntry(
                     name=dir_name,
@@ -63,9 +46,9 @@ async def browse_directory(path: str = "") -> DirectoryListing:
                 ))
         return DirectoryListing(path="", entries=entries)
     
-    full_path = PROJECT_ROOT / path
-    
-    if not is_path_allowed(full_path):
+    try:
+        full_path = resolve_allowed_path(path)
+    except ValueError:
         raise HTTPException(status_code=403, detail="Access denied to this path")
     
     if not full_path.exists():
@@ -79,7 +62,7 @@ async def browse_directory(path: str = "") -> DirectoryListing:
         stat = item.stat()
         entries.append(DirectoryEntry(
             name=item.name,
-            path=str(item.relative_to(PROJECT_ROOT)),
+            path=to_allowed_relative(item),
             is_directory=item.is_dir(),
             size_bytes=stat.st_size if item.is_file() else None,
             modified_at=datetime.fromtimestamp(stat.st_mtime)
@@ -95,9 +78,9 @@ async def upload_file(
 ):
     """Upload a file to a specific directory."""
     # Validate path is allowed
-    target_dir = PROJECT_ROOT / path
-    
-    if not is_path_allowed(target_dir):
+    try:
+        target_dir = resolve_allowed_path(path)
+    except ValueError:
         raise HTTPException(status_code=403, detail="Access denied to this path")
     
     if not target_dir.exists():
@@ -117,15 +100,15 @@ async def upload_file(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to upload file: {e}")
         
-    return {"filename": file.filename, "path": str(file_path.relative_to(PROJECT_ROOT)), "size": file_path.stat().st_size}
+    return {"filename": file.filename, "path": to_allowed_relative(file_path), "size": file_path.stat().st_size}
 
 
 @router.get("/download/{file_path:path}")
 async def download_file(file_path: str):
     """Download a file from allowed directories."""
-    full_path = PROJECT_ROOT / file_path
-    
-    if not is_path_allowed(full_path):
+    try:
+        full_path = resolve_allowed_path(file_path)
+    except ValueError:
         raise HTTPException(status_code=403, detail="Access denied to this file")
     
     if not full_path.exists():
@@ -144,9 +127,9 @@ async def download_file(file_path: str):
 @router.get("/pdb/{file_path:path}")
 async def serve_pdb(file_path: str):
     """Serve a PDB file with appropriate content type for Mol* viewer."""
-    full_path = PROJECT_ROOT / file_path
-    
-    if not is_path_allowed(full_path):
+    try:
+        full_path = resolve_allowed_path(file_path)
+    except ValueError:
         raise HTTPException(status_code=403, detail="Access denied to this file")
     
     if not full_path.exists():
@@ -182,12 +165,14 @@ async def extract_chain(
         Path to the extracted single-chain PDB file
     """
     import sys
-    sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+    from paths import get_code_root
+    code_root = get_code_root()
+    sys.path.insert(0, str(code_root / "scripts"))
     from extract_chain import extract_chains
     
-    full_input = PROJECT_ROOT / input_path
-    
-    if not is_path_allowed(full_input):
+    try:
+        full_input = resolve_allowed_path(input_path)
+    except ValueError:
         raise HTTPException(status_code=403, detail="Access denied to input file")
     
     if not full_input.exists():
@@ -209,7 +194,7 @@ async def extract_chain(
         return {
             "success": True,
             "input_path": input_path,
-            "output_path": str(output_path.relative_to(PROJECT_ROOT)),
+            "output_path": to_allowed_relative(output_path),
             "chain_extracted": chain_id,
             "atom_count": result["atom_count"],
             "renamed_to": rename_to

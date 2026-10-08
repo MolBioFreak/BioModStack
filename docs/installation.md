@@ -35,6 +35,32 @@ cd Protein-De-Novo-Modification-and-Design-Platform
 
 ---
 
+## Optional: Path Configuration (Portable Installs)
+
+BioModStack can run without any environment configuration, but if you install on
+another machine or want data outside the repo, set these variables:
+
+```bash
+# Code location (optional - defaults to the repo root)
+export BMS_HOME="/opt/biomodstack"
+
+# Data location (optional - outputs/work/results)
+export BMS_DATA="/data/biomodstack"
+
+# Database location (optional - overrides DB path)
+export DATABASE_URL="sqlite+aiosqlite:////data/biomodstack/biomodstack.db"
+
+# Optional paths for large assets
+export BMS_WEIGHTS="/data/biomodstack/weights"
+export BMS_COLABFOLD_DB="/data/biomodstack/colabfold_db"
+export BMS_MSA_CACHE="/data/biomodstack/msa_cache"
+```
+
+If you do not set these, defaults are used and behavior matches the current
+local install.
+
+---
+
 ## Step 2: Install Dependencies
 
 BioModStack requires two key dependencies to be installed and accessible in your PATH. These are common software packages so they may already be implemented in your HPC environment (e.g. module load apptainer nextflow):

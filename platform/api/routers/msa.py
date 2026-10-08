@@ -16,11 +16,10 @@ import os
 
 from database import Job, NucleotideSequence, get_session
 from services.gpu_orchestrator import estimate_vram
+from paths import get_results_dir
 
 
 router = APIRouter(prefix="/api/msa", tags=["msa"])
-
-PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 
 
 class MSASequence(BaseModel):
@@ -64,7 +63,7 @@ async def create_msa_job(request: MSARequest, session: AsyncSession = Depends(ge
 
     job_id = str(uuid.uuid4())
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    base_output_dir = str(PROJECT_ROOT / "pdj_results" / f"msa_{request.name}_{timestamp}")
+    base_output_dir = str(get_results_dir() / f"msa_{request.name}_{timestamp}")
     os.makedirs(base_output_dir, exist_ok=True)
 
     seq_len = len(sequences[0]["sequence"]) if sequences else 300

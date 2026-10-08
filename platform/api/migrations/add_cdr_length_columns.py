@@ -6,14 +6,18 @@ This adds columns for sorting antibody designs by CDR loop lengths and total bin
 import sqlite3
 from pathlib import Path
 
+from paths import get_db_path
+
 def migrate():
-    db_path = Path(__file__).parent.parent / "biomodstack.db"
+    db_path = Path(get_db_path())
     
     if not db_path.exists():
         print(f"Database not found at {db_path}")
         return
     
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=30)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     cursor = conn.cursor()
     
     # New columns to add

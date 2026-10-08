@@ -192,8 +192,20 @@
                 },
                 "maturation_design_mode": {
                     "type": "string",
-                    "default": "full_design",
-                    "description": "Design mode for maturation redesign constraints.",
+                    "default": "inherit",
+                    "description": "Design mode for maturation redesign constraints. Use 'inherit' to follow antibody_design_mode.",
+                    "hidden": true
+                },
+                "maturation_redesign_enabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Run FAMPNN redesign after partial flow.",
+                    "hidden": true
+                },
+                "maturation_redesign_top_n": {
+                    "type": "integer",
+                    "default": 0,
+                    "description": "Redesign only the top N partial-flow designs (0 = all).",
                     "hidden": true
                 },
                 "maturation_redesign_temp": {
@@ -262,6 +274,18 @@
                 "ppiflow_antigen_chain": {
                     "type": "string",
                     "description": "Override antigen chain ID for PPIFlow.",
+                    "hidden": true
+                },
+                "run_anarcii_post": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Run ANARCII CDR annotation after the pipeline completes.",
+                    "hidden": true
+                },
+                "anarcii_include_children": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Include child jobs when annotating CDRs.",
                     "hidden": true
                 }
             }

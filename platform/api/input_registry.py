@@ -7,6 +7,8 @@ from typing import Optional, List
 import yaml
 from pydantic import BaseModel
 
+from paths import get_code_root, get_allowed_roots, resolve_allowed_path
+
 
 class PresetPDB(BaseModel):
     """A preset PDB file."""
@@ -114,10 +116,18 @@ class InputRegistry:
                 data = yaml.safe_load(f)
             
             self.project_root = data.get('project_root', '')
+            base_root = Path(self.project_root) if self.project_root else get_code_root()
+            if not base_root.is_absolute():
+                base_root = (get_code_root() / base_root).resolve()
+            allowed_roots = get_allowed_roots()
             
             # Load standard paths
             for path_id, path_data in data.get('standard_paths', {}).items():
-                abs_path = str(Path(self.project_root) / path_data['path'])
+                path_value = path_data['path']
+                if path_value in allowed_roots:
+                    abs_path = str(allowed_roots[path_value])
+                else:
+                    abs_path = str(base_root / path_value)
                 self.standard_paths[path_id] = StandardPath(
                     id=path_id,
                     path=path_data['path'],
@@ -127,7 +137,6 @@ class InputRegistry:
             
             # Load preset PDBs
             for pdb in data.get('preset_pdbs', []):
-                pdb['path'] = str(Path(self.project_root) / pdb['path'])
                 self.preset_pdbs.append(PresetPDB(**pdb))
             
             # Load preset sequences
@@ -154,7 +163,10 @@ class InputRegistry:
             
             # Load preset directories
             for dir_preset in data.get('preset_directories', []):
-                abs_path = str(Path(self.project_root) / dir_preset['path'])
+                try:
+                    abs_path = str(resolve_allowed_path(dir_preset['path']))
+                except ValueError:
+                    abs_path = str(base_root / dir_preset['path'])
                 dir_preset['absolute_path'] = abs_path
                 if 'filter_ids' not in dir_preset:
                     dir_preset['filter_ids'] = []

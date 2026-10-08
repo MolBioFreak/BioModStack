@@ -7,7 +7,7 @@ import { EpitopeSelector } from './EpitopeSelector';
 import EpitopeMolstarViewer from './EpitopeMolstarViewer';
 import { TargetAntigenSelector } from './TargetAntigenSelector';
 import { DesignModeSelector } from './DesignModeSelector';
-import { PPIFlowSettingsFields, QualitySettingsPanel, PRESETS, type QualitySettings, type QualityPreset } from './QualitySettingsPanel';
+import { QualitySettingsPanel, PRESETS, type QualitySettings, type QualityPreset } from './QualitySettingsPanel';
 import { TemplateManagerModal } from './TemplateManagerModal';
 import { FrameworkBrowser, type SelectedFramework } from './FrameworkBrowser';
 import { FrameworkEditor, type FrameworkEditorState } from './FrameworkEditor';
@@ -30,6 +30,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [useAntiberty, setUseAntiberty] = useState(false);  // Disabled by default, planned for removal
     const [useThermoMPNN, setUseThermoMPNN] = useState(true);  // Controlled via qualitySettings.run_thermompnn
     const [runFrustrampnn, setRunFrustrampnn] = useState(false);
+    const [runAnarciiPost, setRunAnarciiPost] = useState(false);
+    const [anarciiIncludeChildren, setAnarciiIncludeChildren] = useState(true);
     // explorationMode is now always true - parallelism controlled via parallelMode
     const [seqsPerDesign, setSeqsPerDesign] = useState(8); // Number of sequence variants per backbone
 
@@ -123,6 +125,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             if (initialValues.run_immunogenicity_scoring !== undefined) setUseAntiberty(initialValues.run_immunogenicity_scoring);
             if (initialValues.run_stability_scoring !== undefined) setUseThermoMPNN(initialValues.run_stability_scoring);
             if (initialValues.run_frustrampnn !== undefined) setRunFrustrampnn(initialValues.run_frustrampnn);
+            if (initialValues.run_anarcii_post !== undefined) setRunAnarciiPost(initialValues.run_anarcii_post);
+            if (initialValues.anarcii_include_children !== undefined) setAnarciiIncludeChildren(initialValues.anarcii_include_children);
             // Handling renamed/mapped boolean params if any
             if (initialValues.use_antiberty !== undefined) setUseAntiberty(initialValues.use_antiberty);
             if (initialValues.use_thermompnn !== undefined) setUseThermoMPNN(initialValues.use_thermompnn);
@@ -355,6 +359,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     run_stability_scoring: useThermoMPNN,
                     run_structure_validation: true, // Boltz2 is always run
                     run_frustrampnn: runFrustrampnn,
+                    run_anarcii_post: runAnarciiPost,
+                    anarcii_include_children: anarciiIncludeChildren,
                     exploration_mode: true, // Always parallel - granularity controlled via parallel_mode
                     seqs_per_design: seqsPerDesign, // Number of sequence variants per backbone
                     // Optional DNA sequence for complex prediction
@@ -399,6 +405,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     maturation_design_mode: qualitySettings.maturation_design_mode,
                     maturation_designs_per_job: qualitySettings.maturation_designs_per_job,
                     maturation_filter_percentile: qualitySettings.maturation_filter_percentile,
+                    maturation_redesign_enabled: qualitySettings.maturation_redesign_enabled,
+                    maturation_redesign_top_n: qualitySettings.maturation_redesign_top_n,
                     ppiflow_checkpoint: qualitySettings.ppiflow_checkpoint,
                     ppiflow_antigen_chain: qualitySettings.ppiflow_antigen_chain,
                     ppiflow_heavy_chain: qualitySettings.ppiflow_heavy_chain,
@@ -466,7 +474,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         onClick={onBack}
                         className="p-2 hover:bg-slate-700 rounded-lg transition-colors"
                     >
-                        ← Back
+                        &lt; Back
                     </button>
                     <div>
                         <h2 className="text-lg font-semibold text-slate-200">De Novo Antibody Design</h2>
@@ -503,7 +511,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
                         return steps.map((step, idx) => (
                             <React.Fragment key={step.name}>
-                                {idx > 0 && <span className="text-slate-600">→</span>}
+                                {idx > 0 && <span className="text-slate-600">-&gt;</span>}
                                 <div className={`${colorClasses[step.colorKey]} px-3 py-1.5 rounded-lg text-sm font-medium`}>
                                     {idx + 1}. {step.name}
                                 </div>
@@ -742,7 +750,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                             : 'bg-slate-700 text-slate-400 hover:bg-slate-600 border border-slate-600/40'
                                             }`}
                                     >
-                                        🎯 Target 3D
+                                        Target 3D
                                     </button>
                                 )}
                                 {frameworkPdbUrl && (
@@ -757,7 +765,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                             : 'bg-slate-700 text-slate-400 hover:bg-slate-600 border border-slate-600/40'
                                             }`}
                                     >
-                                        🧬 Framework 3D
+                                        Framework 3D
                                     </button>
                                 )}
                             </div>
@@ -768,7 +776,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             <div className="animate-in fade-in slide-in-from-top-2 duration-300">
                                 {/* Label showing current view */}
                                 <div className="text-xs text-slate-500 mb-2">
-                                    {viewerMode === 'framework' ? '🧬 Framework Template Preview' : '🎯 Target Antigen Preview'}
+                                    {viewerMode === 'framework' ? 'Framework Template Preview' : 'Target Antigen Preview'}
                                 </div>
                                 <EpitopeMolstarViewer
                                     structureUrl={viewerMode === 'framework' && frameworkPdbUrl ? frameworkPdbUrl : pdbBlobUrl || ''}
@@ -794,7 +802,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 {/* Fallback text input if no PDB */}
                 {parsedChains.length === 0 && targetPdb && !isParsing && (
                     <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400 text-sm">
-                        ⚠️ Could not parse PDB file. Please ensure it's a valid PDB format.
+                        Warning: Could not parse PDB file. Please ensure it's a valid PDB format.
                     </div>
                 )}
 
@@ -812,7 +820,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 : 'bg-slate-700/50 text-slate-400 hover:bg-slate-600/50'
                                 }`}
                         >
-                            {showDnaInput ? '🧬 Enabled' : '+ Add DNA/RNA'}
+                            {showDnaInput ? 'Enabled' : '+ Add DNA/RNA'}
                         </button>
                     </div>
                     {showDnaInput && (
@@ -865,17 +873,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     </div>
                 )}
 
-                {/* PPIFlow Maturation (Main Panel) */}
-                <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4">
-                    <PPIFlowSettingsFields
-                        settings={qualitySettings}
-                        onSettingsChange={setQualitySettings}
-                    />
-                    <p className="mt-2 text-xs text-slate-500">
-                        These settings apply when PPIFlow maturation is enabled.
-                    </p>
-                </div>
-
                 {/* Quality Settings Panel */}
                 <QualitySettingsPanel
                     settings={qualitySettings}
@@ -891,13 +888,47 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     isAntibody={true}
                 />
 
+                {/* ANARCII Polishing */}
+                <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <h3 className="text-sm font-semibold text-slate-200">ANARCII CDR Annotation</h3>
+                            <p className="text-xs text-slate-500 mt-1">
+                                Post-pipeline CDR annotation for final designs.
+                            </p>
+                        </div>
+                        <label className="flex items-center gap-2 text-sm text-slate-300">
+                            <input
+                                type="checkbox"
+                                checked={runAnarciiPost}
+                                onChange={(e) => setRunAnarciiPost(e.target.checked)}
+                                className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-amber-600"
+                            />
+                            Enable
+                        </label>
+                    </div>
+                    {runAnarciiPost && (
+                        <div className="mt-3 space-y-2 text-xs text-slate-500">
+                            <label className="flex items-center gap-2 text-slate-300">
+                                <input
+                                    type="checkbox"
+                                    checked={anarciiIncludeChildren}
+                                    onChange={(e) => setAnarciiIncludeChildren(e.target.checked)}
+                                    className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-amber-600"
+                                />
+                                Include child jobs (recommended for orchestrated runs)
+                            </label>
+                        </div>
+                    )}
+                </div>
+
                 {/* FrustraMPNN QC */}
                 <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4">
                     <div className="flex items-center justify-between">
                         <div>
                             <h3 className="text-sm font-semibold text-slate-200">FrustraMPNN QC</h3>
                             <p className="text-xs text-slate-500 mt-1">
-                                Annotate final candidates with local frustration (post‑pipeline, FIO only).
+                                Annotate final candidates with local frustration (post-pipeline, FIO only).
                             </p>
                         </div>
                         <label className="flex items-center gap-2 text-sm text-slate-300">
@@ -1078,19 +1109,18 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             }`}
                     >
                         <div className="flex items-center gap-2">
-                            <span>🔧</span>
                             <span className="font-medium">Debug Settings</span>
                             {(skipRFantibody || skipFampnn || customOutputDir) && (
                                 <span className="px-2 py-0.5 text-xs bg-amber-600 text-white rounded">ACTIVE</span>
                             )}
                         </div>
-                        <span className="text-lg">{showDebugSettings ? '−' : '+'}</span>
+                        <span className="text-lg">{showDebugSettings ? '-' : '+'}</span>
                     </button>
 
                     {showDebugSettings && (
                         <div className="p-4 bg-slate-900/30 space-y-4">
                             <div className="text-xs text-amber-500/80 mb-3">
-                                ⚠️ Debug settings allow skipping workflow steps. Use with caution.
+                                Warning: Debug settings allow skipping workflow steps. Use with caution.
                             </div>
 
                             {/* Skip RFantibody */}
@@ -1167,7 +1197,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     onClick={() => setShowTemplateManager(true)}
                     className="px-6 py-3 text-purple-400 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/30 font-medium rounded-lg transition-colors flex items-center gap-2"
                 >
-                    📋 Save Template
+                    Save Template
                 </button>
                 <button
                     onClick={handleSubmit}
@@ -1184,21 +1214,19 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 >
                     {isUploading ? (
                         <>
-                            <span className="animate-spin">⏳</span>
                             Uploading PDB...
                         </>
                     ) : submitMutation.isPending ? (
                         <>
-                            <span className="animate-spin">⚙️</span>
                             Submitting...
                         </>
                     ) : (skipRFantibody || skipFampnn) ? (
                         <>
-                            🔧 Run Skipped Workflow
+                            Run Skipped Workflow
                         </>
                     ) : (
                         <>
-                            🧬 Generate Antibodies ({selectedResidues.size} hotspots)
+                            Generate Antibodies ({selectedResidues.size} hotspots)
                         </>
                     )}
                 </button>
@@ -1222,6 +1250,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         if (typeof p.run_immunogenicity_scoring === 'boolean') setUseAntiberty(p.run_immunogenicity_scoring);
                         if (typeof p.run_stability_scoring === 'boolean') setUseThermoMPNN(p.run_stability_scoring);
                         if (typeof p.run_frustrampnn === 'boolean') setRunFrustrampnn(p.run_frustrampnn);
+                        if (typeof p.run_anarcii_post === 'boolean') setRunAnarciiPost(p.run_anarcii_post);
+                        if (typeof p.anarcii_include_children === 'boolean') setAnarciiIncludeChildren(p.anarcii_include_children);
                         if (p.parallel_mode) setParallelMode(p.parallel_mode);
                         if (p.designs_per_job) setDesignsPerJob(p.designs_per_job);
                         if (p.pdbs_per_job) setPdBsPerJob(p.pdbs_per_job);
@@ -1254,6 +1284,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     run_immunogenicity_scoring: useAntiberty,
                     run_stability_scoring: useThermoMPNN,
                     run_frustrampnn: runFrustrampnn,
+                    run_anarcii_post: runAnarciiPost,
+                    anarcii_include_children: anarciiIncludeChildren,
                     parallel_mode: parallelMode,
                     designs_per_job: designsPerJob,
                     pdbs_per_job: pdBsPerJob,

@@ -231,7 +231,8 @@ process RunBindCraft {
 
     // Container with AF2 weights mounted
     container 'apptainer/bindcraft.sif'
-    containerOptions { "--nv --env CUDA_DEVICE_ORDER=PCI_BUS_ID --env CUDA_VISIBLE_DEVICES=${task.ext.gpu_id ?: 0} --bind /mnt/BioModStack/weights/alphafold:/app/params --writable-tmpfs" }
+    def weightsRoot = params.weights_root ?: "/mnt/BioModStack/weights"
+    containerOptions { "--nv --env CUDA_DEVICE_ORDER=PCI_BUS_ID --env CUDA_VISIBLE_DEVICES=${task.ext.gpu_id ?: 0} --bind ${weightsRoot}/alphafold:/app/params --writable-tmpfs" }
 
     input:
     path target_settings

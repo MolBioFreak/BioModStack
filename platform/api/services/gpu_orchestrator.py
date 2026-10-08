@@ -14,9 +14,7 @@ Key Features:
 
 import asyncio
 import logging
-import json
 from datetime import datetime
-from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Any
 from dataclasses import dataclass
 
@@ -27,8 +25,8 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
-# Project root for config files
-PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+from services.gpu_config import read_scheduler_config
+from services.gpu_metadata import GPU_CAPABILITIES
 
 
 @dataclass
@@ -87,14 +85,6 @@ VRAM_PROFILES = {
     'default': {'base': 6000, 'scale': 25},     # Conservative fallback
 }
 
-# GPU capabilities
-GPU_CAPABILITIES = {
-    0: {'name': 'RTX 5090', 'vram_mb': 32607, 'supports_heavy': True},
-    1: {'name': 'RTX 5060 Ti', 'vram_mb': 16311, 'supports_heavy': False},
-    2: {'name': 'RTX 3090', 'vram_mb': 24576, 'supports_heavy': True},
-    3: {'name': 'RTX 3090', 'vram_mb': 24576, 'supports_heavy': True},
-}
-
 # Models that need heavy GPUs (exclude 5060 Ti)
 HEAVY_MODELS = {'af2', 'rfdiffusion', 'rf3'}
 
@@ -116,33 +106,41 @@ def estimate_vram(model_type: str, sequence_length: int) -> int:
     return estimated
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# SCHEDULER CONFIG (from .gpu_config.json)
-# ═══════════════════════════════════════════════════════════════════════════════
+def _normalize_job_params(raw_params: Any) -> Dict[str, Any]:
+    """Ensure job params are a dict, handling JSON-encoded strings safely."""
+    if raw_params is None:
+        return {}
+    if isinstance(raw_params, dict):
+        return raw_params
+    if isinstance(raw_params, str):
+        try:
+            import json
+            loaded = json.loads(raw_params)
+            return loaded if isinstance(loaded, dict) else {}
+        except Exception:
+            return {}
+    return {}
 
-def read_scheduler_config() -> Dict[str, Any]:
-    """Read scheduler config from .gpu_config.json."""
-    config_path = PROJECT_ROOT / ".gpu_config.json"
-    
-    default_config = {
-        "global": {
-            "target_vram_fill": 0.85,  # More aggressive packing (was 0.75)
-            "enabled": True,
-        },
-        "overrides": {},
-        "workflow_pins": {},  # Map of model_type -> gpu_id
-        "gpu_locks": {}  # Map of batch_id -> gpu_id for exclusive locks
-    }
-    
-    if not config_path.exists():
-        return default_config
-    
-    try:
-        with open(config_path) as f:
-            return json.load(f)
-    except Exception as e:
-        logger.warning(f"Failed to read scheduler config: {e}")
-        return default_config
+
+def _normalize_pinned_gpus(raw_value: Any) -> Optional[List[int]]:
+    """Normalize pinned_gpus to a list of ints, or None if invalid."""
+    if raw_value is None:
+        return None
+    values = []
+    if isinstance(raw_value, list):
+        values = raw_value
+    elif isinstance(raw_value, str):
+        values = [v.strip() for v in raw_value.split(",") if v.strip()]
+    else:
+        return None
+
+    normalized = []
+    for value in values:
+        try:
+            normalized.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    return normalized or None
 
 
 def is_gpu_disabled(gpu_index: int, config: Dict[str, Any]) -> bool:
@@ -220,9 +218,10 @@ def pack_jobs_to_gpus(
     # 1. FILTER GPUS - Exclude disabled GPUs
     # ═══════════════════════════════════════════════════════════════════════
     active_gpus = [
-        g for g in gpus 
+        g for g in gpus
         if not is_gpu_disabled(g.index, config)
     ]
+    active_gpu_ids = {g.index for g in active_gpus}
     
     if not active_gpus:
         logger.warning("[PACK] No active GPUs available (all disabled)")
@@ -253,7 +252,24 @@ def pack_jobs_to_gpus(
         
         # Log if this job has a multi-GPU allowlist
         if job.pinned_gpus is not None and len(job.pinned_gpus) > 0:
-            logger.debug(f"[PACK] {job.name}: GPU allowlist restricts to GPUs {job.pinned_gpus}")
+            filtered_allowlist = [g for g in job.pinned_gpus if g in active_gpu_ids]
+            if not filtered_allowlist:
+                logger.warning(f"[PACK] {job.name}: GPU allowlist has no active GPUs; skipping")
+                continue
+            if filtered_allowlist != job.pinned_gpus:
+                logger.info(f"[PACK] {job.name}: GPU allowlist filtered to active GPUs {filtered_allowlist}")
+            job = JobInfo(
+                id=job.id,
+                name=job.name,
+                model_type=job.model_type,
+                vram_estimate_mb=job.vram_estimate_mb,
+                sequence_length=job.sequence_length,
+                priority=job.priority,
+                pinned_gpu=job.pinned_gpu,
+                created_at=job.created_at,
+                batch_id=job.batch_id,
+                pinned_gpus=filtered_allowlist,
+            )
         
         # ═══════════════════════════════════════════════════════════════════
         # PRE-CHECK: Determine forced GPU assignment from pins/locks
@@ -264,20 +280,32 @@ def pack_jobs_to_gpus(
         # Check 0a: Batch lock (highest priority - exclusive GPU for batch)
         batch_lock_gpu = get_batch_lock_gpu(getattr(job, 'batch_id', None), config)
         if batch_lock_gpu is not None:
-            forced_gpu = batch_lock_gpu
-            logger.debug(f"[PACK] {job.name}: Batch lock forces GPU {forced_gpu}")
+            if batch_lock_gpu in active_gpu_ids:
+                forced_gpu = batch_lock_gpu
+                logger.debug(f"[PACK] {job.name}: Batch lock forces GPU {forced_gpu}")
+            else:
+                logger.warning(f"[PACK] {job.name}: Batch lock targets inactive GPU {batch_lock_gpu}")
+                continue
         
         # Check 0b: Job-level pinning (user explicitly chose GPU for this job)
         elif job.pinned_gpu is not None:
-            forced_gpu = job.pinned_gpu
-            logger.debug(f"[PACK] {job.name}: Job pin forces GPU {forced_gpu}")
+            if job.pinned_gpu in active_gpu_ids:
+                forced_gpu = job.pinned_gpu
+                logger.debug(f"[PACK] {job.name}: Job pin forces GPU {forced_gpu}")
+            else:
+                logger.warning(f"[PACK] {job.name}: Job pin targets inactive GPU {job.pinned_gpu}")
+                continue
         
         # Check 0c: Workflow-level pin (all jobs of this model_type go to specific GPU)
         else:
             workflow_pin = get_workflow_pin(job.model_type, config)
             if workflow_pin is not None:
-                forced_gpu = workflow_pin
-                logger.debug(f"[PACK] {job.name}: Workflow pin ({job.model_type}) forces GPU {forced_gpu}")
+                if workflow_pin in active_gpu_ids:
+                    forced_gpu = workflow_pin
+                    logger.debug(f"[PACK] {job.name}: Workflow pin ({job.model_type}) forces GPU {forced_gpu}")
+                else:
+                    logger.warning(f"[PACK] {job.name}: Workflow pin targets inactive GPU {workflow_pin}")
+                    continue
         
         for gpu in active_gpus:
             gpu_caps = GPU_CAPABILITIES.get(gpu.index, {'supports_heavy': True})
@@ -540,10 +568,8 @@ class GPUOrchestrator:
                     vram = estimate_vram(model, seq_len)
                 
                 # Extract pinned_gpus from job params if present
-                job_params = job.params or {}
-                pinned_gpus = job_params.get('pinned_gpus', None)
-                if pinned_gpus is not None and not isinstance(pinned_gpus, list):
-                    pinned_gpus = None  # Invalid format, ignore
+                job_params = _normalize_job_params(job.params)
+                pinned_gpus = _normalize_pinned_gpus(job_params.get('pinned_gpus'))
                 
                 job_infos.append(JobInfo(
                     id=job.id,
@@ -552,7 +578,7 @@ class GPUOrchestrator:
                     vram_estimate_mb=vram,
                     sequence_length=job.sequence_length or 300,
                     priority=job.priority or 0,
-                    pinned_gpu=job.pinned_gpu,
+                    pinned_gpu=job.pinned_gpu if isinstance(job.pinned_gpu, int) else None,
                     created_at=job.created_at,
                     batch_id=getattr(job, 'batch_id', None),  # For GPU locking
                     pinned_gpus=pinned_gpus  # Multi-GPU allowlist
@@ -560,6 +586,9 @@ class GPUOrchestrator:
             
             # 3. Get GPU state
             gpu_stats = self.get_gpu_stats()
+            if not gpu_stats:
+                logger.warning("[ORCHESTRATOR] No GPU stats available; skipping scheduling cycle")
+                return
             
             # ═══════════════════════════════════════════════════════════════════════
             # CRITICAL: Include recently-launched jobs in VRAM projection
@@ -786,8 +815,9 @@ class GPUOrchestrator:
                     
                     # Parse progress from work directory log
                     total_designs = None
-                    if job.params:
-                        total_designs = job.params.get('rfantibody_num_designs') or job.params.get('num_designs')
+                    job_params = _normalize_job_params(job.params)
+                    if job_params:
+                        total_designs = job_params.get('rfantibody_num_designs') or job_params.get('num_designs')
                     
                     progress = parse_stage_progress(
                         job.stage_work_dir,
@@ -804,67 +834,6 @@ class GPUOrchestrator:
         except Exception as e:
             logger.debug(f"[ORCHESTRATOR] Error updating progress: {e}")
     
-    async def handle_msa_job_completion(self, msa_job_id: str, manifest_path: str):
-        """
-        Handle MSA batch job completion.
-        
-        Updates child inference jobs from 'pending_msa' to 'queued' status,
-        allowing them to enter the normal job queue.
-        """
-        async with self.db_session_factory() as session:
-            from sqlalchemy import select
-            from database import Job
-            import json
-            
-            # Get child jobs waiting for this MSA job
-            result = await session.execute(
-                select(Job).where(
-                    Job.parent_job_id == msa_job_id,
-                    Job.queue_status == "pending_msa"
-                )
-            )
-            child_jobs = result.scalars().all()
-            
-            if not child_jobs:
-                logger.info(f"[MSA COMPLETE] No child jobs for MSA job {msa_job_id}")
-                return
-            
-            # Parse manifest for MSA paths
-            try:
-                with open(manifest_path) as f:
-                    manifest = json.load(f)
-                
-                # Build sequence hash -> MSA path mapping
-                msa_paths = {}
-                for seq_info in manifest.get("sequences", []):
-                    if seq_info.get("success"):
-                        msa_paths[seq_info["sequence_hash"]] = seq_info["msa_path"]
-            except Exception as e:
-                logger.error(f"[MSA COMPLETE] Failed to parse manifest: {e}")
-                # Still unlock jobs even without MSA paths
-                msa_paths = {}
-            
-            # Update each child job with its MSA path and queue status
-            import hashlib
-            for job in child_jobs:
-                # Find MSA path for this job's sequence
-                sequence = job.params.get("sequence", "")
-                seq_hash = hashlib.sha256(sequence.encode()).hexdigest()
-                msa_path = msa_paths.get(seq_hash)
-                
-                # Update job params with MSA path
-                if msa_path:
-                    job.params = {**job.params, "msa_path": msa_path}
-                
-                # Move to queued - now ready for inference!
-                job.queue_status = "queued"
-                
-                logger.info(f"[MSA COMPLETE] Unlocked {job.name} for inference (MSA: {msa_path or 'not found'})")
-            
-            await session.commit()
-            logger.info(f"[MSA COMPLETE] Unlocked {len(child_jobs)} inference jobs")
-
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # STANDALONE TESTING
 # ═══════════════════════════════════════════════════════════════════════════════

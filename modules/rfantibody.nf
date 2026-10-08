@@ -18,7 +18,9 @@ process RFANTIBODY {
     // Container now supports RTX 5090 (Blackwell) via compiled DGL
     // Use gpu_id input for per-process GPU assignment (enables multi-GPU parallel execution)
     // IMPORTANT: Must use closure { } for dynamic evaluation per task
-    containerOptions { "--nv --env CUDA_DEVICE_ORDER=PCI_BUS_ID --env CUDA_VISIBLE_DEVICES=${gpu_id} --bind /mnt/BioModStack/weights/rfantibody/rfantibody_repo:/opt/RFantibody --writable-tmpfs" }
+    def weightsRoot = params.weights_root ?: "/mnt/BioModStack/weights"
+    def rfantibodyRepo = "${weightsRoot}/rfantibody/rfantibody_repo"
+    containerOptions { "--nv --env CUDA_DEVICE_ORDER=PCI_BUS_ID --env CUDA_VISIBLE_DEVICES=${gpu_id} --bind ${rfantibodyRepo}:/opt/RFantibody --writable-tmpfs" }
 
     publishDir "${params.out_dir}/run/rfantibody", mode: 'copy', pattern: "*.log"
     publishDir "${params.out_dir}/run/rfantibody", mode: 'copy', pattern: "output/*.pdb"

@@ -547,7 +547,7 @@ export function JobSubmission() {
                     to="/"
                     className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors"
                 >
-                    ← Back
+                    &lt; Back
                 </Link>
                 <div>
                     <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
@@ -557,7 +557,7 @@ export function JobSubmission() {
                 </div>
             </header>
 
-            <main className="max-w-4xl mx-auto space-y-8">
+            <main className="w-full max-w-7xl mx-auto space-y-8">
 
                 {/* 2. Mode Toggle: Templates vs Manual */}
                 <section>
@@ -569,7 +569,7 @@ export function JobSubmission() {
                                 : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                                 }`}
                         >
-                            🔬 Workflows
+                            Workflows
                         </button>
                         <button
                             onClick={() => { setWizardMode('manual'); setSelectedTemplateId(null); }}
@@ -578,7 +578,7 @@ export function JobSubmission() {
                                 : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                                 }`}
                         >
-                            ⚙️ Advanced (Models)
+                            Advanced (Models)
                         </button>
                     </div>
 
@@ -1122,7 +1122,7 @@ export function JobSubmission() {
                                 : 'bg-slate-800 text-slate-500 cursor-not-allowed'
                                 }`}
                         >
-                            {submitMutation.isPending ? 'Launching Job...' : 'Launch Experiment 🚀'}
+                            {submitMutation.isPending ? 'Launching Job...' : 'Launch Experiment'}
                         </button>
                     </div>
                 )}

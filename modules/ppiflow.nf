@@ -121,14 +121,15 @@ process PrepMaturationRedesign {
     label 'pyrosetta_tools'
 
     input:
-    tuple val(meta), path(backbone_pdb), path(anchors_json)
+    tuple val(meta), path(backbone_pdb), path(anchors_json), path(cdr_positions), path(cdr_positions_by_loop)
 
     output:
     tuple val(meta), path("fampnn_input/*.pdb"), path("fampnn.csv"), emit: prep
 
     script:
     def antibodyChains = params.antibody_chains ?: 'H,L'
-    def designMode = params.maturation_design_mode ?: 'full_design'
+    def designModeRaw = params.maturation_design_mode ?: 'inherit'
+    def designMode = designModeRaw == 'inherit' ? (params.antibody_design_mode ?: 'cdr_only') : designModeRaw
     def protectTetrad = params.protect_vhh_tetrad != null ? params.protect_vhh_tetrad : true
     """
     cp "${backbone_pdb}" ./input.pdb
@@ -143,6 +144,8 @@ process PrepMaturationRedesign {
         --input_dir "./" \\
         --out_dir "fampnn_input"
 
+    cdr_positions=\$(cat "${cdr_positions}" | tr -d '\\n')
+
     python /scripts/prep_antibody_constraints.py \\
         --input_dir "./" \\
         --out_fampnn "fampnn.csv" \\
@@ -150,7 +153,9 @@ process PrepMaturationRedesign {
         --design_mode "${designMode}" \\
         --protect_tetrad "${protectTetrad}" \\
         --antibody_chains "${antibodyChains}" \\
-        --extra_fixed_positions "\${anchors_spec}"
+        --extra_fixed_positions "\${anchors_spec}" \\
+        --cdr_positions "\${cdr_positions}" \\
+        --cdr_positions_by_loop "${cdr_positions_by_loop}"
     """
 }
 
@@ -238,6 +243,31 @@ process ScoreMaturationImprovement {
         --antigen_chains "${antigenChains}" \\
         --distance_cutoff ${distanceCutoff} \\
         --output "${meta.id}_maturation_score.json"
+    """
+}
+
+process ScorePartialFlowImprovement {
+    label 'pyrosetta_tools'
+    publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "*partial_flow_score.json"
+
+    input:
+    tuple val(meta), path(original_pdb), path(matured_pdb)
+
+    output:
+    tuple val(meta), path("${meta.id}_partial_flow_score.json"), emit: scores
+
+    script:
+    def antibodyChains = params.antibody_chains ?: 'H,L'
+    def antigenChains = params.antigen_chains ?: ''
+    def distanceCutoff = params.maturation_anchor_distance_cutoff ?: 8.0
+    """
+    python /scripts/score_maturation.py \\
+        --original_pdb "${original_pdb}" \\
+        --matured_pdb "${matured_pdb}" \\
+        --antibody_chains "${antibodyChains}" \\
+        --antigen_chains "${antigenChains}" \\
+        --distance_cutoff ${distanceCutoff} \\
+        --output "${meta.id}_partial_flow_score.json"
     """
 }
 
