@@ -36,6 +36,10 @@ const statusOrder: Record<string, number> = {
     cancelled: 5,
 };
 
+function isMolecularDynamicsJob(job: Pick<Job, 'model_id' | 'mode'>): boolean {
+    return ['md', 'molecular_dynamics'].includes(job.model_id.toLowerCase()) || job.mode.toLowerCase() === 'molecular_dynamics';
+}
+
 const MOBILE_MEDIA_QUERY = '(max-width: 767px)';
 const MOBILE_TABLE_PANEL_HEIGHT = 'min(56vh, 30rem)';
 const DESKTOP_TABLE_PANEL_HEIGHT = 'min(62vh, 38rem)';
@@ -215,10 +219,21 @@ export function JobQueueTable({
 
     const renderJobActions = (job: Job, compactButtons = false) => {
         const buttonClass = compactButtons ? 'px-2.5 py-1.5 text-[11px]' : 'px-2 py-1 text-xs';
+        const mdJob = isMolecularDynamicsJob(job);
 
         return (
             <div className={`flex flex-wrap items-center ${compactButtons ? 'gap-1.5' : 'gap-2'}`}>
-                {job.status === 'completed' && (
+                {mdJob && (
+                    <Link
+                        to={`/designs/${job.id}`}
+                        onClick={(event) => event.stopPropagation()}
+                        className={`${buttonClass} rounded border border-cyan-400/40 bg-cyan-500/10 font-medium text-cyan-100 transition-colors hover:bg-cyan-500/20`}
+                        title="Open durable MD lifecycle operations and governed results"
+                    >
+                        MD Operations
+                    </Link>
+                )}
+                {job.status === 'completed' && !mdJob && (
                     <>
                         <button
                             onClick={(event) => {
@@ -257,7 +272,7 @@ export function JobQueueTable({
                     </>
                 )}
 
-                {(job.status === 'running' || job.status === 'queued') && (
+                {!mdJob && (job.status === 'running' || job.status === 'queued') && (
                     <button
                         onClick={(event) => {
                             event.stopPropagation();
@@ -269,7 +284,7 @@ export function JobQueueTable({
                     </button>
                 )}
 
-                {debugMode && job.status === 'queued' && onForceRun && (
+                {!mdJob && debugMode && job.status === 'queued' && onForceRun && (
                     <button
                         onClick={(event) => {
                             event.stopPropagation();
@@ -282,7 +297,7 @@ export function JobQueueTable({
                     </button>
                 )}
 
-                {job.status === 'awaiting_input' && (
+                {!mdJob && job.status === 'awaiting_input' && (
                     <>
                         <button
                             onClick={(event) => {
@@ -317,7 +332,7 @@ export function JobQueueTable({
                     </>
                 )}
 
-                {(job.status === 'failed' || job.status === 'cancelled') && (
+                {!mdJob && (job.status === 'failed' || job.status === 'cancelled') && (
                     <>
                         <button
                             onClick={(event) => {
@@ -360,7 +375,7 @@ export function JobQueueTable({
                     </>
                 )}
 
-                {onDelete && (
+                {!mdJob && onDelete && (
                     <button
                         onClick={(event) => {
                             event.stopPropagation();
@@ -497,6 +512,7 @@ export function JobQueueTable({
             rows.push(
                 <React.Fragment key={job.id}>
                     <tr
+                        data-bms-md-job-row={isMolecularDynamicsJob(job) ? job.id : undefined}
                         onClick={() => setExpandedJobId(expandedJobId === job.id ? null : job.id)}
                         className={`cursor-pointer border-b border-slate-700/50 transition-colors hover:bg-slate-700/30 ${
                             expandedJobId === job.id ? 'bg-slate-700/40' : ''
@@ -507,6 +523,9 @@ export function JobQueueTable({
                                 <div className="flex items-center">
                                     <span className="mr-2">{expandedJobId === job.id ? '▼' : '▶'}</span>
                                     {job.name}
+                                    {isMolecularDynamicsJob(job) && (
+                                        <span className="ml-2 rounded bg-cyan-500/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-cyan-200">MD</span>
+                                    )}
                                 </div>
                                 <StageProgress job={job} />
                                 {awaitingPrompt && (
@@ -552,6 +571,7 @@ export function JobQueueTable({
         return (
             <article
                 key={job.id}
+                data-bms-md-job-row={isMolecularDynamicsJob(job) ? job.id : undefined}
                 className={`rounded-xl border ${
                     nested ? 'border-slate-700/70 bg-slate-950/35' : 'border-slate-700 bg-slate-900/50'
                 } p-3`}
@@ -566,6 +586,9 @@ export function JobQueueTable({
                             <div className="flex items-center gap-2">
                                 <span className="text-slate-400">{isExpanded ? '▼' : '▶'}</span>
                                 <h3 className="truncate text-sm font-semibold text-white">{displayName}</h3>
+                                {isMolecularDynamicsJob(job) && (
+                                    <span className="rounded bg-cyan-500/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-cyan-200">MD</span>
+                                )}
                             </div>
                             <div className="mt-2 flex flex-wrap items-center gap-2">
                                 <span className="rounded bg-blue-500/20 px-2 py-1 text-[11px] text-blue-400">

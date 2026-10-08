@@ -12,8 +12,6 @@ vi.mock('../../src/components/MolstarViewer', () => ({
 
 import MDResultsPane from '../../src/components/MDResultsPane';
 
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const response = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config: {} });
 const shaA = 'a'.repeat(64);
 const shaB = 'b'.repeat(64);

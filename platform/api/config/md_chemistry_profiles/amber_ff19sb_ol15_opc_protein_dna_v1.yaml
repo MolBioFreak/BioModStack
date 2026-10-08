@@ -7,8 +7,8 @@ assurance: curated_profile
 legacy: false
 automatic_preparation: true
 inventory_class: candidate
-installed: false
-runtime_validated: false
+installed: true
+runtime_validated: true
 operator_enabled: false
 supported_engines: [gromacs, openmm]
 v1_preparation:
@@ -16,6 +16,10 @@ v1_preparation:
   water_model: opc
 asset_probe:
   runtime_id: md-preparation-v1
+  required_runtime_identity:
+    runtime_id: md-preparation-v1
+    runtime_version: "1"
+    sif_sha256: 625d81608118af006295601b8275389e7681a1d98a6fb0622e6241c5d101df4b
   required_asset_ids: [amber/ff19SB, amber/OL15, water/opc, ions/opc-monovalent-pinned]
 scientific_validation:
   validated: false
@@ -26,6 +30,6 @@ scientific_validation:
     system_classes: [protein_dna_complex]
     composition: canonical protein and DNA candidate without ligands or divalent catalytic metals
     protocol: named-system interaction validation not yet executed
-    ionic_conditions: exact OPC-compatible monovalent ion release pending installation
+    ionic_conditions: pinned OPC-compatible monovalent-ion runtime qualified; named-system scientific validation not executed
     observables: [DNA geometry stability, protein-DNA contact persistence, replica agreement]
 explicit_exclusions: [automatic launch, RNA, ligands, membranes, catalytic metals]

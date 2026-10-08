@@ -9,7 +9,7 @@ Provides endpoints for managing the GPU orchestrator job queue:
 """
 
 from fastapi import APIRouter, HTTPException, Depends
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Any, Dict, List, Optional, Tuple
 from pydantic import BaseModel, ConfigDict, field_serializer
@@ -25,6 +25,8 @@ from services.gpu_stage_activity import job_uses_assigned_gpu
 from services.job_control import (
     cancel_job_lineage,
     force_launch_job as force_launch_job_service,
+    get_md_owned_job_ids,
+    reject_generic_md_lifecycle_control,
 )
 from services.workflow_adapter import WorkflowAdapterRequestError, request_via_workflow_adapter, workflow_adapter_enabled
 import logging
@@ -427,10 +429,12 @@ async def list_queue(
     Query params:
     - status: Filter by queue_status (queued, running, paused)
     """
-    # Auto-sync: Fix queue_status for jobs that have actually completed
+    md_owned = await get_md_owned_job_ids(session)
+    # Auto-sync: Fix queue_status for non-MD jobs that have actually completed.
     # This catches cases where the job finished but queue_status wasn't updated
     sync_result = await session.execute(
         select(Job).where(
+            ~Job.id.in_(md_owned),
             Job.queue_status.in_(['running', 'queued', 'paused']),
             (
                 Job.status.in_(['completed', 'failed', 'cancelled', 'awaiting_input'])
@@ -460,6 +464,7 @@ async def list_queue(
     
     # Only show jobs that went through the new orchestrator (have vram_estimate_mb set)
     query = select(Job).where(
+        ~Job.id.in_(md_owned),
         Job.queue_status.in_(['queued', 'running', 'paused']),
         Job.awaiting_input == False,
         Job.vram_estimate_mb.isnot(None)
@@ -470,6 +475,7 @@ async def list_queue(
     
     if status:
         query = select(Job).where(
+            ~Job.id.in_(md_owned),
             Job.queue_status == status
         ).order_by(Job.priority.desc(), Job.created_at)
     
@@ -524,6 +530,8 @@ async def get_queue_stats(session: AsyncSession = Depends(get_session)):
         )
     )
     jobs = result.scalars().all()
+    md_owned = await get_md_owned_job_ids(session)
+    jobs = [job for job in jobs if job.id not in md_owned]
     
     queued = sum(1 for j in jobs if j.queue_status == 'queued')
     running = sum(1 for j in jobs if j.queue_status == 'running')
@@ -540,6 +548,7 @@ async def get_queue_stats(session: AsyncSession = Depends(get_session)):
 @router.post("/{job_id}/pause")
 async def pause_job(job_id: str, session: AsyncSession = Depends(get_session)):
     """Pause a queued job (won't be scheduled until resumed)."""
+    await reject_generic_md_lifecycle_control(job_id, session)
     result = await session.execute(select(Job).where(Job.id == job_id))
     job = result.scalar_one_or_none()
     
@@ -559,6 +568,7 @@ async def pause_job(job_id: str, session: AsyncSession = Depends(get_session)):
 @router.post("/{job_id}/resume")
 async def resume_job(job_id: str, session: AsyncSession = Depends(get_session)):
     """Resume a paused job."""
+    await reject_generic_md_lifecycle_control(job_id, session)
     result = await session.execute(select(Job).where(Job.id == job_id))
     job = result.scalar_one_or_none()
     
@@ -577,6 +587,7 @@ async def resume_job(job_id: str, session: AsyncSession = Depends(get_session)):
 
 @router.post("/{job_id}/release-gpu")
 async def release_job_gpu(job_id: str, session: AsyncSession = Depends(get_session)):
+    await reject_generic_md_lifecycle_control(job_id, session)
     result = await session.execute(select(Job).where(Job.id == job_id))
     job = result.scalar_one_or_none()
 
@@ -598,6 +609,7 @@ async def release_job_gpu(job_id: str, session: AsyncSession = Depends(get_sessi
 @router.delete("/{job_id}")
 async def cancel_job(job_id: str, session: AsyncSession = Depends(get_session)):
     """Cancel a queued/paused/running job and any active descendant jobs it spawned."""
+    await reject_generic_md_lifecycle_control(job_id, session)
     job, lineage = await cancel_job_lineage(job_id, session)
     return {
         "success": True,
@@ -614,6 +626,7 @@ async def pin_job_to_gpu(
     session: AsyncSession = Depends(get_session)
 ):
     """Pin a job to a specific GPU (or set to None for auto-assign)."""
+    await reject_generic_md_lifecycle_control(job_id, session)
     result = await session.execute(select(Job).where(Job.id == job_id))
     job = result.scalar_one_or_none()
     
@@ -642,6 +655,7 @@ async def set_job_priority(
     session: AsyncSession = Depends(get_session)
 ):
     """Set job priority (higher = runs first)."""
+    await reject_generic_md_lifecycle_control(job_id, session)
     result = await session.execute(select(Job).where(Job.id == job_id))
     job = result.scalar_one_or_none()
     
@@ -660,6 +674,7 @@ async def set_job_priority(
 @router.post("/{job_id}/retry")
 async def retry_job(job_id: str, session: AsyncSession = Depends(get_session)):
     """Retry a failed job (resets to queued)."""
+    await reject_generic_md_lifecycle_control(job_id, session)
     result = await session.execute(select(Job).where(Job.id == job_id))
     job = result.scalar_one_or_none()
     
@@ -698,6 +713,8 @@ async def cancel_all_queued(session: AsyncSession = Depends(get_session)):
         select(Job).where(Job.queue_status.in_(['queued', 'paused']))
     )
     jobs = result.scalars().all()
+    md_owned = await get_md_owned_job_ids(session)
+    jobs = [job for job in jobs if job.id not in md_owned]
     
     cancelled_count = 0
     cancelled_names = []
@@ -724,19 +741,30 @@ async def list_cancelled_jobs(
     limit: int = 20,
     session: AsyncSession = Depends(get_session)
 ):
-    """List recently cancelled jobs (for requeue UI)."""
+    """List recently cancelled non-MD jobs (for requeue UI)."""
+    md_owned = await get_md_owned_job_ids(session)
     result = await session.execute(
         select(Job).where(
+            ~Job.id.in_(md_owned),
             Job.error_message.like('%cancelled%')
         ).order_by(Job.created_at.desc()).limit(limit)
     )
-    jobs = result.scalars().all()
-    return jobs
+    return result.scalars().all()
 
 
 @router.post("/kill-active")
-async def kill_active_nextflow_jobs():
-    """Kill ALL running Nextflow processes (nuclear option)."""
+async def kill_active_nextflow_jobs(session: AsyncSession = Depends(get_session)):
+    """Kill all running non-MD Nextflow processes when no durable MD job is active."""
+    md_owned = await get_md_owned_job_ids(session)
+    if md_owned:
+        active_md = await session.scalar(select(func.count()).select_from(Job).where(
+            Job.id.in_(md_owned), Job.queue_status == "running",
+        ))
+        if active_md:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "MD_LIFECYCLE_CONTROL_REQUIRED", "message": "bulk process kill is blocked while MD jobs are active"},
+            )
     import subprocess
     import os
     
@@ -789,6 +817,7 @@ async def force_launch_job(
     The GPU orchestrator remains the only component that may admit and launch
     the job; all VRAM, concurrency, and disabled-GPU checks still apply.
     """
+    await reject_generic_md_lifecycle_control(job_id, session)
     # Validate GPU index against live/proxied GPU status, not only the API
     # container's local nvidia-smi view.
     _validate_queue_gpu_index(request.gpu_id)

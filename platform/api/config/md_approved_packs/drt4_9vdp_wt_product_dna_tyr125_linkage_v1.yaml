@@ -1,0 +1,32 @@
+schema: bms.md.approved-pack.v1
+id: drt4_9vdp_wt_product_dna_tyr125_linkage_v1
+version: 1.0.0-candidate
+display_name: DRT4 9VDP WT product-DNA Tyr125 linkage candidate
+system_class: drt4_product_complex
+source:
+  accession: 9VDP
+  format: mmcif
+  sha256: af276e7b91627e9ac131322f4b465f5f3c5cd976e1899514bd4a15248f84e049
+installed: false
+runtime_validated: false
+operator_enabled: false
+required_covalent_links:
+  - protein_residue: TYR:125
+    protein_atom: OH
+    partner: product_DNA_5prime_phosphate
+    partner_atom: P
+linkage_validation:
+  authoritative_mmcif_parsed: true
+  deposited_struct_conn_present: false
+  rcsb_inter_mol_covalent_bond_count: 0
+  tyr125_oh_sites: 6
+  minimum_tyr125_oh_to_any_deposited_dna_p_angstrom: 13.949193740141409
+  required_link_observed: false
+  custom_bonded_terms_present: false
+scientific_validation:
+  validated: false
+  lane: null
+blockers:
+  - 9VDP deposition has no struct_conn records, reports zero intermolecular covalent bonds, and does not geometrically support a Tyr125-O to DNA-P bond
+  - an authoritative alternative source is required before defining any Tyr125-phosphate custom bonded terms
+  - runtime and scientific validation have not run

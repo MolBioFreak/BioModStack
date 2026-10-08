@@ -439,8 +439,27 @@ def test_gromacs_command_uses_full_gpu_offload_and_restart_flags(tmp_path: Path)
     for flag in ("-nb", "-pme", "-bonded", "-update"):
         assert command[command.index(flag) + 1] == "gpu"
     assert command[command.index("-cpi") + 1] == str(checkpoint)
+    assert command[command.index("-cpo") + 1] == str(checkpoint)
     assert command[command.index("-cpt") + 1] == "15.0"
     assert "-append" in command
+
+
+def test_gromacs_command_supports_gpu_forces_with_cpu_update_for_virtual_sites(tmp_path: Path) -> None:
+    command = build_mdrun_command(
+        gmx="gmx",
+        deffnm="production",
+        gpu_id="0",
+        ntmpi=1,
+        ntomp=8,
+        gpu_offload="full_forces",
+        pin="on",
+        checkpoint=tmp_path / "missing.cpt",
+    )
+
+    assert command[command.index("-nb") + 1] == "gpu"
+    assert command[command.index("-pme") + 1] == "gpu"
+    assert command[command.index("-bonded") + 1] == "gpu"
+    assert command[command.index("-update") + 1] == "cpu"
 
 
 def test_gromacs_command_omits_restart_flags_without_checkpoint(tmp_path: Path) -> None:
@@ -531,6 +550,20 @@ def test_cuda_contract_requires_one_scheduler_device_remapped_to_zero(tmp_path: 
     for environ in ({}, {"CUDA_VISIBLE_DEVICES": "0,1"}):
         with pytest.raises(CudaContractError, match="exactly one"):
             assert_single_cuda_device(config, environ=environ)
+
+
+def test_cuda_contract_accepts_opc_full_forces_mode_with_cpu_update(tmp_path: Path) -> None:
+    _config_path, config = _materialized_gromacs(tmp_path)
+    config["execution"]["gpu_offload"] = "full_forces"
+
+    normalized = normalize_job_config(config)
+    allocation = assert_single_cuda_device(
+        normalized,
+        environ={"CUDA_VISIBLE_DEVICES": "GPU-opc-fixture"},
+    )
+
+    assert normalized["execution"]["gpu_offload"] == "full_forces"
+    assert allocation["container_device_index"] == "0"
 
 
 def test_adapter_dispatch_is_engine_exact(

@@ -58,6 +58,7 @@ def run_openmm_job(
     *,
     replica_index: int = 0,
     _prepared_config: Mapping[str, Any] | None = None,
+    preparation_bundle: Path | None = None,
 ) -> Path:
     config_path = Path(config_path).expanduser().resolve()
     output_dir = Path(output_dir).expanduser().resolve()
@@ -73,9 +74,23 @@ def run_openmm_job(
     allocation = assert_single_cuda_device(config)
     openmm, app, unit, Platform, Integrator, Barostat, version = _require_openmm_cuda()
 
-    coordinates = _resolve(str(config["input"]["coordinates"]), config_path)
-    topology = _resolve(str(config["input"]["topology"]), config_path)
-    closure = config["input"].get("topology_closure")
+    if config.get("schema") == "bms.md.job.v2":
+        if preparation_bundle is None:
+            raise ValueError("bms.md.job.v2 requires an immutable preparation bundle")
+        from .chemistry.prepare import verify_preparation_bundle
+        chemistry = config.get("chemistry") or {}
+        verify_preparation_bundle(
+            preparation_bundle,
+            expected_profile_id=chemistry.get("profile_id"),
+            expected_profile_sha256=chemistry.get("profile_sha256"),
+        )
+        coordinates = Path(preparation_bundle) / "system.gro"
+        topology = Path(preparation_bundle) / "system.top"
+        closure: Mapping[str, Any] | None = {"root": str(Path(preparation_bundle).resolve()), "runtime_includes": []}
+    else:
+        coordinates = _resolve(str(config["input"]["coordinates"]), config_path)
+        topology = _resolve(str(config["input"]["topology"]), config_path)
+        closure = config["input"].get("topology_closure")
     if not isinstance(closure, Mapping):
         raise ValueError("OpenMM requires a verified private topology closure")
     private_include_root = Path(str(closure.get("root") or "")).resolve()

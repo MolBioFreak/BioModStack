@@ -19,6 +19,7 @@ process MD_SPAWN_REPLICAS {
     input:
     path normalized_config
     path metadata
+    path preparation_bundle
     val parent_job_id
     val parent_name
     val api_url
@@ -34,6 +35,7 @@ process MD_SPAWN_REPLICAS {
       --parent-name "${parent_name}" \
       --normalized-config ${normalized_config} \
       --metadata ${metadata} \
+      --preparation-bundle ${preparation_bundle} \
       --api-url "${api_url}" \
       --output spawn_md_replicas.json
     """
@@ -270,6 +272,7 @@ workflow {
     MD_SPAWN_REPLICAS(
         MD_PREPARE_CONFIG.out.normalized_config,
         MD_PREPARE_CONFIG.out.metadata,
+        MD_PREPARE_CONFIG.out.preparation_bundle,
         params.job_id.toString(),
         params.job_name.toString(),
         params.api_url.toString(),

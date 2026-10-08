@@ -16,6 +16,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
+import yaml
 
 from scripts.bms_md.contract import normalize_job_config
 from services.md.chemistry_catalog import (
@@ -36,6 +37,14 @@ PROFILE_CLAIM_FIELDS = (
     "chemistry_profile_sha256",
     "chemistry_profile_scope",
 )
+V2_SERVER_RESOLVED_CHEMISTRY_FIELDS = (
+    "assurance",
+    "family",
+    "version",
+    "resolved_preparation",
+    "runtime_identity",
+    "resolved_approved_packs",
+)
 GENERATED_INPUT_DIGEST_FIELDS = (
     "structure_sha256",
     "coordinates_sha256",
@@ -44,7 +53,11 @@ GENERATED_INPUT_DIGEST_FIELDS = (
     "coordinates_bytes",
     "topology_bytes",
 )
-MD_JOB_SCHEMA_PATH = Path(__file__).resolve().parents[4] / "schemas" / "md_job_v1.schema.json"
+MD_JOB_SCHEMA_PATHS = {
+    "bms.md.job.v1": Path(__file__).resolve().parents[4] / "schemas" / "md_job_v1.schema.json",
+    "bms.md.job.v2": Path(__file__).resolve().parents[4] / "schemas" / "md_job_v2.schema.json",
+}
+APPROVED_PACK_DIR = Path(__file__).resolve().parents[2] / "config" / "md_approved_packs"
 
 
 class MDLaunchError(ValueError):
@@ -56,9 +69,16 @@ class MDLaunchError(ValueError):
         super().__init__(message)
 
 
-@lru_cache(maxsize=1)
-def _md_job_validator() -> Draft202012Validator:
-    schema = json.loads(MD_JOB_SCHEMA_PATH.read_text(encoding="utf-8"))
+@lru_cache(maxsize=len(MD_JOB_SCHEMA_PATHS))
+def _md_job_validator(schema_name: str) -> Draft202012Validator:
+    schema_path = MD_JOB_SCHEMA_PATHS.get(schema_name)
+    if schema_path is None:
+        raise MDLaunchError(
+            "MD_JOB_CONTRACT_INVALID",
+            "The molecular-dynamics job contract is invalid.",
+            status_code=422,
+        )
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
     Draft202012Validator.check_schema(schema)
     return Draft202012Validator(schema)
 
@@ -104,6 +124,21 @@ def _validate_raw_input_semantics(candidate: Mapping[str, Any]) -> None:
             "MD_CHEMISTRY_PROFILE_FORBIDDEN",
             "Prepared external systems cannot carry v1 chemistry profile claims: "
             f"{', '.join(attached_claims)}.",
+        )
+
+
+def _validate_raw_v2_semantics(candidate: Mapping[str, Any]) -> None:
+    if candidate.get("schema") != "bms.md.job.v2":
+        return
+    chemistry = candidate.get("chemistry")
+    if not isinstance(chemistry, Mapping):
+        return
+    forbidden = [field for field in V2_SERVER_RESOLVED_CHEMISTRY_FIELDS if field in chemistry]
+    if forbidden:
+        raise MDLaunchError(
+            "MD_CHEMISTRY_RESOLUTION_FORBIDDEN",
+            "Server-resolved chemistry identity cannot be supplied by a launch request.",
+            status_code=422,
         )
 
 
@@ -220,7 +255,7 @@ def _validate_resource_contract(candidate: Mapping[str, Any]) -> None:
 def _validate_raw_md_job_spec(candidate: Mapping[str, Any]) -> None:
     try:
         errors = sorted(
-            _md_job_validator().iter_errors(candidate),
+            _md_job_validator(str(candidate.get("schema") or "")).iter_errors(candidate),
             key=lambda error: tuple(str(part) for part in error.absolute_path),
         )
     except (OSError, json.JSONDecodeError, SchemaError) as exc:
@@ -718,6 +753,139 @@ def _validate_profile_launch_constraints(normalized: Mapping[str, Any], profile:
         )
 
 
+def _load_approved_pack_records() -> dict[str, dict[str, Any]]:
+    records: dict[str, dict[str, Any]] = {}
+    try:
+        paths = sorted(APPROVED_PACK_DIR.glob("*.yaml"))
+        for path in paths:
+            if path.is_symlink() or not path.is_file():
+                continue
+            raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+            if not isinstance(raw, Mapping) or raw.get("schema") != "bms.md.approved-pack.v1":
+                continue
+            pack_id = raw.get("id")
+            if isinstance(pack_id, str) and pack_id == path.stem:
+                records[pack_id] = copy.deepcopy(dict(raw))
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        raise MDLaunchError(
+            "MD_APPROVED_PACK_CATALOG_UNAVAILABLE",
+            "The molecular-dynamics approved-pack catalog is unavailable.",
+            status_code=503,
+        ) from exc
+    return records
+
+
+def approved_pack_inventory() -> dict[str, Any]:
+    packs: list[dict[str, Any]] = []
+    for record in _load_approved_pack_records().values():
+        scientific = record.get("scientific_validation")
+        states = {
+            "installed": record.get("installed") is True,
+            "runtime_validated": record.get("runtime_validated") is True,
+            "scientifically_validated": (
+                isinstance(scientific, Mapping) and scientific.get("validated") is True
+            ),
+            "operator_enabled": record.get("operator_enabled") is True,
+        }
+        states["selectable"] = all(states.values())
+        canonical = json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        public = copy.deepcopy(record)
+        public["pack_sha256"] = hashlib.sha256(canonical).hexdigest()
+        public["states"] = states
+        packs.append(public)
+    return {
+        "schema": "bms.md.approved-pack-inventory.v1",
+        "packs": packs,
+        "selectable_pack_ids": [pack["id"] for pack in packs if pack["states"]["selectable"]],
+        "count": len(packs),
+        "bounded": True,
+    }
+
+
+def _resolve_approved_packs(pack_ids: list[Any]) -> list[dict[str, Any]]:
+    if not pack_ids:
+        return []
+    records = _load_approved_pack_records()
+    resolved: list[dict[str, Any]] = []
+    for requested in pack_ids:
+        record = records.get(requested) if isinstance(requested, str) else None
+        scientific = record.get("scientific_validation") if isinstance(record, Mapping) else None
+        selectable = bool(
+            isinstance(record, Mapping)
+            and record.get("installed") is True
+            and record.get("runtime_validated") is True
+            and record.get("operator_enabled") is True
+            and isinstance(scientific, Mapping)
+            and scientific.get("validated") is True
+        )
+        if not selectable:
+            raise MDLaunchError(
+                "MD_APPROVED_PACK_UNAVAILABLE",
+                f"Approved chemistry pack {requested!r} is unavailable for launch.",
+                status_code=409,
+            )
+        assert isinstance(record, dict)
+        canonical = json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        resolved.append({
+            "id": record["id"],
+            "version": str(record.get("version") or ""),
+            "pack_sha256": hashlib.sha256(canonical).hexdigest(),
+            "snapshot": record,
+        })
+    return resolved
+
+
+def _resolve_v2_chemistry(
+    normalized: dict[str, Any], *, catalog: ChemistryCatalog, view: CatalogView
+) -> dict[str, Any]:
+    chemistry = normalized.get("chemistry")
+    if not isinstance(chemistry, Mapping):
+        raise MDLaunchError("MD_JOB_CONTRACT_INVALID", "The molecular-dynamics job contract is invalid.", status_code=422)
+    if chemistry.get("catalog_digest") != view.catalog_digest:
+        raise MDLaunchError(
+            "MD_CHEMISTRY_CATALOG_STALE",
+            "The selected molecular-dynamics chemistry catalog generation is stale.",
+            status_code=409,
+        )
+    profile = view.get_profile(str(chemistry.get("profile_id") or ""))
+    if profile is None:
+        raise ChemistryProfileSelectionError(
+            "MD_CHEMISTRY_PROFILE_UNAVAILABLE", "The selected molecular-dynamics chemistry profile is unavailable."
+        )
+    resolved_preparation = profile.get("v1_preparation")
+    if not isinstance(resolved_preparation, Mapping):
+        raise ChemistryProfileSelectionError(
+            "MD_CHEMISTRY_PROFILE_UNAVAILABLE",
+            "The selected molecular-dynamics chemistry profile has no resolved preparation.",
+        )
+    catalog.validate_v1_profile_selection(
+        profile_id=chemistry.get("profile_id"), profile_sha256=chemistry.get("profile_sha256"),
+        force_field=str(resolved_preparation.get("force_field") or ""),
+        water_model=str(resolved_preparation.get("water_model") or ""), engine=normalized["engine"],
+        requested_scope=chemistry.get("requested_scope"), view=view,
+    )
+    approved_pack_ids = chemistry.get("approved_pack_ids", [])
+    if not isinstance(approved_pack_ids, list):
+        raise MDLaunchError(
+            "MD_JOB_CONTRACT_INVALID", "The molecular-dynamics job contract is invalid.", status_code=422
+        )
+    resolved_packs = _resolve_approved_packs(approved_pack_ids)
+    normalized["chemistry"] = {
+        "profile_id": profile["id"], "profile_sha256": profile["profile_sha256"],
+        "catalog_digest": view.catalog_digest, "requested_scope": chemistry["requested_scope"],
+        "assurance": profile["assurance"], "family": profile["family"], "version": profile["version"],
+        "resolved_preparation": copy.deepcopy(dict(resolved_preparation)),
+        "runtime_identity": copy.deepcopy(profile["runtime_identity"]),
+    }
+    if approved_pack_ids:
+        normalized["chemistry"]["approved_pack_ids"] = list(approved_pack_ids)
+        normalized["chemistry"]["resolved_approved_packs"] = resolved_packs
+    compatibility = copy.deepcopy(normalized)
+    compatibility["preparation"] = {**dict(normalized["preparation"]), **dict(resolved_preparation)}
+    _validate_profile_launch_constraints(compatibility, profile)
+    return normalized
+
+
 def normalize_md_job_spec(
     *,
     params: Mapping[str, Any],
@@ -735,6 +903,7 @@ def normalize_md_job_spec(
     candidate = copy.deepcopy(dict(spec))
     candidate["job_id"] = job_id
     _validate_raw_input_semantics(candidate)
+    _validate_raw_v2_semantics(candidate)
     _validate_resource_contract(candidate)
     _validate_raw_md_job_spec(candidate)
     input_config = candidate.get("input")
@@ -766,7 +935,17 @@ def normalize_md_job_spec(
             )
 
     preparation = dict(normalized["preparation"])
-    if has_structure:
+    if normalized.get("schema") == "bms.md.job.v2":
+        if not has_structure:
+            raise MDLaunchError(
+                "MD_JOB_CONTRACT_INVALID",
+                "New bms.md.job.v2 launches require a structure input and a governed chemistry profile.",
+                status_code=422,
+            )
+        catalog = chemistry_catalog or get_chemistry_catalog()
+        captured_view = chemistry_view or catalog.view()
+        normalized = _resolve_v2_chemistry(normalized, catalog=catalog, view=captured_view)
+    elif has_structure:
         catalog = chemistry_catalog or get_chemistry_catalog()
         captured_view = chemistry_view or catalog.view()
         profile = catalog.validate_v1_profile_selection(
@@ -843,9 +1022,12 @@ def materialize_md_job_spec(
         topology_snapshot: Path | None = None
         expected_structure_sha256: str | None = None
         if input_config.get("structure"):
-            profile = captured_view.get_profile(
-                str(normalized["preparation"].get("chemistry_profile_id") or "")
-            ) if captured_view is not None else None
+            profile_id = (
+                normalized.get("chemistry", {}).get("profile_id")
+                if normalized.get("schema") == "bms.md.job.v2"
+                else normalized["preparation"].get("chemistry_profile_id")
+            )
+            profile = captured_view.get_profile(str(profile_id or "")) if captured_view is not None else None
             constraints = profile.get("launch_constraints") if isinstance(profile, Mapping) else None
             if not isinstance(constraints, Mapping):
                 raise ChemistryProfileSelectionError(

@@ -19,6 +19,7 @@ import { jobPollingInterval } from '../lib/queryPolling';
 import { buildGpuCatalog, formatGpuLabel, listGpuCatalogEntries, type GpuCatalogEntry, type GpuCatalogLike } from './gpuCatalog';
 import { formatGpuList, resolveQueueGpuDisplay } from './jobQueueGpuDisplay';
 import { BMS_PANEL_OVERFLOW } from './ui/bmsStyle';
+import { MDQueueSection } from './MDQueueSection';
 
 // Model display names and icons
 // Model display names removed - using text badges instead
@@ -112,6 +113,11 @@ function isNgsJob(modelId: string, mode?: string): boolean {
         modeKey === 'methylation_analysis' ||
         modeKey === 'nanopore_methylation'
     );
+}
+
+function isMolecularDynamicsJob(modelId: string, mode?: string): boolean {
+    const modelKey = modelId.toLowerCase();
+    return ['md', 'molecular_dynamics'].includes(modelKey) || (mode || '').toLowerCase() === 'molecular_dynamics';
 }
 
 function StatusBadge({ status, paused }: { status: string; paused: boolean }) {
@@ -444,8 +450,10 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
     const isPending = pauseMutation.isPending || resumeMutation.isPending ||
         cancelMutation.isPending || pinMutation.isPending || cancelAllMutation.isPending || killActiveMutation.isPending || forceLaunchMutation.isPending;
 
-    const visibleQueue = showNgsJobs ? queue : queue.filter(j => !isNgsJob(j.model_id, j.mode));
-    const cancelledJobs = showNgsJobs ? cancelledJobsRaw : cancelledJobsRaw.filter(j => !isNgsJob(j.model_id, j.mode));
+    const genericQueue = queue.filter(j => !isMolecularDynamicsJob(j.model_id, j.mode));
+    const genericCancelled = cancelledJobsRaw.filter(j => !isMolecularDynamicsJob(j.model_id, j.mode));
+    const visibleQueue = showNgsJobs ? genericQueue : genericQueue.filter(j => !isNgsJob(j.model_id, j.mode));
+    const cancelledJobs = showNgsJobs ? genericCancelled : genericCancelled.filter(j => !isNgsJob(j.model_id, j.mode));
 
     // Separate running, paused, queued, and pending_msa jobs
     const runningJobs = visibleQueue.filter(j => j.queue_status === 'running');
@@ -479,11 +487,14 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
     return (
         <div className={`${BMS_PANEL_OVERFLOW} ${className}`.trim()}>
             {/* Header */}
-            <div
-                className="flex items-center justify-between px-4 py-2 border-b border-slate-700/50 cursor-pointer hover:bg-slate-700/20"
-                onClick={() => setExpanded(!expanded)}
-            >
-                <div className="flex items-center gap-3">
+            <div className="flex items-center justify-between px-4 py-2 border-b border-slate-700/50 hover:bg-slate-700/20">
+                <button
+                    type="button"
+                    className="flex items-center gap-3 text-left"
+                    onClick={() => setExpanded(!expanded)}
+                    aria-expanded={expanded}
+                    aria-controls="bms-gpu-queue-content"
+                >
                     <span className="text-sm font-semibold text-slate-200">GPU Queue</span>
                     {stats && (
                         <div className="flex gap-2">
@@ -500,7 +511,7 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
                             )}
                         </div>
                     )}
-                </div>
+                </button>
                 <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
                     {/* Kill Active - kills actual Nextflow processes */}
                     <button
@@ -541,7 +552,8 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
             </div>
 
             {expanded && (
-                <div className="p-3">
+                <div id="bms-gpu-queue-content" className="p-3">
+                    <MDQueueSection />
                     {showCancelled ? (
                         /* Cancelled Jobs Tab */
                         <div>

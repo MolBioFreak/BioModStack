@@ -62,6 +62,7 @@ class WorkflowAdapterLaunchResponse(BaseModel):
 
 class WorkflowAdapterCancelRequest(BaseModel):
     nextflow_run_id: str
+    graceful_timeout_seconds: float = Field(default=5.0, ge=0.0, le=300.0)
 
 
 class WorkflowAdapterCancelResponse(BaseModel):
@@ -307,7 +308,10 @@ async def _resolve_native_run_id(job_handle: str) -> str:
 @router.post("/cancel", response_model=WorkflowAdapterCancelResponse)
 async def workflow_adapter_cancel(request: WorkflowAdapterCancelRequest) -> WorkflowAdapterCancelResponse:
     resolved_nextflow_run_id = await _resolve_native_run_id(request.nextflow_run_id)
-    cancelled = await cancel_nextflow_job(resolved_nextflow_run_id)
+    cancelled = await cancel_nextflow_job(
+        resolved_nextflow_run_id,
+        graceful_timeout_seconds=request.graceful_timeout_seconds,
+    )
     return WorkflowAdapterCancelResponse(
         cancelled=bool(cancelled),
         resolved_nextflow_run_id=resolved_nextflow_run_id,

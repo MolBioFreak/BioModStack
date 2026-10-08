@@ -3843,7 +3843,10 @@ async def cancel_nextflow_job(nextflow_run_id: str, graceful_timeout_seconds: fl
     """Cancel a running Nextflow job, escalating to SIGKILL if it ignores SIGTERM."""
     if workflow_adapter_enabled():
         try:
-            return cancel_via_workflow_adapter(str(nextflow_run_id))
+            return cancel_via_workflow_adapter(
+                str(nextflow_run_id),
+                graceful_timeout_seconds=graceful_timeout_seconds,
+            )
         except Exception as exc:
             logger.warning("Workflow adapter cancellation failed for %r: %s", nextflow_run_id, exc)
             return False

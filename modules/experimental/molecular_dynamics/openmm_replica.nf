@@ -6,7 +6,7 @@ process MD_OPENMM_REPLICA {
     publishDir "${params.out_dir}/replicas/replica_${replica_index}", mode: 'copy', overwrite: true
 
     input:
-    tuple val(replica_index), path(normalized_config)
+    tuple val(replica_index), path(normalized_config), path(preparation_bundle)
 
     output:
     path "openmm_replica_${replica_index}_manifest.json", emit: manifest
@@ -22,7 +22,8 @@ process MD_OPENMM_REPLICA {
     python3 -m scripts.bms_md.cli run \
       --config ${normalized_config} \
       --output-dir replica_${replica_index} \
-      --replica-index ${replica_index}
+      --replica-index ${replica_index} \
+      --preparation-bundle ${preparation_bundle}
     cp replica_${replica_index}/manifest.json openmm_replica_${replica_index}_manifest.json
     """
 }

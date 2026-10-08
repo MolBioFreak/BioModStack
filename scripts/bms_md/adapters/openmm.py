@@ -19,7 +19,7 @@ class OpenMMAdapter:
         if config["engine"] != self.name:
             raise EngineAdapterError("MD_ENGINE_ADAPTER_ERROR: OpenMM adapter received another engine")
         inputs = config["input"]
-        if not inputs.get("coordinates") or not inputs.get("topology"):
+        if request.preparation_bundle is None and (not inputs.get("coordinates") or not inputs.get("topology")):
             raise EngineAdapterError(
                 "MD_ENGINE_ADAPTER_ERROR: experimental OpenMM requires prepared coordinates plus topology"
             )
@@ -43,4 +43,5 @@ class OpenMMAdapter:
             request.output_dir,
             replica_index=request.replica_index,
             _prepared_config=config,
+            preparation_bundle=request.preparation_bundle,
         )

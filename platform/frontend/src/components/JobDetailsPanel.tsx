@@ -32,6 +32,8 @@ interface JobDetailsPanelProps {
 export function JobDetailsPanel({ job, onClose }: JobDetailsPanelProps) {
     // Check if this is a docking job
     const isDockingJob = job.model_id === 'diffdock' || job.mode?.includes('dock');
+    const isMolecularDynamicsJob = job.model_id === 'molecular_dynamics' ||
+        job.mode === 'molecular_dynamics' || job.mode === 'md';
 
     // Fetch docking results
     const { data: dockingData, isLoading: dockingLoading } = useQuery({
@@ -52,7 +54,7 @@ export function JobDetailsPanel({ job, onClose }: JobDetailsPanelProps) {
             if (!res.ok) throw new Error('Failed to fetch structure files');
             return res.json();
         },
-        enabled: !isDockingJob && job.status === 'completed',
+        enabled: !isDockingJob && !isMolecularDynamicsJob && job.status === 'completed',
     });
 
     const poses = dockingData?.sdfs || [];
@@ -74,7 +76,7 @@ export function JobDetailsPanel({ job, onClose }: JobDetailsPanelProps) {
                                 to={`/designs/${job.id}`}
                                 className="px-3 py-1 bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 rounded text-xs font-medium transition-colors"
                             >
-                                Open in Results Viewer →
+                                {isMolecularDynamicsJob ? 'MD Operations →' : 'Open in Results Viewer →'}
                             </Link>
                             <button
                                 onClick={onClose}
@@ -127,7 +129,7 @@ export function JobDetailsPanel({ job, onClose }: JobDetailsPanelProps) {
                             )}
 
                             {/* Structure files */}
-                            {!isDockingJob && (
+                            {!isDockingJob && !isMolecularDynamicsJob && (
                                 structureLoading ? (
                                     <span className="text-xs text-slate-500">Loading structures...</span>
                                 ) : structureData?.structures && structureData.structures.length > 0 ? (
@@ -149,9 +151,15 @@ export function JobDetailsPanel({ job, onClose }: JobDetailsPanelProps) {
                                 )
                             )}
 
+                            {isMolecularDynamicsJob && (
+                                <span className="text-xs text-cyan-300">
+                                    Trajectories, checkpoints, analysis, and lifecycle controls are available only in MD Operations.
+                                </span>
+                            )}
+
                             {/* Show more indicator */}
                             {((isDockingJob && poses.length > 5) ||
-                                (!isDockingJob && structureData && structureData.count > 6)) && (
+                                (!isDockingJob && !isMolecularDynamicsJob && structureData && structureData.count > 6)) && (
                                     <Link
                                         to={`/designs/${job.id}`}
                                         className="px-2 py-1 bg-accent/20 text-accent hover:bg-accent/30 rounded text-xs transition-colors"

@@ -70,7 +70,13 @@ def _decode_json_response(raw_body: str, *, url: str) -> Any:
 
 
 
-def request_via_workflow_adapter(method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
+def request_via_workflow_adapter(
+    method: str,
+    path: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    timeout_seconds: float = DEFAULT_ADAPTER_TIMEOUT_SECONDS,
+) -> Any:
     base_url = workflow_adapter_base_url()
     if not base_url:
         raise RuntimeError("BMS_WORKFLOW_ADAPTER_URL is not configured")
@@ -84,7 +90,7 @@ def request_via_workflow_adapter(method: str, path: str, payload: dict[str, Any]
 
     request = urllib.request.Request(url, data=data, headers=headers, method=method.upper())
     try:
-        with urllib.request.urlopen(request, timeout=DEFAULT_ADAPTER_TIMEOUT_SECONDS) as response:
+        with urllib.request.urlopen(request, timeout=float(timeout_seconds)) as response:
             raw_body = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         raw_body = exc.read().decode("utf-8", errors="replace")
@@ -102,8 +108,19 @@ def request_via_workflow_adapter(method: str, path: str, payload: dict[str, Any]
 
 
 
-def _request_json(method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-    parsed = request_via_workflow_adapter(method, path, payload)
+def _request_json(
+    method: str,
+    path: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    timeout_seconds: float = DEFAULT_ADAPTER_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    parsed = request_via_workflow_adapter(
+        method,
+        path,
+        payload,
+        timeout_seconds=timeout_seconds,
+    )
     if not isinstance(parsed, dict):
         base_url = workflow_adapter_base_url() or "<unconfigured>"
         raise RuntimeError(f"Workflow adapter returned non-object JSON for {base_url}{path}: {parsed!r}")
@@ -177,11 +194,15 @@ def launch_via_workflow_adapter(
 
 
 
-def cancel_via_workflow_adapter(nextflow_run_id: str) -> bool:
+def cancel_via_workflow_adapter(nextflow_run_id: str, *, graceful_timeout_seconds: float = 5.0) -> bool:
     response = _request_json(
         "POST",
         "/api/workflow-adapter/cancel",
-        {"nextflow_run_id": nextflow_run_id},
+        {
+            "nextflow_run_id": nextflow_run_id,
+            "graceful_timeout_seconds": float(graceful_timeout_seconds),
+        },
+        timeout_seconds=max(DEFAULT_ADAPTER_TIMEOUT_SECONDS, float(graceful_timeout_seconds) + 5.0),
     )
     return bool(response.get("cancelled", False))
 

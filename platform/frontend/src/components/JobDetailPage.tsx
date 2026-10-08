@@ -56,6 +56,9 @@ export function JobDetailPage() {
         job?.model_id === 'unidock' ||
         job?.model_id === 'docking' ||
         job?.mode?.includes('dock');
+    const isMolecularDynamicsJob = job?.model_id === 'molecular_dynamics' ||
+        job?.mode === 'molecular_dynamics' ||
+        job?.mode === 'md';
 
     // Fetch docking results
     const { data: dockingData, isLoading: dockingLoading } = useQuery({
@@ -76,7 +79,7 @@ export function JobDetailPage() {
             if (!res.ok) throw new Error('Failed to fetch structure files');
             return res.json();
         },
-        enabled: job?.status === 'completed' && !isDockingJob,
+        enabled: job?.status === 'completed' && !isDockingJob && !isMolecularDynamicsJob,
     });
 
     const poses = dockingData?.sdfs || [];
@@ -120,7 +123,15 @@ export function JobDetailPage() {
                     <h1 className="text-2xl font-bold text-white">{job.name}</h1>
                     <div className="flex items-center gap-3">
                         <StatusBadge status={job.status} />
-                        {(job.status === 'running' || job.status === 'queued') && (
+                        {isMolecularDynamicsJob && (
+                            <Link
+                                to={`/designs/${job.id}`}
+                                className="px-3 py-1 bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 rounded-lg text-sm font-medium hover:bg-cyan-500/20 transition-colors"
+                            >
+                                MD Operations
+                            </Link>
+                        )}
+                        {!isMolecularDynamicsJob && (job.status === 'running' || job.status === 'queued') && (
                             <button
                                 onClick={() => {
                                     if (confirm('Are you sure you want to cancel this job?')) {
@@ -274,7 +285,7 @@ export function JobDetailPage() {
                     </div>
                 )}
 
-                {job.status === 'completed' && !isDockingJob && (
+                {job.status === 'completed' && !isDockingJob && !isMolecularDynamicsJob && (
                     <div>
                         <h3 className="text-md font-medium text-white mb-4">
                             Structure Files ({structureData?.count || 0})

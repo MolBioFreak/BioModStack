@@ -6,7 +6,12 @@ import type { Data, Layout, PlotMouseEvent } from 'plotly.js';
 import {
     fetchMDAnalysis,
     fetchMDArtifacts,
+    fetchMDRun,
     fetchMDSummary,
+    cancelMDRun,
+    pauseMDRun,
+    resumeMDRun,
+    retryMDDynamics,
     retryMDAnalysis,
     type MDAnalysisPoint,
     type MDTrajectoryFrameMap,
@@ -45,6 +50,26 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
         queryKey: ['md-analysis', jobId],
         queryFn: () => fetchMDAnalysis(jobId),
         refetchInterval: (query) => query.state.data?.data.status === 'completed' ? false : 5_000,
+    });
+    const lifecycle = useQuery({
+        queryKey: ['md-run', jobId], queryFn: () => fetchMDRun(jobId), retry: false,
+        refetchInterval: (query) => query.state.data?.data.phase && !['completed', 'partial', 'failed', 'cancelled'].includes(query.state.data.data.phase) ? 5_000 : false,
+    });
+    const lifecycleCommand = useMutation({
+        mutationFn: async ({ action, replicaIndex }: { action: 'pause' | 'resume_dynamics' | 'retry_dynamics' | 'cancel'; replicaIndex?: number }) => {
+            const run = lifecycle.data!.data;
+            const key = `${action}:${jobId}:${replicaIndex ?? 'run'}:${run.state_version}:${crypto.randomUUID()}`;
+            if (action === 'pause') return pauseMDRun(jobId, run.state_version, key);
+            if (action === 'cancel') return cancelMDRun(jobId, run.state_version, key);
+            if (action === 'retry_dynamics') return retryMDDynamics(jobId, replicaIndex!, run.state_version, key);
+            return resumeMDRun(jobId, run.state_version, key);
+        },
+        onSuccess: async () => {
+            await Promise.all([
+                queryClient.invalidateQueries({ queryKey: ['md-run', jobId] }),
+                queryClient.invalidateQueries({ queryKey: ['jobs'] }),
+            ]);
+        },
     });
     const retry = useMutation({
         mutationFn: () => retryMDAnalysis(jobId),
@@ -163,15 +188,25 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
             customdata: report.residue_metrics!.map((residue) => [residue.resname, residue.backbone_atom_count]),
             hovertemplate: '%{x} %{customdata[0]}<br>Backbone RMSF %{y:.3f} Å<br>%{customdata[1]} backbone atoms<extra></extra>',
         })), [reports]);
+    const lifecyclePanel = lifecycle.data?.data ? <div className="rounded-xl border border-cyan-500/20 bg-slate-900/70 p-4" data-bms-md-lifecycle="true">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+            <div><div className="text-xs uppercase tracking-wide text-cyan-300">Dynamics lifecycle</div><div className="mt-1 text-lg font-semibold text-white">{lifecycle.data.data.phase.replaceAll('_', ' ')}</div><div className="mt-1 text-xs text-slate-400">{lifecycle.data.data.engine} · {lifecycle.data.data.chemistry.profile_id} · {lifecycle.data.data.simulated_time_ps.toFixed(2)} / {lifecycle.data.data.requested_time_ps.toFixed(2)} ps</div></div>
+            <div className="flex flex-wrap gap-2">{lifecycle.data.data.allowed_actions.filter((action) => action !== 'retry_dynamics').map((action) => <button key={action} type="button" disabled={lifecycleCommand.isPending} onClick={() => lifecycleCommand.mutate({ action })} className="rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-3 py-2 text-sm font-medium text-cyan-100 disabled:opacity-50">{action === 'resume_dynamics' ? 'Resume dynamics' : action[0].toUpperCase() + action.slice(1)}</button>)}</div>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">{lifecycle.data.data.replicas.map((replica) => <span key={replica.id} className="flex items-center gap-2 rounded border border-slate-700 px-2 py-1 text-xs text-slate-300">Replica {replica.replica_index} · attempt {replica.attempt} · {replica.state}{lifecycle.data.data.allowed_actions.includes('retry_dynamics') && replica.retry_eligible && <button type="button" disabled={lifecycleCommand.isPending} onClick={() => lifecycleCommand.mutate({ action: 'retry_dynamics', replicaIndex: replica.replica_index })} className="rounded border border-amber-400/40 px-2 py-1 text-amber-200 disabled:opacity-50">Retry dynamics</button>}</span>)}</div>
+        <div className="mt-2 text-xs text-slate-500">State version {lifecycle.data.data.state_version} · accepted checkpoints {lifecycle.data.data.checkpoints.length} · dynamics retry and analysis retry are independent operations.</div>
+        {lifecycleCommand.isError && <div className="mt-2 text-xs text-rose-300">The lifecycle command was rejected because durable state changed or a safety precondition was not met. Refresh before retrying.</div>}
+    </div> : null;
     const loading = summary.isLoading || artifacts.isLoading || analysis.isLoading;
-    if (loading) return <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-8 text-slate-300">Loading MD results…</div>;
+    if (loading) return <section className="space-y-4" data-bms-result-pane="molecular-dynamics">{lifecyclePanel}<div className="rounded-xl border border-slate-800 bg-slate-900/70 p-8 text-slate-300">Loading MD results…</div></section>;
     if (summary.isError || artifacts.isError || analysis.isError) {
-        return <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-6 text-rose-200">MD result manifests are unavailable or failed validation.</div>;
+        return <section className="space-y-4" data-bms-result-pane="molecular-dynamics">{lifecyclePanel}<div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-6 text-amber-100">Dynamics results are not complete yet or their manifests failed validation.</div></section>;
     }
     const summaryData = summary.data!.data;
     const analysisData = analysis.data!.data;
     return (
         <section className="space-y-4" data-bms-result-pane="molecular-dynamics">
+            {lifecyclePanel}
             <div className="grid gap-3 md:grid-cols-4">
                 {[
                     ['Replicas', summaryData.replica_count], ['Artifacts', summaryData.artifact_count],

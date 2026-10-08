@@ -34,9 +34,16 @@ def build_mdrun_command(
         pin,
         "-gpu_id",
         str(gpu_id),
+        "-cpo",
+        str(checkpoint),
     ]
     if gpu_offload == "full":
         command.extend(["-nb", "gpu", "-pme", "gpu", "-bonded", "gpu", "-update", "gpu"])
+    elif gpu_offload == "full_forces":
+        # Four-site waters such as OPC require virtual sites, which GROMACS
+        # 2025.3 cannot update on GPU. Keep every supported force task on GPU
+        # while making the CPU coordinate-update boundary explicit.
+        command.extend(["-nb", "gpu", "-pme", "gpu", "-bonded", "gpu", "-update", "cpu"])
     elif gpu_offload == "partial":
         command.extend(["-nb", "gpu"])
     elif gpu_offload == "auto":
