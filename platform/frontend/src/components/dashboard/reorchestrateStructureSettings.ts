@@ -182,14 +182,14 @@ const isBoltzCpLaunch = (job: StructureRetryJob): boolean => {
     return modelId === 'boltz_cp_experimental' || launchVariant === 'boltz_cp_experimental';
 };
 
-const resolveBoltzCpAutoFallbackGpuIds = (job: StructureRetryJob): string => {
+const resolveBoltzCpAutoFallbackGpuIds = (job: StructureRetryJob): string | null => {
     const params = job.params || {};
     const explicitPinned = parseBoltzCpGpuIds(params.pinned_gpus);
     if (explicitPinned.length > 0) {
-        return '0,1,2,3';
+        return null;
     }
-    const rawFallback = String(params.gpu_ids ?? params.bcp_gpu_ids ?? '0,1,2,3').trim();
-    return rawFallback || '0,1,2,3';
+    const rawFallback = String(params.gpu_ids ?? params.bcp_gpu_ids ?? '').trim();
+    return rawFallback || null;
 };
 
 const sameValue = (left: unknown, right: unknown): boolean => {

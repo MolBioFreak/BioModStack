@@ -7,6 +7,9 @@ export type StructureMsaProvider = 'local' | 'colabfold_api';
 export type StructureMsaPreset = 'maximum' | 'balanced' | 'fast';
 export type StructureMsaTargetShardMode = 'auto' | 'required' | 'off';
 
+export const BOLTZ_NUM_SAMPLES_HELP_TEXT = 'Generates this many final ranked candidate structures from the same input. model_0 is the top-ranked candidate; additional samples are alternative candidates.';
+export const BOLTZ_MAX_PARALLEL_SAMPLES_HELP_TEXT = 'Caps the denoiser-forward chunk size across already-requested Boltz diffusion/FK particles. Lower can reduce neural-network VRAM spikes, but this is not a full one-at-a-time job guarantee.';
+
 export interface StructurePredictorOption {
     id: StructurePredictorSelection;
     name: string;

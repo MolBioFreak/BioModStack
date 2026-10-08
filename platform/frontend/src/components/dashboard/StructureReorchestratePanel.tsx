@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { fetchBoltzCpShardPlans, type BoltzCpShardPlan } from '../../lib/api.js';
 import {
     BOLTZ_CP_SHARD_PLAN_DEFINITIONS,
@@ -6,6 +6,7 @@ import {
     getBoltzCpLogicalSizeCp,
     getBoltzCpRuntimeBridgeSummary,
 } from '../structurePredictionUiState.js';
+import { useLiveGpuCatalog } from '../useLiveGpuCatalog';
 import type { StructurePredictor, StructureReorchestrateSettings } from './reorchestrateStructureSettings.js';
 
 interface StructureReorchestratePanelProps {
@@ -22,12 +23,6 @@ const predictorLabel: Record<StructurePredictor, string> = {
 
 const numberInputClass = 'mt-1 w-full rounded border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100';
 const sectionClass = 'rounded-xl border border-slate-700 bg-slate-800/40 p-4';
-const boltzCpGpuOptions = [
-    { id: 0, name: '5090' },
-    { id: 1, name: '5060Ti' },
-    { id: 2, name: '3090#1' },
-    { id: 3, name: '3090#2' },
-];
 const DEFAULT_BOLTZ_CP_SHARD_PLANS: BoltzCpShardPlan[] = BOLTZ_CP_SHARD_PLAN_DEFINITIONS.map((plan) => ({
     id: plan.id,
     label: plan.label,
@@ -48,6 +43,8 @@ export function StructureReorchestratePanel({
     disabled = false,
 }: StructureReorchestratePanelProps) {
     const update = (patch: Partial<StructureReorchestrateSettings>) => onChange({ ...settings, ...patch });
+    const { gpuOptions } = useLiveGpuCatalog();
+    const boltzCpFallbackGpuIds = useMemo(() => gpuOptions.map((gpu) => gpu.index).join(','), [gpuOptions]);
     const [availableBoltzCpPlans, setAvailableBoltzCpPlans] = useState<BoltzCpShardPlan[]>(DEFAULT_BOLTZ_CP_SHARD_PLANS);
 
     const updateBoltz = (patch: Partial<StructureReorchestrateSettings['boltz']>) => {
@@ -70,7 +67,7 @@ export function StructureReorchestratePanel({
         ? deriveBoltzCpGpuLaunchSettings({
             pinnedGpus: settings.boltzCp.pinnedGpus,
             requestedSizeCp: getBoltzCpLogicalSizeCp(settings.boltzCp.shardPlanId),
-            fallbackGpuIds: '0,1,2,3',
+            fallbackGpuIds: boltzCpFallbackGpuIds,
         })
         : null;
 
@@ -268,22 +265,22 @@ export function StructureReorchestratePanel({
                             >
                                 Auto
                             </button>
-                            {boltzCpGpuOptions.map((gpu) => (
+                            {gpuOptions.map((gpu) => (
                                 <button
-                                    key={gpu.id}
+                                    key={gpu.index}
                                     type="button"
                                     onClick={() => updateBoltzCp({
-                                        pinnedGpus: settings.boltzCp.pinnedGpus.includes(gpu.id)
-                                            ? settings.boltzCp.pinnedGpus.filter((value) => value !== gpu.id)
-                                            : [...settings.boltzCp.pinnedGpus, gpu.id].sort((left, right) => left - right),
+                                        pinnedGpus: settings.boltzCp.pinnedGpus.includes(gpu.index)
+                                            ? settings.boltzCp.pinnedGpus.filter((value) => value !== gpu.index)
+                                            : [...settings.boltzCp.pinnedGpus, gpu.index].sort((left, right) => left - right),
                                     })}
-                                    className={`px-3 py-2 rounded-lg font-medium text-sm transition-all ${settings.boltzCp.pinnedGpus.includes(gpu.id)
+                                    className={`px-3 py-2 rounded-lg font-medium text-sm transition-all ${settings.boltzCp.pinnedGpus.includes(gpu.index)
                                         ? 'bg-blue-600 text-white ring-2 ring-blue-400'
                                         : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                                     }`}
                                     disabled={disabled}
                                 >
-                                    {gpu.name}
+                                    {gpu.label}
                                 </button>
                             ))}
                         </div>
