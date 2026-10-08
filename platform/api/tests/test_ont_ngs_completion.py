@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from ngs_resource_fixture import ngs_resources
 
 API_ROOT = Path(__file__).resolve().parents[1]
 if str(API_ROOT) not in sys.path:
@@ -19,6 +20,11 @@ from services.ont_ngs_completion import (  # noqa: E402
     OntNgsCompletionError,
     _validate_terminal_stages,
 )
+
+
+# Load production validators before per-test completion seams are patched;
+# their module-level imports must never retain another test's mock reader.
+from services import ont_ngs_native_plasmid  # noqa: E402, F401
 
 
 def test_reviewed_launch_settings_survive_materialization_but_not_scientific_drift():
@@ -141,6 +147,11 @@ async def test_external_signal_alignment_completion_persists_primary_package_aut
         "align.log",
     ):
         (alignment_root / name).write_bytes(name.encode("utf-8"))
+    from ngs_producer_fixtures import producer_receipt
+    (alignment_root / "align.log").write_text(producer_receipt(
+        alignment_root / "fixture-producer",
+        ("modules/ngs/dorado_align.nf", "scripts/build_primary_alignment_session_manifest.sh"),
+        ("dorado", "samtools")))
     manifest_path = output_root / "qc_manifest.json"
     manifest_path.write_text("{}", encoding="utf-8")
     reference_sha256 = "a" * 64
@@ -666,13 +677,15 @@ def test_terminal_stage_validation_rejects_non_regular_output(
 
 
 @pytest.mark.asyncio
+@pytest.mark.native_http
+@pytest.mark.usefixtures("ngs_resources", "native_http")
 async def test_finalizer_persists_stage_mirrors_without_a_transient_all_stages_field(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from services import ont_ngs_completion as service
 
-    result_root = tmp_path / "state" / "bms_results" / "retry3"
+    result_root = tmp_path / "results" / "retry3"
     outputs_by_stage: dict[str, list[str]] = {}
     for stage in _REQUIRED_TERMINAL_STAGES:
         outputs_by_stage[stage] = []
@@ -683,35 +696,6 @@ async def test_finalizer_persists_stage_mirrors_without_a_transient_all_stages_f
             outputs_by_stage[stage].append(f"bms_results/{result_root.name}/{suffix}")
 
     reference_sha256 = "a" * 64
-    fastq_manifest = {
-        "reference": {"expected_sha256": reference_sha256, "name": "eGFP_plasmid", "length": 5570},
-        "artifacts": [
-            {
-                "kind": "summary",
-                "state": "present",
-                "required": True,
-                "integrity_valid": True,
-                "actual_sha256": "b" * 64,
-                "size_bytes": 10,
-            }
-        ],
-    }
-    verification_manifest = {
-        "schema": service.VERIFICATION_SCHEMA,
-        "summary": {"reference_name": "eGFP_plasmid", "reference_length": 5570},
-        "inputs": {"source_reads": {"sha256": "f" * 64}},
-        "verdict": "review_required",
-        "artifacts": [
-            {
-                "kind": "verification_summary",
-                "state": "present",
-                "required": True,
-                "integrity_valid": True,
-                "actual_sha256": "c" * 64,
-                "size_bytes": 20,
-            }
-        ],
-    }
     job = SimpleNamespace(
         id="job-a",
         model_id="nanopore",
@@ -738,36 +722,10 @@ async def test_finalizer_persists_stage_mirrors_without_a_transient_all_stages_f
         error_message=None,
     )
 
+    from ngs_fastq_completion_fixture import native_fastq_package
+    reads = native_fastq_package(result_root, job, tmp_path)
+    reference_sha256 = job.params["reference_sequence_sha256"]
     monkeypatch.setattr(service, "resolve_persisted_job_result_root", lambda _job: result_root)
-    monkeypatch.setattr(service, "_read_manifest", lambda path: (b"{}", "d" * 64 if path.parent.name == "fastq_qc" else "e" * 64))
-    monkeypatch.setattr(
-        service,
-        "load_sequence_qc_manifest",
-        lambda path, **_kwargs: fastq_manifest if path.parent.name == "fastq_qc" else verification_manifest,
-    )
-    monkeypatch.setattr(
-        service.ngs_alignment_sessions,
-        "build_ngs_package_artifacts",
-        lambda *_args, **_kwargs: [
-            {
-                "source": "fixture",
-                "kind": f"artifact_{index}",
-                "state": "present",
-                "sha256": f"{index + 1:064x}",
-                "size_bytes": index + 1,
-            }
-            for index in range(34)
-        ] + [
-            {
-                "source": "input_mode",
-                "kind": kind,
-                "state": "not_applicable_to_input_mode",
-                "sha256": None,
-                "size_bytes": None,
-            }
-            for kind in ("modified_bases", "signal_data")
-        ],
-    )
     attached_receipts: list[dict] = []
 
     def fake_attach(params, receipt):
@@ -807,7 +765,12 @@ async def test_finalizer_persists_stage_mirrors_without_a_transient_all_stages_f
     assert integrity["declared_artifact_count"] == 36
     assert integrity["present_artifact_count"] == 34
     assert integrity["unavailable_artifact_count"] == 2
-    assert integrity["source_fastq_sha256"] == "f" * 64
+    assert integrity["source_fastq_sha256"] == hashlib.sha256(reads.read_bytes()).hexdigest()
+    assert integrity["native_evidence"]["alignment"]["mapped_records"] == 1
+    assert integrity["native_evidence"]["qc"]["state"] == "validated"
+    assert integrity["construct_verification_verdict"] == "REVIEW"
+    assert integrity["native_evidence"]["qc"]["verification_verdict"] == "REVIEW"
+    assert "INSUFFICIENT_DEPTH" in integrity["native_evidence"]["qc"]["verification_reason_codes"]
     assert integrity["alignment_presentations"] == [
         {
             "session_id": "1" * 24,
@@ -828,13 +791,13 @@ async def test_finalizer_persists_stage_mirrors_without_a_transient_all_stages_f
 
 
 @pytest.mark.asyncio
-async def test_scientific_completion_inserts_idempotent_presentation_requests_without_building(
+async def test_scientific_completion_prepares_idempotent_catalog_intents_without_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from sqlalchemy import func, select
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-    from database import Base, Job, NgsAlignmentPresentationJob
+    from database import Base, Job, NgsAlignmentPresentationJob, NgsAlignmentDerivedProduct
     from services import ont_ngs_completion as service
 
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'completion.db'}")
@@ -861,6 +824,8 @@ async def test_scientific_completion_inserts_idempotent_presentation_requests_wi
                 "session_id": "1" * 24,
                 "artifact_set_sha256": "2" * 64,
                 "alignment_pair_sha256": "3" * 64,
+                "reference": {"contig": "ref", "length_bp": 100, "topology": "linear",
+                    "normalized_sequence_sha256": "a" * 64, "fasta_sha256": "b" * 64, "fai_sha256": "c" * 64},
             },
             {
                 "mode": "dimer_candidates",
@@ -868,6 +833,8 @@ async def test_scientific_completion_inserts_idempotent_presentation_requests_wi
                 "session_id": "4" * 24,
                 "artifact_set_sha256": "5" * 64,
                 "alignment_pair_sha256": "6" * 64,
+                "reference": {"contig": "dimer", "length_bp": 200, "topology": "linear",
+                    "normalized_sequence_sha256": "d" * 64, "fasta_sha256": "e" * 64, "fai_sha256": "f" * 64},
             },
         ],
     )
@@ -912,9 +879,16 @@ async def test_scientific_completion_inserts_idempotent_presentation_requests_wi
             )
             await session.commit()
             count = await session.scalar(select(func.count()).select_from(NgsAlignmentPresentationJob))
+            catalogs = await session.scalar(select(func.count()).select_from(NgsAlignmentDerivedProduct))
+            intents = session.info["ngs_derived_catalog_intents"][job.id]
+            assert set(intents) == {item["session_id"] for item in first}
+            from services import ngs_alignment_derived_products as derived
+            assert {derived.catalog_request_id(source) for source in intents.values()} == {
+                item["request_id"] for item in first}
         assert first == second
         assert len(first) == 2
-        assert count == 2
+        # Only a terminal CAS winner may admit these intents, never validation.
+        assert count == catalogs == 0
         assert all(set(item) == {"request_id", "session_id", "source_authority_sha256"} for item in first)
         assert job.status == "running"
         assert job.queue_status == "running"
