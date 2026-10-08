@@ -9,15 +9,57 @@ import os
 import socket
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from sqlalchemy import or_, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import Job, MdReconcilerLease, MdReplicaRun, MdRun
+from database import Job, MdAttemptSegment, MdReconcilerLease, MdReplicaRun, MdRun
 from services.md.state import TERMINAL_PHASES, MdStateError, append_event_cas, finalize_pause
 
 logger = logging.getLogger(__name__)
+
+_TERMINAL_REPLICA_STATES = {"completed", "failed", "cancelled", "orphaned"}
+
+
+def _completed_segment_bounds(parent: Job | None, replica: MdReplicaRun) -> tuple[int, float] | None:
+    """Read terminal production bounds only from the validated replica publication."""
+
+    if parent is None or not parent.output_dir:
+        return None
+    try:
+        root = Path(parent.output_dir).expanduser().resolve(strict=True)
+        manifest = root / "replicas" / f"replica_{replica.replica_index}" / "manifest.json"
+        if manifest.is_symlink() or not manifest.is_file():
+            return None
+        manifest.resolve(strict=True).relative_to(root)
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    if (
+        payload.get("schema") != "bms.md.run.v1"
+        or payload.get("job_id") != parent.id
+        or payload.get("replica_index") != replica.replica_index
+    ):
+        return None
+    config = payload.get("config")
+    stages = payload.get("stages")
+    if not isinstance(config, dict) or not isinstance(stages, dict):
+        return None
+    production = config.get("stages", {}).get("production")
+    observed = stages.get("production")
+    if not isinstance(production, dict) or not isinstance(observed, dict):
+        return None
+    if production.get("enabled") is not True or observed.get("status") != "completed":
+        return None
+    steps = production.get("steps")
+    timestep_fs = production.get("timestep_fs")
+    if not isinstance(steps, int) or isinstance(steps, bool) or steps < 1:
+        return None
+    if not isinstance(timestep_fs, (int, float)) or isinstance(timestep_fs, bool) or timestep_fs <= 0:
+        return None
+    return steps, float(steps * timestep_fs / 1000.0)
 
 
 def _project_child(job: Job) -> str:
@@ -68,39 +110,69 @@ async def reconcile_md_state(
 ) -> dict:
     if apply and not await acquire_reconciler_lease(session, owner_id=owner_id):
         raise RuntimeError("MD_RECONCILER_LEASE_UNAVAILABLE")
-    runs = list((await session.scalars(select(MdRun).where(~MdRun.phase.in_(TERMINAL_PHASES)))).all())
+    stale_segment_runs = (
+        select(MdReplicaRun.md_job_id)
+        .join(MdAttemptSegment, MdAttemptSegment.replica_run_id == MdReplicaRun.id)
+        .where(~MdAttemptSegment.state.in_(_TERMINAL_REPLICA_STATES | {"paused"}))
+    )
+    runs = list((await session.scalars(select(MdRun).where(or_(
+        ~MdRun.phase.in_(TERMINAL_PHASES),
+        MdRun.job_id.in_(stale_segment_runs),
+    )))).all())
     changes: list[dict] = []
-    planned: list[tuple[MdRun, list[tuple[MdReplicaRun, str]], str]] = []
+    planned: list[tuple[MdRun, Job | None, list[tuple[MdReplicaRun, MdAttemptSegment | None, str]], str]] = []
     for run in runs:
+        parent = await session.get(Job, run.job_id)
         replicas = list((await session.scalars(select(MdReplicaRun).where(
             MdReplicaRun.md_job_id == run.job_id
         ))).all())
-        projections: list[tuple[MdReplicaRun, str]] = []
+        projections: list[tuple[MdReplicaRun, MdAttemptSegment | None, str]] = []
         effective: list[str] = []
         for replica in replicas:
             child = await session.get(Job, replica.child_job_id) if replica.child_job_id else None
             projected = _project_child(child) if child is not None else replica.state
+            segment = await session.scalar(
+                select(MdAttemptSegment)
+                .where(MdAttemptSegment.replica_run_id == replica.id)
+                .order_by(MdAttemptSegment.segment_index.desc())
+            )
             effective.append(projected)
+            segment_stale = (
+                projected in _TERMINAL_REPLICA_STATES
+                and segment is not None
+                and segment.state not in _TERMINAL_REPLICA_STATES
+            )
+            if projected != replica.state or segment_stale:
+                projections.append((replica, segment, projected))
             if projected != replica.state:
-                projections.append((replica, projected))
                 changes.append({"kind": "replica_state", "job_id": run.job_id,
                                 "replica_run_id": replica.id, "from": replica.state, "to": projected})
+            if segment_stale and segment is not None:
+                changes.append({"kind": "segment_state", "job_id": run.job_id,
+                                "segment_id": segment.id, "from": segment.state, "to": projected})
         next_phase = _phase(run, effective)
         if next_phase != run.phase:
             changes.append({"kind": "parent_phase", "job_id": run.job_id,
                             "from": run.phase, "to": next_phase})
-        planned.append((run, projections, next_phase))
+        planned.append((run, parent, projections, next_phase))
     receipt = {"schema": "bms.md.reconciliation.v1", "dry_run": not apply,
                "owner_id": owner_id, "change_count": len(changes), "changes": changes}
     receipt["plan_sha256"] = hashlib.sha256(json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     if not apply:
         return receipt
-    for run, projections, next_phase in planned:
-        for replica, state in projections:
+    for run, parent, projections, next_phase in planned:
+        for replica, segment, state in projections:
             replica.state = state
-            if state in {"completed", "failed", "cancelled", "orphaned"}:
+            if state in _TERMINAL_REPLICA_STATES:
                 replica.active = False
                 replica.completed_at = datetime.utcnow()
+                if segment is not None and segment.state not in _TERMINAL_REPLICA_STATES:
+                    segment.state = state
+                    segment.completed_at = datetime.utcnow()
+                    if state == "completed":
+                        bounds = _completed_segment_bounds(parent, replica)
+                        if bounds is not None:
+                            segment.end_step, segment.end_time_ps = bounds
         if run.phase == "checkpointing":
             try:
                 await finalize_pause(
