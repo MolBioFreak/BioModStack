@@ -2054,8 +2054,11 @@ async def _persist_boltz_launch_authority(session, job, command, *, compiled_tra
     validate_launch_settings(job)
     persisted_command = build_job_nextflow_command(job, job.params, job.output_dir)
     persisted_authority = build_authority(job, persisted_command)
+    # Prepared MSA custody is verified by the native plan binder, not a
+    # requested scientific setting. Compare every other Boltz value unchanged.
     compiled_settings = [{key:value for key,value in command_params(cmd).items()
-        if key.startswith('boltz_') or key in ('pred_method', 'num_parallel_jobs')}
+        if (key.startswith('boltz_') or key in ('pred_method', 'num_parallel_jobs'))
+        and key not in {'boltz_prepared_msa_dir', 'boltz_prepared_msa_sha256'}}
         for cmd in (command, persisted_command)]
     if compiled_settings[0] != compiled_settings[1]:
         raise ValueError('Boltz compiled settings differ from persisted request')
@@ -4172,6 +4175,84 @@ def _bind_prepared_protenix_plan(invocation, supplied):
             row.component_or_dependency_id == 'protenix:msa' and row.field == 'external_service_roles'))))
 
 
+def _bind_prepared_boltz_plan(invocation, supplied):
+    """Discharge only direct Boltz MSA roles against the compiled task roster."""
+    from dataclasses import replace
+    from biomodstack_msa_handoff import digest
+    from biomodstack_boltz_msa import hydrate_prepared_boltz_task
+    from services.model_msa_handoff import _boltz_roster, _boltz_task_proteins
+    from component_runtime import _LAUNCH_BINDING_KEYS
+
+    plan = invocation.execution_plan
+    if plan is None:
+        raise ValueError('Prepared Boltz MSA requires its selected execution plan')
+    native = invocation.native_parameters
+    source = Path(str(supplied['boltz_prepared_msa_dir']))
+    output = Path(str(native['out_dir']))
+    if (not source.is_absolute() or not output.is_absolute()
+            or any(path.is_symlink() for path in (source, *source.parents))
+            or not source.resolve().is_relative_to(output.resolve())):
+        raise ValueError('Prepared MSA transport unavailable outside compiled job output')
+    manifest_path = source / 'msa-inputs.json'
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        raise ValueError('Prepared MSA manifest must be a regular native input')
+    raw = manifest_path.read_bytes()
+    sha256 = supplied['boltz_prepared_msa_sha256']
+    if digest(raw) != sha256:
+        raise ValueError('Prepared Boltz MSA manifest digest mismatch')
+    manifest = json.loads(raw)
+    settings = {k: v for k, v in native.items()
+                if k.startswith(('msa_', 'colabfold_', 'boltz_'))
+                and not k.endswith(('_path', '_dir'))
+                and k not in _LAUNCH_BINDING_KEYS}
+    if manifest.get('schema') != 'bms.boltz-msa-inputs.v1' or manifest.get('settings') != settings:
+        raise ValueError('Prepared Boltz MSA schema/scientific settings mismatch')
+    tasks = _boltz_roster(native)
+    prepared = manifest.get('tasks')
+    if not isinstance(prepared, list) or len(tasks) != len(prepared):
+        raise ValueError('Prepared Boltz native task roster mismatch')
+    for task_index, (task, sealed) in enumerate(zip(tasks, prepared)):
+        if (type(sealed.get('task_index')) is not int or sealed['task_index'] != task_index
+                or sealed.get('name') != task['name']
+                or sealed.get('native_task') != task):
+            raise ValueError('Prepared Boltz native task order/identity mismatch')
+        proteins = _boltz_task_proteins(task, native)
+        chains = sealed.get('chains')
+        if not isinstance(chains, list) or len(chains) != len(proteins):
+            raise ValueError('Prepared Boltz native chain roster mismatch')
+        for index, (protein, chain) in enumerate(zip(proteins, chains)):
+            expected = {k: v for k, v in protein.items() if k != 'msa'}
+            expected.update(chain_index=index, logical_id=f'{task_index}:{index}')
+            if (type(chain.get('chain_index')) is not int
+                    or {k: v for k, v in chain.items() if k != 'alignment'} != expected
+                    or (chain['alignment'].get('mode') == 'empty') != (protein.get('msa') == 'empty')):
+                raise ValueError('Prepared Boltz native chain identity/no-MSA mismatch')
+            if protein.get('msa') not in (None, 'empty'):
+                base = Path(task['source_path']).parent if task.get('source_path') else Path.cwd()
+                protein['msa'] = str(base / protein['msa'])
+        hydrate_prepared_boltz_task({'sequences': [{'protein': p} for p in proteins]},
+            source, sha256, task_name=task['name'])
+    metadata = plan.metadata
+    services = tuple(row for row in metadata.external_services if row.logical_id == 'boltz2:msa')
+    roles = tuple(row for row in metadata.artifact_roles if row.role_id == 'boltz2:msa_artifacts')
+    if len(services) != 1 or len(roles) != 1 or services[0].state == 'disabled':
+        raise ValueError('Prepared Boltz MSA has no selected service/artifact role')
+    identity = 'sha256:' + sha256
+    if services[0].operation_identity not in (None, identity):
+        raise ValueError('Prepared MSA plan operation identity changed')
+    authority = 'biomodstack_boltz_msa.py:hydrate_prepared_boltz_task'
+    return replace(plan, metadata=replace(metadata,
+        external_services=tuple(replace(row, state='prepared', operation_identity=identity)
+            if row.logical_id == 'boltz2:msa' else row for row in metadata.external_services),
+        artifact_roles=tuple(replace(row, identity_authority=authority,
+            format='bms.boltz-msa-inputs.v1', cardinality_authority=authority,
+            native_declaration='msa-inputs.json@' + identity)
+            if row.role_id == 'boltz2:msa_artifacts' else row for row in metadata.artifact_roles),
+        blockers=tuple(row for row in metadata.blockers if not (
+            row.component_or_dependency_id in {'boltz2:msa', 'GenerateLocalMSA'}
+            and row.field == 'external_service_roles'))))
+
+
 def _bind_protenix_msa_transport(invocation, params):
     """Bind prepared MSA artifacts to the once-compiled native roster.
 
@@ -4211,7 +4292,9 @@ def _bind_protenix_msa_transport(invocation, params):
             command.extend([flag, str(value)])
         native[key] = value
     plan = (_bind_prepared_protenix_plan(invocation, supplied)
-            if invocation.model_id == 'protenix' else invocation.execution_plan)
+            if invocation.model_id == 'protenix' else
+            _bind_prepared_boltz_plan(invocation, supplied)
+            if invocation.model_id == 'boltz2' else invocation.execution_plan)
     return replace(invocation, command=tuple(command), native_parameters_json=canonical_bytes(native),
                    execution_plan=plan)
 

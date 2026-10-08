@@ -843,7 +843,7 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
             dependencies[helper] = SelectedDependency(helper, 'support_tool', 'scripts/run_local_msa.py',
                 'modules/structure_prediction.nf:GenerateLocalMSA')
             components.append(NativeComponent('GenerateLocalMSA',
-                'modules/structure_prediction.nf:structure_prediction_wf',
+                'modules/structure_prediction.nf:GenerateLocalMSA',
                 canonical_bytes({'need_boltz_msa': True, 'msa_path': None}),
                 dependency_ids=('support-python', 'bms-source', helper), input_role_ids=(input_role,),
                 output_role_ids=('boltz2:msa_artifacts',), resources_json=resource_policy('CPU'),
