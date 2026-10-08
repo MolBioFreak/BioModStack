@@ -38,6 +38,7 @@ def test_migration_versions_are_unique_with_md_before_ont() -> None:
         (20, "add_ont_terminal_artifact_manifests"),
         (21, "enforce_ont_terminal_artifact_manifest_immutability"),
         (22, "relax_shape_geometry_hash_uniqueness"),
+        (23, "add_frustrampnn_persistence"),
     ]
     assert len({migration.version for migration in MIGRATIONS}) == len(MIGRATIONS)
 
@@ -68,6 +69,10 @@ def test_full_runner_upgrades_complete_legacy_ont_history_to_canonical_v21(tmp_p
     db_path = tmp_path / "legacy-ont.db"
     connection = sqlite3.connect(db_path)
     _ensure_migrations_table(connection)
+    # This fixture claims a complete canonical schema through v21. Preserve the
+    # minimal designs table required by subsequent registered migrations rather
+    # than constructing a ledger-only database that could never exist in service.
+    connection.execute("CREATE TABLE designs (id INTEGER PRIMARY KEY)")
     _insert_rows(connection, _canonical_prefix_through_16() + LEGACY_ONT_ROWS)
     connection.close()
 
@@ -142,14 +147,20 @@ def test_runner_fails_closed_when_applied_version_has_wrong_name(tmp_path) -> No
 
 
 @pytest.mark.parametrize(
-    "applied",
+    ("applied", "message"),
     [
-        {23: "unrelated_migration"},
-        {21: "enforce_ont_terminal_artifact_manifest_immutability"},
+        ({24: "unrelated_migration"}, "contiguous exact prefix"),
+        ({23: "unrelated_migration"}, "version 23.*unrelated_migration.*add_frustrampnn_persistence"),
+        (
+            {21: "enforce_ont_terminal_artifact_manifest_immutability"},
+            "contiguous exact prefix",
+        ),
     ],
 )
-def test_migration_ledger_must_be_an_exact_contiguous_known_prefix(applied: dict[int, str]) -> None:
-    with pytest.raises(RuntimeError, match="contiguous exact prefix"):
+def test_migration_ledger_must_be_an_exact_contiguous_known_prefix(
+    applied: dict[int, str], message: str
+) -> None:
+    with pytest.raises(RuntimeError, match=message):
         runner._validate_applied_migration_identities(applied)
 
 
@@ -157,10 +168,14 @@ def test_v21_shape_schema_is_rebuilt_for_provenance_distinct_canonical_geometry(
     db_path = tmp_path / "shape-v21.db"
     connection = sqlite3.connect(db_path)
     _ensure_migrations_table(connection)
-    _insert_rows(connection, tuple((migration.version, migration.name) for migration in MIGRATIONS[:-1]))
+    _insert_rows(
+        connection,
+        tuple((migration.version, migration.name) for migration in MIGRATIONS if migration.version <= 21),
+    )
     connection.executescript(
         """
         PRAGMA foreign_keys = ON;
+        CREATE TABLE designs (id INTEGER PRIMARY KEY);
         CREATE TABLE shape_cad_sources (
             source_id VARCHAR(40) PRIMARY KEY,
             source_sha256 VARCHAR(64) NOT NULL UNIQUE,
@@ -216,6 +231,6 @@ def test_v21_shape_schema_is_rebuilt_for_provenance_distinct_canonical_geometry(
     assert connection.execute("SELECT geometry_id FROM shape_design_requests").fetchall() == [('geom_a',)]
     assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
     assert connection.execute(
-        "SELECT version, name FROM schema_migrations ORDER BY version DESC LIMIT 1"
-    ).fetchone() == (22, "relax_shape_geometry_hash_uniqueness")
+        "SELECT name FROM schema_migrations WHERE version = 22"
+    ).fetchone() == ("relax_shape_geometry_hash_uniqueness",)
     connection.close()

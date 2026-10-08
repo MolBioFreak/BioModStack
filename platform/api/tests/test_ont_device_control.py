@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import os
-import socket
 import sys
-import threading
 from pathlib import Path
 
 import pytest
@@ -27,41 +24,7 @@ from services.ont_device_control import (  # noqa: E402
     get_device_control_status,
 )
 from services.ont_ngs_contract import DEVICE_CONTROL_OWNER  # noqa: E402
-from services.mk1d_reconnect import ReconnectHelperUnavailable, request_mk1d_reconnect  # noqa: E402
 
-
-RECONNECT_CONFIRMATION = {"confirm_reconnect": True}
-RECONNECT_PROXY_SECRET = "test-tailnet-proxy-secret"
-RECONNECT_IDENTITY = "authorized@example.com"
-
-
-@pytest.fixture(autouse=True)
-def _configure_mk1d_reconnect_authorization(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("BMS_MK1D_RECONNECT_TRUSTED_PROXY_HOSTS", "127.0.0.1")
-    monkeypatch.setenv("BMS_MK1D_RECONNECT_ALLOWED_TAILSCALE_USERS", RECONNECT_IDENTITY)
-    monkeypatch.setenv("BMS_CM_TRUSTED_PROXY_SECRET", RECONNECT_PROXY_SECRET)
-
-
-def reconnect_client(app: FastAPI, *, client: tuple[str, int] = ("127.0.0.1", 50000)) -> TestClient:
-    return TestClient(
-        app,
-        client=client,
-        headers={
-            "Tailscale-User-Login": RECONNECT_IDENTITY,
-            "X-BMS-CM-Proxy-Secret": RECONNECT_PROXY_SECRET,
-        },
-    )
-
-
-def _completed_reconnect_receipt() -> dict[str, str]:
-    return {
-        "schema": "bms.mk1d-reconnect-receipt.v1",
-        "receipt_id": "mk1d-reconnect-test",
-        "status": "completed",
-        "minknow": "already_active",
-        "host_agent_recreate": "requested",
-        "host_agent_health": "verified",
-    }
 
 def test_ont_device_control_contract_supports_live_mk1d_without_fake_devices() -> None:
     status = get_device_control_status()
@@ -226,138 +189,21 @@ def test_device_status_filters_non_mk1d_and_redacts_raw_minknow_details(monkeypa
         assert secret not in rendered
 
 
-def test_manual_mk1d_reconnect_accepts_only_strict_confirmation_from_trusted_tailnet_proxy(monkeypatch) -> None:
+def test_browser_mk1d_reconnect_route_is_not_admitted() -> None:
     app = FastAPI()
     app.include_router(ont_devices.router, prefix="/api/ont")
-    trusted_proxy = reconnect_client(app)
-    direct_api = TestClient(app, client=("127.0.0.1", 50000))
-    non_loopback = reconnect_client(app, client=("100.64.0.7", 50000))
-    monkeypatch.setattr(ont_device_control, "reconnect_mk1d", lambda: {"connected": False})
-
-    assert trusted_proxy.post("/api/ont/devices/reconnect").status_code == 422
-    assert trusted_proxy.post("/api/ont/devices/reconnect", json={"confirm_reconnect": False}).status_code == 422
-    assert trusted_proxy.post("/api/ont/devices/reconnect", json={"confirm_reconnect": 1}).status_code == 422
-    assert trusted_proxy.post("/api/ont/devices/reconnect", json={"confirm_reconnect": "true"}).status_code == 422
-    assert trusted_proxy.post("/api/ont/devices/reconnect", json={"confirm_reconnect": True, "service": "anything"}).status_code == 422
-    assert direct_api.post("/api/ont/devices/reconnect", json=RECONNECT_CONFIRMATION).status_code == 401
-    assert non_loopback.post("/api/ont/devices/reconnect", json=RECONNECT_CONFIRMATION).status_code == 401
-    assert trusted_proxy.post("/api/ont/devices/reconnect", json=RECONNECT_CONFIRMATION).status_code == 202
-
-
-def test_manual_mk1d_reconnect_denies_forged_tailnet_forwarding_headers(monkeypatch) -> None:
-    app = FastAPI()
-    app.include_router(ont_devices.router, prefix="/api/ont")
-    direct_api = TestClient(
+    client = TestClient(
         app,
         client=("127.0.0.1", 50000),
         headers={
             "Tailscale-User-Login": "forged@example.com",
-            "X-Forwarded-For": "127.0.0.1",
-            "X-Forwarded-Host": "forge.ts.net",
             "X-BMS-CM-Proxy-Secret": "forged-secret",
         },
     )
-    monkeypatch.setattr(ont_device_control, "reconnect_mk1d", lambda: {"connected": False})
 
-    assert direct_api.post("/api/ont/devices/reconnect", json=RECONNECT_CONFIRMATION).status_code == 401
-
-
-def test_manual_mk1d_reconnect_fails_closed_without_the_trusted_proxy_secret(monkeypatch) -> None:
-    app = FastAPI()
-    app.include_router(ont_devices.router, prefix="/api/ont")
-    client = reconnect_client(app)
-    monkeypatch.delenv("BMS_CM_TRUSTED_PROXY_SECRET")
-
-    assert client.post("/api/ont/devices/reconnect", json=RECONNECT_CONFIRMATION).status_code == 503
-
-
-def test_manual_mk1d_reconnect_returns_helper_receipt_and_only_claims_observed_status(monkeypatch) -> None:
-    app = FastAPI()
-    app.include_router(ont_devices.router, prefix="/api/ont")
-    monkeypatch.setattr(ont_device_control, "request_mk1d_reconnect", _completed_reconnect_receipt)
-    monkeypatch.setattr(
-        ont_device_control,
-        "get_device_control_status",
-        lambda: {"implementation_status": "host_agent_unavailable", "live_devices": [], "fake_or_demo_devices": False},
+    response = client.post(
+        "/api/ont/devices/reconnect",
+        json={"confirm_reconnect": True},
     )
 
-    response = reconnect_client(app).post("/api/ont/devices/reconnect", json=RECONNECT_CONFIRMATION)
-
-    assert response.status_code == 202
-    assert response.json()["receipt"] == _completed_reconnect_receipt()
-    assert response.json()["connected"] is False
-
-
-def test_manual_mk1d_reconnect_fails_closed_when_privileged_helper_is_not_installed(monkeypatch) -> None:
-    app = FastAPI()
-    app.include_router(ont_devices.router, prefix="/api/ont")
-    monkeypatch.setattr(
-        ont_device_control,
-        "request_mk1d_reconnect",
-        lambda: (_ for _ in ()).throw(ReconnectHelperUnavailable("internal path must not be disclosed")),
-    )
-
-    response = reconnect_client(app).post("/api/ont/devices/reconnect", json=RECONNECT_CONFIRMATION)
-
-    assert response.status_code == 503
-    assert response.json() == {"detail": "Reconnect helper unavailable/not installed"}
-
-
-def test_reconnect_socket_client_refuses_a_missing_helper(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("BMS_MK1D_RECONNECT_SOCKET", str(tmp_path / "missing.sock"))
-
-    with pytest.raises(ReconnectHelperUnavailable, match="unavailable/not installed"):
-        request_mk1d_reconnect()
-
-
-def test_reconnect_socket_client_uses_native_service_primary_group_permission_shape(monkeypatch, tmp_path: Path) -> None:
-    socket_path = tmp_path / "mk1d-reconnect.sock"
-    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    listener.bind(str(socket_path))
-    os.chown(socket_path, os.geteuid(), os.getegid())
-    os.chmod(socket_path, 0o660)
-    listener.listen(1)
-
-    def serve_once() -> None:
-        connection, _ = listener.accept()
-        with connection:
-            assert connection.recv(128) == b"RECONNECT\n"
-            connection.sendall(
-                b'{"schema":"bms.mk1d-reconnect-receipt.v1","receipt_id":"mk1d-reconnect-test",'
-                b'"status":"completed","minknow":"already_active",'
-                b'"host_agent_recreate":"requested","host_agent_health":"verified"}'
-            )
-
-    worker = threading.Thread(target=serve_once)
-    worker.start()
-    monkeypatch.setenv("BMS_MK1D_RECONNECT_SOCKET", str(socket_path))
-    try:
-        receipt = request_mk1d_reconnect()
-    finally:
-        worker.join(timeout=2)
-        listener.close()
-
-    socket_stat = socket_path.stat()
-    assert socket_stat.st_gid == os.getegid()
-    assert socket_stat.st_mode & 0o777 == 0o660
-    assert receipt == _completed_reconnect_receipt()
-
-
-def test_manual_mk1d_reconnect_preserves_fixed_busy_receipt(monkeypatch) -> None:
-    app = FastAPI()
-    app.include_router(ont_devices.router, prefix="/api/ont")
-    busy = {
-        "schema": "bms.mk1d-reconnect-receipt.v1",
-        "receipt_id": "mk1d-reconnect-busy",
-        "status": "busy",
-        "minknow": "not_attempted",
-        "host_agent_recreate": "not_attempted",
-        "host_agent_health": "not_checked",
-    }
-    monkeypatch.setattr(ont_device_control, "request_mk1d_reconnect", lambda: busy)
-    monkeypatch.setattr(ont_device_control, "get_device_control_status", lambda: {"implementation_status": "configured", "live_devices": []})
-
-    response = reconnect_client(app).post("/api/ont/devices/reconnect", json=RECONNECT_CONFIRMATION)
-
-    assert response.status_code == 202
-    assert response.json()["receipt"] == busy
+    assert response.status_code == 404

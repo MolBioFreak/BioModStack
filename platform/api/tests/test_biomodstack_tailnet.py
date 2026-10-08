@@ -416,6 +416,15 @@ def test_environment_spec_accepts_only_explicit_development_or_production(tmp_pa
             tailnet.environment_spec(rejected, project_root=tmp_path)
 
 
+def test_production_web_proxy_denies_browser_mk1d_reconnect_before_upstream() -> None:
+    config = (Path(tailnet.__file__).resolve().parent / "docker" / "web" / "nginx.conf").read_text()
+
+    assert "location = /api/ont/devices/reconnect" in config
+    denied = config.split("location = /api/ont/devices/reconnect", 1)[1].split("}", 1)[0]
+    assert "return 404;" in denied
+    assert "proxy_pass" not in denied
+
+
 def test_canonical_environment_root_requires_exact_clean_durable_branch(tmp_path: Path) -> None:
     root = tmp_path / "canonical"
     root.mkdir()

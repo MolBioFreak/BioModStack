@@ -4,7 +4,6 @@ import {
     createOntRunIntent,
     fetchOntDeviceStatus,
     fetchOntProtocolOptions,
-    requestMk1dReconnect,
     startOntRunIntent,
     type OntInstrumentRun,
     type OntLiveDevice,
@@ -122,10 +121,6 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
         ),
     });
 
-    const reconnectMk1d = useMutation({
-        mutationFn: async () => (await requestMk1dReconnect()).data,
-        onSuccess: () => void deviceStatus.refetch(),
-    });
 
     const blockers = effectiveProtocolOptions?.blockers ?? [];
     const canStart = Boolean(
@@ -149,7 +144,6 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                 </div>
                 <div className="flex flex-wrap gap-2">
                     <button type="button" onClick={onAnalyzeExistingData} className="rounded-lg border border-[var(--border-primary)] px-3 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]">Analyze existing data</button>
-                    <button type="button" disabled={reconnectMk1d.isPending} onClick={() => { if (window.confirm('Reconnect Mk1D only starts inactive MinKNOW and recreates bms-host-agent. It does not start sequencing, alter a flow cell, or restart active MinKNOW. Continue?')) reconnectMk1d.mutate(); }} className="rounded-lg border border-cyan-500/40 px-3 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-50">{reconnectMk1d.isPending ? 'Reconnecting Mk1D…' : 'Reconnect Mk1D'}</button>
                 </div>
             </div>
 
@@ -160,8 +154,6 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
             </div>
 
             {instrumentEvidenceError ? <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">Current instrument evidence is unavailable after a refresh failure. Intent validation is disabled until a fresh device and protocol response succeeds.</p> : null}
-            {reconnectMk1d.data ? <div className="rounded-xl border border-cyan-500/40 bg-cyan-500/10 p-3 text-xs text-cyan-50"><div className="font-semibold">Recovery receipt</div><div>Receipt: {reconnectMk1d.data.receipt.receipt_id} · {reconnectMk1d.data.receipt.status}</div><div>MinKNOW: {reconnectMk1d.data.receipt.minknow} · host agent: {reconnectMk1d.data.receipt.host_agent_recreate} / {reconnectMk1d.data.receipt.host_agent_health}</div><div>{reconnectMk1d.data.connected ? 'Connection is confirmed by post-recovery device observation.' : 'Mk1D is not confirmed connected until post-recovery device status is observed.'}</div></div> : null}
-            {reconnectMk1d.isError ? <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">Reconnect request did not produce a safe receipt.</p> : null}
 
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
                 <div className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4">

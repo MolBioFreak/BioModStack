@@ -3368,27 +3368,6 @@ export interface OntProtocolOptions {
 export const fetchOntDeviceStatus = () =>
     api.get<OntDeviceStatus>('/api/ont/devices/status');
 
-export interface OntMk1dReconnectResponse {
-    action: 'manual_mk1d_reconnect';
-    receipt: {
-        receipt_id: string;
-        status: 'completed' | 'failed' | 'blocked' | 'busy';
-        minknow: string;
-        host_agent_recreate: string;
-        host_agent_health: string;
-    };
-    post_action_device_status: {
-        implementation_status: string;
-        observed_mk1d_position_count: number;
-        safe_mk1d_observed: boolean;
-    };
-    device_status_observed: boolean;
-    connected: boolean;
-}
-
-export const requestMk1dReconnect = () =>
-    api.post<OntMk1dReconnectResponse>('/api/ont/devices/reconnect', { confirm_reconnect: true });
-
 export const fetchOntProtocolOptions = (position: string) =>
     api.get<OntProtocolOptions>(`/api/ont/positions/${encodeURIComponent(position)}/protocol-options`);
 
