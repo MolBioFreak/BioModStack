@@ -40,7 +40,7 @@ def telemetry_history(
             resolution=resolution,
             limit=limit,
         )
-    except (sqlite3.Error, OSError):
+    except (sqlite3.Error, OSError, RuntimeError):
         raise HTTPException(status_code=503, detail="Telemetry history is unavailable") from None
     return {
         "source": "immutable_server_telemetry",
