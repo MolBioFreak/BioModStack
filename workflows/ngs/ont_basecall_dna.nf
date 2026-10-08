@@ -87,17 +87,17 @@ workflow ONT_BASECALL_DNA {
 // Entry point for standalone Ont Basecall Dna workflow
 workflow {
     ONT_BASECALL_DNA()
-}
 
-// publishDir is asynchronous with respect to process-output subscriptions.
-// Anchor terminal demux products only after Nextflow has completed publication.
-workflow.onComplete {
-    def is_barcoded = params.barcode_kit && params.barcode_kit.toString().trim()
-    if (workflow.success && is_barcoded) {
-        reportStage(params, "dorado_demux", [
-            "${params.out_dir}/demux/demux_manifest.json",
-            "${params.out_dir}/demux/per_barcode_units.json",
-            "${params.out_dir}/demux/demux/units",
-        ])
+    // publishDir is asynchronous with respect to process-output subscriptions.
+    // Anchor terminal demux products only after Nextflow has completed publication.
+    workflow.onComplete {
+        def is_barcoded = params.barcode_kit && params.barcode_kit.toString().trim()
+        if (workflow.success && is_barcoded) {
+            reportStage(params, "dorado_demux", [
+                "${params.out_dir}/demux/demux_manifest.json",
+                "${params.out_dir}/demux/per_barcode_units.json",
+                "${params.out_dir}/demux/demux/units",
+            ])
+        }
     }
 }

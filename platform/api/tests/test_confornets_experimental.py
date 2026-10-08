@@ -151,7 +151,8 @@ def test_template_registry_loads_confornets_experimental_card_with_monomer_only_
 
     assert template is not None
     assert template.name == "Conformational Mapping"
-    assert template.experimental is False
+    assert template.experimental is True
+    assert template.enabled is False
     assert template.preset_params["template_model_id"] == "confornets_experimental"
     assert template.preset_params["template_mode_id"] == "design"
     assert template.preset_params["cn_task"] == "diversity"
