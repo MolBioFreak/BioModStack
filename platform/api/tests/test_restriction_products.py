@@ -9,6 +9,7 @@ import pytest
 import rfc8785
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from jsonschema import Draft202012Validator, FormatChecker
 
 from routers import molbio_restriction
 from services.restriction_catalog import CatalogAuthority
@@ -30,6 +31,102 @@ def _service_module():
 
 def _valid_document() -> dict[str, object]:
     return json.loads(ARTIFACT.read_bytes())
+
+
+def _seal_record(record: dict[str, object]) -> dict[str, object]:
+    unsigned = dict(record)
+    unsigned.pop("record_sha256", None)
+    record["record_sha256"] = hashlib.sha256(rfc8785.dumps(unsigned)).hexdigest()
+    return record
+
+
+def _seal_document(document: dict[str, object]) -> dict[str, object]:
+    document["schema_raw_sha256"] = hashlib.sha256(SCHEMA.read_bytes()).hexdigest()
+    records = document["records"]
+    assert isinstance(records, list)
+    document["record_count"] = len(records)
+    unsigned = dict(document)
+    unsigned.pop("content_sha256", None)
+    document["content_sha256"] = hashlib.sha256(rfc8785.dumps(unsigned)).hexdigest()
+    return document
+
+
+def _future_record(
+    product_id: str,
+    enzyme_id: str,
+    supplier_id: str,
+    supplier_name: str,
+    catalog_number: str,
+) -> dict[str, object]:
+    source_digest = hashlib.sha256(product_id.encode()).hexdigest()
+    evidence = {
+        "source_id": f"fixture:{product_id}",
+        "source_sha256": source_digest,
+        "observed_on": "2026-08-31",
+    }
+    unavailable = {"state": "unavailable", "value": None, "evidence": None}
+    return _seal_record({
+        "product_id": product_id,
+        "enzyme_id": enzyme_id,
+        "supplier": {"supplier_id": supplier_id, "name": supplier_name},
+        "catalog_number": catalog_number,
+        "product_name": f"Fixture {enzyme_id} {catalog_number}",
+        "source": {
+            "url": f"https://fixtures.invalid/{product_id}",
+            "retrieved_at": "2026-08-31T12:00:00Z",
+            "content_sha256": source_digest,
+            "manual_receipt_id": f"fixture:{product_id}",
+            "manual_receipt_sha256": source_digest,
+        },
+        "redistribution_permission": {
+            "state": "approved", "receipt_id": "fixture-permission-v1",
+            "receipt_sha256": "e" * 64, "decided_on": "2026-08-30",
+        },
+        "availability": {"state": "available", "as_of": "2026-08-31", "evidence": dict(evidence)},
+        "reaction_conditions": {
+            "temperature": {"state": "available", "value": 37, "evidence": dict(evidence)},
+            "heat_inactivation": dict(unavailable),
+            "buffer_activity": [{"state": "available", "value": "100% in fixture buffer", "evidence": dict(evidence)}],
+        },
+        "methylation_effects": [dict(unavailable)],
+        "star_activity_warnings": [dict(unavailable)],
+        "unit_concentration": {
+            "state": "available", "units": "U", "concentration": "20 U/uL", "evidence": dict(evidence),
+        },
+        "operational_status": "available",
+    })
+
+
+def _future_document() -> dict[str, object]:
+    records = [
+        _future_record("fixture-p3", "EcoRI", "fixture-supplier-b", "Fixture Supplier B", "CAT-3"),
+        _future_record("fixture-p1", "BamHI", "fixture-supplier-a", "Fixture Supplier A", "CAT-2"),
+        _future_record("fixture-p2", "EcoRI", "fixture-supplier-a", "Fixture Supplier A", "CAT-1"),
+    ]
+    return _seal_document({
+        "schema": "bms.molbio.restriction-enzyme-products.v1",
+        "schema_version": 1,
+        "release_id": "fixture-permissioned-products-v1",
+        "release_version": "1.1.0",
+        "created_at": "2026-09-01T12:00:00Z",
+        "created_at_policy": "permissioned_evidence_release_timestamp",
+        "source_policy": "no_runtime_scraping_written_redistribution_permission_required",
+        "redistribution_permission_state": "approved",
+        "permission_receipt": {
+            "receipt_id": "fixture-permission-v1", "receipt_sha256": "e" * 64,
+            "decided_on": "2026-08-30",
+        },
+        "product_evidence_available": True,
+        "record_count": len(records),
+        "active_claim_count": 12,
+        "core_catalog_digest_binding": "independent_no_binding",
+        "product_identity_policy": "supplier_id_and_catalog_number_nfkc_casefold_trim_v1",
+        "canonicalization": "RFC_8785_JCS",
+        "digest_semantics": "sha256(rfc8785(document_without_content_sha256))",
+        "schema_raw_sha256": "0" * 64,
+        "records": records,
+        "content_sha256": "0" * 64,
+    })
 
 
 def _write_authority(tmp_path: Path, document: dict[str, object], *, schema_bytes: bytes | None = None):
@@ -138,6 +235,119 @@ def test_loader_rejects_any_ungoverned_or_inconsistent_record(tmp_path: Path) ->
             _write_authority(tmp_path / str(index), document).require()
 
 
+def _reseal_future(document: dict[str, object]) -> dict[str, object]:
+    records = document["records"]
+    assert isinstance(records, list)
+    for record in records:
+        assert isinstance(record, dict)
+        _seal_record(record)
+    return _seal_document(document)
+
+
+def _schema_errors(document: dict[str, object]) -> list[object]:
+    schema = json.loads(SCHEMA.read_bytes())
+    return list(Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(document))
+
+
+def test_schema_and_runtime_accept_complete_permissioned_future_fixture(tmp_path: Path) -> None:
+    document = _future_document()
+    assert _schema_errors(document) == []
+    view = _write_authority(tmp_path, document).require()
+    assert view.record_count == 3
+    assert view.active_claim_count == 12
+    assert [record["product_id"] for record in view.records] == ["fixture-p2", "fixture-p1", "fixture-p3"]
+    assert view.permission_receipt == document["permission_receipt"]
+
+
+@pytest.mark.parametrize(
+    ("label", "mutate"),
+    [
+        ("temperature unavailable value", lambda d: d["records"][0]["reaction_conditions"]["temperature"].update(state="unavailable", value=37, evidence=None)),
+        ("heat unavailable value", lambda d: d["records"][0]["reaction_conditions"]["heat_inactivation"].update(value="80 C for 20 min")),
+        ("buffer unavailable value", lambda d: d["records"][0]["reaction_conditions"]["buffer_activity"][0].update(state="unavailable", value="100%", evidence=None)),
+        ("methylation unavailable value", lambda d: d["records"][0]["methylation_effects"][0].update(value="blocked by methylation")),
+        ("star unavailable value", lambda d: d["records"][0]["star_activity_warnings"][0].update(value="star activity possible")),
+        ("availability unavailable date", lambda d: d["records"][0]["availability"].update(state="unavailable", as_of="2026-08-31", evidence=None)),
+        ("unit unavailable text", lambda d: d["records"][0]["unit_concentration"].update(state="unavailable", units="U", concentration=None, evidence=None)),
+        ("temperature stale evidence", lambda d: d["records"][0]["reaction_conditions"]["temperature"].update(state="stale", evidence=None)),
+        ("heat stale evidence", lambda d: d["records"][0]["reaction_conditions"]["heat_inactivation"].update(state="stale", value="80 C", evidence=None)),
+        ("buffer stale evidence", lambda d: d["records"][0]["reaction_conditions"]["buffer_activity"][0].update(state="stale", evidence=None)),
+        ("methylation stale evidence", lambda d: d["records"][0]["methylation_effects"][0].update(state="stale", value="blocked", evidence=None)),
+        ("star stale evidence", lambda d: d["records"][0]["star_activity_warnings"][0].update(state="stale", value="warning", evidence=None)),
+        ("availability stale date", lambda d: d["records"][0]["availability"].update(state="stale", as_of=None)),
+        ("unit stale evidence", lambda d: d["records"][0]["unit_concentration"].update(state="stale", evidence=None)),
+        ("record permission unavailable", lambda d: d["records"][0]["redistribution_permission"].update(state="unavailable", receipt_id=None, receipt_sha256=None, decided_on=None)),
+        ("record source has no digest", lambda d: d["records"][0]["source"].update(content_sha256=None, manual_receipt_id=None, manual_receipt_sha256=None)),
+        ("manual source receipt incomplete", lambda d: d["records"][0]["source"].update(manual_receipt_sha256=None)),
+    ],
+)
+def test_claim_family_invariants_reject_in_schema_and_runtime(
+    tmp_path: Path, label: str, mutate,
+) -> None:
+    document = _future_document()
+    mutate(document)
+    _reseal_future(document)
+    assert _schema_errors(document), label
+    module = _service_module()
+    record = document["records"][0]
+    assert isinstance(record, dict)
+    permission = document["permission_receipt"]
+    assert isinstance(permission, dict)
+    with pytest.raises(module.ProductEvidenceUnavailable):
+        module._validate_record_semantics(record, set(_core().require().by_id), permission)
+    with pytest.raises(module.ProductEvidenceUnavailable):
+        _write_authority(tmp_path / label.replace(" ", "-"), document).require()
+
+
+@pytest.mark.parametrize(
+    ("label", "mutate"),
+    [
+        ("foreign evidence digest", lambda row: row["reaction_conditions"]["temperature"]["evidence"].update(source_sha256="9" * 64)),
+        ("foreign evidence source", lambda row: row["reaction_conditions"]["temperature"]["evidence"].update(source_id="fixture:foreign")),
+        ("permission receipt mismatch", lambda row: row["redistribution_permission"].update(receipt_sha256="9" * 64)),
+        ("availability observed date mismatch", lambda row: row["availability"]["evidence"].update(observed_on="2026-08-30")),
+    ],
+)
+def test_runtime_rejects_schema_valid_relational_evidence_mismatch(
+    tmp_path: Path, label: str, mutate,
+) -> None:
+    document = _future_document()
+    record = document["records"][0]
+    assert isinstance(record, dict)
+    mutate(record)
+    _reseal_future(document)
+    assert _schema_errors(document) == []
+    module = _service_module()
+    permission = document["permission_receipt"]
+    assert isinstance(permission, dict)
+    with pytest.raises(module.ProductEvidenceUnavailable):
+        module._validate_record_semantics(record, set(_core().require().by_id), permission)
+    with pytest.raises(module.ProductEvidenceUnavailable):
+        _write_authority(tmp_path / label.replace(" ", "-"), document).require()
+
+
+@pytest.mark.parametrize(
+    ("label", "mutate"),
+    [
+        ("duplicate supplier catalog", lambda rows: rows[0].update(enzyme_id=rows[2]["enzyme_id"], supplier=rows[2]["supplier"], catalog_number=rows[2]["catalog_number"])),
+        ("tuple conflicting enzyme", lambda rows: rows[0].update(supplier=rows[1]["supplier"], catalog_number=rows[1]["catalog_number"])),
+        ("catalog mismatched supplier identity", lambda rows: rows[0].update(supplier={"supplier_id": "fixture-supplier-new", "name": rows[1]["supplier"]["name"]}, catalog_number=rows[1]["catalog_number"])),
+        ("supplier display mismatch", lambda rows: rows[0].update(supplier={"supplier_id": rows[1]["supplier"]["supplier_id"], "name": "Different Display"})),
+        ("duplicate product id", lambda rows: rows[0].update(product_id=rows[1]["product_id"])),
+    ],
+)
+def test_loader_rejects_composite_identity_collisions(
+    tmp_path: Path, label: str, mutate,
+) -> None:
+    document = _future_document()
+    rows = document["records"]
+    assert isinstance(rows, list)
+    mutate(rows)
+    _reseal_future(document)
+    with pytest.raises(_service_module().ProductEvidenceUnavailable):
+        _write_authority(tmp_path / label.replace(" ", "-"), document).require()
+
+
 def test_loader_is_sticky_fail_closed_and_rejects_symlink_component_and_oversize(tmp_path: Path) -> None:
     module = _service_module()
     missing = tmp_path / "missing/products.json"
@@ -182,9 +392,61 @@ def test_products_route_returns_exact_zero_release_and_openapi_contract() -> Non
     assert set(record_schema["required"]) >= {"product_id", "enzyme_id", "source", "redistribution_permission", "availability", "reaction_conditions"}
 
 
+def test_products_route_serves_bounded_filtered_future_pages_with_bound_cursor(tmp_path: Path) -> None:
+    authority = _write_authority(tmp_path / "release-a", _future_document())
+    client = _client(authority)
+
+    first = client.get("/api/molbio/restriction/products?limit=1")
+    assert first.status_code == 200, first.text
+    first_body = first.json()
+    assert [row["product_id"] for row in first_body["items"]] == ["fixture-p2"]
+    assert isinstance(first_body["next_cursor"], str)
+    assert first_body["product_release"]["record_count"] == 3
+    assert first_body["product_release"]["permission_receipt"] == {
+        "receipt_id": "fixture-permission-v1", "receipt_sha256": "e" * 64,
+        "decided_on": "2026-08-30",
+    }
+
+    second = client.get(
+        "/api/molbio/restriction/products",
+        params={"limit": "1", "cursor": first_body["next_cursor"]},
+    )
+    assert second.status_code == 200, second.text
+    assert [row["product_id"] for row in second.json()["items"]] == ["fixture-p1"]
+
+    filtered = client.get(
+        "/api/molbio/restriction/products",
+        params={"enzyme_id": "EcoRI", "supplier": "FIXTURE-SUPPLIER-A", "operational_status": "available", "limit": "2"},
+    )
+    assert filtered.status_code == 200, filtered.text
+    assert [row["product_id"] for row in filtered.json()["items"]] == ["fixture-p2"]
+    assert filtered.json()["next_cursor"] is None
+
+    cursor = first_body["next_cursor"]
+    invalid_requests = [
+        {"limit": "2", "cursor": cursor},
+        {"limit": "1", "cursor": cursor, "enzyme_id": "EcoRI"},
+        {"limit": "1", "cursor": cursor[:-1] + ("A" if cursor[-1] != "A" else "B")},
+    ]
+    for params in invalid_requests:
+        response = client.get("/api/molbio/restriction/products", params=params)
+        assert response.status_code == 422
+        assert response.json()["detail"]["code"] == "product_cursor_invalid"
+
+    changed = _future_document()
+    changed["release_id"] = "fixture-permissioned-products-v2"
+    _seal_document(changed)
+    other_client = _client(_write_authority(tmp_path / "release-b", changed))
+    mismatch = other_client.get(
+        "/api/molbio/restriction/products", params={"limit": "1", "cursor": cursor},
+    )
+    assert mismatch.status_code == 422
+    assert mismatch.json()["detail"]["code"] == "product_cursor_invalid"
+
+
 @pytest.mark.parametrize("query", [
     "unknown=x", "enzyme_id=a&enzyme_id=b", "supplier=x&supplier=y", "limit=0", "limit=251",
-    "cursor=bad!", "cursor=Zm9yZ2Vk", "operational_status=available",
+    "cursor=bad!", "cursor=Zm9yZ2Vk", "operational_status=unknown", "supplier=x%20", "enzyme_id=x%20",
 ])
 def test_products_route_rejects_query_and_cursor_abuse(query: str) -> None:
     response = _client().get(f"/api/molbio/restriction/products?{query}")
@@ -202,6 +464,17 @@ def test_product_readiness_is_truthful_without_claiming_full_runtime_ready() -> 
     assert state["active_claim_count"] == 0
     assert state["product_evidence_available"] is False
     assert state["require_known_policy"] == "fail_closed_product_evidence_unavailable"
+    assert state["full_restriction_runtime_ready"] is False
+    assert state["phase6_denominator_status"] == "stale"
+
+
+def test_future_product_readiness_reports_loaded_evidence_without_phase6_claim(tmp_path: Path) -> None:
+    state = _write_authority(tmp_path, _future_document()).readiness()
+    assert state["ready"] is True
+    assert state["status"] == "evidence_available"
+    assert state["record_count"] == 3
+    assert state["active_claim_count"] == 12
+    assert state["require_known_policy"] == "governed_product_evidence_loaded_phase5_analysis_not_enabled"
     assert state["full_restriction_runtime_ready"] is False
     assert state["phase6_denominator_status"] == "stale"
 

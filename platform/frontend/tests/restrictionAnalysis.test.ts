@@ -51,8 +51,39 @@ const PRODUCT_RELEASE = {
     redistribution_permission_state: 'unavailable', permission_receipt: null,
     product_evidence_available: false, record_count: 0, active_claim_count: 0,
     core_catalog_digest_binding: 'independent_no_binding',
+    product_identity_policy: 'supplier_id_and_catalog_number_nfkc_casefold_trim_v1',
 };
 const PRODUCTS = { schema: 'bms.molbio.restriction-products-page.v1', product_release: PRODUCT_RELEASE, items: [], next_cursor: null };
+const PRODUCT_EVIDENCE = { source_id: 'fixture:p1', source_sha256: H, observed_on: '2026-08-31' };
+const PRODUCT_RECORD = {
+    product_id: 'fixture-p1', enzyme_id: 'EcoRI',
+    supplier: { supplier_id: 'fixture-supplier', name: 'Fixture Supplier' },
+    catalog_number: 'CAT-1', product_name: 'Fixture EcoRI',
+    source: { url: 'https://fixtures.invalid/p1', retrieved_at: '2026-08-31T12:00:00Z', content_sha256: H, manual_receipt_id: 'fixture:p1', manual_receipt_sha256: H },
+    redistribution_permission: { state: 'approved', receipt_id: 'fixture-permission-v1', receipt_sha256: 'e'.repeat(64), decided_on: '2026-08-30' },
+    availability: { state: 'available', as_of: '2026-08-31', evidence: PRODUCT_EVIDENCE },
+    reaction_conditions: {
+        temperature: { state: 'available', value: 37, evidence: PRODUCT_EVIDENCE },
+        heat_inactivation: { state: 'unavailable', value: null, evidence: null },
+        buffer_activity: [{ state: 'available', value: '100% fixture activity', evidence: PRODUCT_EVIDENCE }],
+    },
+    methylation_effects: [{ state: 'unavailable', value: null, evidence: null }],
+    star_activity_warnings: [{ state: 'unavailable', value: null, evidence: null }],
+    unit_concentration: { state: 'available', units: 'U', concentration: '20 U/uL', evidence: PRODUCT_EVIDENCE },
+    operational_status: 'available', record_sha256: 'f'.repeat(64),
+};
+const FUTURE_RELEASE = {
+    release_id: 'fixture-permissioned-products-v1', release_version: '1.1.0',
+    content_sha256: 'b'.repeat(64), raw_sha256: 'c'.repeat(64), schema_raw_sha256: 'd'.repeat(64),
+    created_at: '2026-09-01T12:00:00Z', created_at_policy: 'permissioned_evidence_release_timestamp',
+    source_policy: 'no_runtime_scraping_written_redistribution_permission_required',
+    redistribution_permission_state: 'approved',
+    permission_receipt: { receipt_id: 'fixture-permission-v1', receipt_sha256: 'e'.repeat(64), decided_on: '2026-08-30' },
+    product_evidence_available: true, record_count: 2, active_claim_count: 8,
+    core_catalog_digest_binding: 'independent_no_binding',
+    product_identity_policy: 'supplier_id_and_catalog_number_nfkc_casefold_trim_v1',
+};
+const FUTURE_PRODUCTS = { schema: 'bms.molbio.restriction-products-page.v1', product_release: FUTURE_RELEASE, items: [PRODUCT_RECORD], next_cursor: 'opaque_cursor' };
 const RECORD = {
     enzyme_id: 'EcoRI', id_policy: 'canonical_name_v1_casefold_unique', canonical_name: 'EcoRI', aliases: [],
     recognition: { site_iupac: 'GAATTC', site_alternatives_iupac: ['GAATTC'], source_notation: 'G^AATTC', reverse_complement_iupac: 'GAATTC', reverse_complement_alternatives_iupac: ['GAATTC'], length_bp: 6, palindromic: true },
@@ -85,8 +116,9 @@ describe('restriction API boundary', () => {
         expect(parseRestrictionDigestSimulation(DIGEST).fragments[0]).toBe(DIGEST.fragments[0]);
     });
 
-    it('accepts exact empty product evidence and rejects contradictory or ungoverned claims', () => {
+    it('accepts empty and complete future product contracts without reordering', () => {
         expect(parseRestrictionProducts(PRODUCTS).product_release).toBe(PRODUCT_RELEASE);
+        expect(parseRestrictionProducts(FUTURE_PRODUCTS).items[0]).toBe(PRODUCT_RECORD);
         const contradictions = [
             { product_evidence_available: true }, { record_count: 1 }, { active_claim_count: 1 },
             { redistribution_permission_state: 'approved' }, { content_sha256: 'bad' },
@@ -99,6 +131,38 @@ describe('restriction API boundary', () => {
         const record = clone(PRODUCTS);
         record.items = [{ product_id: 'fake' }];
         expect(() => parseRestrictionProducts(record)).toThrow();
+
+        const hostile = [
+            () => { const value = clone(FUTURE_PRODUCTS); value.items[0].reaction_conditions.temperature = { state: 'unavailable', value: 37, evidence: null }; return value; },
+            () => { const value = clone(FUTURE_PRODUCTS); value.items[0].reaction_conditions.heat_inactivation.value = '80 C'; return value; },
+            () => { const value = clone(FUTURE_PRODUCTS); value.items[0].reaction_conditions.buffer_activity[0].evidence = null; return value; },
+            () => { const value = clone(FUTURE_PRODUCTS); value.items[0].methylation_effects[0].value = 'blocked'; return value; },
+            () => { const value = clone(FUTURE_PRODUCTS); value.items[0].star_activity_warnings[0].value = 'warning'; return value; },
+            () => { const value = clone(FUTURE_PRODUCTS); value.items[0].availability.as_of = null; return value; },
+            () => { const value = clone(FUTURE_PRODUCTS); value.items[0].unit_concentration.evidence = null; return value; },
+            () => { const value = clone(FUTURE_PRODUCTS); value.items[0].redistribution_permission.receipt_sha256 = H; return value; },
+            () => { const value = clone(FUTURE_PRODUCTS); value.items[0].supplier.supplier_id = 'supplier-ß'; return value; },
+        ];
+        hostile.forEach((mutate) => expect(() => parseRestrictionProducts(mutate())).toThrow());
+    });
+
+    it('fetches future product cursors in server order and binds one release receipt', async () => {
+        const secondRecord = { ...clone(PRODUCT_RECORD), product_id: 'fixture-p2', catalog_number: 'CAT-2' };
+        const first = clone(FUTURE_PRODUCTS);
+        const second = { ...clone(FUTURE_PRODUCTS), items: [secondRecord], next_cursor: null };
+        const transport = vi.fn()
+            .mockResolvedValueOnce(new Response(JSON.stringify(first)))
+            .mockResolvedValueOnce(new Response(JSON.stringify(second)));
+        const result = await fetchRestrictionProducts({ transport });
+        expect(result.items.map((row) => row.product_id)).toEqual(['fixture-p1', 'fixture-p2']);
+        expect(transport.mock.calls[1][0]).toContain('cursor=opaque_cursor');
+
+        const mismatched = clone(second);
+        mismatched.product_release.content_sha256 = H;
+        const changing = vi.fn()
+            .mockResolvedValueOnce(new Response(JSON.stringify(first)))
+            .mockResolvedValueOnce(new Response(JSON.stringify(mismatched)));
+        await expect(fetchRestrictionProducts({ transport: changing })).rejects.toThrow('authority changed');
     });
 
     it('keeps only the newest product evidence completion and sanitizes backend details', async () => {
