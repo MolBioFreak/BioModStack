@@ -50,8 +50,19 @@ def test_model_owned_settings_survive_normalization_compiler_clone(model, mode, 
 
 
 @pytest.mark.parametrize('model', ['proteinmpnn','fampnn'])
-def test_all_consumed_scientific_settings_are_available_in_each_mode(model):
-    definition=get_registry().get_model(model)
+@pytest.mark.asyncio
+async def test_all_consumed_scientific_settings_are_available_in_each_mode(model):
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+    from model_registry import ModelDefinition
+    from routers.models import router
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api/models")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/models/{model}")
+    assert response.status_code == 200, response.text
+    definition = ModelDefinition.model_validate(response.json())
     declared={p.name for p in definition.params}
     # Antibody constraint mode remains a historical, non-generic wrapper control.
     applicable=declared-({'fampnn_constraint_mode'} if model=='fampnn' else set())

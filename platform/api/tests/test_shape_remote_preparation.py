@@ -110,12 +110,32 @@ async def test_shape_review_approval_real_insertion_replay(admission, isolated_r
 @pytest.mark.asyncio
 async def test_shape_local_real_insertion_without_remote_review(admission, isolated_roots, tmp_path):
     submitted = (await submitted_request(admission, tmp_path)).model_copy(update={'execution_target_id': None})
-    created = await shape_blueprint.submit_shape_request(submitted, BackgroundTasks(), admission)
+    # Exercise the public DTO/response projection around real local insertion.
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    async def session_override():
+        yield admission
+
+    app = FastAPI()
+    app.include_router(shape_blueprint.router, prefix="/api/shape-blueprint")
+    app.dependency_overrides[shape_blueprint.get_session] = session_override
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/shape-blueprint/requests", json=submitted.model_dump(mode="json"))
+    assert response.status_code == 201, response.text
+    created = response.json()
+    expected_job_id = str(shape_blueprint.uuid.uuid5(
+        shape_blueprint._SHAPE_JOB_NAMESPACE, "shape_" + submitted.client_request_id))
+    assert created["job_id"] == expected_job_id
     admission.expire_all()
     job = await admission.get(Job, created['job_id'])
     row = await admission.get(ShapeDesignRequest, created['request_id'])
     assert row.job_id == job.id
     assert job.execution_target_id is None and job.parent_job_id is None
+    assert job.model_id == 'protein_modification_experimental'
+    assert job.mode == 'shape_blueprint'
+    assert job.params['shape_generator'] == 'rfd3'
+    assert all('client' not in key for key in job.params)
     assert job.params['shape_sequence_policy'] == 'skip'
     assert job.params['shape_sequences_per_backbone'] == 0
     assert 'execution_plan_approval' not in job.provenance

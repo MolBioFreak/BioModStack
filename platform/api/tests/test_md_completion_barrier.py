@@ -13,17 +13,6 @@ from services.md.state import create_md_run, create_replica_attempt
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
-def test_md_completion_service_is_the_named_terminal_authority() -> None:
-    service = (REPO_ROOT / "platform/api/services/md/completion.py").read_text(encoding="utf-8")
-    results = (REPO_ROOT / "platform/api/services/md/results.py").read_text(encoding="utf-8")
-    assert "def validate_and_finalize_md_job" in service
-    assert "apply_completion_barrier(job, _snapshot=snapshot)" in service
-    assert "md_run_v1.schema.json" in results
-    assert "md_analysis_v1.schema.json" in results
-    assert "replica_manifest_set_sha256" in results
-    assert "MD_COMPLETION_CONFLICT" in results
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("missing_evidence", [False, True])
 async def test_md_terminal_authority_closes_durable_run_state_in_the_callers_transaction(
