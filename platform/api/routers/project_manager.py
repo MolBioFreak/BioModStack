@@ -871,6 +871,7 @@ async def list_domain_frustrampnn_results(
         statistics_analysis_state = metadata.get("statistics_analysis_state", "not_started")
         manifest_sha256 = metadata.get("manifest_sha256")
         reopen_uri = acknowledgement.get("reopen_uri")
+        scope_state = _frustrampnn_scope_state(row.availability, str(canonical_state))
         if (
             not isinstance(parent_job_id, str)
             or not parent_job_id
@@ -888,8 +889,15 @@ async def list_domain_frustrampnn_results(
             or len(source_artifact_sha256) != 64
             or canonical_state not in {"succeeded", "completed", "failed", "missing", "not_run", "skipped"}
             or statistics_analysis_state not in {"not_started", "queued", "running", "completed", "failed"}
-            or not isinstance(manifest_sha256, str)
-            or len(manifest_sha256) != 64
+            or (
+                scope_state == "completed"
+                and (not isinstance(manifest_sha256, str) or len(manifest_sha256) != 64)
+            )
+            or (
+                scope_state != "completed"
+                and manifest_sha256 is not None
+                and (not isinstance(manifest_sha256, str) or len(manifest_sha256) != 64)
+            )
             or not isinstance(reopen_uri, str)
             or not reopen_uri
         ):
@@ -912,7 +920,7 @@ async def list_domain_frustrampnn_results(
                 "artifact_sha256": source_artifact_sha256,
                 "candidate_id": candidate_id,
             },
-            "state": _frustrampnn_scope_state(row.availability, canonical_state),
+            "state": scope_state,
             "diagnostic": _bounded_scope_diagnostic(metadata.get("diagnostic")),
             "statistics_analysis": {
                 "state": statistics_analysis_state,
@@ -920,7 +928,7 @@ async def list_domain_frustrampnn_results(
                     metadata.get("statistics_analysis_diagnostic")
                 ),
             },
-            "manifest_sha256": manifest_sha256,
+            "manifest_sha256": manifest_sha256 if scope_state == "completed" else None,
             "content_digest": row.content_digest,
             "reopen_uri": reopen_uri,
         }
@@ -971,6 +979,7 @@ async def list_domain_frustrampnn_results(
                     "message": "A selected Domain-revision Design has no owning core Job",
                 },
             )
+        source_jobs_by_id = {str(job.id): job for job in source_jobs}
         source_batch_ids = sorted({
             str(job.batch_id) for job in source_jobs if job.batch_id is not None
         })
@@ -1088,6 +1097,32 @@ async def list_domain_frustrampnn_results(
         ):
             authority = authority_by_design.get(design_id)
             if authority is None:
+                design = designs_by_id[design_id]
+                source_job = source_jobs_by_id[str(design.job_id)]
+                explicitly_disabled = (source_job.params or {}).get("run_frustrampnn") is False
+                projected_items.append({
+                    "result_receipt_id": membership.id,
+                    "parent_job_id": None,
+                    "invocation_id": None,
+                    "candidate_id": design_id,
+                    "operator_label": str(design.name)[:160],
+                    "source_identity": {
+                        "design_id": design_id,
+                        "artifact_id": design_id,
+                        "artifact_sha256": membership.content_digest,
+                        "candidate_id": design_id,
+                    },
+                    "state": "skipped" if explicitly_disabled else "missing",
+                    "diagnostic": (
+                        "FrustraMPNN was explicitly disabled for this source workflow."
+                        if explicitly_disabled
+                        else "No FrustraMPNN execution exists for this selected Design."
+                    ),
+                    "statistics_analysis": {"state": "not_started", "diagnostic": None},
+                    "manifest_sha256": None,
+                    "content_digest": membership.content_digest,
+                    "reopen_uri": None,
+                })
                 continue
             child, member = authority
             invocation_id = str(member["invocation_id"])
@@ -1095,20 +1130,32 @@ async def list_domain_frustrampnn_results(
             identity = (str(child.id), invocation_id)
             result = results_by_identity.get(identity)
             analysis = analysis_by_identity.get(identity)
+            source_job = source_jobs_by_id[str(designs_by_id[design_id].job_id)]
+            explicitly_disabled = (source_job.params or {}).get("run_frustrampnn") is False
             child_state = str(child.queue_status or child.status or "").lower()
-            if child_state == "failed":
+            if explicitly_disabled:
+                state = "skipped"
+                diagnostic = "FrustraMPNN was explicitly disabled for this source workflow."
+            elif child_state == "failed":
                 state = "failed"
                 diagnostic = _bounded_scope_diagnostic(child.error_message)
             elif child_state in {"cancelled", "canceled"}:
-                state = "skipped"
-                diagnostic = _bounded_scope_diagnostic(child.error_message)
+                state = "missing"
+                diagnostic = (
+                    _bounded_scope_diagnostic(child.error_message)
+                    or "FrustraMPNN execution was cancelled before a persisted result existed."
+                )
             elif child_state == "completed" and result is not None:
                 state = "completed"
                 diagnostic = None
             else:
                 state = "missing"
                 diagnostic = "expected persisted result absent"
-            manifest_sha = str(result.manifest_sha256) if result is not None else ""
+            manifest_sha = (
+                str(result.manifest_sha256)
+                if state == "completed" and result is not None
+                else None
+            )
             projected_items.append({
                 "result_receipt_id": membership.id,
                 "parent_job_id": str(child.id),
@@ -1134,13 +1181,16 @@ async def list_domain_frustrampnn_results(
                     ),
                 },
                 "manifest_sha256": manifest_sha,
-                "content_digest": manifest_sha or membership.content_digest,
+                "content_digest": membership.content_digest,
                 "reopen_uri": (
                     f"/designs/{child.id}?frustrampnn_invocation_id={invocation_id}"
                 ),
             })
         for item in projected_items:
-            identity = (item["parent_job_id"], item["invocation_id"])
+            identity = (
+                item["parent_job_id"] or f"membership:{item['result_receipt_id']}",
+                item["invocation_id"] or item["source_identity"]["design_id"],
+            )
             prior = items_by_identity.get(identity)
             if prior is not None and prior != item:
                 raise HTTPException(

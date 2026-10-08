@@ -129,6 +129,44 @@ describe('Project Manager API contract', () => {
             },
         );
 
+        const missingItem = {
+            ...payload.items[0],
+            parent_job_id: null,
+            invocation_id: null,
+            candidate_id: 'design-2',
+            source_identity: {
+                design_id: 'design-2', artifact_id: 'design-2',
+                artifact_sha256: 'd'.repeat(64), candidate_id: 'design-2',
+            },
+            state: 'missing',
+            diagnostic: 'No FrustraMPNN execution exists for this selected Design.',
+            statistics_analysis: { state: 'not_started', diagnostic: null },
+            manifest_sha256: null,
+            content_digest: 'd'.repeat(64),
+            reopen_uri: null,
+        };
+        const missingPayload = { ...payload, items: [missingItem] };
+        transport.get.mockResolvedValueOnce({ data: missingPayload });
+        await expect(contract.fetchDomainFrustraMpnnResults!(
+            payload.project_id,
+            payload.global_experiment_id,
+            payload.domain_experiment_id,
+            payload.global_experiment_revision_id,
+            payload.domain_revision_id,
+        )).resolves.toEqual(missingPayload);
+
+        transport.get.mockResolvedValueOnce({ data: {
+            ...payload,
+            items: [{ ...payload.items[0], manifest_sha256: null }],
+        } });
+        await expect(contract.fetchDomainFrustraMpnnResults!(
+            payload.project_id,
+            payload.global_experiment_id,
+            payload.domain_experiment_id,
+            payload.global_experiment_revision_id,
+            payload.domain_revision_id,
+        )).rejects.toThrow(/manifest_sha256/);
+
         transport.get.mockResolvedValueOnce({ data: { ...payload, unexpected: true } });
         await expect(contract.fetchDomainFrustraMpnnResults!(
             payload.project_id,

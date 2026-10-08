@@ -168,6 +168,9 @@ export default function FrustraMpnnResultsViewer({
     });
     const experimentResultLinks = useMemo(() => (
         (experimentResults.data?.items ?? []).map((item) => {
+            if (!item.reopen_uri || !item.parent_job_id || !item.invocation_id) {
+                return { item, href: null };
+            }
             const separator = item.reopen_uri.includes('?') ? '&' : '?';
             const contextQuery = new URLSearchParams({
                 workspace_id: experimentContext!.projectId,
