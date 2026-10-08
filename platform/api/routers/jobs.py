@@ -335,6 +335,21 @@ async def _resolve_antibody_root_job(session: AsyncSession, source_job_id: str) 
     if source_job is None:
         raise HTTPException(status_code=404, detail=f"Source job '{source_job_id}' not found")
 
+    # Viewer-launched refinement/iteration rounds are top-level jobs, so parent_job_id does not
+    # capture scientific lineage. Prefer the explicit iteration root when it exists.
+    iteration_root_id: Optional[str] = None
+    if isinstance(source_job.params, dict):
+        for key in ("iteration_source_root_job_id", "iteration_source_job_id"):
+            value = source_job.params.get(key)
+            if isinstance(value, str) and value.strip():
+                iteration_root_id = value.strip()
+                break
+
+    if iteration_root_id:
+        explicit_root = await session.get(Job, iteration_root_id)
+        if explicit_root is not None and _looks_like_antibody_job(explicit_root):
+            return source_job, explicit_root
+
     lineage: List[Job] = []
     visited: set[str] = set()
     current: Optional[Job] = source_job
@@ -1080,6 +1095,25 @@ def _build_antibody_iteration_job(
         launch_params.update(param_overrides)
 
     if action == "ui_refinement":
+        def _invalid_refinement_value(value: Any) -> bool:
+            return value is None or (isinstance(value, str) and (not value.strip() or value.strip() == "refinement_mode"))
+
+        def _pick_refinement_context(key: str) -> Any:
+            for job in (root_job, source_job):
+                params = job.params if isinstance(job.params, dict) else {}
+                candidate = params.get(key)
+                if not _invalid_refinement_value(candidate):
+                    return candidate
+            return None
+
+        for key in ("target_pdb", "epitope_residues", "selected_residues", "antigen_chains"):
+            if _invalid_refinement_value(launch_params.get(key)):
+                fallback = _pick_refinement_context(key)
+                if fallback is None:
+                    launch_params.pop(key, None)
+                else:
+                    launch_params[key] = fallback
+
         launch_params["skip_rfantibody"] = True
         
         # If the UI mapped sequence design (like FAMPNN), the inputs go to rfantibody_input_pdbs.
