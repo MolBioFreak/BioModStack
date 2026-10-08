@@ -307,6 +307,8 @@ export interface NormalizedStoredPrimerPlacement {
 
 export function normalizeStoredPrimerPlacement(
     primer: Record<string, unknown>,
+    sequenceLength?: number,
+    circular = false,
 ): NormalizedStoredPrimerPlacement {
     const rawSites = Array.isArray(primer.sites) ? primer.sites : [];
     const sites = rawSites.flatMap((rawSite) => {
@@ -343,6 +345,7 @@ export function normalizeStoredPrimerPlacement(
     });
 
     const firstSite = sites[0] || null;
+    const lastSite = sites[sites.length - 1] || null;
     const storedStart = Number(primer.start);
     const storedEnd = Number(primer.end);
     const hasStoredStart = primer.start != null && Number.isFinite(storedStart);
@@ -350,12 +353,84 @@ export function normalizeStoredPrimerPlacement(
     const storedStrand = primer.strand === 1 || primer.strand === -1
         ? primer.strand
         : null;
-    return {
+    const parsed = {
         start: hasStoredStart ? storedStart : (firstSite?.start ?? 0),
-        end: hasStoredEnd ? storedEnd : (firstSite?.end ?? 0),
+        end: hasStoredEnd ? storedEnd : (lastSite?.end ?? 0),
         strand: storedStrand ?? firstSite?.strand ?? 1,
         sites: sites.length > 0 ? sites : undefined,
     };
+    return sequenceLength === undefined
+        ? parsed
+        : canonicalizePrimerPlacement(parsed, sequenceLength, circular);
+}
+
+export function canonicalizePrimerPlacement(
+    primer: NormalizedStoredPrimerPlacement,
+    sequenceLength: number,
+    circular: boolean,
+): NormalizedStoredPrimerPlacement {
+    if (!Number.isInteger(sequenceLength) || sequenceLength <= 0) {
+        return { ...primer, sites: undefined };
+    }
+
+    const start = Math.trunc(primer.start);
+    const rawEnd = Math.trunc(primer.end);
+    const strand: 1 | -1 = primer.strand === -1 ? -1 : 1;
+    const explicitSites = (primer.sites || []).filter((site) => (
+        Number.isInteger(site.start)
+        && Number.isInteger(site.end)
+        && site.start >= 0
+        && site.end > site.start
+        && site.end <= sequenceLength
+    )).map((site) => ({ ...site, strand: site.strand === -1 ? -1 as const : 1 as const }));
+
+    if (explicitSites.length > 0) {
+        const normalizedEnd = circular && rawEnd > sequenceLength
+            ? rawEnd % sequenceLength
+            : rawEnd;
+        return {
+            start,
+            end: normalizedEnd,
+            strand,
+            sites: explicitSites,
+        };
+    }
+
+    if (start < 0 || start >= sequenceLength || rawEnd < 0) {
+        return { start, end: rawEnd, strand };
+    }
+
+    if (circular && rawEnd > sequenceLength) {
+        const end = rawEnd % sequenceLength;
+        const sites = [
+            { start, end: sequenceLength, strand },
+            ...(end > 0 ? [{ start: 0, end, strand }] : []),
+        ].filter((site) => site.end > site.start);
+        return { start, end, strand, sites };
+    }
+
+    if (circular && start > rawEnd) {
+        return {
+            start,
+            end: rawEnd,
+            strand,
+            sites: [
+                { start, end: sequenceLength, strand },
+                ...(rawEnd > 0 ? [{ start: 0, end: rawEnd, strand }] : []),
+            ],
+        };
+    }
+
+    if (rawEnd > start && rawEnd <= sequenceLength) {
+        return {
+            start,
+            end: rawEnd,
+            strand,
+            sites: [{ start, end: rawEnd, strand }],
+        };
+    }
+
+    return { start, end: rawEnd, strand };
 }
 
 interface PrimerPlacementInput {
@@ -371,7 +446,17 @@ interface PrimerPlacementInput {
     }>;
 }
 
-export function getPrimerRenderableSites(primer: PrimerPlacementInput) {
+export function getPrimerRenderableSites(
+    primer: PrimerPlacementInput,
+    sequenceLength?: number,
+    circular = false,
+) {
+    if (sequenceLength !== undefined) {
+        const canonical = canonicalizePrimerPlacement(primer, sequenceLength, circular);
+        return canonical.sites && canonical.sites.length > 0
+            ? canonical.sites.map((site) => ({ ...site }))
+            : [];
+    }
     if (primer.sites && primer.sites.length > 0) {
         return primer.sites.map((site) => ({ ...site }));
     }
@@ -387,8 +472,10 @@ export function getPrimerHighlightRegions(
     primer: PrimerPlacementInput,
     color: string,
     label: string,
+    sequenceLength?: number,
+    circular = false,
 ) {
-    return getPrimerRenderableSites(primer).map((site) => ({
+    return getPrimerRenderableSites(primer, sequenceLength, circular).map((site) => ({
         start: site.start,
         end: site.end,
         color,

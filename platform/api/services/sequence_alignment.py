@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Literal
 
 from Bio import Align
@@ -66,10 +67,31 @@ class _AlignmentCandidate:
 
 def clean_alignment_sequence(sequence: str) -> str:
     compact = "".join((sequence or "").upper().split())
-    cleaned = "".join(base for base in compact if base in VALID_ALIGNMENT_BASES)
-    if not cleaned:
+    if not compact:
         raise SequenceAlignmentError("Sequence contains no valid nucleotide characters")
-    return cleaned
+    invalid = sorted(set(compact).difference(VALID_ALIGNMENT_BASES))
+    if invalid:
+        raise SequenceAlignmentError(
+            "Sequence contains invalid nucleotide characters: " + ", ".join(invalid)
+        )
+    return compact
+
+
+def _validate_settings(settings: AlignmentSettings) -> None:
+    numeric = {
+        "match_score": settings.match_score,
+        "mismatch_score": settings.mismatch_score,
+        "gap_open_score": settings.gap_open_score,
+        "gap_extend_score": settings.gap_extend_score,
+    }
+    if any(not math.isfinite(value) for value in numeric.values()):
+        raise SequenceAlignmentError("Alignment scores must be finite")
+    if settings.match_score <= 0:
+        raise SequenceAlignmentError("match_score must be positive")
+    if settings.mismatch_score > 0 or settings.gap_open_score >= 0 or settings.gap_extend_score > 0:
+        raise SequenceAlignmentError(
+            "Mismatch and gap scores must be non-positive, with a negative gap-open score"
+        )
 
 
 def _normalize_mode(mode: AlignmentMode | str) -> Literal["global", "local", "placement"]:
@@ -521,6 +543,7 @@ def align_sequences(
     reference = clean_alignment_sequence(reference_sequence)
     query = clean_alignment_sequence(query_sequence)
     resolved = settings or AlignmentSettings()
+    _validate_settings(resolved)
     candidate = _select_candidate(reference, query, resolved)
     result = _result_from_candidate(candidate)
     result["reference_sequence"] = reference

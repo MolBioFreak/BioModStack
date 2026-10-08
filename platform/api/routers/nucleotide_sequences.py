@@ -5,21 +5,24 @@ Provides CRUD operations for DNA/RNA sequences with feature annotations.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Optional, List, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
 from datetime import datetime, timezone
 import re
 import uuid
+import math
 
 from molbio_database import get_molbio_session
-from molbio_models import NucleotideSequence
+from molbio_models import NucleotideSequence, Primer
 from services.molbio_persistence import (
     begin_immediate_molbio_write,
+    record_primer_revision,
     record_sequence_deletion,
     record_sequence_revision,
 )
+from services.nucleotide_validation import canonicalize_nucleotide_sequence
 
 
 router = APIRouter(prefix="/api/sequences", tags=["sequences"])
@@ -99,6 +102,24 @@ class AnalysisTrackSchema(BaseModel):
     min_value: Optional[float] = None
     max_value: Optional[float] = None
     created_at: Optional[str] = None
+
+    @field_validator("values")
+    @classmethod
+    def values_must_be_finite(
+        cls, values: Optional[List[Optional[float]]]
+    ) -> Optional[List[Optional[float]]]:
+        if values is not None and any(
+            value is not None and not math.isfinite(value) for value in values
+        ):
+            raise ValueError("Analysis track values must be finite")
+        return values
+
+    @field_validator("min_value", "max_value")
+    @classmethod
+    def bounds_must_be_finite(cls, value: Optional[float]) -> Optional[float]:
+        if value is not None and not math.isfinite(value):
+            raise ValueError("Analysis track bounds must be finite")
+        return value
 
 
 class NucleotideSequenceCreate(BaseModel):
@@ -204,15 +225,7 @@ def calculate_gc_content(sequence: str) -> float:
 
 def clean_sequence(sequence: str, seq_type: str = "dna") -> str:
     """Clean, canonicalize, and validate a DNA/RNA nucleotide sequence."""
-    seq = sequence.upper().replace(" ", "").replace("\n", "").replace("\r", "")
-    if seq_type == "rna":
-        seq = seq.replace("T", "U")
-        valid_chars = set("AUCGNRYMKSWHBVD")
-    else:
-        seq = seq.replace("U", "T")
-        valid_chars = set("ATCGNRYMKSWHBVD")
-    cleaned = "".join(c for c in seq if c in valid_chars)
-    return cleaned
+    return canonicalize_nucleotide_sequence(sequence, seq_type, allow_empty=True)
 
 
 def normalize_sequence_type(sequence_type: Optional[str], sequence: str) -> str:
@@ -366,6 +379,21 @@ def normalize_analysis_tracks(
             )
 
         numeric_values = [value for value in values if value is not None]
+        if any(not math.isfinite(value) for value in numeric_values):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Analysis track '{payload.get('name', 'unnamed')}' contains a non-finite value",
+            )
+        for bound_name in ("min_value", "max_value"):
+            bound = payload.get(bound_name)
+            if bound is not None and not math.isfinite(bound):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Analysis track '{payload.get('name', 'unnamed')}' "
+                        f"contains a non-finite {bound_name}"
+                    ),
+                )
         if numeric_values:
             payload["min_value"] = min(numeric_values) if payload.get("min_value") is None else payload["min_value"]
             payload["max_value"] = max(numeric_values) if payload.get("max_value") is None else payload["max_value"]
@@ -430,7 +458,6 @@ def normalize_feature_payloads(
                 )
             normalized_segments.append({"start": start, "end": end})
 
-        normalized_segments.sort(key=lambda item: (item["start"], item["end"]))
         payload["segments"] = normalized_segments
         payload["start"] = min(segment["start"] for segment in normalized_segments)
         payload["end"] = max(segment["end"] for segment in normalized_segments)
@@ -658,7 +685,10 @@ async def create_sequence(
     """Create a new nucleotide sequence."""
     # Clean and validate sequence
     normalized_type = normalize_sequence_type(data.sequence_type, data.sequence)
-    cleaned_seq = clean_sequence(data.sequence, normalized_type)
+    try:
+        cleaned_seq = clean_sequence(data.sequence, normalized_type)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     if not cleaned_seq:
         raise HTTPException(status_code=400, detail="Invalid sequence: no valid nucleotides found")
     
@@ -736,42 +766,55 @@ async def update_sequence(
         raise HTTPException(status_code=404, detail="Sequence not found")
 
     changed = False
+    provided_fields = data.model_fields_set
 
     next_sequence_type = normalize_sequence_type(
         data.sequence_type or seq.sequence_type,
         data.sequence or seq.sequence,
     )
-    next_sequence = (
-        clean_sequence(data.sequence, next_sequence_type)
-        if data.sequence is not None
-        else seq.sequence
-    )
+    try:
+        next_sequence = clean_sequence(
+            data.sequence if data.sequence is not None else seq.sequence,
+            next_sequence_type,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     if not next_sequence:
         raise HTTPException(status_code=400, detail="Invalid sequence: no valid nucleotides found")
     next_is_circular = data.is_circular if data.is_circular is not None else seq.is_circular
     normalized_primers = normalize_primer_payloads(
-        data.primers if data.primers is not None else seq.primers,
+        []
+        if "primers" in provided_fields and data.primers is None
+        else data.primers
+        if data.primers is not None
+        else seq.primers,
         len(next_sequence),
         next_is_circular,
     )
     normalized_features = normalize_feature_payloads(
-        data.features if data.features is not None else seq.features,
+        []
+        if "features" in provided_fields and data.features is None
+        else data.features
+        if data.features is not None
+        else seq.features,
         len(next_sequence),
     )
     normalized_analysis_tracks = (
         normalize_analysis_tracks(data.analysis_tracks, len(next_sequence))
-        if data.analysis_tracks is not None
-        else [] if data.sequence is not None else None
+        if "analysis_tracks" in provided_fields
+        else []
+        if data.sequence is not None
+        else None
     )
 
     # Update fields if provided
     if data.name is not None:
         seq.name = data.name
         changed = True
-    if data.description is not None:
+    if "description" in provided_fields:
         seq.description = data.description
         changed = True
-    if data.sequence is not None:
+    if data.sequence is not None or data.sequence_type is not None:
         seq.sequence = next_sequence
         seq.length = len(next_sequence)
         seq.gc_content = calculate_gc_content(next_sequence)
@@ -800,22 +843,22 @@ async def update_sequence(
     if data.is_circular is not None:
         seq.is_circular = data.is_circular
         changed = True
-    if data.features is not None or data.sequence is not None:
+    if "features" in provided_fields or data.sequence is not None:
         seq.features = normalized_features
         changed = True
-    if data.primers is not None or data.sequence is not None or data.is_circular is not None:
+    if "primers" in provided_fields or data.sequence is not None or data.is_circular is not None:
         seq.primers = normalized_primers
         changed = True
     if normalized_analysis_tracks is not None:
         seq.analysis_tracks = normalized_analysis_tracks
         changed = True
-    if data.organism is not None:
+    if "organism" in provided_fields:
         seq.organism = data.organism
         changed = True
-    if data.accession is not None:
+    if "accession" in provided_fields:
         seq.accession = data.accession
         changed = True
-    if data.source_file is not None:
+    if "source_file" in provided_fields:
         seq.source_file = data.source_file
         changed = True
 
@@ -840,16 +883,54 @@ async def delete_sequence(
     sequence_id: str,
     session: AsyncSession = Depends(get_molbio_session)
 ):
-    """Delete a sequence."""
+    """Delete a sequence after resolving all restricting projection references."""
     await begin_immediate_molbio_write(session)
     result = await session.execute(
         select(NucleotideSequence).where(NucleotideSequence.id == sequence_id)
     )
     seq = result.scalar_one_or_none()
-    
+
     if not seq:
         raise HTTPException(status_code=404, detail="Sequence not found")
-    
+
+    child = (
+        await session.execute(
+            select(NucleotideSequence.id)
+            .where(NucleotideSequence.parent_id == sequence_id)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if child is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Sequence has derived child '{child}' and cannot be deleted",
+        )
+
+    dependent_primers = (
+        await session.execute(select(Primer).where(Primer.target_sequence_id == sequence_id))
+    ).scalars().all()
+    active_primers = [primer.id for primer in dependent_primers if primer.deleted_at is None]
+    if active_primers:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Sequence is targeted by active primers: {active_primers}",
+        )
+    for primer in dependent_primers:
+        primer.target_sequence_id = None
+        primer.binding_start = None
+        primer.binding_end = None
+        primer.updated_at = datetime.utcnow()
+        await record_primer_revision(
+            session,
+            primer,
+            change_kind="target_detach",
+            provenance={
+                "source": "api",
+                "endpoint": "DELETE /api/sequences/{sequence_id}",
+                "deleted_target_sequence_id": sequence_id,
+            },
+        )
+
     await record_sequence_deletion(
         session,
         seq,
@@ -857,7 +938,7 @@ async def delete_sequence(
     )
     await session.delete(seq)
     await session.commit()
-    
+
     return {"status": "deleted", "id": sequence_id}
 
 

@@ -25,6 +25,7 @@ from molbio_models import (
     PrimerRevision,
 )
 from services.sqlite_backup import backup_sqlite_database
+from services.nucleotide_validation import canonicalize_nucleotide_sequence
 
 
 class MigrationConflictError(RuntimeError):
@@ -64,6 +65,7 @@ class LegacyMolBioMigrationReport:
     destination_path: Path
     backup_path: Path
     backup_sha256: str
+    source_manifest_sha256: str
     source_sequence_count: int
     destination_sequence_count: int
     source_primer_count: int
@@ -196,6 +198,116 @@ def _model_record(model: Any, fields: Iterable[str]) -> dict[str, Any]:
 
 def _sequence_sha256(sequence: str) -> str:
     return hashlib.sha256(sequence.encode("utf-8")).hexdigest()
+
+
+def _normalize_legacy_sequence_record(record: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(record)
+    sequence_type = str(normalized.get("sequence_type") or "dna").lower()
+    if sequence_type not in {"dna", "rna"}:
+        raise MigrationVerificationError(
+            f"Legacy sequence {normalized.get('id')} has unsupported type {sequence_type!r}"
+        )
+    try:
+        sequence = canonicalize_nucleotide_sequence(
+            str(normalized.get("sequence") or ""),
+            sequence_type,
+            allow_empty=False,
+        )
+    except ValueError as error:
+        raise MigrationVerificationError(
+            f"Legacy sequence {normalized.get('id')} is invalid: {error}"
+        ) from error
+    if normalized.get("length") not in (None, len(sequence)):
+        raise MigrationVerificationError(
+            f"Legacy sequence {normalized.get('id')} length metadata does not match content"
+        )
+    normalized.update(
+        sequence=sequence,
+        sequence_type=sequence_type,
+        molecule_strandedness=normalized.get("molecule_strandedness") or "unknown",
+        molecule_orientation=normalized.get("molecule_orientation") or "unknown",
+        is_circular=bool(normalized.get("is_circular")),
+        length=len(sequence),
+        features=normalized.get("features") or [],
+        primers=normalized.get("primers") or [],
+        analysis_tracks=normalized.get("analysis_tracks") or [],
+        version=int(normalized.get("version") or 1),
+        created_at=normalized.get("created_at") or datetime(1970, 1, 1),
+    )
+    return normalized
+
+
+def _normalize_legacy_primer_record(record: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(record)
+    sequence_type = str(normalized.get("sequence_type") or "dna").lower()
+    if sequence_type not in {"dna", "rna"}:
+        raise MigrationVerificationError(
+            f"Legacy primer {normalized.get('id')} has unsupported type {sequence_type!r}"
+        )
+    try:
+        sequence = canonicalize_nucleotide_sequence(
+            str(normalized.get("sequence") or ""),
+            sequence_type,
+            allow_empty=False,
+        )
+    except ValueError as error:
+        raise MigrationVerificationError(
+            f"Legacy primer {normalized.get('id')} is invalid: {error}"
+        ) from error
+    if normalized.get("length") not in (None, len(sequence)):
+        raise MigrationVerificationError(
+            f"Legacy primer {normalized.get('id')} length metadata does not match content"
+        )
+    normalized.update(
+        sequence=sequence,
+        sequence_type=sequence_type,
+        length=len(sequence),
+        primer_type=normalized.get("primer_type") or "general",
+        binding_strand=int(normalized.get("binding_strand") or 1),
+        is_favorite=bool(normalized.get("is_favorite")),
+        created_at=normalized.get("created_at") or datetime(1970, 1, 1),
+    )
+    return normalized
+
+
+def _legacy_manifest_sha256(
+    sequence_rows: list[dict[str, Any]],
+    primer_rows: list[dict[str, Any]],
+) -> str:
+    entries = [
+        {
+            "kind": "sequence",
+            "id": str(record["id"]),
+            "content_sha256": hashlib.sha256(
+                _canonical_record(record).encode("utf-8")
+            ).hexdigest(),
+        }
+        for record in sequence_rows
+    ]
+    entries.extend(
+        {
+            "kind": "primer",
+            "id": str(record["id"]),
+            "content_sha256": hashlib.sha256(
+                _canonical_record(record).encode("utf-8")
+            ).hexdigest(),
+        }
+        for record in primer_rows
+    )
+    payload = json.dumps(entries, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def legacy_molbio_manifest_sha256(source_path: Path) -> str:
+    """Build the immutable canonical manifest that an operator must approve."""
+
+    sequence_rows, primer_rows = _read_legacy_rows(Path(source_path).expanduser().resolve())
+    normalized_sequences = [
+        _normalize_legacy_sequence_record(record) for record in sequence_rows
+    ]
+    normalized_sequences = _order_sequences_by_parent_dependency(normalized_sequences)
+    normalized_primers = [_normalize_legacy_primer_record(record) for record in primer_rows]
+    return _legacy_manifest_sha256(normalized_sequences, normalized_primers)
 
 
 def _sequence_snapshot(record: dict[str, Any]) -> dict[str, Any]:
@@ -360,6 +472,7 @@ async def extract_legacy_molbio_data(
     destination_path: Path,
     *,
     backup_path: Path,
+    expected_manifest_sha256: str | None = None,
     expected_sequence_count: int | None = None,
     expected_total_bases: int | None = None,
     expected_primer_count: int | None = None,
@@ -388,7 +501,21 @@ async def extract_legacy_molbio_data(
     # Extract from the verified online-backup snapshot so a concurrent legacy
     # writer cannot make the copied rows diverge from the provenance artifact.
     sequence_rows, primer_rows = _read_legacy_rows(backup_report.backup_path)
+    sequence_rows = [
+        _normalize_legacy_sequence_record(record) for record in sequence_rows
+    ]
     sequence_rows = _order_sequences_by_parent_dependency(sequence_rows)
+    primer_rows = [_normalize_legacy_primer_record(record) for record in primer_rows]
+    source_manifest_sha256 = _legacy_manifest_sha256(sequence_rows, primer_rows)
+    if expected_manifest_sha256 is None:
+        raise MigrationVerificationError(
+            "Legacy extraction requires an operator-approved canonical manifest SHA-256"
+        )
+    if source_manifest_sha256.lower() != expected_manifest_sha256.strip().lower():
+        raise MigrationVerificationError(
+            "Legacy canonical manifest changed before extraction: "
+            f"expected={expected_manifest_sha256} observed={source_manifest_sha256}"
+        )
     source_checksums = {
         str(row["id"]): _sequence_sha256(str(row["sequence"])) for row in sequence_rows
     }
@@ -582,6 +709,7 @@ async def extract_legacy_molbio_data(
             destination_path=destination,
             backup_path=backup_report.backup_path,
             backup_sha256=backup_report.sha256,
+            source_manifest_sha256=source_manifest_sha256,
             source_sequence_count=len(sequence_rows),
             destination_sequence_count=destination_sequence_count,
             source_primer_count=len(primer_rows),

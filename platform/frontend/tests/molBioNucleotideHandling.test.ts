@@ -202,7 +202,7 @@ test('MolBio import path uses parser metadata, canonical normalization, and pers
     assert.match(source, /sourceDisplayStrandForSequenceData\(nextSequence\)/);
     assert.match(source, /activeDisplayStrand=\{activeDisplayStrand\}/);
     assert.match(source, /onDisplayStrandChange=\{handleDisplayStrandChange\}/);
-    assert.match(source, /findOpenReadingFrames\(sequenceData\.sequence, 100\)/);
+    assert.match(source, /findOpenReadingFrames\([\s\S]*sequenceData\.sequence,[\s\S]*100,[\s\S]*sequenceData\.circular,[\s\S]*\)/);
 });
 
 test('viewer labels expose molecule labels and SeqViz receives polymer type, not molecule label', () => {

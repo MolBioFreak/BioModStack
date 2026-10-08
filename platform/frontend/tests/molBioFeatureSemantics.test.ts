@@ -28,13 +28,13 @@ const compoundFeature: FeatureRecord = {
 
 test('compound feature highlight uses every authoritative segment rather than aggregate bounds', () => {
     assert.deepEqual(featureHighlightRegions(compoundFeature, '#06b6d4'), [
-        { start: 0, end: 4, color: '#06b6d4', label: 'Origin wrap' },
         { start: 12, end: 16, color: '#06b6d4', label: 'Origin wrap' },
+        { start: 0, end: 4, color: '#06b6d4', label: 'Origin wrap' },
     ]);
 });
 
 test('compound feature coordinate summary names each segment', () => {
-    assert.equal(featureCoordinateLabel(compoundFeature), '1–4 + 13–16');
+    assert.equal(featureCoordinateLabel(compoundFeature), '13–16 + 1–4');
 });
 
 test('UTR aliases normalize to canonical INSDC feature keys and colors', () => {

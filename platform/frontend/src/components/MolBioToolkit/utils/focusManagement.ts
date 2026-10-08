@@ -1,5 +1,7 @@
 export interface FocusTarget {
     focus(options?: { preventScroll?: boolean }): void;
+    disabled?: boolean;
+    getAttribute?(name: string): string | null;
 }
 
 export type MenuNavigationKey = 'ArrowDown' | 'ArrowUp' | 'Home' | 'End' | 'Tab';
@@ -47,6 +49,7 @@ export function focusTrapTarget<T extends FocusTarget>(
     if (items.length === 0) return null;
     const first = items[0];
     const last = items[items.length - 1];
+    if (!items.includes(activeItem as T)) return shiftKey ? last : first;
     if (shiftKey && activeItem === first) return last;
     if (!shiftKey && activeItem === last) return first;
     return null;
@@ -56,9 +59,23 @@ export function restoreFocusIfConnected<T extends FocusTarget>(
     target: T | null | undefined,
     contains: (target: T) => boolean,
 ): boolean {
-    if (!target || !contains(target)) {
+    if (
+        !target
+        || !contains(target)
+        || target.disabled === true
+        || target.getAttribute?.('aria-disabled') === 'true'
+    ) {
         return false;
     }
     target.focus({ preventScroll: true });
     return true;
+}
+
+export function restoreFocusWithFallback<T extends FocusTarget>(
+    primaryTarget: T | null | undefined,
+    fallbackTarget: T | null | undefined,
+    contains: (target: T) => boolean,
+): boolean {
+    return restoreFocusIfConnected(primaryTarget, contains)
+        || restoreFocusIfConnected(fallbackTarget, contains);
 }

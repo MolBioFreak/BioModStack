@@ -110,6 +110,8 @@ export interface Translation {
     end: number;
     strand: 1 | -1;
     frame?: 1 | 2 | 3;  // Reading frame (1-3 for both + and - strand)
+    length?: number;
+    segments?: Array<{ start: number; end: number }>;
 }
 
 export interface AnalysisTrack {
@@ -273,7 +275,11 @@ export function SequenceViewer({
         }
 
         if (visibility.primers && sequenceData.primers) {
-            result.push(...sequenceData.primers.flatMap(p => getPrimerRenderableSites(p).map((site) => {
+            result.push(...sequenceData.primers.flatMap(p => getPrimerRenderableSites(
+                p,
+                sequenceLength,
+                sequenceData.circular,
+            ).map((site) => {
                 const displayRange = transformRangeForDisplayStrand(
                     site.start,
                     site.end,
@@ -314,7 +320,30 @@ export function SequenceViewer({
 
         // Sort by length (longest first) and filter out overlapping ORFs
         // This prevents the visual overload when many ORFs overlap
-        const sorted = [...frameFiltered].sort((a, b) => (b.end - b.start) - (a.end - a.start));
+        const translationSegments = (translation: Translation) => (
+            translation.segments && translation.segments.length > 0
+                ? translation.segments
+                : [{ start: translation.start, end: translation.end }]
+        );
+        const translationLength = (translation: Translation) => (
+            translation.length
+            ?? translationSegments(translation).reduce(
+                (total, segment) => total + (segment.end - segment.start),
+                0,
+            )
+        );
+        const overlapLength = (left: Translation, right: Translation) => (
+            translationSegments(left).reduce((total, leftSegment) => (
+                total + translationSegments(right).reduce((subtotal, rightSegment) => (
+                    subtotal + Math.max(
+                        0,
+                        Math.min(leftSegment.end, rightSegment.end)
+                            - Math.max(leftSegment.start, rightSegment.start),
+                    )
+                ), 0)
+            ), 0)
+        );
+        const sorted = [...frameFiltered].sort((a, b) => translationLength(b) - translationLength(a));
         const nonOverlapping: typeof sorted = [];
 
         for (const orf of sorted) {
@@ -322,11 +351,9 @@ export function SequenceViewer({
             const overlaps = nonOverlapping.some(existing => {
                 // Same strand and positions overlap by more than 50%
                 if (existing.strand !== orf.strand) return false;
-                const overlapStart = Math.max(existing.start, orf.start);
-                const overlapEnd = Math.min(existing.end, orf.end);
-                if (overlapEnd <= overlapStart) return false;
-                const overlapLen = overlapEnd - overlapStart;
-                const shorterLen = Math.min(existing.end - existing.start, orf.end - orf.start);
+                const overlapLen = overlapLength(existing, orf);
+                if (overlapLen <= 0) return false;
+                const shorterLen = Math.min(translationLength(existing), translationLength(orf));
                 return (overlapLen / shorterLen) > 0.5;
             });
 
@@ -335,22 +362,24 @@ export function SequenceViewer({
             }
         }
 
-        return nonOverlapping.map((t, i) => {
-            const displayRange = transformRangeForDisplayStrand(
-                t.start,
-                t.end,
-                sequenceLength,
-                sourceDisplayStrand,
-                resolvedDisplayStrand,
-            );
+        return nonOverlapping.flatMap((t, i) => (
+            translationSegments(t).map((segment) => {
+                const displayRange = transformRangeForDisplayStrand(
+                    segment.start,
+                    segment.end,
+                    sequenceLength,
+                    sourceDisplayStrand,
+                    resolvedDisplayStrand,
+                );
 
-            return {
-                name: `ORF ${i + 1}`,
-                start: displayRange.start,
-                end: displayRange.end,
-                direction: transformDirectionForDisplayStrand(t.strand, sourceDisplayStrand, resolvedDisplayStrand)
-            };
-        });
+                return {
+                    name: `ORF ${i + 1}`,
+                    start: displayRange.start,
+                    end: displayRange.end,
+                    direction: transformDirectionForDisplayStrand(t.strand, sourceDisplayStrand, resolvedDisplayStrand),
+                };
+            })
+        ));
     }, [resolvedDisplayStrand, sequenceData.translations, sequenceLength, sourceDisplayStrand, visibility.translations, visibleFrames]);
 
     // Build the sequence that SeqViz should render for the selected display strand.

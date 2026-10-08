@@ -5,6 +5,10 @@
 import { useState, useRef, useEffect } from 'react';
 import { jsonToGenbank } from '@teselagen/bio-parsers';
 import type { HistoryEntry } from './hooks/useSequenceHistory';
+import {
+    buildPrimersTsv,
+    canonicalizeExportablePrimer,
+} from './utils/exportData';
 
 interface ExportDropdownProps {
     sequenceData: {
@@ -27,11 +31,17 @@ interface ExportDropdownProps {
         primers?: Array<{
             name: string;
             sequence: string;
+            sequenceType?: 'dna' | 'rna';
             start: number;
             end: number;
-            strand: number;
+            strand: 1 | -1;
             tm?: number;
             gc_percent?: number;
+            sites?: Array<{
+                start: number;
+                end: number;
+                strand: 1 | -1;
+            }>;
         }>;
         circular?: boolean;
         sequenceType?: 'dna' | 'rna' | 'protein';
@@ -101,16 +111,12 @@ export function ExportDropdown({ sequenceData, historyJournal = [], className }:
             content = ['name\ttype\tstart\tend\tstrand\tsegments\tdescription', ...rows].join('\n');
             extension = 'features.tsv';
         } else if (format === 'primers_tsv') {
-            const rows = (sequenceData.primers || []).map((primer) => [
-                primer.name,
-                primer.sequence,
-                primer.start + 1,
-                primer.end,
-                primer.strand,
-                primer.tm ?? '',
-                primer.gc_percent ?? '',
-            ].join('\t'));
-            content = ['name\tsequence\tstart\tend\tstrand\ttm\tgc_percent', ...rows].join('\n');
+            content = buildPrimersTsv(
+                sequenceData.primers || [],
+                sequenceData.sequenceType === 'rna' ? 'rna' : 'dna',
+                sequenceData.sequence.length,
+                Boolean(sequenceData.circular),
+            );
             extension = 'primers.tsv';
         } else if (format === 'history_txt') {
             content = historyJournal.length === 0
@@ -129,7 +135,13 @@ export function ExportDropdown({ sequenceData, historyJournal = [], className }:
                     locations: featureLocations(feature),
                     notes: formatNotes(feature),
                 })),
-                primers: sequenceData.primers || [],
+                primers: (sequenceData.primers || []).map((primer) => (
+                    canonicalizeExportablePrimer(
+                        primer,
+                        sequenceData.sequence.length,
+                        Boolean(sequenceData.circular),
+                    )
+                )),
             }) || '';
             extension = 'gb';
         }

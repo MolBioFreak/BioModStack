@@ -7,12 +7,14 @@ import {
     focusTrapTarget,
     moveMenuFocus,
     restoreFocusIfConnected,
+    restoreFocusWithFallback,
     type FocusTarget,
 } from '../src/components/MolBioToolkit/utils/focusManagement.js';
 
 class FakeFocusTarget implements FocusTarget {
     focusCalls = 0;
     lastOptions: { preventScroll?: boolean } | undefined;
+    disabled = false;
 
     focus(options?: { preventScroll?: boolean }): void {
         this.focusCalls += 1;
@@ -60,6 +62,8 @@ test('dialog focus trap wraps only at its first and last controls', () => {
     assert.equal(focusTrapTarget(items, last, false), first);
     assert.equal(focusTrapTarget(items, middle, false), null);
     assert.equal(focusTrapTarget(items, middle, true), null);
+    assert.equal(focusTrapTarget(items, new FakeFocusTarget(), false), first);
+    assert.equal(focusTrapTarget(items, new FakeFocusTarget(), true), last);
 });
 
 test('focus restoration runs only for a still-connected target', () => {
@@ -72,4 +76,18 @@ test('focus restoration runs only for a still-connected target', () => {
 
     assert.equal(restoreFocusIfConnected(detached, () => false), false);
     assert.equal(detached.focusCalls, 0);
+});
+
+test('focus restoration rejects a disabled invoker and uses the connected fallback', () => {
+    const disabledInvoker = new FakeFocusTarget();
+    const fallback = new FakeFocusTarget();
+    disabledInvoker.disabled = true;
+
+    assert.equal(
+        restoreFocusWithFallback(disabledInvoker, fallback, () => true),
+        true,
+    );
+    assert.equal(disabledInvoker.focusCalls, 0);
+    assert.equal(fallback.focusCalls, 1);
+    assert.deepEqual(fallback.lastOptions, { preventScroll: true });
 });

@@ -63,7 +63,12 @@ import {
     type NucleotideDisplayStrand,
 } from './utils/nucleotides';
 import { findOpenReadingFrames } from './utils/orfs';
-import { dedupeFeatures, featureBounds } from './utils/features';
+import {
+    dedupeFeatures,
+    featureBounds,
+    featureLength,
+    featureOverlapLength,
+} from './utils/features';
 import {
     buildSelectionPrimer,
     buildPrimerTmRequest,
@@ -288,8 +293,7 @@ function normalizeFeatureRecord(feature: Partial<Feature> & Record<string, Untyp
             start: Number(segment?.start ?? segment?.startIndex ?? segment?.rangeBegin ?? feature.start ?? 0),
             end: Number(segment?.end ?? segment?.endIndex ?? segment?.rangeEnd ?? feature.end ?? 0),
         }))
-        .filter((segment: { start: number; end: number }) => Number.isFinite(segment.start) && Number.isFinite(segment.end) && segment.end > segment.start)
-        .sort((left: { start: number; end: number }, right: { start: number; end: number }) => left.start - right.start || left.end - right.end);
+        .filter((segment: { start: number; end: number }) => Number.isFinite(segment.start) && Number.isFinite(segment.end) && segment.end > segment.start);
 
     const start = typeof feature.start === 'number'
         ? feature.start
@@ -322,8 +326,13 @@ function normalizeFeatureRecord(feature: Partial<Feature> & Record<string, Untyp
     };
 }
 
-function normalizePrimerRecord(primer: Partial<Primer> & Record<string, UntypedApiValue>, fallbackId: string): Primer {
-    const placement = normalizeStoredPrimerPlacement(primer);
+function normalizePrimerRecord(
+    primer: Partial<Primer> & Record<string, UntypedApiValue>,
+    fallbackId: string,
+    sequenceLength: number,
+    circular: boolean,
+): Primer {
+    const placement = normalizeStoredPrimerPlacement(primer, sequenceLength, circular);
     return {
         id: primer.id || fallbackId,
         name: primer.name || 'Primer',
@@ -360,6 +369,8 @@ function sequenceDataFromApiRecord(seq: NucleotideSequenceResponse): SequenceDat
         primers: (seq.primers || []).map((primer: Primer, index: number) => normalizePrimerRecord(
             primer as Primer & Record<string, UntypedApiValue>,
             primer.id || `loaded_primer_${index}`,
+            seq.sequence.length,
+            seq.is_circular,
         )),
         translations: [],
         analysisTracks: (seq.analysis_tracks || []).map(trackFromApi),
@@ -537,6 +548,7 @@ export function MolBioToolkitV2() {
     const [quickAddMenu, setQuickAddMenu] = useState<QuickAddMenuState | null>(null);
     const quickAddMenuRef = useRef<HTMLDivElement | null>(null);
     const quickAddInvokerRef = useRef<HTMLDivElement | null>(null);
+    const toolkitRootRef = useRef<HTMLDivElement | null>(null);
     const [selectionAction, setSelectionAction] = useState<SelectionActionState | null>(null);
     const [quickAddBusy, setQuickAddBusy] = useState<SelectionActionKind | null>(null);
     const [selectionActionError, setSelectionActionError] = useState<string | null>(null);
@@ -748,11 +760,15 @@ export function MolBioToolkitV2() {
     // Auto-compute ORFs for display only. Keep them out of persisted undo history.
     useEffect(() => {
         if (sequenceData.sequence && sequenceData.sequence.length > 100) {
-            setDerivedTranslations(findOpenReadingFrames(sequenceData.sequence, 100));
+            setDerivedTranslations(findOpenReadingFrames(
+                sequenceData.sequence,
+                100,
+                sequenceData.circular,
+            ));
         } else {
             setDerivedTranslations([]);
         }
-    }, [sequenceData.sequence]);
+    }, [sequenceData.circular, sequenceData.sequence]);
 
     const viewerSequenceData = useMemo(() => ({
         ...sequenceData,
@@ -888,7 +904,12 @@ export function MolBioToolkitV2() {
                 moleculeOrientation: moleculeMetadata.moleculeOrientation,
                 moleculeLabel: moleculeMetadata.moleculeLabel,
                 features: normalizeFeatureList((parsed.features || []).map((f: UntypedApiValue, i: number) => normalizeFeatureRecord(f, `f_${i}`))),
-                primers: (parsed.primers || []).map((p: UntypedApiValue, i: number) => normalizePrimerRecord(p, `p_${i}`)),
+                primers: (parsed.primers || []).map((p: UntypedApiValue, i: number) => normalizePrimerRecord(
+                    p,
+                    `p_${i}`,
+                    normalizedSequence.length,
+                    parsed.circular ?? false,
+                )),
                 translations: [],
                 analysisTracks: [],
                 sourceFile: file.name,
@@ -1388,12 +1409,10 @@ export function MolBioToolkitV2() {
                     const sameType = existingF.type === newF.type;
                     if (!sameName || !sameType) return false;
 
-                    // Calculate position overlap
-                    const overlapStart = Math.max(existingF.start, newF.start);
-                    const overlapEnd = Math.min(existingF.end, newF.end);
-                    const overlapLength = Math.max(0, overlapEnd - overlapStart);
-                    const newLength = newF.end - newF.start;
-                    const existingLength = existingF.end - existingF.start;
+                    // Calculate overlap over authoritative segments, not aggregate gaps.
+                    const overlapLength = featureOverlapLength(existingF, newF);
+                    const newLength = featureLength(newF);
+                    const existingLength = featureLength(existingF);
                     const minLength = Math.min(newLength, existingLength);
 
                     // If >80% overlap, consider it duplicate
@@ -1558,6 +1577,8 @@ export function MolBioToolkitV2() {
                 primer,
                 preparedPrimer.strand === 1 ? '#22c55e' : '#ef4444',
                 primer.name,
+                sequenceData.sequence.length,
+                sequenceData.circular,
             ));
             setSelectionAction(null);
             setQuickAddBusy(null);
@@ -1628,6 +1649,8 @@ export function MolBioToolkitV2() {
     return (
         <>
             <div
+                ref={toolkitRootRef}
+                tabIndex={-1}
                 className={`molbio-toolkit h-full w-full flex bg-slate-900 text-slate-100 overflow-hidden ${isViewerFullscreen ? 'fixed inset-0 z-[70]' : ''}`}
                 data-molbio-viewer-fullscreen={isViewerFullscreen ? 'true' : 'false'}
             >
@@ -2130,6 +2153,7 @@ export function MolBioToolkitV2() {
                     busy={quickAddBusy !== null}
                     error={selectionActionError}
                     returnFocusTarget={quickAddInvokerRef.current}
+                    fallbackFocusTarget={toolkitRootRef.current}
                     onClose={closeSelectionAction}
                     onConfirmFeature={handleQuickAddFeature}
                     onConfirmPrimer={(input) => void handleQuickAddPrimer(input)}

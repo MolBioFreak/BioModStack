@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from routers.nucleotide_sequences import (
     FeatureSchema,
     _sortable_timestamp,
@@ -20,6 +22,12 @@ def test_explicit_rna_payload_canonicalizes_thymine_without_shortening() -> None
 def test_explicit_dna_payload_canonicalizes_uracil_without_shortening() -> None:
     assert normalize_sequence_type("dna", "AUG UAA") == "dna"
     assert clean_sequence("AUG UAA", "dna") == "ATGTAA"
+
+
+@pytest.mark.parametrize("payload", ["ATGC!!!XZ", "ACGT-ACGT", "ACGT1234"])
+def test_sequence_normalization_rejects_non_whitespace_invalid_characters(payload: str) -> None:
+    with pytest.raises(ValueError, match="invalid nucleotide"):
+        clean_sequence(payload, "dna")
 
 
 def test_sequence_type_inference_still_detects_u_only_rna() -> None:

@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
+from services.nucleotide_validation import canonicalize_nucleotide_sequence
+
 
 IUPAC_BASES: Dict[str, set[str]] = {
     "A": {"A"},
@@ -37,10 +39,11 @@ RNA_IUPAC_COMPLEMENT = str.maketrans(
 
 def clean_sequence(seq: str) -> str:
     """Normalize sequence text while preserving valid IUPAC ambiguity codes."""
-    return "".join(
-        c
-        for c in seq.upper().replace(" ", "").replace("\n", "").replace("\r", "")
-        if c in IUPAC_BASES
+    sequence_type = "rna" if "U" in seq.upper() and "T" not in seq.upper() else "dna"
+    return canonicalize_nucleotide_sequence(
+        seq,
+        sequence_type,
+        allow_empty=True,
     )
 
 
@@ -230,7 +233,7 @@ def pcr_product(
     if not rev_sites:
         raise ValueError("Reverse primer binding site not found in template.")
 
-    best_product: Optional[PCRProductResult] = None
+    candidates: list[PCRProductResult] = []
     template_length = len(seq)
     fwd_overhang_prefix = lambda binding: fwd[: binding.overhang_length]
     rev_overhang_suffix = lambda binding: reverse_complement(rev[: binding.overhang_length], sequence_type)
@@ -279,15 +282,28 @@ def pcr_product(
                     wraps_origin=False,
                 )
 
-            if best_product is None or candidate.length < best_product.length:
-                best_product = candidate
+            candidates.append(candidate)
 
-    if best_product is None:
+    if not candidates:
         if circular:
             raise ValueError("Unable to construct a circular-template PCR product from the primer pair.")
         raise ValueError("Reverse primer site occurs before forward primer (linear PCR expected).")
 
-    return best_product
+    distinct_candidates = {
+        (
+            candidate.start,
+            candidate.end,
+            candidate.wraps_origin,
+            candidate.sequence,
+        ): candidate
+        for candidate in candidates
+    }
+    if len(distinct_candidates) > 1:
+        raise ValueError(
+            "Ambiguous PCR primer placement produced "
+            f"{len(distinct_candidates)} distinct amplicons; explicit binding sites are required."
+        )
+    return next(iter(distinct_candidates.values()))
 
 
 def ligate_fragments(fragments: List[str], circular: bool = True) -> str:
@@ -331,6 +347,7 @@ def golden_gate_assembly(fragments: List[str], enzymes: List[DigestEnzyme]) -> s
 
 def apply_mutations(sequence: str, mutations: List[Dict]) -> str:
     seq = list(clean_sequence(sequence))
+    sequence_type = "rna" if "U" in seq and "T" not in seq else "dna"
     for mut in mutations:
         pos = mut.get("pos")
         if not isinstance(pos, int) or pos < 1 or pos > len(seq):
@@ -340,7 +357,23 @@ def apply_mutations(sequence: str, mutations: List[Dict]) -> str:
         to_base = mut.get("to")
         if to_base is None:
             raise ValueError("Mutation missing 'to' base.")
-        if from_base and seq[idx] != from_base.upper():
-            raise ValueError(f"Mismatch at position {pos}: expected {from_base}, found {seq[idx]}")
-        seq[idx] = to_base.upper()
+        normalized_to = canonicalize_nucleotide_sequence(
+            str(to_base), sequence_type, allow_empty=False
+        )
+        normalized_from = (
+            canonicalize_nucleotide_sequence(
+                str(from_base), sequence_type, allow_empty=False
+            )
+            if from_base is not None
+            else None
+        )
+        if len(normalized_to) != 1 or (
+            normalized_from is not None and len(normalized_from) != 1
+        ):
+            raise ValueError("Mutations require exactly one source and replacement residue.")
+        if normalized_from and seq[idx] != normalized_from:
+            raise ValueError(
+                f"Mismatch at position {pos}: expected {normalized_from}, found {seq[idx]}"
+            )
+        seq[idx] = normalized_to
     return "".join(seq)

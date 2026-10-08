@@ -6,7 +6,7 @@ import type { SelectionSnapshot } from './utils/selectionActions';
 import {
     chooseReturnFocusTarget,
     focusTrapTarget,
-    restoreFocusIfConnected,
+    restoreFocusWithFallback,
 } from './utils/focusManagement';
 
 export type SelectionActionKind = 'feature' | 'forward_primer' | 'reverse_primer';
@@ -31,6 +31,7 @@ interface SelectionActionDialogProps {
     busy: boolean;
     error?: string | null;
     returnFocusTarget?: HTMLElement | null;
+    fallbackFocusTarget?: HTMLElement | null;
     onClose: () => void;
     onConfirmFeature: (input: SelectionFeatureInput) => void;
     onConfirmPrimer: (input: SelectionPrimerInput) => void;
@@ -51,6 +52,7 @@ export function SelectionActionDialog({
     busy,
     error,
     returnFocusTarget,
+    fallbackFocusTarget,
     onClose,
     onConfirmFeature,
     onConfirmPrimer,
@@ -64,6 +66,7 @@ export function SelectionActionDialog({
     const nameInputRef = useRef<HTMLInputElement | null>(null);
     const dialogPanelRef = useRef<HTMLDivElement | null>(null);
     const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+    const fallbackFocusedRef = useRef<HTMLElement | null>(null);
 
     const isFeature = action === 'feature';
     const primerStrand = action === 'reverse_primer' ? -1 : 1;
@@ -92,17 +95,23 @@ export function SelectionActionDialog({
     }, [action, snapshot.coordinateKey]);
 
     useEffect(() => {
+        const activeTarget = document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null;
         previouslyFocusedRef.current = chooseReturnFocusTarget(
             returnFocusTarget,
-            document.activeElement instanceof HTMLElement ? document.activeElement : null,
+            activeTarget,
         );
+        fallbackFocusedRef.current = fallbackFocusTarget
+            ?? (activeTarget !== previouslyFocusedRef.current ? activeTarget : null);
         return () => {
-            restoreFocusIfConnected(
+            restoreFocusWithFallback(
                 previouslyFocusedRef.current,
+                fallbackFocusedRef.current,
                 (target) => document.contains(target),
             );
         };
-    }, [returnFocusTarget]);
+    }, [fallbackFocusTarget, returnFocusTarget]);
 
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {

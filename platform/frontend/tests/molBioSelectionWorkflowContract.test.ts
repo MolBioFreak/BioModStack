@@ -10,6 +10,9 @@ const toolkitSource = readSource('src/components/MolBioToolkit/MolBioToolkitV2.t
 const viewerSource = readSource('src/components/MolBioToolkit/SequenceViewer.tsx');
 const gcTrackSource = readSource('src/components/MolBioToolkit/GCContentTrack.tsx');
 const primerPanelSource = readSource('src/components/MolBioToolkit/panels/PrimerPanel.tsx');
+const alignmentPanelSource = readSource('src/components/MolBioToolkit/panels/AlignmentPanel.tsx');
+const editPanelSource = readSource('src/components/MolBioToolkit/panels/EditPanel.tsx');
+const featurePanelSource = readSource('src/components/MolBioToolkit/panels/FeaturePanel.tsx');
 
 test('selection actions are configuration-gated rather than immediate default creation', () => {
     assert.match(toolkitSource, /openSelectionAction\('forward_primer'\)/);
@@ -72,4 +75,25 @@ test('primer panel delegates single and all-primer highlights to authoritative s
     assert.match(highlightPrimerSource, /primersToHighlight\.flatMap/);
     assert.doesNotMatch(highlightPrimerSource, /start:\s*existingPrimer\.start/);
     assert.doesNotMatch(highlightPrimerSource, /start:\s*primer\.start/);
+});
+
+test('all selection-consuming panels preserve or explicitly reject origin-spanning geometry', () => {
+    assert.match(primerPanelSource, /createSelectionSnapshot/);
+    assert.match(primerPanelSource, /buildSelectionPrimer/);
+    assert.match(primerPanelSource, /Pinned to selected locus/);
+    assert.match(primerPanelSource, /Rotate Origin First/);
+    assert.doesNotMatch(primerPanelSource, /Math\.min\(selection\.start/);
+
+    assert.match(alignmentPanelSource, /createSelectionSnapshot/);
+    assert.match(alignmentPanelSource, /wrappingSelection/);
+    assert.match(alignmentPanelSource, /scalar-offset selection alignment/);
+    assert.doesNotMatch(alignmentPanelSource, /Math\.min\(selection\.start/);
+
+    assert.match(editPanelSource, /createSelectionSnapshot/);
+    assert.match(editPanelSource, /disabled=\{!contiguousSelection\}/);
+    assert.match(editPanelSource, /Origin-spanning delete, replace, reverse, and complement edits are disabled/);
+    assert.doesNotMatch(editPanelSource, /Math\.min\(selection\.start/);
+
+    assert.match(featurePanelSource, /selectionSnapshot\?\.coordinateLabel/);
+    assert.doesNotMatch(featurePanelSource, /Selection \{Math\.min\(selection\.start/);
 });
