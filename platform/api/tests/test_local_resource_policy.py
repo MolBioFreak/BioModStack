@@ -94,15 +94,17 @@ def test_admission_uses_local_policy(resources):
 @pytest.mark.parametrize("active", [False, True])
 async def test_persisted_policy_changes_only_when_idle(resources, tmp_path, active):
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-    from experiment_models import ExperimentBase, ExperimentResourceAdmissionPolicy as Policy, ExperimentResourceAdmission as Admission
+    from experiment_models import ExperimentResourceAdmissionPolicy as Policy, ExperimentResourceAdmission as Admission
     from services import ngs_molbio_n5 as n5
     assert hasattr(n5, "_locked_local_admission_policy")
+    # Use the migrated resource owner, including the derived-reservation table
+    # and its immutable identity/transition triggers (not ORM tables alone).
+    from experiment_migrations import run_all
+    run_all(tmp_path / "admissions.db")
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'admissions.db'}")
-    async with engine.begin() as connection:
-        await connection.run_sync(ExperimentBase.metadata.create_all)
     async with async_sessionmaker(engine, expire_on_commit=False)() as session:
-        session.add(Policy(policy_id="managed-workflows", policy_version=n5.ADMISSION_POLICY_VERSION,
-            cpu_thread_limit=24, dram_byte_limit=96 * 1024**3, lock_generation=0))
+        policy = await session.get(Policy, "managed-workflows")
+        assert policy is not None and policy.policy_version == n5.ADMISSION_POLICY_VERSION
         if active:
             session.add(Admission(admission_id="a", workspace_id="w", domain_experiment_id="d", plan_id="p",
                 preparation_id="prep", state="admitted", cpu_threads=20, dram_bytes=32 * 1024**3,
