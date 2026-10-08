@@ -187,3 +187,11 @@ test('fails closed when canonical row identity is duplicated', () => {
     payload.rows.push(structuredClone(payload.rows[0]));
     assert.throws(() => canonicalStateLandscapeAnalysis(value), /row identity/i);
 });
+
+test('fails closed when support excluded-row count does not match its pair exclusions', () => {
+    const value = withAnalysis();
+    const payload = value.records[1].payload as unknown as TestAnalysis;
+    payload.support_ledger[0].excluded_row_count = 1;
+
+    assert.throws(() => canonicalStateLandscapeAnalysis(value), /support.*exclusion|exclusion.*support/i);
+});

@@ -228,9 +228,18 @@ const validateRows = (value: unknown, pairs: Set<string>, comparisonTargetId: st
     return rows as unknown as CmStateLandscapeRow[];
 };
 
-const validateSupport = (value: unknown, pairs: Set<string>): CmStateLandscapeSupport[] => {
+const validateSupport = (
+    value: unknown,
+    pairs: Set<string>,
+    exclusions: CmStateLandscapeExclusion[],
+): CmStateLandscapeSupport[] => {
     const support = array(value, 'State landscape support ledger is malformed');
     const seen = new Set<string>();
+    const excludedCounts = new Map<string, number>();
+    exclusions.forEach((entry) => {
+        const key = pairKey(entry);
+        excludedCounts.set(key, (excludedCounts.get(key) ?? 0) + 1);
+    });
     support.forEach((value) => {
         const entry = object(value, 'State landscape support entry is malformed');
         exactFields(entry, ['pair_id', 'candidate_a_id', 'candidate_b_id', 'eligible_row_count', 'excluded_row_count'], 'State landscape support entry is malformed');
@@ -239,7 +248,10 @@ const validateSupport = (value: unknown, pairs: Set<string>): CmStateLandscapeSu
         if (seen.has(key)) throw new Error('State landscape support ledger contains a duplicate pair');
         seen.add(key);
         integer(entry.eligible_row_count, 'State landscape support count is malformed', 0);
-        integer(entry.excluded_row_count, 'State landscape support count is malformed', 0);
+        const excludedRowCount = integer(entry.excluded_row_count, 'State landscape support count is malformed', 0);
+        if (excludedRowCount !== (excludedCounts.get(key) ?? 0)) {
+            throw new Error('State landscape support exclusion count does not match exclusion ledger');
+        }
     });
     if (seen.size !== pairs.size) throw new Error('State landscape support ledger does not cover every resolved pair');
     return support as unknown as CmStateLandscapeSupport[];
@@ -327,7 +339,7 @@ export const canonicalStateLandscapeAnalysis = (results: CmResults): CmStateLand
     const pairs = validatePairs(payload.resolved_pairs, candidateCoordinates, comparisonTargetId, comparisonMode, referenceCandidateId);
     const pairSet = new Set(pairs.map(pairKey));
     validateRows(payload.rows, pairSet, comparisonTargetId);
-    validateSupport(payload.support_ledger, pairSet);
-    validateExclusions(payload.exclusion_ledger, pairSet, comparisonTargetId);
+    const exclusions = validateExclusions(payload.exclusion_ledger, pairSet, comparisonTargetId);
+    validateSupport(payload.support_ledger, pairSet, exclusions);
     return payload as unknown as CmStateLandscapeAnalysis;
 };
