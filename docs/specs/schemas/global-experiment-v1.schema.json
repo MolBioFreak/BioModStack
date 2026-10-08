@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.global-experiment.v1",
+  "title": "BioModStack Global Experiment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "name", "objective", "scientific_question", "hypothesis", "description", "status", "priority", "tags", "shared_source_receipt_ids", "shared_dataset_ids", "comparison_plan", "success_criteria", "review_summary", "conclusion", "created_by", "change_summary", "needs_metadata_review"],
+  "properties": {
+    "schema": {"const": "bms.global-experiment.v1"},
+    "name": {"type": "string", "minLength": 1, "maxLength": 255},
+    "objective": {"type": "string"},
+    "scientific_question": {"type": "string"},
+    "hypothesis": {"type": ["string", "null"]},
+    "description": {"type": "string"},
+    "status": {"enum": ["draft", "planned", "active", "analysis", "review", "completed", "blocked", "archived"]},
+    "priority": {"enum": ["low", "normal", "high", "critical"]},
+    "tags": {"type": "array", "items": {"type": "string"}},
+    "shared_source_receipt_ids": {"type": "array", "items": {"type": "string"}},
+    "shared_dataset_ids": {"type": "array", "items": {"type": "string"}},
+    "comparison_plan": {"type": ["string", "null"]},
+    "success_criteria": {"type": "array", "items": {"type": "string"}},
+    "review_summary": {"type": ["string", "null"]},
+    "conclusion": {"type": ["string", "null"]},
+    "created_by": {"type": ["string", "null"]},
+    "change_summary": {"type": "string"},
+    "needs_metadata_review": {"type": "boolean"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "completed"}}},
+      "then": {
+        "properties": {
+          "review_summary": {"type": "string", "minLength": 1},
+          "conclusion": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  ]
+}
