@@ -293,6 +293,16 @@
                     "description": "Fix target side-chain positions when performing binder sequence design (default: false)",
                     "hidden": true
                 },
+                "fampnn_constraint_mode": {
+                    "type": "string",
+                    "default": "generic",
+                    "description": "Constraint mode for FAMPNN. 'generic' uses no fixed residues; 'antibody' applies CDR-aware constraints.",
+                    "enum": [
+                        "generic",
+                        "antibody"
+                    ],
+                    "hidden": true
+                },
                 "fampnn_psce_threshold": {
                     "type": "number",
                     "default": 0.3,

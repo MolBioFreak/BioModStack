@@ -1,14 +1,14 @@
-[🏠 ProteinDJ](../README.md) > Parameter Guide
+[🏠 BioModStack](../README.md) > Parameter Guide
 
-# ProteinDJ Parameter Guide
+# BioModStack Parameter Guide
 
-This guide summarizes the key parameters used in ProteinDJ's Nextflow pipeline configuration. Parameters are essential for controlling the design mode, input/output locations, model choices, advanced options, filtering thresholds, and cluster resource allocation.
+This guide summarizes the key parameters used in BioModStack's Nextflow pipeline configuration. Parameters are essential for controlling the design mode, input/output locations, model choices, advanced options, filtering thresholds, and cluster resource allocation.
 
 ---
 
 ## Essential Parameters
 
-These parameters are required for ProteinDJ and are used by every mode.
+These parameters are required for BioModStack and are used by every mode.
 
 | Parameter         | Default         | Description                                                                                                                                                                                     |
 | ----------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -21,7 +21,7 @@ These parameters are required for ProteinDJ and are used by every mode.
 
 ## Mode-Specific Parameters
 
-These parameters are used for some of the ProteinDJ modes.
+These parameters are used for some of the BioModStack modes.
 
 | Parameter                         | Default | Description                                                                                                                                                        | Required for Modes                                                                                                         |
 | --------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
@@ -59,7 +59,7 @@ These parameters are used for some of the ProteinDJ modes.
 
 ## Workflow Advanced Parameters
 
-These parameters control the workflow of ProteinDJ.
+These parameters control the workflow of BioModStack.
 
 | Parameter           | Default | Description                                                                                                                                                                                                              |
 | ------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -114,6 +114,7 @@ Advanced parameters to control the behaviour of Full-Atom MPNN
 | Parameter               | Default | Description                                                                                                  |
 | ----------------------- | ------- | ------------------------------------------------------------------------------------------------------------ |
 | `fampnn__fix_target_sidechains` | false    | Fix target side-chain positions when performing binder sequence design (default: false) |
+| `fampnn_constraint_mode` | 'generic' | Constraint mode for FAMPNN. Use `'generic'` for no fixed residues or `'antibody'` for CDR-aware constraints. |
 | `fampnn_psce_threshold` | 0.3     | Will only keep sidechains below this PSCE threshold during design. Null means no filtering.                  |
 | `fampnn_temperature`    | 0.1     | Temperature for sampling; higher increases sequence diversity. Recommended lower for binders (e.g., 0.0001). |
 | `fampnn_exclude_cys`    | true    | Exclude cysteine residues from design.                                                                       |
@@ -227,7 +228,7 @@ The cluster parameters may need adjusting depending on your HPC setup and availa
 **🌟 Notes:**
 
 - Parameters set to `null` indicate optional or user-defined inputs.
-- Ensure paths are updated to your environment when running ProteinDJ.
+- Ensure paths are updated to your environment when running BioModStack.
 - Filtering parameters can be set to `null` to disable filtering.
 
 ---

@@ -1,8 +1,8 @@
-[🏠 ProteinDJ](../README.md) > Installation Guide
+[🏠 BioModStack](../README.md) > Installation Guide
 
-# ProteinDJ Installation Guide
+# BioModStack Installation Guide
 
-This guide will walk you through installing ProteinDJ and all its dependencies and is intended for system admins. The installation process involves several steps that need to be completed once per cluster or system.
+This guide will walk you through installing BioModStack and all its dependencies and is intended for system admins. The installation process involves several steps that need to be completed once per cluster or system.
 
 ## Prerequisites
 
@@ -26,10 +26,10 @@ Before starting, ensure you have:
 
 ## Step 1: Clone Repository
 
-First, clone the ProteinDJ repository:
+First, clone the BioModStack repository:
 
 ```bash
-git clone https://github.com/PapenfussLab/proteindj
+git clone https://github.com/MolBioFreak/Protein-De-Novo-Modification-and-Design-Platform
 cd proteindj
 ```
 
@@ -37,7 +37,7 @@ cd proteindj
 
 ## Step 2: Install Dependencies
 
-ProteinDJ requires two key dependencies to be installed and accessible in your PATH. These are common software packages so they may already be implemented in your HPC environment (e.g. module load apptainer nextflow):
+BioModStack requires two key dependencies to be installed and accessible in your PATH. These are common software packages so they may already be implemented in your HPC environment (e.g. module load apptainer nextflow):
 
 ### Apptainer (Required)
 
@@ -152,7 +152,7 @@ ls -la models/boltz/  # Should contain .ckpt files and mols directory
 
 ## Step 4: Build Containers
 
-ProteinDJ requires several containers for the different dependencies. By default, these will be fetched during execution of Nextflow and cached. You can also direct proteinDJ to container files located in `container_dir`. We have provide def files for containers in `proteindj/apptainer`. You may already have similar containers for some of these programs, but we have made changes to the source code and environment so we do not recommend using other containers with ProteinDJ. If the containers have already been built, you only need to update the `container_dir` variable in `nextflow.config` to the build directory.
+BioModStack requires several containers for the different dependencies. By default, these will be fetched during execution of Nextflow and cached. You can also direct proteinDJ to container files located in `container_dir`. We have provide def files for containers in `proteindj/apptainer`. You may already have similar containers for some of these programs, but we have made changes to the source code and environment so we do not recommend using other containers with BioModStack. If the containers have already been built, you only need to update the `container_dir` variable in `nextflow.config` to the build directory.
 
 We have provided a script for building the containers in a series of sbatch jobs (`apptainer/build_containers.sh`). You may need to tweak the SLURM parameters and enviroment settings for your cluster.
 
@@ -336,7 +336,7 @@ nextflow clean -f
 After successful installation:
 
 1. **Read the [Getting Started Guide](GETTING-STARTED.md)** for your first protein design
-2. **Review [ProteinDJ Modes](MODES.md)** to understand available options
+2. **Review [BioModStack Modes](MODES.md)** to understand available options
 3. **Configure [Parameters](docs/PARAMETERS.md)** for your specific needs
 
 ---
@@ -346,11 +346,11 @@ After successful installation:
 If you encounter issues:
 
 1. **Check the [Troubleshooting Guide](TROUBLESHOOTING.md)**
-2. **Search existing [GitHub Issues](https://github.com/PapenfussLab/proteindj/issues)**
+2. **Search existing [GitHub Issues](https://github.com/MolBioFreak/Protein-De-Novo-Modification-and-Design-Platform/issues)**
 3. **Create a new issue** with detailed error information
 
 ---
 
-**🎉 Congratulations!** You're now ready to DJ some proteins with ProteinDJ!
+**🎉 Congratulations!** You're now ready to DJ some proteins with BioModStack!
 
 [⬅️ Back to Main README](../README.md)

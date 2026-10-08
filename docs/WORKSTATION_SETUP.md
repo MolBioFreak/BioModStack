@@ -1,18 +1,18 @@
-# ProteinDJ Workstation Setup Guide
+# BioModStack Workstation Setup Guide
 
 ## Hardware Configuration
 
-**Tested on:**
-- CPU: AMD Ryzen 7960x (16 cores / 32 threads)
+**Current Configuration:**
+- CPU: AMD Ryzen Threadripper 9960X (24 cores / 48 threads)
 - RAM: 128GB DDR5
-- Storage: 8TB NVMe (multiple drives)
-- GPUs: 3 GPUs active in pipeline
-  - GPU 0: RTX 3090 (24GB VRAM)
-  - GPU 1: RTX 3090 (24GB VRAM)
-  - GPU 2: RTX 5090 (32GB VRAM)
-  - GPU 3: RTX 5060 Ti (16GB) - **Excluded from pipeline** (reserved for other work)
+- Storage: 4TB NVMe (primary) + expansion drives
+- GPUs: 4 GPUs in pipeline
+  - GPU 0: RTX 5090 (32GB VRAM) - Primary compute
+  - GPU 1: RTX 5060 Ti (16GB VRAM) - Secondary
+  - GPU 2: RTX 3090 (24GB VRAM) - Batch processing
+  - GPU 3: RTX 3090 (24GB VRAM) - Batch processing
 
-**Total GPU resources:** 80GB VRAM, 3 parallel GPU tasks
+**Total GPU resources:** 96GB VRAM, 4 parallel GPU tasks
 
 ---
 
@@ -171,7 +171,7 @@ The build script (`apptainer/build_containers_workstation.sh`) provides:
 Containers are built from definition files (`.def`) in `apptainer/` directory that:
 - Pull base images from NVIDIA container registry (fast)
 - Clone repositories and install dependencies
-- Are fully compatible with Nextflow/ProteinDJ
+- Are fully compatible with Nextflow/BioModStack
 
 ---
 
@@ -180,7 +180,7 @@ Containers are built from definition files (`.def`) in `apptainer/` directory th
 ### 1. Small Test (Recommended)
 
 ```bash
-# Run ProteinDJ's built-in test
+# Run BioModStack's built-in test
 # 4 designs × 2 sequences = 8 total predictions
 # Should take ~25-35 minutes
 
@@ -495,5 +495,5 @@ GPU 3 is **intentionally excluded** from the pipeline via `CUDA_VISIBLE_DEVICES=
 ## Support
 
 - Documentation: `docs/` directory
-- ProteinDJ GitHub: https://github.com/PapenfussLab/proteindj
+- BioModStack GitHub: https://github.com/PapenfussLab/biomodstack
 - Issues: Report in project repository

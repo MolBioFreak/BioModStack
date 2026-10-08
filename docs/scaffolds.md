@@ -1,4 +1,4 @@
-[🏠 ProteinDJ](../README.md) > Scaffold Generation Guide
+[🏠 BioModStack](../README.md) > Scaffold Generation Guide
 
 ## Scaffold Generation Guide
 
