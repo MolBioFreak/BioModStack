@@ -86,6 +86,7 @@ process RunPersistedFrustraMPNNGroupedBatch {
     set -euo pipefail
     export CUDA_VISIBLE_DEVICES='${assigned_gpu}'
     '${params.api_python}' '${params.code_root}/scripts/run_frustrampnn_grouped_batch.py' \
+      --job-id '${params.job_id}' \
       --batch-manifest '${batch_manifest_path}' \
       --job-root '${params.out_dir}' \
       --container '${params.container_dir}/frustrampnn.sif' \

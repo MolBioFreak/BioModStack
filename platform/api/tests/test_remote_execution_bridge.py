@@ -9,6 +9,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -88,6 +89,53 @@ def _wait_terminal(attempt_dir: Path, timeout: float = 10.0) -> dict[str, object
             return status
         time.sleep(0.05)
     raise AssertionError("remote worker did not reach a terminal state")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unsafe_permissions", [False, True])
+async def test_parent_capability_uses_private_file_and_reaches_worker(
+    tmp_path: Path, monkeypatch, unsafe_permissions: bool,
+) -> None:
+    from services import stage_reporting
+
+    token, digest = stage_reporting.issue_stage_report_token()
+    command = [sys.executable, "-c", (
+        "import hashlib,os; "
+        "value=os.environ.get('BMS_STAGE_REPORT_TOKEN',''); "
+        f"assert hashlib.sha256(value.encode()).hexdigest() == {digest!r}; "
+        "print('capability-present')"
+    )]
+    attempt_dir = _worker_attempt(tmp_path, command)
+
+    async def local_secret_writer(connection, argv, *, input_bytes):
+        # Exercise the exact writer without SSH or a live worker.
+        completed = subprocess.run(argv, input=input_bytes, capture_output=True, check=True)
+        return SimpleNamespace(stdout=completed.stdout.decode())
+
+    monkeypatch.setattr(executor_module, "run_remote", local_secret_writer)
+    await executor_module._stage_secret_environment(
+        cast(RemoteConnection, None),
+        cast(bundle_module.PreparedRemoteBundle, SimpleNamespace(remote_attempt_dir=str(attempt_dir))),
+        {stage_reporting.ENV_TOKEN_KEY: token},
+    )
+    secret = attempt_dir / "secret-env.json"
+    assert secret.stat().st_mode & 0o777 == 0o600
+    assert token not in (attempt_dir / worker.ENVELOPE_FILE).read_text()
+    if unsafe_permissions:
+        secret.chmod(0o644)
+    worker.prepare(attempt_dir)
+    result = worker.supervise(attempt_dir)
+    status = worker.status(attempt_dir)
+    log = (attempt_dir / "nextflow.log").read_text() if (attempt_dir / "nextflow.log").exists() else ""
+    assert token not in log
+    if unsafe_permissions:
+        assert result != 0 and status["state"] == "failed"
+        assert "permissions are unsafe" in status["error"]
+        assert "capability-present" not in log
+    else:
+        assert result == 0 and status["state"] == "succeeded"
+        assert "capability-present" in log
+        assert not secret.exists()
 
 
 def test_execution_target_root_is_normalized_and_bounded() -> None:

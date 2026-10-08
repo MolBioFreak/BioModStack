@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -170,6 +171,12 @@ def test_shared_client_spawns_exact_grouped_children_waits_and_seals_terminal_ev
 
     monkeypatch.setattr(module.requests, "post", fake_post)
     monkeypatch.setattr(module.requests, "get", fake_get)
+    def retrieve(**kwargs):
+        assert kwargs["capability"] == "parent-fanout-capability"
+        source = output_roots[kwargs["child_id"]] / "frustrampnn" / "results" / kwargs["candidate_id"]
+        shutil.copytree(source, kwargs["destination"])
+
+    monkeypatch.setattr(module, "_retrieve_result", retrieve)
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
 
     receipt_path = tmp_path / "terminal.json"
@@ -269,21 +276,21 @@ def test_shared_client_canonicalizes_parent_dataset_order_across_arrival_orders(
                 "children": [{"job_id": "child-a", "status": "completed", "output_dir": str(child_root)}],
             })
         return Response({
-            "job_id": "child-a", "status": "completed",
+            "job_id": "child-a", "status": "completed", "parent_job_id": "parent-1",
             "candidates": [{"candidate_id": candidate_id} for candidate_id in expected_ids],
             "results": [{"candidate_id": candidate_id, "status": "succeeded"} for candidate_id in expected_ids],
             "grouped_terminal_artifact": {"content_sha256": "b" * 64},
         })
 
     copied: list[tuple[str, str]] = []
-    original_copytree = module.shutil.copytree
-    def recording_copytree(source, destination, **kwargs):
-        copied.append((Path(destination).parent.name, Path(destination).name))
-        return original_copytree(source, destination, **kwargs)
+    def retrieve(**kwargs):
+        destination = kwargs["destination"]
+        copied.append((destination.parent.name, kwargs["candidate_id"]))
+        shutil.copytree(child_root / "frustrampnn" / "results" / kwargs["candidate_id"], destination)
 
     monkeypatch.setattr(module.requests, "post", fake_post)
     monkeypatch.setattr(module.requests, "get", fake_get)
-    monkeypatch.setattr(module.shutil, "copytree", recording_copytree)
+    monkeypatch.setattr(module, "_retrieve_result", retrieve)
     settings_json = json.dumps(
         {"batching_enabled": True, "structures_per_job": 3},
         sort_keys=True,

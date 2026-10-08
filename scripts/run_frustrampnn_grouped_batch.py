@@ -263,6 +263,7 @@ def run_grouped_batch(
     container: Path | str,
     physical_gpu_id: int,
     apptainer: Path | str = "apptainer",
+    job_id: str | None = None,
     prepare_record: Callable[..., PreparedCandidate] = _default_prepare_record,
     build_command: Callable[..., _runtime.FrustraMPNNInvocation] = _runtime.build_frustrampnn_predict_batch_command,
     execute: Callable[..., subprocess.CompletedProcess[bytes]] = _runtime.execute_frustrampnn,
@@ -273,8 +274,9 @@ def run_grouped_batch(
     manifest_path = Path(batch_manifest_path).absolute()
     root = Path(job_root).absolute()
     batch = _read_batch(manifest_path)
-    if batch["execution_owner_job_id"] != root.name:
-        raise GroupedBatchError("scheduler batch owner does not match the exact job root")
+    # A remote output root is attempt/results, not the logical scheduler ID.
+    if batch["execution_owner_job_id"] != (job_id if job_id is not None else root.name):
+        raise GroupedBatchError("scheduler batch owner does not match the exact job identity")
     authority_root = manifest_path.parent.parent
     output_root = Path.cwd() / "grouped_results"
     if output_root.exists() or output_root.is_symlink():
@@ -400,6 +402,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--batch-manifest", required=True, type=Path)
     parser.add_argument("--job-root", required=True, type=Path)
+    parser.add_argument("--job-id", help="Logical scheduler owner, independent of relocated output root")
     parser.add_argument("--container", required=True, type=Path)
     parser.add_argument("--physical-gpu-id", required=True, type=int)
     parser.add_argument("--apptainer", default="apptainer")
@@ -408,7 +411,7 @@ def main(argv: list[str] | None = None) -> int:
         result = run_grouped_batch(
             batch_manifest_path=args.batch_manifest, job_root=args.job_root,
             container=args.container, physical_gpu_id=args.physical_gpu_id,
-            apptainer=args.apptainer,
+            apptainer=args.apptainer, job_id=args.job_id,
         )
         print(json.dumps(result, sort_keys=True, separators=(",", ":")))
         return 0

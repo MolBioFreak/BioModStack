@@ -65,7 +65,7 @@ EOF
     _write_executable(
         root / "bin" / "api-python",
         f"""#!/usr/bin/python3
-import json, os, pathlib, shutil, subprocess, sys, threading
+import hashlib, io, json, os, pathlib, shutil, subprocess, sys, tarfile, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 args=sys.argv[1:]
 script=pathlib.Path(args[0]).name if args else ''
@@ -99,6 +99,9 @@ if script == 'run_frustrampnn_parent_fanout.py':
     ))
     children=[]
     output_roots={{}}
+    transfers={{}}
+    results={{}}
+    canonical=lambda value: json.dumps(value,sort_keys=True,separators=(',',':')).encode()
     for ordinal, candidate_id in enumerate(candidates):
         child_id=f'fake-child-{{ordinal}}'
         output_root=pathlib.Path.cwd()/'fake_scheduler_children'/child_id
@@ -115,6 +118,31 @@ if script == 'run_frustrampnn_parent_fanout.py':
         )
         children.append({{'job_id':child_id,'structure_count':1,'candidates':[{{'candidate_id':candidate_id}}]}})
         output_roots[child_id]=str(output_root)
+        # This harness mocks scientific execution; transport hashes bind its
+        # actual fixture bytes instead of pretending API-host paths are shared.
+        source_bytes=(bundle/source.name).read_bytes()
+        declaration={{'relative_path':source.name,'bytes':len(source_bytes),'sha256':hashlib.sha256(source_bytes).hexdigest()}}
+        manifest={{'schema_name':'frustrampnn_result_manifest','schema_version':3,
+                  'parent_job_id':child_id,'candidate_id':candidate_id,
+                  'invocation_id':child_id+'-invocation','request_sha256':'a'*64,
+                  'source_artifact_sha256':declaration['sha256'],'artifacts':[declaration]}}
+        name='frustrampnn_result_manifest_v3.json'
+        (bundle/name).write_bytes(canonical(manifest))
+        digest=hashlib.sha256((bundle/name).read_bytes()).hexdigest()
+        results[child_id]={{**manifest,'status':'succeeded','manifest_sha256':digest}}
+        paths=[name,*sorted(path.name for path in bundle.iterdir() if path.name != name)]
+        inventory={{'schema_name':'bms.frustrampnn.parent-result-transfer.v1',
+                   'parent_job_id':parent_job_id,'child_job_id':child_id,'candidate_id':candidate_id,
+                   'manifest_path':name,'manifest_sha256':digest,
+                   'files':[{{'relative_path':path,'bytes':len((bundle/path).read_bytes()),
+                             'sha256':hashlib.sha256((bundle/path).read_bytes()).hexdigest()}} for path in paths]}}
+        archive_bytes=io.BytesIO()
+        with tarfile.open(fileobj=archive_bytes,mode='w',format=tarfile.USTAR_FORMAT) as archive:
+            for path,content in [('transfer.json',canonical(inventory)),*[(path,(bundle/path).read_bytes()) for path in paths]]:
+                member=tarfile.TarInfo(path)
+                member.size=len(content)
+                archive.addfile(member,io.BytesIO(content))
+        transfers[child_id]=archive_bytes.getvalue()
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args):
@@ -148,6 +176,18 @@ if script == 'run_frustrampnn_parent_fanout.py':
                 'child_jobs':children,
             }})
         def do_GET(self):
+            if '/workflow-children/' in self.path:
+                child_id=self.path.split('/workflow-children/',1)[1].split('/')[0]
+                if self.headers.get('Authorization') != 'Bearer phase5c-stage-token' or child_id not in transfers:
+                    self.send_error(403)
+                    return
+                payload=transfers[child_id]
+                self.send_response(200)
+                self.send_header('Content-Type','application/x-tar')
+                self.send_header('Content-Length',str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
             if self.path.startswith(f'/api/jobs/{{parent_job_id}}/children/status?'):
                 self.send_json({{
                     'total':len(children),'completed':len(children),'failed':0,'cancelled':0,
@@ -165,7 +205,7 @@ if script == 'run_frustrampnn_parent_fanout.py':
             self.send_json({{
                 'job_id':child_id,'status':'completed','parent_job_id':parent_job_id,
                 'candidates':child_candidates,
-                'results':[{{'candidate_id':value['candidate_id'],'status':'succeeded','manifest_sha256':'b'*64}} for value in child_candidates],
+                'results':[results[child_id]],
                 'batch_manifest':{{'sha256':'c'*64}},'grouped_terminal_artifact':None,
             }})
 

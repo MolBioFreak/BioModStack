@@ -821,27 +821,29 @@ async def create_reanalysis_child(
     )
 
 
-async def child_receipt(session: AsyncSession, *, child: Job) -> dict[str, Any]:
-    if child.model_id != MODEL_ID or ENVELOPE_KEY not in (child.params or {}):
-        raise FrustraMPNNChildError("Job is not a persisted FrustraMPNN child")
-    envelope = child.params[ENVELOPE_KEY]
-    root = Path(str(child.output_dir)).absolute()
+def _child_receipt_artifacts(*, child_id: str, output_dir: str, params: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Validate bounded file snapshots off-loop; ORM state stays on the caller thread."""
+    from .manifests import _read_regular
+
+    envelope = params[ENVELOPE_KEY]
+    root = Path(str(output_dir)).absolute()
     configured_manifest = Path(
-        str((child.params or {}).get("frustrampnn_batch_manifest_path", ""))
+        str((params or {}).get("frustrampnn_batch_manifest_path", ""))
     ).absolute()
     expected_manifest = root / str(envelope.get("batch_manifest_relative_path", ""))
     if configured_manifest != expected_manifest or configured_manifest.is_symlink():
         raise FrustraMPNNChildError("child batch manifest identity is invalid")
     try:
-        manifest_payload = configured_manifest.read_bytes()
+        manifest_payload = _read_regular(configured_manifest.parent, configured_manifest.name, max_bytes=MAX_UPLOAD_BYTES)
         manifest = json.loads(manifest_payload)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
         raise FrustraMPNNChildError("child batch manifest is unavailable") from exc
     if (
-        manifest_payload != canonical_json_bytes(manifest)
+        not isinstance(manifest, dict)
+        or manifest_payload != canonical_json_bytes(manifest)
         or len(manifest_payload) != envelope.get("batch_manifest_size_bytes")
         or hashlib.sha256(manifest_payload).hexdigest() != envelope.get("batch_manifest_sha256")
-        or manifest.get("execution_owner_job_id") != str(child.id)
+        or manifest.get("execution_owner_job_id") != child_id
         or manifest.get("expected_cardinality") != len(manifest.get("records") or [])
     ):
         raise FrustraMPNNChildError("child batch manifest authority is invalid")
@@ -858,21 +860,23 @@ async def child_receipt(session: AsyncSession, *, child: Job) -> dict[str, Any]:
     grouped_path = (
         root / "frustrampnn" / "batches" / "grouped_batch_terminal_receipt_v1.json"
     )
-    if grouped_path.exists():
+    if grouped_path.exists() or grouped_path.is_symlink():
         if grouped_path.is_symlink() or not grouped_path.is_file():
             raise FrustraMPNNChildError("grouped terminal artifact identity is invalid")
         try:
-            grouped_payload = grouped_path.read_bytes()
+            grouped_payload = _read_regular(grouped_path.parent, grouped_path.name, max_bytes=MAX_UPLOAD_BYTES)
             grouped = json.loads(grouped_payload)
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
             raise FrustraMPNNChildError("grouped terminal artifact is unavailable") from exc
+        if not isinstance(grouped, dict):
+            raise FrustraMPNNChildError("grouped terminal artifact must be an object")
         unsigned = {key: value for key, value in grouped.items() if key != "receipt_sha256"}
         records = grouped.get("records")
         if (
             grouped_payload != canonical_json_bytes(grouped)
             or grouped.get("schema_name") != "bms.frustrampnn.grouped-batch-terminal.v1"
             or grouped.get("schema_version") != 1
-            or grouped.get("execution_owner_job_id") != str(child.id)
+            or grouped.get("execution_owner_job_id") != child_id
             or grouped.get("batch_manifest") != manifest_identity
             or not isinstance(records, list)
             or grouped.get("record_count") != len(records)
@@ -898,11 +902,24 @@ async def child_receipt(session: AsyncSession, *, child: Job) -> dict[str, Any]:
             ):
                 raise FrustraMPNNChildError("grouped terminal diagnostic is invalid")
         grouped_terminal_artifact = {
-            "artifact_id": f"frustrampnn-grouped-terminal:{child.id}",
+            "artifact_id": f"frustrampnn-grouped-terminal:{child_id}",
             "content_sha256": hashlib.sha256(grouped_payload).hexdigest(),
             "size_bytes": len(grouped_payload),
             "records": copy.deepcopy(records),
         }
+    return manifest_identity, grouped_terminal_artifact
+
+
+async def child_receipt(session: AsyncSession, *, child: Job) -> dict[str, Any]:
+    if child.model_id != MODEL_ID or ENVELOPE_KEY not in (child.params or {}):
+        raise FrustraMPNNChildError("Job is not a persisted FrustraMPNN child")
+    from starlette.concurrency import run_in_threadpool
+
+    envelope = child.params[ENVELOPE_KEY]
+    manifest_identity, grouped_terminal_artifact = await run_in_threadpool(
+        _child_receipt_artifacts, child_id=str(child.id), output_dir=str(child.output_dir),
+        params=copy.deepcopy(child.params),
+    )
     results = (await session.execute(
         select(FrustraMPNNResult).where(FrustraMPNNResult.parent_job_id == str(child.id))
     )).scalars().all()

@@ -278,19 +278,9 @@ async def cancel_job_lineage(
         if terminalized.rowcount != 1:
             terminal_conflicts.append(str(job.id))
         elif job.execution_target_id:
-            await session.execute(
-                update(ExecutionTarget)
-                .where(
-                    ExecutionTarget.id == str(job.execution_target_id),
-                    ExecutionTarget.leased_job_id == str(job.id),
-                )
-                .values(
-                    leased_job_id=None,
-                    lease_acquired_at=None,
-                    updated_at=completed_at,
-                )
-                .execution_options(synchronize_session=False)
-            )
+            from services.remote_execution.fanout_lease import release_lease
+
+            await release_lease(session, job)
 
     if terminal_conflicts:
         await session.rollback()

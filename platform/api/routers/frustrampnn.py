@@ -3215,6 +3215,55 @@ async def get_child_receipt(
         raise HTTPException(404, str(exc)) from exc
 
 
+@router.get("/jobs/{parent_job_id}/workflow-children/{child_job_id}/results/{candidate_id}/bundle")
+async def download_parent_child_result(
+    parent_job_id: str,
+    child_job_id: str,
+    candidate_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    """A running parent's capability can read only its completed workflow children."""
+    from starlette.background import BackgroundTask
+    from starlette.concurrency import run_in_threadpool
+    from services.frustrampnn.parent_results import check_child_lineage, result_snapshot
+
+    parent = await session.get(Job, parent_job_id)
+    if parent is None:
+        raise HTTPException(404, "source parent Job not found")
+    scheme, _, capability = str(request.headers.get("authorization") or "").partition(" ")
+    if scheme.lower() != "bearer" or not stage_reporting.token_is_authorized(parent.provenance, capability):
+        raise HTTPException(403, "invalid parent workflow capability")
+    if parent.status != "running" or parent.queue_status != "running":
+        raise HTTPException(409, "source parent Job is not authoritatively running")
+    child = await session.get(Job, child_job_id)
+    if child is None:
+        raise HTTPException(404, "FrustraMPNN child Job not found")
+    try:
+        check_child_lineage(parent, child)
+        receipt = await child_receipt(session, child=child)
+        snapshot = await run_in_threadpool(result_snapshot, child, receipt, candidate_id)
+    except (FrustraMPNNChildError, ValueError, OSError, KeyError) as exc:
+        raise HTTPException(409, "child result authority is unavailable") from exc
+    snapshot.seek(0, os.SEEK_END)
+    size = snapshot.tell()
+    snapshot.seek(0)
+
+    def content():
+        try:
+            while chunk := snapshot.read(1024 * 1024):
+                yield chunk
+        finally:
+            snapshot.close()
+
+    return StreamingResponse(
+        content(), media_type="application/x-tar",
+        headers={"Content-Length": str(size), "Cache-Control": "no-store",
+                 "X-Content-Type-Options": "nosniff"},
+        background=BackgroundTask(snapshot.close),
+    )
+
+
 @router.get("/health")
 async def health_check():
     """Report scheduler integration health without probing runtime paths."""

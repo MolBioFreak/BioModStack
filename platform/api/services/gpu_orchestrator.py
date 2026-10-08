@@ -1417,6 +1417,17 @@ async def _claim_remote_job(
         return None
     from datetime import timedelta
     from services.remote_execution.targets import INVENTORY_MAX_AGE_SECONDS
+    from services.remote_execution.fanout_lease import (
+        HANDOFF_KEY, handoff_receipt, lending_parent, parent_snapshot,
+    )
+    parent = await lending_parent(session, job)
+    envelope = _normalize_job_params(job.params).get("_frustrampnn_child_v1", {})
+    if (isinstance(envelope, dict)
+            and envelope.get("trigger") == "parent_workflow_terminal_dataset"
+            and parent is None):
+        # A terminal-boundary child never escapes its parent's fenced placement,
+        # even when the target has become idle after cancellation/failure.
+        return None
     claim_now = datetime.utcnow()
     lease_transition = await session.execute(
         update(ExecutionTarget)
@@ -1430,7 +1441,9 @@ async def _claim_remote_job(
             ExecutionTarget.provider_metadata["inventory"]["checked_at"].as_string() >=
                 (claim_now - timedelta(seconds=INVENTORY_MAX_AGE_SECONDS)).isoformat(),
             ExecutionTarget.provider_metadata["inventory"]["checked_at"].as_string() <= claim_now.isoformat(),
-            ExecutionTarget.leased_job_id.is_(None),
+            (ExecutionTarget.leased_job_id == str(parent.id)) if parent is not None
+            else ExecutionTarget.leased_job_id.is_(None),
+            *([parent_snapshot(parent)] if parent is not None else []),
         )
         .values(
             leased_job_id=str(job.id),
@@ -1457,6 +1470,8 @@ async def _claim_remote_job(
         "admission_snapshot": dict(admission_snapshot or {}),
         "claimed_at": datetime.utcnow().isoformat() + "Z",
     }
+    if parent is not None:
+        provenance["remote_execution_assignment"][HANDOFF_KEY] = handoff_receipt(parent)
     transition = await session.execute(
         update(Job)
         .where(
@@ -1465,6 +1480,13 @@ async def _claim_remote_job(
             Job.queue_status == "queued",
             Job.paused.is_(False),
             Job.assigned_gpu.is_(None),
+            Job.provenance == job.provenance,
+            Job.parent_job_id == job.parent_job_id,
+            Job.model_id == job.model_id,
+            Job.mode == job.mode,
+            Job.child_stage == job.child_stage,
+            Job.execution_source_revision == job.execution_source_revision,
+            Job.execution_source_tree == job.execution_source_tree,
             Job.execution_target_id == target_id,
             Job.params == original,
             Job.started_at.is_(None),
@@ -2713,7 +2735,13 @@ class GPUOrchestrator:
                         for active in active_remote_jobs
                         if active.execution_target_id == job.execution_target_id
                     ]
-                    if target_active:
+                    from services.remote_execution.fanout_lease import lending_parent
+                    loan_parent = await lending_parent(session, job)
+                    if target_active and not (
+                        loan_parent is not None and len(target_active) == 1
+                        and str(target_active[0].id) == str(loan_parent.id)
+                        and target.leased_job_id == str(loan_parent.id)
+                    ):
                         job.remote_state = "waiting_remote_worker"
                         continue
                     vram = job.vram_estimate_mb
@@ -3168,20 +3196,10 @@ class GPUOrchestrator:
                 from sqlalchemy import select, func
                 from database import Job, Design
                 
-                # Recovery for older finalizers/crashes after terminal commit.
-                # Only a lease still owned by the exact terminal target/job pair
-                # is releasable; never rewrite immutable terminal job history.
-                from sqlalchemy import update
-                from database import ExecutionTarget
-                terminal_owner = select(Job.id).where(
-                    Job.id == ExecutionTarget.leased_job_id,
-                    Job.execution_target_id == ExecutionTarget.id,
-                    Job.status.in_(("completed", "failed", "cancelled")),
-                    Job.queue_status.in_(("completed", "failed", "cancelled")),
-                ).exists()
-                await session.execute(update(ExecutionTarget).where(terminal_owner).values(
-                    leased_job_id=None, lease_acquired_at=None,
-                ).execution_options(synchronize_session=False))
+                # Crash recovery must hand a terminal child's lease back to its
+                # still-live parent, not admit unrelated work beside that parent.
+                from services.remote_execution.fanout_lease import recover_terminal_leases
+                await recover_terminal_leases(session)
                 await session.commit()
                 # Preparing claims are durable work, not scheduler-claimable jobs.
                 result = await session.execute(

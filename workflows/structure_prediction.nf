@@ -165,6 +165,23 @@ def producerIdentitySha256(producerMeta) {
     ]).with { bytes -> sha256Hex(bytes) }
 }
 
+// Match services.frustrampnn.identity.deterministic_candidate_id.
+def structurePredictionCandidateId(parentJobId, producerStage, producerCandidateKey) {
+    def domain = [
+        'bms.frustrampnn.parent-candidate.v1',
+        parentJobId?.toString()?.trim(),
+        'structure_prediction',
+        producerStage?.toString()?.trim(),
+        producerCandidateKey?.toString()?.trim(),
+    ]
+    if (domain.tail().any { !it || it.contains('\u0000') }) {
+        throw new IllegalArgumentException('structure_prediction candidate identity fields must be non-empty and NUL-free')
+    }
+    def digest = java.security.MessageDigest.getInstance('SHA-256')
+        .digest(domain.join('\u0000').getBytes('UTF-8')).encodeHex().toString()[0..<32]
+    return "${digest[0..<8]}-${digest[8..<12]}-${digest[12..<16]}-${digest[16..<20]}-${digest[20..<32]}"
+}
+
 process PrepareStructurePredictionFrustraMPNNCandidate {
     tag "frustrampnn-source:${candidate_meta.producer_stage}:${candidate_meta.producer_candidate_key}"
     stageInMode 'copy'
@@ -327,6 +344,7 @@ workflow STRUCTURE_PREDICTION {
                 def producerIdentity = producerIdentitySha256(producer_meta)
                 def producerKey = "frustrampnn/sources/${method}/${artifactKey}.${producerIdentity.take(16)}.normalized.pdb"
                 tuple([
+                    candidate_id: structurePredictionCandidateId(params.job_id, "structure_prediction:${method}", producerKey),
                     parent_job_id: params.job_id.toString(),
                     parent_workflow_id: 'structure_prediction',
                     producer_stage: "structure_prediction:${method}",

@@ -339,6 +339,72 @@ def _input_assets(
     return [(path, relative) for path, relative in sorted(selected.items(), key=lambda item: str(item[0]))]
 
 
+def _frustrampnn_child_inputs(job: Any, params: dict[str, Any], root: Path) -> list[tuple[Path, str]]:
+    """Relocate only manifest-declared snapshots; never rewrite closed authority bytes.
+
+    The manifest lives at child/inputs/<manifest>, so its parent.parent remains
+    the snapshot namespace on either host. Each consumed file is an ordinary
+    envelope input record verified in place by worker preflight.
+    """
+    configured = params.get("frustrampnn_batch_manifest_path")
+    if not configured:
+        return []
+    if str(job.model_id).lower() != "frustrampnn":
+        raise RemoteBundleError("Scheduler child manifest requires FrustraMPNN ownership")
+    authority = (job.params or {}).get("_frustrampnn_child_v1", {})
+    manifest_relative = "inputs/frustrampnn_scheduler_batch_v3.json"
+    manifest = root / manifest_relative
+    if str(configured) != str(manifest) or authority.get("batch_manifest_relative_path") != manifest_relative:
+        raise RemoteBundleError("FrustraMPNN child manifest path authority is invalid")
+
+    def checked(path: Path, size: Any, digest: Any) -> bytes:
+        if any(part.is_symlink() for part in (path, *path.parents)) or not path.is_file():
+            raise RemoteBundleError("FrustraMPNN snapshot must be a regular non-symlink file")
+        payload = path.read_bytes()
+        if type(size) is not int or len(payload) != size or hashlib.sha256(payload).hexdigest() != digest:
+            raise RemoteBundleError("FrustraMPNN snapshot digest/size authority is invalid")
+        return payload
+
+    payload = checked(manifest, authority.get("batch_manifest_size_bytes"), authority.get("batch_manifest_sha256"))
+    batch = json.loads(payload)
+    fields = {"schema_name", "schema_version", "execution_owner_job_id", "batching_enabled",
+              "structures_per_job", "settings_sha256", "expected_cardinality", "records"}
+    if (not isinstance(batch, dict) or set(batch) != fields or payload != _canonical_bytes(batch)
+            or batch.get("schema_name") != "bms_frustrampnn_scheduler_batch" or batch.get("schema_version") != 3
+            or batch.get("execution_owner_job_id") != str(job.id)
+            or type(batch.get("batching_enabled")) is not bool
+            or type(batch.get("structures_per_job")) is not int
+            or not 1 <= batch["structures_per_job"] <= 250
+            or not isinstance(batch.get("records"), list)
+            or not 1 <= len(batch["records"]) <= batch["structures_per_job"]
+            or batch.get("expected_cardinality") != len(batch["records"])
+            or (not batch["batching_enabled"] and len(batch["records"]) != 1)):
+        raise RemoteBundleError("FrustraMPNN child batch authority is invalid")
+    selected = {manifest: f"frustrampnn-child/{manifest_relative}"}
+    kinds = {"request": ("requests", "workflow_component_request_v3.json"),
+             "source": ("sources", "canonical_source.pdb"),
+             "structure_map": ("maps", "frustrampnn_structure_map_v1.json")}
+    record_fields = {"record_schema_name", "record_schema_version", "ordinal", "candidate_id", "invocation_id"}
+    record_fields.update(f"{kind}_{suffix}" for kind in kinds for suffix in ("relative_path", "sha256", "size_bytes"))
+    for ordinal, record in enumerate(batch["records"]):
+        if (not isinstance(record, dict) or set(record) != record_fields
+                or record.get("record_schema_name") != "bms_frustrampnn_scheduler_record"
+                or record.get("record_schema_version") != 2 or type(record.get("ordinal")) is not int
+                or record["ordinal"] != ordinal):
+            raise RemoteBundleError("FrustraMPNN child record authority is invalid")
+        for kind, (directory, filename) in kinds.items():
+            relative = record[f"{kind}_relative_path"]
+            if not isinstance(relative, str) or not re.fullmatch(
+                    rf"inputs/{directory}/[A-Za-z0-9_-][A-Za-z0-9._-]*/{re.escape(filename)}", relative):
+                raise RemoteBundleError("FrustraMPNN snapshot path escapes declared child namespace")
+            path = root / relative
+            checked(path, record[f"{kind}_size_bytes"], record[f"{kind}_sha256"])
+            if path in selected:
+                raise RemoteBundleError("FrustraMPNN snapshot path is duplicated")
+            selected[path] = f"frustrampnn-child/{relative}"
+    return list(selected.items())
+
+
 def _rewrite(value: str, path_map: dict[str, str]) -> str:
     candidate = PurePosixPath(value)
     if not candidate.is_absolute() or ".." in candidate.parts:
@@ -554,6 +620,13 @@ def prepare_remote_bundle(
         runtime_paths=runtime_paths,
         output_dir=local_output,
     )
+    child_inputs = _frustrampnn_child_inputs(job, effective_params, local_output)
+    if child_inputs:
+        declared = {path for path, _ in child_inputs}
+        # Replace the standalone hashed manifest with one physically coherent,
+        # closed snapshot namespace. Do not copy the child output directory.
+        input_assets = [(path, relative) for path, relative in input_assets if path not in declared]
+        input_assets.extend(child_inputs)
     input_records: list[RemoteFileRecord] = []
     input_transfers: list[TransferPlan] = []
     input_path_map: dict[str, str] = {}

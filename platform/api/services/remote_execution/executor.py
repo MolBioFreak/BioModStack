@@ -31,6 +31,7 @@ from .bundle import (
 )
 from .contracts import RemoteAttemptStatus, RemoteResultManifest
 from .targets import ExecutionTargetError, get_ready_target, target_eligible
+from .fanout_lease import child_launch_parent_authority, lease_authority, release_lease
 from .transport import (
     RemoteConnection,
     RemoteTransportError,
@@ -330,14 +331,17 @@ async def _publish_remote_transition(
     session: AsyncSession, job: Job, values: dict[str, Any], *, release_lease: bool = False,
 ) -> bool:
     """CAS the complete attempt/claim snapshot; never autoflush a stale owner."""
-    lease_authority = [select(ExecutionTarget.id).where(
-        ExecutionTarget.id == job.execution_target_id,
-        ExecutionTarget.leased_job_id == str(job.id),
-    ).exists()]
+    authority = [lease_authority(job)]
+    if values.get("remote_state") == "launch_requested":
+        # A lent parent can be observed/stopped, never restarted beside its child.
+        authority = [select(ExecutionTarget.id).where(
+            ExecutionTarget.id == job.execution_target_id,
+            ExecutionTarget.leased_job_id == str(job.id),
+        ).exists(), child_launch_parent_authority(job)]
     with session.no_autoflush:
         result = await session.execute(
             update(Job).where(
-                *lease_authority,
+                *authority,
                 Job.id == str(job.id),
                 Job.status == job.status,
                 Job.queue_status == job.queue_status,
@@ -555,10 +559,7 @@ async def _acquire_remote_terminal_fence(session: AsyncSession, job: Job) -> boo
             Job.queue_status == "running",
             Job.execution_target_id == job.execution_target_id,
             Job.remote_state == job.remote_state,
-            select(ExecutionTarget.id).where(
-                ExecutionTarget.id == job.execution_target_id,
-                ExecutionTarget.leased_job_id == str(job.id),
-            ).exists(),
+            lease_authority(job),
             Job.nextflow_run_id == job.nextflow_run_id,
             Job.remote_attempt_id == job.remote_attempt_id,
         )
@@ -573,22 +574,7 @@ async def _acquire_remote_terminal_fence(session: AsyncSession, job: Job) -> boo
 
 
 async def _release_remote_target_lease(session: AsyncSession, job: Job) -> None:
-    target_id = str(job.execution_target_id or "").strip()
-    if not target_id:
-        return
-    await session.execute(
-        update(ExecutionTarget)
-        .where(
-            ExecutionTarget.id == target_id,
-            ExecutionTarget.leased_job_id == str(job.id),
-        )
-        .values(
-            leased_job_id=None,
-            lease_acquired_at=None,
-            updated_at=datetime.utcnow(),
-        )
-        .execution_options(synchronize_session=False)
-    )
+    await release_lease(session, job)
 
 
 def _preparation_expired(job: Job) -> bool:

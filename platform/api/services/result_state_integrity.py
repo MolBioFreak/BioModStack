@@ -350,16 +350,15 @@ async def finalize_successful_job(
     epitope_residues: Optional[list[str]] = None,
 ) -> FinalizationResult:
     """Ingest, validate, and commit results before exposing terminal completion."""
+    from services.remote_execution.fanout_lease import lease_authority
+
     job_id = str(job.id)
     remote_authority = (
         [Job.execution_target_id == job.execution_target_id,
          Job.remote_attempt_id == job.remote_attempt_id,
          Job.nextflow_run_id == job.nextflow_run_id,
          Job.remote_state == job.remote_state,
-         select(ExecutionTarget.id).where(
-             ExecutionTarget.id == job.execution_target_id,
-             ExecutionTarget.leased_job_id == job_id,
-         ).exists()]
+         lease_authority(job)]
         if job.execution_target_id else []
     )
     if ingest_fn is None:

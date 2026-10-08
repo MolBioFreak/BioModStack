@@ -3853,6 +3853,24 @@ async def _ingest_explicit_frustrampnn_results(
         if isinstance(terminal_states, dict)
         else []
     )
+    from services.frustrampnn.parent_fanout_acceptance import accept_parent_fanout_terminal
+
+    if await accept_parent_fanout_terminal(
+        current_job,
+        output_path,
+        session,
+        explicit_paths=[
+            path
+            for stage, outputs in (current_job.stage_outputs or {}).items()
+            if str(stage).strip().lower() in _FRUSTRAMPNN_TERMINAL_STAGES
+            for path in _explicit_stage_paths(outputs)
+        ] if isinstance(current_job.stage_outputs, dict) else [],
+        terminal_entries=frustrampnn_terminal_entries,
+    ):
+        # Scheduler children already own their native FrustraMPNN results.
+        # Accept their terminal evidence, then ingest ordinary parent structures.
+        return None
+
     not_requested_entries = [
         (stage, state)
         for stage, state in frustrampnn_terminal_entries
