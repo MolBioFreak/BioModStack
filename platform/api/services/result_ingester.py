@@ -495,14 +495,20 @@ async def ingest_loose_files(
             continue
         
         recursive_scan = search_dir.name in {"pdb_files", "validated_designs", "collected"} or "collected" in search_dir.parts
-        json_files = list(search_dir.rglob("confidence_*.json")) if recursive_scan else list(search_dir.glob("confidence_*.json"))
+        json_files = set(list(search_dir.rglob("confidence_*.json")) if recursive_scan else list(search_dir.glob("confidence_*.json")))
+        boltz_aligned_jsons = list(search_dir.rglob("*_boltzpred.json")) if recursive_scan else list(search_dir.glob("*_boltzpred.json"))
+        json_files.update(boltz_aligned_jsons)
+        json_files = sorted(json_files)
         print(f"[Ingester DEBUG] {search_dir}: {len(json_files)} confidence JSONs found")
         
         # BOLTZ2: Look for confidence_*.json patterns
         for json_file in json_files:
             try:
-                # Filename format: confidence_DESIGNNAME.json
-                design_name = json_file.stem.replace("confidence_", "")
+                raw_name = json_file.stem
+                if raw_name.endswith("_boltzpred"):
+                    design_name = raw_name.replace("_boltzpred", "")
+                else:
+                    design_name = raw_name.replace("confidence_", "")
                 
                 # Skip input templates (no numeric suffix) - these are not actual designs
                 # Actual designs are named like: boltzgen_input_0, boltzgen_input_1, etc.
@@ -515,19 +521,22 @@ async def ingest_loose_files(
                     continue
                 
                 # Look for corresponding Structure (CIF preferred for complexes, PDB fallback)
-                structure_path = search_dir / f"{design_name}.cif"
-                if not structure_path.exists():
-                    structure_path = output_path / "pdb_files" / f"{design_name}.cif"
-                
-                if not structure_path.exists():
-                    # Fallback to PDB
-                    structure_path = search_dir / f"{design_name}.pdb"
-                    if not structure_path.exists():
-                        structure_path = output_path / "pdb_files" / f"{design_name}.pdb"
-                    if not structure_path.exists():
-                        structure_path = output_path / "pdb_files" / "predictions" / f"{design_name}.pdb"
-                
-                if not structure_path.exists():
+                structure_candidates = [
+                    search_dir / f"{design_name}.cif",
+                    output_path / "pdb_files" / f"{design_name}.cif",
+                    search_dir / f"{raw_name}.pdb",
+                    search_dir / f"{design_name}_boltzpred.pdb",
+                    search_dir / f"{design_name}.pdb",
+                    output_path / "pdb_files" / f"{raw_name}.pdb",
+                    output_path / "pdb_files" / f"{design_name}_boltzpred.pdb",
+                    output_path / "pdb_files" / f"{design_name}.pdb",
+                    output_path / "pdb_files" / "predictions" / f"{raw_name}.pdb",
+                    output_path / "pdb_files" / "predictions" / f"{design_name}_boltzpred.pdb",
+                    output_path / "pdb_files" / "predictions" / f"{design_name}.pdb",
+                ]
+                structure_path = next((candidate for candidate in structure_candidates if candidate.exists()), None)
+
+                if structure_path is None:
                     continue
                     
                 # Read Boltz2 metrics
@@ -772,6 +781,8 @@ async def ingest_loose_files(
                     base_name, sample_rank = stem.rsplit("_summary_confidence_sample_", 1)
                     design_name = f"{base_name}_sample_{sample_rank}"
                     candidate = json_file.with_name(f"{design_name}.cif")
+                    if not candidate.exists():
+                        candidate = json_file.with_name(f"{design_name}.pdb")
                     if candidate.exists():
                         structure_path = candidate
 
@@ -781,10 +792,14 @@ async def ingest_loose_files(
                 # Legacy format: confidence.json in per-sample subdir
                 if structure_path is None:
                     cif_files = list(json_file.parent.glob("*.cif"))
-                    if not cif_files:
-                        print(f"[Ingester] No CIF found for Protenix design {design_name}")
-                        continue
-                    structure_path = cif_files[0]
+                    if cif_files:
+                        structure_path = cif_files[0]
+                    else:
+                        pdb_files = list(json_file.parent.glob("*.pdb"))
+                        if not pdb_files:
+                            print(f"[Ingester] No CIF/PDB found for Protenix design {design_name}")
+                            continue
+                        structure_path = pdb_files[0]
 
                 # Read Protenix confidence metrics
                 with open(json_file, 'r') as f:
@@ -821,6 +836,8 @@ async def ingest_loose_files(
                 if disorder is None:
                     disorder = metrics.get('full_disorder_prob_mean')
                 num_recycles = metrics.get('num_recycles')
+                rmsd_overall = metrics.get('rmsd_overall') or metrics.get('protenix_overall_rmsd')
+                rmsd_binder = metrics.get('rmsd_binder') or metrics.get('protenix_binder_rmsd')
 
                 pae = metrics.get('complex_pae') or metrics.get('pae') or metrics.get('gpde')
                 if pae is None:
@@ -845,6 +862,8 @@ async def ingest_loose_files(
                     ptm=safe_float(ptm),
                     iptm=safe_float(iptm),
                     protein_iptm=safe_float(protein_iptm),
+                    rmsd_overall=safe_float(rmsd_overall),
+                    rmsd_binder=safe_float(rmsd_binder),
                     conf_score=safe_float(conf_score),
                     ligand_iptm=safe_float(ligand_iptm),
                     complex_iplddt=safe_float(complex_iplddt),

@@ -46,6 +46,25 @@ DEFAULT_DB_PATH = os.getenv("BMS_COLABFOLD_DB") or str(_default_data_root / "col
 DEFAULT_CACHE_DIR = os.getenv("BMS_MSA_CACHE") or str(_default_data_root / "msa_cache")
 
 
+def read_persisted_msa_pinned_gpu_id(cache_dir: Optional[Path]) -> Optional[int]:
+    """Read the global MSA GPU pin from shared gpuserver settings."""
+    try:
+        base_cache = Path(cache_dir) if cache_dir else Path(DEFAULT_CACHE_DIR)
+        runtime_root = base_cache / ".gpuserver"
+        settings_path = runtime_root / "settings.json"
+        if not settings_path.exists():
+            return None
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return None
+        raw_value = data.get("pinned_gpu_id")
+        if raw_value in (None, ""):
+            return None
+        return int(raw_value)
+    except Exception:
+        return None
+
+
 def compute_sequence_hash(sequence: str) -> str:
     """Compute SHA256 hash of sequence for cache key."""
     return hashlib.sha256(sequence.encode()).hexdigest()
@@ -138,7 +157,7 @@ def _run_colabfold_per_sequence(
     output_dir: Path,
     db_path: Path,
     cache_dir: Optional[Path],
-    gpu_id: int,
+    gpu_id: Optional[int],
     reference_sequence: Optional[str],
     force_refresh: bool,
     cpu_only: bool,
@@ -185,8 +204,9 @@ def _run_colabfold_per_sequence(
             "--out_dir", str(output_dir),
             "--db_path", str(db_path),
             "--preset", preset,
-            "--gpu-id", str(gpu_id),
         ]
+        if gpu_id is not None:
+            cmd.extend(["--gpu-id", str(gpu_id)])
         if max_seqs is not None:
             cmd.extend(["--max-seqs", str(max(1, int(max_seqs)))])
 
@@ -277,7 +297,7 @@ def run_batch_msa(
     output_dir: Path,
     db_path: Path,
     cache_dir: Optional[Path],
-    gpu_id: int = 0,
+    gpu_id: Optional[int] = None,
     reference_sequence: Optional[str] = None,
     force_refresh: bool = False,
     cpu_only: bool = False,
@@ -326,10 +346,19 @@ def run_batch_msa(
         or min_depth_fail is not None
     )
 
+    effective_gpu_id = gpu_id
+    if effective_gpu_id is None and not cpu_only:
+        effective_gpu_id = read_persisted_msa_pinned_gpu_id(cache_dir)
+        if effective_gpu_id is not None:
+            print(f"Using persisted MSA GPU pin: {effective_gpu_id}")
+    if effective_gpu_id is None and not cpu_only:
+        effective_gpu_id = 0
+        print("No explicit or persisted MSA GPU pin found; defaulting batch MSA to GPU 0")
+
     print(f"\n=== True Batch MSA Generation ===")
     print(f"Sequences: {len(sequences)}")
     print(f"Output: {output_dir}")
-    print(f"GPU: {gpu_id}")
+    print(f"GPU: {effective_gpu_id}")
     print(f"CPU only: {cpu_only}")
     print(f"Preset: {preset}")
     print(f"Max seqs: {max_seqs if max_seqs is not None else 'preset default'}")
@@ -392,7 +421,7 @@ def run_batch_msa(
                     output_dir=output_dir,
                     db_path=db_path,
                     cache_dir=cache_dir,
-                    gpu_id=gpu_id,
+                    gpu_id=effective_gpu_id,
                     reference_sequence=reference_sequence,
                     force_refresh=force_refresh,
                     cpu_only=cpu_only,
@@ -485,8 +514,8 @@ def run_batch_msa(
     
     # Set GPU environment
     env = os.environ.copy()
-    if use_gpu:
-        env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    if use_gpu and effective_gpu_id is not None:
+        env["CUDA_VISIBLE_DEVICES"] = str(effective_gpu_id)
     
     try:
         # ═══════════════════════════════════════════════════════════════════════
@@ -505,7 +534,7 @@ def run_batch_msa(
         search_tmp = tmp_dir / "search_tmp"
         search_tmp.mkdir(exist_ok=True)
         
-        print(f"  Running batch search ({'GPU ' + str(gpu_id) if use_gpu else 'CPU'})...")
+        print(f"  Running batch search ({'GPU ' + str(effective_gpu_id) if use_gpu else 'CPU'})...")
         effective_max_seqs = max(1, int(max_seqs)) if max_seqs is not None else 300
         search_cmd = [
             mmseqs_bin, "search",
@@ -666,7 +695,7 @@ if __name__ == "__main__":
                        help="Path to MSA cache directory")
     parser.add_argument("--force_refresh", action="store_true",
                        help="Bypass cache and regenerate MSAs")
-    parser.add_argument("--gpu_id", type=int, default=0,
+    parser.add_argument("--gpu_id", type=int, default=None,
                        help="GPU ID to use for search")
     parser.add_argument("--cpu-only", action="store_true",
                        help="Force CPU mode (disable GPU MMseqs2)")

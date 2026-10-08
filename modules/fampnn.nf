@@ -19,8 +19,9 @@ process PrepFAMPNN {
 
     // Parse rfantibody_design_loops_custom if available by removing brackets
     def customCdrPositions = ''
-    if (params.rfantibody_design_loops_custom) {
-        customCdrPositions = params.rfantibody_design_loops_custom.replace('[', '').replace(']', '')
+    def customLoopSpec = params.get('rfantibody_design_loops_custom')
+    if (customLoopSpec) {
+        customCdrPositions = customLoopSpec.replace('[', '').replace(']', '')
     }
     def customCdrFlag = customCdrPositions ? "--cdr_positions \"${customCdrPositions}\"" : ""
 
@@ -79,6 +80,17 @@ process RunFAMPNN {
     path "*.log"
 
     script:
+    def checkpointPreset = (params.fampnn_checkpoint ?: '').toString().trim()
+    def checkpointOverride = (params.fampnn_checkpoint_path ?: '').toString().trim()
+    def checkpointMap = [
+        'fampnn_0_0.pt': '/app/fampnn/weights/fampnn_0_0.pt',
+        'fampnn_0_3.pt': '/app/fampnn/weights/fampnn_0_3.pt',
+        'fampnn_0_3_cath.pt': '/app/fampnn/weights/fampnn_0_3_cath.pt',
+    ]
+    def checkpointPath = checkpointOverride ?: checkpointMap.get(checkpointPreset, checkpointPreset)
+    if (!checkpointPath) {
+        throw new IllegalArgumentException("FAMPNN checkpoint not configured. Set params.fampnn_checkpoint or params.fampnn_checkpoint_path.")
+    }
     """
     mkdir -p results
 
@@ -86,7 +98,7 @@ process RunFAMPNN {
     # legacy FAMPNN checkpoints saved with defaultdict metadata.
     TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 python /app/fampnn/fampnn/inference/seq_design.py \\
         batch_size=${params.fampnn_batch_size ?: 16} \\
-        checkpoint_path=/app/fampnn/weights/fampnn_0_3.pt \\
+        checkpoint_path=${checkpointPath} \\
         exclude_cys=${params.fampnn_exclude_cys != null ? params.fampnn_exclude_cys : true} \\
         fixed_pos_csv=${csv} \\
         num_seqs_per_pdb=${params.seqs_per_design ?: 8} \\
@@ -135,6 +147,8 @@ process FilterFAMPNN {
     label 'pyrosetta_tools'
 
     publishDir "${params.out_dir}/run/filter_fampnn", mode: 'copy', pattern: '*.log'
+    publishDir "${params.out_dir}/collected/fampnn_filtered", mode: 'copy', pattern: 'filtered_output/*.pdb', saveAs: { fn -> fn.replace('filtered_output/', '') }
+    publishDir "${params.out_dir}/collected/fampnn_filtered", mode: 'copy', pattern: 'filtered_output/*.json', saveAs: { fn -> fn.replace('filtered_output/', '') }
 
     input:
     tuple path(pdb_files), path(json_files)

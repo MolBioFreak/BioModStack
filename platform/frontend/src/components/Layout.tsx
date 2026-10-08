@@ -854,17 +854,20 @@ function MSAServerSettingsMenu() {
     const [isOpen, setIsOpen] = useState(false);
     const [loading, setLoading] = useState<string | null>(null);
     const [status, setStatus] = useState<any>(null);
+    const [availableGpus, setAvailableGpus] = useState<Array<{ index: number; name: string; memory_total_mb?: number }>>([]);
     const [settings, setSettings] = useState({
         include_envdb_on_start: false,
         auto_stop_idle_enabled: false,
-        auto_stop_idle_minutes: 10
+        auto_stop_idle_minutes: 10,
+        pinned_gpu_id: null as number | null,
     });
 
     const fetchState = async () => {
         try {
-            const [statusRes, settingsRes] = await Promise.all([
+            const [statusRes, settingsRes, gpuRes] = await Promise.all([
                 fetch('/api/msa/server/status'),
-                fetch('/api/msa/server/settings')
+                fetch('/api/msa/server/settings'),
+                fetch('/api/gpu/gpus'),
             ]);
 
             if (statusRes.ok) {
@@ -879,6 +882,13 @@ function MSAServerSettingsMenu() {
                 const settingsData = await settingsRes.json();
                 if (settingsData?.settings) {
                     setSettings((prev) => ({ ...prev, ...settingsData.settings }));
+                }
+            }
+
+            if (gpuRes.ok) {
+                const gpuData = await gpuRes.json();
+                if (Array.isArray(gpuData?.gpus)) {
+                    setAvailableGpus(gpuData.gpus);
                 }
             }
         } catch (error) {
@@ -916,7 +926,10 @@ function MSAServerSettingsMenu() {
             await fetch('/api/msa/server/start', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ include_envdb: settings.include_envdb_on_start })
+                body: JSON.stringify({
+                    include_envdb: settings.include_envdb_on_start,
+                    gpu_id: settings.pinned_gpu_id ?? undefined,
+                })
             });
             await fetchState();
         } catch (error) {
@@ -932,7 +945,9 @@ function MSAServerSettingsMenu() {
             await fetch('/api/msa/server/stop', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({})
+                body: JSON.stringify({
+                    gpu_id: settings.pinned_gpu_id ?? undefined,
+                })
             });
             await fetchState();
         } catch (error) {
@@ -955,6 +970,7 @@ function MSAServerSettingsMenu() {
         })
         : [];
     const summary = [
+        `Pinned GPU: ${settings.pinned_gpu_id ?? 'auto'}`,
         `GPU: ${status?.effective_gpu_id ?? 'n/a'}`,
         `Running: ${running ? 'yes' : 'no'} | Full target set: ${allRunning ? 'yes' : 'no'}`,
         `Expected DBs: ${(status?.expected_aliases || []).join(', ') || 'n/a'}`,
@@ -1021,6 +1037,31 @@ function MSAServerSettingsMenu() {
                             />
                             Start EnvDB server with UniRef (higher VRAM/IO)
                         </label>
+
+                        <div className="space-y-1">
+                            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                                Pinned GPU
+                            </label>
+                            <select
+                                value={settings.pinned_gpu_id ?? ''}
+                                onChange={(e) => {
+                                    const raw = e.target.value;
+                                    saveSettings({ pinned_gpu_id: raw === '' ? null : Number(raw) });
+                                }}
+                                disabled={loading !== null}
+                                className="w-full px-3 py-2 rounded border border-slate-600 bg-slate-900 text-slate-100 text-sm"
+                            >
+                                <option value="">Auto-select from scheduler</option>
+                                {availableGpus.map((gpu) => (
+                                    <option key={gpu.index} value={gpu.index}>
+                                        GPU {gpu.index}: {gpu.name}{typeof gpu.memory_total_mb === 'number' ? ` (${(gpu.memory_total_mb / 1024).toFixed(0)} GB)` : ''}
+                                    </option>
+                                ))}
+                            </select>
+                            <p className="text-xs text-slate-400">
+                                Sets the default GPU for MSA server status, start, and stop actions. Leave on auto to use scheduler preference.
+                            </p>
+                        </div>
 
                         <div className="space-y-2 border border-slate-700 rounded-lg p-2">
                             <label className="flex items-center gap-2 text-sm text-slate-300">

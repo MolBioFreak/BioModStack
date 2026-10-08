@@ -604,11 +604,11 @@ async def launch_msa_batch_job(
         sequences_json = _json.dumps(sequences_json)
     elif not isinstance(sequences_json, str):
         sequences_json = '[]'
-    raw_gpu_id = params.get('gpu_id', 0)
+    raw_gpu_id = params.get('gpu_id')
     try:
-        gpu_id = int(raw_gpu_id)
+        gpu_id = int(raw_gpu_id) if raw_gpu_id is not None else None
     except (TypeError, ValueError):
-        gpu_id = 0
+        gpu_id = None
     reference_sequence = params.get('reference_sequence', '')
     force_refresh = params.get('msa_force_refresh', False)
     msa_use_gpu_raw = params.get('msa_use_gpu', True)
@@ -647,9 +647,10 @@ async def launch_msa_batch_job(
         "--output_dir", output_dir,
         "--db_path", db_path,
         "--cache_dir", cache_dir,
-        "--gpu_id", str(gpu_id),
         "--preset", msa_preset,
     ]
+    if gpu_id is not None:
+        cmd.extend(["--gpu_id", str(gpu_id)])
     if reference_sequence:
         cmd.extend(["--reference_sequence", reference_sequence])
     if force_refresh:
@@ -1229,9 +1230,14 @@ async def launch_nextflow_job(
                     if exit_code == 0:
                         # Allow launcher finalization to heal stale reconciliations where
                         # the orchestrator may have prematurely marked this job complete.
-                        job.status = JobStatus.COMPLETED.value
-                        job.queue_status = 'completed'
-                        job.current_stage = "Complete"
+                        if job.awaiting_input:
+                            job.status = JobStatus.AWAITING_INPUT.value
+                            job.queue_status = 'paused'
+                            job.current_stage = job.awaiting_stage or job.current_stage or "Awaiting Input"
+                        else:
+                            job.status = JobStatus.COMPLETED.value
+                            job.queue_status = 'completed'
+                            job.current_stage = "Complete"
                         job.error_message = None
                         
                         # Ingest results into Design table
@@ -1394,6 +1400,27 @@ def build_nextflow_command(
         ('protenix', 'predict'): 'protenix',
         ('protenix', 'complex'): 'protenix',
     }
+
+    def resolve_antibody_validation_profile(default_profile: str) -> str:
+        antibody_modes = {
+            ('antibody_denovo', 'antibody_denovo_pipeline'),
+            ('antibody_denovo', 'default'),
+            ('template_antibody_denovo', 'antibody_denovo_pipeline'),
+            ('template_antibody_denovo', 'default'),
+            ('antibody_child', 'validation_batch'),
+        }
+        if (model_id, mode) not in antibody_modes:
+            return default_profile
+
+        validator = str(
+            params.get('structure_validator')
+            or params.get('validation_predictor')
+            or params.get('pred_method')
+            or 'boltz2'
+        ).strip().lower()
+        if validator == 'boltz':
+            validator = 'boltz2'
+        return 'protenix' if validator == 'protenix' else 'boltz'
     
     # Determine profile based on model and mode
     if (model_id, mode) in model_mode_to_profile:
@@ -1402,6 +1429,8 @@ def build_nextflow_command(
         effective_profile = mode_to_profile[mode]
     else:
         effective_profile = mode
+
+    effective_profile = resolve_antibody_validation_profile(effective_profile)
     
     # Handle GPU priority forcing
     gpu_priority = params.get('gpu_priority', 'auto')
@@ -1498,33 +1527,49 @@ def build_nextflow_command(
         if params.get(key) in (None, ""):
             cmd.extend([f"--{key}", str(value)])
 
-    # Inject scheduler-backed MSA GPU policy defaults when caller did not
-    # explicitly specify them. This keeps MSA routing aligned with the GPU
-    # scheduler UI and avoids accidental spillover onto folding GPUs.
+    # Inject MSA GPU policy defaults when caller did not explicitly specify them.
+    # Precedence:
+    # 1) job params
+    # 2) persisted MSA Server Settings GPU pin
+    # 3) scheduler global MSA preference list
     try:
         from services.gpu_config import read_scheduler_config
+        from services.msa_server import read_server_settings
 
         scheduler_cfg = read_scheduler_config() or {}
         global_cfg = scheduler_cfg.get("global", {}) if isinstance(scheduler_cfg, dict) else {}
         overrides_cfg = scheduler_cfg.get("overrides", {}) if isinstance(scheduler_cfg, dict) else {}
+        msa_server_settings = read_server_settings() or {}
 
         if params.get("msa_preferred_gpus") in (None, ""):
-            raw_preferred = global_cfg.get("msa_preferred_gpu_ids")
             preferred_ids = []
-            seen_preferred = set()
-            if isinstance(raw_preferred, list):
-                for gpu_id in raw_preferred:
-                    try:
-                        normalized_id = int(gpu_id)
-                    except (TypeError, ValueError):
-                        continue
-                    if normalized_id in seen_preferred:
-                        continue
-                    seen_preferred.add(normalized_id)
-                    preferred_ids.append(normalized_id)
+            preferred_source = None
+            raw_pinned_gpu = msa_server_settings.get("pinned_gpu_id")
+            if raw_pinned_gpu not in (None, ""):
+                try:
+                    preferred_ids = [int(raw_pinned_gpu)]
+                except (TypeError, ValueError):
+                    preferred_ids = []
+                if preferred_ids:
+                    preferred_source = "persisted MSA server settings"
+            if not preferred_ids:
+                raw_preferred = global_cfg.get("msa_preferred_gpu_ids")
+                seen_preferred = set()
+                if isinstance(raw_preferred, list):
+                    for gpu_id in raw_preferred:
+                        try:
+                            normalized_id = int(gpu_id)
+                        except (TypeError, ValueError):
+                            continue
+                        if normalized_id in seen_preferred:
+                            continue
+                        seen_preferred.add(normalized_id)
+                        preferred_ids.append(normalized_id)
+                if preferred_ids:
+                    preferred_source = "scheduler config"
             if preferred_ids:
                 params["msa_preferred_gpus"] = preferred_ids
-                logger.info(f"[MSA] Injected preferred GPUs from scheduler config: {params['msa_preferred_gpus']}")
+                logger.info(f"[MSA] Injected preferred GPUs from {preferred_source}: {params['msa_preferred_gpus']}")
 
         if params.get("msa_excluded_gpus") in (None, ""):
             excluded_ids = []
@@ -1599,6 +1644,7 @@ def build_nextflow_command(
         'protenix_n_step': 'protenix_n_step',
         'protenix_n_cycle': 'protenix_n_cycle',
         'protenix_use_msa': 'protenix_use_msa',
+        'protenix_msa_backend': 'protenix_msa_backend',
         'protenix_use_template': 'protenix_use_template',
         'protenix_enable_cache': 'protenix_enable_cache',
         'protenix_enable_fusion': 'protenix_enable_fusion',

@@ -21,6 +21,7 @@ class JobStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
     COMPLETED = "completed"
+    AWAITING_INPUT = "awaiting_input"
     FAILED = "failed"
     CANCELLED = "cancelled"
 
@@ -86,6 +87,10 @@ class JobResponse(BaseModel):
     current_stage: Optional[str] = None
     completed_stages: Optional[List[str]] = None
     stage_outputs: Optional[dict] = None
+    awaiting_input: Optional[bool] = None
+    awaiting_stage: Optional[str] = None
+    awaiting_payload: Optional[dict] = None
+    decision_history: Optional[List[dict]] = None
     
     model_config = ConfigDict(from_attributes=True)
     

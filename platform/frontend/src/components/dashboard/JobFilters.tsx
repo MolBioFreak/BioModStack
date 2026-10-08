@@ -38,6 +38,7 @@ export function JobFilters({
                     <option value="all">All Statuses</option>
                     <option value="running">Running</option>
                     <option value="queued">Queued</option>
+                    <option value="awaiting_input">Awaiting Input</option>
                     <option value="completed">Completed</option>
                     <option value="failed">Failed</option>
                     <option value="cancelled">Cancelled</option>

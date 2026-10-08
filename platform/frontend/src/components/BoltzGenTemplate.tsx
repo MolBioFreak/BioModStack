@@ -2018,6 +2018,7 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
                 }}
                 currentModelId="boltzgen"
                 currentMode={mode}
+                baseTemplateId="boltzgen_design"
                 onSelect={(template) => {
                     if (template.params.boltzgen_mode) setMode(template.params.boltzgen_mode as DesignMode);
                     if (template.params.boltzgen_scaffold_length) setScaffoldLength(template.params.boltzgen_scaffold_length);

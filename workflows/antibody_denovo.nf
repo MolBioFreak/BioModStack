@@ -62,12 +62,40 @@ def extractSequenceFromPDB(pdb_file) {
     return result ?: "AAAA"
 }
 
+def parseFastaRecords(fasta_file) {
+    def records = []
+    def currentId = null
+    def sequence = new StringBuilder()
+
+    fasta_file.eachLine { line ->
+        def trimmed = line?.trim()
+        if (!trimmed) {
+            return
+        }
+        if (trimmed.startsWith('>')) {
+            if (currentId != null) {
+                records << [id: currentId, sequence: sequence.toString()]
+            }
+            currentId = trimmed.substring(1).trim()
+            sequence = new StringBuilder()
+        } else {
+            sequence.append(trimmed)
+        }
+    }
+
+    if (currentId != null) {
+        records << [id: currentId, sequence: sequence.toString()]
+    }
+
+    return records
+}
+
 // Import modules
 include { RFANTIBODY } from '../modules/rfantibody'
 include { ANTIFOLD } from '../modules/antifold'
 include { PrepFAMPNN ; RunFAMPNN ; FilterFAMPNN } from '../modules/fampnn'
 include { PrepMPNN ; RunMPNN as ProteinMPNNSeq } from '../modules/proteinmpnn'
-include { ANTIBERTY_SCORE ; ANTIBERTY_FILTER } from '../modules/antiberty'
+include { ANTIBERTY_SCORE ; ANTIBERTY_FILTER_STRUCTURES } from '../modules/antiberty'
 include { THERMOMPNN } from '../modules/thermompnn'
 include { MergeComplex ; AF2_BACKPROP } from '../modules/af2_backprop'
 include { IGGM_AFFINITY_MATURATION } from '../modules/iggm'
@@ -77,6 +105,7 @@ include { ANARCII } from '../modules/utils/anarci'
 include { PredictTargetComplex } from '../modules/predict_target_complex'
 include { OpenMMRelaxation ; OpenMMScore } from '../modules/openmm'
 include { FrustrampnnQC ; AggregateFrustrationReports } from '../modules/frustrampnn'
+include { BatchProtenixValidation } from '../modules/antibody_batch'
 
 // =============================================================================
 // ORCHESTRATOR SPAWN-WAIT-COLLECT PROCESSES
@@ -102,14 +131,17 @@ process SpawnRFantibodyJobs {
     path "spawn_rfa_result.json", emit: result
     
     script:
+    def customLoopSpec = params.get('rfantibody_design_loops_custom')
     def params_json = groovy.json.JsonOutput.toJson([
         rfantibody_diffusion_steps: params.rfantibody_diffusion_steps ?: 50,
         rfantibody_noise_scale_ca: params.rfantibody_noise_scale_ca ?: 1.0,
         rfantibody_noise_scale_frame: params.rfantibody_noise_scale_frame ?: 1.0,
         rfantibody_guide_scale: params.rfantibody_guide_scale ?: 10,
         // Pass UI CDR loop selection - prefer custom UI index over general string flag if available
-        antibody_design_loops: params.rfantibody_design_loops_custom ?: (params.antibody_design_loops ?: '')
+        antibody_design_loops: customLoopSpec ?: (params.antibody_design_loops ?: ''),
+        antibody_chains: params.antibody_chains ?: 'H,L'
     ])
+    def frameworkArg = params.framework_pdb ? "--framework_pdb \"${params.framework_pdb}\" \\\n        " : ""
     """
     python3 ${params.code_root}/scripts/spawn_rfantibody_children.py \\
         --parent_job_id "${parent_job_id}" \\
@@ -118,11 +150,71 @@ process SpawnRFantibodyJobs {
         --target_pdb "\$(readlink -f ${target_pdb})" \\
         --epitope_residues "${epitope_residues}" \\
         --framework_type "${framework_type}" \\
+        ${frameworkArg}\
         --batch_name "${batch_name}" \\
         --params_json '${params_json}' \\
         --api_url "${params.api_url}" \\
         --output spawn_rfa_result.json \\
         2>&1 | tee spawn_rfa.log
+    """
+}
+
+process NormalizeTargetPDB {
+    label 'process_low'
+
+    publishDir "${params.out_dir}/input", mode: 'copy', pattern: "normalized_target.pdb"
+
+    input:
+    tuple val(meta), path(target_pdb)
+
+    output:
+    tuple val(meta), path("normalized_target.pdb"), emit: normalized
+
+    script:
+    def chainArg = params.antigen_chains ? "--chains \"${params.antigen_chains}\" \\\n        " : ""
+    """
+    python3 ${params.code_root}/scripts/normalize_target_pdb.py \\
+        --input "\$(readlink -f ${target_pdb})" \\
+        --output normalized_target.pdb \\
+        --first-model-only \\
+        ${chainArg}\
+        2>&1 | tee normalize_target.log
+    """
+}
+
+process CheckZeroYield {
+    label 'process_low'
+
+    input:
+    val candidate_count
+
+    output:
+    path "zero_yield_guard.ok", emit: ok
+
+    script:
+    def structureValidator = (params.structure_validator ?: 'boltz2').toString().toLowerCase()
+    def validationLabel = structureValidator == 'protenix' ? 'Protenix' : 'Boltz2'
+    def reportJson = groovy.json.JsonOutput.prettyPrint(
+        groovy.json.JsonOutput.toJson([
+            status: "completed_zero_yield",
+            reason: "No sequences survived upstream filtering or upstream child jobs failed before ${validationLabel} validation",
+            structure_validator: structureValidator,
+            fampnn_psce_threshold: params.fampnn_psce_threshold ?: "default",
+            fampnn_temperature: params.fampnn_temperature ?: "default",
+            recommendation: "Check RFantibody/FAMPNN child logs, confirm target antigen preprocessing, or relax FAMPNN filtering"
+        ])
+    )
+    """
+    set -euo pipefail
+    if [ "${candidate_count}" -le 0 ]; then
+        mkdir -p "${params.out_dir}"
+        cat > "${params.out_dir}/zero_yield_report.json" <<'JSON'
+${reportJson}
+JSON
+        echo "ZERO-YIELD: no designs reached ${validationLabel} validation" >&2
+        exit 1
+    fi
+    touch zero_yield_guard.ok
     """
 }
 
@@ -144,11 +236,13 @@ process SpawnFAMPNNJobs {
     
     script:
     def params_json = groovy.json.JsonOutput.toJson([
+        fampnn_checkpoint: params.fampnn_checkpoint,
+        fampnn_checkpoint_path: params.fampnn_checkpoint_path,
         fampnn_temperature: params.fampnn_temperature ?: 0.0001,
         fampnn_num_steps: params.fampnn_num_steps ?: 500,
         fampnn_psce_threshold: params.fampnn_psce_threshold ?: 0.15,
         fampnn_constraint_mode: params.fampnn_constraint_mode,
-        rfantibody_design_loops_custom: params.rfantibody_design_loops_custom
+        rfantibody_design_loops_custom: params.get('rfantibody_design_loops_custom')
     ])
     """
     python3 ${params.code_root}/scripts/spawn_fampnn_children.py \\
@@ -377,12 +471,14 @@ process SpawnMaturationJobs {
     val designs_per_job
     val parent_job_id
     val batch_name
+    val stage_name
 
     output:
     path "spawn_maturation_result.json", emit: result
 
     script:
     def params_json = groovy.json.JsonOutput.toJson([
+        framework_type: params.framework_type,
         antibody_chains: params.antibody_chains,
         antigen_chains: params.antigen_chains,
         epitope_residues: params.epitope_residues ?: "",
@@ -410,7 +506,7 @@ process SpawnMaturationJobs {
         fampnn_repack_last: params.fampnn_repack_last,
         fampnn_seq_only: params.fampnn_seq_only,
         fampnn_extra_config: params.fampnn_extra_config,
-        rfantibody_design_loops_custom: params.rfantibody_design_loops_custom
+        rfantibody_design_loops_custom: params.get('rfantibody_design_loops_custom')
     ])
     """
     python3 ${params.code_root}/scripts/spawn_maturation_children.py \\
@@ -418,6 +514,7 @@ process SpawnMaturationJobs {
         --pdb_dir "${pdb_dir}" \\
         --designs_per_job ${designs_per_job} \\
         --batch_name "${batch_name}" \\
+        --stage "${stage_name}" \\
         --params_json '${params_json}' \\
         --api_url "${params.api_url}" \\
         --output spawn_maturation_result.json \\
@@ -470,6 +567,199 @@ process CollectMaturationOutputs {
         --child_outputs_json "${child_outputs_json}" \\
         --stage_name "${stage_name}" \\
         --manifest collection_manifest.json
+    """
+}
+
+process StageValidatedMaturationInputs {
+    label 'process_low'
+
+    publishDir "${params.out_dir}/ppiflow/validated_input_pdbs", mode: 'copy', pattern: "*.pdb"
+
+    input:
+    path pdbs
+
+    output:
+    path "input_pdbs", emit: pdb_dir
+
+    script:
+    """
+    mkdir -p input_pdbs
+    cp ${pdbs} input_pdbs/ 2>/dev/null || true
+    """
+}
+
+process SpawnValidatedMaturationJobs {
+    label 'process_low'
+
+    publishDir "${params.out_dir}/spawn", mode: 'copy', pattern: "*.log"
+    publishDir "${params.out_dir}/spawn", mode: 'copy', pattern: "*.json"
+
+    input:
+    path pdb_dir
+    val designs_per_job
+    val parent_job_id
+    val batch_name
+    val stage_name
+
+    output:
+    path "spawn_validated_maturation_result.json", emit: result
+
+    script:
+    def params_json = groovy.json.JsonOutput.toJson([
+        framework_type: params.framework_type,
+        antibody_chains: params.antibody_chains,
+        antigen_chains: params.antigen_chains,
+        epitope_residues: params.epitope_residues ?: "",
+        ppiflow_start_t: params.ppiflow_start_t ?: 0.8,
+        ppiflow_samples_per_target: params.ppiflow_samples_per_target ?: 1,
+        ppiflow_retry_limit: params.ppiflow_retry_limit ?: 10,
+        ppiflow_config: params.ppiflow_config,
+        ppiflow_checkpoint: params.ppiflow_checkpoint,
+        ppiflow_checkpoint_path: params.ppiflow_checkpoint_path,
+        ppiflow_weights_dir: params.ppiflow_weights_dir,
+        ppiflow_antigen_chain: params.ppiflow_antigen_chain,
+        ppiflow_heavy_chain: params.ppiflow_heavy_chain,
+        ppiflow_light_chain: params.ppiflow_light_chain,
+        maturation_anchor_threshold: params.maturation_anchor_threshold ?: -5.0,
+        maturation_anchor_distance_cutoff: params.maturation_anchor_distance_cutoff ?: 8.0,
+        maturation_min_improvement: params.maturation_min_improvement ?: -1.0,
+        maturation_filter_percentile: params.maturation_filter_percentile,
+        maturation_redesign_temp: params.maturation_redesign_temp,
+        maturation_redesign_steps: params.maturation_redesign_steps,
+        maturation_design_mode: params.maturation_design_mode,
+        maturation_redesign_enabled: params.maturation_redesign_enabled,
+        maturation_redesign_top_n: params.maturation_redesign_top_n,
+        fampnn_psce_threshold: params.fampnn_psce_threshold,
+        fampnn_exclude_cys: params.fampnn_exclude_cys,
+        fampnn_repack_last: params.fampnn_repack_last,
+        fampnn_seq_only: params.fampnn_seq_only,
+        fampnn_extra_config: params.fampnn_extra_config,
+        rfantibody_design_loops_custom: params.get('rfantibody_design_loops_custom')
+    ])
+    """
+    python3 ${params.code_root}/scripts/spawn_maturation_children.py \\
+        --parent_job_id "${parent_job_id}" \\
+        --pdb_dir "${pdb_dir}" \\
+        --designs_per_job ${designs_per_job} \\
+        --batch_name "${batch_name}" \\
+        --stage "${stage_name}" \\
+        --params_json '${params_json}' \\
+        --api_url "${params.api_url}" \\
+        --output spawn_validated_maturation_result.json \\
+        2>&1 | tee spawn_validated_maturation.log
+    """
+}
+
+process WaitForValidatedMaturationChildren {
+    label 'process_low'
+
+    input:
+    val parent_job_id
+    val stage_name
+    val poll_interval_seconds
+    val batch_name
+
+    output:
+    path "child_outputs.json", emit: child_outputs
+
+    script:
+    """
+    python3 ${params.code_root}/scripts/wait_for_children.py \\
+        --parent_job_id "${parent_job_id}" \\
+        --stage "${stage_name}" \\
+        --poll_interval ${poll_interval_seconds} \\
+        --batch_name "${batch_name}" \\
+        --api_url "${params.api_url}" \\
+        --output child_outputs.json
+    """
+}
+
+process CollectValidatedMaturationOutputs {
+    label 'process_low'
+
+    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.pdb"
+    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.json"
+
+    input:
+    path child_outputs_json
+    val stage_name
+
+    output:
+    path "*.pdb", emit: pdbs, optional: true
+    path "*.json", emit: jsons, optional: true
+    path "collection_manifest.json", emit: manifest
+
+    script:
+    """
+    python3 ${params.code_root}/scripts/collect_maturation_outputs.py \\
+        --child_outputs_json "${child_outputs_json}" \\
+        --stage_name "${stage_name}" \\
+        --manifest collection_manifest.json
+    """
+}
+
+process StageStructureValidationArtifacts {
+    label 'process_low'
+
+    publishDir "${params.out_dir}/collected/structure_validation", mode: 'copy', pattern: "validation_artifacts/*"
+
+    input:
+    val pdbs
+
+    output:
+    path "validation_artifacts", emit: dir
+
+    script:
+    """
+    mkdir -p validation_artifacts
+    for pdb in ${pdbs}; do
+        [ -f "\$pdb" ] || continue
+        base="\$(basename "\$pdb")"
+        stem="\${base%.*}"
+        cp "\$pdb" "validation_artifacts/\$base"
+        for ext in json cif; do
+            sibling="\${pdb%.*}.\$ext"
+            if [ -f "\$sibling" ]; then
+                cp "\$sibling" "validation_artifacts/\${stem}.\$ext"
+            fi
+        done
+    done
+    """
+}
+
+process OpenInteractiveGate {
+    label 'process_low'
+
+    publishDir "${params.out_dir}/gates", mode: 'copy', pattern: "*.json"
+
+    input:
+    val job_id
+    val stage_name
+    val candidate_dir
+    val raw_dir
+    val filtered_dir
+    val framework_type
+    val antibody_chains
+    val structure_validator
+
+    output:
+    path "gate_${stage_name}.json", emit: report
+
+    script:
+    def filteredArg = filtered_dir ? "--filtered_dir \"${filtered_dir}\"" : ""
+    def rawArg = raw_dir ? "--raw_dir \"${raw_dir}\"" : ""
+    """
+    python3 ${params.code_root}/scripts/open_stage_gate.py \\
+        --job_id "${job_id}" \\
+        --stage "${stage_name}" \\
+        --candidate_dir "${candidate_dir}" \\
+        ${rawArg} \\
+        ${filteredArg} \\
+        --framework_type "${framework_type ?: ''}" \\
+        --antibody_chains "${antibody_chains ?: ''}" \\
+        --structure_validator "${structure_validator ?: ''}" \\
+        --api_url "${params.api_url}" \\
+        --output "gate_${stage_name}.json"
     """
 }
 
@@ -561,7 +851,7 @@ process SpawnChildJobs {
         --batch_name "${batch_name}" \\
         --msa_path "\$MSA_PERSIST_PATH" \\
         --params_json '${child_params_json}' \\
-        --seqs_per_boltz_job ${params.seqs_per_boltz_job ?: 10} \\
+        --seqs_per_validation_job ${params.seqs_per_validation_job ?: params.seqs_per_boltz_job ?: 10} \\
         --api_url "${params.api_url}" \\
         2>&1 | tee -a spawn.log
     
@@ -585,15 +875,19 @@ process WaitAndAggregateChildResults {
     label 'process_low'
     
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.pdb"
+    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.json"
+    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.cif"
     publishDir "${params.out_dir}", mode: 'copy', pattern: "aggregation_report.json"
     
     input:
     val parent_job_id
     val batch_name
     val expected_child_count
+    val child_stage
     
     output:
     path "validated_designs/*.pdb", emit: pdbs, optional: true
+    path "validated_designs/*.json", emit: scores, optional: true
     path "aggregation_report.json", emit: report
     
     script:
@@ -608,7 +902,7 @@ process WaitAndAggregateChildResults {
     # Wait for all children using the wait script
     python3 ${params.code_root}/scripts/wait_for_children.py \\
         --parent_job_id "${parent_job_id}" \\
-        --stage "boltz2" \\
+        --stage "${child_stage}" \\
         --batch_name "${batch_name}" \\
         --output wait_result.json \\
         --api_url "${params.api_url}" \\
@@ -633,9 +927,8 @@ with open('wait_result.json') as f:
             TOTAL_CHILDREN=\$((TOTAL_CHILDREN + 1))
             child_idx="\$TOTAL_CHILDREN"
             
-            # Look for Boltz-validated PDBs in child output
-            # Search multiple possible locations where Boltz outputs may be published
-            for subdir in "pdb_files/predictions" "pdb_files" "run/boltz/predictions" "run/boltz" ""; do
+            # Search multiple possible locations where validator outputs may be published
+            for subdir in "pdb_files/predictions" "pdb_files" "run/boltz/predictions" "run/boltz" "run/protenix/predictions" "run/protenix" ""; do
                 search_path="\$child_dir/\$subdir"
                 if [ -d "\$search_path" ]; then
                     for pdb in \$search_path/*.pdb; do
@@ -646,13 +939,18 @@ with open('wait_result.json') as f:
                             TOTAL_PDBS=\$((TOTAL_PDBS + 1))
                         fi
                     done
-                fi
-            done
-            
-            # Also collect confidence JSONs if present
-            for json_path in \$child_dir/pdb_files/predictions/*.json \$child_dir/pdb_files/*.json \$child_dir/run/boltz/predictions/*.json \$child_dir/run/boltz/*.json; do
-                if [ -f "\$json_path" ] 2>/dev/null; then
-                    cp "\$json_path" intermediates/scores/ 2>/dev/null || true
+                    for cif in \$search_path/*.cif; do
+                        if [ -f "\$cif" ]; then
+                            basename=\$(basename "\$cif")
+                            cp "\$cif" "validated_designs/\${child_idx}_\$basename" 2>/dev/null || true
+                        fi
+                    done
+                    for json_path in \$search_path/*.json; do
+                        if [ -f "\$json_path" ]; then
+                            basename=\$(basename "\$json_path")
+                            cp "\$json_path" "validated_designs/\${child_idx}_\$basename" 2>/dev/null || true
+                        fi
+                    done
                 fi
             done
         fi
@@ -692,13 +990,25 @@ EOF
 
 // Initialize missing parameters with defaults to suppress warnings
 if (!params.containsKey('framework_pdb')) params.framework_pdb = null
+if (!params.containsKey('run_id')) params.run_id = null
 if (!params.containsKey('analysis_chain_id')) params.analysis_chain_id = 'all_chains'
 if (!params.containsKey('filter_immunogenic')) params.filter_immunogenic = true
+if (!params.containsKey('run_immunogenicity_scoring')) params.run_immunogenicity_scoring = false
 if (!params.containsKey('run_affinity_maturation')) params.run_affinity_maturation = false
+if (!params.containsKey('run_post_boltz_maturation')) params.run_post_boltz_maturation = false
+if (!params.containsKey('run_post_validation_maturation')) params.run_post_validation_maturation = params.run_post_boltz_maturation
+if (!params.run_post_boltz_maturation && params.run_post_validation_maturation) params.run_post_boltz_maturation = params.run_post_validation_maturation
+if (!params.containsKey('structure_validator') || !params.structure_validator) params.structure_validator = 'boltz2'
 if (!params.containsKey('exploration_mode') || params.exploration_mode == null) params.exploration_mode = false
+if (!params.containsKey('pinned_gpus')) params.pinned_gpus = null
 if (!params.containsKey('job_id')) params.job_id = "job_${new java.text.SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date())}"
 if (!params.containsKey('job_name')) params.job_name = 'antibody_batch'
 if (!params.containsKey('fampnn_constraint_mode')) params.fampnn_constraint_mode = 'antibody'
+if (!params.containsKey('rfantibody_design_loops_custom')) params.rfantibody_design_loops_custom = null
+if (!params.containsKey('interactive_gating')) params.interactive_gating = false
+if (!params.containsKey('interactive_swa')) params.interactive_swa = false
+if (!params.containsKey('interactive_gate_stage') || !params.interactive_gate_stage) params.interactive_gate_stage = 'post_fampnn'
+if (!params.containsKey('interactive_gate_continue')) params.interactive_gate_continue = false
 
 // Orchestrator-based parallelism settings
 // 'standard' = Nextflow-internal parallelism (current behavior)
@@ -706,6 +1016,8 @@ if (!params.containsKey('fampnn_constraint_mode')) params.fampnn_constraint_mode
 if (!params.containsKey('parallel_mode')) params.parallel_mode = 'standard'
 if (!params.containsKey('designs_per_job')) params.designs_per_job = 5
 if (!params.containsKey('seqs_per_job')) params.seqs_per_job = 50
+if (!params.containsKey('seqs_per_boltz_job') || params.seqs_per_boltz_job == null) params.seqs_per_boltz_job = 10
+if (!params.containsKey('seqs_per_validation_job') || params.seqs_per_validation_job == null) params.seqs_per_validation_job = params.seqs_per_boltz_job ?: 10
 
 
 workflow ANTIBODY_DENOVO {
@@ -730,6 +1042,12 @@ workflow ANTIBODY_DENOVO {
     framework_for_rfantibody = framework_pdb_ch
         .map { meta, pdb -> pdb }
         .ifEmpty(framework_path)
+
+    if (params.framework_type == 'nanobody' &&
+        (!params.antibody_chains || params.antibody_chains.toString().trim() == 'H,L')) {
+        params.antibody_chains = 'H'
+        log.info("  Nanobody mode detected; defaulting antibody_chains to H for maturation/design stages")
+    }
     
     // Multi-GPU parallelism for RFantibody
     // Parse available GPUs from pinned_gpus param (e.g., "0,2" -> [0, 2])
@@ -758,13 +1076,14 @@ workflow ANTIBODY_DENOVO {
     // =========================================================================
     // SKIP RFANTIBODY: Load pre-existing backbone PDBs instead of generating
     // =========================================================================
-    def skip_rfantibody = params.skip_rfantibody == true || params.rfantibody_input_pdbs != null
-    
-    if (skip_rfantibody && params.rfantibody_input_pdbs) {
-        log.info("  SKIP: Loading pre-existing backbone PDBs from ${params.rfantibody_input_pdbs}")
+    def skip_rfantibody = params.skip_rfantibody == true || params.rfantibody_input_pdbs != null || params.fampnn_collected_pdbs != null
+    def skip_rfantibody_input_dir = params.rfantibody_input_pdbs ?: params.fampnn_collected_pdbs
+
+    if (skip_rfantibody && skip_rfantibody_input_dir) {
+        log.info("  SKIP: Loading pre-existing backbone PDBs from ${skip_rfantibody_input_dir}")
         
         // Load backbone PDBs from provided directory
-        backbone_designs = Channel.fromPath("${params.rfantibody_input_pdbs}/*.pdb")
+        backbone_designs = Channel.fromPath("${skip_rfantibody_input_dir}/*.pdb")
             .collect()
             .map { pdbs ->
                 log.info("  Loaded ${pdbs.size()} backbone PDBs")
@@ -904,6 +1223,9 @@ workflow ANTIBODY_DENOVO {
     fampnn_seqs = Channel.empty()
     antifold_seqs = Channel.empty()
     proteinmpnn_seqs = Channel.empty()
+    def fampnnRawDir = params.out_dir ? "${params.out_dir}/collected/fampnn" : null
+    def fampnnFilteredDir = params.out_dir ? "${params.out_dir}/collected/fampnn_filtered" : null
+    def fampnnCandidateDir = params.fampnn_collected_pdbs ? params.fampnn_collected_pdbs.toString() : null
 
     // FAMPNN branch - using GPU orchestrator spawn-wait-aggregate pattern
     if (run_fampnn) {
@@ -927,6 +1249,7 @@ workflow ANTIBODY_DENOVO {
                 def meta = [id: "fampnn_designs"]
                 [meta, pdbs]
             }
+            fampnnCandidateDir = params.fampnn_collected_pdbs.toString()
             
             // Skip the spawn/wait/collect/filter block
             
@@ -1027,6 +1350,7 @@ workflow ANTIBODY_DENOVO {
                     def meta = [id: "fampnn_designs"]
                     [meta, pdbs]
                 }
+                fampnnCandidateDir = fampnnFilteredDir ?: fampnnRawDir
             } else {
                 log.info("  FAMPNN filtering disabled (enable with fampnn_max_psce or fampnn_max_residue_psce)")
                 // Pass through unfiltered
@@ -1034,436 +1358,513 @@ workflow ANTIBODY_DENOVO {
                     def meta = [id: "fampnn_designs"]
                     [meta, pdbs]
                 }
+                fampnnCandidateDir = fampnnRawDir
             }
         } // End of else block (standard FAMPNN mode)
     }
 
-    // =====================================================================
-    // Step 2.4: PPIFlow Maturation (Interface Rotamer Enrichment + Partial Flow)
-    // Applies only to the FAMPNN branch
-    // =====================================================================
-    maturation_seqs = Channel.empty()
-    if (params.run_maturation == true) {
-        if (!run_fampnn) {
-            log.warn("PPIFlow maturation requested but FAMPNN is disabled; skipping maturation.")
-            maturation_seqs = fampnn_seqs
-        } else {
-            log.info("Step 2.4: Running PPIFlow maturation on FAMPNN outputs...")
-            log.info("  Spawning maturation child jobs (${params.maturation_designs_per_job ?: 4} PDBs per job)")
+    def interactiveGateEnabled = params.interactive_gating == true || params.interactive_swa == true
+    def shouldPauseAfterFampnn = interactiveGateEnabled &&
+        (params.interactive_gate_stage ?: 'post_fampnn') == 'post_fampnn' &&
+        params.interactive_gate_continue != true &&
+        run_fampnn &&
+        fampnnCandidateDir
 
-            // Stage inputs into a stable directory for child jobs
-            maturation_inputs = fampnn_seqs
-                .map { meta, pdbs -> pdbs }
-                .flatten()
-                .collect()
+    if (shouldPauseAfterFampnn) {
+        log.info("Interactive SWA gate: pausing after FAMPNN candidate collection at ${fampnnCandidateDir}")
+        OpenInteractiveGate(
+            params.job_id ?: "unknown",
+            "post_fampnn",
+            fampnnCandidateDir,
+            fampnnRawDir ?: "",
+            fampnnFilteredDir ?: "",
+            params.framework_type ?: "standard-fv",
+            params.antibody_chains ?: "",
+            params.structure_validator ?: "boltz2"
+        )
+        validated_structures = Channel.empty()
+        stability_scores_early = Channel.empty()
+    } else {
+        // =====================================================================
+        // Step 2.4: PPIFlow Maturation (Interface Rotamer Enrichment + Partial Flow)
+        // Applies only to the FAMPNN branch
+        // =====================================================================
+        maturation_seqs = Channel.empty()
+        if (params.run_maturation == true) {
+            if (!run_fampnn) {
+                log.warn("PPIFlow maturation requested but FAMPNN is disabled; skipping maturation.")
+                maturation_seqs = fampnn_seqs
+            } else {
+                log.info("Step 2.4: Running PPIFlow maturation on FAMPNN outputs...")
+                log.info("  Spawning maturation child jobs (${params.maturation_designs_per_job ?: 4} PDBs per job)")
 
-            StageMaturationInputs(maturation_inputs)
+                maturation_inputs = fampnn_seqs
+                    .map { meta, pdbs -> pdbs }
+                    .flatten()
+                    .collect()
 
-            SpawnMaturationJobs(
-                StageMaturationInputs.out.pdb_dir,
-                params.maturation_designs_per_job ?: 4,
-                params.job_id ?: "unknown",
-                orchestrator_batch_name
-            )
+                StageMaturationInputs(maturation_inputs)
 
-            // Wait for all maturation children to complete
-            maturation_wait_trigger = SpawnMaturationJobs.out.result.map { _spawn_result -> params.job_id ?: "unknown" }
-            maturation_batch_name = orchestrator_batch_name
+                SpawnMaturationJobs(
+                    StageMaturationInputs.out.pdb_dir,
+                    params.maturation_designs_per_job ?: 4,
+                    params.job_id ?: "unknown",
+                    orchestrator_batch_name,
+                    "maturation"
+                )
 
-            WaitForMaturationChildren(
-                maturation_wait_trigger,
-                "maturation",
-                30,
-                maturation_batch_name
-            )
+                maturation_wait_trigger = SpawnMaturationJobs.out.result.map { _spawn_result -> params.job_id ?: "unknown" }
+                maturation_batch_name = orchestrator_batch_name
 
-            CollectMaturationOutputs(
-                WaitForMaturationChildren.out.child_outputs,
-                "maturation"
-            )
+                WaitForMaturationChildren(
+                    maturation_wait_trigger,
+                    "maturation",
+                    30,
+                    maturation_batch_name
+                )
 
-            // REPORT STAGE: maturation
-            CollectMaturationOutputs.out.pdbs.subscribe { pdbs ->
-                try {
-                    def file_list = pdbs instanceof List ? pdbs : [pdbs]
-                    def count = file_list.size()
-                    log.info("  PPIFlow maturation: Collected ${count} PDBs from child jobs")
-                    def report_files = count > 50 ? file_list[0..49] : file_list
-                    def args = [params.job_id, "maturation", "complete"] + report_files.collect { it.toString() }
-                    def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
-                    proc.waitFor()
-                } catch (Exception e) {
-                    println "Warning: Failed to report stage maturation: ${e.message}"
+                CollectMaturationOutputs(
+                    WaitForMaturationChildren.out.child_outputs,
+                    "maturation"
+                )
+
+                CollectMaturationOutputs.out.pdbs.subscribe { pdbs ->
+                    try {
+                        def file_list = pdbs instanceof List ? pdbs : [pdbs]
+                        def count = file_list.size()
+                        log.info("  PPIFlow maturation: Collected ${count} PDBs from child jobs")
+                        def report_files = count > 50 ? file_list[0..49] : file_list
+                        def args = [params.job_id, "maturation", "complete"] + report_files.collect { it.toString() }
+                        def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
+                        proc.waitFor()
+                    } catch (Exception e) {
+                        println "Warning: Failed to report stage maturation: ${e.message}"
+                    }
+                }
+
+                maturation_seqs = CollectMaturationOutputs.out.pdbs.map { pdbs ->
+                    def meta = [id: "ppiflow_maturation"]
+                    [meta, pdbs]
                 }
             }
+        } else {
+            maturation_seqs = fampnn_seqs
+        }
 
-            maturation_seqs = CollectMaturationOutputs.out.pdbs.map { pdbs ->
-                def meta = [id: "ppiflow_maturation"]
+        if (run_antifold) {
+            log.info("  Running AntiFold...")
+            ANARCII(backbone_designs)
+            ANTIFOLD(ANARCII.out.pdb_imgt)
+            antifold_seqs = ANTIFOLD.out.sequences
+        }
+
+        if (run_proteinmpnn) {
+            log.info("  Running ProteinMPNN...")
+            mpnn_prep_input = backbone_designs.map { meta, pdbs ->
+                 [pdbs, file("${params.code_root}/lib/empty-meta.jsonl")]
+            }
+            PrepMPNN(mpnn_prep_input)
+            ProteinMPNNSeq(PrepMPNN.out.pdbs)
+            proteinmpnn_seqs = ProteinMPNNSeq.out.pdbs_jsons.map { pdbs, jsons ->
+                def meta = [id: "proteinmpnn_designs"]
                 [meta, pdbs]
             }
         }
-    } else {
-        maturation_seqs = fampnn_seqs
-    }
 
-    // AntiFold branch (requires IMGT numbering)
-    if (run_antifold) {
-        log.info("  Running AntiFold...")
-        // First number with ANARCII
-        ANARCII(backbone_designs)
-        ANTIFOLD(ANARCII.out.pdb_imgt)
-        
-        // AntiFold already emits [meta, sequences (fasta)] - wait, check module
-        // Module emits: tuple val(meta), path("*_probs.csv"), emit: probabilities
-        //              tuple val(meta), path("*_sampled.fasta"), emit: sequences
-        // WE NEED PDBs! AntiFold output is FASTA? 
-        // Checking module again... yes, outputs FASTA.
-        // Boltz *can* take FASTA if we prep it right, but PrepBoltz expects PDBs currently.
-        // Actually, looking at main.nf, PrepBoltz expects PDBs.
-        // BUT wait, AntiFold module in this codebase might be doing structure generation?
-        // Let's check if we missed something. 
-        // The previous view of antifold.nf showed it outputs FASTAs.
-        // IF downstream expects PDBs, we have a problem for AntiFold branch too.
-        // HOWEVER, likely the user wants to validate the *sequences* modelled on the backbone?
-        // OR construct new structures?
-        // For now, let's assume valid data flow for what we have, but FAMPNN was definitely wrong (Tuple vs Path).
-        
-        antifold_seqs = ANTIFOLD.out.sequences
-    }
-
-    // ProteinMPNN branch
-    if (run_proteinmpnn) {
-        log.info("  Running ProteinMPNN...")
-        // FIRST run PrepMPNN to generate PDBs with FIXED labels in B-factors
-        // Map backbones to [pdbs, dummy_json] input for PrepMPNN
-        mpnn_prep_input = backbone_designs.map { meta, pdbs ->
-             [pdbs, file("${params.code_root}/lib/empty-meta.jsonl")]
-        }
-        PrepMPNN(mpnn_prep_input)
-
-        // Then run ProteinMPNN - it will auto-detect FIXED labels in B-factor column
-        ProteinMPNNSeq(PrepMPNN.out.pdbs)
-        
-        // ProteinMPNNSeq (RunMPNN) outputs: tuple path("results/*.pdb"), path("results/*.json")
-        // We need to map this to [meta, pdbs]
-        proteinmpnn_seqs = ProteinMPNNSeq.out.pdbs_jsons.map { pdbs, jsons ->
-            def meta = [id: "proteinmpnn_designs"]
-            [meta, pdbs]
-        }
-    }
-
-    // Collect all designed sequences for downstream
-    // Merge into unified format: [meta, fasta/pdb]
-    all_sequences = maturation_seqs
-        .mix(antifold_seqs) 
-        .mix(proteinmpnn_seqs)
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // Step 2.5: Pre-Boltz Stability Scoring (ThermoMPNN)
-    // Filters unstable sequences BEFORE expensive Boltz-2 validation
-    // ═══════════════════════════════════════════════════════════════════════
-    if (params.run_thermompnn == true) {
-        log.info("Step 2.5: Scoring sequence stability with ThermoMPNN...")
-        
-        // Flatten sequences for per-design ThermoMPNN scoring
-        thermompnn_input = all_sequences.flatMap { meta, pdbs ->
-            def pdb_list = pdbs instanceof List ? pdbs : [pdbs]
-            pdb_list.collect { pdb ->
-                def design_meta = [id: pdb.baseName]
-                [design_meta, pdb]
-            }
-        }
-        
-        THERMOMPNN(thermompnn_input)
-        
-        // REPORT STAGE: thermompnn
-        THERMOMPNN.out.stability.subscribe { meta, csv ->
-            try {
-                def args = [params.job_id, "thermompnn", "complete", csv.toString()]
-                def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
-                proc.waitFor()
-            } catch (Exception e) {
-                println "Warning: Failed to report stage thermompnn: ${e.message}"
-            }
-        }
-        
-        // Filter by ddG threshold if set
-        if (params.thermompnn_max_ddg != null) {
-            log.info("  Filtering by ThermoMPNN ddG <= ${params.thermompnn_max_ddg}...")
-            
-            // Parse stability CSV and filter designs
-            stable_sequences = THERMOMPNN.out.stability.filter { meta, csv ->
-                try {
-                    def lines = csv.text.split('\n')
-                    if (lines.size() > 1) {
-                        // CSV format: sequence_id,ddG_pred
-                        def ddg = lines[1].split(',')[1]?.trim()
-                        if (ddg && ddg != 'N/A' && ddg != 'ERROR') {
-                            return Float.parseFloat(ddg) <= params.thermompnn_max_ddg
-                        }
+        pdb_designs = maturation_seqs.mix(proteinmpnn_seqs)
+        sequence_only_designs = Channel.empty()
+        if (run_antifold) {
+            if (params.exploration_mode == true) {
+                log.warn("AntiFold emits FASTA only. Exploration-mode Boltz children accept PDBs only, so AntiFold candidates are skipped until serial refinement.")
+            } else {
+                sequence_only_designs = antifold_seqs.flatMap { meta, fasta ->
+                    parseFastaRecords(fasta).collect { record ->
+                        tuple(record.sequence, record.id ?: "${meta.id}_antifold")
                     }
-                } catch (Exception e) {
-                    log.warn("Could not parse ThermoMPNN output for ${meta.id}: ${e.message}")
                 }
-                return true // Pass through if parsing fails
-            }.map { meta, csv ->
-                // Re-associate with PDB file for downstream
-                def pdb_file = file("${csv.parent}/${meta.id}.pdb")
-                [meta, pdb_file.exists() ? pdb_file : csv]
             }
-            
-            // Collect filtered PDBs back into batched format
-            sequences_for_boltz = stable_sequences.map { meta, pdb -> pdb }
-                .collect()
-                .map { pdbs -> 
-                    def meta = [id: "thermompnn_filtered"]
-                    [meta, pdbs]
-                }
-        } else {
-            // No ddG filtering, pass through original sequences
-            sequences_for_boltz = all_sequences
         }
-        
-        stability_scores_early = THERMOMPNN.out.stability
-    } else {
-        log.info("ThermoMPNN stability scoring disabled (enable with run_thermompnn=true)")
-        sequences_for_boltz = all_sequences
-        stability_scores_early = Channel.empty()
-    }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // Step 2.6: AF2 Backprop CDR Refinement (Optional)
-    // Uses ColabDesign AfDesign to optimize CDR sequences for binding confidence
-    // ═══════════════════════════════════════════════════════════════════════
-    if (params.run_af2_backprop == true) {
-        log.info("Step 2.6: Refining CDR sequences with AF2 Backprop...")
-        
-        // Merge each antibody design with target for AF2 complex input
-        af2_merge_input = sequences_for_boltz
-            .flatMap { meta, pdbs ->
+        pdb_designs_for_boltz = pdb_designs
+        if (params.run_thermompnn == true) {
+            log.info("Step 2.5: Scoring sequence stability with ThermoMPNN...")
+
+            thermompnn_input = pdb_designs.flatMap { meta, pdbs ->
                 def pdb_list = pdbs instanceof List ? pdbs : [pdbs]
                 pdb_list.collect { pdb ->
                     def design_meta = [id: pdb.baseName]
                     [design_meta, pdb]
                 }
             }
-            .combine(target_pdb_ch.first().map { meta, pdb -> pdb })
-            .map { meta, antibody_pdb, target_pdb ->
-                [meta, antibody_pdb, target_pdb]
-            }
-        
-        MergeComplex(af2_merge_input)
-        AF2_BACKPROP(MergeComplex.out.complex)
-        
-        // REPORT STAGE: af2_backprop
-        AF2_BACKPROP.out.refined.subscribe { meta, pdb ->
-            try {
-                def args = [params.job_id, "af2_backprop", "complete", pdb.toString()]
-                def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
-                proc.waitFor()
-            } catch (Exception e) {
-                println "Warning: Failed to report stage af2_backprop: ${e.message}"
-            }
-        }
-        
-        // Collect refined PDBs for downstream Boltz validation
-        sequences_for_boltz = AF2_BACKPROP.out.refined
-            .map { meta, pdb -> pdb }
-            .collect()
-            .map { pdbs ->
-                def meta = [id: "af2_refined"]
-                [meta, pdbs]
-            }
-    }
 
-    // =========================================================================
-    // PHASE 2: VALIDATION & SCORING
-    // =========================================================================
+            THERMOMPNN(thermompnn_input)
 
-    // Step 3: Structure Validation with Boltz2
-    // ---------------------------------------------------------------------------
-    log.info("Step 3: Validating structures with Boltz2...")
-
-    if (params.run_structure_validation != false) {
-        // =========================================================================
-        // EXPLORATION vs REFINEMENT MODE
-        // Parallel: Spawn child jobs for GPU distribution (fast screening)
-        // Serial: Run BoltzFromSequenceWithMSA in-process (thorough analysis)
-        // =========================================================================
-        
-        // Step 1: Extract sequences from FAMPNN PDB outputs
-        design_sequences = sequences_for_boltz
-            .flatMap { meta, files ->
-                def pdbs = files instanceof List ? files : [files]
-                pdbs.collect { pdb ->
-                    def sequence = extractSequenceFromPDB(pdb)
-                    tuple(sequence, pdb.baseName, pdb)
-                }
-            }
-
-        design_sequences = design_sequences.ifEmpty {
-                log.warn("=" * 80)
-                log.warn("ZERO-YIELD: No sequences available for Boltz validation.")
-                log.warn("All designs were filtered by FAMPNN HQ settings or upstream child jobs crashed.")
-                log.warn("=" * 80)
-
-                // Write a machine-readable zero-yield report before exiting
-                def report = new File("${params.out_dir}/zero_yield_report.json")
-                report.parentFile?.mkdirs()
-                report.text = groovy.json.JsonOutput.prettyPrint(
-                    groovy.json.JsonOutput.toJson([
-                        status: "completed_zero_yield",
-                        reason: "No sequences survived upstream filtering or upstream child jobs failed",
-                        fampnn_psce_threshold: params.fampnn_psce_threshold ?: "default",
-                        fampnn_temperature: params.fampnn_temperature ?: "default",
-                        recommendation: "Check child job logs, or consider relaxing FAMPNN stringency settings"
-                    ])
-                )
-            }
-        
-        // Step 2: Generate MSA ONCE using first design's sequence
-        first_design_for_msa = design_sequences
-            .first()
-            .map { sequence, name, pdb ->
-                tuple(sequence, "antibody_representative")
-            }
-        
-        GenerateLocalMSA(first_design_for_msa)
-        msa_file_ch = GenerateLocalMSA.out.msa.map { _seq, _name, msa_file -> msa_file }
-        
-        if (params.exploration_mode == true) {
-            // ═══════════════════════════════════════════════════════════════════
-            // PARALLEL MODE: Spawn child jobs via API for GPU orchestrator
-            // Each child job enters queue and gets assigned to available GPU
-            // Uses SpawnChildJobs process to BLOCK until spawn is complete
-            // ═══════════════════════════════════════════════════════════════════
-            log.info("Exploration Mode: Spawning child jobs for parallel GPU processing...")
-            
-            // Collect all PDB files from sequence design into a single list
-            collected_pdbs = sequences_for_boltz
-                .flatMap { meta, files -> files instanceof List ? files : [files] }
-                .collect()
-            
-            // Get MSA file (take first emission since it's a single-value channel)
-            msa_for_spawn = msa_file_ch.first()
-            
-            // Derive job identifiers with safe defaults
-            def parent_id = params.job_id ?: "unknown_${System.currentTimeMillis()}"
-            def batch = params.job_name ?: "antibody_batch"
-            
-            // Build comprehensive params_json with ALL quality settings for child jobs
-            def child_params = groovy.json.JsonOutput.toJson([
-                // Boltz-2 settings
-                boltz_sampling_steps: params.boltz_sampling_steps ?: 200,
-                boltz_recycling_steps: params.boltz_recycling_steps ?: 3,
-                boltz_num_samples: params.boltz_num_samples ?: 1,
-                boltz_use_potentials: params.boltz_use_potentials ?: false,
-                boltz_use_msa: params.boltz_use_msa ?: false,
-                boltz_step_scale: params.boltz_step_scale,
-                
-                // ThermoMPNN settings
-                run_thermompnn: params.run_thermompnn ?: false,
-                thermompnn_max_ddg: params.thermompnn_max_ddg,
-                
-                // Immunogenicity (AntiBERTy) settings
-                run_immunogenicity_scoring: params.run_immunogenicity_scoring ?: false,
-                
-                // GPU assignment
-                pinned_gpus: params.pinned_gpus,
-                
-                // Filtering settings carried from FAMPNN
-                fampnn_max_psce: params.fampnn_max_psce,
-                fampnn_max_residue_psce: params.fampnn_max_residue_psce
-            ])
-            
-            // Call the spawn process - THIS BLOCKS until spawn is complete
-            // PDBs and MSA must both be ready before this executes
-            SpawnChildJobs(
-                collected_pdbs,
-                msa_for_spawn,
-                parent_id,
-                batch,
-                child_params
-            )
-            
-            // Get expected child count from spawn result
-            spawn_child_count = SpawnChildJobs.out.result
-                .map { result_file ->
-                    try {
-                        def result = new groovy.json.JsonSlurper().parse(result_file)
-                        log.info("Spawned ${result.spawned_jobs} child validation jobs")
-                        return result.spawned_jobs ?: 0
-                    } catch (Exception e) {
-                        log.warn("Failed to parse spawn result: ${e.message}")
-                        return 0
-                    }
-                }
-            
-            // Wait for all children to complete and aggregate their results
-            // This ensures validated designs are in pdb_files/ for analytics
-            WaitAndAggregateChildResults(
-                parent_id,
-                batch,
-                spawn_child_count
-            )
-            
-            // Report aggregation completion
-            WaitAndAggregateChildResults.out.report.subscribe { report_file ->
+            THERMOMPNN.out.stability.subscribe { meta, csv ->
                 try {
-                    def report = new groovy.json.JsonSlurper().parse(report_file)
-                    log.info("Aggregation complete: ${report.total_validated_designs} validated designs collected")
-                } catch (Exception e) {
-                    log.warn("Failed to parse aggregation report: ${e.message}")
-                }
-            }
-            
-            // Final validated structures from aggregation
-            validated_structures = WaitAndAggregateChildResults.out.pdbs
-                .flatten()
-                .map { pdb ->
-                    def name = pdb.baseName.replace('_model_0', '').replace('_boltzpred', '')
-                    def meta = [id: name]
-                    [meta, pdb]
-                }
-        }
-        else {
-            // ═══════════════════════════════════════════════════════════════════
-            // SERIAL MODE: Run Boltz in-process (sequential, thorough)
-            // ═══════════════════════════════════════════════════════════════════
-            log.info("Refinement Mode: Running Boltz validation sequentially...")
-            
-            boltz_inputs = design_sequences
-                .combine(msa_file_ch)
-                .map { sequence, name, pdb, msa_file ->
-                    tuple(sequence, name, msa_file)
-                }
-            
-            BoltzFromSequenceWithMSA(boltz_inputs)
-            
-            // REPORT STAGE: boltz2
-            BoltzFromSequenceWithMSA.out.pdbs.subscribe { pdbs ->
-                try {
-                    def file_list = pdbs instanceof List ? pdbs : [pdbs]
-                    def report_files = file_list.size() > 50 ? file_list[0..49] : file_list
-                    def args = [params.job_id, "boltz2", "complete"] + report_files.collect { it.toString() }
+                    def args = [params.job_id, "thermompnn", "complete", csv.toString()]
                     def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
                     proc.waitFor()
                 } catch (Exception e) {
-                    println "Warning: Failed to report stage boltz2: ${e.message}"
+                    println "Warning: Failed to report stage thermompnn: ${e.message}"
                 }
             }
-            
-            validated_structures = BoltzFromSequenceWithMSA.out.pdbs
+
+            def thermompnn_with_pdb = THERMOMPNN.out.stability
+                .join(thermompnn_input.map { meta, pdb -> tuple(meta, pdb) })
+                .map { meta, csv, pdb ->
+                    tuple(meta, pdb, csv)
+                }
+
+            if (params.thermompnn_max_ddg != null) {
+                log.info("  Filtering by ThermoMPNN ddG <= ${params.thermompnn_max_ddg}...")
+
+                stable_pdb_designs = thermompnn_with_pdb.filter { meta, pdb, csv ->
+                    try {
+                        def lines = csv.text.split('\n')
+                        if (lines.size() > 1) {
+                            def ddg = lines[1].split(',')[1]?.trim()
+                            if (ddg && ddg != 'N/A' && ddg != 'ERROR') {
+                                return Float.parseFloat(ddg) <= params.thermompnn_max_ddg
+                            }
+                        }
+                    } catch (Exception e) {
+                        log.warn("Could not parse ThermoMPNN output for ${meta.id}: ${e.message}")
+                    }
+                    return true
+                }
+
+                pdb_designs_for_boltz = stable_pdb_designs
+                    .map { meta, pdb, csv -> pdb }
+                    .collect()
+                    .map { pdbs ->
+                        def meta = [id: "thermompnn_filtered"]
+                        [meta, pdbs]
+                    }
+            }
+
+            stability_scores_early = THERMOMPNN.out.stability
+        } else {
+            log.info("ThermoMPNN stability scoring disabled (enable with run_thermompnn=true)")
+            stability_scores_early = Channel.empty()
+        }
+
+        if (params.run_af2_backprop == true) {
+            log.info("Step 2.6: Refining CDR sequences with AF2 Backprop...")
+
+            af2_merge_input = pdb_designs_for_boltz
+                .flatMap { meta, pdbs ->
+                    def pdb_list = pdbs instanceof List ? pdbs : [pdbs]
+                    pdb_list.collect { pdb ->
+                        def design_meta = [id: pdb.baseName]
+                        [design_meta, pdb]
+                    }
+                }
+                .combine(target_pdb_ch.first().map { meta, pdb -> pdb })
+                .map { meta, antibody_pdb, target_pdb ->
+                    [meta, antibody_pdb, target_pdb]
+                }
+
+            MergeComplex(af2_merge_input)
+            AF2_BACKPROP(MergeComplex.out.complex)
+
+            AF2_BACKPROP.out.refined.subscribe { meta, pdb ->
+                try {
+                    def args = [params.job_id, "af2_backprop", "complete", pdb.toString()]
+                    def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
+                    proc.waitFor()
+                } catch (Exception e) {
+                    println "Warning: Failed to report stage af2_backprop: ${e.message}"
+                }
+            }
+
+            pdb_designs_for_boltz = AF2_BACKPROP.out.refined
+                .map { meta, pdb -> pdb }
+                .collect()
+                .map { pdbs ->
+                    def meta = [id: "af2_refined"]
+                    [meta, pdbs]
+                }
+        }
+
+        def structure_validator = (params.structure_validator ?: 'boltz2').toString().toLowerCase()
+        if (!(structure_validator in ['boltz2', 'protenix'])) {
+            log.warn("Unknown structure_validator '${structure_validator}', defaulting to boltz2")
+            structure_validator = 'boltz2'
+        }
+        def validation_stage_name = "structure_validation"
+        def validation_label = structure_validator == 'protenix' ? 'Protenix' : 'Boltz2'
+
+        log.info("Step 3: Validating structures with ${validation_label}...")
+
+        if (params.run_structure_validation != false) {
+            pdb_design_sequences = pdb_designs_for_boltz
+                .flatMap { meta, files ->
+                    def pdbs = files instanceof List ? files : [files]
+                    pdbs.collect { pdb ->
+                        def sequence = extractSequenceFromPDB(pdb)
+                        tuple(sequence, pdb.baseName, pdb)
+                    }
+                }
+
+            if (structure_validator == 'protenix' && run_antifold) {
+                log.warn("AntiFold emits FASTA only. Protenix validation currently runs on PDB-backed candidates only, so AntiFold sequence-only designs are skipped.")
+            }
+
+            design_sequences = (params.exploration_mode == true || structure_validator == 'protenix')
+                ? pdb_design_sequences
+                : pdb_design_sequences.mix(sequence_only_designs.map { sequence, name -> tuple(sequence, name, null) })
+
+            design_sequence_count = design_sequences.count()
+            CheckZeroYield(design_sequence_count)
+            design_sequences = design_sequences
+                .combine(CheckZeroYield.out.ok)
+                .map { sequence, name, pdb, _guard -> tuple(sequence, name, pdb) }
+
+            def msa_file_ch
+            if (structure_validator == 'protenix') {
+                log.info("Protenix validation uses its built-in MSA/update pipeline; skipping parent GenerateLocalMSA step.")
+                msa_file_ch = Channel.value(file("${params.code_root}/lib/NO_MSA"))
+            } else {
+                first_design_for_msa = design_sequences
+                    .map { sequence, name, pdb ->
+                        tuple(sequence, name, pdb)
+                    }
+                    .first()
+                    .map { sequence, name, pdb ->
+                        tuple(sequence, "antibody_representative")
+                    }
+
+                GenerateLocalMSA(first_design_for_msa)
+                msa_file_ch = GenerateLocalMSA.out.msa.map { _seq, _name, msa_file -> msa_file }
+            }
+
+            if (params.exploration_mode == true) {
+                log.info("Exploration Mode: Spawning child jobs for parallel GPU processing...")
+
+                collected_pdbs = pdb_designs_for_boltz
+                    .flatMap { meta, files -> files instanceof List ? files : [files] }
+                    .collect()
+
+                msa_for_spawn = msa_file_ch
+
+                def parent_id = params.job_id ?: "unknown_${System.currentTimeMillis()}"
+                def batch = params.job_name ?: "antibody_batch"
+
+                def child_params = groovy.json.JsonOutput.toJson([
+                    structure_validator: structure_validator,
+                    boltz_sampling_steps: params.boltz_sampling_steps ?: 200,
+                    boltz_recycling_steps: params.boltz_recycling_steps ?: 3,
+                    boltz_num_samples: params.boltz_num_samples ?: 1,
+                    boltz_use_potentials: params.boltz_use_potentials ?: false,
+                    boltz_use_msa: params.boltz_use_msa ?: false,
+                    boltz_step_scale: params.boltz_step_scale,
+                    protenix_model_weights: params.protenix_model_weights,
+                    protenix_seeds: params.protenix_seeds,
+                    protenix_n_sample: params.protenix_n_sample,
+                    protenix_n_step: params.protenix_n_step,
+                    protenix_n_cycle: params.protenix_n_cycle,
+                    protenix_use_msa: params.protenix_use_msa,
+                    protenix_use_template: params.protenix_use_template,
+                    protenix_enable_cache: params.protenix_enable_cache,
+                    protenix_enable_fusion: params.protenix_enable_fusion,
+                    run_thermompnn: params.run_thermompnn ?: false,
+                    thermompnn_max_ddg: params.thermompnn_max_ddg,
+                    run_immunogenicity_scoring: params.run_immunogenicity_scoring ?: false,
+                    pinned_gpus: params.pinned_gpus,
+                    fampnn_max_psce: params.fampnn_max_psce,
+                    fampnn_max_residue_psce: params.fampnn_max_residue_psce
+                ])
+
+                SpawnChildJobs(
+                    collected_pdbs,
+                    msa_for_spawn,
+                    parent_id,
+                    batch,
+                    child_params
+                )
+
+                spawn_child_count = SpawnChildJobs.out.result
+                    .map { result_file ->
+                        try {
+                            def result = new groovy.json.JsonSlurper().parse(result_file)
+                            log.info("Spawned ${result.spawned_jobs} child validation jobs")
+                            return result.spawned_jobs ?: 0
+                        } catch (Exception e) {
+                            log.warn("Failed to parse spawn result: ${e.message}")
+                            return 0
+                        }
+                    }
+
+                WaitAndAggregateChildResults(
+                    parent_id,
+                    batch,
+                    spawn_child_count,
+                    validation_stage_name
+                )
+
+                WaitAndAggregateChildResults.out.report.subscribe { report_file ->
+                    try {
+                        def report = new groovy.json.JsonSlurper().parse(report_file)
+                        log.info("Aggregation complete: ${report.total_validated_designs} validated designs collected")
+                    } catch (Exception e) {
+                        log.warn("Failed to parse aggregation report: ${e.message}")
+                    }
+                }
+
+                validated_structures = WaitAndAggregateChildResults.out.pdbs
+                    .flatten()
+                    .map { pdb ->
+                        def name = pdb.baseName.replace('_model_0', '').replace('_boltzpred', '')
+                        def meta = [id: name]
+                        [meta, pdb]
+                    }
+            } else {
+                log.info("Refinement Mode: Running ${validation_label} validation sequentially...")
+
+                if (structure_validator == 'protenix') {
+                    collected_validation_pdbs = pdb_design_sequences
+                        .map { sequence, name, pdb -> pdb }
+                        .collect()
+
+                    msa_for_validation = msa_file_ch
+                    BatchProtenixValidation(collected_validation_pdbs, msa_for_validation)
+
+                    BatchProtenixValidation.out.pdbs.subscribe { pdbs ->
+                        try {
+                            def file_list = pdbs instanceof List ? pdbs : [pdbs]
+                            def report_files = file_list.size() > 50 ? file_list[0..49] : file_list
+                            def args = [params.job_id, validation_stage_name, "complete"] + report_files.collect { it.toString() }
+                            def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
+                            proc.waitFor()
+                        } catch (Exception e) {
+                            println "Warning: Failed to report stage ${validation_stage_name}: ${e.message}"
+                        }
+                    }
+
+                    validated_structures = BatchProtenixValidation.out.pdbs
+                        .flatten()
+                        .map { pdb ->
+                            def name = pdb.baseName.replace('_model_0', '').replace('_boltzpred', '')
+                            def meta = [id: name]
+                            [meta, pdb]
+                        }
+                } else {
+                    boltz_inputs = design_sequences
+                        .combine(msa_file_ch)
+                        .map { sequence, name, pdb, msa_file ->
+                            tuple(sequence, name, msa_file)
+                        }
+
+                    BoltzFromSequenceWithMSA(boltz_inputs)
+
+                    BoltzFromSequenceWithMSA.out.pdbs.subscribe { pdbs ->
+                        try {
+                            def file_list = pdbs instanceof List ? pdbs : [pdbs]
+                            def report_files = file_list.size() > 50 ? file_list[0..49] : file_list
+                            def args = [params.job_id, validation_stage_name, "complete"] + report_files.collect { it.toString() }
+                            def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
+                            proc.waitFor()
+                        } catch (Exception e) {
+                            println "Warning: Failed to report stage ${validation_stage_name}: ${e.message}"
+                        }
+                    }
+
+                    validated_structures = BoltzFromSequenceWithMSA.out.pdbs
+                        .flatten()
+                        .map { pdb ->
+                            def name = pdb.baseName.replace('_model_0', '').replace('_boltzpred', '')
+                            def meta = [id: name]
+                            [meta, pdb]
+                        }
+                }
+            }
+        } else {
+            if (run_antifold) {
+                log.warn("Structure validation disabled; AntiFold sequence-only outputs are omitted from downstream structure-based stages.")
+            }
+            validated_structures = pdb_designs_for_boltz
+        }
+
+        def shouldPauseAfterStructureValidation = interactiveGateEnabled &&
+            (params.interactive_gate_stage ?: 'post_fampnn') == 'post_structure_validation' &&
+            params.interactive_gate_continue != true &&
+            params.run_structure_validation != false
+
+        if (params.run_structure_validation != false) {
+            staged_validation_pdbs = validated_structures
+                .map { meta, pdb -> pdb }
+                .collect()
+
+            StageStructureValidationArtifacts(staged_validation_pdbs)
+
+            validation_gate_candidate_dir = StageStructureValidationArtifacts.out.dir
+                .map { _dir -> "${params.out_dir}/collected/structure_validation" }
+        }
+
+        if (shouldPauseAfterStructureValidation) {
+            log.info("Interactive SWA gate: pausing after ${validation_label} structure validation")
+            OpenInteractiveGate(
+                params.job_id ?: "unknown",
+                "post_structure_validation",
+                validation_gate_candidate_dir,
+                "",
+                "",
+                params.framework_type ?: "standard-fv",
+                params.antibody_chains ?: "",
+                structure_validator
+            )
+            validated_structures = Channel.empty()
+        } else if (params.run_post_validation_maturation == true) {
+            log.info("Step 3.25: Running PPIFlow maturation on ${validation_label}-validated structures...")
+            log.info("  Spawning post-validation maturation child jobs (${params.maturation_designs_per_job ?: 4} PDBs per job)")
+
+            validated_maturation_inputs = validated_structures
+                .map { meta, pdb -> pdb }
+                .collect()
+
+            StageValidatedMaturationInputs(validated_maturation_inputs)
+
+            SpawnValidatedMaturationJobs(
+                StageValidatedMaturationInputs.out.pdb_dir,
+                params.maturation_designs_per_job ?: 4,
+                params.job_id ?: "unknown",
+                "${orchestrator_batch_name}_post_validation",
+                "maturation_post_validation"
+            )
+
+            validated_maturation_wait_trigger = SpawnValidatedMaturationJobs.out.result.map { _spawn_result -> params.job_id ?: "unknown" }
+
+            WaitForValidatedMaturationChildren(
+                validated_maturation_wait_trigger,
+                "maturation_post_validation",
+                30,
+                "${orchestrator_batch_name}_post_validation"
+            )
+
+            CollectValidatedMaturationOutputs(
+                WaitForValidatedMaturationChildren.out.child_outputs,
+                "maturation_post_validation"
+            )
+
+            CollectValidatedMaturationOutputs.out.pdbs.subscribe { pdbs ->
+                try {
+                    def file_list = pdbs instanceof List ? pdbs : [pdbs]
+                    def report_files = file_list.size() > 50 ? file_list[0..49] : file_list
+                    def args = [params.job_id, "maturation_post_validation", "complete"] + report_files.collect { it.toString() }
+                    def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
+                    proc.waitFor()
+                } catch (Exception e) {
+                    println "Warning: Failed to report stage maturation_post_validation: ${e.message}"
+                }
+            }
+
+            validated_structures = CollectValidatedMaturationOutputs.out.pdbs
                 .flatten()
                 .map { pdb ->
-                    def name = pdb.baseName.replace('_model_0', '').replace('_boltzpred', '')
-                    def meta = [id: name]
+                    def meta = [id: pdb.baseName]
                     [meta, pdb]
                 }
         }
-    }
-    else {
-        validated_structures = all_sequences
     }
 
     // =========================================================================
@@ -1573,8 +1974,8 @@ workflow ANTIBODY_DENOVO {
         // Filter high-risk sequences
         if (params.filter_immunogenic != false) {
             antiberty_filter_input = ANTIBERTY_SCORE.out.scores.join(refined_structures)
-            ANTIBERTY_FILTER(antiberty_filter_input)
-            filtered_structures = ANTIBERTY_FILTER.out.filtered_fasta
+            ANTIBERTY_FILTER_STRUCTURES(antiberty_filter_input)
+            filtered_structures = ANTIBERTY_FILTER_STRUCTURES.out.filtered_pdb
         }
         else {
             filtered_structures = refined_structures
@@ -1606,8 +2007,9 @@ workflow ANTIBODY_DENOVO {
         matured_designs = IGGM_AFFINITY_MATURATION.out.matured_designs
         mutations = IGGM_AFFINITY_MATURATION.out.mutations
 
-        // Re-validate matured designs through Phase 2
-        // (In practice, you'd loop this back through steps 3-5)
+        if (params.run_structure_validation != false) {
+            log.warn("IgGM affinity maturation completed, but a full post-IgGM Boltz revalidation loop is not yet wired in this workflow.")
+        }
         final_designs = matured_designs
     }
     else {
@@ -1694,8 +2096,11 @@ workflow {
         ? Channel.of([meta, file(params.framework_pdb)])
         : Channel.empty()
 
+    NormalizeTargetPDB(target_ch)
+    normalized_target_ch = NormalizeTargetPDB.out.normalized
+
     // Run workflow
-    ANTIBODY_DENOVO(target_ch, epitope, framework_ch)
+    ANTIBODY_DENOVO(normalized_target_ch, epitope, framework_ch)
 
     // Collect outputs
     ANTIBODY_DENOVO.out.designs

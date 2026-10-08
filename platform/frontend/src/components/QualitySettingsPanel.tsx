@@ -18,7 +18,20 @@ export interface QualitySettings {
     boltz_predict_affinity: boolean;
     boltz_diffusion_samples_affinity: number;
 
+    // Protenix settings (structure validation)
+    protenix_model_weights: string;
+    protenix_seeds: string;
+    protenix_n_sample: number;
+    protenix_n_step: number;
+    protenix_n_cycle: number;
+    protenix_use_msa: boolean;
+    protenix_use_template: boolean;
+    protenix_enable_cache: boolean;
+    protenix_enable_fusion: boolean;
+
     // FAMPNN settings (sequence design)
+    fampnn_checkpoint: string;
+    fampnn_checkpoint_path: string;
     fampnn_temperature: number;
     fampnn_num_steps: number;
     fampnn_psce_threshold: number;
@@ -74,6 +87,31 @@ export interface QualitySettings {
 
 export type QualityPreset = 'speed' | 'balanced' | 'quality' | 'maximum';
 
+const normalizeProtenixModel = (model?: string) => {
+    if (!model) return 'protenix_base_20250630_v1.0.0';
+    if (model === 'protenix_base_20241211_v0.2.1') return 'protenix_base_default_v1.0.0';
+    if (model === 'protenix_esm_20241211_v0.2.1') return 'protenix_mini_esm_v0.5.0';
+    return model;
+};
+
+const FAMPNN_CHECKPOINT_OPTIONS = [
+    {
+        value: 'fampnn_0_0.pt',
+        label: 'FAMPNN (0.0A)',
+        description: 'Full PDB dataset, 0.0A noise. Use when you want the strict no-noise checkpoint.',
+    },
+    {
+        value: 'fampnn_0_3.pt',
+        label: 'FAMPNN (0.3A)',
+        description: 'Full PDB dataset, 0.3A noise. Recommended upstream for sequence design.',
+    },
+    {
+        value: 'fampnn_0_3_cath.pt',
+        label: 'FAMPNN (0.3A, CATH)',
+        description: 'CATH-trained 0.3A checkpoint. Recommended upstream for mutation scoring rather than primary sequence design.',
+    },
+] as const;
+
 const PRESETS: Record<QualityPreset, QualitySettings> = {
     speed: {
         // RFantibody: Fast screening
@@ -90,7 +128,19 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         boltz_step_scale: null,
         boltz_predict_affinity: false,
         boltz_diffusion_samples_affinity: 5,
+        // Protenix
+        protenix_model_weights: 'protenix_mini_esm_v0.5.0',
+        protenix_seeds: '42',
+        protenix_n_sample: 1,
+        protenix_n_step: 100,
+        protenix_n_cycle: 4,
+        protenix_use_msa: false,
+        protenix_use_template: false,
+        protenix_enable_cache: true,
+        protenix_enable_fusion: true,
         // FAMPNN
+        fampnn_checkpoint: '',
+        fampnn_checkpoint_path: '',
         fampnn_temperature: 0.2,
         fampnn_num_steps: 50,
         fampnn_psce_threshold: 0.4,
@@ -153,7 +203,19 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         boltz_step_scale: null,
         boltz_predict_affinity: false,
         boltz_diffusion_samples_affinity: 5,
+        // Protenix
+        protenix_model_weights: 'protenix_base_20250630_v1.0.0',
+        protenix_seeds: '42',
+        protenix_n_sample: 3,
+        protenix_n_step: 200,
+        protenix_n_cycle: 8,
+        protenix_use_msa: true,
+        protenix_use_template: false,
+        protenix_enable_cache: true,
+        protenix_enable_fusion: true,
         // FAMPNN
+        fampnn_checkpoint: '',
+        fampnn_checkpoint_path: '',
         fampnn_temperature: 0.1,
         fampnn_num_steps: 100,
         fampnn_psce_threshold: 0.3,
@@ -216,7 +278,19 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         boltz_step_scale: null,
         boltz_predict_affinity: false,
         boltz_diffusion_samples_affinity: 5,
+        // Protenix
+        protenix_model_weights: 'protenix_base_20250630_v1.0.0',
+        protenix_seeds: '42',
+        protenix_n_sample: 5,
+        protenix_n_step: 200,
+        protenix_n_cycle: 10,
+        protenix_use_msa: true,
+        protenix_use_template: false,
+        protenix_enable_cache: true,
+        protenix_enable_fusion: true,
         // FAMPNN
+        fampnn_checkpoint: '',
+        fampnn_checkpoint_path: '',
         fampnn_temperature: 0.01,
         fampnn_num_steps: 200,
         fampnn_psce_threshold: 0.2,
@@ -279,7 +353,19 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         boltz_step_scale: null,
         boltz_predict_affinity: true,
         boltz_diffusion_samples_affinity: 10,
+        // Protenix
+        protenix_model_weights: 'protenix_base_20250630_v1.0.0',
+        protenix_seeds: '42',
+        protenix_n_sample: 8,
+        protenix_n_step: 300,
+        protenix_n_cycle: 12,
+        protenix_use_msa: true,
+        protenix_use_template: false,
+        protenix_enable_cache: true,
+        protenix_enable_fusion: true,
         // FAMPNN
+        fampnn_checkpoint: '',
+        fampnn_checkpoint_path: '',
         fampnn_temperature: 0.0001,
         fampnn_num_steps: 500,
         fampnn_psce_threshold: 0.15,
@@ -341,6 +427,7 @@ interface QualitySettingsPanelProps {
     onSettingsChange: (settings: QualitySettings) => void;
     preset: QualityPreset;
     onPresetChange: (preset: QualityPreset) => void;
+    structureValidator?: 'boltz2' | 'protenix';
 }
 
 interface PPIFlowSettingsFieldsProps {
@@ -840,12 +927,17 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
     onSettingsChange,
     preset,
     onPresetChange,
+    structureValidator = 'boltz2',
 }) => {
     const [isExpanded, setIsExpanded] = useState(false);
 
     const handlePresetSelect = (newPreset: QualityPreset) => {
         onPresetChange(newPreset);
-        onSettingsChange(PRESETS[newPreset]);
+        onSettingsChange({
+            ...PRESETS[newPreset],
+            fampnn_checkpoint: settings.fampnn_checkpoint,
+            fampnn_checkpoint_path: settings.fampnn_checkpoint_path,
+        });
     };
 
     const updateSetting = <K extends keyof QualitySettings>(key: K, value: QualitySettings[K]) => {
@@ -1008,120 +1100,342 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                         </div>
                     </div>
 
-                    {/* Boltz-2 Settings */}
                     <div className="space-y-3 pt-3 border-t border-slate-700/50">
-                        <div className="flex items-center gap-2 text-sm font-medium text-accent">
-                            Structure Prediction (Boltz-2)
-                        </div>
-
-                        {/* Sampling Steps */}
-                        <div className="grid grid-cols-2 gap-4">
-                            <div>
-                                <label className="block text-xs text-slate-500 mb-1">
-                                    Sampling Steps <span className="text-slate-600">({settings.boltz_sampling_steps})</span>
-                                </label>
-                                <input
-                                    type="range"
-                                    min={50}
-                                    max={1000}
-                                    step={50}
-                                    value={settings.boltz_sampling_steps}
-                                    onChange={(e) => updateSetting('boltz_sampling_steps', parseInt(e.target.value))}
-                                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-accent"
-                                />
-                                <div className="flex justify-between text-[10px] text-slate-600 mt-1">
-                                    <span>50</span>
-                                    <span>500</span>
-                                    <span>1000</span>
+                        {structureValidator === 'protenix' ? (
+                            <>
+                                <div className="flex items-center gap-2 text-sm font-medium text-cyan-300">
+                                    Structure Validation (Protenix)
+                                    <a
+                                        href="https://github.com/bytedance/Protenix"
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="text-xs text-slate-400 underline hover:text-cyan-200"
+                                    >
+                                        GitHub
+                                    </a>
                                 </div>
-                            </div>
+                                <p className="text-xs text-slate-500">
+                                    These controls map directly to the Protenix inference CLI flags used by the workflow:
+                                    <code className="ml-1">--model_name</code>, <code>--sample</code>, <code>--step</code>, <code>--cycle</code>,
+                                    <code> --use_msa</code>, <code>--use_template</code>, <code>--enable_cache</code>, and <code>--enable_fusion</code>.
+                                </p>
 
-                            <div>
-                                <label className="block text-xs text-slate-500 mb-1">
-                                    Recycling Steps <span className="text-slate-600">({settings.boltz_recycling_steps})</span>
-                                </label>
-                                <input
-                                    type="range"
-                                    min={1}
-                                    max={10}
-                                    step={1}
-                                    value={settings.boltz_recycling_steps}
-                                    onChange={(e) => updateSetting('boltz_recycling_steps', parseInt(e.target.value))}
-                                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-accent"
-                                />
-                                <div className="flex justify-between text-[10px] text-slate-600 mt-1">
-                                    <span>1</span>
-                                    <span>5</span>
-                                    <span>10</span>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-xs text-slate-500 mb-1">Model Variant</label>
+                                        <select
+                                            value={normalizeProtenixModel(settings.protenix_model_weights)}
+                                            onChange={(e) => updateSetting('protenix_model_weights', e.target.value)}
+                                            className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-slate-300"
+                                        >
+                                            <option value="protenix_base_20250630_v1.0.0">Base 2025-06-30 v1.0.0</option>
+                                            <option value="protenix_base_default_v1.0.0">Base Default v1.0.0</option>
+                                            <option value="protenix_mini_esm_v0.5.0">Mini ESM v0.5.0</option>
+                                            <option value="protenix_mini_default_v0.5.0">Mini Default v0.5.0</option>
+                                        </select>
+                                        <p className="mt-1 text-[10px] text-slate-600">
+                                            Base + MSA is the highest-fidelity option. Mini ESM is the lighter fallback for faster smoke tests and memory pressure.
+                                        </p>
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-xs text-slate-500 mb-1">Seeds</label>
+                                        <input
+                                            type="text"
+                                            value={settings.protenix_seeds}
+                                            onChange={(e) => updateSetting('protenix_seeds', e.target.value.replace(/[^0-9,]/g, ''))}
+                                            placeholder="42"
+                                            className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-slate-300"
+                                        />
+                                        <p className="mt-1 text-[10px] text-slate-600">
+                                            Comma-separated random seeds. More seeds broaden search but also multiply runtime.
+                                        </p>
+                                    </div>
                                 </div>
-                            </div>
-                        </div>
 
-                        {/* Diffusion Samples */}
-                        <div>
-                            <label className="block text-xs text-slate-500 mb-1">
-                                Diffusion Samples <span className="text-slate-600">({settings.boltz_num_samples})</span>
-                            </label>
-                            <input
-                                type="range"
-                                min={1}
-                                max={10}
-                                step={1}
-                                value={settings.boltz_num_samples}
-                                onChange={(e) => updateSetting('boltz_num_samples', parseInt(e.target.value))}
-                                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-accent"
-                            />
-                            <div className="flex justify-between text-[10px] text-slate-600 mt-1">
-                                <span>1 (fastest)</span>
-                                <span>5</span>
-                                <span>10 (most diverse)</span>
-                            </div>
-                        </div>
+                                <div className="grid grid-cols-3 gap-4">
+                                    <div>
+                                        <label className="block text-xs text-slate-500 mb-1">
+                                            Samples / Seed <span className="text-slate-600">({settings.protenix_n_sample})</span>
+                                        </label>
+                                        <input
+                                            type="range"
+                                            min={1}
+                                            max={12}
+                                            step={1}
+                                            value={settings.protenix_n_sample}
+                                            onChange={(e) => updateSetting('protenix_n_sample', parseInt(e.target.value))}
+                                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                                        />
+                                        <div className="mt-1 flex justify-between text-[10px] text-slate-600">
+                                            <span>1</span>
+                                            <span>6</span>
+                                            <span>12</span>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs text-slate-500 mb-1">
+                                            Diffusion Steps <span className="text-slate-600">({settings.protenix_n_step})</span>
+                                        </label>
+                                        <input
+                                            type="range"
+                                            min={50}
+                                            max={400}
+                                            step={25}
+                                            value={settings.protenix_n_step}
+                                            onChange={(e) => updateSetting('protenix_n_step', parseInt(e.target.value))}
+                                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                                        />
+                                        <div className="mt-1 flex justify-between text-[10px] text-slate-600">
+                                            <span>50</span>
+                                            <span>200</span>
+                                            <span>400</span>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs text-slate-500 mb-1">
+                                            Recycle Iterations <span className="text-slate-600">({settings.protenix_n_cycle})</span>
+                                        </label>
+                                        <input
+                                            type="range"
+                                            min={1}
+                                            max={16}
+                                            step={1}
+                                            value={settings.protenix_n_cycle}
+                                            onChange={(e) => updateSetting('protenix_n_cycle', parseInt(e.target.value))}
+                                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                                        />
+                                        <div className="mt-1 flex justify-between text-[10px] text-slate-600">
+                                            <span>1</span>
+                                            <span>8</span>
+                                            <span>16</span>
+                                        </div>
+                                    </div>
+                                </div>
 
-                        {/* Toggles */}
-                        <div className="flex gap-4">
-                            <label className="flex items-center gap-2 cursor-pointer">
-                                <input
-                                    type="checkbox"
-                                    checked={settings.boltz_use_potentials}
-                                    onChange={(e) => updateSetting('boltz_use_potentials', e.target.checked)}
-                                    className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-accent focus:ring-accent"
-                                />
-                                <span className="text-sm text-slate-300">
-                                    Boltz-2x <span className="text-xs text-slate-500">(physics potentials)</span>
-                                </span>
-                            </label>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={settings.protenix_use_msa}
+                                            onChange={(e) => {
+                                                const useMsa = e.target.checked;
+                                                updateSetting('protenix_use_msa', useMsa);
+                                                if (!useMsa && !normalizeProtenixModel(settings.protenix_model_weights).includes('esm')) {
+                                                    updateSetting('protenix_model_weights', 'protenix_mini_esm_v0.5.0');
+                                                }
+                                            }}
+                                            className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500"
+                                        />
+                                        <span className="text-sm text-slate-300">
+                                            Use MSA <span className="text-xs text-slate-500">(higher fidelity, more memory)</span>
+                                        </span>
+                                    </label>
 
-                            <label className="flex items-center gap-2 cursor-pointer">
-                                <input
-                                    type="checkbox"
-                                    checked={settings.boltz_use_msa}
-                                    onChange={(e) => updateSetting('boltz_use_msa', e.target.checked)}
-                                    className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-accent focus:ring-accent"
-                                />
-                                <span className="text-sm text-slate-300">
-                                    Use MSA <span className="text-xs text-slate-500">(better accuracy)</span>
-                                </span>
-                            </label>
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={settings.protenix_use_template}
+                                            onChange={(e) => updateSetting('protenix_use_template', e.target.checked)}
+                                            className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500"
+                                        />
+                                        <span className="text-sm text-slate-300">
+                                            Use Template DB <span className="text-xs text-slate-500">(requires local mmCIF cache)</span>
+                                        </span>
+                                    </label>
 
-                            <label className="flex items-center gap-2 cursor-pointer">
-                                <input
-                                    type="checkbox"
-                                    checked={settings.boltz_predict_affinity}
-                                    onChange={(e) => updateSetting('boltz_predict_affinity', e.target.checked)}
-                                    className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-accent focus:ring-accent"
-                                />
-                                <span className="text-sm text-slate-300">
-                                    Predict Affinity <span className="text-xs text-slate-500">(log₁₀ IC50)</span>
-                                </span>
-                            </label>
-                        </div>
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={settings.protenix_enable_cache}
+                                            onChange={(e) => updateSetting('protenix_enable_cache', e.target.checked)}
+                                            className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500"
+                                        />
+                                        <span className="text-sm text-slate-300">
+                                            Enable Cache <span className="text-xs text-slate-500">(recommended default)</span>
+                                        </span>
+                                    </label>
+
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={settings.protenix_enable_fusion}
+                                            onChange={(e) => updateSetting('protenix_enable_fusion', e.target.checked)}
+                                            className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500"
+                                        />
+                                        <span className="text-sm text-slate-300">
+                                            Enable Fusion <span className="text-xs text-slate-500">(recommended default)</span>
+                                        </span>
+                                    </label>
+                                </div>
+
+                                {settings.protenix_use_template && (
+                                    <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                                        Template mode requires local mmCIF data under <code>.protenix_cache/mmcif</code>. Submission is rejected if that cache is missing.
+                                    </div>
+                                )}
+                            </>
+                        ) : (
+                            <>
+                                <div className="flex items-center gap-2 text-sm font-medium text-accent">
+                                    Structure Prediction (Boltz-2)
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-xs text-slate-500 mb-1">
+                                            Sampling Steps <span className="text-slate-600">({settings.boltz_sampling_steps})</span>
+                                        </label>
+                                        <input
+                                            type="range"
+                                            min={50}
+                                            max={1000}
+                                            step={50}
+                                            value={settings.boltz_sampling_steps}
+                                            onChange={(e) => updateSetting('boltz_sampling_steps', parseInt(e.target.value))}
+                                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-accent"
+                                        />
+                                        <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                                            <span>50</span>
+                                            <span>500</span>
+                                            <span>1000</span>
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-xs text-slate-500 mb-1">
+                                            Recycling Steps <span className="text-slate-600">({settings.boltz_recycling_steps})</span>
+                                        </label>
+                                        <input
+                                            type="range"
+                                            min={1}
+                                            max={10}
+                                            step={1}
+                                            value={settings.boltz_recycling_steps}
+                                            onChange={(e) => updateSetting('boltz_recycling_steps', parseInt(e.target.value))}
+                                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-accent"
+                                        />
+                                        <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                                            <span>1</span>
+                                            <span>5</span>
+                                            <span>10</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs text-slate-500 mb-1">
+                                        Diffusion Samples <span className="text-slate-600">({settings.boltz_num_samples})</span>
+                                    </label>
+                                    <input
+                                        type="range"
+                                        min={1}
+                                        max={10}
+                                        step={1}
+                                        value={settings.boltz_num_samples}
+                                        onChange={(e) => updateSetting('boltz_num_samples', parseInt(e.target.value))}
+                                        className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-accent"
+                                    />
+                                    <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                                        <span>1 (fastest)</span>
+                                        <span>5</span>
+                                        <span>10 (most diverse)</span>
+                                    </div>
+                                </div>
+
+                                <div className="flex gap-4">
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={settings.boltz_use_potentials}
+                                            onChange={(e) => updateSetting('boltz_use_potentials', e.target.checked)}
+                                            className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-accent focus:ring-accent"
+                                        />
+                                        <span className="text-sm text-slate-300">
+                                            Boltz-2x <span className="text-xs text-slate-500">(physics potentials)</span>
+                                        </span>
+                                    </label>
+
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={settings.boltz_use_msa}
+                                            onChange={(e) => updateSetting('boltz_use_msa', e.target.checked)}
+                                            className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-accent focus:ring-accent"
+                                        />
+                                        <span className="text-sm text-slate-300">
+                                            Use MSA <span className="text-xs text-slate-500">(better accuracy)</span>
+                                        </span>
+                                    </label>
+
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={settings.boltz_predict_affinity}
+                                            onChange={(e) => updateSetting('boltz_predict_affinity', e.target.checked)}
+                                            className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-accent focus:ring-accent"
+                                        />
+                                        <span className="text-sm text-slate-300">
+                                            Predict Affinity <span className="text-xs text-slate-500">(log₁₀ IC50)</span>
+                                        </span>
+                                    </label>
+                                </div>
+                            </>
+                        )}
                     </div>
 
                     {/* FAMPNN Settings */}
                     <div className="space-y-3 pt-3 border-t border-slate-700/50">
                         <div className="flex items-center gap-2 text-sm font-medium text-blue-400">
                             Sequence Design (FAMPNN)
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-xs text-slate-500 mb-1">Checkpoint Preset</label>
+                                <select
+                                    value={settings.fampnn_checkpoint}
+                                    onChange={(e) => updateSetting('fampnn_checkpoint', e.target.value)}
+                                    className={`w-full bg-slate-800 border rounded px-2 py-1 text-sm ${
+                                        settings.fampnn_checkpoint
+                                            ? 'border-slate-700 text-slate-300'
+                                            : 'border-red-500/50 text-red-200'
+                                    }`}
+                                >
+                                    <option value="">Select FAMPNN weights...</option>
+                                    {FAMPNN_CHECKPOINT_OPTIONS.map((option) => (
+                                        <option key={option.value} value={option.value}>{option.label}</option>
+                                    ))}
+                                </select>
+                                <p className="mt-1 text-[10px] text-slate-600">
+                                    No hidden default is applied. Pick the checkpoint explicitly for every campaign.
+                                </p>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs text-slate-500 mb-1">Checkpoint Path Override</label>
+                                <input
+                                    type="text"
+                                    value={settings.fampnn_checkpoint_path}
+                                    onChange={(e) => updateSetting('fampnn_checkpoint_path', e.target.value)}
+                                    placeholder="/app/fampnn/weights/custom.pt"
+                                    className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-slate-300 font-mono"
+                                />
+                                <p className="mt-1 text-[10px] text-slate-600">
+                                    Optional manual path. If set, this overrides the preset selection.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="rounded-lg border border-slate-700/50 bg-slate-950/40 px-3 py-2">
+                            <div className="text-[11px] font-medium text-slate-300">Checkpoint guidance</div>
+                            <div className="mt-1 space-y-1 text-[10px] text-slate-500">
+                                {FAMPNN_CHECKPOINT_OPTIONS.map((option) => (
+                                    <div key={option.value}>
+                                        <code className="text-slate-300">{option.value}</code>: {option.description}
+                                    </div>
+                                ))}
+                            </div>
                         </div>
 
                         <div className="grid grid-cols-2 gap-4">
@@ -1195,11 +1509,11 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                         />
                     </div>
 
-                    {/* Pre-Boltz Filtering (Compute Savings) */}
+                    {/* Pre-validation Filtering (Compute Savings) */}
                     <div className="space-y-3 pt-3 border-t border-slate-700/50">
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2 text-sm font-medium text-green-400">
-                                Pre-Boltz Filtering
+                                Pre-Validation Filtering
                                 <span className="text-xs text-slate-500 font-normal">(saves compute)</span>
                             </div>
                             <label className="flex items-center gap-2 cursor-pointer">
@@ -1284,7 +1598,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2 text-sm font-medium text-orange-400">
                                 Post-Validation Filtering
-                                <span className="text-xs text-slate-500 font-normal">(after Boltz-2)</span>
+                                <span className="text-xs text-slate-500 font-normal">(after {structureValidator === 'protenix' ? 'Protenix' : 'Boltz-2'})</span>
                             </div>
                             <label className="flex items-center gap-2 cursor-pointer">
                                 <input
@@ -1308,7 +1622,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                         {(settings.boltz_max_binder_rmsd !== null || settings.boltz_min_ptm_interface !== null) && (
                             <div className="space-y-4">
                                 <p className="text-xs text-slate-500">
-                                    Filters designs after Boltz-2 structure prediction based on self-consistency (RMSD) and interface confidence (iPTM).
+                                    Filters designs after structure validation based on self-consistency (RMSD) and interface confidence (iPTM).
                                 </p>
 
                                 <div className="grid grid-cols-2 gap-4">
@@ -1409,7 +1723,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                         {settings.run_thermompnn && (
                             <div className="space-y-3">
                                 <p className="text-xs text-slate-500">
-                                    Scores sequence stability before Boltz-2 validation. Lower ddG = more stable.
+                                    Scores sequence stability before structure validation. Lower ddG = more stable.
                                 </p>
 
                                 <div>
@@ -1654,7 +1968,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
 
 
                     {/* Info Banner */}
-                    {settings.boltz_use_potentials && (
+                    {structureValidator !== 'protenix' && settings.boltz_use_potentials && (
                         <div className="p-3 bg-accent/10 border border-accent/30 rounded-lg">
                             <div className="flex items-start gap-2">
                                 <div>

@@ -222,6 +222,7 @@ class MSAServerSettingsUpdate(BaseModel):
     include_envdb_on_start: Optional[bool] = None
     auto_stop_idle_enabled: Optional[bool] = None
     auto_stop_idle_minutes: Optional[int] = None
+    pinned_gpu_id: Optional[int] = None
 
 
 @router.get("/server/status")
@@ -235,6 +236,8 @@ async def get_msa_server_status(
 ):
     """Get current persistent MSA server state for the selected/default GPU."""
     try:
+        settings = read_server_settings()
+        effective_gpu_id = gpu_id if gpu_id is not None else settings.get("pinned_gpu_id")
         active_batch_result = await session.execute(
             select(func.count())
             .select_from(Job)
@@ -246,7 +249,7 @@ async def get_msa_server_status(
         has_active_batch_job = int(active_batch_result.scalar() or 0) > 0
 
         return server_status(
-            gpu_id=gpu_id,
+            gpu_id=effective_gpu_id,
             include_envdb=include_envdb,
             max_seqs=max_seqs,
             prefilter_mode=prefilter_mode,
@@ -271,7 +274,7 @@ async def update_msa_server_settings(request: MSAServerSettingsUpdate):
     """Update persisted MSA server settings."""
     try:
         current = read_server_settings()
-        patch = request.model_dump(exclude_none=True)
+        patch = {field: getattr(request, field) for field in request.model_fields_set}
         merged = {**current, **patch}
         settings = write_server_settings(merged)
         return {"success": True, "settings": settings}
@@ -294,7 +297,8 @@ async def start_msa_server(request: MSAServerStartRequest):
             if request.include_envdb is not None
             else bool(settings.get("include_envdb_on_start", False))
         )
-        gpu_id = resolve_msa_gpu_id(request.gpu_id)
+        requested_gpu_id = request.gpu_id if request.gpu_id is not None else settings.get("pinned_gpu_id")
+        gpu_id = resolve_msa_gpu_id(requested_gpu_id)
         started = [
             ensure_server_for_db(
                 db_alias="uniref",
@@ -338,7 +342,9 @@ async def start_msa_server(request: MSAServerStartRequest):
 async def stop_msa_server(request: MSAServerStopRequest):
     """Stop persistent MMseqs gpuserver(s)."""
     try:
-        result = stop_servers(gpu_id=request.gpu_id)
+        settings = read_server_settings()
+        effective_gpu_id = request.gpu_id if request.gpu_id is not None else settings.get("pinned_gpu_id")
+        result = stop_servers(gpu_id=effective_gpu_id)
         return {
             "success": True,
             **result,

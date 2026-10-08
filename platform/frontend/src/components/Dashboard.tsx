@@ -178,6 +178,10 @@ export function Dashboard() {
     });
 
     const handleResume = (job: Job) => {
+        if (job.status === 'awaiting_input') {
+            handleResumeWithSettings(job);
+            return;
+        }
         const completed = job.completed_stages || [];
         const resumePoint = completed.length > 0 ? `after ${completed[completed.length - 1]}` : 'from start (using cache)';
 
@@ -189,8 +193,14 @@ export function Dashboard() {
     const handleResumeWithSettings = (job: Job) => {
         const p = job.params || {};
         setResumeSettingsJob(job);
-        setResumeSettingsFromStage('auto');
-        setResumeSettingsNameSuffix('retuned');
+        setResumeSettingsFromStage(
+            job.awaiting_stage === 'post_fampnn'
+                ? 'fampnn'
+                : job.awaiting_stage === 'post_structure_validation'
+                    ? 'structure_validation'
+                    : 'auto'
+        );
+        setResumeSettingsNameSuffix(job.status === 'awaiting_input' ? 'continued' : 'retuned');
         setResumeSettingsForm({
             rfantibodyNumDesigns: clamp(Math.round(toNumber(p.rfantibody_num_designs, DEFAULT_RESUME_SETTINGS_FORM.rfantibodyNumDesigns)), 1, 64),
             seqsPerDesign: clamp(Math.round(toNumber(p.seqs_per_design, DEFAULT_RESUME_SETTINGS_FORM.seqsPerDesign)), 1, 32),
@@ -761,7 +771,9 @@ export function Dashboard() {
                         const matchesSearch = search === '' ||
                             job.name.toLowerCase().includes(search.toLowerCase()) ||
                             job.id.includes(search);
-                        const matchesStatus = statusFilter === 'all' || job.status === statusFilter;
+                        const matchesStatus = statusFilter === 'all' ||
+                            job.status === statusFilter ||
+                            (statusFilter === 'awaiting_input' && !!job.awaiting_input);
                         const matchesNgs = showNgsJobs || !isNgsJob(job);
                         return matchesSearch && matchesStatus && matchesNgs;
                     });

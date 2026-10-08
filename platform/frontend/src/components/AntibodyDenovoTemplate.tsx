@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { submitJob, uploadFile, extractChain, annotateFrameworkCdrs, type CDRAnnotationResponse } from '../lib/api';
+import { submitJob, uploadFile, extractChain, annotateFrameworkCdrs, downloadSabdabFramework, type CDRAnnotationResponse } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
 import { parsePDBFile, type Chain } from '../utils/pdbUtils';
 import { EpitopeSelector } from './EpitopeSelector';
@@ -20,6 +20,35 @@ interface AntibodyDenovoTemplateProps {
 }
 
 export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ onBack, initialValues }) => {
+    const restoringSelectionRef = useRef<{ chain: string | null; residues: string[] } | null>(null);
+
+    const normalizeProtenixModel = (model?: string) => {
+        if (!model) return 'protenix_base_20250630_v1.0.0';
+        if (model === 'protenix_base_20241211_v0.2.1') return 'protenix_base_default_v1.0.0';
+        if (model === 'protenix_esm_20241211_v0.2.1') return 'protenix_mini_esm_v0.5.0';
+        return model;
+    };
+    const mergeQualitySettingsFromParams = (params?: Record<string, any>): QualitySettings => {
+        const merged = {
+            ...PRESETS.balanced,
+            ...(params?.quality_settings || params?.qualitySettings || {}),
+        } as QualitySettings;
+
+        if (!params) {
+            return merged;
+        }
+
+        (Object.keys(PRESETS.balanced) as Array<keyof QualitySettings>).forEach((key) => {
+            if (params[key] !== undefined) {
+                (merged as any)[key] = key === 'protenix_model_weights'
+                    ? normalizeProtenixModel(params[key])
+                    : params[key];
+            }
+        });
+
+        return merged;
+    };
+
     const [jobName, setJobName] = useState('antibody_design');
     const [pinnedGpus, setPinnedGpus] = useState<number[]>(initialValues?.pinned_gpus ?? []);
     const [lockGpus, setLockGpus] = useState(false);
@@ -33,6 +62,15 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [runFrustrampnn, setRunFrustrampnn] = useState(false);
     const [runAnarciiPost, setRunAnarciiPost] = useState(false);
     const [anarciiIncludeChildren, setAnarciiIncludeChildren] = useState(true);
+    const [interactiveWorkflow, setInteractiveWorkflow] = useState(
+        initialValues?.interactive_swa ?? initialValues?.interactive_gating ?? false
+    );
+    const [interactiveGateStage, setInteractiveGateStage] = useState<'post_fampnn' | 'post_structure_validation'>(
+        initialValues?.interactive_gate_stage === 'post_structure_validation' ? 'post_structure_validation' : 'post_fampnn'
+    );
+    const [structureValidator, setStructureValidator] = useState<'boltz2' | 'protenix'>(
+        initialValues?.structure_validator === 'protenix' ? 'protenix' : 'boltz2'
+    );
     // explorationMode is now always true - parallelism controlled via parallelMode
     const [seqsPerDesign, setSeqsPerDesign] = useState(8); // Number of sequence variants per backbone
 
@@ -55,8 +93,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [showCDREditor, setShowCDREditor] = useState(false);
 
     // Quality settings
-    const [qualityPreset, setQualityPreset] = useState<QualityPreset>('balanced');
-    const [qualitySettings, setQualitySettings] = useState<QualitySettings>(PRESETS.balanced);
+    const [qualityPreset, setQualityPreset] = useState<QualityPreset>((initialValues?.quality_preset as QualityPreset) || 'balanced');
+    const [qualitySettings, setQualitySettings] = useState<QualitySettings>(() => mergeQualitySettingsFromParams(initialValues));
 
     // Physics refinement settings (OpenMM)
     const [physicsSettings, setPhysicsSettings] = useState<PhysicsRefinementSettings>(PHYSICS_DEFAULTS);
@@ -108,6 +146,172 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [fampnnCollectedPdbs, setFampnnCollectedPdbs] = useState<string>('');
     const [customOutputDir, setCustomOutputDir] = useState<string>('');
 
+    const buildFilesApiUrl = (mode: 'download' | 'pdb', path: string) =>
+        `/api/files/${mode}/${encodeURIComponent(path)}`;
+
+    const loadPdbFileFromUrl = async (url: string, fallbackName: string) => {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const blob = await res.blob();
+        const fileName = fallbackName.toLowerCase().endsWith('.pdb') ? fallbackName : `${fallbackName}.pdb`;
+        return new File([blob], fileName, { type: 'chemical/x-pdb' });
+    };
+
+    const loadSabdabFrameworkFile = async (pdbCode: string, fallbackName: string) => {
+        const response = await downloadSabdabFramework(pdbCode, {
+            scheme: 'imgt',
+            convert_hlt: true,
+            include_content: true,
+        });
+        const data = response.data as any;
+        if (!data?.pdb_content) {
+            throw new Error(`No PDB content returned for SAbDab framework ${pdbCode}`);
+        }
+        const blob = new Blob([data.pdb_content], { type: 'text/plain' });
+        const fileName = fallbackName.toLowerCase().endsWith('.pdb') ? fallbackName : `${fallbackName}.pdb`;
+        return {
+            file: new File([blob], fileName, { type: 'chemical/x-pdb' }),
+            url: URL.createObjectURL(blob),
+            filePath: data.file_path as string | undefined,
+        };
+    };
+
+    const restoreFrameworkPreview = async (saved: Record<string, any>) => {
+        const savedFramework = saved.sabdab_framework as SelectedFramework | undefined;
+        const savedFrameworkPath = (saved.custom_framework_path || saved.framework_pdb || savedFramework?.filePath || '').trim();
+
+        if (saved.framework_type === 'sabdab' && savedFramework) {
+            const preferredSabdabPath = savedFramework.filePath || savedFrameworkPath || null;
+            setSabdabFramework({ ...savedFramework, filePath: preferredSabdabPath || savedFramework.filePath });
+            setCustomFrameworkPath(preferredSabdabPath);
+            setViewerMode('framework');
+            setShow3DViewer(true);
+
+            if (savedFramework.pdbContent) {
+                const blob = new Blob([savedFramework.pdbContent], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                setFrameworkPdbUrl(url);
+                const fwFile = new File([blob], `${savedFramework.pdbCode || savedFramework.name || 'framework'}.pdb`);
+                const parsed = await parsePDBFile(fwFile);
+                setParsedFrameworkChains(parsed.chains);
+                return;
+            }
+
+            if (!savedFramework.pdbCode) return;
+
+            const hydrated = await loadSabdabFrameworkFile(
+                savedFramework.pdbCode,
+                `${savedFramework.pdbCode || savedFramework.name || 'framework'}.pdb`
+            );
+            setSabdabFramework((prev) => prev ? { ...prev, filePath: hydrated.filePath || prev.filePath } : prev);
+            setCustomFrameworkPath(hydrated.filePath || preferredSabdabPath);
+            setFrameworkPdbUrl(hydrated.url);
+            const fwFile = hydrated.file;
+            const parsed = await parsePDBFile(fwFile);
+            setParsedFrameworkChains(parsed.chains);
+            return;
+        }
+
+        if (saved.framework_type === 'custom' && savedFrameworkPath) {
+            setSabdabFramework(null);
+            setCustomFrameworkPath(savedFrameworkPath);
+            setViewerMode('framework');
+            setShow3DViewer(true);
+            const fwUrl = buildFilesApiUrl('download', savedFrameworkPath);
+            setFrameworkPdbUrl(fwUrl);
+            const fwFile = await loadPdbFileFromUrl(fwUrl, savedFrameworkPath.split('/').pop() || 'framework.pdb');
+            setCustomFrameworkFile(fwFile);
+            const parsed = await parsePDBFile(fwFile);
+            setParsedFrameworkChains(parsed.chains);
+            return;
+        }
+
+        setSabdabFramework(null);
+    };
+
+    const getSavedResidueSelection = (saved: Record<string, any>): string[] => {
+        if (Array.isArray(saved.selected_residues)) {
+            return saved.selected_residues.map((res) => String(res).trim()).filter(Boolean);
+        }
+        if (typeof saved.epitope_residues === 'string') {
+            return saved.epitope_residues
+                .split(',')
+                .map((res) => res.trim())
+                .filter(Boolean);
+        }
+        return [];
+    };
+
+    const queueRestoredSelection = (saved: Record<string, any>) => {
+        const residues = getSavedResidueSelection(saved);
+        const chain = saved.selected_chain || saved.antigen_chains || null;
+        restoringSelectionRef.current = { chain, residues };
+        if (chain) {
+            setSelectedChain(chain);
+        }
+        setSelectedResidues(new Set(residues));
+    };
+
+    useEffect(() => {
+        const queuedRestore = restoringSelectionRef.current;
+        if (!queuedRestore || parsedChains.length === 0) {
+            return;
+        }
+        const chainIds = parsedChains.map((chain) => chain.id);
+        if (!queuedRestore.chain || chainIds.includes(queuedRestore.chain)) {
+            if (queuedRestore.chain) {
+                setSelectedChain(queuedRestore.chain);
+            }
+            setSelectedResidues(new Set(queuedRestore.residues));
+            restoringSelectionRef.current = null;
+        }
+    }, [parsedChains]);
+
+    const restoreTargetFromSaved = async (saved: Record<string, any>) => {
+        const savedSource = saved.target_source as { type?: string; url?: string; path?: string; designId?: string; pdbId?: string; name?: string } | undefined;
+        const savedUploadedPath = typeof saved.uploaded_path === 'string' ? saved.uploaded_path : '';
+        const rawPath = (savedSource?.path || savedUploadedPath || saved.target_pdb || '').trim();
+        const rcsbMatch = rawPath.match(/(?:^|\/)([a-z0-9]{4})\.pdb$/i);
+
+        let fetchUrl = savedSource?.url || '';
+        let sourceType = savedSource?.type || '';
+        if (fetchUrl.includes('/api/files/download?path=') && rawPath) {
+            fetchUrl = buildFilesApiUrl('download', rawPath);
+        }
+        if (!fetchUrl && rawPath) {
+            if (sourceType === 'rcsb' || rcsbMatch) {
+                const pdbId = (savedSource?.pdbId || rcsbMatch?.[1] || '').toUpperCase();
+                if (pdbId) {
+                    fetchUrl = `/api/rcsb/${pdbId}/file`;
+                    sourceType = 'rcsb';
+                }
+            } else {
+                fetchUrl = buildFilesApiUrl('download', rawPath);
+                sourceType = sourceType || 'preset';
+            }
+        }
+
+        if (!rawPath && !fetchUrl) {
+            return;
+        }
+
+        const sourceName = savedSource?.name || rawPath.split('/').pop() || 'target.pdb';
+        setUploadedPath(savedUploadedPath || (sourceType === 'upload' ? rawPath : null));
+        setTargetSource({
+            type: sourceType || 'preset',
+            url: fetchUrl || undefined,
+            path: rawPath || undefined,
+            designId: savedSource?.designId,
+            pdbId: savedSource?.pdbId || rcsbMatch?.[1]?.toUpperCase(),
+            name: sourceName,
+        });
+
+        if (!fetchUrl) return;
+
+        const file = await loadPdbFileFromUrl(fetchUrl, sourceName);
+        setTargetPdb(file);
+    };
+
     const navigate = useNavigate();
     const queryClient = useQueryClient();
 
@@ -123,22 +327,45 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     useEffect(() => {
         if (initialValues) {
             console.log('[ANTIBODY_DENOVO] Initializing from values:', initialValues);
+            setQualitySettings(mergeQualitySettingsFromParams(initialValues));
+            if (initialValues.quality_preset) {
+                setQualityPreset(initialValues.quality_preset);
+            }
 
             // Basic params
-            if (initialValues.name) setJobName(initialValues.name); // Job name usually comes from wrapper but might be passed
+            if (initialValues.job_name) setJobName(initialValues.job_name);
+            else if (initialValues.name) setJobName(initialValues.name); // Job name usually comes from wrapper but might be passed
             if (initialValues.rfantibody_num_designs) setNumDesigns(initialValues.rfantibody_num_designs);
             if (initialValues.seqs_per_design) setSeqsPerDesign(initialValues.seqs_per_design);
+            if (initialValues.seqs_per_validation_job) setSeqsPerBoltzJob(initialValues.seqs_per_validation_job);
+            else if (initialValues.seqs_per_boltz_job) setSeqsPerBoltzJob(initialValues.seqs_per_boltz_job);
             // exploration_mode is now always true - controlled via parallel_mode instead
 
             // Booleans
             if (initialValues.run_immunogenicity_scoring !== undefined) setUseAntiberty(initialValues.run_immunogenicity_scoring);
-            if (initialValues.run_stability_scoring !== undefined) setUseThermoMPNN(initialValues.run_stability_scoring);
+            if (initialValues.run_thermompnn !== undefined) setUseThermoMPNN(initialValues.run_thermompnn);
+            else if (initialValues.run_stability_scoring !== undefined) setUseThermoMPNN(initialValues.run_stability_scoring);
             if (initialValues.run_frustrampnn !== undefined) setRunFrustrampnn(initialValues.run_frustrampnn);
             if (initialValues.run_anarcii_post !== undefined) setRunAnarciiPost(initialValues.run_anarcii_post);
             if (initialValues.anarcii_include_children !== undefined) setAnarciiIncludeChildren(initialValues.anarcii_include_children);
+            if (initialValues.interactive_swa !== undefined) setInteractiveWorkflow(initialValues.interactive_swa);
+            else if (initialValues.interactive_gating !== undefined) setInteractiveWorkflow(initialValues.interactive_gating);
+            if (initialValues.interactive_gate_stage === 'post_structure_validation' || initialValues.interactive_gate_stage === 'post_fampnn') {
+                setInteractiveGateStage(initialValues.interactive_gate_stage);
+            }
             // Handling renamed/mapped boolean params if any
             if (initialValues.use_antiberty !== undefined) setUseAntiberty(initialValues.use_antiberty);
             if (initialValues.use_thermompnn !== undefined) setUseThermoMPNN(initialValues.use_thermompnn);
+            if (Array.isArray(initialValues.pinned_gpus)) setPinnedGpus(initialValues.pinned_gpus);
+            if (typeof initialValues.lock_gpus === 'boolean') setLockGpus(initialValues.lock_gpus);
+            if (initialValues.parallel_mode) setParallelMode(initialValues.parallel_mode);
+            if (initialValues.designs_per_job) setDesignsPerJob(initialValues.designs_per_job);
+            if (initialValues.pdbs_per_job) setPdBsPerJob(initialValues.pdbs_per_job);
+            else if (initialValues.seqs_per_job) setPdBsPerJob(initialValues.seqs_per_job);
+            if (initialValues.target_dna_seq) {
+                setTargetDnaSeq(initialValues.target_dna_seq);
+                setShowDnaInput(true);
+            }
 
             // Sequence Designer
             if (initialValues.seq_design_fampnn) setSeqDesigner('fampnn');
@@ -151,53 +378,31 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
             // Framework
             if (initialValues.framework_type) setFrameworkType(initialValues.framework_type);
-
-            // Target PDB
-            // If checking target_pdb path, we can try to set it as a "preset" or "run" source so it fetches
-            if (initialValues.target_pdb) {
-                const path = initialValues.target_pdb;
-                const name = path.split('/').pop() || 'target.pdb';
-
-                // Check if this is an RCSB cached file (e.g., /path/to/rcsb/6pax.pdb)
-                const rcsbMatch = path.match(/\/rcsb\/([a-z0-9]{4})\.pdb$/i);
-                let fetchUrl: string;
-                let sourceType: string;
-
-                if (rcsbMatch) {
-                    // RCSB cached file - use RCSB API endpoint
-                    const pdbId = rcsbMatch[1].toUpperCase();
-                    fetchUrl = `/api/rcsb/${pdbId}/file`;
-                    sourceType = 'rcsb';
-                    console.log(`[CLONE] Detected RCSB PDB: ${pdbId}`);
-                } else {
-                    // Regular uploaded/preset file
-                    fetchUrl = `/api/files/download?path=${encodeURIComponent(path)}`;
-                    sourceType = 'preset';
-                }
-
-                setTargetSource({
-                    type: sourceType,
-                    path: path,
-                    url: fetchUrl,
-                    name: name
-                });
-                // Trigger fetch
-                fetch(fetchUrl)
-                    .then(res => res.blob())
-                    .then(blob => {
-                        const file = new File([blob], name, { type: 'chemical/x-pdb' });
-                        setTargetPdb(file);
-                        setUploadedPath(path); // It's already on server
-                    })
-                    .catch(e => console.error("Failed to load target PDB from clone", e));
+            if (initialValues.design_mode || initialValues.antibody_design_mode) {
+                setDesignMode(initialValues.design_mode || initialValues.antibody_design_mode);
+            }
+            if (Array.isArray(initialValues.selected_cdr_loops)) {
+                setSelectedCDRLoops(new Set(initialValues.selected_cdr_loops));
+            } else if (initialValues.antibody_design_loops) {
+                setSelectedCDRLoops(new Set(String(initialValues.antibody_design_loops).split(',').map((v: string) => v.trim()).filter(Boolean)));
+            }
+            if (typeof initialValues.protect_tetrad === 'boolean') setProtectTetrad(initialValues.protect_tetrad);
+            else if (typeof initialValues.protect_vhh_tetrad === 'boolean') setProtectTetrad(initialValues.protect_vhh_tetrad);
+            if (Array.isArray(initialValues.manual_cdr_definitions)) {
+                const defs = initialValues.manual_cdr_definitions.map((d: any) => ({
+                    ...d,
+                    residues: new Set(d.residues || [])
+                }));
+                setManualCDRDefinitions(defs);
+                setShowCDREditor(defs.length > 0);
             }
 
-            // Epitopes & Chain
-            if (initialValues.antigen_chains) setSelectedChain(initialValues.antigen_chains);
-            if (initialValues.epitope_residues) {
-                const residues = new Set((initialValues.epitope_residues as string).split(','));
-                setSelectedResidues(residues);
-            }
+            queueRestoredSelection(initialValues);
+
+            restoreTargetFromSaved(initialValues)
+                .catch((e) => console.error('[ANTIBODY_DENOVO] Failed to restore saved target state', e));
+            restoreFrameworkPreview(initialValues)
+                .catch((e) => console.error('[ANTIBODY_DENOVO] Failed to restore saved framework state', e));
         }
     }, [initialValues]);
 
@@ -223,13 +428,22 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     // If clone set selectedChain, verify it exists, otherwise fallback
                     if (result.chains.length > 0) {
                         const chainIds = result.chains.map(c => c.id);
-                        if (!selectedChain || !chainIds.includes(selectedChain)) {
+                        const queuedRestore = restoringSelectionRef.current;
+                        if (queuedRestore?.chain && chainIds.includes(queuedRestore.chain)) {
+                            setSelectedChain(queuedRestore.chain);
+                            setSelectedResidues(new Set(queuedRestore.residues));
+                            restoringSelectionRef.current = null;
+                        } else if (!selectedChain || !chainIds.includes(selectedChain)) {
                             const longestChain = result.chains.reduce((a, b) =>
                                 a.length > b.length ? a : b
                             );
                             setSelectedChain(longestChain.id);
                             // Clear selection only if we CHANGED the chain automatically
-                            if (!initialValues) setSelectedResidues(new Set());
+                            if (!queuedRestore) setSelectedResidues(new Set());
+                            restoringSelectionRef.current = null;
+                        } else if (queuedRestore) {
+                            setSelectedResidues(new Set(queuedRestore.residues));
+                            restoringSelectionRef.current = null;
                         }
                     }
                     if (!uploadedPath && !initialValues) setUploadedPath(null); // Only clear if new upload
@@ -243,7 +457,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         } else {
             setParsedChains([]);
             setSelectedChain(null);
-            setSelectedResidues(new Set());
+            if (!restoringSelectionRef.current) {
+                setSelectedResidues(new Set());
+            }
         }
     }, [targetPdb]);
 
@@ -349,7 +565,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         setIsUploading(true);
         try {
             const response = await uploadFile('inputs/antibody', file);
-            const path = `inputs/antibody/${file.name}`;
+            const path = response.data?.path || `inputs/antibody/${file.name}`;
             setUploadedPath(path);
             console.log('[ANTIBODY_DENOVO] File uploaded:', path, response);
             return path;
@@ -382,6 +598,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         }
         if (skipFampnn && !fampnnCollectedPdbs.trim()) {
             alert('Please provide a path to sequenced PDBs for Skip FAMPNN');
+            return;
+        }
+        const fampnnCheckpointSpecified = Boolean(
+            qualitySettings.fampnn_checkpoint_path.trim() || qualitySettings.fampnn_checkpoint.trim()
+        );
+        const needsFampnnCheckpoint = seqDesigner === 'fampnn' || qualitySettings.run_maturation;
+        if (needsFampnnCheckpoint && !fampnnCheckpointSpecified) {
+            alert('Please choose FAMPNN weights before submitting. No default checkpoint is applied.');
             return;
         }
 
@@ -434,41 +658,40 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             if (qualitySettings.run_maturation) pipelineSteps.push('ppiflow');
             if (useAntiberty) pipelineSteps.push('antiberty');
             if (useThermoMPNN) pipelineSteps.push('thermompnn');
-            pipelineSteps.push('boltz2'); // Boltz2 is always run last for structure validation
+            pipelineSteps.push(structureValidator === 'protenix' ? 'protenix' : 'boltz2');
 
             // Step 2: Upload custom framework if provided
-            let frameworkPath = customFrameworkPath;
+            let frameworkPath = frameworkType === 'sabdab'
+                ? (sabdabFramework?.filePath || customFrameworkPath)
+                : customFrameworkPath;
             let effectiveFrameworkType = frameworkType;
             let effectiveAntibodyType = frameworkType === 'nanobody' ? 'vhh' : 'scfv';
 
             if (frameworkType === 'custom' && customFrameworkFile && !frameworkPath) {
                 const response = await uploadFile('inputs/antibody', customFrameworkFile);
-                frameworkPath = `inputs/antibody/${customFrameworkFile.name}`;
+                frameworkPath = response.data?.path || `inputs/antibody/${customFrameworkFile.name}`;
                 setCustomFrameworkPath(frameworkPath);
                 console.log('[ANTIBODY_DENOVO] Custom framework uploaded:', frameworkPath, response);
                 effectiveAntibodyType = 'custom';
             } else if (frameworkType === 'sabdab' && sabdabFramework?.pdbCode) {
-                // Fetch the SAbDab PDB and upload it as a custom framework
+                // Use the converted H/L/T SAbDab artifact from our own backend, not a raw RCSB fetch.
                 try {
-                    const rcsbUrl = `https://files.rcsb.org/download/${sabdabFramework.pdbCode.toUpperCase()}.pdb`;
-                    console.log(`[ANTIBODY_DENOVO] Fetching SAbDab framework from ${rcsbUrl}`);
-                    const response = await fetch(rcsbUrl);
-                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                    const blob = await response.blob();
-                    const fwFile = new File([blob], `${sabdabFramework.pdbCode}_framework.pdb`, { type: 'chemical/x-pdb' });
-
-                    const uploadResp = await uploadFile('inputs/antibody', fwFile);
-                    frameworkPath = `inputs/antibody/${fwFile.name}`;
-                    console.log('[ANTIBODY_DENOVO] SAbDab framework uploaded:', frameworkPath, uploadResp);
-
-                    // Route as 'custom' framework type so Nextflow uses the path, not a preset
                     effectiveFrameworkType = 'custom';
-
-                    // Determine antibody chains based on SAbDab type (VHH lacks a light chain)
                     effectiveAntibodyType = !sabdabFramework.lChain ? 'vhh' : 'fab';
+                    frameworkPath = frameworkPath || sabdabFramework.filePath || null;
+
+                    if (!frameworkPath) {
+                        const hydrated = await loadSabdabFrameworkFile(
+                            sabdabFramework.pdbCode,
+                            `${sabdabFramework.pdbCode}_framework.pdb`
+                        );
+                        frameworkPath = hydrated.filePath || await handleFileUpload(hydrated.file);
+                        setCustomFrameworkPath(frameworkPath);
+                        setSabdabFramework((prev) => prev ? { ...prev, filePath: frameworkPath || prev.filePath } : prev);
+                    }
                 } catch (err) {
                     console.error('[ANTIBODY_DENOVO] Failed to process SAbDab framework:', err);
-                    alert(`Failed to download SAbDab framework ${sabdabFramework.pdbCode}. Please try a different one or use the Nanobody preset.`);
+                    alert(`Failed to prepare SAbDab framework ${sabdabFramework.pdbCode}. Please try a different one or use the Nanobody preset.`);
                     return;
                 }
             }
@@ -518,11 +741,15 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     seq_design_antifold: seqDesigner === 'antifold',
                     seq_design_proteinmpnn: seqDesigner === 'proteinmpnn',
                     run_immunogenicity_scoring: useAntiberty,
-                    run_stability_scoring: useThermoMPNN,
-                    run_structure_validation: true, // Boltz2 is always run
+                    run_stability_scoring: qualitySettings.run_thermompnn,
+                    run_structure_validation: true,
+                    structure_validator: structureValidator,
                     run_frustrampnn: runFrustrampnn,
                     run_anarcii_post: runAnarciiPost,
                     anarcii_include_children: anarciiIncludeChildren,
+                    interactive_swa: interactiveWorkflow,
+                    interactive_gating: interactiveWorkflow,
+                    interactive_gate_stage: interactiveGateStage,
                     exploration_mode: true, // Always parallel - granularity controlled via parallel_mode
                     seqs_per_design: seqsPerDesign, // Number of sequence variants per backbone
                     // Optional DNA sequence for complex prediction
@@ -539,7 +766,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     rfantibody_noise_scale_ca: qualitySettings.rfantibody_noise_scale_ca,
                     rfantibody_noise_scale_frame: qualitySettings.rfantibody_noise_scale_frame,
                     rfantibody_guide_scale: qualitySettings.rfantibody_guide_scale,
-                    // Quality settings - Boltz-2 (structure validation)
+                    // Structure validation settings
                     boltz_sampling_steps: qualitySettings.boltz_sampling_steps,
                     boltz_recycling_steps: qualitySettings.boltz_recycling_steps,
                     boltz_num_samples: qualitySettings.boltz_num_samples,
@@ -548,13 +775,26 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     // Boltz-2 affinity prediction
                     boltz_predict_affinity: qualitySettings.boltz_predict_affinity,
                     boltz_diffusion_samples_affinity: qualitySettings.boltz_diffusion_samples_affinity,
+                    protenix_model_weights: qualitySettings.protenix_model_weights,
+                    protenix_seeds: qualitySettings.protenix_seeds,
+                    protenix_n_sample: qualitySettings.protenix_n_sample,
+                    protenix_n_step: qualitySettings.protenix_n_step,
+                    protenix_n_cycle: qualitySettings.protenix_n_cycle,
+                    protenix_use_msa: qualitySettings.protenix_use_msa,
+                    protenix_use_template: qualitySettings.protenix_use_template,
+                    protenix_enable_cache: qualitySettings.protenix_enable_cache,
+                    protenix_enable_fusion: qualitySettings.protenix_enable_fusion,
                     // Quality settings - FAMPNN (sequence design)
+                    fampnn_checkpoint: qualitySettings.fampnn_checkpoint || undefined,
+                    fampnn_checkpoint_path: qualitySettings.fampnn_checkpoint_path.trim() || undefined,
                     fampnn_temperature: qualitySettings.fampnn_temperature,
                     fampnn_num_steps: qualitySettings.fampnn_num_steps,
                     fampnn_psce_threshold: qualitySettings.fampnn_psce_threshold,
                     fampnn_constraint_mode: seqDesigner === 'fampnn' ? fampnnConstraintMode : undefined,
                     // PPIFlow maturation settings
                     run_maturation: qualitySettings.run_maturation,
+                    run_post_validation_maturation: qualitySettings.run_maturation,
+                    run_post_boltz_maturation: qualitySettings.run_maturation,
                     ppiflow_start_t: qualitySettings.ppiflow_start_t,
                     ppiflow_samples_per_target: qualitySettings.ppiflow_samples_per_target,
                     ppiflow_retry_limit: qualitySettings.ppiflow_retry_limit,
@@ -593,7 +833,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     af2_backprop_loss_plddt: qualitySettings.af2_backprop_loss_plddt,
                     af2_backprop_loss_pae: qualitySettings.af2_backprop_loss_pae,
                     af2_backprop_loss_contact: qualitySettings.af2_backprop_loss_contact,
-                    // Post-Boltz validation filtering (applied after Boltz-2 structure prediction)
+                    // Post-validation filtering
                     boltz_max_binder_rmsd: qualitySettings.boltz_max_binder_rmsd,
                     boltz_min_ptm_interface: qualitySettings.boltz_min_ptm_interface,
                     // Orchestrator parallelism mode
@@ -601,6 +841,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     designs_per_job: designsPerJob,
                     seqs_per_job: pdBsPerJob,
                     seqs_per_boltz_job: seqsPerBoltzJob,
+                    seqs_per_validation_job: seqsPerBoltzJob,
                     // Debug: Skip step settings
                     skip_rfantibody: skipRFantibody || undefined,
                     rfantibody_input_pdbs: rfantibodyInputPdbs.trim() || undefined,
@@ -856,22 +1097,19 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                                     console.error('Failed to parse selected framework PDB:', err);
                                                     setParsedFrameworkChains([]);
                                                 });
-                                        } else if (fw?.filePath) {
-                                            const fwUrl = `/api/files/download?path=${encodeURIComponent(fw.filePath)}`;
-                                            setFrameworkPdbUrl(fwUrl);
+                                        } else if (fw?.filePath || fw?.pdbCode) {
                                             setViewerMode('framework');
                                             setShow3DViewer(true);
                                             setParsedFrameworkChains([]);
 
-                                            fetch(fwUrl)
-                                                .then((res) => {
-                                                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                                                    return res.blob();
-                                                })
-                                                .then((blob) => {
-                                                    const fwFile = new File([blob], `${fw.pdbCode || 'framework'}.pdb`);
+                                            loadSabdabFrameworkFile(fw.pdbCode || fw.id, `${fw.pdbCode || 'framework'}.pdb`)
+                                                .then(({ file, url, filePath }) => {
+                                                    if (filePath) {
+                                                        setSabdabFramework((prev) => prev ? { ...prev, filePath } : prev);
+                                                    }
+                                                    setFrameworkPdbUrl(url);
                                                     return import('../utils/pdbUtils').then(({ parsePDBFile }) =>
-                                                        parsePDBFile(fwFile)
+                                                        parsePDBFile(file)
                                                     );
                                                 })
                                                 .then((parsed) => setParsedFrameworkChains(parsed.chains))
@@ -1373,12 +1611,115 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
                 {/* RIGHT COLUMN: Quality Settings & Debug */}
                 <div className="space-y-5">
+                    <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4 space-y-4">
+                        <div>
+                            <h3 className="text-sm font-semibold text-slate-200">Execution Mode</h3>
+                            <p className="text-xs text-slate-500 mt-1">
+                                Choose whether the workflow pauses for manual review or runs through without intervention.
+                            </p>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3">
+                            <button
+                                type="button"
+                                onClick={() => setInteractiveWorkflow(false)}
+                                className={`rounded-lg border px-3 py-2 text-sm transition-colors ${!interactiveWorkflow
+                                    ? 'border-emerald-400 bg-emerald-400/10 text-emerald-300'
+                                    : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-600'
+                                    }`}
+                            >
+                                Static
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setInteractiveWorkflow(true)}
+                                className={`rounded-lg border px-3 py-2 text-sm transition-colors ${interactiveWorkflow
+                                    ? 'border-amber-400 bg-amber-400/10 text-amber-300'
+                                    : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-600'
+                                    }`}
+                            >
+                                Interactive
+                            </button>
+                        </div>
+
+                        {interactiveWorkflow && (
+                            <div className="space-y-2 rounded-lg border border-slate-700/50 bg-slate-950/40 p-3">
+                                <label className="block text-xs text-slate-500">Pause After</label>
+                                <div className="grid grid-cols-2 gap-3">
+                                    <button
+                                        type="button"
+                                        onClick={() => setInteractiveGateStage('post_fampnn')}
+                                        className={`rounded-lg border px-3 py-2 text-sm transition-colors ${interactiveGateStage === 'post_fampnn'
+                                            ? 'border-blue-400 bg-blue-400/10 text-blue-300'
+                                            : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-600'
+                                            }`}
+                                    >
+                                        FAMPNN Review
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setInteractiveGateStage('post_structure_validation')}
+                                        className={`rounded-lg border px-3 py-2 text-sm transition-colors ${interactiveGateStage === 'post_structure_validation'
+                                            ? 'border-cyan-400 bg-cyan-400/10 text-cyan-300'
+                                            : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-600'
+                                            }`}
+                                    >
+                                        Structure Review
+                                    </button>
+                                </div>
+                                <p className="text-xs text-slate-500">
+                                    {interactiveGateStage === 'post_fampnn'
+                                        ? 'Pause immediately after FAMPNN candidate generation/filtering so you can inspect the initial sequence pool before any structure validator is called.'
+                                        : 'Pause after Boltz-2 or Protenix validation so the Results Viewer can be used to inspect metrics and launch the next refinement round.'}
+                                </p>
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4 space-y-4">
+                        <div>
+                            <h3 className="text-sm font-semibold text-slate-200">Structure Validator</h3>
+                            <p className="text-xs text-slate-500 mt-1">
+                                Select the structural validation backend for post-FAMPNN candidate evaluation.
+                            </p>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3">
+                            <button
+                                type="button"
+                                onClick={() => setStructureValidator('boltz2')}
+                                className={`rounded-lg border px-3 py-2 text-sm transition-colors ${structureValidator === 'boltz2'
+                                    ? 'border-accent bg-accent/10 text-accent'
+                                    : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-600'
+                                    }`}
+                            >
+                                Boltz-2
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setStructureValidator('protenix')}
+                                className={`rounded-lg border px-3 py-2 text-sm transition-colors ${structureValidator === 'protenix'
+                                    ? 'border-cyan-400 bg-cyan-400/10 text-cyan-300'
+                                    : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-600'
+                                    }`}
+                            >
+                                Protenix
+                            </button>
+                        </div>
+                        <p className="text-xs text-slate-500">
+                            {structureValidator === 'protenix'
+                                ? 'Protenix-specific quality controls now live inside Quality Settings. AntiFold FASTA-only outputs remain excluded in this validator mode because the antibody workflow uses PDB-backed candidates for iterative review.'
+                                : 'Boltz-2 controls and post-validation filters live inside Quality Settings.'}
+                        </p>
+                    </div>
+
                     {/* Quality Settings Panel */}
                     <QualitySettingsPanel
                         settings={qualitySettings}
                         onSettingsChange={setQualitySettings}
                         preset={qualityPreset}
                         onPresetChange={setQualityPreset}
+                        structureValidator={structureValidator}
                     />
 
                     {/* Physics Refinement Panel (OpenMM) */}
@@ -1584,7 +1925,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     <span className="text-sm text-slate-300">{pdBsPerJob}</span>
                                 </div>
                                 <div>
-                                    <label className="text-xs text-slate-500">Sequences per Boltz job</label>
+                                    <label className="text-xs text-slate-500">Sequences per validation job</label>
                                     <input
                                         type="range"
                                         min="1"
@@ -1755,40 +2096,48 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         if (p.rfantibody_num_designs) { setNumDesigns(p.rfantibody_num_designs); loaded.push('rfantibody_num_designs'); } else { skipped.push('rfantibody_num_designs'); }
                         if (p.seqs_per_design) { setSeqsPerDesign(p.seqs_per_design); loaded.push('seqs_per_design'); } else { skipped.push('seqs_per_design'); }
                         if (typeof p.run_immunogenicity_scoring === 'boolean') { setUseAntiberty(p.run_immunogenicity_scoring); loaded.push('run_immunogenicity_scoring'); }
-                        if (typeof p.run_stability_scoring === 'boolean') { setUseThermoMPNN(p.run_stability_scoring); loaded.push('run_stability_scoring'); }
+                        if (typeof p.run_thermompnn === 'boolean') { setUseThermoMPNN(p.run_thermompnn); loaded.push('run_thermompnn'); }
+                        else if (typeof p.run_stability_scoring === 'boolean') { setUseThermoMPNN(p.run_stability_scoring); loaded.push('run_stability_scoring'); }
                         if (typeof p.run_frustrampnn === 'boolean') { setRunFrustrampnn(p.run_frustrampnn); loaded.push('run_frustrampnn'); }
                         if (typeof p.run_anarcii_post === 'boolean') { setRunAnarciiPost(p.run_anarcii_post); loaded.push('run_anarcii_post'); }
                         if (typeof p.anarcii_include_children === 'boolean') { setAnarciiIncludeChildren(p.anarcii_include_children); loaded.push('anarcii_include_children'); }
+            if (typeof p.interactive_swa === 'boolean') { setInteractiveWorkflow(p.interactive_swa); loaded.push('interactive_swa'); }
+                        else if (typeof p.interactive_gating === 'boolean') { setInteractiveWorkflow(p.interactive_gating); loaded.push('interactive_gating'); }
+                        if (p.interactive_gate_stage === 'post_structure_validation' || p.interactive_gate_stage === 'post_fampnn') {
+                            setInteractiveGateStage(p.interactive_gate_stage);
+                            loaded.push('interactive_gate_stage');
+                        }
+                        if (p.structure_validator === 'protenix' || p.structure_validator === 'boltz2') { setStructureValidator(p.structure_validator); loaded.push('structure_validator'); }
                         if (p.parallel_mode) { setParallelMode(p.parallel_mode); loaded.push('parallel_mode'); } else { skipped.push('parallel_mode'); }
                         if (p.designs_per_job) { setDesignsPerJob(p.designs_per_job); loaded.push('designs_per_job'); }
                         if (p.pdbs_per_job) { setPdBsPerJob(p.pdbs_per_job); loaded.push('pdbs_per_job'); }
+                        else if (p.seqs_per_job) { setPdBsPerJob(p.seqs_per_job); loaded.push('seqs_per_job'); }
+                        if (p.seqs_per_validation_job) { setSeqsPerBoltzJob(p.seqs_per_validation_job); loaded.push('seqs_per_validation_job'); }
+                        else if (p.seqs_per_boltz_job) { setSeqsPerBoltzJob(p.seqs_per_boltz_job); loaded.push('seqs_per_boltz_job'); }
+                        if (Array.isArray(p.pinned_gpus)) { setPinnedGpus(p.pinned_gpus); loaded.push('pinned_gpus'); }
+                        if (typeof p.lock_gpus === 'boolean') { setLockGpus(p.lock_gpus); loaded.push('lock_gpus'); }
                         // Design mode
                         if (p.design_mode) { setDesignMode(p.design_mode); loaded.push('design_mode'); } else { skipped.push('design_mode'); }
                         if (Array.isArray(p.selected_cdr_loops)) { setSelectedCDRLoops(new Set(p.selected_cdr_loops)); loaded.push('selected_cdr_loops'); }
                         if (typeof p.protect_tetrad === 'boolean') { setProtectTetrad(p.protect_tetrad); loaded.push('protect_tetrad'); }
-                        // Target (path only - user must re-upload if file no longer at path)
-                        if (p.uploaded_path) { setUploadedPath(p.uploaded_path); loaded.push('uploaded_path'); } else { skipped.push('uploaded_path'); }
-                        // Target source - restore full context including RCSB sources
+                        else if (typeof p.protect_vhh_tetrad === 'boolean') { setProtectTetrad(p.protect_vhh_tetrad); loaded.push('protect_vhh_tetrad'); }
+                        if (p.uploaded_path) { loaded.push('uploaded_path'); } else { skipped.push('uploaded_path'); }
                         if (p.target_source) {
-                            setTargetSource(p.target_source);
                             loaded.push('target_source');
-                            // Trigger PDB fetch if it's a URL-based source
-                            if (p.target_source.url) {
-                                fetch(p.target_source.url)
-                                    .then(res => res.blob())
-                                    .then(blob => {
-                                        const file = new File([blob], (p.target_source.name || 'structure') + '.pdb', { type: 'chemical/x-pdb' });
-                                        setTargetPdb(file);
-                                    })
-                                    .catch(err => console.error('[TEMPLATE_LOAD] Failed to fetch PDB from source:', err));
-                            }
                         }
-                        if (p.selected_chain) { setSelectedChain(p.selected_chain); loaded.push('selected_chain'); } else { skipped.push('selected_chain'); }
-                        if (Array.isArray(p.selected_residues)) { setSelectedResidues(new Set(p.selected_residues)); loaded.push('selected_residues'); }
+                        queueRestoredSelection(p);
+                        restoreTargetFromSaved(p).catch((err) => console.error('[TEMPLATE_LOAD] Failed to restore target state:', err));
+                        if (p.selected_chain || p.antigen_chains) { loaded.push('selected_chain'); } else { skipped.push('selected_chain'); }
+                        if (getSavedResidueSelection(p).length > 0) { loaded.push('selected_residues'); } else { skipped.push('selected_residues'); }
+                        if (p.target_dna_seq) { setTargetDnaSeq(p.target_dna_seq); setShowDnaInput(true); loaded.push('target_dna_seq'); }
                         // Quality settings - check both old and new field names
-                        const qualityS = p.quality_settings || p.qualitySettings;
-                        if (qualityS) {
-                            setQualitySettings({ ...PRESETS.balanced, ...qualityS });
+                        const hasQualityOverrides = Boolean(
+                            p.quality_settings ||
+                            p.qualitySettings ||
+                            (Object.keys(PRESETS.balanced) as Array<keyof QualitySettings>).some((key) => p[key] !== undefined)
+                        );
+                        if (hasQualityOverrides) {
+                            setQualitySettings(mergeQualitySettingsFromParams(p));
                             loaded.push('quality_settings');
                         }
                         if (p.quality_preset) { setQualityPreset(p.quality_preset); loaded.push('quality_preset'); }
@@ -1802,6 +2151,15 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             setShowCDREditor(defs.length > 0);
                             loaded.push('manual_cdr_definitions');
                         }
+                        if (p.custom_framework_path && p.framework_type !== 'sabdab') {
+                            setCustomFrameworkPath(p.custom_framework_path);
+                            loaded.push('custom_framework_path');
+                        }
+                        if (p.sabdab_framework) {
+                            setSabdabFramework(p.sabdab_framework);
+                            loaded.push('sabdab_framework');
+                        }
+                        restoreFrameworkPreview(p).catch((err) => console.error('[TEMPLATE_LOAD] Failed to restore framework state:', err));
 
                         console.log('[TEMPLATE_LOAD] Loaded fields:', loaded.join(', '));
                         console.log('[TEMPLATE_LOAD] Skipped fields (not in template):', skipped.join(', '));
@@ -1814,34 +2172,80 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     // Core settings
                     job_name: jobName,
                     framework_type: frameworkType,
+                    framework_pdb: frameworkType === 'sabdab'
+                        ? (sabdabFramework?.filePath || customFrameworkPath || undefined)
+                        : (customFrameworkPath || undefined),
                     seq_designer: seqDesigner,
                     rfantibody_num_designs: numDesigns,
                     seqs_per_design: seqsPerDesign,
                     run_immunogenicity_scoring: useAntiberty,
-                    run_stability_scoring: useThermoMPNN,
+                    run_thermompnn: qualitySettings.run_thermompnn,
+                    run_stability_scoring: qualitySettings.run_thermompnn,
+                    structure_validator: structureValidator,
+                    protenix_model_weights: qualitySettings.protenix_model_weights,
+                    protenix_seeds: qualitySettings.protenix_seeds,
+                    protenix_n_sample: qualitySettings.protenix_n_sample,
+                    protenix_n_step: qualitySettings.protenix_n_step,
+                    protenix_n_cycle: qualitySettings.protenix_n_cycle,
+                    protenix_use_msa: qualitySettings.protenix_use_msa,
+                    protenix_use_template: qualitySettings.protenix_use_template,
+                    protenix_enable_cache: qualitySettings.protenix_enable_cache,
+                    protenix_enable_fusion: qualitySettings.protenix_enable_fusion,
+                    fampnn_checkpoint: qualitySettings.fampnn_checkpoint,
+                    fampnn_checkpoint_path: qualitySettings.fampnn_checkpoint_path,
+                    run_post_validation_maturation: qualitySettings.run_maturation,
+                    run_post_boltz_maturation: qualitySettings.run_maturation,
                     run_frustrampnn: runFrustrampnn,
                     run_anarcii_post: runAnarciiPost,
                     anarcii_include_children: anarciiIncludeChildren,
+                    interactive_swa: interactiveWorkflow,
+                    interactive_gating: interactiveWorkflow,
+                    interactive_gate_stage: interactiveGateStage,
                     parallel_mode: parallelMode,
                     designs_per_job: designsPerJob,
                     pdbs_per_job: pdBsPerJob,
                     seqs_per_boltz_job: seqsPerBoltzJob,
+                    seqs_per_validation_job: seqsPerBoltzJob,
                     // Design mode
                     design_mode: designMode,
+                    antibody_design_mode: designMode,
                     selected_cdr_loops: Array.from(selectedCDRLoops),
+                    antibody_design_loops: Array.from(selectedCDRLoops).join(','),
                     protect_tetrad: protectTetrad,
+                    protect_vhh_tetrad: protectTetrad,
                     // Framework protection (for framework_allowed and full_design modes)
                     protected_positions: frameworkProtection.protectedPositions.join(','),
                     protect_disulfides: frameworkProtection.protectDisulfides,
                     protect_fr_contacts: frameworkProtection.protectFrContacts,
                     // Target info - now includes full source context
+                    target_pdb: uploadedPath || targetSource?.path || undefined,
                     target_source: targetSource,
                     uploaded_path: uploadedPath,
                     selected_chain: selectedChain,
+                    antigen_chains: selectedChain,
                     selected_residues: Array.from(selectedResidues),
+                    epitope_residues: Array.from(selectedResidues).sort().join(','),
+                    target_dna_seq: targetDnaSeq.trim() || undefined,
+                    pinned_gpus: pinnedGpus,
+                    lock_gpus: lockGpus,
                     // Quality settings
                     quality_preset: qualityPreset,
                     quality_settings: qualitySettings,
+                    sabdab_framework: sabdabFramework ? {
+                        type: sabdabFramework.type,
+                        id: sabdabFramework.id,
+                        name: sabdabFramework.name,
+                        pdbCode: sabdabFramework.pdbCode,
+                        sequence: sabdabFramework.sequence,
+                        filePath: sabdabFramework.filePath,
+                        cdrH3Length: sabdabFramework.cdrH3Length,
+                        hChain: sabdabFramework.hChain,
+                        lChain: sabdabFramework.lChain,
+                        antigenChain: sabdabFramework.antigenChain,
+                    } : null,
+                    custom_framework_path: frameworkType === 'sabdab'
+                        ? (sabdabFramework?.filePath || customFrameworkPath || undefined)
+                        : customFrameworkPath,
                     // Manual CDR definitions - serialize Sets to arrays
                     manual_cdr_definitions: manualCDRDefinitions.map(d => ({
                         ...d,
@@ -1850,6 +2254,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 }}
                 currentModelId="template_antibody_denovo"
                 currentMode="antibody_denovo_pipeline"
+                baseTemplateId="antibody_denovo"
             />
         </div >
     );

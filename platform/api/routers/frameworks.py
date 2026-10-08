@@ -274,17 +274,6 @@ async def download_framework(
         raise HTTPException(status_code=400, detail="Invalid scheme. Use 'imgt', 'chothia', or 'original'")
     
     try:
-        pdb_content = await download_pdb(pdb_code, scheme=scheme, cache=True)
-        
-        if not pdb_content:
-            raise HTTPException(status_code=404, detail=f"PDB {pdb_code} not found in SAbDab")
-        
-        # Convert to HLT if requested
-        if convert_hlt:
-            pdb_content = convert_sabdab_to_hlt(pdb_content)
-        
-        cache_file = CACHE_DIR / f"{pdb_code.lower()}_{scheme}.pdb"
-        
         # Fetch chain metadata from local DB for post-download selection
         h_chain, l_chain, antigen_chain, antigen_name = None, None, None, None
         try:
@@ -293,12 +282,30 @@ async def download_framework(
             if entries:
                 entry = entries[0]  # Use first entry
                 h_chain = entry.h_chain
-                l_chain = None  # VHH don't have L chain
+                l_chain = entry.l_chain
                 antigen_chain = entry.antigen_chain
                 antigen_name = entry.antigen_name
                 logger.info(f"[SAbDab Download] Chain metadata: H={h_chain}, Ag={antigen_chain}")
         except Exception as db_err:
             logger.warning(f"[SAbDab Download] Could not fetch chain metadata: {db_err}")
+
+        pdb_content = await download_pdb(pdb_code, scheme=scheme, cache=True)
+        
+        if not pdb_content:
+            raise HTTPException(status_code=404, detail=f"PDB {pdb_code} not found in SAbDab")
+
+        cache_file = CACHE_DIR / f"{pdb_code.lower()}_{scheme}.pdb"
+
+        # Convert to HLT if requested and persist the converted artifact for workflow use.
+        if convert_hlt:
+            pdb_content = convert_sabdab_to_hlt(
+                pdb_content,
+                heavy_chain=h_chain,
+                light_chain=l_chain,
+                antigen_chain=antigen_chain,
+            )
+            cache_file = CACHE_DIR / f"{pdb_code.lower()}_{scheme}_hlt.pdb"
+            cache_file.write_text(pdb_content)
         
         return FrameworkDownloadResponse(
             pdb_code=pdb_code.upper(),

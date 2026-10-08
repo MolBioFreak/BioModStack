@@ -53,6 +53,7 @@ export const MODE_DISPLAY_NAMES: Record<string, string> = {
 // Model display names (job.model_id -> human readable)
 export const MODEL_DISPLAY_NAMES: Record<string, string> = {
     'boltz2': 'Boltz-2',
+    'protenix': 'Protenix',
     'rf3': 'RoseTTAFold3',
     'af2': 'AlphaFold2',
     'fampnn': 'FAMPNN',
@@ -81,8 +82,15 @@ export const STAGE_DISPLAY_NAMES: Record<string, string> = {
     'fampnn': 'FAMPNN',
     'antifold': 'AntiFold',
     'proteinmpnn': 'ProteinMPNN',
+    'maturation': 'PPIFlow',
+    'maturation_post_validation': 'PPIFlow Repair',
+    'maturation_post_boltz': 'PPIFlow Repair',
+    'post_fampnn': 'FAMPNN Review',
+    'post_structure_validation': 'Structure Review',
+    'structure_validation': 'Structure Validation',
     'boltz2': 'Boltz-2',
     'boltz': 'Boltz-2',
+    'protenix': 'Protenix',
     'antiberty': 'AntiBERTy',
     'thermompnn': 'ThermoMPNN',
     'iggm': 'IgGM',

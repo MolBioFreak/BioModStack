@@ -105,6 +105,7 @@ def spawn_rfantibody_jobs(
     target_pdb_path: str,
     epitope_residues: str,
     framework_type: str,
+    framework_pdb: str | None,
     batch_name: str,
     params_json: str = None,
     api_url: str = DEFAULT_API_URL
@@ -236,6 +237,8 @@ def spawn_rfantibody_jobs(
             "child_stage": "rfantibody",
             "sequence_length": 250,  # Approximate for VRAM estimation
         }
+        if framework_pdb:
+            job_data["params"]["framework_pdb"] = framework_pdb
         
         try:
             resp = requests.post(
@@ -282,6 +285,7 @@ def main():
     parser.add_argument("--target_pdb", required=True, help="Path to target PDB")
     parser.add_argument("--epitope_residues", default="", help="Epitope residue specification")
     parser.add_argument("--framework_type", default="standard-fv", help="Framework type")
+    parser.add_argument("--framework_pdb", default=None, help="Optional custom framework PDB path")
     parser.add_argument("--batch_name", required=True, help="Batch name for display")
     parser.add_argument("--params_json", default=None, help="Additional params as JSON")
     parser.add_argument("--api_url", default=DEFAULT_API_URL, help="API URL")
@@ -296,6 +300,7 @@ def main():
         target_pdb_path=args.target_pdb,
         epitope_residues=args.epitope_residues,
         framework_type=args.framework_type,
+        framework_pdb=args.framework_pdb,
         batch_name=args.batch_name,
         params_json=args.params_json,
         api_url=args.api_url

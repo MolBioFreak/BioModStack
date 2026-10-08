@@ -7,6 +7,30 @@
 
 ---
 
+## Implementation Note 2026-03-08
+
+This document is still useful as the design review, but the live code has moved forward.
+
+Current implementation status:
+
+- standalone Protenix predictor support is live
+- antibody workflow validation now supports `protenix`
+- antibody Protenix validation now uses `scripts/prepare_protenix_msa.py` to resolve external MSA inputs before `protenix pred`
+
+Current MSA strategy in code:
+
+- `protenix_msa_backend=auto`
+  - small jobs -> `colabfold_api`
+  - larger jobs -> `local`
+- explicit `colabfold_api` and `local` modes are also supported
+- this replaces the earlier antibody path that let child jobs sit in Protenix's internal MSA polling loop
+
+Still pending:
+
+- additional end-to-end live-run proof for the antibody `Protenix + external MSA prep` path after the most recent module-level fixes
+
+---
+
 ## Executive Summary
 
 Integration of ByteDance's Protenix ecosystem into BioModStack as a third structure predictor alongside Boltz-2 and RoseTTAFold3. This revision corrects 10 critical gaps identified during deep infrastructure review.
