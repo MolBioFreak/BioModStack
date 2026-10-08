@@ -3,6 +3,8 @@ import { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchModels, fetchFiles, submitJob, uploadFile, fetchTemplates, fetchTemplateById, fetchInputPresets, fetchPresetDirectories } from '../lib/api';
+import { SequenceManagerModal } from './SequenceManagerModal';
+import { TemplateManagerModal } from './TemplateManagerModal';
 
 // Preset Selector Component - Enhanced with multi-select and directory modes
 interface PresetSelectorProps {
@@ -363,6 +365,9 @@ export function JobSubmission() {
     const [jobName, setJobName] = useState('');
     const [params, setParams] = useState<Record<string, any>>({});
     const [showFileBrowser, setShowFileBrowser] = useState<string | null>(null);
+    const [showSequenceManager, setShowSequenceManager] = useState(false);
+    const [showTemplateManager, setShowTemplateManager] = useState(false);
+    const [sequenceToSave, setSequenceToSave] = useState<{ sequence: string; name?: string } | null>(null);
 
     const { data: modelsData } = useQuery({
         queryKey: ['models'],
@@ -721,41 +726,52 @@ export function JobSubmission() {
                                                     placeholder="Select a contig preset..."
                                                 />
                                             ) : (param.type === 'text' || param.name === 'sequence') && param.name !== 'sequence_name' ? (
-                                                /* Text/Sequence Input with Preset Dropdown */
+                                                /* Sequence Input with Action Buttons */
                                                 <div className="space-y-2">
-                                                    <div className="flex gap-2">
-                                                        <select
-                                                            onChange={async (e) => {
-                                                                if (e.target.value) {
-                                                                    try {
-                                                                        const res = await fetch(`/api/inputs/presets?type=sequence`);
-                                                                        const presets = await res.json();
-                                                                        const preset = presets.find((p: any) => p.id === e.target.value);
-                                                                        if (preset) {
-                                                                            updateParam(param.name, preset.sequence.replace(/\s+/g, ''));
-                                                                        }
-                                                                    } catch (err) { console.error(err); }
-                                                                }
-                                                            }}
-                                                            className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm"
+                                                    <div className="flex gap-2 items-center flex-wrap">
+                                                        {/* Manage Library Button */}
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setShowSequenceManager(true)}
+                                                            className="px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-300 text-sm rounded-lg transition-colors flex items-center gap-2"
                                                         >
-                                                            <option value="">Load from preset...</option>
-                                                            <option value="tdt_human">Human TdT (509 aa)</option>
-                                                            <option value="klenow_ecoli">Klenow Fragment (605 aa)</option>
-                                                            <option value="taq_ttaq">Taq Polymerase (832 aa)</option>
-                                                            <option value="gfp_avictoria">GFP (238 aa)</option>
-                                                            <option value="lysozyme_gallus">Lysozyme (147 aa)</option>
-                                                        </select>
-                                                        <span className="text-xs text-slate-500 self-center">
+                                                            📚 Sequence Library
+                                                        </button>
+                                                        {/* Character count */}
+                                                        <span className="text-xs text-slate-500 bg-slate-800/50 px-2 py-1 rounded">
                                                             {(params[param.name] || '').length} aa
                                                         </span>
+                                                        {/* Save Sequence Button - only show if has content */}
+                                                        {params[param.name] && params[param.name].length > 0 && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => {
+                                                                    setSequenceToSave({ sequence: params[param.name], name: params['sequence_name'] || '' });
+                                                                    setShowSequenceManager(true);
+                                                                }}
+                                                                className="px-3 py-2 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-sm rounded-lg transition-colors flex items-center gap-1.5 border border-emerald-600/30"
+                                                            >
+                                                                💾 Save to Library
+                                                            </button>
+                                                        )}
+                                                        {/* Clear Button */}
+                                                        {params[param.name] && params[param.name].length > 0 && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => updateParam(param.name, '')}
+                                                                className="px-2 py-2 text-slate-500 hover:text-red-400 text-sm transition-colors"
+                                                                title="Clear sequence"
+                                                            >
+                                                                ✕
+                                                            </button>
+                                                        )}
                                                     </div>
                                                     <textarea
                                                         value={params[param.name] || ''}
                                                         onChange={(e) => updateParam(param.name, e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
-                                                        placeholder={param.placeholder || 'Enter amino acid sequence (A-Z)...'}
-                                                        rows={5}
-                                                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm font-mono resize-y"
+                                                        placeholder={param.placeholder || 'Enter amino acid sequence (A-Z)...\n\nTip: Click "Sequence Library" to load a saved sequence or save your current one.'}
+                                                        rows={6}
+                                                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2.5 text-white text-sm font-mono resize-y focus:ring-2 focus:ring-blue-500 outline-none"
                                                     />
                                                 </div>
                                             ) : (
@@ -876,7 +892,16 @@ export function JobSubmission() {
                 )}
 
                 {/* Submit Button */}
-                <div className="flex justify-end pt-4 pb-12">
+                <div className="flex justify-end gap-3 pt-4 pb-12">
+                    {/* Save as Template Button */}
+                    {(wizardMode === 'templates' || (wizardMode === 'manual' && selectedModelId)) && (
+                        <button
+                            onClick={() => setShowTemplateManager(true)}
+                            className="px-6 py-4 rounded-xl font-semibold text-purple-400 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/30 transition-all flex items-center gap-2"
+                        >
+                            📋 Save as Template
+                        </button>
+                    )}
                     <button
                         onClick={handleSubmit}
                         disabled={!isReady || submitMutation.isPending}
@@ -900,6 +925,38 @@ export function JobSubmission() {
                     onCancel={() => setShowFileBrowser(null)}
                 />
             )}
+
+            {/* Sequence Manager Modal */}
+            <SequenceManagerModal
+                isOpen={showSequenceManager}
+                onClose={() => {
+                    setShowSequenceManager(false);
+                    setSequenceToSave(null);
+                }}
+                onSelect={(seq) => {
+                    // Load selected sequence into the current sequence param
+                    updateParam('sequence', seq.sequence);
+                    if (seq.name) updateParam('sequence_name', seq.name);
+                }}
+                initialSequence={sequenceToSave?.sequence || ''}
+                initialName={sequenceToSave?.name || ''}
+            />
+
+            {/* Template Manager Modal */}
+            <TemplateManagerModal
+                isOpen={showTemplateManager}
+                onClose={() => setShowTemplateManager(false)}
+                onSelect={(template) => {
+                    // Load template params
+                    setParams(template.params);
+                    if (template.model_id) setSelectedModelId(template.model_id);
+                    if (template.mode) setSelectedModeId(template.mode);
+                }}
+                currentParams={params}
+                currentModelId={selectedModelId || undefined}
+                currentMode={selectedModeId || undefined}
+                baseTemplateId={selectedTemplateId || undefined}
+            />
         </div>
     );
 }

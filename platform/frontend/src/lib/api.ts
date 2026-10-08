@@ -302,3 +302,76 @@ export const fetchStructureAnalysis = (designId: string) =>
 export const fetchStructureComparison = (id1: string, id2: string) =>
     api.get<StructureComparison>(`/api/designs/${id1}/compare/${id2}`);
 
+// User Sequences API
+export interface UserSequence {
+    id: string;
+    name: string;
+    sequence: string;
+    description: string | null;
+    length: number;
+    organism: string | null;
+    uniprot_id: string | null;
+    ncbi_id: string | null;
+    is_preset: boolean;
+    created_at: string;
+    updated_at: string | null;
+}
+
+export interface UserSequenceCreate {
+    name: string;
+    sequence: string;
+    description?: string;
+    organism?: string;
+    uniprot_id?: string;
+    ncbi_id?: string;
+}
+
+export const fetchUserSequences = (search?: string) =>
+    api.get<UserSequence[]>('/api/user-sequences', { params: { search } });
+
+export const createUserSequence = (data: UserSequenceCreate) =>
+    api.post<UserSequence>('/api/user-sequences', data);
+
+export const updateUserSequence = (id: string, data: Partial<UserSequenceCreate>) =>
+    api.put<UserSequence>(`/api/user-sequences/${id}`, data);
+
+export const deleteUserSequence = (id: string) =>
+    api.delete(`/api/user-sequences/${id}`);
+
+// User Templates API
+export interface UserTemplate {
+    id: string;
+    name: string;
+    description: string | null;
+    icon: string;
+    color: string;
+    base_template_id: string | null;
+    model_id: string | null;
+    mode: string | null;
+    params: Record<string, any>;
+    created_at: string;
+    updated_at: string | null;
+}
+
+export interface UserTemplateCreate {
+    name: string;
+    description?: string;
+    icon?: string;
+    color?: string;
+    base_template_id?: string;
+    model_id?: string;
+    mode?: string;
+    params: Record<string, any>;
+}
+
+export const fetchUserTemplates = (search?: string, model_id?: string) =>
+    api.get<UserTemplate[]>('/api/user-templates', { params: { search, model_id } });
+
+export const createUserTemplate = (data: UserTemplateCreate) =>
+    api.post<UserTemplate>('/api/user-templates', data);
+
+export const updateUserTemplate = (id: string, data: Partial<UserTemplateCreate>) =>
+    api.put<UserTemplate>(`/api/user-templates/${id}`, data);
+
+export const deleteUserTemplate = (id: string) =>
+    api.delete(`/api/user-templates/${id}`);

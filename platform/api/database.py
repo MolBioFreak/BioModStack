@@ -102,6 +102,57 @@ class InputFile(Base):
     uploaded_at = Column(DateTime, default=datetime.utcnow)
 
 
+class UserSequence(Base):
+    """User-defined amino acid sequence."""
+    __tablename__ = "user_sequences"
+    
+    id = Column(String(36), primary_key=True)
+    name = Column(String(255), nullable=False, unique=True)
+    sequence = Column(Text, nullable=False)
+    description = Column(String(500), nullable=True)
+    length = Column(Integer, nullable=False)
+    organism = Column(String(255), nullable=True)  # Optional organism info
+    uniprot_id = Column(String(50), nullable=True)  # Optional UniProt reference
+    ncbi_id = Column(String(50), nullable=True)  # Optional NCBI reference (gene ID or accession)
+    is_preset = Column(Boolean, default=False)  # True if migrated from YAML presets
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=True, onupdate=datetime.utcnow)
+
+
+class UserTemplate(Base):
+    """User-defined run template (job configuration snapshot)."""
+    __tablename__ = "user_templates"
+    
+    id = Column(String(36), primary_key=True)
+    name = Column(String(255), nullable=False, unique=True)
+    description = Column(String(500), nullable=True)
+    icon = Column(String(50), default="bookmark")
+    color = Column(String(20), default="#6B7280")
+    base_template_id = Column(String(100), nullable=True)  # Original system template ID if cloned
+    model_id = Column(String(50), nullable=True)  # Associated model (rfdiffusion, boltz2, etc.)
+    mode = Column(String(100), nullable=True)  # Workflow mode (binder_denovo, predict, etc.)
+    params = Column(JSON, nullable=False)  # Full parameter snapshot
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=True, onupdate=datetime.utcnow)
+
+
+class MSACache(Base):
+    """Cached MSA results from ColabFold API."""
+    __tablename__ = "msa_cache"
+    
+    id = Column(String(36), primary_key=True)
+    sequence_hash = Column(String(64), unique=True, nullable=False, index=True)  # SHA256 of sequence
+    sequence = Column(Text, nullable=False)  # Original sequence for verification
+    sequence_length = Column(Integer, nullable=False)
+    msa_path = Column(String(500), nullable=False)  # data/msa_cache/ab/abc123.a3m.gz
+    file_size_bytes = Column(Integer, nullable=False)  # Compressed size
+    colabfold_job_id = Column(String(100), nullable=True)  # Original ColabFold job ID
+    hit_count = Column(Integer, default=0)  # Usage tracking
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_accessed = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)  # created_at + 30 days
+
+
 async def init_db():
     """Create all tables if they don't exist."""
     async with engine.begin() as conn:
