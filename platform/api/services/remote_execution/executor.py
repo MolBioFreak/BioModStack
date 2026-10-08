@@ -5,6 +5,7 @@ import asyncio
 import fcntl
 import hashlib
 import json
+import logging
 import os
 import shutil
 import uuid
@@ -40,6 +41,7 @@ from .transport import (
 )
 
 REMOTE_RUN_PREFIX = "remote:"
+logger = logging.getLogger(__name__)
 TERMINAL_REMOTE_STATES = frozenset({"cancelled", "succeeded", "failed", "lost"})
 MAX_RESULT_MANIFEST_BYTES = 4 * 1024 * 1024
 MAX_RESULT_ARTIFACTS = 100_000
@@ -60,7 +62,28 @@ class RemoteCollectionPending(RemoteExecutionError):
 
 
 class RemoteStagingIncomplete(RemoteExecutionError):
-    pass
+    """Staging cannot be resumed and made no forward progress before its deadline.
+
+    ``record`` carries the durable deadline evidence (anchor, deadline, last
+    observed activity, worker error) so the caller can publish it into the Job's
+    own state instead of leaving the reason in a log line.
+    """
+
+    def __init__(self, message: str, *, record: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.record = dict(record or {})
+
+
+class RemoteStagingProgressPending(RemoteExecutionError):
+    """Staging has not resumed yet, but its progress deadline has not expired.
+
+    A quiet attempt is not a dead attempt: this is an expected, retryable
+    observation that carries the same deadline evidence as its terminal sibling.
+    """
+
+    def __init__(self, message: str, *, record: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.record = dict(record or {})
 
 
 def is_remote_run_id(value: Any) -> bool:
@@ -427,15 +450,23 @@ async def _publish_remote_transition(
     return True
 
 
-async def fail_remote_prestart(session: AsyncSession, job: Job, error: str) -> bool:
+async def fail_remote_prestart(session: AsyncSession, job: Job, error: str,
+                               *, evidence: dict | None = None) -> bool:
     if (job.status != "queued" or job.queue_status != "preparing"
             or job.remote_state not in {"preparing", "staging"}):
         return False
-    return await _publish_remote_transition(session, job, {
+    values = {
         "status": "failed", "queue_status": "failed", "remote_state": "launch_failed",
         "error_message": error[:2000], "completed_at": datetime.utcnow(),
         "assigned_gpu": None, "params": release_scheduler_gpu_assignment(job.params),
-    }, release_lease=True)
+    }
+    if evidence:
+        from .progress import RECOVERY_PROVENANCE_KEY
+
+        # The reason travels with the terminal transition, so the Job can always
+        # explain itself without the operator reading a log.
+        values["provenance"] = dict(job.provenance or {}, **{RECOVERY_PROVENANCE_KEY: dict(evidence)})
+    return await _publish_remote_transition(session, job, values, release_lease=True)
 
 
 async def _publish_started_receipt(
@@ -808,17 +839,107 @@ async def _release_remote_target_lease(session: AsyncSession, job: Job) -> None:
     )
 
 
-def _preparation_expired(job: Job) -> bool:
-    assignment = dict((job.provenance or {}).get("remote_execution_assignment") or {})
-    raw = assignment.get("claimed_at")
-    try:
-        origin = datetime.fromisoformat(str(raw).replace("Z", "+00:00")).replace(tzinfo=None) if raw else None
-    except ValueError:
-        origin = None
-    # Legacy rows use their persisted age, never a new clock on every poll.
-    origin = origin or job.started_at or job.created_at
-    grace = max(0, int(os.environ.get("BMS_REMOTE_STAGING_RECOVERY_GRACE_SECONDS", "900")))
-    return origin is None or (datetime.utcnow() - origin).total_seconds() >= grace
+def _preparation_expired(job: Job, target: ExecutionTarget | None = None) -> bool:
+    """True once this attempt has passed its own durable progress deadline."""
+    from .progress import progress_deadline
+
+    return bool(progress_deadline(job, target=target)["expired"])
+
+
+async def _publish_attempt_recovery(session: AsyncSession, job: Job, record: dict) -> bool:
+    """Persist the attempt's deadline/evidence in the Job's own state.
+
+    Republished only when the material fields change, so a stalled attempt is
+    observable without the reconciler writing (and logging) on every poll.
+    """
+    from .progress import RECOVERY_PROVENANCE_KEY, recovery_record_changed
+
+    if not record:
+        return False
+    previous = dict((job.provenance or {}).get(RECOVERY_PROVENANCE_KEY) or {})
+    if not recovery_record_changed(previous, record):
+        return False
+    provenance = dict(job.provenance or {})
+    provenance[RECOVERY_PROVENANCE_KEY] = dict(record)
+    return await _publish_remote_transition(session, job, {"provenance": provenance})
+
+
+async def _reclaim_terminal_attempt_lease(session: AsyncSession, job: Job) -> bool:
+    """Release a target lease held by a terminal Job with no attempt identity.
+
+    Fail-closed: the update re-checks in SQL that the row is still terminal, has
+    no attempt/run identity, and that the lease still names this Job, so a
+    successor attempt can never lose its reservation to a stale observation.
+    """
+    from .progress import RECOVERY_PROVENANCE_KEY, attempt_recovery_record
+
+    target_id = str(job.execution_target_id or "").strip()
+    if not target_id:
+        return False
+    # Read identity before the session expires the row: a post-commit attribute
+    # load outside the greenlet would raise instead of logging.
+    job_id, job_status = str(job.id), str(job.status)
+    record = attempt_recovery_record(
+        job, state="lease_reclaimed",
+        observed_error="Terminal Job retained a target lease after its attempt identity was cleared",
+        detail=f"released {target_id} so the next attempt is not blocked by an owner that no longer exists",
+    )
+    provenance = dict(job.provenance or {})
+    provenance[RECOVERY_PROVENANCE_KEY] = record
+    with session.no_autoflush:
+        result = await session.execute(
+            update(ExecutionTarget)
+            .where(
+                ExecutionTarget.id == target_id,
+                ExecutionTarget.leased_job_id == str(job.id),
+                select(Job.id).where(
+                    Job.id == str(job.id),
+                    Job.status == job.status,
+                    Job.queue_status == job.queue_status,
+                    Job.remote_attempt_id.is_(None),
+                    Job.nextflow_run_id.is_(None),
+                ).exists(),
+            )
+            .values(leased_job_id=None, lease_acquired_at=None, updated_at=datetime.utcnow())
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            await session.rollback()
+            return False
+        await session.execute(
+            update(Job)
+            .where(
+                Job.id == str(job.id),
+                Job.status == job.status,
+                Job.queue_status == job.queue_status,
+                Job.remote_attempt_id.is_(None),
+                Job.nextflow_run_id.is_(None),
+                Job.provenance == job.provenance,
+            )
+            .values(provenance=provenance)
+            .execution_options(synchronize_session=False)
+        )
+    session.expire(job)
+    await session.commit()
+    logger.warning(
+        "[REMOTE RECOVERY] Reclaimed target lease from terminal Job %s (%s -> no attempt identity)",
+        job_id, job_status,
+    )
+    return True
+
+
+def _resumed_recovery_provenance(job: Job, target: ExecutionTarget | None) -> dict | None:
+    """Mark a stalled attempt as resumed once the worker publishes prepared again."""
+    from .progress import (RECOVERY_PROVENANCE_KEY, RECOVERY_RESUMED_STATES,
+                           attempt_recovery_record)
+
+    previous = dict((job.provenance or {}).get(RECOVERY_PROVENANCE_KEY) or {})
+    if str(previous.get("state") or "") not in RECOVERY_RESUMED_STATES:
+        return None
+    record = attempt_recovery_record(job, state="resumed", target=target,
+        observed_error=previous.get("observed_error"),
+        detail=f"worker prepared receipt observed after {previous.get('state')}")
+    return dict(job.provenance or {}, **{RECOVERY_PROVENANCE_KEY: record})
 
 
 async def retry_component_execution(session: AsyncSession, job: Job, *, component_id: str,
@@ -1314,6 +1435,10 @@ async def remote_status(session: AsyncSession, job: Job, *, recover_staging: boo
     except RemoteTransportError as exc:
         if not recover_staging or str(job.remote_state or "") != "staging":
             raise RemoteExecutionError(str(exc)) from exc
+        # Resume lane: the worker revalidates the content-addressed
+        # materialization already on that host and republishes its durable
+        # prepared receipt. Nothing is re-uploaded and no new attempt identity
+        # is issued, so an interrupted staging attempt continues where it was.
         try:
             response = await run_remote(
                 connection,
@@ -1321,12 +1446,34 @@ async def remote_status(session: AsyncSession, job: Job, *, recover_staging: boo
                 timeout=300,
             )
         except RemoteTransportError as prepare_exc:
-            if _preparation_expired(job):
+            from .progress import attempt_recovery_record, attempt_stall_confirmed
+
+            expired = _preparation_expired(job, target)
+            # Evidence before consequence: an expired window is recorded on the
+            # first observation and only abandons the attempt on a later one.
+            confirmed = expired and attempt_stall_confirmed(job, target)
+            record = attempt_recovery_record(
+                job,
+                state="abandoned" if confirmed else ("expired" if expired else "awaiting_progress"),
+                target=target,
+                observed_error=(
+                    f"{prepare_exc}; observation error: {exc}"
+                ),
+            )
+            if confirmed:
                 raise RemoteStagingIncomplete(
-                    "Remote attempt did not reach a durable prepared receipt"
+                    "Remote attempt staging made no forward progress before its "
+                    f"deadline at {record.get('deadline_at')} "
+                    f"(anchor {record.get('anchor_at')} from {record.get('anchor_source')}); "
+                    "the worker cannot publish a prepared receipt for this attempt: "
+                    + str(prepare_exc)[:300],
+                    record=record,
                 ) from prepare_exc
-            raise RemoteExecutionError(
-                "Remote attempt staging is not ready for restart recovery"
+            raise RemoteStagingProgressPending(
+                "Remote attempt staging has not resumed yet "
+                f"(deadline {record.get('deadline_at')}, state {record.get('state')}): "
+                + str(prepare_exc)[:300],
+                record=record,
             ) from prepare_exc
     status = _parse_status(response.stdout)
     if status.job_id != str(job.id) or status.attempt_id != str(job.remote_attempt_id):
@@ -1853,6 +2000,13 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
         changed = await _recover_diagnostic_return(session, job)
         target = await session.get(ExecutionTarget, str(job.execution_target_id), populate_existing=True)
         if target is None or target.leased_job_id != str(job.id) or not job.remote_attempt_id:
+            if target is not None and not job.remote_attempt_id and not job.nextflow_run_id:
+                # A terminal Job with no attempt identity owns a lease nothing
+                # can still be writing under. Leaving it reserved blocks every
+                # later attempt on that target (BMS-DEV-60), so reclaim it and
+                # say exactly why on the Job itself.
+                reclaimed = await _reclaim_terminal_attempt_lease(session, job)
+                return reclaimed or changed
             return changed
         observed = await remote_status(session, job)
         if observed.state in TERMINAL_REMOTE_STATES and observed.quiescent:
@@ -1879,8 +2033,25 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
         return False
     try:
         status = await remote_status(session, job)
+    except RemoteStagingProgressPending as exc:
+        # Quiet is not dead: publish the deadline and its evidence in the Job's
+        # own state, then keep observing until the attempt resumes or expires.
+        published = await _publish_attempt_recovery(session, job, exc.record)
+        if published:
+            logger.warning(
+                "[REMOTE RECOVERY] Job %s staging has not resumed; it will be abandoned at %s "
+                "unless the attempt publishes forward progress: %s",
+                job_id, exc.record.get("deadline_at"), exc,
+            )
+        return published
     except RemoteStagingIncomplete as exc:
-        return await fail_remote_prestart(session, job, str(exc))
+        record = dict(getattr(exc, "record", None) or {})
+        if await fail_remote_prestart(session, job, str(exc), evidence=record):
+            return True
+        # The row is no longer under this lane's authority (a successor, an
+        # operator action, or a status other than queued/preparing owns it), so
+        # the deadline evidence must still be visible on the Job itself.
+        return await _publish_attempt_recovery(session, job, record)
     # Remote I/O can outlive a concurrent operator action. End the current read
     # transaction and reload local authority before any resume or publication.
     await session.rollback()
@@ -1968,7 +2139,13 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
             gpu_ids=resources['gpu_ids'], minimum_gpu_memory_mb=resources.get('minimum_gpu_memory_mb', 0))
         if admission['devices'] != resources['admission'].get('devices'):
             raise RemoteExecutionError('Prepared recovery physical target devices changed')
-        if not await _publish_remote_transition(session, job, {"remote_state": "launch_requested"}):
+        start_values: dict[str, Any] = {"remote_state": "launch_requested"}
+        # A prepared receipt proves the resume lane worked; say so on the Job
+        # instead of leaving the earlier stall record as the last word.
+        resumed_provenance = _resumed_recovery_provenance(job, target)
+        if resumed_provenance is not None:
+            start_values["provenance"] = resumed_provenance
+        if not await _publish_remote_transition(session, job, start_values):
             return False
         response = await run_remote(
             connection,

@@ -2540,6 +2540,14 @@ def build_queue_scheduler_diagnostics(
 # MAIN ORCHESTRATOR LOOP
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _adapter_admission_detail() -> str:
+    """Why a new launch is deferred while the adapter is unobservable."""
+    from services.workflow_adapter import workflow_adapter_admission
+
+    receipt = workflow_adapter_admission()
+    return str(receipt.get("detail") or receipt.get("last_status") or "workflow adapter admission is unobserved")
+
+
 class GPUOrchestrator:
     """
     Background service that manages GPU job scheduling.
@@ -3182,6 +3190,16 @@ class GPUOrchestrator:
             if len(assignments) < len(job_infos):
                 logger.info(f"[ORCHESTRATOR] Throttled to {len(assignments)}/{len(job_infos)} launches this cycle")
 
+            # Launch admission is an adapter fact, not a startup fact: a new
+            # launch waits while the adapter is unobservable, but nothing here
+            # touches an attempt that is already durable (BMS-DEV-56 restart).
+            if assignments and not await self._workflow_adapter_dispatch_admitted():
+                logger.warning(
+                    "[ORCHESTRATOR] %s new launch(es) deferred: %s",
+                    len(assignments), _adapter_admission_detail(),
+                )
+                return
+
             # 5. Launch assigned jobs with stagger to prevent GPU initialization OOM
             used_quick_enable_gpu_ids = set()
             for i, (job_info, gpu_id) in enumerate(assignments):
@@ -3279,6 +3297,12 @@ class GPUOrchestrator:
             
             await session.commit()
     
+    async def _workflow_adapter_dispatch_admitted(self) -> bool:
+        """Fail-closed gate for NEW launches only; owned attempts are untouched."""
+        from services.workflow_adapter import workflow_adapter_dispatch_admitted
+
+        return await workflow_adapter_dispatch_admitted()
+
     async def _reconcile_remote_target(self, remote_ids: list[str]) -> None:
         """One control task per target; a slow SSH/pull cannot block the fleet."""
         from services.remote_execution.executor import reconcile_remote_job

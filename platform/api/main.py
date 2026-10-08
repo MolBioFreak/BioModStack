@@ -80,26 +80,24 @@ async def _orchestrator_launch_job(job_id, model_id, mode, params, output_dir):
 
 async def wait_for_workflow_adapter_admission(
     *,
-    timeout_seconds: float = 30.0,
+    timeout_seconds: float | None = None,
     poll_interval_seconds: float = 0.25,
-) -> None:
-    """Block scheduler admission until the configured adapter answers health probes."""
-    base_url = workflow_adapter_base_url()
-    if not base_url:
-        return
-    health_url = f"{base_url}/api/workflow-adapter/health"
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + max(0.0, float(timeout_seconds))
-    last_status = "unavailable"
-    while True:
-        ready, last_status = await http_readiness(health_url)
-        if ready:
-            return
-        if loop.time() >= deadline:
-            raise RuntimeError(
-                f"Configured workflow adapter is not ready for scheduler admission: {last_status}"
-            )
-        await asyncio.sleep(max(0.0, float(poll_interval_seconds)))
+) -> dict:
+    """Observe scheduler admission with bounded backoff instead of refusing to start.
+
+    An API that cannot come up is the only observer of the attempts it owns, so
+    a momentarily unavailable adapter must not strand an in-flight run. Dispatch
+    stays closed (see GPUOrchestrator) until the adapter answers a probe, and
+    BMS_WORKFLOW_ADAPTER_ADMISSION_STRICT=1 restores a hard startup failure.
+    """
+    from services.workflow_adapter import run_workflow_adapter_admission
+
+    return await run_workflow_adapter_admission(
+        base_url=workflow_adapter_base_url(),
+        probe=http_readiness,
+        timeout_seconds=timeout_seconds,
+        poll_interval_seconds=poll_interval_seconds,
+    )
 
 
 @asynccontextmanager
@@ -159,7 +157,13 @@ async def lifespan(app: FastAPI):
     
     # Initialize GPU orchestrator only when this runtime is allowed to own workflow launches.
     if workflow_launches_allowed():
-        await wait_for_workflow_adapter_admission()
+        adapter_admission = await wait_for_workflow_adapter_admission()
+        app.state.workflow_adapter_admission = adapter_admission
+        if not adapter_admission.get("admitted"):
+            logger.warning(
+                "[STARTUP] Scheduler admission degraded: %s",
+                adapter_admission.get("detail") or adapter_admission.get("last_status"),
+            )
         _orchestrator = GPUOrchestrator(
             db_session_factory=async_session,
             get_gpu_stats_fn=get_gpu_stats,

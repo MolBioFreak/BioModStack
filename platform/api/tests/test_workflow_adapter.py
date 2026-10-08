@@ -282,16 +282,79 @@ async def test_scheduler_admission_waits_for_configured_adapter_readiness(
 
 
 @pytest.mark.asyncio
+async def test_scheduler_admission_degrades_instead_of_refusing_startup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import main
+    from services import workflow_adapter
+
+    monkeypatch.setattr(main, "workflow_adapter_base_url", lambda: "http://127.0.0.1:18001")
+    monkeypatch.setattr(main, "http_readiness", lambda _url: _async_readiness(False, "unavailable"))
+    monkeypatch.delenv("BMS_WORKFLOW_ADAPTER_ADMISSION_STRICT", raising=False)
+
+    receipt = await main.wait_for_workflow_adapter_admission(timeout_seconds=0.0, poll_interval_seconds=0.0)
+
+    # A momentary outage defers dispatch; it never abandons a live attempt by
+    # refusing to start the process that observes it.
+    assert receipt["admitted"] is False
+    assert receipt["last_status"] == "unavailable"
+    assert "dispatch stays closed" in receipt["detail"]
+    assert workflow_adapter.workflow_adapter_admission()["admitted"] is False
+
+
+@pytest.mark.asyncio
 async def test_scheduler_admission_fails_before_launch_when_adapter_stays_unready(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import main
 
+    monkeypatch.setenv("BMS_WORKFLOW_ADAPTER_ADMISSION_STRICT", "1")
     monkeypatch.setattr(main, "workflow_adapter_base_url", lambda: "http://127.0.0.1:18001")
     monkeypatch.setattr(main, "http_readiness", lambda _url: _async_readiness(False, "unavailable"))
 
     with pytest.raises(RuntimeError, match="workflow adapter is not ready"):
         await main.wait_for_workflow_adapter_admission(timeout_seconds=0.0, poll_interval_seconds=0.0)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_gate_is_closed_while_the_adapter_is_unobservable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import workflow_adapter
+
+    monkeypatch.delenv("BMS_WORKFLOW_ADAPTER_LANE", raising=False)
+    monkeypatch.delenv("BMS_RUNTIME_MODE", raising=False)
+    monkeypatch.setenv("BMS_WORKFLOW_ADAPTER_URL", "http://127.0.0.1:18001")
+    monkeypatch.setattr(workflow_adapter, "_admission_receipt", {
+        "schema": workflow_adapter.ADAPTER_ADMISSION_SCHEMA,
+        "configured": True, "admitted": None, "attempts": 0,
+        "last_status": "unobserved", "observed_at": None, "detail": "",
+    })
+    probes: list[str] = []
+
+    async def unreachable(url: str) -> tuple[bool, str]:
+        probes.append(url)
+        return False, "unavailable"
+
+    assert await workflow_adapter.workflow_adapter_dispatch_admitted(probe=unreachable) is False
+    assert probes and probes[0] == "http://127.0.0.1:18001/api/workflow-adapter/health"
+    # A fresh negative observation is honoured without probing on every cycle.
+    before = len(probes)
+    assert await workflow_adapter.workflow_adapter_dispatch_admitted(probe=unreachable) is False
+    assert len(probes) == before
+
+    async def reachable(_url: str) -> tuple[bool, str]:
+        return True, "http_200"
+
+    monkeypatch.setattr(workflow_adapter, "_admission_receipt", {
+        "schema": workflow_adapter.ADAPTER_ADMISSION_SCHEMA,
+        "configured": True, "admitted": None, "attempts": 0,
+        "last_status": "unobserved", "observed_at": None, "detail": "",
+    })
+    assert await workflow_adapter.workflow_adapter_dispatch_admitted(probe=reachable) is True
+    monkeypatch.delenv("BMS_WORKFLOW_ADAPTER_URL", raising=False)
+    # No adapter configured: the local lane owns dispatch.
+    assert await workflow_adapter.workflow_adapter_dispatch_admitted(probe=unreachable) is True
 
 
 async def _async_readiness(ready: bool, status: str) -> tuple[bool, str]:

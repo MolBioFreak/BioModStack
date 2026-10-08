@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import threading
 import urllib.error
 import urllib.request
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from biomodstack_runtime_profile import resolve_runtime_paths
 from .execution_ownership import (
@@ -19,6 +22,150 @@ from .execution_ownership import (
 DEFAULT_ADAPTER_TIMEOUT_SECONDS = 15.0
 _TRUE_STRINGS = {"1", "true", "yes", "on"}
 _FALSE_STRINGS = {"0", "false", "no", "off"}
+
+ADAPTER_ADMISSION_SCHEMA = "bms.workflow-adapter-admission.v1"
+ADMISSION_TIMEOUT_ENV = "BMS_WORKFLOW_ADAPTER_ADMISSION_TIMEOUT_SECONDS"
+ADMISSION_STRICT_ENV = "BMS_WORKFLOW_ADAPTER_ADMISSION_STRICT"
+ADMISSION_MAX_POLL_SECONDS = 5.0
+DEFAULT_ADMISSION_TIMEOUT_SECONDS = 120.0
+# Dispatch re-probes are bounded well under the scheduler's poll interval so a
+# down adapter delays new launches without stalling the fleet loop.
+DISPATCH_ADMISSION_TIMEOUT_SECONDS = 3.0
+ADMISSION_OBSERVATION_MAX_AGE_SECONDS = 5.0
+
+_admission_lock = threading.Lock()
+_admission_receipt: dict[str, Any] = {
+    "schema": ADAPTER_ADMISSION_SCHEMA,
+    "configured": False,
+    "admitted": None,
+    "attempts": 0,
+    "last_status": "unobserved",
+    "deadline_seconds": None,
+    "observed_at": None,
+    "detail": "Workflow adapter admission has not been observed in this process",
+}
+
+
+def workflow_adapter_admission() -> dict[str, Any]:
+    """This process's latest scheduler-admission observation."""
+    with _admission_lock:
+        return dict(_admission_receipt)
+
+
+def record_workflow_adapter_admission(**fields: Any) -> dict[str, Any]:
+    with _admission_lock:
+        _admission_receipt.update(fields)
+        _admission_receipt["observed_at"] = datetime.utcnow().isoformat()
+        return dict(_admission_receipt)
+
+
+def workflow_adapter_admission_timeout_seconds() -> float:
+    raw = os.getenv(ADMISSION_TIMEOUT_ENV)
+    if raw is None or not str(raw).strip():
+        return DEFAULT_ADMISSION_TIMEOUT_SECONDS
+    try:
+        return max(0.0, float(str(raw).strip()))
+    except ValueError:
+        return DEFAULT_ADMISSION_TIMEOUT_SECONDS
+
+
+def workflow_adapter_admission_strict() -> bool:
+    return str(os.getenv(ADMISSION_STRICT_ENV, "")).strip().lower() in _TRUE_STRINGS
+
+
+def _admission_age_seconds(receipt: dict[str, Any]) -> float | None:
+    raw = receipt.get("observed_at")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        observed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if observed.tzinfo is not None:
+        observed = observed.replace(tzinfo=None)
+    return (datetime.utcnow() - observed).total_seconds()
+
+
+async def run_workflow_adapter_admission(
+    *,
+    base_url: str | None,
+    probe: Callable[[str], Awaitable[tuple[bool, str]]],
+    timeout_seconds: float | None = None,
+    poll_interval_seconds: float = 0.25,
+    strict: bool | None = None,
+) -> dict[str, Any]:
+    """Observe adapter liveness with bounded exponential backoff.
+
+    Never refuses admission by default: an API that cannot finish starting is
+    the only observer of its own in-flight attempts, so a momentary adapter
+    outage must degrade dispatch, not the process. ``strict`` (or
+    BMS_WORKFLOW_ADAPTER_ADMISSION_STRICT) keeps the old fail-closed startup for
+    operators who want it.
+    """
+    strict = workflow_adapter_admission_strict() if strict is None else bool(strict)
+    if not base_url:
+        return record_workflow_adapter_admission(
+            configured=False, admitted=True, attempts=0, last_status="not_configured",
+            deadline_seconds=None,
+            detail="No workflow adapter is configured; the local lane owns dispatch",
+        )
+    health_url = f"{base_url.rstrip('/')}/api/workflow-adapter/health"
+    window = workflow_adapter_admission_timeout_seconds() if timeout_seconds is None else max(0.0, float(timeout_seconds))
+    interval = max(0.0, float(poll_interval_seconds))
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + window
+    attempts = 0
+    last_status = "unavailable"
+    while True:
+        ready, last_status = await probe(health_url)
+        attempts += 1
+        if ready:
+            return record_workflow_adapter_admission(
+                configured=True, admitted=True, attempts=attempts, last_status=last_status,
+                deadline_seconds=window, detail="Workflow adapter answered health probes",
+            )
+        remaining = deadline - loop.time()
+        if remaining <= 0 or interval <= 0:
+            break
+        await asyncio.sleep(min(interval, remaining))
+        interval = min(max(interval * 2, 0.01), ADMISSION_MAX_POLL_SECONDS)
+    detail = (
+        f"Workflow adapter did not answer health probes within {window:g}s; "
+        "scheduler dispatch stays closed until it does, and this process keeps "
+        "reconciling the attempts it already owns"
+    )
+    receipt = record_workflow_adapter_admission(
+        configured=True, admitted=False, attempts=attempts, last_status=last_status,
+        deadline_seconds=window, detail=detail,
+    )
+    if strict:
+        raise RuntimeError(
+            f"Configured workflow adapter is not ready for scheduler admission: {last_status}"
+        )
+    return receipt
+
+
+async def workflow_adapter_dispatch_admitted(*, probe=None) -> bool:
+    """Fail-closed dispatch gate: closed until the adapter answers a probe.
+
+    Existing attempts are never touched here; only new launches wait.
+    """
+    base_url = workflow_adapter_base_url()
+    if base_url is None:
+        return True  # No adapter: the local lane owns dispatch.
+    receipt = workflow_adapter_admission()
+    age = _admission_age_seconds(receipt)
+    if age is not None and age < ADMISSION_OBSERVATION_MAX_AGE_SECONDS:
+        return bool(receipt.get("admitted"))
+    if probe is None:
+        from readiness import http_readiness
+
+        probe = http_readiness
+    refreshed = await run_workflow_adapter_admission(
+        base_url=base_url, probe=probe,
+        timeout_seconds=DISPATCH_ADMISSION_TIMEOUT_SECONDS, poll_interval_seconds=0.5, strict=False,
+    )
+    return bool(refreshed.get("admitted"))
 
 
 class WorkflowAdapterRequestError(RuntimeError):
