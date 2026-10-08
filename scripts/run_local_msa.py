@@ -135,21 +135,21 @@ def release_msa_lock(fd: int):
         pass
 
 
-def check_gpu_availability(threshold: int = 80, max_sm_version: float = 9.0) -> int | None:
+def check_gpu_availability(threshold: int = 80) -> int | None:
     """
-    Check for available GPU compatible with MMseqs2.
+    Check for available GPU for MMseqs2.
     
     Args:
         threshold: Max utilization/memory percentage to consider GPU available
-        max_sm_version: Maximum SM compute capability (default 9.0 excludes Blackwell/Hopper).
-                        MMseqs2-GPU is compiled for Ampere (SM 8.x), so Blackwell (SM 12.0) is unsupported.
     
-    Returns GPU ID if one is available and compatible, None otherwise.
+    Returns GPU ID if one is available, None otherwise.
+    
+    Note: Tested and confirmed working on Ampere (SM 8.x) and Blackwell (SM 12.0).
     """
     try:
-        # Query including compute capability for architecture filtering
+        # Query including compute capability for logging
         result = subprocess.run(
-            ['nvidia-smi', '--query-gpu=index,utilization.gpu,memory.used,memory.total,compute_cap',
+            ['nvidia-smi', '--query-gpu=index,utilization.gpu,memory.used,memory.total,compute_cap,name',
              '--format=csv,noheader,nounits'],
             capture_output=True, text=True, timeout=5
         )
@@ -161,25 +161,21 @@ def check_gpu_availability(threshold: int = 80, max_sm_version: float = 9.0) -> 
             if not line.strip():
                 continue
             parts = [p.strip() for p in line.split(',')]
-            if len(parts) >= 5:
+            if len(parts) >= 6:
                 gpu_id = int(parts[0])
                 utilization = int(parts[1])
                 mem_used = int(parts[2])
                 mem_total = int(parts[3])
                 compute_cap = float(parts[4])
+                gpu_name = parts[5]
                 mem_percent = (mem_used / mem_total * 100) if mem_total > 0 else 100
-                
-                # Skip GPUs with unsupported architecture (Blackwell SM 12.0, Hopper SM 9.0)
-                # MMseqs2-GPU is compiled for Ampere (SM 8.x)
-                if compute_cap >= max_sm_version:
-                    print(f"GPU {gpu_id}: SM {compute_cap} unsupported for MMseqs2 (requires SM < {max_sm_version})", flush=True)
-                    continue
                 
                 gpus.append({
                     'id': gpu_id,
                     'utilization': utilization,
                     'memory_percent': mem_percent,
-                    'compute_cap': compute_cap
+                    'compute_cap': compute_cap,
+                    'name': gpu_name
                 })
         
         # Sort by utilization (prefer least busy)
@@ -187,11 +183,11 @@ def check_gpu_availability(threshold: int = 80, max_sm_version: float = 9.0) -> 
         
         for gpu in gpus:
             if gpu['utilization'] < threshold and gpu['memory_percent'] < threshold:
-                print(f"Selected GPU {gpu['id']} (SM {gpu['compute_cap']}) for MMseqs2", flush=True)
+                print(f"Selected GPU {gpu['id']} ({gpu['name']}, SM {gpu['compute_cap']}) for MMseqs2", flush=True)
                 return gpu['id']
         
         if not gpus:
-            print("No compatible GPUs found for MMseqs2 (all GPUs have unsupported architecture)", flush=True)
+            print("No available GPUs found for MMseqs2", flush=True)
         
         return None
     except Exception as e:
