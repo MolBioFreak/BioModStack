@@ -4,8 +4,9 @@ import { compose } from "redux";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
 // Shim for withRouter in React Router v6
+// Extract 'key' prop to prevent "key prop is being spread into JSX" error in React 19
 const withRouter = (Component) => {
-  const Wrapper = (props) => {
+  const Wrapper = ({ key: _key, ...props }) => {
     const location = useLocation();
     const navigate = useNavigate();
     const params = useParams();
@@ -223,7 +224,9 @@ const dividerShorthandEnhancer = def =>
     : def;
 
 // filter out unwanted attributes here! we won't want these to show up on the dom element or react will give nasty warnings
+// IMPORTANT: 'key' is included to prevent React 19 "key prop is being spread into JSX" error
 const unwantedAttrs = [
+  "key",
   "isSimpleText",
   "justText",
   "submenu",

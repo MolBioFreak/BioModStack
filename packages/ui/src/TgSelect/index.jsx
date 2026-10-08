@@ -444,7 +444,8 @@ class TgSelect extends React.Component {
   }
 }
 
-const withAsyncOptions = Component => props => {
+// Extract 'key' prop to prevent "key prop is being spread into JSX" error in React 19
+const withAsyncOptions = Component => ({ key: _key, ...props }) => {
   const { loadOptions, options, ...rest } = props;
   const [asyncOptions, setAsyncOptions] = useState([]);
   const [isLoading, setLoading] = useState(false);

@@ -11,8 +11,9 @@ import {
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 
 // Shim for withRouter in React Router v6
+// Extract 'key' prop to prevent "key prop is being spread into JSX" error in React 19
 const withRouter = (Component) => {
-  const Wrapper = (props) => {
+  const Wrapper = ({ key: _key, ...props }) => {
     const location = useLocation();
     const navigate = useNavigate();
     const params = useParams();
@@ -319,7 +320,8 @@ const withTableParams = topLevelOptions =>
   compose(
     //don't use withRouter if noRouter is passed!
     branch(({ noRouter }) => !noRouter, withRouter),
-    Comp => props => {
+    // Extract 'key' prop to prevent "key prop is being spread into JSX" error in React 19
+    Comp => ({ key: _key, ...props }) => {
       const tableParams = useTableParams({
         ...topLevelOptions,
         ...props

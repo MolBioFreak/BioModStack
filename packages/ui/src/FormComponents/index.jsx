@@ -372,40 +372,40 @@ export const RenderBlueprintInput = ({
         {...toSpread}
         {...(clickToEdit
           ? {
-              disabled: rest.disabled,
-              onChange: e => {
-                setVal(e.target.value);
-              },
-              ...(value === null ? {} : { value }),
-              onKeyDown: (...args) => {
-                onKeyDown(...args);
-                const e = args[0];
-                if (e.key === "Enter") {
-                  input.onChange(value === null ? input.value : value);
-                  onFieldSubmit(e.target.value, { enter: true }, e);
-                  stopEdit();
-                }
-                return true;
+            disabled: rest.disabled,
+            onChange: e => {
+              setVal(e.target.value);
+            },
+            ...(value === null ? {} : { value }),
+            onKeyDown: (...args) => {
+              onKeyDown(...args);
+              const e = args[0];
+              if (e.key === "Enter") {
+                input.onChange(value === null ? input.value : value);
+                onFieldSubmit(e.target.value, { enter: true }, e);
+                stopEdit();
               }
+              return true;
             }
+          }
           : {
-              onKeyDown: function (...args) {
-                onKeyDown(...args);
-                const e = args[0];
-                if (e.key === "Enter") {
-                  onFieldSubmit(e.target.value, { enter: true }, e);
-                }
-              },
-              onBlur: function (e, val) {
-                if (rest.readOnly) return;
-                input.onBlur(e, val);
-                onFieldSubmit(
-                  e.target ? e.target.value : val,
-                  { blur: true },
-                  e
-                );
+            onKeyDown: function (...args) {
+              onKeyDown(...args);
+              const e = args[0];
+              if (e.key === "Enter") {
+                onFieldSubmit(e.target.value, { enter: true }, e);
               }
-            })}
+            },
+            onBlur: function (e, val) {
+              if (rest.readOnly) return;
+              input.onBlur(e, val);
+              onFieldSubmit(
+                e.target ? e.target.value : val,
+                { blur: true },
+                e
+              );
+            }
+          })}
       />
     );
   if (clickToEdit)
@@ -710,10 +710,10 @@ export const renderReactSelect = props => {
     onBlur() {
       const valToPass = Array.isArray(valueToUse)
         ? valueToUse
-            .filter(val => !!val)
-            .map(function (val) {
-              return val.value;
-            })
+          .filter(val => !!val)
+          .map(function (val) {
+            return val.value;
+          })
         : valueToUse;
       if (props.cancelSubmit && props.cancelSubmit(valToPass)) {
         return; //allow the user to cancel the submit
@@ -985,7 +985,8 @@ export const RenderReactColorPicker = ({ input, onFieldSubmit, ...rest }) => (
 
 export function generateField(component, opts) {
   const compWithDefaultVal = withAbstractWrapper(component, opts);
-  return ({ name, isRequired, onFieldSubmit = noop, ...rest }) => {
+  // Extract 'key' prop to prevent "key prop is being spread into JSX" error in React 19
+  return ({ name, isRequired, onFieldSubmit = noop, key: _key, ...rest }) => {
     const props = {
       onFieldSubmit,
       name,
@@ -1000,7 +1001,8 @@ export function generateField(component, opts) {
 }
 
 export const withAbstractWrapper = (ComponentToWrap, opts = {}) => {
-  return props => {
+  // Extract 'key' prop to prevent "key prop is being spread into JSX" error in React 19
+  return ({ key: _key, ...props }) => {
     const {
       massageDefaultIdValue,
       generateDefaultValue,
@@ -1066,8 +1068,7 @@ export const withAbstractWrapper = (ComponentToWrap, opts = {}) => {
           );
           console.warn(`generateDefaultValue.customParams:`, customParamsToUse);
           throw new Error(
-            `Issue with generateDefaultValue code=${
-              generateDefaultValue.code
+            `Issue with generateDefaultValue code=${generateDefaultValue.code
             }: Difference detected with: ${difference(
               Object.keys(generateDefaultValue.params || {}),
               Object.keys(customParamsToUse || {})
@@ -1082,9 +1083,9 @@ export const withAbstractWrapper = (ComponentToWrap, opts = {}) => {
         let { defaultValue, allowUserOverride } = defaultValueByIdOverride
           ? { defaultValue: defaultValueByIdOverride }
           : await window.__triggerGetDefaultValueRequest(
-              generateDefaultValue.code,
-              customParamsToUse
-            );
+            generateDefaultValue.code,
+            customParamsToUse
+          );
         if (massageDefaultIdValue) {
           const massagedRes = await massageDefaultIdValue({
             defaultValueById: defaultValue
