@@ -365,7 +365,15 @@ workflow {
         error("--sequence_input is required. ESMFold2 complex jobs may instead provide --complex_components.")
     }
 
-    if (!(params.pred_method in ['boltz', 'protenix', 'esmfold2', 'boltz_protenix'])) {
+    def isMutagenesisPrediction =
+        params.containsKey('mutagenesis_prediction') && params.mutagenesis_prediction == true
+    def allowedPredictors = isMutagenesisPrediction
+        ? ['boltz', 'rf3', 'both', 'esmfold2']
+        : ['boltz', 'protenix', 'esmfold2', 'boltz_protenix']
+    if (!(params.pred_method in allowedPredictors)) {
+        if (isMutagenesisPrediction) {
+            error("--pred_method must be one of: boltz, rf3, both, esmfold2")
+        }
         error("--pred_method must be one of: boltz, protenix, esmfold2, boltz_protenix")
     }
     
@@ -374,7 +382,7 @@ workflow {
     def numJobs = params.num_parallel_jobs ?: 1
     
     println("=" * 60)
-    println("Structure Prediction Workflow")
+    println(isMutagenesisPrediction ? "Mutagenesis Variant Prediction Workflow" : "Structure Prediction Workflow")
     println("=" * 60)
     println("* Sequence: ${seq ? seq.take(50) + (seq.length() > 50 ? '...' : '') : '[complex components]'}")
     println("* Name: ${name}")

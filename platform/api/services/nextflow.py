@@ -4346,6 +4346,7 @@ def build_nextflow_command(
         if key in {
             "frustrampnn_physical_gpu_id",
             "frustrampnn_settings_value_origin",
+            "mutagenesis_prediction",
         }:
             continue
         if value is not None:
@@ -4366,6 +4367,10 @@ def build_nextflow_command(
                 # Convert list to comma-separated string for Nextflow
                 cmd.extend([f"--{nf_key}", ",".join(str(v) for v in value)])
             elif isinstance(value, dict):
+                if key == "mutation_variant":
+                    # The nested provenance stays in the persisted Job. The
+                    # server-derived scalar below is the only workflow control.
+                    continue
                 if key == "frustrampnn_settings":
                     transport_value = dict(value)
                     protein_selection = transport_value.get("protein_selection")
@@ -4421,6 +4426,9 @@ def build_nextflow_command(
                     logger.warning(f"Skipping dict parameter {key} - not supported in command line")
             else:
                 cmd.extend([f"--{nf_key}", str(value)])
+
+    if isinstance(params.get("mutation_variant"), dict):
+        cmd.extend(["--mutagenesis_prediction", "true"])
 
     if params.get("run_frustrampnn") is True:
         component_gpu = params.get("gpu_id")

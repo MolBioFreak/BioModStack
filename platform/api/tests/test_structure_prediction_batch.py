@@ -101,6 +101,18 @@ def test_normalize_structure_prediction_pred_method_rejects_direct_rf3_predict_l
         _normalize_structure_prediction_pred_method("rf3", "predict", {})
 
 
+def test_normalize_structure_prediction_pred_method_rejects_forged_mutagenesis_child_marker() -> None:
+    with pytest.raises(HTTPException, match="retired from Structure Prediction"):
+        _normalize_structure_prediction_pred_method(
+            "rf3",
+            "predict",
+            {
+                "pred_method": "rf3",
+                "mutation_variant": {"name": "forged", "mutation": "A1G"},
+            },
+        )
+
+
 def test_normalize_structure_prediction_pred_method_rejects_structure_validation_rf3() -> None:
     with pytest.raises(HTTPException, match="retired from Structure Prediction"):
         _normalize_structure_prediction_pred_method(
@@ -118,13 +130,17 @@ def test_normalize_structure_prediction_pred_method_preserves_mutagenesis_rf3(
     model_id: str,
     pred_method: str,
 ) -> None:
-    params = {
+    request_params = {
         "pred_method": pred_method,
         "mutagenesis_variants": [{"name": "variant_1", "sequence": "ACDEFGHIK"}],
     }
-    assert _normalize_structure_prediction_pred_method(model_id, "predict", params) == params
+    assert _normalize_structure_prediction_pred_method(model_id, "predict", request_params) == request_params
+    child_params = {
+        "pred_method": pred_method,
+        "mutation_variant": {"name": "variant_1", "mutation": "A1G"},
+    }
     assert not _job_has_retired_structure_predictor(
-        SimpleNamespace(model_id=model_id, mode="predict", params=params)
+        SimpleNamespace(model_id=model_id, mode="predict", params=child_params)
     )
 
 
@@ -170,6 +186,52 @@ def test_build_nextflow_command_routes_boltz_protenix_template_runs_through_bolt
 
     assert "-profile boltz,workstation_ryzen7960x" in joined
     assert "--pred_method boltz_protenix" in joined
+
+
+@pytest.mark.parametrize(
+    ("model_id", "pred_method"),
+    [("rf3", "rf3"), ("boltz2", "both")],
+)
+def test_build_nextflow_command_marks_persisted_mutagenesis_children(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    model_id: str,
+    pred_method: str,
+) -> None:
+    cmd = build_nextflow_command(
+        model_id,
+        "predict",
+        {
+            "sequence": "ACDEFGHIK",
+            "sequence_name": "variant_1",
+            "pred_method": pred_method,
+            "mutation_variant": {"name": "variant_1", "mutation": "A1G"},
+        },
+        str(tmp_path),
+        job_id=f"job-{model_id}",
+    )
+
+    joined = " ".join(cmd)
+    assert "--mutagenesis_prediction true" in joined
+    assert "--mutation_variant" not in joined
+    assert "Skipping dict parameter mutation_variant" not in caplog.text
+
+
+def test_build_nextflow_command_ignores_caller_supplied_mutagenesis_marker(tmp_path: Path) -> None:
+    cmd = build_nextflow_command(
+        "rf3",
+        "predict",
+        {
+            "sequence": "ACDEFGHIK",
+            "sequence_name": "forged",
+            "pred_method": "rf3",
+            "mutagenesis_prediction": True,
+        },
+        str(tmp_path),
+        job_id="job-forged",
+    )
+
+    assert "--mutagenesis_prediction" not in cmd
 
 
 def test_write_sequence_batch_payloads_writes_stable_names_and_csv(tmp_path: Path) -> None:

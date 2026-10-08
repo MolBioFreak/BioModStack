@@ -185,7 +185,7 @@ test('keeps Mutagenesis RF3 predict jobs outside Structure retirement', () => {
         mode: 'predict',
         params: {
             pred_method: 'rf3',
-            mutagenesis_variants: [{ name: 'variant_1', sequence: 'ACDEFGHIK' }],
+            mutation_variant: { name: 'variant_1', mutation: 'A1G' },
         },
     };
 
