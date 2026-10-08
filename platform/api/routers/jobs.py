@@ -198,17 +198,32 @@ async def create_job(
     # Logging MSA batch intent
 
     
-    # Check if this is a mutagenesis batch (has msa_reference_sequence)
-    # or any batch with multiple unique sequences that need MSA
-    if job_data.params.get('msa_reference_sequence') and num_jobs > 1:
-        # Mutagenesis: all variants use same MSA (reference sequence)
+    # Mutagenesis: generate per-variant MSAs when using MSA
+    if mutagenesis_variants and num_jobs > 1:
+        use_msa = job_data.params.get('boltz_use_msa', True) or job_data.params.get('rf3_use_msa', False)
+        if use_msa:
+            sequences_for_msa = []
+            for idx, variant in enumerate(mutagenesis_variants):
+                seq = variant.get('sequence')
+                if not seq:
+                    continue
+                name = variant.get('name', f'var_{idx + 1}')
+                sequences_for_msa.append({'name': name, 'sequence': seq})
+            # Always regenerate MSAs for mutagenesis variants
+            job_data.params['msa_force_refresh'] = True
+            # Ensure no shared reference MSA is used
+            job_data.params.pop('msa_reference_sequence', None)
+            needs_msa = len(sequences_for_msa) > 0
+            if needs_msa:
+                logger.info(f"[MSA BATCH] Mutagenesis mode: {len(sequences_for_msa)} per-variant MSAs")
+    # Legacy: single reference MSA for multi-sequence batches
+    if not needs_msa and job_data.params.get('msa_reference_sequence') and num_jobs > 1:
         needs_msa = True
-        # Only need MSA for the reference sequence
         sequences_for_msa = [{
             'name': 'reference_msa',
             'sequence': job_data.params['msa_reference_sequence']
         }]
-        logger.info(f"[MSA BATCH] Mutagenesis mode: 1 reference MSA for {num_jobs} variants")
+        logger.info(f"[MSA BATCH] Reference MSA for {num_jobs} variants")
     elif num_jobs > 1 and 'sequence_input' in job_data.params:
         # Multiple inference jobs with potentially different sequences
         # For now, skip MSA batching if all use same sequence (normal parallel runs)
@@ -232,6 +247,7 @@ async def create_job(
                 'sequences': sequences_for_msa,
                 'sequences_json': json_lib.dumps(sequences_for_msa),
                 'reference_sequence': job_data.params.get('msa_reference_sequence'),
+                'msa_force_refresh': job_data.params.get('msa_force_refresh', False),
             },
             output_dir=msa_output_dir,
             status=JobStatus.QUEUED.value,
@@ -620,6 +636,7 @@ async def resubmit_job(
 @router.post("/{job_id}/reingest")
 async def reingest_job_results(
     job_id: str,
+    include_children: bool = Query(True, description="Include child jobs when re-ingesting"),
     session: AsyncSession = Depends(get_session)
 ):
     """
@@ -642,35 +659,47 @@ async def reingest_job_results(
     
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+
+    # Build job list (parent + children)
+    job_ids = [job_id]
+    jobs_to_ingest = {job_id: job}
+    if include_children:
+        child_result = await session.execute(select(Job).where(Job.parent_job_id == job_id))
+        child_jobs = child_result.scalars().all()
+        for child in child_jobs:
+            job_ids.append(child.id)
+            jobs_to_ingest[child.id] = child
     
-    if not job.output_dir:
-        raise HTTPException(status_code=400, detail="Job has no output directory")
+    total_deleted = 0
+    total_created = 0
     
-    # Count existing designs
-    existing_count = (await session.execute(
-        select(func.count(Design.id)).where(Design.job_id == job_id)
-    )).scalar()
-    
-    # Delete existing designs for this job
-    await session.execute(delete(Design).where(Design.job_id == job_id))
-    await session.commit()
-    
-    logger.info(f"[REINGEST] Deleted {existing_count} existing designs for job {job_id}")
-    
-    # Re-run ingestion
-    try:
-        new_count = await ingest_job_results(job_id, job.output_dir, session)
-        logger.info(f"[REINGEST] Re-ingested {new_count} designs for job {job_id}")
+    for jid in job_ids:
+        target_job = jobs_to_ingest.get(jid)
+        if not target_job or not target_job.output_dir:
+            logger.warning(f"[REINGEST] Skipping job {jid}: no output_dir")
+            continue
         
-        return {
-            "message": f"Re-ingested {new_count} designs (deleted {existing_count} old entries)",
-            "job_id": job_id,
-            "designs_deleted": existing_count,
-            "designs_created": new_count
-        }
-    except Exception as e:
-        logger.error(f"[REINGEST] Error re-ingesting job {job_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Re-ingestion failed: {str(e)}")
+        existing_count = (await session.execute(
+            select(func.count(Design.id)).where(Design.job_id == jid)
+        )).scalar()
+        
+        await session.execute(delete(Design).where(Design.job_id == jid))
+        await session.commit()
+        total_deleted += existing_count or 0
+        
+        try:
+            new_count = await ingest_job_results(jid, target_job.output_dir, session)
+            total_created += new_count
+            logger.info(f"[REINGEST] Re-ingested {new_count} designs for job {jid}")
+        except Exception as e:
+            logger.error(f"[REINGEST] Error re-ingesting job {jid}: {e}")
+    
+    return {
+        "message": f"Re-ingested {total_created} designs (deleted {total_deleted} old entries)",
+        "job_id": job_id,
+        "designs_deleted": total_deleted,
+        "designs_created": total_created
+    }
 
 
 @router.post("/{job_id}/annotate-cdrs")

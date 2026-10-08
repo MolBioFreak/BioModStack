@@ -71,7 +71,8 @@ def run_batch_msa(
     db_path: Path,
     cache_dir: Optional[Path],
     gpu_id: int = 0,
-    reference_sequence: Optional[str] = None
+    reference_sequence: Optional[str] = None,
+    force_refresh: bool = False
 ) -> Dict[str, Any]:
     """
     Generate MSAs for all sequences in a SINGLE mmseqs search.
@@ -103,7 +104,7 @@ def run_batch_msa(
         msa_path = output_dir / f"{name}.a3m"
         
         # Check cache
-        if cache_dir:
+        if cache_dir and not force_refresh:
             cached = check_cache(cache_dir, seq_hash)
             if cached:
                 load_from_cache(cached, msa_path)
@@ -332,6 +333,8 @@ if __name__ == "__main__":
                        help="Path to ColabFold database")
     parser.add_argument("--cache_dir", default="/mnt/BioModStack/msa_cache",
                        help="Path to MSA cache directory")
+    parser.add_argument("--force_refresh", action="store_true",
+                       help="Bypass cache and regenerate MSAs")
     parser.add_argument("--gpu_id", type=int, default=0,
                        help="GPU ID to use for search")
     parser.add_argument("--reference_sequence", default=None,
@@ -353,7 +356,8 @@ if __name__ == "__main__":
         db_path=Path(args.db_path),
         cache_dir=Path(args.cache_dir) if args.cache_dir else None,
         gpu_id=args.gpu_id,
-        reference_sequence=args.reference_sequence
+        reference_sequence=args.reference_sequence,
+        force_refresh=args.force_refresh
     )
     
     # Exit with error if any failed

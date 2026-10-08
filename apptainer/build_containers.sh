@@ -10,6 +10,7 @@ declare -A CONTAINERS=(
     ["boltz2"]="boltz2.def"
     ["dl_binder_design"]="dl_binder_design.def"
     ["fampnn"]="fampnn.def"
+    ["frustrampnn"]="frustrampnn.def"
     ["pyrosetta_tools"]="pyrosetta_tools.def"
     ["rfdiffusion"]="rfdiffusion.def"
 )
@@ -20,6 +21,7 @@ BUILD_BINDSWEEPER=1
 BUILD_BOLTZ2=1
 BUILD_DL_BINDER_DESIGN=1
 BUILD_FAMPNN=1
+BUILD_FRUSTRAMPNN=1
 BUILD_PYROSETTA_TOOLS=1
 BUILD_RFDIFFUSION=1
 

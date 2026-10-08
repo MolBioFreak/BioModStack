@@ -46,10 +46,11 @@ declare -A CONTAINERS=(
     ["dl_binder_design"]="dl_binder_design.def"
     ["pyrosetta_tools"]="pyrosetta_tools.def"
     ["af2"]="af2.def"
+    ["frustrampnn"]="frustrampnn.def"
 )
 
 # Build order (dependencies first)
-BUILD_ORDER=("rfdiffusion" "fampnn" "dl_binder_design" "af2" "boltz2" "pyrosetta_tools")
+BUILD_ORDER=("rfdiffusion" "fampnn" "dl_binder_design" "af2" "boltz2" "pyrosetta_tools" "frustrampnn")
 
 ################################################################################
 # Helper Functions

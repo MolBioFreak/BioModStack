@@ -133,6 +133,98 @@ def sanitize_filename(name: str) -> str:
     return sanitized if sanitized else "unnamed"
 
 
+def _is_antibody_job(job) -> bool:
+    model_id = (job.model_id or "").lower()
+    mode = (job.mode or "").lower()
+    name = (job.name or "").lower()
+    return (
+        model_id in {"rfantibody", "antibody_denovo", "template_antibody_denovo", "antibody_child"} or
+        "antibody" in model_id or
+        "antibody" in mode or
+        "nanobody" in mode or
+        "vhh" in mode or
+        "antibody" in name or
+        "nanobody" in name or
+        "vhh" in name
+    )
+
+
+async def maybe_auto_annotate_cdrs(job, session) -> None:
+    """
+    Auto-run ANARCII CDR annotation after antibody jobs complete.
+    Runs in a background thread and updates the DB directly.
+    """
+    if job.parent_job_id:
+        return
+    if not _is_antibody_job(job):
+        return
+
+    try:
+        from database import Design, Job as JobModel
+        from sqlalchemy import select
+        from services.cdr_annotator import batch_annotate_pdbs
+        import threading
+        import sqlite3
+        from pathlib import Path
+
+        # Include child jobs (exploration mode)
+        child_result = await session.execute(select(JobModel.id).where(JobModel.parent_job_id == job.id))
+        child_job_ids = [row[0] for row in child_result.all()]
+        all_job_ids = [job.id] + child_job_ids
+
+        designs_result = await session.execute(
+            select(Design).where(Design.job_id.in_(all_job_ids))
+        )
+        designs = designs_result.scalars().all()
+        pdb_paths = [d.pdb_path for d in designs if d.pdb_path]
+        design_ids = [d.id for d in designs if d.pdb_path]
+
+        if not pdb_paths:
+            logger.info(f"[CDR AUTO] No PDBs found for job {job.id}, skipping ANARCII")
+            return
+
+        logger.info(f"[CDR AUTO] Starting ANARCII for {len(pdb_paths)} designs (job {job.id})")
+
+        def run_annotation_sync():
+            annotations = batch_annotate_pdbs(pdb_paths, batch_size=500)
+            db_path = Path(__file__).parent.parent / "biomodstack.db"
+            conn = sqlite3.connect(str(db_path))
+            cursor = conn.cursor()
+
+            annotated = 0
+            for pdb_path, design_id in zip(pdb_paths, design_ids):
+                annot = annotations.get(pdb_path)
+                if annot:
+                    cursor.execute("""
+                        UPDATE designs SET
+                            antibody_type = ?,
+                            binder_length = ?,
+                            cdr_h1 = ?, cdr_h2 = ?, cdr_h3 = ?,
+                            cdr_l1 = ?, cdr_l2 = ?, cdr_l3 = ?,
+                            cdr_h1_length = ?, cdr_h2_length = ?, cdr_h3_length = ?,
+                            cdr_l1_length = ?, cdr_l2_length = ?, cdr_l3_length = ?,
+                            fr2_contacts = ?, de_loop = ?, fr3_contacts = ?, fr4_contacts = ?
+                        WHERE id = ?
+                    """, (
+                        annot.antibody_type, annot.binder_length,
+                        annot.cdr_h1, annot.cdr_h2, annot.cdr_h3,
+                        annot.cdr_l1, annot.cdr_l2, annot.cdr_l3,
+                        annot.cdr_h1_length, annot.cdr_h2_length, annot.cdr_h3_length,
+                        annot.cdr_l1_length, annot.cdr_l2_length, annot.cdr_l3_length,
+                        annot.fr2_contacts, annot.de_loop, annot.fr3_contacts, annot.fr4_contacts,
+                        design_id
+                    ))
+                    annotated += 1
+
+            conn.commit()
+            conn.close()
+            logger.info(f"[CDR AUTO] Completed: {annotated}/{len(pdb_paths)} annotated (job {job.id})")
+
+        threading.Thread(target=run_annotation_sync, daemon=True).start()
+    except Exception as e:
+        logger.warning(f"[CDR AUTO] Failed to start ANARCII: {e}")
+
+
 async def launch_msa_batch_job(
     job_id: str,
     params: Dict[str, Any],
@@ -166,6 +258,7 @@ async def launch_msa_batch_job(
     sequences_json = params.get('sequences_json', '[]')
     gpu_id = params.get('gpu_id', 0)
     reference_sequence = params.get('reference_sequence', '')
+    force_refresh = params.get('msa_force_refresh', False)
     
     # Build batch_msa.py command
     script_path = PROJECT_ROOT / "scripts" / "batch_msa.py"
@@ -179,6 +272,8 @@ async def launch_msa_batch_job(
     ]
     if reference_sequence:
         cmd.extend(["--reference_sequence", reference_sequence])
+    if force_refresh:
+        cmd.append("--force_refresh")
     
     logger.info(f"[MSA BATCH] Command: {' '.join(cmd[:6])}...")
     
@@ -266,14 +361,20 @@ async def unlock_child_inference_jobs(msa_job_id: str, manifest_path: str) -> No
                 manifest = json.load(f)
             for seq_info in manifest.get("sequences", []):
                 if seq_info.get("success"):
-                    msa_paths[seq_info.get("name", "")] = seq_info.get("msa_path")
+                    msa_paths[seq_info.get("sequence_hash", "")] = seq_info.get("msa_path")
         except Exception as e:
             logger.warning(f"[MSA COMPLETE] Could not parse manifest: {e}")
         
         # Update each child job
+        import hashlib
         for job in child_jobs:
+            sequence = job.params.get("sequence", "")
+            seq_hash = hashlib.sha256(sequence.encode()).hexdigest()
+            msa_path = msa_paths.get(seq_hash)
+            if msa_path:
+                job.params = {**job.params, "msa_path": msa_path}
             job.queue_status = 'queued'  # Now ready for inference!
-            logger.info(f"[MSA COMPLETE] Unlocked {job.name} for inference")
+            logger.info(f"[MSA COMPLETE] Unlocked {job.name} for inference (MSA: {msa_path or 'not found'})")
         
         await session.commit()
         logger.info(f"[MSA COMPLETE] Unlocked {len(child_jobs)} inference jobs")
@@ -505,6 +606,7 @@ async def launch_nextflow_job(
                                 epitope_residues=epitope_residues
                             )
                             logger.info(f"Ingested {design_count} designs for job {job_id}")
+                            await maybe_auto_annotate_cdrs(job, session)
                         except Exception as ingest_err:
                             logger.warning(f"Result ingestion failed: {ingest_err}")
                             

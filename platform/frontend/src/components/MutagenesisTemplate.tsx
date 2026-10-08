@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { SequenceManagerModal } from './SequenceManagerModal';
-import { parseRegions, generateLibrary } from '../utils/mutationUtils';
+import { parseRegions, generateLibrary, normalizeAminoAcids, formatMutationLabel } from '../utils/mutationUtils';
 import type { VariantSequence, SubstitutionStrategy, Mutation } from '../utils/mutationUtils';
 import { InteractiveSequence } from './InteractiveSequence';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
@@ -25,6 +25,17 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
     const [strategy, setStrategy] = useState<SubstitutionStrategy>('random');
     const [numVariants, setNumVariants] = useState(20);
     const [mutationsPerVariant, setMutationsPerVariant] = useState<[number, number]>([1, 2]); // Min, Max
+    const [mutationCountMode, setMutationCountMode] = useState<'range' | 'exact' | 'set'>('range');
+    const [mutationCountExact, setMutationCountExact] = useState(1);
+    const [mutationCountSetInput, setMutationCountSetInput] = useState('1,2,3');
+    const [excludedPositions, setExcludedPositions] = useState<Set<number>>(new Set());
+    const [excludeResiduesInput, setExcludeResiduesInput] = useState('');
+    const [allowedAAsInput, setAllowedAAsInput] = useState('');
+    const [blockedAAsInput, setBlockedAAsInput] = useState('');
+    const [allowInsertions, setAllowInsertions] = useState(false);
+    const [allowDeletions, setAllowDeletions] = useState(false);
+    const [indelSizes, setIndelSizes] = useState<number[]>([1]);
+    const [indelProbability, setIndelProbability] = useState(0);
 
     // Sequence Manager State
     const [showSequenceManager, setShowSequenceManager] = useState(false);
@@ -35,6 +46,11 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
 
     // Preview
     const regions = useMemo(() => parseRegions(regionInput), [regionInput]);
+    const excludedPositionsList = useMemo(() => {
+        return Array.from(excludedPositions)
+            .filter(pos => pos > 0 && pos <= baseSequence.length)
+            .sort((a, b) => a - b);
+    }, [excludedPositions, baseSequence.length]);
     const [generatedVariants, setGeneratedVariants] = useState<VariantSequence[]>([]);
 
     // Predictor Config
@@ -48,6 +64,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
         use_potentials: false,
         step_scale: 1.638
     });
+    const [runFrustrampnnPost, setRunFrustrampnnPost] = useState(false);
 
     // Complex Mode: Ligands & Ions
     const [ligands, setLigands] = useState<LigandEntry[]>([]);
@@ -57,6 +74,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
 
     // PDB Import State
     const [showPdbImport, setShowPdbImport] = useState(false);
+    const [pdbImportTab, setPdbImportTab] = useState<'upload' | 'runs' | 'presets' | 'rcsb'>('upload');
     const [parsedChains, setParsedChains] = useState<Chain[]>([]);
     const [pdbBlobUrl, setPdbBlobUrl] = useState<string | null>(null);
     const [show3DViewer, setShow3DViewer] = useState(false);
@@ -84,16 +102,49 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
     }, [mode, regions, manualMutations, selectedChainId]);
 
     // Handlers
+    const toggleExcludedPosition = (pos: number) => {
+        setExcludedPositions(prev => {
+            const next = new Set(prev);
+            if (next.has(pos)) {
+                next.delete(pos);
+            } else {
+                next.add(pos);
+            }
+            return next;
+        });
+    };
+
     const handleGeneratePreview = () => {
         if (!baseSequence) return;
 
         if (mode === 'library') {
+            const allowedAAs = normalizeAminoAcids(allowedAAsInput);
+            const blockedAAs = normalizeAminoAcids(blockedAAsInput);
+            const excludeResidues = normalizeAminoAcids(excludeResiduesInput);
+            const mutationCountSet = mutationCountSetInput
+                .split(',')
+                .map(v => parseInt(v.trim()))
+                .filter(v => Number.isFinite(v) && v > 0);
             const variants = generateLibrary(
                 baseSequence,
                 regions,
                 strategy,
                 numVariants,
-                mutationsPerVariant
+                mutationsPerVariant,
+                {
+                    customAA: allowedAAs,
+                    allowedAAs,
+                    blockedAAs,
+                    excludeFromResidues: excludeResidues,
+                    excludedPositions: excludedPositionsList,
+                    mutationCountMode,
+                    mutationCount: mutationCountExact,
+                    mutationCountSet,
+                    allowInsertions,
+                    allowDeletions,
+                    indelSizes,
+                    indelProbability
+                }
             );
             setGeneratedVariants(variants);
         } else {
@@ -110,7 +161,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                 });
 
                 setGeneratedVariants([{
-                    name: `manual_${manualMutations.map(m => `${m.from}${m.position}${m.to}`).join('_')}`,
+                    name: `manual_${manualMutations.map(formatMutationLabel).join('_')}`,
                     sequence: seqArray.join(''),
                     mutations: manualMutations
                 }]);
@@ -148,8 +199,10 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
         onSubmit(jobNamePrefix, generatedVariants, {
             predictor,
             ...predictorParams,
-            // Pass base sequence for MSA sharing - all variants use WT MSA
+            // Reference sequence for logging (mutants regenerate MSAs)
             msa_reference_sequence: baseSequence,
+            // Optional post-run FrustraMPNN annotation
+            run_frustrampnn: runFrustrampnnPost,
             // Include ALL fields from ligand entries - sequence is required for DNA/RNA!
             ligands: ligands.map(l => ({
                 type: l.type,
@@ -200,10 +253,22 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                 📚 Sequence Library
                             </button>
                             <button
-                                onClick={() => setShowPdbImport(true)}
+                                onClick={() => {
+                                    setPdbImportTab('upload');
+                                    setShowPdbImport(true);
+                                }}
                                 className="px-3 py-1 bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-600/30 text-cyan-400 text-xs rounded-lg transition-colors flex items-center gap-2"
                             >
-                                🧬 Import from PDB
+                                🧬 Import PDB
+                            </button>
+                            <button
+                                onClick={() => {
+                                    setPdbImportTab('runs');
+                                    setShowPdbImport(true);
+                                }}
+                                className="px-3 py-1 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-600/30 text-indigo-300 text-xs rounded-lg transition-colors flex items-center gap-2"
+                            >
+                                🧪 From Runs
                             </button>
                             {baseSequence && baseSequence.length > 0 && (
                                 <button
@@ -308,6 +373,156 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                             )}
                         </div>
 
+                        {/* Mutation Rules */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <label className="block text-sm font-medium text-slate-300 mb-1">Exclude Positions</label>
+                                <p className="text-xs text-slate-500 mb-2">Click residues to blacklist within your mutation region.</p>
+                                {baseSequence ? (
+                                    <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-3">
+                                        <div className="flex items-center justify-between mb-2">
+                                            <span className="text-[11px] text-slate-500">
+                                                Excluded: {excludedPositionsList.length}
+                                                {excludedPositionsList.length > 0 ? ` (${excludedPositionsList.join(', ')})` : ''}
+                                            </span>
+                                            <button
+                                                onClick={() => setExcludedPositions(new Set())}
+                                                className="text-[11px] text-slate-400 hover:text-white"
+                                                disabled={excludedPositionsList.length === 0}
+                                            >
+                                                Clear
+                                            </button>
+                                        </div>
+                                        <div className="flex flex-wrap gap-1 font-mono text-xs leading-none max-h-[160px] overflow-y-auto">
+                                            {baseSequence.split('').map((aa, idx) => {
+                                                const pos = idx + 1;
+                                                const isExcluded = excludedPositions.has(pos);
+                                                return (
+                                                    <button
+                                                        key={pos}
+                                                        onClick={() => toggleExcludedPosition(pos)}
+                                                        className={`w-7 h-7 rounded border transition-colors ${
+                                                            isExcluded
+                                                                ? 'bg-red-600/30 border-red-400 text-red-200 line-through'
+                                                                : 'bg-slate-900 border-slate-700 text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                                                        }`}
+                                                        title={`Pos ${pos}: ${aa}${isExcluded ? ' (excluded)' : ''}`}
+                                                    >
+                                                        {aa}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="text-xs text-slate-600 bg-slate-950/60 border border-slate-800 rounded-lg p-3">
+                                        Load a sequence to enable position exclusion.
+                                    </div>
+                                )}
+                                <label className="block text-sm font-medium text-slate-300 mb-1 mt-4">Exclude Residues</label>
+                                <p className="text-xs text-slate-500 mb-2">Do not mutate positions with these WT residues (e.g., "CP")</p>
+                                <input
+                                    type="text"
+                                    value={excludeResiduesInput}
+                                    onChange={(e) => setExcludeResiduesInput(e.target.value.toUpperCase())}
+                                    placeholder="e.g., C, P"
+                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-slate-300 mb-1">Allowed AAs (Whitelist)</label>
+                                <p className="text-xs text-slate-500 mb-2">Restrict substitutions/insertions to these AAs</p>
+                                <input
+                                    type="text"
+                                    value={allowedAAsInput}
+                                    onChange={(e) => setAllowedAAsInput(e.target.value.toUpperCase())}
+                                    placeholder="e.g., AST"
+                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm"
+                                />
+                                <label className="block text-sm font-medium text-slate-300 mb-1 mt-4">Blocked AAs (Blacklist)</label>
+                                <p className="text-xs text-slate-500 mb-2">Exclude these AAs from substitutions/insertions</p>
+                                <input
+                                    type="text"
+                                    value={blockedAAsInput}
+                                    onChange={(e) => setBlockedAAsInput(e.target.value.toUpperCase())}
+                                    placeholder="e.g., C, P"
+                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm"
+                                />
+                            </div>
+                        </div>
+
+                        {/* Indel Rules */}
+                        <div className="bg-slate-950/50 rounded-lg p-4 border border-slate-800">
+                            <div className="flex items-center justify-between mb-3">
+                                <h4 className="text-sm font-semibold text-slate-300">Loop Resize (Indels)</h4>
+                                <span className="text-xs text-slate-500">CDR-only recommended</span>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <label className="flex items-center gap-2 text-sm text-slate-300">
+                                        <input
+                                            type="checkbox"
+                                            checked={allowInsertions}
+                                            onChange={(e) => setAllowInsertions(e.target.checked)}
+                                            className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-purple-600"
+                                        />
+                                        Allow insertions
+                                    </label>
+                                    <label className="flex items-center gap-2 text-sm text-slate-300">
+                                        <input
+                                            type="checkbox"
+                                            checked={allowDeletions}
+                                            onChange={(e) => setAllowDeletions(e.target.checked)}
+                                            className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-purple-600"
+                                        />
+                                        Allow deletions
+                                    </label>
+                                    <div className="text-xs text-slate-500">Indel sizes</div>
+                                    <div className="flex gap-2">
+                                        {[1, 2, 3].map(size => (
+                                            <label key={size} className="flex items-center gap-1 text-xs text-slate-400">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={indelSizes.includes(size)}
+                                                    onChange={(e) => {
+                                                        setIndelSizes(prev => {
+                                                            const next = new Set(prev);
+                                                            if (e.target.checked) {
+                                                                next.add(size);
+                                                            } else {
+                                                                next.delete(size);
+                                                            }
+                                                            return Array.from(next).sort();
+                                                        });
+                                                    }}
+                                                    className="w-3 h-3 rounded bg-slate-900 border-slate-700 text-purple-600"
+                                                />
+                                                {size}
+                                            </label>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-xs text-slate-500 mb-2">Indel Probability</label>
+                                    <input
+                                        type="range"
+                                        min={0}
+                                        max={100}
+                                        step={5}
+                                        value={Math.round(indelProbability * 100)}
+                                        onChange={(e) => setIndelProbability(parseInt(e.target.value) / 100)}
+                                        className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer"
+                                    />
+                                    <div className="flex justify-between text-xs text-slate-500 mt-1">
+                                        <span>0%</span>
+                                        <span className="text-slate-300 font-medium">{Math.round(indelProbability * 100)}%</span>
+                                        <span>100%</span>
+                                    </div>
+                                    <p className="text-[11px] text-slate-500 mt-2">Applied per variant; substitutions still follow mutation count settings.</p>
+                                </div>
+                            </div>
+                        </div>
+
                         {/* Strategy Options */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
@@ -320,7 +535,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                     <option value="random">Random (Any AA)</option>
                                     <option value="conservative">Conservative (Similar properties)</option>
                                     <option value="nonconservative">Non-Conservative (Different properties)</option>
-                                    <option value="custom">Custom Set (Not implemented)</option>
+                                    <option value="custom">Custom Set (Use "Allowed AAs")</option>
                                 </select>
                             </div>
                             <div>
@@ -337,20 +552,54 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                     </div>
                                     <div className="flex-1">
                                         <label className="text-xs text-slate-500 block mb-1">Mutations / Variant</label>
-                                        <div className="flex gap-2 items-center">
-                                            <input
-                                                type="number"
-                                                value={mutationsPerVariant[0]}
-                                                onChange={(e) => setMutationsPerVariant([parseInt(e.target.value), mutationsPerVariant[1]])}
-                                                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-white text-sm text-center"
-                                            />
-                                            <span className="text-slate-500">-</span>
-                                            <input
-                                                type="number"
-                                                value={mutationsPerVariant[1]}
-                                                onChange={(e) => setMutationsPerVariant([mutationsPerVariant[0], parseInt(e.target.value)])}
-                                                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-white text-sm text-center"
-                                            />
+                                        <div className="space-y-2">
+                                            <select
+                                                value={mutationCountMode}
+                                                onChange={(e) => setMutationCountMode(e.target.value as any)}
+                                                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-white text-sm"
+                                            >
+                                                <option value="range">Range (min-max)</option>
+                                                <option value="exact">Exact N</option>
+                                                <option value="set">Random from set</option>
+                                            </select>
+                                            {mutationCountMode === 'range' && (
+                                                <div className="flex gap-2 items-center">
+                                                    <input
+                                                        type="number"
+                                                        value={mutationsPerVariant[0]}
+                                                        onChange={(e) => setMutationsPerVariant([parseInt(e.target.value) || 1, mutationsPerVariant[1]])}
+                                                        className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-white text-sm text-center"
+                                                        min={1}
+                                                    />
+                                                    <span className="text-slate-500">-</span>
+                                                    <input
+                                                        type="number"
+                                                        value={mutationsPerVariant[1]}
+                                                        onChange={(e) => setMutationsPerVariant([mutationsPerVariant[0], parseInt(e.target.value) || 1])}
+                                                        className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-white text-sm text-center"
+                                                        min={1}
+                                                    />
+                                                </div>
+                                            )}
+                                            {mutationCountMode === 'exact' && (
+                                                <input
+                                                    type="number"
+                                                    value={mutationCountExact}
+                                                    onChange={(e) => setMutationCountExact(parseInt(e.target.value) || 1)}
+                                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-white text-sm text-center"
+                                                    min={1}
+                                                />
+                                            )}
+                                            {mutationCountMode === 'set' && (
+                                                <input
+                                                    type="text"
+                                                    value={mutationCountSetInput}
+                                                    onChange={(e) => setMutationCountSetInput(e.target.value)}
+                                                    placeholder="e.g., 1,2,3"
+                                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-white text-sm"
+                                                />
+                                            )}
+                                            <p className="text-[11px] text-slate-500">Counts apply to substitutions; indels are additional.</p>
                                         </div>
                                     </div>
                                 </div>
@@ -375,7 +624,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                 <div className="max-h-60 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
                                     {generatedVariants.map((v, i) => (
                                         <div key={i} className="text-xs bg-slate-900 p-2 rounded flex justify-between items-center border border-slate-800">
-                                            <span className="text-purple-400 font-mono font-medium">{v.mutations.map(m => `${m.from}${m.position}${m.to}`).join(', ')}</span>
+                                            <span className="text-purple-400 font-mono font-medium">{v.mutations.map(formatMutationLabel).join(', ')}</span>
                                             <span className="text-slate-500 font-mono text-[10px] truncate max-w-[200px]" title={v.sequence}>{v.sequence}</span>
                                         </div>
                                     ))}
@@ -426,7 +675,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                 <h3 className="text-sm font-semibold text-slate-300 mb-2">Variant Preview</h3>
                                 <div className="text-xs bg-slate-900 p-2 rounded flex justify-between items-center border border-slate-800">
                                     <span className="text-purple-400 font-mono font-medium">
-                                        {manualMutations.map(m => `${m.from}${m.position}${m.to}`).join(', ')}
+                                        {manualMutations.map(formatMutationLabel).join(', ')}
                                     </span>
                                     <span className="text-slate-500 font-mono text-[10px] truncate max-w-[200px]">
                                         {generatedVariants[0]?.sequence}
@@ -535,6 +784,17 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                 className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-blue-600"
                             />
                             <label className="text-slate-300" title="Enable physics-based potentials (Boltz-2x). More accurate but slower.">Use Potentials (Boltz-2x)</label>
+                        </div>
+                        <div className="flex items-center gap-2 pt-6">
+                            <input
+                                type="checkbox"
+                                checked={runFrustrampnnPost}
+                                onChange={(e) => setRunFrustrampnnPost(e.target.checked)}
+                                className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-amber-600"
+                            />
+                            <label className="text-slate-300" title="Run FrustraMPNN after Boltz-2 to annotate frustration per variant">
+                                FrustraMPNN QC (post-run)
+                            </label>
                         </div>
                         <div>
                             <label className="text-slate-400 block mb-1" title="Step scale for diffusion (lower = more diverse, higher = more conserved). Default: 1.638">Step Scale</label>
@@ -665,6 +925,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                         }
                                     }
                                 }}
+                                initialTab={pdbImportTab}
                             />
                         ) : (
                             <div className="space-y-4">

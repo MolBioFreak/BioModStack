@@ -23,6 +23,27 @@ export interface QualitySettings {
     fampnn_num_steps: number;
     fampnn_psce_threshold: number;
 
+    // PPIFlow maturation (interface rotamer enrichment + partial flow)
+    run_maturation: boolean;
+    ppiflow_start_t: number;
+    ppiflow_samples_per_target: number;
+    ppiflow_retry_limit: number;
+    ppiflow_config: string;
+    ppiflow_weights_dir: string;
+    ppiflow_checkpoint_path: string;
+    maturation_anchor_threshold: number;
+    maturation_anchor_distance_cutoff: number;
+    maturation_min_improvement: number;
+    maturation_redesign_temp: number;
+    maturation_redesign_steps: number;
+    maturation_design_mode: string;
+    maturation_designs_per_job: number;
+    maturation_filter_percentile: number;
+    ppiflow_checkpoint: string;
+    ppiflow_antigen_chain: string;
+    ppiflow_heavy_chain: string;
+    ppiflow_light_chain: string;
+
     // Pre-Boltz filtering (saves compute by rejecting low-quality designs before expensive validation)
     fampnn_max_psce: number | null;           // Max avg PSCE score to pass to Boltz (null = no filter)
     fampnn_max_residue_psce: number | null;   // Max per-residue PSCE (catches individual bad residues)
@@ -71,6 +92,26 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         fampnn_temperature: 0.2,
         fampnn_num_steps: 50,
         fampnn_psce_threshold: 0.4,
+        // PPIFlow maturation (off for speed)
+        run_maturation: false,
+        ppiflow_start_t: 0.5,
+        ppiflow_samples_per_target: 3,
+        ppiflow_retry_limit: 10,
+        ppiflow_config: '/app/ppiflow/configs/inference_nanobody.yaml',
+        ppiflow_weights_dir: '/mnt/BioModStack/weights/ppiflow',
+        ppiflow_checkpoint_path: '',
+        maturation_anchor_threshold: -5.0,
+        maturation_anchor_distance_cutoff: 8.0,
+        maturation_min_improvement: -1.0,
+        maturation_redesign_temp: 0.1,
+        maturation_redesign_steps: 100,
+        maturation_design_mode: 'full_design',
+        maturation_designs_per_job: 4,
+        maturation_filter_percentile: 0,
+        ppiflow_checkpoint: 'antibody',
+        ppiflow_antigen_chain: '',
+        ppiflow_heavy_chain: '',
+        ppiflow_light_chain: '',
         // Pre-Boltz filter (null = disabled for speed mode, let everything through)
         fampnn_max_psce: null,
         fampnn_max_residue_psce: null,
@@ -112,6 +153,26 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         fampnn_temperature: 0.1,
         fampnn_num_steps: 100,
         fampnn_psce_threshold: 0.3,
+        // PPIFlow maturation (off for balanced)
+        run_maturation: false,
+        ppiflow_start_t: 0.5,
+        ppiflow_samples_per_target: 3,
+        ppiflow_retry_limit: 10,
+        ppiflow_config: '/app/ppiflow/configs/inference_nanobody.yaml',
+        ppiflow_weights_dir: '/mnt/BioModStack/weights/ppiflow',
+        ppiflow_checkpoint_path: '',
+        maturation_anchor_threshold: -5.0,
+        maturation_anchor_distance_cutoff: 8.0,
+        maturation_min_improvement: -1.0,
+        maturation_redesign_temp: 0.1,
+        maturation_redesign_steps: 100,
+        maturation_design_mode: 'full_design',
+        maturation_designs_per_job: 4,
+        maturation_filter_percentile: 0,
+        ppiflow_checkpoint: 'antibody',
+        ppiflow_antigen_chain: '',
+        ppiflow_heavy_chain: '',
+        ppiflow_light_chain: '',
         // Pre-Boltz filter: moderate filtering to save compute
         fampnn_max_psce: 2.5,
         fampnn_max_residue_psce: 5.0,
@@ -153,6 +214,26 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         fampnn_temperature: 0.01,
         fampnn_num_steps: 200,
         fampnn_psce_threshold: 0.2,
+        // PPIFlow maturation (enabled for quality)
+        run_maturation: true,
+        ppiflow_start_t: 0.5,
+        ppiflow_samples_per_target: 3,
+        ppiflow_retry_limit: 10,
+        ppiflow_config: '/app/ppiflow/configs/inference_nanobody.yaml',
+        ppiflow_weights_dir: '/mnt/BioModStack/weights/ppiflow',
+        ppiflow_checkpoint_path: '',
+        maturation_anchor_threshold: -5.0,
+        maturation_anchor_distance_cutoff: 8.0,
+        maturation_min_improvement: -1.0,
+        maturation_redesign_temp: 0.1,
+        maturation_redesign_steps: 100,
+        maturation_design_mode: 'full_design',
+        maturation_designs_per_job: 4,
+        maturation_filter_percentile: 0,
+        ppiflow_checkpoint: 'antibody',
+        ppiflow_antigen_chain: '',
+        ppiflow_heavy_chain: '',
+        ppiflow_light_chain: '',
         // Pre-Boltz filter: stricter filtering for quality runs
         fampnn_max_psce: 2.0,
         fampnn_max_residue_psce: 4.0,
@@ -194,6 +275,26 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         fampnn_temperature: 0.0001,
         fampnn_num_steps: 500,
         fampnn_psce_threshold: 0.15,
+        // PPIFlow maturation (enabled for maximum)
+        run_maturation: true,
+        ppiflow_start_t: 0.5,
+        ppiflow_samples_per_target: 3,
+        ppiflow_retry_limit: 10,
+        ppiflow_config: '/app/ppiflow/configs/inference_nanobody.yaml',
+        ppiflow_weights_dir: '/mnt/BioModStack/weights/ppiflow',
+        ppiflow_checkpoint_path: '',
+        maturation_anchor_threshold: -5.0,
+        maturation_anchor_distance_cutoff: 8.0,
+        maturation_min_improvement: -1.0,
+        maturation_redesign_temp: 0.1,
+        maturation_redesign_steps: 100,
+        maturation_design_mode: 'full_design',
+        maturation_designs_per_job: 4,
+        maturation_filter_percentile: 0,
+        ppiflow_checkpoint: 'antibody',
+        ppiflow_antigen_chain: '',
+        ppiflow_heavy_chain: '',
+        ppiflow_light_chain: '',
         // Pre-Boltz filter: strictest filtering for maximum quality
         fampnn_max_psce: 1.5,
         fampnn_max_residue_psce: 3.0,
@@ -231,6 +332,359 @@ interface QualitySettingsPanelProps {
     preset: QualityPreset;
     onPresetChange: (preset: QualityPreset) => void;
 }
+
+interface PPIFlowSettingsFieldsProps {
+    settings: QualitySettings;
+    onSettingsChange: (settings: QualitySettings) => void;
+}
+
+export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
+    settings,
+    onSettingsChange,
+}) => {
+    const updateSetting = <K extends keyof QualitySettings>(key: K, value: QualitySettings[K]) => {
+        onSettingsChange({
+            ...settings,
+            [key]: value,
+        });
+    };
+
+    const defaultCheckpointPath = `/opt/ppiflow/ckpt/${settings.ppiflow_checkpoint}.ckpt`;
+
+    return (
+        <div className="space-y-4">
+            <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-sm font-medium text-teal-400">
+                    <span>🧩</span>
+                    PPIFlow Maturation
+                    <a
+                        href="https://github.com/Mingchenchen/PPIFlow"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs text-slate-400 hover:text-teal-300 underline"
+                    >
+                        GitHub
+                    </a>
+                </div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                        type="checkbox"
+                        checked={settings.run_maturation}
+                        onChange={(e) => updateSetting('run_maturation', e.target.checked)}
+                        className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-teal-600 focus:ring-teal-500"
+                    />
+                    <span className="text-sm text-slate-300">Enable</span>
+                </label>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+                <div>
+                    <label className="block text-xs text-slate-500 mb-1">
+                        Partial Flow Start t <span className="text-slate-600">({settings.ppiflow_start_t.toFixed(2)})</span>
+                    </label>
+                    <input
+                        type="range"
+                        min={0.3}
+                        max={0.95}
+                        step={0.05}
+                        value={settings.ppiflow_start_t}
+                        onChange={(e) => updateSetting('ppiflow_start_t', parseFloat(e.target.value))}
+                        className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
+                    />
+                    <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                        <span>0.3 (diverse)</span>
+                        <span>0.8</span>
+                        <span>0.95 (refine)</span>
+                    </div>
+                </div>
+
+                <div>
+                    <label className="block text-xs text-slate-500 mb-1">
+                        Samples per Target <span className="text-slate-600">({settings.ppiflow_samples_per_target})</span>
+                    </label>
+                    <input
+                        type="range"
+                        min={1}
+                        max={10}
+                        step={1}
+                        value={settings.ppiflow_samples_per_target}
+                        onChange={(e) => updateSetting('ppiflow_samples_per_target', parseInt(e.target.value))}
+                        className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
+                    />
+                    <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                        <span>1</span>
+                        <span>5</span>
+                        <span>10</span>
+                    </div>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+                <div>
+                    <label className="block text-xs text-slate-500 mb-1">
+                        Retry Limit <span className="text-slate-600">({settings.ppiflow_retry_limit})</span>
+                    </label>
+                    <input
+                        type="range"
+                        min={1}
+                        max={20}
+                        step={1}
+                        value={settings.ppiflow_retry_limit}
+                        onChange={(e) => updateSetting('ppiflow_retry_limit', parseInt(e.target.value))}
+                        className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
+                    />
+                    <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                        <span>1</span>
+                        <span>10</span>
+                        <span>20</span>
+                    </div>
+                </div>
+
+                <div>
+                    <label className="block text-xs text-slate-500 mb-1">
+                        Anchor Distance Cutoff <span className="text-slate-600">({settings.maturation_anchor_distance_cutoff.toFixed(1)} Å)</span>
+                    </label>
+                    <input
+                        type="range"
+                        min={4}
+                        max={12}
+                        step={0.5}
+                        value={settings.maturation_anchor_distance_cutoff}
+                        onChange={(e) => updateSetting('maturation_anchor_distance_cutoff', parseFloat(e.target.value))}
+                        className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
+                    />
+                    <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                        <span>4</span>
+                        <span>8</span>
+                        <span>12</span>
+                    </div>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+                <div>
+                    <label className="block text-xs text-slate-500 mb-1">
+                        Anchor Energy Threshold <span className="text-slate-600">({settings.maturation_anchor_threshold.toFixed(1)})</span>
+                    </label>
+                    <input
+                        type="range"
+                        min={-10}
+                        max={0}
+                        step={0.5}
+                        value={settings.maturation_anchor_threshold}
+                        onChange={(e) => updateSetting('maturation_anchor_threshold', parseFloat(e.target.value))}
+                        className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
+                    />
+                    <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                        <span>-10 (strict)</span>
+                        <span>-5</span>
+                        <span>0 (loose)</span>
+                    </div>
+                </div>
+
+                <div>
+                    <label className="block text-xs text-slate-500 mb-1">
+                        Min Interface Improvement <span className="text-slate-600">({settings.maturation_min_improvement.toFixed(1)})</span>
+                    </label>
+                    <input
+                        type="range"
+                        min={-5}
+                        max={0}
+                        step={0.5}
+                        value={settings.maturation_min_improvement}
+                        onChange={(e) => updateSetting('maturation_min_improvement', parseFloat(e.target.value))}
+                        className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
+                    />
+                    <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                        <span>-5 (strict)</span>
+                        <span>-1</span>
+                        <span>0 (off)</span>
+                    </div>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+                <div>
+                    <label className="block text-xs text-slate-500 mb-1">
+                        Redesign Temperature <span className="text-slate-600">({settings.maturation_redesign_temp.toFixed(4)})</span>
+                    </label>
+                    <input
+                        type="range"
+                        min={-4}
+                        max={0}
+                        step={0.1}
+                        value={Math.log10(settings.maturation_redesign_temp)}
+                        onChange={(e) => updateSetting('maturation_redesign_temp', Math.pow(10, parseFloat(e.target.value)))}
+                        className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
+                    />
+                    <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                        <span>0.0001</span>
+                        <span>0.01</span>
+                        <span>1.0</span>
+                    </div>
+                </div>
+
+                <div>
+                    <label className="block text-xs text-slate-500 mb-1">
+                        Redesign Steps <span className="text-slate-600">({settings.maturation_redesign_steps})</span>
+                    </label>
+                    <input
+                        type="range"
+                        min={50}
+                        max={500}
+                        step={50}
+                        value={settings.maturation_redesign_steps}
+                        onChange={(e) => updateSetting('maturation_redesign_steps', parseInt(e.target.value))}
+                        className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
+                    />
+                    <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                        <span>50</span>
+                        <span>250</span>
+                        <span>500</span>
+                    </div>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+                <div>
+                    <label className="block text-xs text-slate-500 mb-1">
+                        Filter Percentile <span className="text-slate-600">({settings.maturation_filter_percentile || 0}%)</span>
+                    </label>
+                    <input
+                        type="range"
+                        min={0}
+                        max={50}
+                        step={5}
+                        value={settings.maturation_filter_percentile}
+                        onChange={(e) => updateSetting('maturation_filter_percentile', parseInt(e.target.value))}
+                        className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
+                    />
+                    <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                        <span>0 (off)</span>
+                        <span>25</span>
+                        <span>50</span>
+                    </div>
+                </div>
+
+                <div>
+                    <label className="block text-xs text-slate-500 mb-1">Maturation Design Mode</label>
+                    <select
+                        value={settings.maturation_design_mode}
+                        onChange={(e) => updateSetting('maturation_design_mode', e.target.value)}
+                        className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-slate-300"
+                    >
+                        <option value="cdr_only">CDR Only</option>
+                        <option value="cdr_selective">CDR Selective</option>
+                        <option value="framework_allowed">Framework Allowed</option>
+                        <option value="full_design">Full Design</option>
+                    </select>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+                <div>
+                    <label className="block text-xs text-slate-500 mb-1">
+                        Designs per Maturation Job <span className="text-slate-600">({settings.maturation_designs_per_job})</span>
+                    </label>
+                    <input
+                        type="range"
+                        min={1}
+                        max={20}
+                        step={1}
+                        value={settings.maturation_designs_per_job}
+                        onChange={(e) => updateSetting('maturation_designs_per_job', parseInt(e.target.value))}
+                        className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
+                    />
+                    <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                        <span>1</span>
+                        <span>10</span>
+                        <span>20</span>
+                    </div>
+                </div>
+
+                <div>
+                    <label className="block text-xs text-slate-500 mb-1">Checkpoint</label>
+                    <select
+                        value={settings.ppiflow_checkpoint}
+                        onChange={(e) => updateSetting('ppiflow_checkpoint', e.target.value)}
+                        className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-slate-300"
+                    >
+                        <option value="antibody">Antibody</option>
+                        <option value="nanobody">Nanobody</option>
+                        <option value="binder">Binder</option>
+                    </select>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3">
+                <div>
+                    <label className="block text-xs text-slate-500 mb-1">Heavy Chain Override</label>
+                    <input
+                        type="text"
+                        value={settings.ppiflow_heavy_chain}
+                        onChange={(e) => updateSetting('ppiflow_heavy_chain', e.target.value.toUpperCase())}
+                        placeholder="auto"
+                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm text-slate-300 font-mono"
+                    />
+                </div>
+                <div>
+                    <label className="block text-xs text-slate-500 mb-1">Light Chain Override</label>
+                    <input
+                        type="text"
+                        value={settings.ppiflow_light_chain}
+                        onChange={(e) => updateSetting('ppiflow_light_chain', e.target.value.toUpperCase())}
+                        placeholder="auto"
+                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm text-slate-300 font-mono"
+                    />
+                </div>
+                <div>
+                    <label className="block text-xs text-slate-500 mb-1">Antigen Chain Override</label>
+                    <input
+                        type="text"
+                        value={settings.ppiflow_antigen_chain}
+                        onChange={(e) => updateSetting('ppiflow_antigen_chain', e.target.value.toUpperCase())}
+                        placeholder="auto"
+                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm text-slate-300 font-mono"
+                    />
+                </div>
+            </div>
+
+            <div className="space-y-3">
+                <div>
+                    <label className="block text-xs text-slate-500 mb-1">Weights Directory</label>
+                    <input
+                        type="text"
+                        value={settings.ppiflow_weights_dir}
+                        onChange={(e) => updateSetting('ppiflow_weights_dir', e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300 font-mono"
+                    />
+                </div>
+                <div>
+                    <label className="block text-xs text-slate-500 mb-1">Checkpoint Override (optional)</label>
+                    <input
+                        type="text"
+                        value={settings.ppiflow_checkpoint_path}
+                        onChange={(e) => updateSetting('ppiflow_checkpoint_path', e.target.value)}
+                        placeholder={defaultCheckpointPath}
+                        className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300 font-mono"
+                    />
+                    <p className="text-[10px] text-slate-600 mt-1">
+                        Auto path: {defaultCheckpointPath}
+                    </p>
+                </div>
+                <div>
+                    <label className="block text-xs text-slate-500 mb-1">Config Path</label>
+                    <input
+                        type="text"
+                        value={settings.ppiflow_config}
+                        onChange={(e) => updateSetting('ppiflow_config', e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300 font-mono"
+                    />
+                </div>
+            </div>
+        </div>
+    );
+};
 
 export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
     settings,
@@ -586,6 +1040,14 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                 <span>0.5 (permissive)</span>
                             </div>
                         </div>
+                    </div>
+
+                    {/* PPIFlow Maturation */}
+                    <div className="space-y-3 pt-3 border-t border-slate-700/50">
+                        <PPIFlowSettingsFields
+                            settings={settings}
+                            onSettingsChange={onSettingsChange}
+                        />
                     </div>
 
                     {/* Pre-Boltz Filtering (Compute Savings) */}

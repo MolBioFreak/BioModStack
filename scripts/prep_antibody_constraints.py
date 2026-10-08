@@ -21,6 +21,7 @@ HLT Format REMARK labels:
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 from collections import defaultdict
 
@@ -184,9 +185,32 @@ def get_ranges(numbers):
     return ranges
 
 
+def parse_chain_position_spec(spec):
+    """
+    Parse chain-specific positions, e.g., "H27,H30-32,L50".
+    Returns dict: chain -> sorted list of positions.
+    """
+    if not spec:
+        return {}
+    mapping = {}
+    for token in spec.split(','):
+        token = token.strip()
+        if not token:
+            continue
+        match = re.match(r'^([A-Za-z])(\d+)(?:-(\d+))?$', token)
+        if not match:
+            print(f"Warning: Invalid extra_fixed_positions token '{token}', skipping")
+            continue
+        chain, start, end = match.groups()
+        start = int(start)
+        end = int(end) if end else start
+        mapping.setdefault(chain.upper(), set()).update(range(start, end + 1))
+    return {k: sorted(v) for k, v in mapping.items()}
+
+
 def compute_fixed_residues(mode, chains_data, cdr_dict, tetrad_positions, 
                            selected_loops, protect_tetrad, antibody_chains,
-                           extra_protected_positions=None):
+                           extra_protected_positions=None, extra_fixed_by_chain=None):
     """
     Compute which residues should be fixed based on design mode.
     
@@ -199,12 +223,14 @@ def compute_fixed_residues(mode, chains_data, cdr_dict, tetrad_positions,
         protect_tetrad: bool, whether to always fix tetrad positions
         antibody_chains: list of antibody chain IDs (e.g., ['H', 'L'])
         extra_protected_positions: list of additional PDB positions to protect on chain H
+        extra_fixed_by_chain: dict of chain_id -> list of PDB positions to always fix
     
     Returns:
         dict: chain_id -> list of FIXED residue numbers
     """
     fixed_residues = {}
     extra_protected = set(extra_protected_positions or [])
+    extra_fixed_by_chain = extra_fixed_by_chain or {}
     
     # Always fix target chain(s) completely
     target_chains = [c for c in chains_data.keys() if c not in antibody_chains]
@@ -259,6 +285,11 @@ def compute_fixed_residues(mode, chains_data, cdr_dict, tetrad_positions,
         if chain == 'H' and mode != 'full_design':
             valid_extra = extra_protected & all_residues
             fixed.update(valid_extra)
+
+        # Add chain-specific extra fixed positions (e.g., anchors)
+        if chain in extra_fixed_by_chain:
+            valid_extra = set(extra_fixed_by_chain[chain]) & all_residues
+            fixed.update(valid_extra)
         
         if fixed:
             fixed_residues[chain] = sorted(fixed)
@@ -289,6 +320,8 @@ def main():
                         help="Comma-separated list of antibody chain IDs (default: H,L)")
     parser.add_argument("--protected_positions", default="",
                         help="Comma-separated list of additional IMGT positions to protect (e.g., '23,72,73,104')")
+    parser.add_argument("--extra_fixed_positions", default="",
+                        help="Chain-specific PDB positions to always fix (e.g., 'H27,H30-33,L50')")
     parser.add_argument("--protect_fr_contacts", default="false",
                         help="Protect all FR contact hotspots from Zavrtanik 2018 (default: false)")
     parser.add_argument("--protect_disulfides", default="true",
@@ -311,6 +344,7 @@ def main():
     
     # Build extra protected positions list (IMGT numbering)
     extra_protected_imgt = []
+    extra_fixed_by_chain = parse_chain_position_spec(args.extra_fixed_positions)
     
     # Add user-specified positions
     if args.protected_positions.strip():
@@ -342,6 +376,8 @@ def main():
     print(f"Antibody chains: {antibody_chains}")
     if extra_protected_imgt:
         print(f"Extra protected IMGT positions: {sorted(extra_protected_imgt)}")
+    if extra_fixed_by_chain:
+        print(f"Extra fixed positions by chain: {extra_fixed_by_chain}")
 
     for pdb in pdb_files:
         pdb_name = pdb.stem
@@ -364,6 +400,14 @@ def main():
                 residues = chains_data[chain]
                 ranges = get_ranges(residues)
                 for r_start, r_end in ranges:
+                    fampnn_constraints.append(f"{chain}{r_start}-{r_end}")
+
+            # Add extra fixed positions (anchors) if provided
+            for chain, residues in extra_fixed_by_chain.items():
+                if chain not in chains_data:
+                    continue
+                valid = set(residues) & set(chains_data[chain])
+                for r_start, r_end in get_ranges(valid):
                     fampnn_constraints.append(f"{chain}{r_start}-{r_end}")
             
             fampnn_str = ",".join(fampnn_constraints)
@@ -402,7 +446,8 @@ def main():
             selected_loops=selected_loops,
             protect_tetrad=protect_tetrad,
             antibody_chains=antibody_chains,
-            extra_protected_positions=extra_protected_pdb
+            extra_protected_positions=extra_protected_pdb,
+            extra_fixed_by_chain=extra_fixed_by_chain
         )
         
         # Generate FAMPNN constraints (chain + residue ranges)

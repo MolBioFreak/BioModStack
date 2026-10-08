@@ -5,7 +5,7 @@
  * Allows selecting PDBs from previous job results, presets, or RCSB
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchInputPresets, fetchDesigns } from '../lib/api';
 import type { Job } from '../lib/api';
@@ -24,6 +24,7 @@ export interface SelectedTarget {
 interface TargetAntigenSelectorProps {
     onSelect: (target: SelectedTarget | null) => void;
     selectedTarget?: SelectedTarget | null;
+    initialTab?: 'upload' | 'runs' | 'presets' | 'rcsb';
 }
 
 interface PdbPreset {
@@ -34,8 +35,8 @@ interface PdbPreset {
     category: string;
 }
 
-export function TargetAntigenSelector({ onSelect, selectedTarget }: TargetAntigenSelectorProps) {
-    const [activeTab, setActiveTab] = useState<'upload' | 'runs' | 'presets' | 'rcsb'>('upload');
+export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab }: TargetAntigenSelectorProps) {
+    const [activeTab, setActiveTab] = useState<'upload' | 'runs' | 'presets' | 'rcsb'>(initialTab ?? 'upload');
     const [pdbIdInput, setPdbIdInput] = useState('');
     const [fetchError, setFetchError] = useState<string | null>(null);
     const [selectedJob, setSelectedJob] = useState<Job | null>(null);
@@ -44,6 +45,9 @@ export function TargetAntigenSelector({ onSelect, selectedTarget }: TargetAntige
     const [designsPage, setDesignsPage] = useState(0);
     const [sortBy, setSortBy] = useState<'plddt' | 'iptm' | 'created_at'>('plddt');
     const [sortDesc, setSortDesc] = useState(true);
+    const [reingestStatus, setReingestStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
+    const [reingestMessage, setReingestMessage] = useState<string | null>(null);
+    const reingestAttempted = useRef<Set<string>>(new Set());
     const DESIGNS_PER_PAGE = 50;
     const queryClient = useQueryClient();
 
@@ -51,6 +55,12 @@ export function TargetAntigenSelector({ onSelect, selectedTarget }: TargetAntige
     useEffect(() => {
         setDesignsPage(0);
     }, [selectedJob]);
+
+    useEffect(() => {
+        if (initialTab) {
+            setActiveTab(initialTab);
+        }
+    }, [initialTab]);
 
     // Debounce search input
     useEffect(() => {
@@ -87,6 +97,7 @@ export function TargetAntigenSelector({ onSelect, selectedTarget }: TargetAntige
         queryKey: ['designs', selectedJob?.id, designsPage, sortBy, sortDesc],
         queryFn: () => fetchDesigns({
             job_id: selectedJob?.id,
+            include_children: true,
             limit: DESIGNS_PER_PAGE,
             offset: designsPage * DESIGNS_PER_PAGE,
             sort_by: sortBy === 'created_at' ? undefined : sortBy,
@@ -98,6 +109,38 @@ export function TargetAntigenSelector({ onSelect, selectedTarget }: TargetAntige
     const designs = designsResponse?.designs ?? (designsData as any)?.designs ?? [];
     const totalDesigns = designsResponse?.total ?? 0;
     const totalPages = Math.ceil(totalDesigns / DESIGNS_PER_PAGE);
+
+    const triggerReingest = async (jobId: string) => {
+        try {
+            setReingestStatus('running');
+            setReingestMessage('Re-ingesting designs…');
+            const res = await fetch(`/api/jobs/${jobId}/reingest?include_children=true`, { method: 'POST' });
+            const rawText = await res.text();
+            let data: any = null;
+            try {
+                data = rawText ? JSON.parse(rawText) : null;
+            } catch {
+                data = { message: rawText };
+            }
+            if (!res.ok) {
+                throw new Error(data?.detail || data?.message || 'Re-ingest failed');
+            }
+            setReingestStatus('done');
+            setReingestMessage(data?.message || 'Re-ingest complete');
+            queryClient.invalidateQueries({ queryKey: ['designs'] });
+        } catch (err: any) {
+            setReingestStatus('error');
+            setReingestMessage(err?.message || 'Re-ingest failed');
+        }
+    };
+
+    useEffect(() => {
+        if (!selectedJob || designsLoading) return;
+        if (designs.length === 0 && selectedJob.design_count > 0 && !reingestAttempted.current.has(selectedJob.id)) {
+            reingestAttempted.current.add(selectedJob.id);
+            triggerReingest(selectedJob.id);
+        }
+    }, [selectedJob, designsLoading, designs.length]);
 
     // Fetch preset PDBs
     const { data: presetsData } = useQuery({
@@ -260,6 +303,11 @@ export function TargetAntigenSelector({ onSelect, selectedTarget }: TargetAntige
                                 <div className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white">
                                     <span className="ml-2 text-slate-400 text-xs">({selectedJob.design_count} designs)</span>
                                 </div>
+                                {reingestMessage && (
+                                    <div className={`text-xs ${reingestStatus === 'error' ? 'text-red-400' : 'text-slate-400'}`}>
+                                        {reingestMessage}
+                                    </div>
+                                )}
 
                                 {/* Sort Controls */}
                                 <div className="flex gap-2 text-xs">
@@ -284,8 +332,15 @@ export function TargetAntigenSelector({ onSelect, selectedTarget }: TargetAntige
                                     {designsLoading ? (
                                         <div className="text-center py-2 text-slate-500 text-sm">Loading designs...</div>
                                     ) : designs.length === 0 ? (
-                                        <div className="text-center py-2 text-slate-500 text-sm">
-                                            No designs in this job
+                                        <div className="text-center py-2 text-slate-500 text-sm space-y-2">
+                                            <div>No designs in this job</div>
+                                            <button
+                                                onClick={() => selectedJob && triggerReingest(selectedJob.id)}
+                                                className="px-3 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 rounded"
+                                                disabled={reingestStatus === 'running'}
+                                            >
+                                                {reingestStatus === 'running' ? 'Re-ingesting…' : 'Re-ingest Designs'}
+                                            </button>
                                         </div>
                                     ) : (
                                         designs.map((design: any) => (

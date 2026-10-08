@@ -6,6 +6,7 @@ include { FilterRFD ; RunRFDiffusion } from './modules/rfdiffusion.nf'
 include { PrepRFD3Input ; RunRFD3 ; FilterRFD3 } from './modules/rfd3.nf'
 include { RunRF3 ; FilterRF3 } from './modules/rf3.nf'
 include { PrepFAMPNN ; FilterFAMPNN ; RunFAMPNN } from './modules/fampnn.nf'
+include { IdentifyAnchorResidues ; RunPartialFlow ; PrepMaturationRedesign ; RunMaturationFAMPNN ; ScoreMaturationImprovement ; FilterByMaturation } from './modules/ppiflow.nf'
 include { FilterMPNN ; PrepMPNN ; RunMPNN } from './modules/proteinmpnn.nf'
 include { AlignAF2 ; FilterAF2 ; RunAF2 } from './modules/af2.nf'
 include { AnalyseBestDesigns } from './modules/analysis.nf'
@@ -26,6 +27,7 @@ include { BoltzFromComplex } from './modules/structure_prediction.nf'
 include { RF3FromSequence } from './modules/structure_prediction.nf'
 include { structure_prediction_wf } from './modules/structure_prediction.nf'
 include { OpenMMRelaxation ; OpenMMScore } from './modules/openmm.nf'
+include { FrustrampnnQC ; AggregateFrustrationReports } from './modules/frustrampnn.nf'
 
 // Oligo Designer (RFDpoly multi-polymer design)
 include { OLIGO_DESIGNER } from './workflows/oligo_design.nf'
@@ -289,6 +291,68 @@ workflow {
     }
 
     /////////////////////////////
+    // PPIFlow MATURATION CHILD //
+    /////////////////////////////
+    if (params.rfd_mode == 'maturation_child') {
+        println("Running PPIFlow Maturation (Child Job)")
+        println("* PDB paths: ${params.pdb_paths}")
+        println("* GPU: ${params.gpu_id}")
+
+        if (!params.pdb_paths) {
+            error("PDB paths required for maturation_child mode")
+        }
+
+        def pdb_paths_raw = params.pdb_paths.toString()
+        def pdb_list = pdb_paths_raw.split(',').collect { it.strip().replaceAll(/[\[\]'"]/, '') }.findAll { it }.collect { file(it) }
+
+        if (pdb_list.isEmpty()) {
+            error("No valid PDB files found in pdb_paths: ${params.pdb_paths}")
+        }
+
+        println("* Processing ${pdb_list.size()} PDBs")
+
+        def anchor_inputs = Channel.from(pdb_list).map { pdb ->
+            def meta = [id: pdb.baseName]
+            tuple(meta, pdb)
+        }
+
+        IdentifyAnchorResidues(anchor_inputs)
+        RunPartialFlow(IdentifyAnchorResidues.out.anchor_inputs)
+
+        def redesign_join = RunPartialFlow.out.backbones.join(IdentifyAnchorResidues.out.anchor_inputs)
+        def redesign_inputs = redesign_join.map { meta, backbone, original_pdb, anchors_json, cdr_positions ->
+            tuple(meta, backbone, anchors_json, original_pdb)
+        }
+
+        PrepMaturationRedesign(redesign_inputs.map { meta, backbone, anchors_json, original_pdb ->
+            tuple(meta, backbone, anchors_json)
+        })
+
+        RunMaturationFAMPNN(PrepMaturationRedesign.out.prep)
+
+        def original_lookup = redesign_inputs.map { meta, backbone, anchors_json, original_pdb ->
+            tuple(meta, original_pdb)
+        }
+
+        def score_inputs = RunMaturationFAMPNN.out.redesigned.join(original_lookup)
+            .map { meta, matured_pdb, matured_json, original_pdb ->
+                tuple(meta, original_pdb, matured_pdb)
+            }
+
+        ScoreMaturationImprovement(score_inputs)
+
+        def filter_inputs = ScoreMaturationImprovement.out.scores.join(RunMaturationFAMPNN.out.redesigned)
+            .map { meta, score_json, matured_pdb, matured_json ->
+                tuple(meta, matured_pdb, score_json)
+            }
+
+        FilterByMaturation(filter_inputs)
+
+        println("PPIFlow maturation child job complete")
+        return null
+    }
+
+    /////////////////////////////
     // ANTIBODY DESIGN STACK   //
     /////////////////////////////
     if (params.rfd_mode in ['structure_prediction', 'inverse_folding', 'stability_prediction', 'de_novo', 'antibody_denovo_pipeline']) {
@@ -377,9 +441,10 @@ workflow {
 
         // Create parallel job channels (like structure_prediction workflow)
         def job_indices = Channel.from(0..<numParallelJobs)
+        def msa_file = params.msa_path ? file(params.msa_path) : file("${projectDir}/NO_MSA")
         def complex_ch = job_indices.map { idx ->
             def jobName = numParallelJobs > 1 ? "${complex_name}_job${idx}" : complex_name
-            tuple(jobName, complex_json, file("${projectDir}/NO_MSA"))
+            tuple(jobName, complex_json, msa_file)
         }
         BoltzFromComplex(complex_ch)
 
@@ -487,6 +552,15 @@ workflow {
             // Fallback for unknown method, default to Boltz inside workflow anyway
             structure_prediction_wf(parallel_jobs_ch)
             structure_prediction_wf.out.structures.flatten().collect().set { final_pdbs }
+        }
+
+        // Optional post-run FrustraMPNN QC
+        if (params.run_frustrampnn == true) {
+            def frustra_input = final_pdbs
+                .flatten()
+                .map { pdb -> tuple([id: pdb.baseName], pdb) }
+            FrustrampnnQC(frustra_input)
+            AggregateFrustrationReports(FrustrampnnQC.out.summary.collect())
         }
 
         // Skip all other stages for sequence-only prediction

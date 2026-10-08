@@ -63,6 +63,10 @@ async def ingest_job_results(
     output_path = Path(output_dir)
     if not output_path.is_absolute():
         output_path = PROJECT_ROOT / output_dir
+
+    if not output_path.exists():
+        print(f"[Ingester] Output dir not found: {output_path}")
+        return 0
     
     csv_path = output_path / "results" / "all_designs.csv"
     
@@ -175,7 +179,9 @@ async def ingest_loose_files(
     # RF3 outputs in pdb_files/rf3/output/*/
     search_paths = [
         output_path / "pdb_files" / "predictions",
+        output_path / "pdb_files" / "validated_designs",
         output_path / "pdb_files",
+        output_path / "collected",
         output_path,
     ]
     
@@ -201,7 +207,8 @@ async def ingest_loose_files(
         if not search_dir.exists():
             continue
         
-        json_files = list(search_dir.glob("confidence_*.json"))
+        recursive_scan = search_dir.name in {"pdb_files", "validated_designs", "collected"} or "collected" in search_dir.parts
+        json_files = list(search_dir.rglob("confidence_*.json")) if recursive_scan else list(search_dir.glob("confidence_*.json"))
         print(f"[Ingester DEBUG] {search_dir}: {len(json_files)} confidence JSONs found")
         
         # BOLTZ2: Look for confidence_*.json patterns
@@ -343,7 +350,8 @@ async def ingest_loose_files(
                 print(f"[Ingester] Error parsing Boltz2 file {json_file}: {e}")
         
         # RF3: Look for *_summary_confidences.json patterns
-        for json_file in search_dir.glob("*_summary_confidences.json"):
+        rf3_jsons = list(search_dir.rglob("*_summary_confidences.json")) if recursive_scan else list(search_dir.glob("*_summary_confidences.json"))
+        for json_file in rf3_jsons:
             try:
                 # Filename format: DESIGNNAME_summary_confidences.json
                 design_name = json_file.stem.replace("_summary_confidences", "")
@@ -444,7 +452,8 @@ async def ingest_loose_files(
             if not search_dir.exists():
                 continue
                 
-            for pdb_file in search_dir.glob("*.pdb"):
+            pdb_iter = search_dir.rglob("*.pdb") if recursive_scan else search_dir.glob("*.pdb")
+            for pdb_file in pdb_iter:
                 design_name = pdb_file.stem
                 if design_name in ingested_names:
                     continue
@@ -493,6 +502,10 @@ def extract_pdb_files(output_path: Path) -> Path:
     import tarfile
     
     pdb_dir = output_path / "pdb_files"
+
+    if not output_path.exists():
+        print(f"[Ingester] Output path missing, skipping extraction: {output_path}")
+        return pdb_dir
     
     # Skip if already extracted
     if pdb_dir.exists() and any(pdb_dir.glob("*.pdb")):
@@ -535,6 +548,12 @@ def find_pdb_path(output_path: Path, design_name: str) -> str:
         pdb_file = pdb_files / f"{design_name}.pdb"
         if pdb_file.exists():
             return str(pdb_file)
+        # Check validated designs subdir
+        validated_dir = pdb_files / "validated_designs"
+        if validated_dir.exists():
+            pdb_file = validated_dir / f"{design_name}.pdb"
+            if pdb_file.exists():
+                return str(pdb_file)
     
     # Check in best_designs directory
     best_designs = output_path / "best_designs"
