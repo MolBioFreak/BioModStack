@@ -129,15 +129,30 @@ it('retains the original fallback key through timeout/404 reconciliation without
     expect(admissions).toHaveLength(1); expect(admissions[0].body).toEqual(original);
     expect(view.entropy).toHaveBeenCalledTimes(2);
 });
-it.each(['missing crypto', 'missing getRandomValues', 'throwing getRandomValues', 'throwing randomUUID'])('reports %s before either caller sends a request', async mode => {
+it.each(['missing crypto', 'missing getRandomValues', 'throwing getRandomValues', 'throwing randomUUID'])('refuses normal action with %s but transports independent addressed Stops', async mode => {
     const view = await newDocument();
     vi.stubGlobal('crypto', mode === 'missing crypto' ? undefined : mode === 'missing getRandomValues' ? {} : mode === 'throwing randomUUID'
         ? { randomUUID: () => { throw new Error('entropy unavailable'); } }
         : { getRandomValues: () => { throw new Error('entropy unavailable'); } });
-    await view.submit(); await view.click('Stop X');
+    await view.submit();
     expect(api.post).not.toHaveBeenCalled();
     expect(view.container.textContent).toContain('Request not sent: this browser could not generate a secure request identity. Existing requests are unchanged.');
     expect(view.panel().querySelectorAll('[data-request-key]')).toHaveLength(0);
+    await view.click('Stop X'); await view.click('Stop X');
+    expect(admissions).toHaveLength(0);
+    expect(api.post).toHaveBeenCalledTimes(2);
+    for (const [index, [url, body]] of vi.mocked(api.post).mock.calls.entries()) {
+        expect(url).toContain('/interrupts/oem.x.stop');
+        expect(body).toEqual({
+            schema_version: 'bioxp.operator_interrupt_request.v1', expected_connection_generation: 7,
+            idempotency_key: `bioxp-stop-${index + 1}`,
+            reason: 'BMS operator requested recovered-OEM X STOP',
+            observed_ownership_generation: catalog.dashboard.ownership_generation,
+            observed_board_epoch_by_board: {},
+        });
+    }
+    // Sending Stop must not erase the preceding normal-action refusal.
+    expect(view.container.textContent).toContain('Request not sent: this browser could not generate a secure request identity. Existing requests are unchanged.');
 });
 it('uses randomUUID without requiring getRandomValues', async () => {
     const view = await newDocument();
@@ -153,10 +168,12 @@ it('does not rekey an uncertain request when entropy later fails', async () => {
     const key = admissions[0].body.idempotency_key;
     await act(async () => admissions[0].reject(new Error('timeout'))); await advance();
     vi.stubGlobal('crypto', {}); await view.submit(); await view.click('Stop X'); await advance(4001);
-    expect(admissions).toHaveLength(1); expect(api.post).toHaveBeenCalledTimes(1);
+    expect(admissions).toHaveLength(1); expect(api.post).toHaveBeenCalledTimes(2);
+    expect(api.post).toHaveBeenLastCalledWith(expect.stringContaining('/interrupts/oem.x.stop'), expect.objectContaining({ idempotency_key: 'bioxp-stop-1' }));
+    expect(admissions[0].body.idempotency_key).toBe(key);
     expect(view.panel().textContent).toContain('admission uncertain');
     expect(view.panel().querySelectorAll('[data-request-key]')).toHaveLength(1);
     for (const [url] of vi.mocked(api.get).mock.calls.filter(([url]) => url.includes('/requests/'))) expect(url).toContain(`/requests/${key}`);
     lookup = { ...receipt, terminal: true, status: 'completed', completion_class: 'completed' }; await advance(4001);
-    expect(view.panel().textContent).not.toContain('admission uncertain'); expect(api.post).toHaveBeenCalledTimes(1);
+    expect(view.panel().textContent).not.toContain('admission uncertain'); expect(api.post).toHaveBeenCalledTimes(2);
 });

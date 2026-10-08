@@ -145,9 +145,12 @@ const nextIdempotencyKey = (prefix: string): string | null => {
             const bytes = crypto.getRandomValues(new Uint8Array(16));
             return `${prefix}-${Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')}`;
         }
-    } catch { /* No request may be sent with an invented or weak identity. */ }
+    } catch { /* Normal actions must refuse unavailable secure identity. */ }
     return null;
 };
+// Preserve the legacy interrupt-only escape hatch when secure entropy fails.
+// This counter is independent within a document, not across document lifetimes.
+let fallbackIdempotencySequence = 0;
 
 const CANONICAL_DECK_ACTION_IDS = new Set([
     'oem.deck.move_to_location',
@@ -866,8 +869,7 @@ export function BioXpCockpit() {
     ) => {
         if (!linkConnected || generation <= 0 || interruptPending(actionId)) return;
         if (actionId === 'oem.abort_all' && v2InterruptActionById(actionId)?.enabled !== true) return;
-        const idempotencyKey = createRequestKey('bioxp-stop');
-        if (idempotencyKey === null) return;
+        const idempotencyKey = nextIdempotencyKey('bioxp-stop') ?? `bioxp-stop-${++fallbackIdempotencySequence}`;
         interruptMutation(actionId).mutate({
             actionId,
             request: {
