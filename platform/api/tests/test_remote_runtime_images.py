@@ -359,6 +359,27 @@ async def test_worker_helper_packages_required_lifecycle_peer(tmp_path, local_tr
     assert result.stdout.strip() == str(installed.with_name('runtime_image_lifecycle.py'))
 
 
+def test_warm_image_ingest_hashes_only_lease_and_rejects_corruption(tmp_path, monkeypatch):
+    store, source, item = publish(tmp_path)
+    lifecycle = tool.runtime_lifecycle()
+    real = lifecycle.verify_image
+    hashes = []
+
+    def counted(path, digest):
+        hashes.append(1)
+        return real(path, digest)
+
+    monkeypatch.setattr(lifecycle, 'verify_image', counted)
+    assert store.ingest_runtime(item, source)['cache_hit'] is True
+    assert len(hashes) == 1
+    obj = store.image_path(item)
+    obj.chmod(0o600)
+    obj.write_bytes(b'x' * item['size_bytes'])
+    obj.chmod(0o400)
+    with pytest.raises((RuntimeError, ValueError)):
+        store.ingest_runtime(item, source)
+
+
 def test_image_publication_isolated_and_downstream_publish_reuses_inode(tmp_path):
     store, source, item = publish(tmp_path)
     obj = store.image_path(item)

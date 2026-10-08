@@ -92,7 +92,34 @@ async def _install_helper(connection, check_fence, helper_name='bms_artifact_cac
         payloads['bms_hf_transfer.py'] = (Path(__file__).parents[2] / 'tools/bms_hf_transfer.py').read_bytes()
     generation = hashlib.sha256(b''.join(payloads.values())).hexdigest()
     destination = f'{connection.remote_root}/runner/cache-{generation}/{helper_name}'
-    # Small source modules: stdin transfers, each verified before atomic publication.
+    # A generation is content-addressed, but the remote directory is not a
+    # trust boundary: check all installed bytes on every call, then transfer
+    # only missing/mismatched modules. This avoids repeated stdin uploads and
+    # atomic replaces of an already warm helper without trusting a local flag.
+    digests = {name: hashlib.sha256(payload).hexdigest() for name, payload in payloads.items()}
+    probe = """import hashlib,os,pathlib,stat,sys
+root=pathlib.Path(sys.argv[1]);names=sys.argv[2:];valid=[]
+for pair in names:
+ name,expected=pair.split(':',1)
+ try:
+  fd=os.open(root/name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+  try:
+   if not stat.S_ISREG(os.fstat(fd).st_mode): continue
+   h=hashlib.sha256()
+   while chunk:=os.read(fd,1048576): h.update(chunk)
+   if h.hexdigest()==expected: valid.append(name)
+  finally: os.close(fd)
+ except (OSError,ValueError): pass
+print(' '.join(valid))
+"""
+    await check_fence()
+    result = await run_remote(connection, ['python3', '-c', probe, str(Path(destination).parent),
+                                           *[f'{name}:{digest}' for name, digest in digests.items()]])
+    await check_fence()
+    output = result.stdout.decode() if isinstance(result.stdout, bytes) else result.stdout
+    valid = set(output.strip().split())
+    if not valid <= payloads.keys():
+        raise ValueError('Unexpected helper probe response')
 
     script = """import hashlib,os,pathlib,sys,tempfile
 p=pathlib.Path(sys.argv[1]);expected=sys.argv[2];data=sys.stdin.buffer.read()
@@ -110,6 +137,8 @@ finally:
  if os.path.exists(t): os.unlink(t)
 """
     for name, payload in payloads.items():
+        if name in valid:
+            continue
         await check_fence()
         path = str(Path(destination).with_name(name))
         await run_remote(connection, ['python3', '-c', script, path,
