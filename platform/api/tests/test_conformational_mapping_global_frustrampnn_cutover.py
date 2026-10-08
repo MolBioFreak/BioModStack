@@ -840,6 +840,7 @@ def test_cm_preparer_fans_in_every_producer_with_exact_candidate_identity_and_ca
         assert sorted(path.name for path in candidate_root.iterdir()) == [
             "canonical_source.pdb",
             "frustrampnn_structure_map_v1.json",
+            "original_source.pdb",
             "workflow_component_request_v3.json",
         ]
 
@@ -1145,13 +1146,14 @@ def test_cm_nextflow_wires_every_candidate_through_canonical_v2_and_no_direct_ru
     assert "CONFORMATIONAL_MAPPING_CONFORNETS" in workflow
     assert "CONFORMATIONAL_MAPPING_IMPORT" in workflow
     assert "PrepareConformationalMappingFrustraMPNNV2" in workflow
-    assert "SchedulerFrustraMPNNParentFanout" in workflow
+    assert "NativePreparedFrustraMPNNParent" in workflow
+    assert "SchedulerFrustraMPNNParentFanout" not in workflow
     assert "CanonicalFrustraMPNNV2(" not in workflow
-    assert "SchedulerFrustraMPNNParentFanout.out.result_bundles" in workflow
+    assert "NativePreparedFrustraMPNNParent.out.result_bundles" in workflow
     assert "CanonicalConformationalAnalysisPlaneV2" in workflow
     assert "flatMap" in workflow
-    assert "workflow_component_request_v3.json" in workflow
-    assert "canonical_source.pdb" in workflow
+    assert "prepared_dir.resolve(candidate.candidate_id.toString())" in workflow
+    assert "sourceUpload" not in workflow
     assert "frustrampnn_structure_map_v1.json" in (
         root / "scripts" / "prepare_conformational_mapping_frustrampnn_v2.py"
     ).read_text(encoding="utf-8")

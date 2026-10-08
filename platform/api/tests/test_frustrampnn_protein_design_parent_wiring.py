@@ -40,7 +40,7 @@ def _pdb(serial: int = 1) -> bytes:
 def test_protein_design_has_one_canonical_component_and_no_legacy_owner() -> None:
     workflow = _workflow()
 
-    assert "include { SchedulerFrustraMPNNParentFanout } from '../modules/frustrampnn_parent_fanout.nf'" in workflow
+    assert "include { NativeFrustraMPNNParentFanout as SchedulerFrustraMPNNParentFanout } from '../modules/frustrampnn_native_parent.nf'" in workflow
     assert workflow.count("SchedulerFrustraMPNNParentFanout(") == 1
     assert "CanonicalFrustraMPNNV2(" not in workflow
     assert "CanonicalFrustraMPNN(" not in workflow
@@ -87,7 +87,7 @@ def test_plain_pdb_projection_and_scheduler_owned_terminal_reporting() -> None:
     workflow = _workflow()
 
     assert "terminal_designs.map { candidate_meta, structure -> structure }" in workflow
-    assert "SchedulerFrustraMPNNParentFanout" in workflow
+    assert "NativeFrustraMPNNParentFanout" in workflow
     assert "ReportProteinDesignFrustraMPNNNotRequested" in workflow
     assert "ReportProteinDesignFrustraMPNNComplete" in workflow
     assert "params.frustrampnn_requiredness ?: 'required'" in workflow
