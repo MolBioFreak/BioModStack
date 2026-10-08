@@ -13,9 +13,76 @@ if str(API_ROOT) not in sys.path:
 from services.nextflow import build_nextflow_command
 
 
+NGS_WORKFLOW = REPO_ROOT / "workflows" / "ngs" / "nanopore_methylation.nf"
+NGS_METHYLATION_ENTRYPOINT = REPO_ROOT / "workflows" / "ngs" / "ont_methylation_analysis.nf"
+NGS_MODULE_ROOT = REPO_ROOT / "modules" / "ngs"
+
+
 def test_ngs_entrypoint_files_exist() -> None:
     assert (REPO_ROOT / "ngs.nf").exists()
-    assert (REPO_ROOT / "workflows" / "nanopore_methylation.nf").exists()
+    assert NGS_WORKFLOW.exists()
+    assert NGS_METHYLATION_ENTRYPOINT.exists()
+
+
+def test_ngs_workflow_lives_under_ngs_workflows_namespace() -> None:
+    assert NGS_WORKFLOW.exists()
+    assert not (REPO_ROOT / "workflows" / "nanopore_methylation.nf").exists()
+    assert "./workflows/ngs/nanopore_methylation.nf" in (REPO_ROOT / "ngs.nf").read_text(encoding="utf-8")
+
+
+def test_ngs_process_modules_live_under_ngs_module_namespace() -> None:
+    expected_modules = (
+        "dorado_basecall.nf",
+        "dorado_align.nf",
+        "bam_prepare.nf",
+        "fastq_align.nf",
+        "fastq_plasmid_qc.nf",
+        "fastq_dimer_qc.nf",
+        "modkit_pileup.nf",
+        "modkit_summary.nf",
+        "clone_validation.nf",
+    )
+    for module_name in expected_modules:
+        assert (NGS_MODULE_ROOT / module_name).exists(), module_name
+
+
+def test_nanopore_workflow_uses_ngs_module_namespace() -> None:
+    workflow = NGS_WORKFLOW.read_text(encoding="utf-8")
+    expected_includes = (
+        "../../modules/ngs/dorado_basecall.nf",
+        "../../modules/ngs/dorado_align.nf",
+        "../../modules/ngs/bam_prepare.nf",
+        "../../modules/ngs/fastq_align.nf",
+        "../../modules/ngs/fastq_plasmid_qc.nf",
+        "../../modules/ngs/modkit_pileup.nf",
+        "../../modules/ngs/modkit_summary.nf",
+        "../../modules/ngs/clone_validation.nf",
+    )
+    for include_path in expected_includes:
+        assert include_path in workflow, include_path
+    assert "../modules/dorado.nf" not in workflow
+    assert "../../modules/dorado.nf" not in workflow
+
+
+def test_ngs_is_explicitly_isolated_from_main_entrypoint() -> None:
+    main_nf = (REPO_ROOT / "main.nf").read_text(encoding="utf-8").lower()
+    ngs_nf = (REPO_ROOT / "ngs.nf").read_text(encoding="utf-8").lower()
+
+    forbidden_main_terms = (
+        "nanopore",
+        "dorado",
+        "modkit",
+        "methylation",
+        "clone_validation",
+        "fastq",
+        "bam_path",
+        "reference_fasta",
+        "ngs.nf",
+    )
+    assert not any(term in main_nf for term in forbidden_main_terms)
+
+    assert "main.nf" not in ngs_nf
+    assert "include { nanopore_methylation }" in ngs_nf
 
 
 def test_build_nextflow_command_routes_nanopore_to_ngs_entrypoint() -> None:
@@ -35,8 +102,8 @@ def test_build_nextflow_command_routes_nanopore_to_ngs_entrypoint() -> None:
 
     joined = " ".join(cmd)
 
-    assert cmd[:4] == ["nextflow", "run", "ngs.nf", "-profile"]
-    assert "nanopore_methylation,workstation_ryzen7960x" in cmd
+    assert cmd[:4] == ["nextflow", "run", "workflows/ngs/ont_methylation_analysis.nf", "-profile"]
+    assert "ont_methylation_analysis,workstation_ryzen7960x" in cmd
     assert "--pod5_dir /tmp/pod5" in joined
     assert "--reference_fasta /tmp/reference.fasta" in joined
     assert "--dorado_model sup" in joined
@@ -58,15 +125,15 @@ def test_build_nextflow_command_routes_nanopore_resume_to_ngs_entrypoint() -> No
 
     joined = " ".join(cmd)
 
-    assert cmd[:4] == ["nextflow", "run", "ngs.nf", "-profile"]
+    assert cmd[:4] == ["nextflow", "run", "workflows/ngs/ont_methylation_analysis.nf", "-profile"]
     assert "-w /tmp/work-ngs" in joined
     assert "-resume" in cmd
     assert "--bam_path /tmp/input.bam" in joined
 
 
 def test_fastq_plasmid_qc_declares_manifest_and_per_base_support_outputs() -> None:
-    dorado_module = (REPO_ROOT / "modules" / "dorado.nf").read_text(encoding="utf-8")
-    fastq_block = dorado_module.split("process FastqPlasmidQC", 1)[1].split("process FastqMultimerQC", 1)[0]
+    fastq_module = (NGS_MODULE_ROOT / "fastq_plasmid_qc.nf").read_text(encoding="utf-8")
+    fastq_block = fastq_module.split("process FastqPlasmidQC", 1)[1]
 
     assert 'path "per_base_support.tsv", emit: per_base_support' in fastq_block
     assert 'path "qc_manifest.json", emit: qc_manifest' in fastq_block
@@ -98,16 +165,16 @@ def test_jobs_list_route_exposes_model_and_mode_filters_for_ngs_polling() -> Non
 
 def test_fastq_minimap2_default_is_bundled_runtime_compatible() -> None:
     nextflow_config = (REPO_ROOT / "nextflow.config").read_text(encoding="utf-8")
-    workflow = (REPO_ROOT / "workflows" / "nanopore_methylation.nf").read_text(encoding="utf-8")
-    dorado_module = (REPO_ROOT / "modules" / "dorado.nf").read_text(encoding="utf-8")
+    workflow = NGS_WORKFLOW.read_text(encoding="utf-8")
+    fastq_align_module = (NGS_MODULE_ROOT / "fastq_align.nf").read_text(encoding="utf-8")
     nanopore_yaml = (REPO_ROOT / "platform" / "api" / "config" / "models" / "nanopore.yaml").read_text(encoding="utf-8")
 
     assert "fastq_minimap2_preset = 'map-ont'" in nextflow_config
     assert "job_id = null" in nextflow_config
     assert "params.fastq_minimap2_preset ?: 'map-ont'" in workflow
-    assert "params.fastq_minimap2_preset ?: 'map-ont'" in dorado_module
+    assert "params.fastq_minimap2_preset ?: 'map-ont'" in fastq_align_module
     assert "default: map-ont" in nanopore_yaml
     assert "Unsupported --fastq_minimap2_preset" in workflow
     assert "'lr:hq'" not in nanopore_yaml
     assert "?: 'lr:hq'" not in workflow
-    assert "?: 'lr:hq'" not in dorado_module
+    assert "?: 'lr:hq'" not in fastq_align_module

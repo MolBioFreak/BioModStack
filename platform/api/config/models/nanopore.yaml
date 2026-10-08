@@ -13,6 +13,46 @@ container: dorado.sif
 ui_icon: waveform
 ui_color: "#0EA5E9"
 
+workflow_family:
+  id: ont_ngs
+  analysis_owner: nextflow_analysis
+  device_control_owner: bms_service_api
+  manifest_contract: sequence_qc.manifest.v1
+  canonical_workflows:
+    - ont_basecall_dna
+    - ont_basecall_rna
+    - ont_plasmid_qc
+    - ont_construct_screening
+    - ont_methylation_analysis
+    - ont_fastq_qc
+
+quality_modes:
+  molecule_types:
+    - dna
+    - rna
+  basecalling_modes:
+    - simplex
+    - duplex
+  dorado_quality_modes:
+    - fast
+    - hac
+    - sup
+  default_quality_mode: sup
+  default_basecalling_mode: simplex
+  default_device: cuda:0
+  device_examples:
+    - cuda:0
+    - cuda:all
+    - cpu
+  modified_base_models:
+    - none
+    - 5mC
+    - 6mA
+    - 6mA 4mC_5mC
+  barcode_fields:
+    - barcode_kit
+    - sample_sheet
+
 inputs:
   - pod5
   - bam

@@ -1,18 +1,14 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl = 2
 
-include {
-    DoradoBasecall
-    DoradoAlign
-    PrepareBamForAnalysis
-    ValidateMappedBam
-    PrepareReferenceForIGV
-    ModkitPileup
-    ModkitSummary
-    FastqAlign
-    FastqPlasmidQC
-    RunCloneValidation
-} from '../modules/dorado.nf'
+include { DoradoBasecall } from '../../modules/ngs/dorado_basecall.nf'
+include { DoradoAlign } from '../../modules/ngs/dorado_align.nf'
+include { PrepareBamForAnalysis; ValidateMappedBam; PrepareReferenceForIGV } from '../../modules/ngs/bam_prepare.nf'
+include { ModkitPileup } from '../../modules/ngs/modkit_pileup.nf'
+include { ModkitSummary } from '../../modules/ngs/modkit_summary.nf'
+include { FastqAlign } from '../../modules/ngs/fastq_align.nf'
+include { FastqPlasmidQC } from '../../modules/ngs/fastq_plasmid_qc.nf'
+include { RunCloneValidation } from '../../modules/ngs/clone_validation.nf'
 
 def reportNanoporeStage(params, stageName, outputs) {
     def jobId = params.containsKey('job_id') ? params.job_id : null
