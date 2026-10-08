@@ -16,6 +16,10 @@ import {
     type GpuCatalogLike,
 } from '../gpuCatalog';
 import { BMS_PANEL_SURFACE_SOFT } from '../ui/bmsStyle';
+import {
+    effectiveVramLimitMb,
+    thresholdFromEffectiveVramLimit,
+} from '../../lib/gpuSchedulerMath';
 
 // --- Helper Components ---
 
@@ -785,7 +789,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
             const thresholdPct = override.threshold ?? (config.global?.target_vram_fill ?? 0.75);
             const safetyMb = override.vram_safety_margin_mb ?? config.global.vram_safety_margin_mb;
             gpuStates[gpuIdStr] = {
-                vramLimitMb: Math.max(1024, Math.round(maxVram * thresholdPct - safetyMb)),
+                vramLimitMb: effectiveVramLimitMb(maxVram, thresholdPct, safetyMb),
                 priorityTier: override.priority_tier ?? null,
                 maxConcurrentJobs: override.max_concurrent_jobs ?? null,
             };
@@ -812,7 +816,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
         const safetyMb = override.vram_safety_margin_mb ?? config?.global?.vram_safety_margin_mb ?? 2048;
 
         return {
-            vramLimitMb: Math.max(1024, Math.round(maxVram * thresholdPct - safetyMb)),
+            vramLimitMb: effectiveVramLimitMb(maxVram, thresholdPct, safetyMb),
             priorityTier: override.priority_tier ?? null,
             maxConcurrentJobs: (config?.overrides[gpuId] || {}).max_concurrent_jobs ?? null,
         };
@@ -837,8 +841,15 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
         const gpuIdx = parseInt(gpuId, 10);
         const maxVram = getMaxVramMb(gpuIdx);
 
-        // Convert vramLimitMb back to threshold percentage
-        const thresholdPct = local.vramLimitMb / maxVram;
+        // The displayed limit is already net of the configured safety margin.
+        // Add that margin back when recovering the scheduler threshold so a
+        // no-op save cannot subtract it a second time.
+        const safetyMb = existing.vram_safety_margin_mb ?? config.global.vram_safety_margin_mb;
+        const thresholdPct = thresholdFromEffectiveVramLimit(
+            maxVram,
+            local.vramLimitMb,
+            safetyMb,
+        );
 
         try {
             const res = await fetch(`/api/gpu/scheduler-config/gpu/${gpuId}`, {

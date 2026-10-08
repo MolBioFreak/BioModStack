@@ -66,9 +66,11 @@ def _repo_visible_tmp_dir(tmp_path: Path) -> Path:
     under the checked-out repo path for preview smoke tests that call file(...).
     """
     safe_name = f"{tmp_path.name}-{os.getpid()}"
-    # Keep the fixture repo-visible for host Nextflow without relying on a
-    # shared tmp/ subtree that may have been created by a container/root run.
-    path = REPO_ROOT / f".pytest-nextflow-{safe_name}"
+    # Keep fixtures under one fixed, allowlisted generated root so ownership
+    # drift from host/container Nextflow can be repaired narrowly.
+    fixture_root = REPO_ROOT / ".nextflow-test-artifacts"
+    fixture_root.mkdir(exist_ok=True)
+    path = fixture_root / safe_name
     if path.exists():
         shutil.rmtree(path)
     path.mkdir(parents=True)
