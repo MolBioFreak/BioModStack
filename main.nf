@@ -112,13 +112,11 @@ workflow {
         else if (params.rfd_mode == 'antibody_denovo_pipeline') {
             // Full de novo antibody design pipeline 
             // RFantibody -> FAMPNN/AntiFold -> Boltz2 -> AntiBERTy -> IgGM
-            // Accept either target_pdb or boltzgen_target_pdb (from frontend mapping)
-            def antigen_pdb = params.target_pdb ?: params.boltzgen_target_pdb
-            if (!antigen_pdb) {
+            if (!params.target_pdb) {
                 error("Antigen PDB required for antibody_denovo_pipeline")
             }
             def epitope = params.epitope_residues ?: ""
-            input_ch = channel.of(tuple(meta, file(antigen_pdb)))
+            input_ch = channel.of(tuple(meta, file(params.target_pdb)))
 
             // Framework is optional
             def framework_ch = params.framework_pdb
