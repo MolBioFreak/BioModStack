@@ -608,3 +608,141 @@
 .bp3-overlay-backdrop {
     z-index: 19999 !important;
 }
+
+/* ========================================
+   GLOBAL PORTAL STYLES - Fix text visibility
+   Menus/dialogs are portaled to body, not inside .ove-editor-container
+   ======================================== */
+
+/* Global menu text colors */
+.bp5-menu,
+.bp3-menu {
+    background-color: #FAF7F2 !important;
+    color: #3C3C3C !important;
+}
+
+.bp5-menu-item,
+.bp3-menu-item {
+    color: #3C3C3C !important;
+}
+
+.bp5-menu-item-label,
+.bp3-menu-item-label {
+    color: #666666 !important;
+}
+
+.bp5-menu-item:hover,
+.bp3-menu-item:hover {
+    background-color: #E8E2D4 !important;
+    color: #3C3C3C !important;
+}
+
+.bp5-menu-item.bp5-disabled,
+.bp3-menu-item.bp3-disabled {
+    color: #999999 !important;
+}
+
+/* Submenu caret */
+.bp5-submenu-icon,
+.bp3-submenu-icon {
+    color: #666666 !important;
+}
+
+/* Global dialog styles */
+.bp5-dialog,
+.bp3-dialog {
+    background-color: #FAF7F2 !important;
+    color: #3C3C3C !important;
+}
+
+.bp5-dialog-header,
+.bp3-dialog-header {
+    background-color: #EDE6DA !important;
+}
+
+.bp5-dialog-header .bp5-heading,
+.bp3-dialog-header .bp3-heading {
+    color: #3C3C3C !important;
+}
+
+.bp5-dialog-body,
+.bp3-dialog-body {
+    color: #3C3C3C !important;
+}
+
+/* Dialog form fields */
+.bp5-dialog .bp5-label,
+.bp3-dialog .bp3-label {
+    color: #3C3C3C !important;
+}
+
+.bp5-dialog .bp5-input,
+.bp3-dialog .bp3-input {
+    background-color: white !important;
+    color: #3C3C3C !important;
+    border: 1px solid #D4C9B8 !important;
+}
+
+/* Dialog buttons */
+.bp5-dialog-footer .bp5-button,
+.bp3-dialog-footer .bp3-button {
+    color: #3C3C3C !important;
+}
+
+/* Popover content */
+.bp5-popover-content,
+.bp3-popover-content {
+    background-color: #FAF7F2 !important;
+    color: #3C3C3C !important;
+}
+
+/* Tooltip */
+.bp5-tooltip .bp5-popover-content,
+.bp3-tooltip .bp3-popover-content {
+    color: #3C3C3C !important;
+}
+
+/* Form group text */
+.bp5-form-group label,
+.bp3-form-group label {
+    color: #3C3C3C !important;
+}
+
+/* Radio/checkbox text */
+.bp5-control,
+.bp3-control {
+    color: #3C3C3C !important;
+}
+
+/* Text inputs inside dialogs */
+.bp5-dialog input,
+.bp5-dialog textarea,
+.bp3-dialog input,
+.bp3-dialog textarea {
+    color: #3C3C3C !important;
+}
+
+/* Numeric input */
+.bp5-numeric-input .bp5-input-group input,
+.bp3-numeric-input .bp3-input-group input {
+    color: #3C3C3C !important;
+}
+
+/* Select/dropdown */
+.bp5-select select,
+.bp3-select select {
+    color: #3C3C3C !important;
+    background-color: white !important;
+}
+
+/* Callout inside dialogs */
+.bp5-callout,
+.bp3-callout {
+    color: #3C3C3C !important;
+}
+
+/* Context menu */
+.bp5-context-menu,
+.bp3-context-menu {
+    color: #3C3C3C !important;
+}

@@ -8,7 +8,7 @@ process ANTIBERTY_SCORE {
     container 'apptainer/antibody_tools.sif'
 
     input:
-    tuple val(meta), path(fasta)
+    tuple val(meta), path(input_file)  // Can be FASTA or PDB
 
     output:
     tuple val(meta), path("${meta.id}_pll_scores.csv"), emit: scores
@@ -27,6 +27,8 @@ from pathlib import Path
 try:
     from antiberty import AntiBERTyRunner
     from Bio import SeqIO
+    from Bio.PDB import PDBParser
+    from Bio.SeqUtils import seq1
 except ImportError as e:
     print(f"Import error: {e}", file=sys.stderr)
     sys.exit(1)
@@ -35,17 +37,35 @@ except ImportError as e:
 print("Loading AntiBERTy model...")
 antiberty = AntiBERTyRunner()
 
-# Parse sequences from FASTA
-fasta_file = "${fasta}"
+# Parse sequences - auto-detect file type
+input_file = "${input_file}"
 sequences = []
 seq_ids = []
 
-for record in SeqIO.parse(fasta_file, "fasta"):
-    sequences.append(str(record.seq))
-    seq_ids.append(record.id)
+# Check file extension
+if input_file.endswith('.pdb'):
+    # Extract sequences from PDB
+    print(f"Detected PDB file, extracting sequences...")
+    parser = PDBParser(QUIET=True)
+    structure = parser.get_structure("structure", input_file)
+    
+    for model in structure:
+        for chain in model:
+            residues = [r for r in chain if r.id[0] == ' ']  # Standard residues only
+            if residues:
+                seq = ''.join([seq1(r.resname) for r in residues])
+                if seq and len(seq) > 10:  # Skip very short chains
+                    seq_ids.append(f"{Path(input_file).stem}_{chain.id}")
+                    sequences.append(seq)
+                    print(f"  Chain {chain.id}: {len(seq)} residues")
+else:
+    # Parse as FASTA
+    for record in SeqIO.parse(input_file, "fasta"):
+        sequences.append(str(record.seq))
+        seq_ids.append(record.id)
 
 if not sequences:
-    print("Error: No sequences found in FASTA", file=sys.stderr)
+    print(f"Error: No sequences found in {input_file} (file type: {'PDB' if input_file.endswith('.pdb') else 'FASTA'})", file=sys.stderr)
     sys.exit(1)
 
 print(f"Processing {len(sequences)} sequences...")
@@ -92,6 +112,7 @@ ANTIBERTY_SCRIPT
 process ANTIBERTY_FILTER {
     tag "${meta.id}"
     label 'process_low'
+    container 'apptainer/antibody_tools.sif'
 
     input:
     tuple val(meta), path(scores_csv), path(fasta)

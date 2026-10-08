@@ -93,6 +93,9 @@ async def list_jobs(
             design_count=design_count,  # Now joined from DB
             batch_id=job.batch_id,
             batch_name=job.batch_name,
+            current_stage=job.current_stage,
+            completed_stages=job.completed_stages,
+            stage_outputs=job.stage_outputs,
         ))
     
     return JobList(jobs=job_responses, total=total)
@@ -544,15 +547,47 @@ async def get_job_stages(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    # Define pipeline stages based on mode
-    pipeline_stages = {
-        "antibody_denovo": ["rfantibody", "fampnn", "boltz2"],
-        "antibody_denovo_pipeline": ["rfantibody", "fampnn", "boltz2"],
-        "binder_denovo": ["rfdiffusion", "proteinmpnn", "boltz2"],
-        "monomer_denovo": ["rfdiffusion", "proteinmpnn", "af2"],
-    }
+    display_stages = []
     
-    all_stages = pipeline_stages.get(job.mode, [])
+    if job.mode in ["antibody_denovo", "antibody_denovo_pipeline"]:
+        # Dynamic stage construction for antibody workflow
+        display_stages.append("rfantibody")
+        
+        # Check params for sequence design steps (default to true if not present, matching nextflow logic)
+        params = job.params or {}
+        
+        # Note: In nextflow 'null' means true for these flags due to how they are processed
+        run_fampnn = params.get("seq_design_fampnn")
+        if run_fampnn is None or run_fampnn is True:
+            display_stages.append("fampnn")
+            
+        run_antifold = params.get("seq_design_antifold")
+        if run_antifold is None or run_antifold is True:
+            display_stages.append("antifold")
+            
+        run_proteinmpnn = params.get("seq_design_proteinmpnn")
+        if run_proteinmpnn is None or run_proteinmpnn is True:
+            display_stages.append("proteinmpnn")
+            
+        # Validation stages
+        if params.get("run_structure_validation") is not False:
+            display_stages.append("boltz2")
+            
+        if params.get("run_immunogenicity_scoring") is not False:
+             display_stages.append("antiberty")
+             
+        if params.get("run_stability_scoring") is not False:
+             display_stages.append("thermompnn")
+             
+    else:
+        # Fallback for other modes
+        all_stages_map = {
+            "binder_denovo": ["rfdiffusion", "proteinmpnn", "boltz2"],
+            "monomer_denovo": ["rfdiffusion", "proteinmpnn", "af2"],
+        }
+        display_stages = all_stages_map.get(job.mode, [])
+
+    all_stages = display_stages
     completed = job.completed_stages or []
     
     return {
@@ -562,7 +597,8 @@ async def get_job_stages(
         "current_stage": job.current_stage,
         "completed_stages": completed,
         "stage_outputs": job.stage_outputs or {},
-        "can_resume": job.status in ["failed", "cancelled"] and len(completed) > 0
+        # Allow resume if failed/cancelled, even if no stages fully completed (rely on cache)
+        "can_resume": job.status in ["failed", "cancelled"]
     }
 
 
@@ -591,11 +627,7 @@ async def resume_job(
         )
     
     completed = job.completed_stages or []
-    if not completed:
-        raise HTTPException(
-            status_code=400,
-            detail="No completed stages to resume from. Use resubmit instead."
-        )
+    # Relaxed restriction: Allow resume even if no stages completed (start from scratch with cache)
     
     # Determine work directory for resumption
     # We use the shared 'work' directory in project root by default
@@ -607,6 +639,11 @@ async def resume_job(
     new_job_id = str(uuid.uuid4())
     base_name = job.name.replace("_resubmit", "").replace("_resumed", "")
     new_name = f"{base_name}_resumed"
+    
+    # Generate output directory for the resumed job
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = str(PROJECT_ROOT / "pdj_results" / f"{new_name}_{timestamp}")
+    os.makedirs(output_dir, exist_ok=True)
     
     new_job = Job(
         id=new_job_id,
@@ -620,13 +657,19 @@ async def resume_job(
             "resume_work_dir": resume_work_dir,
             # We don't need manual stage skipping params because we use -resume
         },
-        output_dir=None,  # Will be auto-generated for new job
+        output_dir=output_dir,
         batch_id=job.batch_id,
         batch_name=job.batch_name,
         # Don't copy completed_stages/stage_outputs - they will be re-populated
         # as the resumed workflow re-emits cached results
         completed_stages=[], 
         stage_outputs={},
+        
+        # GPU Orchestrator fields - critical for scheduling
+        queue_status='queued',
+        vram_estimate_mb=job.vram_estimate_mb,
+        sequence_length=job.sequence_length,
+        priority=job.priority,
     )
     
     session.add(new_job)

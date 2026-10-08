@@ -49,13 +49,13 @@ process RunFAMPNN {
     python /app/fampnn/fampnn/inference/seq_design.py \
         batch_size=${params.fampnn_batch_size ?: 16} \
         checkpoint_path=/app/fampnn/weights/fampnn_0_3.pt \
-        exclude_cys=${params.fampnn_exclude_cys} \
+        exclude_cys=${params.fampnn_exclude_cys != null ? params.fampnn_exclude_cys : true} \
         fixed_pos_csv=${csv} \
-        num_seqs_per_pdb=${params.seqs_per_design} \
+        num_seqs_per_pdb=${params.seqs_per_design ?: 8} \
         pdb_dir="./" \
         presort_by_length=true \
-        psce_threshold=${params.fampnn_psce_threshold}  \
-        temperature=${params.fampnn_temperature} \
+        psce_threshold=${params.fampnn_psce_threshold ?: 0.3}  \
+        temperature=${params.fampnn_temperature ?: 0.1} \
         seq_only=${params.fampnn_seq_only ?: false} \
         repack_last=${params.fampnn_repack_last ?: true} \
         timestep_schedule.num_steps=${params.fampnn_num_steps ?: 100} \

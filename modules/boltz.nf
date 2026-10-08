@@ -18,6 +18,42 @@ process PrepBoltz {
         --output "yamls"
     """
 }
+
+// PrepBoltz WITH MSA Generation
+// Generates MSAs for each unique chain sequence using GPU MMseqs2, then creates YAMLs with MSA paths
+process PrepBoltzWithMSA {
+    label 'pyrosetta_tools'
+    publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "msa/*.a3m"
+
+    input:
+    path pdb_files
+
+    output:
+    path ("yamls/*.yaml"), emit: yamls
+    path ("msa/*.a3m"), emit: msas, optional: true
+
+    script:
+    def dbPath = params.msa_local_db ?: "/mnt/BioModStack/colabfold_db"
+    def cacheDir = params.msa_cache_dir ?: "/mnt/BioModStack/msa_cache"
+    def threads = params.msa_threads ?: 32
+    """
+    eval "\$(micromamba shell hook --shell bash)"
+    micromamba activate pyrosetta
+    
+    mkdir -p yamls msa
+    
+    # Call external prep_boltz_with_msa.py script
+    python3 ${projectDir}/scripts/prep_boltz_with_msa.py \\
+        --input "./" \\
+        --output "yamls" \\
+        --msa_output "msa" \\
+        --db_path "${dbPath}" \\
+        --cache_dir "${cacheDir}" \\
+        --threads ${threads} \\
+        --msa_script "${projectDir}/scripts/run_local_msa.py"
+    """
+}
+
 process RunBoltz {
     label 'Boltz'
     label 'gpu'
@@ -48,9 +84,9 @@ process RunBoltz {
         boltz predict \
             ./yamls/ \
             --output_format pdb \
-            --diffusion_samples ${params.boltz_diffusion_samples} \
-            --recycling_steps ${params.boltz_recycling_steps} \
-            --sampling_steps ${params.boltz_sampling_steps} \
+            ${params.boltz_diffusion_samples ? '--diffusion_samples ' + params.boltz_diffusion_samples : ''} \
+            --recycling_steps ${params.boltz_recycling_steps ?: 3} \
+            --sampling_steps ${params.boltz_sampling_steps ?: 50} \
             ${params.boltz_use_potentials ? '--use_potentials' : ''} \
             ${params.boltz_step_scale ? '--step_scale ' + params.boltz_step_scale : ''} \
             --cache /boltzcache \

@@ -26,8 +26,8 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
     export VIRTUAL_ENV=/opt/venv
     export PATH="/opt/venv/bin:$PATH"
 
-    # Install PyTorch Nightly for Blackwell support
-    uv pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu124
+    # Install PyTorch (stable version for compatibility)
+    uv pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
 
     # Install ThermoMPNN
     git clone https://github.com/Kuhlman-Lab/ThermoMPNN.git /opt/ThermoMPNN

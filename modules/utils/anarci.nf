@@ -13,13 +13,21 @@ process ANARCI {
 
     script:
     """
-    python3 << 'EOF'
+    (python3 << 'EOF'
 import sys
 import json
 import warnings
 from Bio import PDB
+from Bio import SeqUtils
 from Bio.PDB import PDBIO, Select
-from anarci import anarci
+try:
+    from anarcii import Anarcii
+except ImportError:
+    try:
+        from ANARCII import Anarcii
+    except ImportError:
+        print("Could not import ANARCII. Ensure it is installed.")
+        sys.exit(1)
 
 pdb_file = "${pdb}"
 output_pdb = "${meta.id}_imgt.pdb"
@@ -33,7 +41,8 @@ def get_seq_from_chain(chain):
     residues = []
     for residue in chain:
         if PDB.is_aa(residue):
-            seq += PDB.Polypeptide.three_to_one(residue.get_resname())
+            # Use SeqUtils.seq1 for modern Biopython compatibility
+            seq += SeqUtils.seq1(residue.get_resname())
             residues.append(residue)
     return seq, residues
 
@@ -47,22 +56,28 @@ renumbered_structure.add(renumbered_model)
 cdr_data = {"cdrs": {}, "numbering": {}, "humanness_score": 0.0}
 processed_chains = []
 
+# Instantiate ANARCII runner (default scheme is IMGT)
+runner = Anarcii()
+
 # Process each chain
 for model in structure:
     for chain in model:
         seq, residues = get_seq_from_chain(chain)
         if not seq: continue
         
-        # Run ANARCI
+        # Run ANARCII
         try:
-            results = anarci([("seq", seq)], scheme="imgt", output=False)
+            # ANARCII number() takes list of sequences
+            runner.number([seq])
+            # Convert to legacy format: (numbering, alignments, hit_tables)
+            results = runner.to_legacy()
             numbering, alignments, hit_tables = results
         except Exception as e:
-            print(f"ANARCI failed for chain {chain.id}: {e}")
+            print(f"ANARCII failed for chain {chain.id}: {e}")
             continue
             
         if not numbering or not numbering[0]:
-            print(f"No ANARCI hit for chain {chain.id}")
+            print(f"No ANARCII hit for chain {chain.id}")
             continue
             
         domains = numbering[0]
@@ -71,8 +86,15 @@ for model in structure:
             
         # Take the best domain
         domain = domains[0]
-        (start, end), (e_value, score), mapping = domain
         
+        # New ANARCII to_legacy structure is (mapping, start, end)
+        # Old ANARCI: ((start, end), (e_value, score), mapping)
+        try:
+            mapping, start, end = domain
+        except ValueError:
+            # Fallback if structure changes again
+            (start, end), (e_value, score), mapping = domain
+            
         # Mapping is list of tuples: ((imgt_num, insert_code), aa)
         
         # Start index in python is 0-based index in `seq` where the domain starts.
@@ -133,5 +155,6 @@ with open(output_json, 'w') as f:
 
 print(f"Renumbered chains: {processed_chains}")
 EOF
+    ) > anarci.log 2>&1
     """
 }

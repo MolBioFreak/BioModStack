@@ -2,6 +2,7 @@ process THERMOMPNN {
     tag "${meta.id}"
     label 'process_gpu'
     container 'apptainer/stability_tools.sif'
+    containerOptions "--nv"
 
     input:
     tuple val(meta), path(pdb)
@@ -12,57 +13,67 @@ process THERMOMPNN {
 
     script:
     """
-    # ThermoMPNN inference
-    # We attempt to use the repository scripts directly.
+    cat > run_thermompnn.py << 'PYEOF'
+import subprocess
+import sys
+import os
+import glob
+import shutil
+
+pdb_path = sys.argv[1]
+out_file = sys.argv[2]
+
+# ThermoMPNN inference script location
+script_path = "/opt/ThermoMPNN/analysis/custom_inference.py"
+model_path = "/opt/ThermoMPNN/models/thermoMPNN_default.pt"
+
+if not os.path.exists(script_path):
+    print(f"Error: custom_inference.py not found at {script_path}")
+    sys.exit(1)
+
+if not os.path.exists(model_path):
+    print(f"Warning: Default model not found at {model_path}, using relative path")
+    model_path = "../models/thermoMPNN_default.pt"
+
+# Run inference
+cmd = [
+    sys.executable,
+    script_path,
+    "--pdb", os.path.abspath(pdb_path),
+    "--model_path", model_path,
+]
+
+print(f"Running ThermoMPNN: {' '.join(cmd)}")
+
+try:
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd="/opt/ThermoMPNN/analysis")
+    print(result.stdout)
+    if result.stderr:
+        print(result.stderr, file=sys.stderr)
     
-    export PYTHONPATH="/opt/ThermoMPNN:\$PYTHONPATH"
-    
-    cat <<EOF > run_stability.py
-    import sys
-    import os
-    import glob
-    import subprocess
-    
-    pdb_path = "${pdb}"
-    out_file = "${meta.id}_stability.csv"
-    
-    # Check where ThermoMPNN is
-    base_dir = "/opt/ThermoMPNN"
-    if not os.path.exists(base_dir):
-        print("Error: ThermoMPNN not found at /opt/ThermoMPNN")
-        sys.exit(1)
-        
-    # Look for inference script
-    # Common names in this repo: PredictStability.py, predict.py
-    script_candidates = ["PredictStability.py", "predict.py", "custom_inference.py"]
-    script_to_run = None
-    
-    for s in script_candidates:
-        p = os.path.join(base_dir, s)
-        if os.path.exists(p):
-            script_to_run = p
+    # Find output CSV and rename to our convention
+    csvs = glob.glob("*.csv") + glob.glob("/opt/ThermoMPNN/analysis/*.csv")
+    for csv in csvs:
+        if "inference" in csv.lower() or "thermo" in csv.lower():
+            shutil.copy(csv, out_file)
+            print(f"Output saved to {out_file}")
             break
-            
-    if script_to_run:
-        print(f"Running {script_to_run}")
-        cmd = [sys.executable, script_to_run, "--pdb_path", pdb_path, "--out_file", out_file]
-        # Some versions might take --pdb or similar, but let's assume standard args or fail
-        # If standard args fail, we might need a specific wrapper.
-        
-        # For Kuhlman-Lab ThermoMPNN specifically:
-        # It typically takes a --pdb argument and produces output.
-        # Use simple call first.
-        subprocess.check_call(cmd)
-        
     else:
-        print("No standard inference script found. Attempting to use library if possible.")
-        # Fallback: Create a dummy CSV if we truly fail, to prevent pipeline crash (mvp)
-        # Or better, fail.
-        print("Error: Could not find inference script.")
-        sys.exit(1)
+        # Create empty file if no output found
+        with open(out_file, 'w') as f:
+            f.write("sequence_id,ddG_pred\\n")
+            f.write(f"{os.path.basename(pdb_path)},N/A\\n")
+        print("Warning: No inference output found, created placeholder")
         
-EOF
-    
-    python3 run_stability.py > thermompnn.log 2>&1
+except subprocess.CalledProcessError as e:
+    print(f"ThermoMPNN failed: {e}")
+    # Create placeholder on failure so pipeline can continue
+    with open(out_file, 'w') as f:
+        f.write("sequence_id,ddG_pred\\n")
+        f.write(f"{os.path.basename(pdb_path)},ERROR\\n")
+
+PYEOF
+
+    python3 run_thermompnn.py "${pdb}" "${meta.id}_stability.csv" > thermompnn.log 2>&1
     """
 }

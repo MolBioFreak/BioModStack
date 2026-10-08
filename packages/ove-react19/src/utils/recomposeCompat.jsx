@@ -31,7 +31,7 @@ import React, { useMemo, useCallback, useEffect, useRef, memo } from 'react';
  */
 export function withHandlersHook(handlerCreators) {
     return function (WrappedComponent) {
-        const WithHandlers = ({ key: _key, ...props }) => {
+        const WithHandlers = React.forwardRef(({ key: _key, ...props }, ref) => {
             // Create handlers by calling each handler creator with current props
             // We use useMemo to avoid recreating handlers on every render
             // Note: This is intentionally NOT using useCallback for each handler
@@ -46,8 +46,8 @@ export function withHandlersHook(handlerCreators) {
                 return result;
             }, [props]);
 
-            return <WrappedComponent {...props} {...handlers} />;
-        };
+            return <WrappedComponent {...props} {...handlers} ref={ref} />;
+        });
 
         WithHandlers.displayName = `withHandlersHook(${getDisplayName(WrappedComponent)})`;
         return WithHandlers;
@@ -62,7 +62,7 @@ export function withHandlersHook(handlerCreators) {
  */
 export function withPropsHook(propsOrMapper) {
     return function (WrappedComponent) {
-        const WithProps = ({ key: _key, ...props }) => {
+        const WithProps = React.forwardRef(({ key: _key, ...props }, ref) => {
             const additionalProps = useMemo(() => {
                 if (typeof propsOrMapper === 'function') {
                     return propsOrMapper(props);
@@ -70,8 +70,8 @@ export function withPropsHook(propsOrMapper) {
                 return propsOrMapper;
             }, [props]);
 
-            return <WrappedComponent {...props} {...additionalProps} />;
-        };
+            return <WrappedComponent {...props} {...additionalProps} ref={ref} />;
+        });
 
         WithProps.displayName = `withPropsHook(${getDisplayName(WrappedComponent)})`;
         return WithProps;
@@ -86,7 +86,7 @@ export function withPropsHook(propsOrMapper) {
  */
 export function lifecycleHook(spec) {
     return function (WrappedComponent) {
-        const WithLifecycle = ({ key: _key, ...props }) => {
+        const WithLifecycle = React.forwardRef(({ key: _key, ...props }, ref) => {
             const propsRef = useRef(props);
             propsRef.current = props;
 
@@ -134,8 +134,8 @@ export function lifecycleHook(spec) {
                 prevPropsRef.current = props;
             }, [props]);
 
-            return <WrappedComponent {...props} />;
-        };
+            return <WrappedComponent {...props} ref={ref} />;
+        });
 
         WithLifecycle.displayName = `lifecycleHook(${getDisplayName(WrappedComponent)})`;
         return WithLifecycle;
@@ -217,10 +217,10 @@ export function onlyUpdateForKeysHook(keys) {
  */
 export function mapPropsHook(propsMapper) {
     return function (WrappedComponent) {
-        const MapProps = ({ key: _key, ...props }) => {
+        const MapProps = React.forwardRef(({ key: _key, ...props }, ref) => {
             const mappedProps = useMemo(() => propsMapper(props), [props]);
-            return <WrappedComponent {...mappedProps} />;
-        };
+            return <WrappedComponent {...mappedProps} ref={ref} />;
+        });
 
         MapProps.displayName = `mapPropsHook(${getDisplayName(WrappedComponent)})`;
         return MapProps;
