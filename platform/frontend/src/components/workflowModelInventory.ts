@@ -84,17 +84,6 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
         ],
     },
     {
-        workflowId: 'confornets_experimental',
-        label: 'ConforNets Experimental (Legacy)',
-        modelTopics: ['confornets'],
-        sourceFiles: [
-            'platform/api/config/models/confornets_experimental.yaml',
-            'platform/api/config/templates/confornets_experimental.yaml',
-            'main.nf',
-            'nextflow.config',
-        ],
-    },
-    {
         workflowId: 'conformational_mapping',
         label: 'Conformational Mapping',
         modelTopics: ['confornets', 'protenix'],
@@ -143,7 +132,9 @@ export const getWorkflowModelTopics = (workflowId: string | null | undefined): M
         ? 'structure_prediction'
         : workflowId === 'protein_cad_experimental' || workflowId === 'protein_local_redesign'
             ? 'protein_modification_experimental'
-            : workflowId;
+            : workflowId === 'confornets_experimental'
+                ? 'conformational_mapping'
+                : workflowId;
     return WORKFLOW_MODEL_INVENTORY.find((workflow) => workflow.workflowId === canonicalWorkflowId)?.modelTopics ?? [];
 };
 

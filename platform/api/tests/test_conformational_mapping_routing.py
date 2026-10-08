@@ -646,5 +646,11 @@ def test_published_conformational_mapping_replaces_legacy_experimental_copy() ->
 
     assert canonical_model is not None and canonical_model.experimental is False
     assert canonical_template is not None and canonical_template.experimental is False
+    assert canonical_template.enabled is True
     assert legacy_model is not None and legacy_model.experimental is True
     assert legacy_template is not None and legacy_template.experimental is True
+    assert legacy_template.enabled is False
+    assert {template.id for template in templates.list_templates(enabled_only=True)} & {
+        "conformational_mapping",
+        "confornets_experimental",
+    } == {"conformational_mapping"}

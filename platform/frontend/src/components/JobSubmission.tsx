@@ -35,6 +35,10 @@ const LEGACY_PROTEIN_MODIFICATION_TEMPLATE_IDS = new Set([
     'protein_hunter_experimental',
 ]);
 
+const LEGACY_CONFORMATIONAL_MAPPING_TEMPLATE_IDS = new Set([
+    'confornets_experimental',
+]);
+
 interface FileBrowserProps {
     onSelect: (path: string) => void;
     onCancel: () => void;
@@ -796,22 +800,21 @@ export function JobSubmission() {
                     setClonedValues({ ...data.params, name: data.name, denovo_generator: 'boltzgen' });
                 }
 
-                // 6. Conformational Mapping is API-template driven; retry/resume must reload the template form, not the hidden raw model picker.
+                // 6. Legacy and canonical conformational-mapping jobs reopen the one published canonical launcher.
                 else if (data.model_id === 'confornets_experimental' || data.params?.template_model_id === 'confornets_experimental') {
+                    sessionStorage.removeItem('bms.conformational-mapping.launcher.v1');
                     setWizardMode('templates');
-                    setSelectedTemplateId('confornets_experimental');
+                    setSelectedTemplateId('conformational_mapping');
                     setClonedValues({
-                        ...data.params,
+                        ...(getDedicatedTemplateInitialValues('conformational_mapping') || {}),
                         name: data.name,
-                        template_model_id: 'confornets_experimental',
-                        template_mode_id: 'design',
-                        workflow_model_topic: data.params?.workflow_model_topic || 'confornets',
+                        backend: 'confornets',
                     });
                     setJobName(data.name || data.params?.job_name || data.params?.sequence_name || '');
                 }
                 else if (data.model_id === 'conformational_mapping') {
                     sessionStorage.removeItem('bms.conformational-mapping.launcher.v1');
-                    setWizardMode('experimental');
+                    setWizardMode('templates');
                     setSelectedTemplateId('conformational_mapping');
                     setClonedValues({
                         ...(getDedicatedTemplateInitialValues('conformational_mapping') || {}),
@@ -923,6 +926,7 @@ export function JobSubmission() {
             !['structure_validation', 'structure_prediction'].includes(t.id) &&
             t.id !== 'binder_design' &&
             !LEGACY_PROTEIN_MODIFICATION_TEMPLATE_IDS.has(t.id) &&
+            !LEGACY_CONFORMATIONAL_MAPPING_TEMPLATE_IDS.has(t.id) &&
             (t.id !== 'dna_polymerase' || (window as UntypedApiValue).__DEBUG_MODE__)
         );
     }, [templatesData]);
@@ -972,7 +976,7 @@ export function JobSubmission() {
             if (dedicatedTemplateId === 'conformational_mapping') {
                 sessionStorage.removeItem('bms.conformational-mapping.launcher.v1');
             }
-            setWizardMode(['boltz_cp_experimental', 'conformational_mapping'].includes(dedicatedTemplateId) ? 'experimental' : 'templates');
+            setWizardMode(dedicatedTemplateId === 'boltz_cp_experimental' ? 'experimental' : 'templates');
             setSelectedTemplateId(dedicatedTemplateId);
             setDedicatedTemplateVersion((prev) => prev + 1);
             setClonedValues({
