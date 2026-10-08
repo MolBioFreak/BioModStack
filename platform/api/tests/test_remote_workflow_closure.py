@@ -559,7 +559,9 @@ def test_remote_projection_rejects_mismatched_real_invocation(mismatch, tmp_path
 def test_conformational_command_without_plan_retains_selected_science(tmp_path, compiler_environment, monkeypatch):
     import paths
     monkeypatch.setattr(paths, 'get_inputs_dir', lambda: tmp_path)
-    (tmp_path / 'request.json').write_text(json.dumps({'backend': 'protenix_v2_ensemble'}))
+    (tmp_path / 'request.json').write_text(json.dumps({'backend': 'protenix_v2_ensemble',
+        'feature_policy': {'mode': 'regenerate_mutated_protein_v1',
+            'protein_msa_enabled': True, 'templates_enabled': False, 'rna_msa_enabled': False}}))
     invocation = nextflow.compile_nextflow_invocation('conformational_mapping', 'map', {
         'cm_request_path': str(tmp_path / 'request.json'), 'gpu_id': 0,
         'run_frustrampnn': True,

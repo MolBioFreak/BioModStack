@@ -162,7 +162,6 @@ def test_plr_actual_compiler_producer_consumer(invocation, tmp_path, provider):
     ('protein_local_redesign', {'plr_structure_validators': ['protenix_v2']}, False),
     ('protein_local_redesign', {'plr_structure_validators': ['protenix_v2'], 'plr_validator_suite_active': True, 'protenix_prepared_msa_dir': '/supplied'}, False),
     ('protein_local_redesign', {'plr_structure_validators': ['protenix_v2'], 'plr_validator_suite_active': True, 'protenix_use_msa': False}, False),
-    ('conformational_mapping', {'cm_request': {'backend': 'protenix_v2_ensemble'}}, False),
     ('confornets_experimental', {'cn_skip_msa': False}, False),
 ])
 def test_canonical_service_roster(workflow, params, supported):
@@ -178,7 +177,7 @@ def test_canonical_service_roster(workflow, params, supported):
     assert any(handoff.generated_msa_service_supported(s) for s in plan.metadata.external_services) == supported
 
 
-@pytest.mark.parametrize('authority', ['', 'modules/conformational_mapping_protenix.nf:CanonicalProtenixEnsemble',
+@pytest.mark.parametrize('authority', ['', 'modules/conformational_mapping_protenix.nf:CanonicalProtenixEnsemble:forged',
     'modules/confornets_experimental.nf:RunConforNets', 'modules/protenix.nf:ProtenixPredict',
     'modules/protenix.nf:ProtenixFromComplex:forged'])
 def test_identifier_alone_never_grants_service(authority):
@@ -219,7 +218,7 @@ def test_confornets_actual_preprocessor_is_not_portable_msa_consumer(tmp_path, s
 
 
 @pytest.mark.parametrize('case_index', [0, 8, -1])
-def test_cm_native_producer_is_format_compatible_but_has_no_provider_authority(tmp_path, monkeypatch, case_index):
+def test_cm_native_producer_and_canonical_provider_authority(tmp_path, monkeypatch, case_index):
     monkeypatch.setattr(nextflow, 'resolve_nextflow_executable', lambda: 'nextflow')
     vectors = json.loads((ROOT / 'platform/api/tests/fixtures/conformational_mapping/phase_0_vectors/complex_cases.json').read_text())
     snapshot = copy.deepcopy([case for case in vectors['cases'] if case['kind'] == 'positive'][case_index])
@@ -248,9 +247,22 @@ def test_cm_native_producer_is_format_compatible_but_has_no_provider_authority(t
         str(tmp_path / 'cm-results'), 'cm-job', source_identity=SourceIdentity('a'*40, 'b'*40))
     services = [s for s in invocation.execution_plan.metadata.external_services if s.logical_id == 'protenix:generated_msa']
     assert len(services) == 1
-    assert services[0].provider is None
-    assert json.loads(services[0].settings_json) == {}
-    assert not handoff.generated_msa_service_supported(services[0])
-    with pytest.raises(ValueError, match='canonical conformational-mapping launch parameters fail closed: .*msa_provider'):
+    from services.msa_policy import apply_msa_policy
+    expected = apply_msa_policy('protenix', {})
+    assert services[0].provider == expected['msa_provider']
+    settings = json.loads(services[0].settings_json)
+    assert all(settings[key] == value for key, value in expected.items())
+    assert settings['protenix_use_msa'] is True
+    assert settings['protenix_use_template'] is False
+    assert settings['protenix_use_rna_msa'] is False
+    assert handoff.generated_msa_service_supported(services[0])
+    replay = nextflow.compile_nextflow_invocation('conformational_mapping', 'map',
+        dict(params, **expected), str(tmp_path / 'cm-results'), 'cm-job',
+        source_identity=SourceIdentity('a'*40, 'b'*40))
+    assert replay.effective_json == invocation.effective_json
+    with pytest.raises(ValueError, match='conflicts with immutable feature_policy'):
         nextflow.compile_nextflow_invocation('conformational_mapping', 'map',
-            dict(params, msa_provider='colabfold_api'), str(tmp_path / 'cm-results'), 'cm-job')
+            dict(params, colabfold_pairing_mode='paired'), str(tmp_path / 'cm-results'), 'cm-job')
+    with pytest.raises(ValueError, match='launch parameters fail closed'):
+        nextflow.compile_nextflow_invocation('conformational_mapping', 'map',
+            dict(params, msa_unsupported=True), str(tmp_path / 'cm-results'), 'cm-job')
