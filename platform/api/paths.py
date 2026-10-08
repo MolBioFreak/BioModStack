@@ -212,8 +212,10 @@ def resolve_allowed_path(rel_path: str) -> Path:
         raise ValueError(f"Root not allowed: {root_key}")
     candidate = (root / Path(*parts[1:])).resolve()
     root_resolved = root.resolve()
-    if not str(candidate).startswith(str(root_resolved)):
-        raise ValueError("Path escapes allowed root")
+    try:
+        candidate.relative_to(root_resolved)
+    except ValueError as exc:
+        raise ValueError("Path escapes allowed root") from exc
     return candidate
 
 

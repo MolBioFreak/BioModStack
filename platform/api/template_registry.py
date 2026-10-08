@@ -27,6 +27,12 @@ class TemplateParam(BaseModel):
     enum_labels: Optional[dict] = None
     minimum: Optional[float] = None
     maximum: Optional[float] = None
+    step: Optional[float] = None
+    ui_control: Optional[str] = None
+    ui_placeholder: Optional[str] = None
+    placeholder: Optional[str] = None
+    preset_type: Optional[str] = None
+    file_type: Optional[str] = None
     condition: Optional[dict] = None  # Conditional visibility: {param: str, values: List[str]}
 
 
