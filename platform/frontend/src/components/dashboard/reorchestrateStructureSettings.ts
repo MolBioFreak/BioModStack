@@ -1,6 +1,12 @@
 import type { Job } from '../../lib/api.js';
+import {
+    getBoltzQualityPresetValues,
+    getPredictorFamiliesForSelection,
+    type StructurePredictionMode,
+    type StructurePredictorFamily,
+} from '../structurePredictionUiState.js';
 
-export type StructurePredictor = 'boltz' | 'rf3' | 'protenix';
+export type StructurePredictor = StructurePredictorFamily;
 export type StructureMsaProvider = 'local' | 'colabfold_api';
 export type StructureMsaPreset = 'maximum' | 'balanced' | 'fast';
 
@@ -44,7 +50,7 @@ const DEFAULTS: StructureReorchestrateSettings = {
     boltz: {
         useMsa: true,
         recyclingSteps: 3,
-        samplingSteps: 50,
+        samplingSteps: getBoltzQualityPresetValues('max').samplingSteps,
         numSamples: 1,
         maxParallelSamples: 1,
         usePotentials: false,
@@ -125,19 +131,13 @@ const hasPredictorHints = (params: Record<string, any>, predictor: StructurePred
 const resolvePredictors = (job: StructureRetryJob): StructurePredictor[] => {
     const params = job.params || {};
     const explicit = String(params.pred_method || '').trim().toLowerCase();
-    switch (explicit) {
-        case 'boltz':
-            return ['boltz'];
-        case 'rf3':
-            return ['rf3'];
-        case 'protenix':
-            return ['protenix'];
-        case 'both':
-            return ['boltz', 'rf3'];
-        case 'all':
-            return ['boltz', 'rf3', 'protenix'];
-        default:
-            break;
+    const predictionMode: StructurePredictionMode = String(job.mode || '').trim().toLowerCase() === 'complex' ? 'complex' : 'predict';
+    if (explicit) {
+        const explicitPredictors = getPredictorFamiliesForSelection(predictionMode, explicit);
+        if (explicitPredictors.length > 0) {
+            return PREDICTOR_ORDER.filter((predictor) => explicitPredictors.includes(predictor));
+        }
+        return [];
     }
 
     const validator = String(params.structure_validator || '').trim().toLowerCase();
@@ -154,7 +154,11 @@ const resolvePredictors = (job: StructureRetryJob): StructurePredictor[] => {
         hinted.add('protenix');
     }
 
-    return PREDICTOR_ORDER.filter((predictor) => hinted.has(predictor));
+    const hintedPredictors = PREDICTOR_ORDER.filter((predictor) => hinted.has(predictor));
+    if (predictionMode === 'complex') {
+        return hintedPredictors.filter((predictor) => predictor !== 'rf3');
+    }
+    return hintedPredictors;
 };
 
 export const isStructureReorchestrateJob = (job: StructureRetryJob): boolean => resolvePredictors(job).length > 0;

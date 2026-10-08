@@ -5,6 +5,21 @@ import { useNavigate } from 'react-router-dom';
 import { SequenceManager } from './SequenceManager';
 import { LigandSelector, componentIdFromIndex, type LigandEntry } from './LigandSelector';
 import { TargetAntigenSelector, type SelectedTarget } from './TargetAntigenSelector';
+import MolstarViewer from './MolstarViewer';
+import {
+    BOLTZ_QUALITY_PRESETS,
+    buildTargetPreviewSelection,
+    buildTargetPreviewSelections,
+    getBoltzQualityPresetValues,
+    getBoltzQualitySliderState,
+    getPredictorFamiliesForSelection,
+    getStructurePredictorOptions,
+    resolveBoltzSamplingStepsFromSlider,
+    resolveStructurePredictorSelection,
+    resolveTargetPreviewSource,
+    type StructurePredictionMode,
+    type StructurePredictorSelection,
+} from './structurePredictionUiState.js';
 import { parsePDBFile, getModelByNumber, type Chain, type ParsedPDB } from '../utils/pdbUtils';
 
 interface StructurePredictionTemplateProps {
@@ -115,13 +130,18 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
     const [targetSourcePath, setTargetSourcePath] = useState<string | null>(
         initialValues?.fixed_target_source_path || initialValues?.target_source?.path || null
     );
+    const [targetPreviewUrl, setTargetPreviewUrl] = useState<string | null>(null);
+    const targetPreviewBlobRef = useRef<string | null>(null);
     const [targetSourceChainId, setTargetSourceChainId] = useState<string | null>(
         String(initialValues?.fixed_target_source_chains || initialValues?.primary_chain_id || initialValues?.target_chains || '')
             .split(',')
             .map((token: string) => token.trim())
             .find(Boolean) || null
     );
-    const [targetSourceSequence, setTargetSourceSequence] = useState<string>(initialValues?.fixed_target_source_sequence || '');
+    const [targetSourceSequence, setTargetSourceSequence] = useState<string>(
+        String(initialValues?.fixed_target_source_sequence || '')
+    );
+
     const [targetStructure, setTargetStructure] = useState<ParsedPDB | null>(null);
     const [selectedTargetModel, setSelectedTargetModel] = useState<number | null>(() => {
         const raw = initialValues?.fixed_target_model_number ?? initialValues?.target_model_number;
@@ -130,7 +150,9 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
     });
 
     // Predictor selection
-    const [predictor, setPredictor] = useState<'boltz' | 'rf3' | 'protenix' | 'both' | 'all'>(initialValues?.pred_method || 'boltz');
+    const [predictor, setPredictor] = useState<StructurePredictorSelection>(
+        (initialValues?.pred_method as StructurePredictorSelection | undefined) || 'boltz'
+    );
 
     // Boltz-2 parameters
     const initialBoltzUseMsa = initialValues?.boltz_use_msa ?? true;
@@ -139,7 +161,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
         clampBoltzRecyclingSteps(initialValues?.boltz_recycling_steps ?? 3, initialBoltzUseMsa)
     );
     const [boltzSamplingSteps, setBoltzSamplingSteps] = useState(
-        clampBoltzSamplingSteps(initialValues?.boltz_sampling_steps ?? 50, initialBoltzUseMsa)
+        clampBoltzSamplingSteps(initialValues?.boltz_sampling_steps ?? getBoltzQualityPresetValues('max').samplingSteps, initialBoltzUseMsa)
     );
     const [boltzNumSamples, setBoltzNumSamples] = useState(initialValues?.boltz_num_samples ?? 1);
     const [boltzUsePotentials, setBoltzUsePotentials] = useState(initialValues?.boltz_use_potentials ?? false);
@@ -246,6 +268,9 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
     const [showInputModal, setShowInputModal] = useState(false);
     const [inputModalTab, setInputModalTab] = useState<'library' | 'pdb'>('library');
     const importTargetRef = useRef<'primary' | 'additional'>('primary');  // Use ref to avoid stale closure
+    const [modalTargetSource, setModalTargetSource] = useState<SelectedTarget | null>(null);
+    const [modalPreviewUrl, setModalPreviewUrl] = useState<string | null>(null);
+    const modalPreviewBlobRef = useRef<string | null>(null);
     const [modalParsedStructure, setModalParsedStructure] = useState<ParsedPDB | null>(null);
     const [modalSelectedModel, setModalSelectedModel] = useState<number>(1);
     const [parsedChains, setParsedChains] = useState<Chain[]>([]);
@@ -268,15 +293,41 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
         setMsaNumIterations(undefined);
     };
 
-    const msaNeeded =
-        ((predictor === 'boltz' || predictor === 'both' || predictor === 'all') && boltzUseMsa) ||
-        ((predictor === 'rf3' || predictor === 'both' || predictor === 'all') && rf3UseMsa) ||
-        ((predictor === 'protenix' || predictor === 'all') && protenixUseMsa);
     const fixedTargetAvailable = !!targetSourceChainId && !!targetSource;
-    const usesBoltz = predictor === 'boltz' || predictor === 'both' || predictor === 'all';
-    const usesProtenix = predictor === 'protenix' || predictor === 'all';
+
+    const replacePreviewBlobUrl = (
+        ref: React.MutableRefObject<string | null>,
+        setter: (value: string | null) => void,
+        nextUrl: string | null,
+    ) => {
+        if (ref.current && ref.current !== nextUrl) {
+            URL.revokeObjectURL(ref.current);
+        }
+        ref.current = nextUrl;
+        setter(nextUrl);
+    };
+
+    const clearTargetPreview = () => replacePreviewBlobUrl(targetPreviewBlobRef, setTargetPreviewUrl, null);
+    const clearModalPreview = () => replacePreviewBlobUrl(modalPreviewBlobRef, setModalPreviewUrl, null);
+    const adoptModalPreviewForTarget = () => {
+        const nextUrl = modalPreviewBlobRef.current;
+        modalPreviewBlobRef.current = null;
+        setModalPreviewUrl(null);
+        replacePreviewBlobUrl(targetPreviewBlobRef, setTargetPreviewUrl, nextUrl);
+    };
+
+    useEffect(() => () => {
+        if (targetPreviewBlobRef.current) {
+            URL.revokeObjectURL(targetPreviewBlobRef.current);
+        }
+        if (modalPreviewBlobRef.current) {
+            URL.revokeObjectURL(modalPreviewBlobRef.current);
+        }
+    }, []);
 
     const closePdbModalState = () => {
+        clearModalPreview();
+        setModalTargetSource(null);
         setModalParsedStructure(null);
         setModalSelectedModel(1);
         setParsedChains([]);
@@ -444,6 +495,57 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
         proteinBatchTargets.find((entry) => entry.role === 'Additional')?.id ||
         proteinBatchTargets[0]?.id ||
         '';
+    const predictionMode: StructurePredictionMode = complexMode ? 'complex' : 'predict';
+    const resolvedPredictorSelection = resolveStructurePredictorSelection(predictionMode, predictor);
+    const predictorFamilies = getPredictorFamiliesForSelection(predictionMode, predictor);
+    const predictorOptions = getStructurePredictorOptions(predictionMode);
+    const selectedPredictorId = resolvedPredictorSelection.canonicalSelection;
+    const usesBoltz = predictorFamilies.includes('boltz');
+    const usesRf3 = predictorFamilies.includes('rf3');
+    const usesProtenix = predictorFamilies.includes('protenix');
+    const msaNeeded =
+        (usesBoltz && boltzUseMsa) ||
+        (usesRf3 && rf3UseMsa) ||
+        (usesProtenix && protenixUseMsa);
+    const boltzQualityState = getBoltzQualitySliderState({
+        samplingSteps: boltzSamplingSteps,
+        recyclingSteps: boltzRecyclingSteps,
+    });
+    const targetPreview = targetSource
+        ? resolveTargetPreviewSource({
+            previewUrl: targetPreviewUrl,
+            stagedPath: targetSourcePath,
+            targetSource,
+        })
+        : { structureUrl: null, format: 'pdb' as const };
+    const targetPreviewSelections = buildTargetPreviewSelection(targetSourceChainId || primaryChainId);
+    const activeModalModel = modalParsedStructure ? getModelByNumber(modalParsedStructure, modalSelectedModel) : null;
+    const modalPreview = modalTargetSource
+        ? resolveTargetPreviewSource({
+            previewUrl: modalPreviewUrl,
+            stagedPath: modalTargetSource.path || null,
+            targetSource: modalTargetSource,
+        })
+        : { structureUrl: null, format: 'pdb' as const };
+    const modalPreviewSelections = buildTargetPreviewSelections(
+        Array.from(selectedChainIndices)
+            .map((index) => (activeModalModel?.chains ?? parsedChains)[index]?.id)
+    );
+
+    useEffect(() => {
+        if (predictor === resolvedPredictorSelection.canonicalSelection) {
+            return;
+        }
+        if (predictionMode === 'complex' && !resolvedPredictorSelection.valid) {
+            return;
+        }
+        setPredictor(resolvedPredictorSelection.canonicalSelection);
+    }, [
+        predictionMode,
+        predictor,
+        resolvedPredictorSelection.canonicalSelection,
+        resolvedPredictorSelection.valid,
+    ]);
 
     const resolveTargetStructurePath = async () => {
         if (targetSourcePath) {
@@ -560,15 +662,20 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
             return;
         }
 
+        if (!resolvedPredictorSelection.valid) {
+            alert(resolvedPredictorSelection.error || 'The selected structure predictor cannot be launched in this mode.');
+            return;
+        }
+
         const params: Record<string, any> = {
             sequence: sequence.trim(),
             sequence_name: sequenceName,
-            pred_method: predictor,
+            pred_method: resolvedPredictorSelection.canonicalSelection,
             num_parallel_jobs: numParallelJobs,
         };
 
         // Boltz-2 parameters
-        if (predictor === 'boltz' || predictor === 'both' || predictor === 'all') {
+        if (usesBoltz) {
             params.boltz_use_msa = boltzUseMsa;
             params.boltz_recycling_steps = boltzRecyclingSteps;
             params.boltz_sampling_steps = boltzSamplingSteps;
@@ -580,14 +687,14 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
         }
 
         // RF3 parameters
-        if (predictor === 'rf3' || predictor === 'both' || predictor === 'all') {
+        if (usesRf3) {
             params.rf3_use_msa = rf3UseMsa;
             params.rf3_num_recycles = rf3NumRecycles;
             params.rf3_num_samples = rf3NumSamples;
         }
 
         // Protenix parameters
-        if (predictor === 'protenix' || predictor === 'all') {
+        if (usesProtenix) {
             params.protenix_model_weights = protenixModelWeights;
             params.protenix_seeds = protenixSeeds;
             params.protenix_n_sample = protenixNSample;
@@ -649,8 +756,8 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
             }
         }
 
-        const modelId = predictor === 'rf3' ? 'rf3' : predictor === 'protenix' ? 'protenix' : 'boltz2';
-        const mode = complexMode ? 'complex' : 'predict';
+        const modelId = selectedPredictorId === 'rf3' ? 'rf3' : selectedPredictorId === 'protenix' ? 'protenix' : 'boltz2';
+        const mode = predictionMode;
 
         if (complexMode) {
             const { components, resolvedPrimaryId, binderIds } = buildComplexComponents(batchEntries);
@@ -713,8 +820,10 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
 
         try {
             let file: File;
+            let nextModalPreviewUrl: string | null = null;
             if (target.type === 'upload' && target.file) {
                 file = target.file;
+                nextModalPreviewUrl = URL.createObjectURL(file);
             } else if (target.url) {
                 const response = await fetch(target.url);
                 const blob = await response.blob();
@@ -725,14 +834,15 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
 
             const parsed = await parsePDBFile(file);
             const defaultModelNumber = parsed.models[0]?.modelNumber ?? 1;
+            if (nextModalPreviewUrl) {
+                replacePreviewBlobUrl(modalPreviewBlobRef, setModalPreviewUrl, nextModalPreviewUrl);
+            } else {
+                clearModalPreview();
+            }
+            setModalTargetSource(target);
             setModalParsedStructure(parsed);
             setModalSelectedModel(defaultModelNumber);
             setSequenceName(target.name.replace(/\.pdb$/i, ''));
-
-            if (importTargetRef.current === 'primary') {
-                setTargetSource(target);
-                setTargetSourcePath(target.path || null);
-            }
 
             if (parsed.chains.length === 1) {
                 const onlyChain = parsed.chains[0];
@@ -744,6 +854,9 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                         name: `Chain ${onlyChain.id}`,
                     }]);
                 } else {
+                    setTargetSource(target);
+                    setTargetSourcePath(target.path || null);
+                    adoptModalPreviewForTarget();
                     setSequence(onlyChain.sequence);
                     setPrimaryChainId(onlyChain.id || 'A');
                     setTargetSourceChainId(onlyChain.id || 'A');
@@ -766,7 +879,6 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
     };
 
     const handleMultiChainImport = () => {
-        const activeModalModel = modalParsedStructure ? getModelByNumber(modalParsedStructure, modalSelectedModel) : null;
         const sourceChains = activeModalModel?.chains ?? parsedChains;
         const selectedChains = sourceChains.filter((_, i) => selectedChainIndices.has(i));
         if (selectedChains.length === 0) return;
@@ -786,6 +898,12 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
             closePdbModalState();
             return;
         }
+
+        if (modalTargetSource) {
+            setTargetSource(modalTargetSource);
+            setTargetSourcePath(modalTargetSource.path || null);
+        }
+        adoptModalPreviewForTarget();
 
         // First chain is primary target
         const primary = selectedChains[0];
@@ -822,9 +940,9 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
         setSelectedChainIndices(next);
     };
 
-    const showBoltzParams = predictor === 'boltz' || predictor === 'both' || predictor === 'all';
-    const showRf3Params = predictor === 'rf3' || predictor === 'both' || predictor === 'all';
-    const showProtenixParams = predictor === 'protenix' || predictor === 'all';
+    const showBoltzParams = usesBoltz;
+    const showRf3Params = usesRf3;
+    const showProtenixParams = usesProtenix;
 
     return (
         <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -911,30 +1029,47 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
 
                 <div>
                     <label className="block text-sm font-medium text-slate-400 mb-3">Structure Predictor</label>
-                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-                        {[
-                            { id: 'boltz', name: 'Boltz-2', desc: 'Fast, SOTA accuracy', color: 'blue' },
-                            { id: 'rf3', name: 'RoseTTAFold3', desc: 'Open-source AF3 alt.', color: 'green' },
-                            { id: 'protenix', name: 'Protenix', desc: 'AF3-level, multi-modal', color: 'violet' },
-                            { id: 'both', name: 'Boltz + RF3', desc: 'Ensemble (2)', color: 'purple' },
-                            { id: 'all', name: 'All Three', desc: 'Full ensemble', color: 'amber' },
-                        ].map((pred) => (
-                            <button
-                                key={pred.id}
-                                onClick={() => setPredictor(pred.id as 'boltz' | 'rf3' | 'protenix' | 'both' | 'all')}
-                                className={`p-3 rounded-lg border text-left transition-all ${predictor === pred.id
-                                    ? pred.color === 'blue' ? 'bg-blue-600/20 border-blue-500 text-blue-300'
-                                        : pred.color === 'green' ? 'bg-green-600/20 border-green-500 text-green-300'
-                                            : pred.color === 'violet' ? 'bg-violet-600/20 border-violet-500 text-violet-300'
-                                                : pred.color === 'amber' ? 'bg-amber-600/20 border-amber-500 text-amber-300'
-                                                    : 'bg-accent/20 border-accent text-accent'
-                                    : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-600'
-                                    }`}
-                            >
-                                <div className="font-medium mb-1">{pred.name}</div>
-                                <div className="text-xs opacity-70">{pred.desc}</div>
-                            </button>
-                        ))}
+                    <div className={`grid grid-cols-2 ${predictionMode === 'complex' ? 'sm:grid-cols-4' : 'sm:grid-cols-5'} gap-3`}>
+                        {predictorOptions.map((pred) => {
+                            const isSelected = selectedPredictorId === pred.id || predictor === pred.id;
+                            const selectedClass = pred.color === 'blue'
+                                ? 'bg-blue-600/20 border-blue-500 text-blue-300'
+                                : pred.color === 'green'
+                                    ? 'bg-green-600/20 border-green-500 text-green-300'
+                                    : pred.color === 'violet'
+                                        ? 'bg-violet-600/20 border-violet-500 text-violet-300'
+                                        : pred.color === 'amber'
+                                            ? 'bg-amber-600/20 border-amber-500 text-amber-300'
+                                            : 'bg-accent/20 border-accent text-accent';
+                            return (
+                                <button
+                                    key={pred.id}
+                                    type="button"
+                                    onClick={() => {
+                                        if (!pred.disabled) {
+                                            setPredictor(pred.id);
+                                        }
+                                    }}
+                                    disabled={pred.disabled}
+                                    title={pred.disabledReason}
+                                    className={`p-3 rounded-lg border text-left transition-all ${isSelected
+                                        ? selectedClass
+                                        : pred.disabled
+                                            ? 'bg-slate-900/60 border-slate-800 text-slate-600 cursor-not-allowed'
+                                            : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-600'
+                                        }`}
+                                >
+                                    <div className="font-medium mb-1 flex items-center justify-between gap-2">
+                                        <span>{pred.name}</span>
+                                        {pred.disabled && <span className="text-[10px] uppercase tracking-wide text-slate-500">Unavailable</span>}
+                                    </div>
+                                    <div className="text-xs opacity-70">{pred.desc}</div>
+                                    {pred.disabledReason && (
+                                        <div className="text-[11px] text-amber-300/80 mt-2 leading-snug">{pred.disabledReason}</div>
+                                    )}
+                                </button>
+                            );
+                        })}
                     </div>
                 </div>
 
@@ -1086,6 +1221,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                 onClick={() => {
                                     setTargetSource(null);
                                     setTargetSourcePath(null);
+                                    clearTargetPreview();
                                     setTargetSourceChainId(null);
                                     setTargetSourceSequence('');
                                     setTargetStructure(null);
@@ -1128,6 +1264,27 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                         </option>
                                     ))}
                                 </select>
+                            </div>
+                        )}
+
+                        {targetPreview.structureUrl && (
+                            <div className="rounded-xl border border-slate-700/60 bg-slate-950/50 overflow-hidden">
+                                <div className="flex items-center justify-between px-3 py-2 border-b border-slate-800 text-xs text-slate-400">
+                                    <span>Source mini-viewer</span>
+                                    <span>{targetPreview.format.toUpperCase()}</span>
+                                </div>
+                                <MolstarViewer
+                                    structureUrl={targetPreview.structureUrl}
+                                    format={targetPreview.format}
+                                    height={240}
+                                    hideControls={true}
+                                    alphafoldView={false}
+                                    selections={targetPreviewSelections}
+                                    label={targetSourceChainId || primaryChainId || undefined}
+                                />
+                                <div className="px-3 py-2 text-xs text-slate-500 border-t border-slate-800">
+                                    Imported primary chain {targetSourceChainId || primaryChainId || 'A'} is highlighted in blue.
+                                </div>
                             </div>
                         )}
 
@@ -1192,7 +1349,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                             </label>
                         </div>
 
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label className="text-xs text-slate-400 block mb-1">Use MSA</label>
                                 <select
@@ -1220,17 +1377,84 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                     className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
                                 />
                             </div>
-                            <div>
-                                <label className="text-xs text-slate-400 block mb-1">Sampling Steps</label>
-                                <input
-                                    type="number"
-                                    value={boltzSamplingSteps}
-                                    onChange={(e) => setBoltzSamplingSteps(clampBoltzSamplingSteps(e.target.value, boltzUseMsa))}
-                                    min={boltzUseMsa ? 10 : MIN_BOLTZ_NO_MSA_SAMPLING_STEPS}
-                                    max={1000}
-                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
-                                />
+                        </div>
+
+                        <div className="rounded-lg border border-blue-500/20 bg-blue-500/5 p-4 space-y-4">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                    <label className="text-xs text-blue-100/80 block mb-1">Sampling Quality</label>
+                                    <div className="text-sm text-slate-200">
+                                        {boltzQualityState.label} · {boltzSamplingSteps} sampling steps
+                                    </div>
+                                    <p className="text-xs text-slate-400 mt-1">
+                                        200-step High is the default top preset. Older 1000-step runs remain editable as custom legacy settings.
+                                    </p>
+                                </div>
+                                <div className="text-right text-xs text-slate-400">
+                                    <div>{boltzUseMsa ? 'MSA-enabled' : 'No-MSA clamp active'}</div>
+                                    {!boltzUseMsa && <div>Minimum 50 steps enforced</div>}
+                                </div>
                             </div>
+
+                            <div className="grid grid-cols-3 gap-2">
+                                {BOLTZ_QUALITY_PRESETS.map((preset) => {
+                                    const isActive = boltzQualityState.presetId === preset.id;
+                                    return (
+                                        <button
+                                            key={preset.id}
+                                            type="button"
+                                            onClick={() => setBoltzSamplingSteps(clampBoltzSamplingSteps(preset.samplingSteps, boltzUseMsa))}
+                                            className={`rounded-lg border px-3 py-2 text-left transition-colors ${isActive
+                                                ? 'border-blue-400 bg-blue-500/15 text-blue-100'
+                                                : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
+                                                }`}
+                                        >
+                                            <div className="text-sm font-medium">{preset.label}</div>
+                                            <div className="text-xs text-slate-400 mt-1">{preset.samplingSteps} steps</div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+
+                            <div>
+                                <input
+                                    type="range"
+                                    min={0}
+                                    max={boltzQualityState.sliderMax}
+                                    value={boltzQualityState.sliderValue}
+                                    onChange={(e) => setBoltzSamplingSteps(clampBoltzSamplingSteps(
+                                        resolveBoltzSamplingStepsFromSlider({
+                                            currentSamplingSteps: boltzSamplingSteps,
+                                            sliderValue: Number(e.target.value),
+                                        }),
+                                        boltzUseMsa,
+                                    ))}
+                                    className="w-full accent-blue-500"
+                                />
+                                <div className={`mt-2 grid text-[11px] text-slate-500 ${boltzQualityState.presetId === 'custom' ? 'grid-cols-4' : 'grid-cols-3'}`}>
+                                    {BOLTZ_QUALITY_PRESETS.map((preset) => (
+                                        <div key={preset.id} className="text-center">{preset.label}</div>
+                                    ))}
+                                    {boltzQualityState.presetId === 'custom' && <div className="text-center">Custom</div>}
+                                </div>
+                            </div>
+
+                            {boltzQualityState.presetId === 'custom' && (
+                                <div className="max-w-xs">
+                                    <label className="text-xs text-slate-400 block mb-1">Legacy custom sampling steps</label>
+                                    <input
+                                        type="number"
+                                        value={boltzSamplingSteps}
+                                        onChange={(e) => setBoltzSamplingSteps(clampBoltzSamplingSteps(e.target.value, boltzUseMsa))}
+                                        min={boltzUseMsa ? 10 : MIN_BOLTZ_NO_MSA_SAMPLING_STEPS}
+                                        max={1000}
+                                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                    />
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4">
                             <div>
                                 <label className="text-xs text-slate-400 block mb-1">Num Samples</label>
                                 <input
@@ -1850,6 +2074,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                                 setPrimaryChainId('A');
                                                 setTargetSource(null);
                                                 setTargetSourcePath(null);
+                                                clearTargetPreview();
                                                 setTargetSourceChainId(null);
                                                 setTargetSourceSequence('');
                                                 setTargetStructure(null);
@@ -1897,6 +2122,26 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                             <p className="text-sm text-slate-500">
                                                 Multiple chains found in the selected structure. Choose the model and chain set you want to import.
                                             </p>
+                                            {modalPreview.structureUrl && (
+                                                <div className="rounded-xl border border-slate-700/60 bg-slate-950/50 overflow-hidden">
+                                                    <div className="flex items-center justify-between px-3 py-2 border-b border-slate-800 text-xs text-slate-400">
+                                                        <span>Source mini-viewer</span>
+                                                        <span>{modalPreview.format.toUpperCase()}</span>
+                                                    </div>
+                                                    <MolstarViewer
+                                                        structureUrl={modalPreview.structureUrl}
+                                                        format={modalPreview.format}
+                                                        height={260}
+                                                        hideControls={true}
+                                                        alphafoldView={false}
+                                                        selections={modalPreviewSelections}
+                                                        label={modalPreviewSelections[0]?.chain_id}
+                                                    />
+                                                    <div className="px-3 py-2 text-xs text-slate-500 border-t border-slate-800">
+                                                        Selected chains are highlighted in blue; the first selected chain becomes the imported primary target.
+                                                    </div>
+                                                </div>
+                                            )}
                                             <div className="grid gap-2">
                                                 {parsedChains.map((chain, i) => {
                                                     const isSelected = selectedChainIndices.has(i);

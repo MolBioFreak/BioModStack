@@ -100,3 +100,33 @@ test('marks multi-predictor structure jobs as relevant and exposes only the acti
     assert.deepEqual(settings.predictors, ['boltz', 'rf3', 'protenix']);
     assert.equal(settings.skipMsa, false);
 });
+
+test('normalizes legacy complex all runs to boltz plus protenix for re-orchestration', () => {
+    const job = {
+        model_id: 'boltz2',
+        mode: 'complex',
+        params: {
+            pred_method: 'all',
+            boltz_use_msa: true,
+            protenix_use_msa: true,
+        },
+    };
+
+    const settings = deriveStructureReorchestrateSettings(job);
+    assert.deepEqual(settings.predictors, ['boltz', 'protenix']);
+});
+
+test('uses the 200-step Boltz default when retry metadata omitted sampling steps', () => {
+    const job = {
+        model_id: 'boltz2',
+        mode: 'complex',
+        params: {
+            pred_method: 'boltz',
+            boltz_use_msa: true,
+        },
+    };
+
+    const settings = deriveStructureReorchestrateSettings(job);
+    assert.equal(settings.boltz.samplingSteps, 200);
+    assert.equal(settings.boltz.recyclingSteps, 3);
+});
