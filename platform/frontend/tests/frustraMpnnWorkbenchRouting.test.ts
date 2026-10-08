@@ -33,7 +33,7 @@ test('direct and conformational-mapping results mount the same global FrustraMPN
     assert.match(detail, /<ConformationalMappingViewer[\s\S]*job=\{job\}/);
     assert.match(cm, /aria-label="Workflow model data views"/);
     assert.match(cm, /modelDataView === 'frustrampnn'[\s\S]*<FrustraWorkbench[\s\S]*job=\{frustraMpnnJob\}/);
-    assert.match(cm, /preferredInvocationId=\{selected \? `frustrampnn:\$\{frustraMpnnJob\.id\}:\$\{selected\.candidate_id\}` : undefined\}/);
+    assert.match(cm, /preferredInvocationId=\{exactCandidateId \? `frustrampnn:\$\{frustraMpnnJob\.id\}:\$\{exactCandidateId\}` : undefined\}/);
     assert.doesNotMatch(cm, /detailTab === 'landscape'/);
     assert.doesNotMatch(cm, /collectCompleteFrustraMpnnLandscape|createFrustraMpnnViewerMetrics|resolveFrustraMpnnResidueProfile/);
     assert.match(cm, /function LegacyCmFrustraMpnnView/);
