@@ -29,7 +29,7 @@ from .bundle import (
     prepare_remote_bundle,
     resolve_job_result_contract,
 )
-from .contracts import RemoteAttemptStatus, RemoteResultManifest
+from .contracts import RemoteAttemptStatus, RemoteResultManifest, RemoteExecutionEnvelope
 from .targets import ExecutionTargetError, get_ready_target, target_eligible
 from .transport import (
     RemoteConnection,
@@ -285,13 +285,24 @@ async def _stage_secret_environment(
 
 
 def _archive_envelope(bundle: PreparedRemoteBundle) -> None:
-    envelope_root = get_data_root() / "remote-execution" / "envelopes"
-    envelope_root.mkdir(parents=True, exist_ok=True)
-    source = bundle.local_attempt_dir / "execution-envelope.json"
-    destination = envelope_root / f"{bundle.attempt_id}.json"
-    temporary = destination.with_suffix(".json.tmp")
-    shutil.copy2(source, temporary)
-    os.replace(temporary, destination)
+    from component_runtime import ArtifactReference, GeneratedInput
+    source = bundle.local_attempt_dir / 'execution-envelope.json'
+    payload = source.read_bytes()
+    if hashlib.sha256(payload).hexdigest() != bundle.envelope_sha256:
+        raise RemoteExecutionError('Execution authority changed before archival')
+    root = get_data_root().resolve()
+    relative = f'remote-execution/envelopes/{bundle.attempt_id}.json'
+    reference = ArtifactReference(logical_id=f'execution-envelope:{bundle.attempt_id}',
+        owner_kind='job', owner_id=bundle.envelope.job_id, job_id=bundle.envelope.job_id,
+        role='receipt', sha256=bundle.envelope_sha256, size_bytes=len(payload),
+        format_schema='bms.remote-execution.v1', relative_path=relative)
+    try:
+        reference.resolve(root)
+        return
+    except FileNotFoundError:
+        pass
+    GeneratedInput(relative, payload).materialize(root)
+    reference.resolve(root)
 
 
 def _cleanup_local_bundle(bundle: PreparedRemoteBundle) -> None:
@@ -307,7 +318,7 @@ def _remote_receipt(
     error: str | None = None,
 ) -> dict[str, Any]:
     capabilities = target.capabilities if isinstance(target.capabilities, dict) else {}
-    return {
+    receipt = {
         "schema": "bms.remote-execution-receipt.v1",
         "state": state,
         "attempt_id": bundle.attempt_id,
@@ -343,6 +354,13 @@ def _remote_receipt(
         "started_at": started_at.isoformat() if started_at else None,
         "error": error[:1500] if error else None,
     }
+    from component_runtime import NATIVE_RECEIPT_INPUT
+    native = [record for record in bundle.envelope.files if record.relative_path == NATIVE_RECEIPT_INPUT]
+    if native:
+        if len(native) != 1 or native[0].role != 'receipt':
+            raise RemoteExecutionError('Invalid native compiler receipt declaration')
+        receipt['native_invocation_receipt_sha256'] = native[0].sha256
+    return receipt
 
 
 async def _publish_remote_transition(
@@ -728,6 +746,44 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _load_archived_envelope(job: Job) -> dict[str, Any]:
+    """Read original authenticated bytes, never rebuild an old launch plan."""
+    attempt_id = _remote_attempt_id(f'remote:{job.remote_attempt_id}')
+    path = get_data_root() / 'remote-execution' / 'envelopes' / f'{attempt_id}.json'
+    try:
+        import stat
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, 'rb') as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise RemoteExecutionError('Archived execution authority is not a regular file')
+            payload = handle.read()
+        if hashlib.sha256(payload).hexdigest() != str(job.execution_bundle_sha256):
+            raise RemoteExecutionError('Archived execution authority hash differs from the Job')
+        parsed = RemoteExecutionEnvelope.model_validate_json(payload)
+        if ((parsed.job_id, parsed.attempt_id, parsed.source_revision, parsed.source_tree)
+                != (str(job.id), str(job.remote_attempt_id), str(job.execution_source_revision), str(job.execution_source_tree))):
+            raise RemoteExecutionError('Archived execution authority belongs to another attempt')
+        return json.loads(payload)
+    except (OSError, ValueError) as exc:
+        raise RemoteExecutionError('Original execution authority is missing or incompatible; no plan was reconstructed') from exc
+
+
+def _verify_native_receipt_manifest(manifest: RemoteResultManifest,
+                                     envelope: dict[str, Any]) -> None:
+    from component_runtime import NATIVE_RECEIPT_INPUT, NATIVE_RECEIPT_RESULT
+    expected = [record for record in envelope['files'] if record['relative_path'] == NATIVE_RECEIPT_INPUT]
+    if not expected:
+        # Preserve historical attempts without attributing a new compiler identity.
+        return
+    if len(expected) != 1 or expected[0]['role'] != 'receipt' or expected[0].get('link_target') is not None:
+        raise RemoteExecutionError('Archived native compiler receipt declaration is invalid')
+    returned = [record for record in manifest.artifacts if record.relative_path == NATIVE_RECEIPT_RESULT]
+    if (len(returned) != 1 or returned[0].role != 'receipt' or returned[0].link_target is not None
+            or returned[0].sha256 != expected[0]['sha256']
+            or returned[0].size_bytes != expected[0]['size_bytes']):
+        raise RemoteExecutionError('Returned native compiler identity differs from launch authority')
+
+
 def _verify_result_package(
     incoming: Path,
     job: Job,
@@ -767,6 +823,15 @@ def _verify_result_package(
             actual.add(path.relative_to(incoming).as_posix())
     if actual != declared:
         raise RemoteExecutionError("Remote result package contains undeclared or missing files")
+    envelope = _load_archived_envelope(job)
+    _verify_native_receipt_manifest(manifest, envelope)
+    from component_runtime import NATIVE_RECEIPT_INPUT, NATIVE_RECEIPT_RESULT, validate_native_invocation_receipt
+    if any(record['relative_path'] == NATIVE_RECEIPT_INPUT for record in envelope['files']):
+        try:
+            payload = (incoming / NATIVE_RECEIPT_RESULT).read_bytes()
+            validate_native_invocation_receipt(json.loads(payload), envelope)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise RemoteExecutionError('Returned native compiler receipt is incompatible') from exc
     return manifest
 
 
@@ -809,6 +874,7 @@ async def _fetch_result_manifest(
         raise RemoteExecutionError("Remote result manifest identity does not match the BMS Job")
     if len(manifest.artifacts) > MAX_RESULT_ARTIFACTS:
         raise RemoteExecutionError("Remote result manifest exceeds the artifact-count limit")
+    _verify_native_receipt_manifest(manifest, _load_archived_envelope(job))
     from .result_generation import checked, prepare_transfer
 
     checked(incoming)
@@ -1512,6 +1578,12 @@ async def _finalize_pulled_results(session, job, status, manifest, incoming):
         expected_contract_sha256 = str(
             receipt.get("expected_result_contract_sha256") or ""
         )
+        sealed_contract = _load_archived_envelope(job)['expected_result_contract']
+        sealed_contract_sha256 = hashlib.sha256(
+            json.dumps(sealed_contract, sort_keys=True, separators=(',', ':')).encode('utf-8')
+        ).hexdigest()
+        if expected_contract_sha256 != sealed_contract_sha256:
+            raise RemoteExecutionError('REMOTE_ARCHIVED_RESULT_CONTRACT_IDENTITY_MISMATCH')
         current_contract = resolve_job_result_contract(job)
         current_contract_sha256 = hashlib.sha256(
             json.dumps(current_contract, sort_keys=True, separators=(",", ":")).encode("utf-8")

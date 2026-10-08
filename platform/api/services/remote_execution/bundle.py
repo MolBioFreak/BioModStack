@@ -965,6 +965,14 @@ def prepare_remote_bundle(
         files=records,
         created_at=datetime.now(timezone.utc),
     )
+    from component_runtime import (NATIVE_RECEIPT_INPUT, durable_write,
+                                   native_invocation_receipt)
+    receipt_path = staging_root / 'native-invocation.json'
+    receipt = native_invocation_receipt(native_invocation, envelope.model_dump(mode='json', by_alias=True))
+    durable_write(receipt_path, _canonical_bytes(receipt) + b'\n')
+    envelope.files.append(_record_file(receipt_path, NATIVE_RECEIPT_INPUT, 'receipt'))
+    input_transfers.append(TransferPlan(receipt_path,
+        f'{remote_attempt}/bundle/{NATIVE_RECEIPT_INPUT}', origin=receipt_path))
     envelope_payload = envelope.model_dump(mode="json", by_alias=True)
     envelope_bytes = _canonical_bytes(envelope_payload)
     envelope_sha256 = hashlib.sha256(envelope_bytes).hexdigest()

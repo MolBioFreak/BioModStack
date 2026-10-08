@@ -10,6 +10,8 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 import hashlib
 import json
+import re
+import uuid
 import os
 import tempfile
 import time
@@ -339,6 +341,112 @@ class NativeInvocation:
     @property
     def invocation_sha256(self) -> str:
         return digest(self.payload)
+
+
+NATIVE_RECEIPT_INPUT = 'receipts/native-invocation.json'
+NATIVE_RECEIPT_RESULT = '.bms-native-invocation.json'
+
+
+def execution_projection_digest(envelope: Mapping[str, Any]) -> str:
+    """Bind placement without a self-reference to its own receipt file.
+
+    This is a placement projection, not a replacement scientific plan schema.
+    Excluding only the reserved receipt and creation time preserves v1 archives.
+    """
+    fields = ('job_id', 'root_job_id', 'parent_job_id', 'attempt_id',
+              'execution_target_id', 'source_revision', 'source_tree',
+              'source_archive_sha256', 'command', 'working_directory',
+              'environment', 'output_directory', 'expected_result_contract', 'path_map')
+    projection = {key: envelope[key] for key in fields}
+    projection['files'] = [record for record in envelope['files']
+                           if record['relative_path'] != NATIVE_RECEIPT_INPUT]
+    return digest(projection)
+
+
+def native_invocation_receipt(invocation: NativeInvocation,
+                              envelope: Mapping[str, Any]) -> dict[str, Any]:
+    """Publish commitments, never raw request settings or credential values."""
+    if invocation.source_identity is None or invocation.entrypoint is None:
+        raise ValueError('receipt requires a source-bound native invocation')
+    receipt = {
+        'schema': 'bms.native-invocation-receipt.v1',
+        'job_id': envelope['job_id'], 'attempt_id': envelope['attempt_id'],
+        'model_id': invocation.model_id, 'mode': invocation.mode,
+        'entrypoint': invocation.entrypoint,
+        'source_identity': asdict(invocation.source_identity),
+        'invocation_sha256': invocation.invocation_sha256,
+        'requested_sha256': hashlib.sha256(invocation.requested_json).hexdigest(),
+        'effective_sha256': hashlib.sha256(invocation.effective_json).hexdigest(),
+        'native_parameters_sha256': hashlib.sha256(invocation.native_parameters_json).hexdigest(),
+        'execution_projection_sha256': execution_projection_digest(envelope),
+    }
+    validate_native_invocation_receipt(receipt, envelope)
+    return receipt
+
+
+def validate_native_invocation_receipt(receipt: Mapping[str, Any],
+                                       envelope: Mapping[str, Any]) -> None:
+    keys = {'schema', 'job_id', 'attempt_id', 'model_id', 'mode', 'entrypoint',
+            'source_identity', 'invocation_sha256', 'requested_sha256',
+            'effective_sha256', 'native_parameters_sha256', 'execution_projection_sha256'}
+    if (not isinstance(receipt, Mapping) or set(receipt) != keys
+            or receipt['schema'] != 'bms.native-invocation-receipt.v1'):
+        raise ValueError('unsupported native invocation receipt')
+    for key in keys - {'source_identity'}:
+        value = receipt[key]
+        if type(value) is not str or not value or '\x00' in value:
+            raise ValueError('native invocation receipt fields must be nonempty text')
+        if key.endswith('_sha256') and not re.fullmatch(r'[0-9a-f]{64}', value):
+            raise ValueError('native invocation receipt digest is invalid')
+    source = receipt['source_identity']
+    if not isinstance(source, dict) or set(source) != {'revision', 'tree'}:
+        raise ValueError('native invocation receipt source is invalid')
+    identity = SourceIdentity(**source)
+    if ((receipt['job_id'], receipt['attempt_id']) != (envelope['job_id'], envelope['attempt_id'])
+            or (identity.revision, identity.tree) != (envelope['source_revision'], envelope['source_tree'])
+            or receipt['execution_projection_sha256'] != execution_projection_digest(envelope)):
+        raise ValueError('native invocation receipt differs from execution authority')
+    entrypoint = PurePosixPath(receipt['entrypoint'])
+    if (entrypoint.is_absolute() or '..' in entrypoint.parts
+            or '\\' in receipt['entrypoint'] or entrypoint.as_posix() != receipt['entrypoint']
+            or entrypoint.suffix != '.nf'):
+        raise ValueError('native invocation receipt entrypoint is invalid')
+
+
+def publish_native_invocation_receipt(root: Path, payload: bytes) -> Path:
+    """Atomically add a reserved receipt, never overwrite native output bytes."""
+    root = Path(root)
+    directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    temporary = f'.native-receipt-{uuid.uuid4().hex}.tmp'
+    created = False
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o644, dir_fd=directory)
+        created = True
+        with os.fdopen(descriptor, 'wb') as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, NATIVE_RECEIPT_RESULT, src_dir_fd=directory,
+                    dst_dir_fd=directory, follow_symlinks=False)
+        except FileExistsError:
+            descriptor = os.open(NATIVE_RECEIPT_RESULT,
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+            with os.fdopen(descriptor, 'rb') as handle:
+                import stat
+                if (not stat.S_ISREG(os.fstat(handle.fileno()).st_mode)
+                        or handle.read(len(payload) + 1) != payload):
+                    raise ValueError('native invocation receipt conflicts with existing output')
+        os.fsync(directory)
+    finally:
+        try:
+            if created:
+                os.unlink(temporary, dir_fd=directory)
+                os.fsync(directory)
+        finally:
+            os.close(directory)
+    return root / NATIVE_RECEIPT_RESULT
 
 
 @dataclass(frozen=True, order=True)

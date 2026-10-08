@@ -171,7 +171,57 @@ def verify_bundle(attempt_dir: Path) -> dict[str, Any]:
     if not working_directory.is_dir():
         raise RuntimeError("working directory is unavailable")
     output_directory.mkdir(parents=True, exist_ok=True)
+    native_receipt_binding(attempt_dir, envelope)
     return envelope
+
+
+def native_receipt_binding(attempt_dir: Path, envelope: dict[str, Any]):
+    # Older envelopes remain byte-identical and do not acquire invented receipts.
+    records = [item for item in envelope.get('files', [])
+               if item.get('relative_path') == 'receipts/native-invocation.json']
+    if not records:
+        return None
+    if len(records) != 1 or records[0].get('role') != 'receipt' or records[0].get('link_target') is not None:
+        raise RuntimeError('invalid native invocation receipt declaration')
+    record = records[0]
+    path = attempt_dir / 'bundle' / record['relative_path']
+    import stat
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, 'rb') as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise RuntimeError('native invocation receipt is not a regular file')
+        payload = handle.read(65537)
+    if (len(payload) > 65536 or len(payload) != record.get('size_bytes')
+            or hashlib.sha256(payload).hexdigest() != record.get('sha256')):
+        raise RuntimeError('native invocation receipt bytes differ from authority')
+    source_name = 'source/platform/api/component_runtime.py'
+    sources = [item for item in envelope['files'] if item.get('relative_path') == source_name]
+    if len(sources) != 1 or sources[0].get('role') != 'source' or sources[0].get('link_target') is not None:
+        raise RuntimeError('shared native receipt contract is not source-bound')
+    source_path = attempt_dir / 'bundle' / source_name
+    descriptor = os.open(source_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, 'rb') as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise RuntimeError('shared native receipt contract is not a regular file')
+        source = handle.read()
+    if len(source) != sources[0].get('size_bytes') or hashlib.sha256(source).hexdigest() != sources[0].get('sha256'):
+        raise RuntimeError('shared native receipt contract differs from pinned source')
+    import importlib.util
+    module_name = '_bms_bound_components_' + hashlib.sha256(source).hexdigest()
+    runtime = sys.modules.get(module_name)
+    if runtime is None:
+        spec = importlib.util.spec_from_file_location(module_name, source_path)
+        if spec is None:
+            raise RuntimeError('shared native receipt contract cannot be loaded')
+        runtime = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = runtime
+        try:
+            exec(compile(source, str(source_path), 'exec'), runtime.__dict__)
+        except BaseException:
+            sys.modules.pop(module_name, None)
+            raise
+    runtime.validate_native_invocation_receipt(json.loads(payload), envelope)
+    return runtime, payload
 
 
 def base_status(envelope: dict[str, Any], state: str) -> dict[str, Any]:
@@ -245,6 +295,10 @@ def start(attempt_dir: Path) -> dict[str, Any]:
 
 def build_result_manifest(attempt_dir: Path, envelope: dict[str, Any], exit_code: int) -> dict[str, Any]:
     output_root = Path(str(envelope["output_directory"]))
+    binding = native_receipt_binding(attempt_dir, envelope)
+    if binding is not None:
+        runtime, payload = binding
+        runtime.publish_native_invocation_receipt(output_root, payload)
     artifacts: list[dict[str, Any]] = []
     for path in sorted(output_root.rglob("*")):
         if path.is_symlink():
@@ -259,7 +313,8 @@ def build_result_manifest(attempt_dir: Path, envelope: dict[str, Any], exit_code
                 "relative_path": relative,
                 "size_bytes": path.stat().st_size,
                 "sha256": sha256_file(path),
-                "role": "log" if path.suffix in {".log", ".trace"} else "result",
+                "role": ('receipt' if binding is not None and relative == binding[0].NATIVE_RECEIPT_RESULT
+                         else "log" if path.suffix in {".log", ".trace"} else "result"),
             }
         )
     return {
