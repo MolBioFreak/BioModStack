@@ -48,14 +48,6 @@ Purpose:
 Purpose:
 - give deeper technical reference for the control plane, UI, and live model set
 
-### 4. Historical Design Notes
-
-- dated `*_Plan*`, `*_Spec*`, `*_Fix*`, `*_Review*` files under `docs/`
-
-Purpose:
-- preserve implementation history without pretending those files are current
-  operator docs
-
 ## Rules Going Forward
 
 ### Keep canonical docs date-neutral
@@ -63,10 +55,11 @@ Purpose:
 If a document is meant to describe current behavior, it should not need a date
 in the filename.
 
-### Keep design history explicit
+### Do not keep stale design notes in tracked docs
 
-If a document is a plan, revision, or implementation note, name it as such and
-do not link to it from the root README as if it were operator documentation.
+If a document is obsolete, superseded, or only useful as temporary design
+scratch space, delete it from the tracked docs tree instead of leaving it in
+place as passive clutter.
 
 ### Keep README thin
 
@@ -92,16 +85,16 @@ experimental. They should not imply support just because a draft spec exists.
 ## What Was Executed In This Pass
 
 - rewrote the repo README
-- added a docs index with explicit canonical vs historical roles
+- added a docs index for the current documentation surface
 - added current docs for platform overview, runtime, workflows, and lab-facing
   subsystems
 - aligned API/frontend README files with the live system
 - replaced the stale model-integration doc with a live inventory
+- removed stale dated design/spec/review docs and bundled reference files from
+  the tracked `docs/` surface
 
 ## Deferred Work
 
-- move historical spec files into clearer archive buckets if link preservation
-  requirements permit it
 - add per-workflow operator runbooks if the antibody, sequencing, or robotics
   surfaces continue to grow
 - add automated link and stale-doc checks in CI
