@@ -353,9 +353,55 @@ def test_release_rejects_mismatched_operator_frontend_build_identity(
         release.OPERATOR_API_HEALTH_URL: (200, payload),
     }
     monkeypatch.setattr(backend, "_fetch", lambda url: responses[url])
+    monkeypatch.setattr(release.time, "sleep", lambda _seconds: None)
 
     with pytest.raises(release.ReleaseValidationError, match="frontend build identity"):
         backend.validate_runtime(identity)
+
+
+def test_release_retries_transient_operator_frontend_build_identity(
+    tmp_path: Path, monkeypatch
+) -> None:
+    revision = "0123456789abcdef0123456789abcdef01234567"
+    identity = release.BuildIdentity(revision, "operator", "2026-07-26T00:00:00Z")
+    backend = release.ProductionReleaseBackend(
+        repo_root=tmp_path,
+        api_url="http://api/health",
+        browser_url="http://stable/bms/",
+        allow_first_install=True,
+    )
+    payload = (
+        '{"readiness":{"ready":true},"build":{"revision":"' + revision + '"}}'
+    ).encode()
+    valid_identity = (
+        'import.meta.env = {"VITE_BMS_BUILD_SHA":"'
+        + revision
+        + '","VITE_BMS_BUILD_ID":"operator","VITE_BMS_BUILD_TIME":"2026-07-26T00:00:00Z"};'
+    ).encode()
+    identity_attempt = 0
+
+    def fetch(url: str) -> tuple[int, bytes]:
+        nonlocal identity_attempt
+        if url == release.OPERATOR_FRONTEND_BUILD_IDENTITY_URL:
+            identity_attempt += 1
+            if identity_attempt == 1:
+                raise release.ReleaseValidationError("frontend identity transport failed")
+            if identity_attempt == 2:
+                return 200, b"transforming"
+            return 200, valid_identity
+        if url in {"http://api/health", release.OPERATOR_API_HEALTH_URL}:
+            return 200, payload
+        return 200, b"<html>operator</html>"
+
+    monkeypatch.setattr(backend, "_fetch", fetch)
+    monkeypatch.setattr(release.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        release.services,
+        "runtime_listener_preflight",
+        lambda **_kwargs: {"components": {"frontend": {"ok": True}}},
+    )
+
+    backend.validate_runtime(identity)
 
 
 class _FailingValidationBackend:

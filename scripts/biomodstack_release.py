@@ -16,6 +16,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -55,6 +56,8 @@ OPERATOR_FRONTEND_BUILD_IDENTITY_URL = (
     "http://127.0.0.1:5173/src/lib/buildIdentity.ts"
 )
 OPERATOR_API_HEALTH_URL = "http://127.0.0.1:5173/api/health"
+OPERATOR_FRONTEND_IDENTITY_ATTEMPTS = 20
+OPERATOR_FRONTEND_IDENTITY_RETRY_SECONDS = 0.25
 
 
 def _read_runtime_env(path: Path) -> dict[str, str]:
@@ -470,37 +473,52 @@ class ProductionReleaseBackend:
         if operator_status != 200 or b"<html" not in operator_body.lower():
             raise ReleaseValidationError("operator frontend did not return the BioModStack HTML shell")
         if identity is not None:
-            identity_status, identity_body = self._fetch(
-                OPERATOR_FRONTEND_BUILD_IDENTITY_URL
-            )
-            if identity_status != 200:
-                raise ReleaseValidationError(
-                    f"operator frontend build identity returned HTTP {identity_status}"
-                )
-            match = re.search(
-                rb"import\.meta\.env\s*=\s*(\{.*?\});", identity_body, re.DOTALL
-            )
-            if match is None:
-                raise ReleaseValidationError(
-                    "operator frontend build identity module is malformed"
-                )
-            try:
-                frontend_environment = json.loads(match.group(1))
-            except (TypeError, ValueError) as exc:
-                raise ReleaseValidationError(
-                    "operator frontend build identity module is malformed"
-                ) from exc
             expected_frontend_identity = {
                 "VITE_BMS_BUILD_SHA": identity.revision,
                 "VITE_BMS_BUILD_ID": identity.build_id,
                 "VITE_BMS_BUILD_TIME": identity.build_time,
             }
-            if any(
-                frontend_environment.get(key) != value
-                for key, value in expected_frontend_identity.items()
-            ):
+            frontend_identity_error = "module is malformed"
+            for attempt in range(OPERATOR_FRONTEND_IDENTITY_ATTEMPTS):
+                try:
+                    identity_status, identity_body = self._fetch(
+                        OPERATOR_FRONTEND_BUILD_IDENTITY_URL
+                    )
+                except ReleaseValidationError as exc:
+                    frontend_identity_error = f"fetch failed: {exc}"
+                else:
+                    if identity_status != 200:
+                        frontend_identity_error = f"returned HTTP {identity_status}"
+                    else:
+                        match = re.search(
+                            rb"import\.meta\.env\s*=\s*(\{.*?\});",
+                            identity_body,
+                            re.DOTALL,
+                        )
+                        if match is None:
+                            frontend_identity_error = "module is malformed"
+                        else:
+                            try:
+                                frontend_environment = json.loads(match.group(1))
+                            except (TypeError, ValueError):
+                                frontend_identity_error = "module is malformed"
+                            else:
+                                mismatched_keys = [
+                                    key
+                                    for key, value in expected_frontend_identity.items()
+                                    if frontend_environment.get(key) != value
+                                ]
+                                if not mismatched_keys:
+                                    break
+                                frontend_identity_error = (
+                                    "does not match the built release for "
+                                    + ", ".join(mismatched_keys)
+                                )
+                if attempt + 1 < OPERATOR_FRONTEND_IDENTITY_ATTEMPTS:
+                    time.sleep(OPERATOR_FRONTEND_IDENTITY_RETRY_SECONDS)
+            else:
                 raise ReleaseValidationError(
-                    "operator frontend build identity does not match the built release"
+                    "operator frontend build identity " + frontend_identity_error
                 )
         proxy_status, proxy_body = self._fetch(OPERATOR_API_HEALTH_URL)
         if proxy_status != 200:
