@@ -6,12 +6,13 @@ import test from 'node:test';
 const cockpit = readFileSync(resolve('src/components/BioXpCockpit.tsx'), 'utf8');
 const client = readFileSync(resolve('src/lib/bioxpClient.ts'), 'utf8');
 
-test('generic gripper routes remain retired while typed OEM M02-M04 stages are explicit', () => {
+test('generic gripper routes and the internal M02 current write are retired from operator controls', () => {
     const combined = `${cockpit}\n${client}`;
     for (const marker of ['axis/relative', 'axis/absolute', 'motion/gripper', "command: 'gripper'"]) {
         assert.doesNotMatch(combined, new RegExp(marker, 'i'));
     }
-    for (const marker of ['gripper-current-31', 'gripper-clear-10000', 'gripper-home']) {
+    assert.doesNotMatch(cockpit, /gripper-current-31|Gripper current 31/);
+    for (const marker of ['gripper-clear-10000', 'gripper-home']) {
         assert.match(cockpit, new RegExp(marker));
     }
 });

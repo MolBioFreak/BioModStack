@@ -37,7 +37,8 @@ test('retired hardware and host controls are absent', () => {
     ]) {
         assert.doesNotMatch(combined, new RegExp(marker, 'i'));
     }
-    for (const approvedStage of ['M01 · Z reference', 'M02 · Gripper current 31', 'M03 · Gripper clear +10000', 'M04 · Gripper home']) {
+    for (const approvedStage of ['M01 · Z reference', 'M03 · Gripper clear +10000', 'M04 · Gripper home']) {
         assert.match(cockpit, new RegExp(approvedStage.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     }
+    assert.doesNotMatch(cockpit, /M02 · Gripper current 31|gripper-current-31/);
 });
