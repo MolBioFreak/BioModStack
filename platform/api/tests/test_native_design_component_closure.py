@@ -82,6 +82,8 @@ if args[0].endswith('native_frustrampnn_parent.py') and args[1]=='run':
     pathlib.Path('group_receipts').mkdir()
     pathlib.Path('group_receipts/native-fixture.json').write_text(json.dumps(ids))
     pathlib.Path({str(tmp_path)!r}, 'observed-'+ids[0]+'.json').write_text(json.dumps(ids))
+    with pathlib.Path({str(tmp_path)!r}, 'native-invocations.jsonl').open('a') as log:
+        log.write(json.dumps(ids)+'\\n')
 else:
     sys.argv=args
     runpy.run_path(args[0], run_name='__main__')
@@ -121,7 +123,7 @@ docker.enabled=false
     if placement == 'worker':
         env['BMS_REMOTE_EXECUTION'] = '1'
     env = offline_worker_env(tmp_path, env)
-    completed = subprocess.run(['java', '--add-opens=java.base/java.util=ALL-UNNAMED', '-jar', str(target), '-C', str(config), 'run', str(workflow), '-offline', '-w', str(tmp_path/'work')], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=180)
+    completed = subprocess.run(['java', '--add-opens=java.base/java.util=ALL-UNNAMED','--add-opens=java.base/java.lang=ALL-UNNAMED', '-jar', str(target), '-C', str(config), 'run', str(workflow), '-offline', '-w', str(tmp_path/'work')], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=180)
     assert completed.returncode == 0, completed.stdout+completed.stderr
     receipt_path = tmp_path/'out/frustrampnn/component_runtime/terminal.json'
     assert receipt_path.is_file(), completed.stdout+completed.stderr
@@ -132,3 +134,8 @@ docker.enabled=false
     assert sorted(calls) == sorted(map(list, partition_ordered(ids, batching_enabled=enabled, structures_per_job=2)))
     assert receipt['candidate_ids'] == ids
     assert len(list((tmp_path/'out/frustrampnn/results').glob('*/workflow_component_result_v3.json'))) == 3
+    invocations = (tmp_path/'native-invocations.jsonl').read_bytes()
+    resumed = subprocess.run([*completed.args, '-resume'], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=180)
+    assert resumed.returncode == 0, resumed.stdout+resumed.stderr
+    assert (tmp_path/'native-invocations.jsonl').read_bytes() == invocations
+    assert json.loads(receipt_path.read_bytes()) == receipt

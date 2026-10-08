@@ -81,7 +81,7 @@ docker.enabled=false
     env.pop('BMS_REMOTE_EXECUTION',None); env.pop('BMS_STAGE_REPORT_TOKEN',None)
     if placement=='worker': env['BMS_REMOTE_EXECUTION']='1'
     env = offline_worker_env(tmp_path, env)
-    result=subprocess.run(['java','--add-opens=java.base/java.util=ALL-UNNAMED','-jar',str(jar),'-C',str(config),'run',str(ROOT/'workflows/conformational_mapping.nf'),'-offline','-w',str(tmp_path/'work')],
+    result=subprocess.run(['java','--add-opens=java.base/java.util=ALL-UNNAMED','--add-opens=java.base/java.lang=ALL-UNNAMED','-jar',str(jar),'-C',str(config),'run',str(ROOT/'workflows/conformational_mapping.nf'),'-offline','-w',str(tmp_path/'work')],
         cwd=tmp_path,env=env,capture_output=True,text=True,timeout=180)
     assert result.returncode==0,result.stdout+result.stderr
     receipt=tmp_path/'out/frustrampnn/component_runtime/terminal.json'

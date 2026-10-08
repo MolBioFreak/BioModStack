@@ -132,7 +132,7 @@ workflow {{ NativeBoltzGenCampaign(Channel.value(file('{bundle}')), Channel.valu
     env.pop('BMS_REMOTE_EXECUTION', None)
     if placement == 'worker': env['BMS_REMOTE_EXECUTION'] = '1'
     env = offline_worker_env(tmp_path, env)
-    result = subprocess.run(['java','--add-opens=java.base/java.util=ALL-UNNAMED','-jar',str(framework),'-C',str(config),'run',str(main),'-offline','-w',str(tmp_path/'work')],
+    result = subprocess.run(['java','--add-opens=java.base/java.util=ALL-UNNAMED','--add-opens=java.base/java.lang=ALL-UNNAMED','-jar',str(framework),'-C',str(config),'run',str(main),'-offline','-w',str(tmp_path/'work')],
         cwd=tmp_path, env=env, capture_output=True, text=True, timeout=180)
     assert result.returncode == 0, result.stdout+result.stderr
     path = tmp_path/'out/components/boltzgen/campaign/collection_manifest.json'
