@@ -3379,26 +3379,44 @@ def build_nextflow_command(
     mode: str,
     params: Dict[str, Any],
     output_dir: str,
-    job_id: str = None,
+    job_id: Optional[str] = None,
     *,
     requested_params: Optional[Dict[str, Any]] = None,
     compiled_parameters: Optional[Dict[str, Any]] = None,
 ) -> list:
+    """Compatibility argv projection of the shared scientific compilation."""
+    invocation = compile_nextflow_invocation(model_id, mode, params, output_dir,
+        job_id=job_id, requested_params=requested_params)
+    if compiled_parameters is not None:
+        compiled_parameters.clear()
+        compiled_parameters.update(invocation.native_parameters)
+    return list(invocation.command)
+
+
+def compile_nextflow_invocation(
+    model_id: str,
+    mode: str,
+    params: Dict[str, Any],
+    output_dir: str,
+    job_id: Optional[str] = None,
+    *,
+    requested_params: Optional[Dict[str, Any]] = None,
+):
+    """The existing native compiler, returning immutable values and argv together.
+
+    This is shared by preview, local/remote launch and saved-job prewarming;
+    transport adapters must not reconstruct its settings from rendered argv.
     """
-    Build the Nextflow command line dynamically.
-    
-    Converts all params to --key value flags.
-    """
-    # Shared preview and scheduler/replay command compilation gate.
-    # Placement consumers receive compiler-owned native values directly. They
-    # must not recover scientific/dependency authority by parsing rendered argv.
+    from component_runtime import NativeInvocation
+    from copy import deepcopy
+    requested_snapshot = deepcopy(params if requested_params is None else requested_params)
     native_parameters: Dict[str, Any] = {}
+
     def finish_command(command):
-        if compiled_parameters is not None:
-            from copy import deepcopy
-            compiled_parameters.clear()
-            compiled_parameters.update(deepcopy(native_parameters))
-        return command
+        return NativeInvocation.capture(model_id=model_id, mode=mode,
+            command=[os.fspath(value) if isinstance(value, os.PathLike) else value for value in command],
+            requested=requested_snapshot, effective=params,
+            native_parameters=native_parameters)
 
     from services.msa_policy import apply_msa_policy
     params = apply_msa_policy(model_id, params)

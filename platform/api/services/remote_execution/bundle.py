@@ -532,7 +532,9 @@ def compile_remote_dependencies(model_id: str, mode: str, command: list[str], *,
     omitted: set[str] = set()
     if model_id.lower() == "protenix":
         omitted.update({"rfd_models", "af2_models", "boltz_models", "alphafold_params"})
-        omitted.update(key for key in params if key.startswith(("bcp_", "esmf_", "plr_", "md_", "rfantibody_")))
+        # Only placement-owned paths may be omitted here. Scientific fields
+        # remain the shared compiler's authority even when their names belong
+        # to another native stage; a prefix is not a capability declaration.
         omitted.update(key for key in params
                        if any(token in key for token in ("container_path", "_container", "runtime_sif", "checkpoint_path", "runtime_lock", "repo_path"))
                        and not key.startswith(("protenix_", "frustrampnn_")))

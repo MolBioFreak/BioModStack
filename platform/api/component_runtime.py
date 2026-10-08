@@ -50,6 +50,62 @@ def durable_write(path: Path, payload: bytes) -> None:
             os.unlink(temporary)
 
 
+@dataclass(frozen=True)
+class NativeInvocation:
+    """Immutable output of the existing scientific command compiler.
+
+    This is the native-invocation projection of a plan, not a replacement
+    scientific compiler or a claim of complete workflow dependency coverage.
+    JSON snapshots prevent later request/path mutation from changing authority.
+    """
+    model_id: str
+    mode: str
+    command: tuple[str, ...]
+    requested_json: bytes
+    effective_json: bytes
+    native_parameters_json: bytes
+
+    def __post_init__(self) -> None:
+        if (type(self.model_id) is not str or not self.model_id
+                or type(self.mode) is not str or not self.mode
+                or type(self.command) is not tuple or not self.command):
+            raise ValueError('native invocation requires model, mode and command')
+        if any(not isinstance(value, str) or '\x00' in value for value in self.command):
+            raise ValueError('native invocation command must contain text arguments')
+        for payload in (self.requested_json, self.effective_json, self.native_parameters_json):
+            if type(payload) is not bytes:
+                raise ValueError('native invocation snapshots must be immutable bytes')
+            value = json.loads(payload)
+            if not isinstance(value, dict) or canonical_bytes(value) != payload:
+                raise ValueError('native invocation settings must be canonical objects')
+
+    @classmethod
+    def capture(cls, *, model_id: str, mode: str, command: Sequence[str],
+                requested: Mapping[str, Any], effective: Mapping[str, Any],
+                native_parameters: Mapping[str, Any]) -> NativeInvocation:
+        return cls(model_id, mode, tuple(command), canonical_bytes(dict(requested)),
+                   canonical_bytes(dict(effective)), canonical_bytes(dict(native_parameters)))
+
+    @property
+    def native_parameters(self) -> dict[str, Any]:
+        return json.loads(self.native_parameters_json)
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return {
+            'schema_name': 'bms.native-invocation.v1', 'schema_version': 1,
+            'model_id': self.model_id, 'mode': self.mode,
+            'command': list(self.command),
+            'requested': json.loads(self.requested_json),
+            'effective': json.loads(self.effective_json),
+            'native_parameters': self.native_parameters,
+        }
+
+    @property
+    def invocation_sha256(self) -> str:
+        return digest(self.payload)
+
+
 @dataclass(frozen=True, order=True)
 class CandidateIdentity:
     producer_candidate_key: str
