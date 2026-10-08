@@ -42,7 +42,7 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     
     # PyTorch (Stable / CUDA 12.4 for now as Boltz might have specific ver needs, sticking to nightly/12.8 if possible but 12.4 is safer for complex deps)
     # Actually, let's match the boltz2.def which used nightly/cu128
-    uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+    uv pip install --compile torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
     
     # Install BoltzGen dependencies
     # BoltzGen is built on top of Boltz
@@ -50,18 +50,21 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     # 1. Install Boltz-2 (Core dependency)
     git clone https://github.com/jwohlwend/boltz.git /app/boltz
     cd /app/boltz
-    uv pip install .
+    uv pip install --compile .
     
     # 2. Install BoltzGen
     git clone https://github.com/HannesStark/boltzgen.git /app/boltzgen
     cd /app/boltzgen
-    uv pip install .
+    uv pip install --compile .
     
     # Cleanup
     # Cleanup
     # rm -rf /root/.cache/uv
     apt-get clean
     apt-get clean
+
+    # Generate lockfile for reproducibility
+    uv pip freeze > /opt/venv/requirements.lock 2>/dev/null || true
 
 %environment
     export PATH=/opt/venv/bin:$PATH
