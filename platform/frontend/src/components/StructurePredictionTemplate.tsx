@@ -8,14 +8,18 @@ import { TargetAntigenSelector, type SelectedTarget } from './TargetAntigenSelec
 import MolstarViewer from './MolstarViewer';
 import {
     BOLTZ_QUALITY_PRESETS,
+    buildBoltzCpSubmitParams,
     buildTargetPreviewSelection,
     buildTargetPreviewSelections,
+    deriveBoltzCpGpuLaunchSettings,
     getBoltzQualityPresetValues,
     getBoltzQualitySliderState,
     getPredictorFamiliesForSelection,
     getStructurePredictorOptions,
     resolveBoltzSamplingStepsFromSlider,
+    resolveStructureLaunchConfig,
     resolveStructurePredictorSelection,
+    resolveStructureSubmitTarget,
     resolveTargetPreviewSource,
     type StructurePredictionMode,
     type StructurePredictorSelection,
@@ -119,6 +123,11 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
         .map((token: string) => token.trim())
         .find(Boolean) || 'A';
 
+    const launchConfig = resolveStructureLaunchConfig(initialValues);
+    const isBoltzCpLaunch = launchConfig.variant === 'boltz_cp_experimental';
+    const initialBoltzCpSizeCp = Number.parseInt(String(initialValues?.size_cp ?? initialValues?.bcp_size_cp ?? 4), 10);
+    const initialBoltzCpSeed = initialValues?.seed ?? initialValues?.bcp_seed;
+
     // Core state
     const [jobName, setJobName] = useState(initialValues?.name || 'structure_prediction');
     const [pinnedGpus, setPinnedGpus] = useState<number[]>(initialValues?.pinned_gpus ?? []);
@@ -151,11 +160,11 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
 
     // Predictor selection
     const [predictor, setPredictor] = useState<StructurePredictorSelection>(
-        (initialValues?.pred_method as StructurePredictorSelection | undefined) || 'boltz'
+        (launchConfig.forcedPredictor || initialValues?.pred_method as StructurePredictorSelection | undefined) || 'boltz'
     );
 
     // Boltz-2 parameters
-    const initialBoltzUseMsa = initialValues?.boltz_use_msa ?? true;
+    const initialBoltzUseMsa = launchConfig.showMsaControls ? (initialValues?.boltz_use_msa ?? true) : false;
     const [boltzUseMsa, setBoltzUseMsa] = useState(initialBoltzUseMsa);
     const [boltzRecyclingSteps, setBoltzRecyclingSteps] = useState(
         clampBoltzRecyclingSteps(initialValues?.boltz_recycling_steps ?? 3, initialBoltzUseMsa)
@@ -189,6 +198,16 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
 
     // Parallel jobs
     const [numParallelJobs, setNumParallelJobs] = useState(initialValues?.num_parallel_jobs ?? 1);
+
+    // Boltz-CP-specific settings
+    const [bcpRequestedSizeCp, setBcpRequestedSizeCp] = useState(
+        Number.isFinite(initialBoltzCpSizeCp) && initialBoltzCpSizeCp > 0 ? initialBoltzCpSizeCp : 4
+    );
+    const [bcpOutputFormat, setBcpOutputFormat] = useState<'mmcif' | 'pdb'>(
+        String(initialValues?.output_format ?? initialValues?.bcp_output_format ?? 'mmcif').toLowerCase() === 'pdb' ? 'pdb' : 'mmcif'
+    );
+    const [bcpWriteFullPae, setBcpWriteFullPae] = useState(Boolean(initialValues?.write_full_pae ?? initialValues?.bcp_write_full_pae ?? false));
+    const [bcpSeed, setBcpSeed] = useState(initialBoltzCpSeed != null ? String(initialBoltzCpSeed) : '');
 
     // Error handling
     const [allowRetries, setAllowRetries] = useState(initialValues?.allow_retries ?? false);
@@ -496,10 +515,16 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
         proteinBatchTargets[0]?.id ||
         '';
     const predictionMode: StructurePredictionMode = complexMode ? 'complex' : 'predict';
-    const resolvedPredictorSelection = resolveStructurePredictorSelection(predictionMode, predictor);
-    const predictorFamilies = getPredictorFamiliesForSelection(predictionMode, predictor);
+    const activePredictorSelection = launchConfig.allowPredictorSelection ? predictor : (launchConfig.forcedPredictor || predictor);
+    const resolvedPredictorSelection = resolveStructurePredictorSelection(predictionMode, activePredictorSelection);
+    const predictorFamilies = getPredictorFamiliesForSelection(predictionMode, activePredictorSelection);
     const predictorOptions = getStructurePredictorOptions(predictionMode);
     const selectedPredictorId = resolvedPredictorSelection.canonicalSelection;
+    const submitTarget = resolveStructureSubmitTarget({
+        launchConfig,
+        predictionMode,
+        predictorSelection: activePredictorSelection,
+    });
     const usesBoltz = predictorFamilies.includes('boltz');
     const usesRf3 = predictorFamilies.includes('rf3');
     const usesProtenix = predictorFamilies.includes('protenix');
@@ -507,6 +532,11 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
         (usesBoltz && boltzUseMsa) ||
         (usesRf3 && rf3UseMsa) ||
         (usesProtenix && protenixUseMsa);
+    const boltzCpGpuSettings = deriveBoltzCpGpuLaunchSettings({
+        pinnedGpus,
+        requestedSizeCp: bcpRequestedSizeCp,
+        fallbackGpuIds: String(initialValues?.gpu_ids ?? initialValues?.bcp_gpu_ids ?? '0,1,2,3'),
+    });
     const boltzQualityState = getBoltzQualitySliderState({
         samplingSteps: boltzSamplingSteps,
         recyclingSteps: boltzRecyclingSteps,
@@ -671,8 +701,18 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
             sequence: sequence.trim(),
             sequence_name: sequenceName,
             pred_method: resolvedPredictorSelection.canonicalSelection,
-            num_parallel_jobs: numParallelJobs,
+            num_parallel_jobs: launchConfig.showParallelJobs ? numParallelJobs : 1,
         };
+
+        if (isBoltzCpLaunch) {
+            Object.assign(params, buildBoltzCpSubmitParams({
+                outputFormat: bcpOutputFormat,
+                writeFullPae: bcpWriteFullPae,
+                seed: bcpSeed,
+                gpuIds: boltzCpGpuSettings.gpuIds,
+                sizeCp: boltzCpGpuSettings.sizeCp,
+            }));
+        }
 
         // Boltz-2 parameters
         if (usesBoltz) {
@@ -756,8 +796,8 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
             }
         }
 
-        const modelId = selectedPredictorId === 'rf3' ? 'rf3' : selectedPredictorId === 'protenix' ? 'protenix' : 'boltz2';
-        const mode = predictionMode;
+        const modelId = submitTarget.modelId;
+        const mode = submitTarget.mode;
 
         if (complexMode) {
             const { components, resolvedPrimaryId, binderIds } = buildComplexComponents(batchEntries);
@@ -1029,48 +1069,57 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
 
                 <div>
                     <label className="block text-sm font-medium text-slate-400 mb-3">Structure Predictor</label>
-                    <div className={`grid grid-cols-2 ${predictionMode === 'complex' ? 'sm:grid-cols-4' : 'sm:grid-cols-5'} gap-3`}>
-                        {predictorOptions.map((pred) => {
-                            const isSelected = selectedPredictorId === pred.id || predictor === pred.id;
-                            const selectedClass = pred.color === 'blue'
-                                ? 'bg-blue-600/20 border-blue-500 text-blue-300'
-                                : pred.color === 'green'
-                                    ? 'bg-green-600/20 border-green-500 text-green-300'
-                                    : pred.color === 'violet'
-                                        ? 'bg-violet-600/20 border-violet-500 text-violet-300'
-                                        : pred.color === 'amber'
-                                            ? 'bg-amber-600/20 border-amber-500 text-amber-300'
-                                            : 'bg-accent/20 border-accent text-accent';
-                            return (
-                                <button
-                                    key={pred.id}
-                                    type="button"
-                                    onClick={() => {
-                                        if (!pred.disabled) {
-                                            setPredictor(pred.id);
-                                        }
-                                    }}
-                                    disabled={pred.disabled}
-                                    title={pred.disabledReason}
-                                    className={`p-3 rounded-lg border text-left transition-all ${isSelected
-                                        ? selectedClass
-                                        : pred.disabled
-                                            ? 'bg-slate-900/60 border-slate-800 text-slate-600 cursor-not-allowed'
-                                            : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-600'
-                                        }`}
-                                >
-                                    <div className="font-medium mb-1 flex items-center justify-between gap-2">
-                                        <span>{pred.name}</span>
-                                        {pred.disabled && <span className="text-[10px] uppercase tracking-wide text-slate-500">Unavailable</span>}
-                                    </div>
-                                    <div className="text-xs opacity-70">{pred.desc}</div>
-                                    {pred.disabledReason && (
-                                        <div className="text-[11px] text-amber-300/80 mt-2 leading-snug">{pred.disabledReason}</div>
-                                    )}
-                                </button>
-                            );
-                        })}
-                    </div>
+                    {launchConfig.allowPredictorSelection ? (
+                        <div className={`grid grid-cols-2 ${predictionMode === 'complex' ? 'sm:grid-cols-4' : 'sm:grid-cols-5'} gap-3`}>
+                            {predictorOptions.map((pred) => {
+                                const isSelected = selectedPredictorId === pred.id || predictor === pred.id;
+                                const selectedClass = pred.color === 'blue'
+                                    ? 'bg-blue-600/20 border-blue-500 text-blue-300'
+                                    : pred.color === 'green'
+                                        ? 'bg-green-600/20 border-green-500 text-green-300'
+                                        : pred.color === 'violet'
+                                            ? 'bg-violet-600/20 border-violet-500 text-violet-300'
+                                            : pred.color === 'amber'
+                                                ? 'bg-amber-600/20 border-amber-500 text-amber-300'
+                                                : 'bg-accent/20 border-accent text-accent';
+                                return (
+                                    <button
+                                        key={pred.id}
+                                        type="button"
+                                        onClick={() => {
+                                            if (!pred.disabled) {
+                                                setPredictor(pred.id);
+                                            }
+                                        }}
+                                        disabled={pred.disabled}
+                                        title={pred.disabledReason}
+                                        className={`p-3 rounded-lg border text-left transition-all ${isSelected
+                                            ? selectedClass
+                                            : pred.disabled
+                                                ? 'bg-slate-900/60 border-slate-800 text-slate-600 cursor-not-allowed'
+                                                : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-600'
+                                            }`}
+                                    >
+                                        <div className="font-medium mb-1 flex items-center justify-between gap-2">
+                                            <span>{pred.name}</span>
+                                            {pred.disabled && <span className="text-[10px] uppercase tracking-wide text-slate-500">Unavailable</span>}
+                                        </div>
+                                        <div className="text-xs opacity-70">{pred.desc}</div>
+                                        {pred.disabledReason && (
+                                            <div className="text-[11px] text-amber-300/80 mt-2 leading-snug">{pred.disabledReason}</div>
+                                        )}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    ) : (
+                        <div className="rounded-lg border border-orange-500/30 bg-orange-500/10 px-4 py-3 text-sm text-orange-100">
+                            <div className="font-medium">{isBoltzCpLaunch ? 'Boltz-CP Experimental' : 'Fixed predictor'}</div>
+                            <div className="mt-1 text-xs text-orange-100/80">
+                                This workflow stays on single-fold Boltz mode and reuses the standard structure input flow.
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 {/* Sequence Input */}
@@ -1121,7 +1170,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                 </div>
 
                 {/* Sequence Name */}
-                <div className="grid grid-cols-2 gap-4">
+                <div className={`grid ${launchConfig.showParallelJobs ? 'grid-cols-2' : 'grid-cols-1'} gap-4`}>
                     <div>
                         <label className="block text-sm font-medium text-slate-400 mb-2">Sequence Name</label>
                         <input
@@ -1132,80 +1181,84 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                             placeholder="predicted"
                         />
                     </div>
-                    <div>
-                        <label className="block text-sm font-medium text-slate-400 mb-2">Parallel Jobs</label>
-                        <input
-                            type="number"
-                            value={numParallelJobs}
-                            onChange={(e) => setNumParallelJobs(Math.max(1, Math.min(500, parseInt(e.target.value) || 1)))}
-                            min={1}
-                            max={500}
-                            disabled={hasBatchEntries}
-                            className={`w-full border border-slate-700 rounded-lg px-3 py-2 text-white text-sm ${hasBatchEntries ? 'bg-slate-800/70 cursor-not-allowed text-slate-500' : 'bg-slate-900'}`}
-                        />
-                        {hasBatchEntries && (
-                            <p className="mt-1 text-xs text-slate-500">Batch launches derive one runtime per pasted sequence and ignore this single-sequence fanout.</p>
-                        )}
-                    </div>
-                </div>
-
-                <div className="border border-slate-700/50 rounded-lg p-4 space-y-4">
-                    <div>
-                        <h3 className="text-sm font-semibold text-slate-200">Sequence Matrix Batch</h3>
-                        <p className="text-xs text-slate-500">
-                            Paste FASTA or one sequence per line to run a named batch. Runtime outputs are auto-numbered with the chosen prefix so the result set stays traceable. If you have imported a target source, pasted sequences are treated as binder candidates against that shared target assembly.
-                        </p>
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {launchConfig.showParallelJobs && (
                         <div>
-                            <label className="text-xs text-slate-400 block mb-1">Default Name Prefix</label>
+                            <label className="block text-sm font-medium text-slate-400 mb-2">Parallel Jobs</label>
                             <input
-                                type="text"
-                                value={sequenceBatchPrefix}
-                                onChange={(e) => setSequenceBatchPrefix(e.target.value)}
-                                className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white text-sm"
-                                placeholder="variant"
+                                type="number"
+                                value={numParallelJobs}
+                                onChange={(e) => setNumParallelJobs(Math.max(1, Math.min(500, parseInt(e.target.value) || 1)))}
+                                min={1}
+                                max={500}
+                                disabled={hasBatchEntries}
+                                className={`w-full border border-slate-700 rounded-lg px-3 py-2 text-white text-sm ${hasBatchEntries ? 'bg-slate-800/70 cursor-not-allowed text-slate-500' : 'bg-slate-900'}`}
                             />
-                        </div>
-                        {complexMode && proteinBatchTargets.length > 1 && (
-                            <div>
-                                <label className="text-xs text-slate-400 block mb-1">Replace Protein Component</label>
-                                <select
-                                    value={resolvedSequenceBatchComponentId}
-                                    onChange={(e) => setSequenceBatchComponentId(e.target.value)}
-                                    className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white text-sm"
-                                >
-                                    {proteinBatchTargets.map((entry) => (
-                                        <option key={entry.id} value={entry.id}>
-                                            {entry.role}: {entry.name}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-                        )}
-                        <div className="bg-slate-900/60 border border-slate-700/60 rounded-lg px-3 py-2">
-                            <div className="text-xs text-slate-500 mb-1">Parsed Variants</div>
-                            <div className="text-white text-sm">{batchEntriesPreview.length}</div>
-                            <div className="text-xs text-slate-500 mt-1">
-                                {batchEntriesPreview[0]?.name ? `First: ${batchEntriesPreview[0].name}` : 'Paste FASTA or lines to enable'}
-                            </div>
-                        </div>
-                    </div>
-                    <textarea
-                        value={sequenceBatchInput}
-                        onChange={(e) => setSequenceBatchInput(e.target.value)}
-                        placeholder={'>sample_001\nQVQLVESGGGLVQ...\n>sample_002\nQVQLVESGGGLVQ...\n\nor:\nseq_003: QVQLVESGGGLVQ...'}
-                        rows={7}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2.5 text-white text-sm font-mono resize-y focus:ring-2 focus:ring-blue-500 outline-none"
-                    />
-                    {batchEntriesPreview.length > 0 && (
-                        <div className="text-xs text-slate-400 bg-slate-900/50 border border-slate-800 rounded-lg px-3 py-2">
-                            {autoBatchBinderMode
-                                ? `Shared-target screen active: ${batchEntriesPreview.length} binder candidates will be simulated against imported target chain ${targetSourceChainId || primaryChainId}.`
-                                : 'Batch mode will use deterministic per-sequence names and ignore the single-sequence parallel fanout.'}
+                            {hasBatchEntries && (
+                                <p className="mt-1 text-xs text-slate-500">Batch launches derive one runtime per pasted sequence and ignore this single-sequence fanout.</p>
+                            )}
                         </div>
                     )}
                 </div>
+
+                {launchConfig.showSequenceBatch && (
+                    <div className="border border-slate-700/50 rounded-lg p-4 space-y-4">
+                        <div>
+                            <h3 className="text-sm font-semibold text-slate-200">Sequence Matrix Batch</h3>
+                            <p className="text-xs text-slate-500">
+                                Paste FASTA or one sequence per line to run a named batch. Runtime outputs are auto-numbered with the chosen prefix so the result set stays traceable. If you have imported a target source, pasted sequences are treated as binder candidates against that shared target assembly.
+                            </p>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <label className="text-xs text-slate-400 block mb-1">Default Name Prefix</label>
+                                <input
+                                    type="text"
+                                    value={sequenceBatchPrefix}
+                                    onChange={(e) => setSequenceBatchPrefix(e.target.value)}
+                                    className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white text-sm"
+                                    placeholder="variant"
+                                />
+                            </div>
+                            {complexMode && proteinBatchTargets.length > 1 && (
+                                <div>
+                                    <label className="text-xs text-slate-400 block mb-1">Replace Protein Component</label>
+                                    <select
+                                        value={resolvedSequenceBatchComponentId}
+                                        onChange={(e) => setSequenceBatchComponentId(e.target.value)}
+                                        className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white text-sm"
+                                    >
+                                        {proteinBatchTargets.map((entry) => (
+                                            <option key={entry.id} value={entry.id}>
+                                                {entry.role}: {entry.name}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                            )}
+                            <div className="bg-slate-900/60 border border-slate-700/60 rounded-lg px-3 py-2">
+                                <div className="text-xs text-slate-500 mb-1">Parsed Variants</div>
+                                <div className="text-white text-sm">{batchEntriesPreview.length}</div>
+                                <div className="text-xs text-slate-500 mt-1">
+                                    {batchEntriesPreview[0]?.name ? `First: ${batchEntriesPreview[0].name}` : 'Paste FASTA or lines to enable'}
+                                </div>
+                            </div>
+                        </div>
+                        <textarea
+                            value={sequenceBatchInput}
+                            onChange={(e) => setSequenceBatchInput(e.target.value)}
+                            placeholder={'>sample_001\nQVQLVESGGGLVQ...\n>sample_002\nQVQLVESGGGLVQ...\n\nor:\nseq_003: QVQLVESGGGLVQ...'}
+                            rows={7}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2.5 text-white text-sm font-mono resize-y focus:ring-2 focus:ring-blue-500 outline-none"
+                        />
+                        {batchEntriesPreview.length > 0 && (
+                            <div className="text-xs text-slate-400 bg-slate-900/50 border border-slate-800 rounded-lg px-3 py-2">
+                                {autoBatchBinderMode
+                                    ? `Shared-target screen active: ${batchEntriesPreview.length} binder candidates will be simulated against imported target chain ${targetSourceChainId || primaryChainId}.`
+                                    : 'Batch mode will use deterministic per-sequence names and ignore the single-sequence parallel fanout.'}
+                            </div>
+                        )}
+                    </div>
+                )}
 
                 {targetSource && (
                     <div className="border border-slate-700/50 rounded-lg p-4 space-y-4">
@@ -1332,7 +1385,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                 {/* Boltz-2 Parameters */}
                 {showBoltzParams && (
                     <div className="border border-slate-700/50 rounded-lg p-4 space-y-4">
-                        <h3 className="text-sm font-semibold text-blue-400">Boltz-2 Settings</h3>
+                        <h3 className="text-sm font-semibold text-blue-400">{isBoltzCpLaunch ? 'Boltz-CP Experimental Settings' : 'Boltz-2 Settings'}</h3>
 
                         {/* Physics Potentials Toggle */}
                         <div className="flex items-center gap-3 p-3 bg-slate-900/50 rounded-lg border border-slate-700/50">
@@ -1349,23 +1402,25 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                             </label>
                         </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div>
-                                <label className="text-xs text-slate-400 block mb-1">Use MSA</label>
-                                <select
-                                    value={boltzUseMsa ? 'true' : 'false'}
-                                    onChange={(e) => {
-                                        const nextUseMsa = e.target.value === 'true';
-                                        setBoltzUseMsa(nextUseMsa);
-                                        setBoltzRecyclingSteps((prev) => clampBoltzRecyclingSteps(prev, nextUseMsa));
-                                        setBoltzSamplingSteps((prev) => clampBoltzSamplingSteps(prev, nextUseMsa));
-                                    }}
-                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
-                                >
-                                    <option value="true">Yes</option>
-                                    <option value="false">No</option>
-                                </select>
-                            </div>
+                        <div className={`grid grid-cols-1 ${launchConfig.showMsaControls ? 'md:grid-cols-2' : ''} gap-4`}>
+                            {launchConfig.showMsaControls && (
+                                <div>
+                                    <label className="text-xs text-slate-400 block mb-1">Use MSA</label>
+                                    <select
+                                        value={boltzUseMsa ? 'true' : 'false'}
+                                        onChange={(e) => {
+                                            const nextUseMsa = e.target.value === 'true';
+                                            setBoltzUseMsa(nextUseMsa);
+                                            setBoltzRecyclingSteps((prev) => clampBoltzRecyclingSteps(prev, nextUseMsa));
+                                            setBoltzSamplingSteps((prev) => clampBoltzSamplingSteps(prev, nextUseMsa));
+                                        }}
+                                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                    >
+                                        <option value="true">Yes</option>
+                                        <option value="false">No</option>
+                                    </select>
+                                </div>
+                            )}
                             <div>
                                 <label className="text-xs text-slate-400 block mb-1">Recycling Steps</label>
                                 <input
@@ -1453,6 +1508,57 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                 </div>
                             )}
                         </div>
+
+                        {isBoltzCpLaunch && (
+                            <div className="rounded-lg border border-orange-500/20 bg-orange-500/5 p-4 space-y-4">
+                                <div>
+                                    <label className="text-xs text-orange-100/80 block mb-1">Context Parallel Size Request</label>
+                                    <input
+                                        type="number"
+                                        value={bcpRequestedSizeCp}
+                                        onChange={(e) => setBcpRequestedSizeCp(Math.max(1, Math.min(16, Number.parseInt(e.target.value || '1', 10) || 1)))}
+                                        min={1}
+                                        max={16}
+                                        className="w-full max-w-xs bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                    />
+                                    <p className="mt-2 text-xs text-slate-400">
+                                        Runtime launch will use square-divisor sizing. Current pinned-GPU resolution: {boltzCpGpuSettings.gpuIds || 'auto fallback'} → size_cp {boltzCpGpuSettings.sizeCp}.
+                                    </p>
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <div>
+                                        <label className="text-xs text-slate-400 block mb-1">Output Format</label>
+                                        <select
+                                            value={bcpOutputFormat}
+                                            onChange={(e) => setBcpOutputFormat(e.target.value === 'pdb' ? 'pdb' : 'mmcif')}
+                                            className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                        >
+                                            <option value="mmcif">mmCIF</option>
+                                            <option value="pdb">PDB</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="text-xs text-slate-400 block mb-1">Seed</label>
+                                        <input
+                                            type="text"
+                                            value={bcpSeed}
+                                            onChange={(e) => setBcpSeed(e.target.value.replace(/[^0-9-]/g, ''))}
+                                            placeholder="optional"
+                                            className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                        />
+                                    </div>
+                                    <label className="flex items-center gap-3 rounded-lg border border-slate-700/60 bg-slate-900/40 px-3 py-2 text-sm text-slate-200">
+                                        <input
+                                            type="checkbox"
+                                            checked={bcpWriteFullPae}
+                                            onChange={(e) => setBcpWriteFullPae(e.target.checked)}
+                                            className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-orange-500"
+                                        />
+                                        <span>Write full PAE matrix</span>
+                                    </label>
+                                </div>
+                            </div>
+                        )}
 
                         <div className="grid grid-cols-2 gap-4">
                             <div>

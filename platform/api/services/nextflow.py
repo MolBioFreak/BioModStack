@@ -10,6 +10,7 @@ import os
 import signal
 import json
 import csv
+import yaml
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple, Set
@@ -420,6 +421,155 @@ def _write_sequence_batch_payloads(
         _write_sequence_batch_name_map(output_dir=out_root, entries=batch_entries)
 
     return sequence_batch_json_path, complex_batch_dir, complex_components
+
+
+def _parse_boltz_cp_gpu_ids(value: object) -> List[int]:
+    raw_values = value if isinstance(value, list) else str(value or "").split(",")
+    seen: Set[int] = set()
+    parsed: List[int] = []
+    for raw_value in raw_values:
+        try:
+            gpu_id = int(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if gpu_id < 0 or gpu_id in seen:
+            continue
+        seen.add(gpu_id)
+        parsed.append(gpu_id)
+    return parsed
+
+
+def _largest_square_divisor(gpu_count: int, requested_size_cp: object) -> int:
+    if gpu_count < 1:
+        return 1
+    requested = _coerce_int(requested_size_cp, gpu_count)
+    if requested < 1:
+        requested = gpu_count
+    best = 1
+    for candidate in range(1, gpu_count + 1):
+        if gpu_count % candidate != 0:
+            continue
+        root = int(candidate ** 0.5)
+        if root * root != candidate or candidate > requested:
+            continue
+        best = candidate
+    return best
+
+
+def _derive_boltz_cp_gpu_launch_settings(
+    *,
+    pinned_gpus: object,
+    requested_size_cp: object,
+    fallback_gpu_ids: object,
+) -> Tuple[str, int]:
+    parsed_gpu_ids = _parse_boltz_cp_gpu_ids(
+        pinned_gpus if isinstance(pinned_gpus, list) and pinned_gpus else fallback_gpu_ids
+    )
+    return ",".join(str(gpu_id) for gpu_id in parsed_gpu_ids), _largest_square_divisor(len(parsed_gpu_ids), requested_size_cp)
+
+
+def _normalize_boltz_cp_component_id(value: object, fallback: str) -> List[str]:
+    component_id = str(value or fallback).strip() or fallback
+    return [component_id]
+
+
+def _normalize_boltz_cp_sequence(value: object) -> str:
+    return str(value or "").strip().upper()
+
+
+def _build_boltz_cp_sequence_entry(component: Dict[str, Any], index: int) -> Dict[str, Any]:
+    component_type = str(component.get("type") or "protein").strip().lower()
+    fallback_id = chr(ord("A") + (index % 26))
+    component_id = _normalize_boltz_cp_component_id(component.get("id"), fallback_id)
+
+    if component_type in {"protein", "peptide"}:
+        sequence = _normalize_boltz_cp_sequence(component.get("sequence"))
+        if not sequence:
+            raise ValueError(f"Boltz-CP protein component {component_id[0]!r} is missing a sequence")
+        return {
+            "protein": {
+                "id": component_id,
+                "sequence": sequence,
+                "msa": "empty",
+            }
+        }
+
+    if component_type == "dna":
+        sequence = _normalize_boltz_cp_sequence(component.get("sequence"))
+        if not sequence:
+            raise ValueError(f"Boltz-CP DNA component {component_id[0]!r} is missing a sequence")
+        return {
+            "dna": {
+                "id": component_id,
+                "sequence": sequence,
+            }
+        }
+
+    if component_type == "rna":
+        sequence = _normalize_boltz_cp_sequence(component.get("sequence"))
+        if not sequence:
+            raise ValueError(f"Boltz-CP RNA component {component_id[0]!r} is missing a sequence")
+        return {
+            "rna": {
+                "id": component_id,
+                "sequence": sequence,
+            }
+        }
+
+    if component_type in {"ligand", "small_molecule"}:
+        ligand_payload: Dict[str, Any] = {"id": component_id}
+        for field_name in ("smiles", "ccd", "path", "name"):
+            field_value = component.get(field_name)
+            if field_value not in (None, ""):
+                ligand_payload[field_name] = field_value
+        if not any(field in ligand_payload for field in ("smiles", "ccd", "path")):
+            raise ValueError(
+                f"Boltz-CP ligand component {component_id[0]!r} requires one of smiles, ccd, or path"
+            )
+        return {"ligand": ligand_payload}
+
+    raise ValueError(f"Unsupported Boltz-CP component type: {component_type!r}")
+
+
+def _write_boltz_cp_input_yaml(
+    *,
+    output_dir: str,
+    params: Dict[str, Any],
+    complex_components: Optional[List[Dict[str, Any]]],
+) -> Optional[Path]:
+    if params.get("bcp_input_path") or params.get("input_path"):
+        return None
+
+    if complex_components:
+        sequences = [
+            _build_boltz_cp_sequence_entry(component, index)
+            for index, component in enumerate(complex_components)
+        ]
+    else:
+        sequence = _normalize_boltz_cp_sequence(params.get("sequence") or params.get("sequence_input"))
+        if not sequence:
+            return None
+        primary_chain_id = str(
+            params.get("primary_chain_id")
+            or params.get("target_chains")
+            or "A"
+        ).split(",")[0].strip() or "A"
+        sequences = [{
+            "protein": {
+                "id": [primary_chain_id],
+                "sequence": sequence,
+                "msa": "empty",
+            }
+        }]
+
+    out_root = Path(output_dir)
+    out_root.mkdir(parents=True, exist_ok=True)
+    yaml_path = out_root / "boltz_cp_input.yaml"
+    yaml_path.write_text(
+        yaml.safe_dump({"version": 1, "sequences": sequences}, sort_keys=False),
+        encoding="utf-8",
+    )
+    return yaml_path
 
 
 def _coerce_bool(value: object, default: bool = False) -> bool:
@@ -2654,6 +2804,45 @@ def build_nextflow_command(
                 if dest_key not in params:
                     params[dest_key] = params[src_key]
                 params.pop(src_key, None)
+
+        if 'bcp_recycling_steps' not in params and params.get('boltz_recycling_steps') not in (None, ''):
+            params['bcp_recycling_steps'] = params['boltz_recycling_steps']
+        if 'bcp_sampling_steps' not in params and params.get('boltz_sampling_steps') not in (None, ''):
+            params['bcp_sampling_steps'] = params['boltz_sampling_steps']
+        if 'bcp_diffusion_samples' not in params:
+            if params.get('boltz_num_samples') not in (None, ''):
+                params['bcp_diffusion_samples'] = params['boltz_num_samples']
+            elif params.get('boltz_diffusion_samples') not in (None, ''):
+                params['bcp_diffusion_samples'] = params['boltz_diffusion_samples']
+
+        derived_gpu_ids, derived_size_cp = _derive_boltz_cp_gpu_launch_settings(
+            pinned_gpus=params.get('pinned_gpus'),
+            requested_size_cp=params.get('bcp_size_cp'),
+            fallback_gpu_ids=params.get('bcp_gpu_ids') or '0,1,2,3',
+        )
+        if derived_gpu_ids and not params.get('bcp_gpu_ids'):
+            params['bcp_gpu_ids'] = derived_gpu_ids
+        if not params.get('bcp_size_cp'):
+            params['bcp_size_cp'] = derived_size_cp
+
+        params.setdefault('bcp_input_format', 'config_files')
+        params.setdefault('bcp_output_format', 'mmcif')
+        params.setdefault('bcp_write_full_pae', False)
+
+        if not params.get('bcp_input_path'):
+            staged_bcp_input = _write_boltz_cp_input_yaml(
+                output_dir=output_dir,
+                params=params,
+                complex_components=complex_components,
+            )
+            if staged_bcp_input is not None:
+                params['bcp_input_path'] = str(staged_bcp_input)
+                complex_components = None
+                params.pop('sequence', None)
+                params.pop('sequence_input', None)
+                params.pop('primary_chain_id', None)
+                params.pop('target_chains', None)
+                params.pop('binder_chains', None)
 
         if not params.get('rfd_mode'):
             params['rfd_mode'] = 'boltz_cp_experimental'

@@ -335,7 +335,18 @@ export function JobSubmission() {
                     setSelectedTemplateId('mutagenesis');
                     // Mutagenesis logic might need updates for pre-filling too, but focusing on Antibody first
                 }
-                // 3. Manual Mode
+                // 3. Boltz-CP experimental reuses the structure-prediction template with a fixed launch variant.
+                else if (data.model_id === 'boltz_cp_experimental') {
+                    setWizardMode('experimental');
+                    setSelectedTemplateId('boltz_cp_experimental');
+                    setClonedValues({
+                        ...data.params,
+                        name: data.name,
+                        template_model_id: 'boltz_cp_experimental',
+                        structure_launch_variant: data.params?.structure_launch_variant || 'boltz_cp_experimental',
+                    });
+                }
+                // 4. Manual Mode
                 else {
                     setWizardMode('manual');
                     setSelectedModelId(data.model_id);
@@ -368,6 +379,7 @@ export function JobSubmission() {
         boltzgen: 'boltzgen_design',
         bindcraft: 'bindcraft',
         protein_local_redesign: 'protein_local_redesign',
+        boltz_cp_experimental: 'boltz_cp_experimental',
     };
     const hardcodedWorkflowTemplates = [
         {
@@ -463,9 +475,9 @@ export function JobSubmission() {
             (template.model_id ? dedicatedTemplateByModelId[template.model_id] : null);
 
         if (dedicatedTemplateId) {
-            setWizardMode('templates');
+            setWizardMode(dedicatedTemplateId === 'boltz_cp_experimental' ? 'experimental' : 'templates');
             setSelectedTemplateId(dedicatedTemplateId);
-            setClonedValues({ ...template.params, name: template.name });
+            setClonedValues({ ...template.params, name: template.name, template_model_id: template.model_id || template.params?.template_model_id });
             setJobName(template.params?.job_name || template.name || '');
             setSelectedModelId(null);
             setSelectedModeId(null);
@@ -816,7 +828,7 @@ export function JobSubmission() {
     };
 
     // Dedicated templates that handle their own header/navigation
-    const dedicatedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'boltzgen_design', 'bindcraft', 'oligo_design', 'protein_local_redesign'];
+    const dedicatedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'boltz_cp_experimental', 'boltzgen_design', 'bindcraft', 'oligo_design', 'protein_local_redesign'];
     const showMainHeader = !selectedTemplateId || !dedicatedTemplates.includes(selectedTemplateId);
 
     return (
@@ -947,10 +959,12 @@ export function JobSubmission() {
                                     onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
                                 />
-                            ) : selectedTemplateId === 'structure_prediction' ? (
+                            ) : selectedTemplateId === 'structure_prediction' || selectedTemplateId === 'boltz_cp_experimental' ? (
                                 <StructurePredictionTemplate
                                     onBack={handleDedicatedTemplateBack}
-                                    initialValues={clonedValues}
+                                    initialValues={selectedTemplateId === 'boltz_cp_experimental'
+                                        ? { ...(templateDetail?.preset_params || {}), ...(clonedValues || {}) }
+                                        : clonedValues}
                                 />
                             ) : selectedTemplateId === 'boltzgen_design' ? (
                                 <BoltzGenTemplate

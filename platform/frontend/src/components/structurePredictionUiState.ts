@@ -2,6 +2,7 @@ export type StructurePredictionMode = 'predict' | 'complex';
 export type StructurePredictorFamily = 'boltz' | 'rf3' | 'protenix';
 export type StructurePredictorSelection = StructurePredictorFamily | 'both' | 'all' | 'boltz_protenix';
 export type BoltzQualityPresetId = 'quick' | 'balanced' | 'max' | 'custom';
+export type StructureLaunchVariant = 'default' | 'boltz_cp_experimental';
 
 export interface StructurePredictorOption {
     id: StructurePredictorSelection;
@@ -44,8 +45,187 @@ export interface TargetPreviewSourceInput {
     } | null;
 }
 
+export interface StructureLaunchConfig {
+    variant: StructureLaunchVariant;
+    submitModelId: 'boltz2' | 'boltz_cp_experimental';
+    submitMode: 'predict' | 'design';
+    allowPredictorSelection: boolean;
+    showParallelJobs: boolean;
+    showSequenceBatch: boolean;
+    showMsaControls: boolean;
+    forcedPredictor: StructurePredictorFamily | null;
+}
+
+export interface BoltzCpGpuLaunchInput {
+    pinnedGpus: number[];
+    requestedSizeCp?: number | null;
+    fallbackGpuIds?: string | null;
+}
+
+export interface StructureSubmitTarget {
+    modelId: 'boltz2' | 'rf3' | 'protenix' | 'boltz_cp_experimental';
+    mode: 'predict' | 'complex' | 'design';
+}
+
+export interface ResolveStructureSubmitTargetInput {
+    launchConfig: StructureLaunchConfig;
+    predictionMode: StructurePredictionMode;
+    predictorSelection: StructurePredictorSelection | string | null | undefined;
+}
+
+export interface BoltzCpSubmitParamsInput {
+    outputFormat: 'mmcif' | 'pdb';
+    writeFullPae: boolean;
+    seed?: string | null;
+    gpuIds?: string | null;
+    sizeCp: number;
+}
+
 const COMPLEX_RF3_DISABLED_REASON = 'RF3 is predict-only and cannot be launched in complex mode.';
 const TARGET_PREVIEW_HIGHLIGHT = { r: 59, g: 130, b: 246 };
+
+const toStructureLaunchVariant = (initialValues?: Record<string, any> | null): StructureLaunchVariant => {
+    const normalized = String(
+        initialValues?.structure_launch_variant
+        || initialValues?.template_model_id
+        || initialValues?.model_id
+        || ''
+    ).trim().toLowerCase();
+    return normalized === 'boltz_cp_experimental' ? 'boltz_cp_experimental' : 'default';
+};
+
+const parseBoltzCpGpuIds = (value: unknown): number[] => {
+    const rawValues = Array.isArray(value)
+        ? value
+        : String(value || '')
+            .split(',')
+            .map((token) => token.trim())
+            .filter(Boolean);
+
+    const seen = new Set<number>();
+    const parsed: number[] = [];
+    for (const rawValue of rawValues) {
+        const gpuId = Number.parseInt(String(rawValue), 10);
+        if (!Number.isFinite(gpuId) || gpuId < 0 || seen.has(gpuId)) {
+            continue;
+        }
+        seen.add(gpuId);
+        parsed.push(gpuId);
+    }
+    return parsed;
+};
+
+const getLargestSquareDivisor = (gpuCount: number, requestedSizeCp?: number | null): number => {
+    if (!Number.isFinite(gpuCount) || gpuCount < 1) {
+        return 1;
+    }
+
+    const preferred = Number.parseInt(String(requestedSizeCp ?? gpuCount), 10);
+    const requested = Number.isFinite(preferred) && preferred > 0 ? preferred : gpuCount;
+
+    let best = 1;
+    for (let candidate = 1; candidate <= gpuCount; candidate += 1) {
+        if (gpuCount % candidate !== 0) {
+            continue;
+        }
+        const root = Math.sqrt(candidate);
+        if (!Number.isInteger(root) || candidate > requested) {
+            continue;
+        }
+        best = candidate;
+    }
+    return best;
+};
+
+export const resolveStructureLaunchConfig = (initialValues?: Record<string, any> | null): StructureLaunchConfig => {
+    const variant = toStructureLaunchVariant(initialValues);
+    if (variant === 'boltz_cp_experimental') {
+        return {
+            variant,
+            submitModelId: 'boltz_cp_experimental',
+            submitMode: 'design',
+            allowPredictorSelection: false,
+            showParallelJobs: false,
+            showSequenceBatch: false,
+            showMsaControls: false,
+            forcedPredictor: 'boltz',
+        };
+    }
+
+    return {
+        variant: 'default',
+        submitModelId: 'boltz2',
+        submitMode: 'predict',
+        allowPredictorSelection: true,
+        showParallelJobs: true,
+        showSequenceBatch: true,
+        showMsaControls: true,
+        forcedPredictor: null,
+    };
+};
+
+export const deriveBoltzCpGpuLaunchSettings = ({
+    pinnedGpus,
+    requestedSizeCp,
+    fallbackGpuIds,
+}: BoltzCpGpuLaunchInput): { gpuIds: string; sizeCp: number } => {
+    const resolvedGpuIds = parseBoltzCpGpuIds(
+        Array.isArray(pinnedGpus) && pinnedGpus.length > 0 ? pinnedGpus : fallbackGpuIds
+    );
+    return {
+        gpuIds: resolvedGpuIds.join(','),
+        sizeCp: getLargestSquareDivisor(resolvedGpuIds.length, requestedSizeCp),
+    };
+};
+
+export const resolveStructureSubmitTarget = ({
+    launchConfig,
+    predictionMode,
+    predictorSelection,
+}: ResolveStructureSubmitTargetInput): StructureSubmitTarget => {
+    if (launchConfig.variant === 'boltz_cp_experimental') {
+        return {
+            modelId: launchConfig.submitModelId,
+            mode: launchConfig.submitMode,
+        };
+    }
+
+    const resolvedSelection = resolveStructurePredictorSelection(predictionMode, predictorSelection);
+    return {
+        modelId: resolvedSelection.canonicalSelection === 'rf3'
+            ? 'rf3'
+            : resolvedSelection.canonicalSelection === 'protenix'
+                ? 'protenix'
+                : 'boltz2',
+        mode: predictionMode,
+    };
+};
+
+export const buildBoltzCpSubmitParams = ({
+    outputFormat,
+    writeFullPae,
+    seed,
+    gpuIds,
+    sizeCp,
+}: BoltzCpSubmitParamsInput): Record<string, any> => {
+    const params: Record<string, any> = {
+        structure_launch_variant: 'boltz_cp_experimental',
+        num_parallel_jobs: 1,
+        bcp_input_format: 'config_files',
+        bcp_output_format: outputFormat,
+        bcp_write_full_pae: writeFullPae,
+        bcp_size_cp: sizeCp,
+    };
+    if (gpuIds && gpuIds.trim()) {
+        params.bcp_gpu_ids = gpuIds.trim();
+    }
+    const normalizedSeed = String(seed || '').trim();
+    if (normalizedSeed) {
+        const parsedSeed = Number.parseInt(normalizedSeed, 10);
+        params.bcp_seed = Number.isFinite(parsedSeed) ? parsedSeed : normalizedSeed;
+    }
+    return params;
+};
 
 export const BOLTZ_QUALITY_PRESETS = [
     { id: 'quick' as const, label: 'Quick', samplingSteps: 50 },
