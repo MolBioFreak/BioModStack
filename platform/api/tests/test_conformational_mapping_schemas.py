@@ -538,6 +538,28 @@ def test_native_ensemble_bundle_is_exactly_cross_bound() -> None:
             validate_contract_bundle(malformed)
 
 
+def test_protenix_runtime_attestation_is_native_and_ensemble_bound() -> None:
+    fixtures = _json(SCHEMA_FIXTURES / "positive" / "all_schemas.json")
+    validate_contract_bundle(fixtures)
+
+    missing_receipt = copy.deepcopy({
+        key: fixtures[key] for key in ("cm_request_v1", "cm_complex_snapshot_v1", "cm_native_artifacts_v1", "cm_ensemble_v1")
+    })
+    missing_receipt["cm_native_artifacts_v1"]["files"] = [
+        item for item in missing_receipt["cm_native_artifacts_v1"]["files"]
+        if item["semantic_role"] != "runtime_attestation"
+    ]
+    with pytest.raises(ContractValidationError, match="runtime attestation"):
+        validate_contract_bundle(missing_receipt)
+
+    forged_binding = copy.deepcopy({
+        key: fixtures[key] for key in ("cm_request_v1", "cm_complex_snapshot_v1", "cm_native_artifacts_v1", "cm_ensemble_v1")
+    })
+    forged_binding["cm_ensemble_v1"]["runtime_attestation_sha256"] = "f" * 64
+    with pytest.raises(ContractValidationError, match="runtime attestation hash"):
+        validate_contract_bundle(forged_binding)
+
+
 def test_resume_descriptor_rejects_semantically_forged_values() -> None:
     coordinates = [
         {

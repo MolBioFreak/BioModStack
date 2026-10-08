@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import mimetypes
+import os
 import secrets
+import stat
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -251,11 +253,85 @@ def _contained_file(root: Path, relative_path: str) -> Path:
     pure = PurePosixPath(relative_path)
     if pure.is_absolute() or str(pure) != relative_path or any(part in {"", ".", ".."} for part in pure.parts) or "\\" in relative_path:
         raise ConformationalPersistenceError("manifest contains an unsafe relative path")
-    candidate = (root / relative_path).resolve(strict=True)
+    candidate = root / Path(*pure.parts)
     candidate.relative_to(root)
-    if not candidate.is_file() or candidate.is_symlink():
+    current = root
+    for part in pure.parts:
+        current = current / part
+        try:
+            info = os.lstat(current)
+        except OSError as exc:
+            raise ConformationalPersistenceError("manifest artifact is unavailable") from exc
+        if stat.S_ISLNK(info.st_mode):
+            raise ConformationalPersistenceError("manifest artifact path contains a symlink")
+    if not stat.S_ISREG(os.lstat(candidate).st_mode):
         raise ConformationalPersistenceError("manifest artifact is not a safe regular file")
     return candidate
+
+
+def _open_pinned_file(path: Path) -> tuple[int, int, str, os.stat_result, os.stat_result]:
+    absolute = Path(os.path.abspath(path))
+    parts = absolute.parts
+    if len(parts) < 2 or parts[0] != os.sep:
+        raise ConformationalPersistenceError("artifact path is not absolute")
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    parent_fd = os.open(os.sep, directory_flags)
+    file_fd: int | None = None
+    try:
+        for component in parts[1:-1]:
+            next_fd = os.open(component, directory_flags, dir_fd=parent_fd)
+            os.close(parent_fd)
+            parent_fd = next_fd
+        leaf = parts[-1]
+        file_fd = os.open(
+            leaf,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_fd,
+        )
+        opened = os.fstat(file_fd)
+        path_before = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+        return file_fd, parent_fd, leaf, opened, path_before
+    except Exception:
+        if file_fd is not None:
+            os.close(file_fd)
+        os.close(parent_fd)
+        raise
+
+
+def _same_file_identity(left: os.stat_result, right: os.stat_result) -> bool:
+    return all(
+        getattr(left, field) == getattr(right, field)
+        for field in ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns", "st_ctime_ns")
+    )
+
+
+def _stable_file_measurement(path: Path) -> tuple[str, int]:
+    try:
+        file_fd, parent_fd, leaf, before, path_before = _open_pinned_file(path)
+    except OSError as exc:
+        raise ConformationalPersistenceError(f"artifact is unavailable: {path}") from exc
+    try:
+        if not stat.S_ISREG(before.st_mode):
+            raise ConformationalPersistenceError("artifact is not a regular file")
+        digest = hashlib.sha256()
+        size = 0
+        while True:
+            chunk = os.read(file_fd, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+            size += len(chunk)
+        after = os.fstat(file_fd)
+        path_after = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+        visible_after = os.lstat(path)
+        if not _same_file_identity(before, after) or not _same_file_identity(path_before, path_after) or not _same_file_identity(before, visible_after):
+            raise ConformationalPersistenceError("artifact path or bytes changed during verification")
+        if size != before.st_size:
+            raise ConformationalPersistenceError("artifact size changed during verification")
+        return digest.hexdigest(), size
+    finally:
+        os.close(file_fd)
+        os.close(parent_fd)
 
 
 async def _replace_record(
@@ -523,6 +599,13 @@ async def ingest_result_bundle(
         raise ConformationalPersistenceError("result coordinates do not equal stored request authority")
     if ensemble["native_manifest_path"] != "cm_native_artifacts_v1.json":
         raise ConformationalPersistenceError("native manifest path is not canonical")
+    if record.backend == "protenix_v2_ensemble":
+        runtime_attestations = [
+            item for item in native["files"]
+            if item.get("candidate_id") is None and item.get("semantic_role") == "runtime_attestation"
+        ]
+        if len(runtime_attestations) != 1 or ensemble.get("runtime_attestation_sha256") != runtime_attestations[0]["sha256"]:
+            raise ConformationalPersistenceError("Protenix runtime attestation is not bound to the ensemble")
     descriptor = ensemble.get("resume_descriptor")
     if ensemble.get("resumable") is True and ensemble.get("resume_key") == "0" * 64:
         raise ConformationalPersistenceError("resumable canonical result has no immutable resume identity")
@@ -535,7 +618,14 @@ async def ingest_result_bundle(
         resume_key_to_persist = ensemble["resume_key"]
     elif ensemble["resume_key"] != record.resume_key:
         raise ConformationalPersistenceError("result bundle resume identity mismatch")
-    root = Path(result_root).resolve(strict=True)
+    root_input = Path(result_root)
+    try:
+        root_info = os.lstat(root_input)
+    except OSError as exc:
+        raise ConformationalPersistenceError("result root is unavailable") from exc
+    if stat.S_ISLNK(root_info.st_mode) or not stat.S_ISDIR(root_info.st_mode):
+        raise ConformationalPersistenceError("result root is not a real directory")
+    root = root_input.resolve(strict=True)
     verified_artifacts: list[tuple[Mapping[str, Any], Path]] = []
     seen_paths: set[str] = set()
     for item in native["files"]:
@@ -544,8 +634,8 @@ async def ingest_result_bundle(
             raise ConformationalPersistenceError("native manifest contains a duplicate path")
         seen_paths.add(relative_path)
         path = _contained_file(root, relative_path)
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        if digest != item["sha256"] or path.stat().st_size != item["bytes"]:
+        digest, byte_count = _stable_file_measurement(path)
+        if digest != item["sha256"] or byte_count != item["bytes"]:
             raise ConformationalPersistenceError("native artifact hash or size mismatch")
         verified_artifacts.append((item, path))
     for item in bundle.get("cm_derived_files", []):
@@ -556,8 +646,8 @@ async def ingest_result_bundle(
             raise ConformationalPersistenceError("derived artifact duplicates a native path")
         seen_paths.add(relative_path)
         path = _contained_file(root, relative_path)
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        if digest != item.get("sha256") or path.stat().st_size != item.get("bytes"):
+        digest, byte_count = _stable_file_measurement(path)
+        if digest != item.get("sha256") or byte_count != item.get("bytes"):
             raise ConformationalPersistenceError("derived artifact hash or size mismatch")
         verified_artifacts.append((item, path))
 
