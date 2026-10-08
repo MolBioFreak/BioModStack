@@ -20,6 +20,7 @@ from lib.shared_runtime_images import verify_image
 
 # Do NOT map experimental confornets.sif to the distinct canonical CM build.
 IMAGE_SELECTORS = {
+    'fold-cp.sif': ('bcp_container_path', 'BMS_FOLD_CP_CONTAINER_PATH'),
     'protenix.sif': ('protenix_container_path', 'BMS_PROTENIX_CONTAINER_PATH'),
     'confornets-canonical.sif': ('cm_confornets_container_path', 'BMS_CM_CONFORNETS_CONTAINER_PATH'),
     'frustrampnn.sif': ('frustrampnn_container_path', 'BMS_FRUSTRAMPNN_SIF'),

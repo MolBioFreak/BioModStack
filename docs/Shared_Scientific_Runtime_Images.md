@@ -55,7 +55,7 @@ Publish a complete lane selection with:
 python scripts/publish_runtime_images.py --store-root PATH --lane development --manifest FILE
 ```
 
-The JSON maps supported keys (`BMS_NGS_RUNTIME_SIF`, `BMS_CM_CONFORNETS_CONTAINER_PATH`, `BMS_PROTENIX_CONTAINER_PATH`, `BMS_FRUSTRAMPNN_SIF`) to `{ "source": "...", "sha256": "..." }`. A transaction records versioned retained lane releases in `references/state.json` before updating `references/development.env` or `production.env`. Valid legacy projections are retained during migration; unknown legacy references fail closed. Old generations remain protected until explicitly unretained. This is deliberate retention, not automatic indefinite backup copying: each digest still has one object.
+The JSON maps supported keys (`BMS_NGS_RUNTIME_SIF`, `BMS_CM_CONFORNETS_CONTAINER_PATH`, `BMS_PROTENIX_CONTAINER_PATH`, `BMS_FRUSTRAMPNN_SIF`, `BMS_FOLD_CP_CONTAINER_PATH`) to `{ "source": "...", "sha256": "..." }`. A transaction records versioned retained lane releases in `references/state.json` before updating `references/development.env` or `production.env`. Valid legacy projections are retained during migration; unknown legacy references fail closed. Old generations remain protected until explicitly unretained. This is deliberate retention, not automatic indefinite backup copying: each digest still has one object.
 
 Managed Development API/adapter units consume the selected store's Development reference projection. Runtime-specific settings explicitly selected by a supported caller are resolved at execution rather than prematurely freezing Nextflow defaults. Publication alone never restarts services, migrates production, removes originals or proves live adoption.
 
@@ -64,6 +64,33 @@ Managed Development API/adapter units consume the selected store's Development r
 Protenix stages a verified receipt/reference, not a SIF-containing preflight directory. Execution resolves and verifies the shared image at its boundaries. NGS samtools retains no-follow descriptor/inode checks and execution through an inherited descriptor. Deferred Dorado Nextflow selectors and nested clone/construct commands preserve the configured image selection.
 
 Worker SIF transport publishes into the same per-worker `cache/runtime-images` store and transports small runtime aliases/reference manifests instead of full attempt copies for compatible readers. Input files, support tools and model data keep their existing materialization semantics. Retained legacy cache/attempt images are not automatically deleted by this change. Exact-path/no-follow scientific registries must retain their prior compatible materialization until explicitly migrated; cleanup must not disable a supported workflow just to claim zero copies.
+
+### Fold-CP selected image
+
+The ordinary Structure Fold-CP compiler (`boltz_cp_experimental`, mode `design`)
+resolves `bcp_container_path` through the same shared image selector used by
+provisioning and job bundles. Selection precedence is an explicit retained
+canonical path, then `BMS_FOLD_CP_CONTAINER_PATH`, then the current lane release,
+then the conventional `fold-cp.sif` only when no managed selection applies.
+Canonical placement alone is not registration: configured objects must belong
+to a retained release and pass immutable-object/digest verification. Invalid
+explicit paths never fall back. The legacy regular-file path remains supported;
+a conventional symlink is still rejected by asset inventory, not dereferenced
+or copied into a job to evade the no-follow contract.
+
+Use the publication command above with the existing store and a **complete**
+Development manifest preserving every currently selected image. Add
+`BMS_FOLD_CP_CONTAINER_PATH` with the installed regular source file (not its
+conventional symlink) and its independently verified SHA256. Existing canonical
+objects may be supplied as the other manifest sources and are reused without
+copying. The publisher also imports valid legacy `development.env` references
+when `state.json` is absent. API/adapter units already load the entire lane
+EnvironmentFile; adopt the projection through the normal managed Development
+release/restart and verify the compiler plus selected asset plan afterward.
+This operation does not select a production release, retire the installed
+source/alias, qualify a worker/GPU, or authorize inference. Image leases,
+worker canonical publication and semantic `containers/fold-cp.sif` transport
+remain with the existing shared owners.
 
 ### FrustraMPNN canonical reader
 

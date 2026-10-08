@@ -19,6 +19,7 @@ from lib.runtime_image_lifecycle import transaction, commit_release
 ALLOWED_KEYS = frozenset({
     "BMS_NGS_RUNTIME_SIF", "BMS_CM_CONFORNETS_CONTAINER_PATH",
     "BMS_PROTENIX_CONTAINER_PATH", "BMS_FRUSTRAMPNN_SIF",
+    "BMS_FOLD_CP_CONTAINER_PATH",
 })
 
 
