@@ -117,7 +117,7 @@ def normalize_notes(raw_attributes: dict[str, Any]) -> dict[str, Any] | None:
         if isinstance(value, list):
             cleaned = [strip_html(str(item)) for item in value if strip_html(str(item))]
             if cleaned:
-                notes[key] = cleaned[:4]
+                notes[key] = cleaned
         else:
             cleaned = strip_html(str(value))
             if cleaned:
@@ -133,10 +133,37 @@ def feature_color(feature: dict[str, Any]) -> str | None:
     return None
 
 
-def map_feature(plasmid_id: str, feature: dict[str, Any]) -> dict[str, Any]:
+def feature_segments(feature: dict[str, Any]) -> list[dict[str, int]]:
+    segments: list[dict[str, int]] = []
+    for segment in feature.get("segments") or []:
+        if segment.get("rangeBegin") is None or segment.get("rangeEnd") is None:
+            continue
+        start = max(0, int(segment.get("rangeBegin", 1)) - 1)
+        end = int(segment.get("rangeEnd", start))
+        if end <= start:
+            continue
+        segments.append({"start": start, "end": end})
+
+    if not segments:
+        start = max(0, int(feature.get("rangeBegin", 1)) - 1)
+        end = int(feature.get("rangeEnd", start))
+        if end > start:
+            segments.append({"start": start, "end": end})
+
+    deduped = OrderedDict(
+        ((segment["start"], segment["end"]), segment)
+        for segment in segments
+    )
+    return list(deduped.values())
+
+
+def map_feature(plasmid_id: str, sequence_id: str, feature: dict[str, Any]) -> dict[str, Any] | None:
     attributes = normalize_notes(feature.get("attributes") or {}) or {}
-    start = max(0, int(feature.get("rangeBegin", 1)) - 1)
-    end = int(feature.get("rangeEnd", start))
+    segments = feature_segments(feature)
+    if not segments:
+        return None
+    start = min(segment["start"] for segment in segments)
+    end = max(segment["end"] for segment in segments)
     strand = -1 if "reverse" in (feature.get("direction") or "").lower() else 1
     name = strip_html(feature.get("name") or feature.get("type") or "feature")
     mapped = {
@@ -149,6 +176,15 @@ def map_feature(plasmid_id: str, feature: dict[str, Any]) -> dict[str, Any]:
         "color": feature_color(feature),
         "description": first_meaningful_attribute(attributes),
         "notes": attributes or None,
+        "qualifiers": attributes or None,
+        "provenance": {
+            "source": "addgene",
+            "plasmid_id": plasmid_id,
+            "sequence_id": sequence_id,
+            "feature_id": feature.get("id"),
+            "feature_type": feature.get("type"),
+        },
+        "segments": segments,
     }
     return mapped
 
@@ -197,12 +233,11 @@ def merge_feature_notes(
     return merged or None
 
 
-def feature_identity_key(feature: dict[str, Any]) -> tuple[str, str, int, int, int]:
+def feature_identity_key(feature: dict[str, Any]) -> tuple[str, str, str, int]:
     return (
         normalize_feature_label(feature.get("name")),
         normalize_feature_label(feature.get("type")),
-        int(feature.get("start", 0)),
-        int(feature.get("end", 0)),
+        ";".join(f"{segment['start']}-{segment['end']}" for segment in feature.get("segments") or []),
         int(feature.get("strand", 1)),
     )
 
@@ -220,11 +255,14 @@ def merge_feature_records(existing: dict[str, Any], incoming: dict[str, Any]) ->
         if len(incoming_description) > len(existing_description)
         else (existing_description or None),
         "notes": merge_feature_notes(existing.get("notes"), incoming.get("notes")),
+        "qualifiers": merge_feature_notes(existing.get("qualifiers"), incoming.get("qualifiers")),
+        "provenance": merge_feature_notes(existing.get("provenance"), incoming.get("provenance")),
+        "segments": existing.get("segments") or incoming.get("segments"),
     }
 
 
 def dedupe_features(features: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    merged_by_key: OrderedDict[tuple[str, str, int, int, int], dict[str, Any]] = OrderedDict()
+    merged_by_key: OrderedDict[tuple[str, str, str, int], dict[str, Any]] = OrderedDict()
     for feature in features:
         key = feature_identity_key(feature)
         existing = merged_by_key.get(key)
@@ -242,23 +280,49 @@ def parse_percent_gc(raw_percent: str | None) -> float | None:
     return float(match.group(1)) if match else None
 
 
-def map_primers(plasmid_id: str, primers_payload: dict[str, Any]) -> list[dict[str, Any]]:
+def map_primers(plasmid_id: str, sequence_id: str, primers_payload: dict[str, Any]) -> list[dict[str, Any]]:
     mapped: list[dict[str, Any]] = []
     for primer in primers_payload.get("primers") or []:
         sites = primer.get("sites") or []
         if not sites:
             continue
-        primary_site = sites[0]
+        mapped_sites = []
+        for site in sites:
+            start = max(0, int(site.get("bindingSiteStart", 1)) - 1)
+            end = int(site.get("bindingSiteEnd", start))
+            if end <= start:
+                continue
+            mapped_sites.append({
+                "start": start,
+                "end": end,
+                "strand": 1 if (site.get("strand") or "").lower() == "top" else -1,
+                "tm": site.get("meltingTemperature"),
+                "note": strip_html(site.get("description") or "") or None,
+            })
+        if not mapped_sites:
+            continue
+        primary_site = mapped_sites[0]
         mapped.append({
             "id": f"addgene-{plasmid_id}-primer-{primer.get('id', len(mapped))}",
             "name": primer.get("name") or f"Primer {len(mapped) + 1}",
             "sequence": (primer.get("sequence") or "").upper(),
             "sequenceType": "dna",
-            "start": max(0, int(primary_site.get("bindingSiteStart", 1)) - 1),
-            "end": int(primary_site.get("bindingSiteEnd", 0)),
-            "strand": 1 if (primary_site.get("strand") or "").lower() == "top" else -1,
-            "tm": primary_site.get("meltingTemperature"),
+            "start": primary_site["start"],
+            "end": primary_site["end"],
+            "strand": primary_site["strand"],
+            "tm": primary_site.get("tm"),
             "gc_percent": parse_percent_gc(primer.get("percentGC")),
+            "notes": {
+                "source": "Addgene",
+                "site_count": len(mapped_sites),
+            },
+            "provenance": {
+                "source": "addgene",
+                "plasmid_id": plasmid_id,
+                "sequence_id": sequence_id,
+                "primer_id": primer.get("id"),
+            },
+            "sites": mapped_sites,
         })
     return mapped
 
@@ -290,9 +354,12 @@ def browse_sequence_payload(plasmid_id: str, sequence_id: str, label: str) -> di
     primers_payload = fetch_json(urls["primers"])
 
     mapped_features = dedupe_features([
-        map_feature(plasmid_id, feature) for feature in features_payload.get("features") or []
+        mapped
+        for feature in features_payload.get("features") or []
+        for mapped in [map_feature(plasmid_id, sequence_id, feature)]
+        if mapped is not None
     ])
-    mapped_primers = map_primers(plasmid_id, primers_payload)
+    mapped_primers = map_primers(plasmid_id, sequence_id, primers_payload)
 
     return {
         "name": label,

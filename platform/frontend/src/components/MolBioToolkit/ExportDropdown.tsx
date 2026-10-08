@@ -4,6 +4,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { jsonToGenbank } from '@teselagen/bio-parsers';
+import type { HistoryEntry } from './hooks/useSequenceHistory';
 
 interface ExportDropdownProps {
     sequenceData: {
@@ -19,6 +20,9 @@ interface ExportDropdownProps {
             color?: string;
             description?: string;
             notes?: Record<string, unknown>;
+            qualifiers?: Record<string, unknown>;
+            provenance?: Record<string, unknown>;
+            segments?: Array<{ start: number; end: number }>;
         }>;
         primers?: Array<{
             name: string;
@@ -32,10 +36,28 @@ interface ExportDropdownProps {
         circular?: boolean;
         sequenceType?: 'dna' | 'rna' | 'protein';
     };
+    historyJournal?: HistoryEntry[];
     className?: string;
 }
 
-export function ExportDropdown({ sequenceData, className }: ExportDropdownProps) {
+function featureLocations(feature: NonNullable<ExportDropdownProps['sequenceData']['features']>[number]) {
+    return (feature.segments && feature.segments.length > 0
+        ? feature.segments
+        : [{ start: feature.start, end: feature.end }]).map((segment) => ({
+            start: segment.start,
+            end: segment.end,
+        }));
+}
+
+function formatNotes(feature: NonNullable<ExportDropdownProps['sequenceData']['features']>[number]) {
+    return {
+        ...(feature.notes || {}),
+        ...(feature.qualifiers || {}),
+        provenance: feature.provenance || undefined,
+    };
+}
+
+export function ExportDropdown({ sequenceData, historyJournal = [], className }: ExportDropdownProps) {
     const [isOpen, setIsOpen] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -50,7 +72,7 @@ export function ExportDropdown({ sequenceData, className }: ExportDropdownProps)
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
-    const exportAs = (format: 'genbank' | 'fasta') => {
+    const exportAs = (format: 'genbank' | 'fasta' | 'json' | 'features_tsv' | 'primers_tsv' | 'history_txt') => {
         let content: string;
         let extension: string;
 
@@ -60,6 +82,41 @@ export function ExportDropdown({ sequenceData, className }: ExportDropdownProps)
                 : `>${sequenceData.name}`;
             content = `${header}\n${sequenceData.sequence.match(/.{1,80}/g)?.join('\n') || ''}`;
             extension = 'fasta';
+        } else if (format === 'json') {
+            content = JSON.stringify({
+                ...sequenceData,
+                historyJournal,
+            }, null, 2);
+            extension = 'molbio.json';
+        } else if (format === 'features_tsv') {
+            const rows = (sequenceData.features || []).map((feature) => [
+                feature.name,
+                feature.type,
+                feature.start + 1,
+                feature.end,
+                feature.strand,
+                (feature.segments || []).map((segment) => `${segment.start + 1}-${segment.end}`).join(';'),
+                feature.description || '',
+            ].join('\t'));
+            content = ['name\ttype\tstart\tend\tstrand\tsegments\tdescription', ...rows].join('\n');
+            extension = 'features.tsv';
+        } else if (format === 'primers_tsv') {
+            const rows = (sequenceData.primers || []).map((primer) => [
+                primer.name,
+                primer.sequence,
+                primer.start + 1,
+                primer.end,
+                primer.strand,
+                primer.tm ?? '',
+                primer.gc_percent ?? '',
+            ].join('\t'));
+            content = ['name\tsequence\tstart\tend\tstrand\ttm\tgc_percent', ...rows].join('\n');
+            extension = 'primers.tsv';
+        } else if (format === 'history_txt') {
+            content = historyJournal.length === 0
+                ? 'No history entries recorded for this workspace.\n'
+                : historyJournal.map((entry) => `${entry.timestamp}\t${entry.label}\t${entry.summary}`).join('\n');
+            extension = 'history.txt';
         } else {
             content = jsonToGenbank({
                 name: sequenceData.name,
@@ -67,7 +124,11 @@ export function ExportDropdown({ sequenceData, className }: ExportDropdownProps)
                 sequence: sequenceData.sequence,
                 circular: sequenceData.circular,
                 type: sequenceData.sequenceType === 'rna' ? 'RNA' : 'DNA',
-                features: sequenceData.features || [],
+                features: (sequenceData.features || []).map((feature) => ({
+                    ...feature,
+                    locations: featureLocations(feature),
+                    notes: formatNotes(feature),
+                })),
                 primers: sequenceData.primers || [],
             }) || '';
             extension = 'gb';
@@ -103,7 +164,7 @@ export function ExportDropdown({ sequenceData, className }: ExportDropdownProps)
             </button>
 
             {isOpen && (
-                <div className="absolute right-0 mt-1 w-40 bg-slate-700 border border-slate-600 rounded shadow-lg z-50">
+                <div className="absolute right-0 mt-1 w-48 bg-slate-700 border border-slate-600 rounded shadow-lg z-50">
                     <button
                         onClick={() => exportAs('genbank')}
                         className="w-full text-left px-3 py-2 text-sm text-slate-200 hover:bg-slate-600 transition-colors"
@@ -115,6 +176,30 @@ export function ExportDropdown({ sequenceData, className }: ExportDropdownProps)
                         className="w-full text-left px-3 py-2 text-sm text-slate-200 hover:bg-slate-600 transition-colors"
                     >
                         FASTA (.fasta)
+                    </button>
+                    <button
+                        onClick={() => exportAs('json')}
+                        className="w-full text-left px-3 py-2 text-sm text-slate-200 hover:bg-slate-600 transition-colors"
+                    >
+                        Toolkit JSON (.molbio.json)
+                    </button>
+                    <button
+                        onClick={() => exportAs('features_tsv')}
+                        className="w-full text-left px-3 py-2 text-sm text-slate-200 hover:bg-slate-600 transition-colors"
+                    >
+                        Features TSV (.tsv)
+                    </button>
+                    <button
+                        onClick={() => exportAs('primers_tsv')}
+                        className="w-full text-left px-3 py-2 text-sm text-slate-200 hover:bg-slate-600 transition-colors"
+                    >
+                        Primers TSV (.tsv)
+                    </button>
+                    <button
+                        onClick={() => exportAs('history_txt')}
+                        className="w-full text-left px-3 py-2 text-sm text-slate-200 hover:bg-slate-600 transition-colors"
+                    >
+                        History Text (.txt)
                     </button>
                 </div>
             )}

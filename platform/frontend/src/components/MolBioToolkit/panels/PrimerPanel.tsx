@@ -10,10 +10,12 @@ import {
     deletePrimer as deletePrimerApi,
     togglePrimerFavorite,
     calculatePrimerTm,
+    calculatePrimerQc,
     designPrimers,
     type Primer as LibraryPrimer,
     type PrimerCreate,
     type PrimerDesignResponse,
+    type PrimerQcResponse,
     type PrimerTmOptionsResponse,
     type PrimerTmResult,
     type PrimerTmSettings,
@@ -101,7 +103,7 @@ export function PrimerPanel({
     const [newPrimerSeq, setNewPrimerSeq] = useState('');
     const [isReverse, setIsReverse] = useState(false);
     const [hoveredPrimerId, setHoveredPrimerId] = useState<string | null>(null);
-    const [activeTab, setActiveTab] = useState<'sequence' | 'design' | 'library'>('sequence');
+    const [activeTab, setActiveTab] = useState<'sequence' | 'design' | 'qc' | 'library'>('sequence');
 
     const [libraryPrimers, setLibraryPrimers] = useState<LibraryPrimer[]>([]);
     const [libraryLoading, setLibraryLoading] = useState(false);
@@ -129,6 +131,9 @@ export function PrimerPanel({
     const [designOverhangReverse, setDesignOverhangReverse] = useState('');
     const [designResult, setDesignResult] = useState<PrimerDesignResponse | null>(null);
     const [designLoading, setDesignLoading] = useState(false);
+    const [draftQc, setDraftQc] = useState<PrimerQcResponse['primers'][number]['qc'] | null>(null);
+    const [sequenceQc, setSequenceQc] = useState<PrimerQcResponse | null>(null);
+    const [qcLoading, setQcLoading] = useState(false);
 
     const sequenceType = sequenceData.sequenceType === 'rna' ? 'rna' : 'dna';
     const unitLabel = sequenceUnitLabel(sequenceType);
@@ -225,6 +230,7 @@ export function PrimerPanel({
     useEffect(() => {
         if (!cleanedDraftPrimer || !isValidNucleotideSequence(cleanedDraftPrimer)) {
             setDraftTmResult(null);
+            setDraftQc(null);
             setDraftTmLoading(false);
             return;
         }
@@ -232,9 +238,22 @@ export function PrimerPanel({
         let cancelled = false;
         setDraftTmLoading(true);
         const timer = window.setTimeout(async () => {
-            const result = await calculateTmForSequence(draftTmSequence, inferSequenceTypeFromSequence(draftTmSequence));
+            const [tmResult, qcResult] = await Promise.all([
+                calculateTmForSequence(draftTmSequence, inferSequenceTypeFromSequence(draftTmSequence)),
+                calculatePrimerQc({
+                    primers: [{
+                        sequence: cleanedDraftPrimer,
+                        sequence_type: inferSequenceTypeFromSequence(cleanedDraftPrimer),
+                    }],
+                    template_sequence: sequenceData.sequence,
+                    template_sequence_type: sequenceType,
+                    template_is_circular: sequenceData.circular,
+                    include_pairwise: false,
+                }).then((response) => response.data).catch(() => null),
+            ]);
             if (!cancelled) {
-                setDraftTmResult(result);
+                setDraftTmResult(tmResult);
+                setDraftQc(qcResult?.primers[0]?.qc || null);
                 setDraftTmLoading(false);
             }
         }, 250);
@@ -243,7 +262,47 @@ export function PrimerPanel({
             cancelled = true;
             window.clearTimeout(timer);
         };
-    }, [calculateTmForSequence, cleanedDraftPrimer, draftTmSequence]);
+    }, [calculateTmForSequence, cleanedDraftPrimer, draftTmSequence, sequenceData.circular, sequenceData.sequence, sequenceType]);
+
+    useEffect(() => {
+        if (activeTab !== 'qc') {
+            return;
+        }
+        const primers = sequenceData.primers || [];
+        if (primers.length === 0) {
+            setSequenceQc({ primers: [], pairwise: [] });
+            return;
+        }
+
+        let cancelled = false;
+        setQcLoading(true);
+        void calculatePrimerQc({
+            primers: primers.map((primer) => ({
+                id: primer.id,
+                name: primer.name,
+                sequence: primer.sequence,
+                sequence_type: primer.sequenceType || inferSequenceTypeFromSequence(primer.sequence),
+            })),
+            template_sequence: sequenceData.sequence,
+            template_sequence_type: sequenceType,
+            template_is_circular: sequenceData.circular,
+            include_pairwise: true,
+        }).then((response) => {
+            if (!cancelled) {
+                setSequenceQc(response.data);
+            }
+        }).catch((qcError) => {
+            console.error('Failed to calculate primer QC:', qcError);
+        }).finally(() => {
+            if (!cancelled) {
+                setQcLoading(false);
+            }
+        });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [activeTab, sequenceData.circular, sequenceData.primers, sequenceData.sequence, sequenceType]);
 
     const useSelectionAsPrimer = (reverse: boolean) => {
         if (!selectedRegion) return;
@@ -501,6 +560,15 @@ export function PrimerPanel({
                     Design
                 </button>
                 <button
+                    onClick={() => setActiveTab('qc')}
+                    className={`px-3 py-1.5 rounded transition-colors ${activeTab === 'qc'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
+                        }`}
+                >
+                    QC
+                </button>
+                <button
                     onClick={() => setActiveTab('library')}
                     className={`px-3 py-1.5 rounded transition-colors ${activeTab === 'library'
                         ? 'bg-blue-600 text-white'
@@ -613,6 +681,17 @@ export function PrimerPanel({
                                 )}
                                 {draftTmWarnings.map((warning) => (
                                     <div key={warning} className="text-yellow-300">
+                                        {warning}
+                                    </div>
+                                ))}
+                                {draftQc && (
+                                    <div className="border-t border-slate-800 pt-2 text-slate-400">
+                                        QC • self {draftQc.max_self_complement} • 3′ self {draftQc.three_prime_self_complement} • hairpin {draftQc.max_hairpin_stem}
+                                        {draftQc.binding_site_count != null ? ` • sites ${draftQc.binding_site_count}` : ''}
+                                    </div>
+                                )}
+                                {draftQc?.warnings.map((warning) => (
+                                    <div key={warning} className="text-amber-300">
                                         {warning}
                                     </div>
                                 ))}
@@ -919,6 +998,8 @@ export function PrimerPanel({
                                                 <div className="font-medium text-slate-100">Pair {pair.rank}</div>
                                                 <div className="mt-1 text-xs text-slate-400">
                                                     Product {pair.product_length} {unitLabel} • ΔTm {pair.tm_delta.toFixed(2)}°C • Penalty {pair.penalty.toFixed(3)}
+                                                    {' '}• heterodimer {pair.heterodimer_complement}
+                                                    {' '}• 3′ heterodimer {pair.three_prime_heterodimer}
                                                 </div>
                                             </div>
                                             <button
@@ -936,6 +1017,8 @@ export function PrimerPanel({
                                                 <div className="mt-1 text-xs text-slate-500">
                                                     {pair.forward.start + 1}-{pair.forward.end} • {pair.forward.tm.toFixed(2)}°C • GC {pair.forward.gc_percent}%
                                                     {pair.forward.overhang_length > 0 ? ` • overhang ${pair.forward.overhang_length}` : ''}
+                                                    {pair.forward.off_target_site_count != null ? ` • off-target ${pair.forward.off_target_site_count}` : ''}
+                                                    {pair.forward.max_hairpin_stem > 0 ? ` • hairpin ${pair.forward.max_hairpin_stem}` : ''}
                                                 </div>
                                             </div>
                                             <div className="rounded border border-slate-800 bg-slate-900 px-3 py-2">
@@ -944,13 +1027,83 @@ export function PrimerPanel({
                                                 <div className="mt-1 text-xs text-slate-500">
                                                     {pair.reverse.start + 1}-{pair.reverse.end} • {pair.reverse.tm.toFixed(2)}°C • GC {pair.reverse.gc_percent}%
                                                     {pair.reverse.overhang_length > 0 ? ` • overhang ${pair.reverse.overhang_length}` : ''}
+                                                    {pair.reverse.off_target_site_count != null ? ` • off-target ${pair.reverse.off_target_site_count}` : ''}
+                                                    {pair.reverse.max_hairpin_stem > 0 ? ` • hairpin ${pair.reverse.max_hairpin_stem}` : ''}
                                                 </div>
                                             </div>
                                         </div>
+
+                                        {pair.warnings.length > 0 && (
+                                            <div className="mt-2 rounded border border-amber-800/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                                                {pair.warnings.join(' • ')}
+                                            </div>
+                                        )}
                                     </div>
                                 ))}
                             </div>
                         </div>
+                    )}
+                </div>
+            )}
+
+            {activeTab === 'qc' && (
+                <div className="space-y-3">
+                    {qcLoading ? (
+                        <div className="rounded border border-slate-700 bg-slate-900/50 px-3 py-4 text-sm text-slate-400">
+                            Calculating primer QC…
+                        </div>
+                    ) : (
+                        <>
+                            <div className="space-y-2">
+                                {(sequenceQc?.primers || []).length === 0 ? (
+                                    <div className="rounded border border-dashed border-slate-700 bg-slate-900/40 px-3 py-4 text-xs text-slate-500">
+                                        Add primers to the construct to run QC.
+                                    </div>
+                                ) : (sequenceQc?.primers || []).map((entry) => (
+                                    <div key={entry.id || entry.name || entry.qc.sequence} className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+                                        <div className="flex items-center justify-between gap-3">
+                                            <div>
+                                                <div className="font-medium text-slate-100">{entry.name || 'Primer'}</div>
+                                                <div className="mt-1 text-xs text-slate-500">
+                                                    self {entry.qc.max_self_complement} • 3′ self {entry.qc.three_prime_self_complement} • hairpin {entry.qc.max_hairpin_stem}
+                                                    {entry.qc.binding_site_count != null ? ` • sites ${entry.qc.binding_site_count}` : ''}
+                                                </div>
+                                            </div>
+                                            <div className="text-xs text-slate-400">
+                                                off-target {entry.qc.off_target_site_count ?? 0}
+                                            </div>
+                                        </div>
+                                        <div className="mt-2 font-mono text-xs text-slate-300 break-all">{entry.qc.sequence}</div>
+                                        {entry.qc.warnings.length > 0 && (
+                                            <div className="mt-2 rounded border border-amber-800/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                                                {entry.qc.warnings.join(' • ')}
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+
+                            {(sequenceQc?.pairwise || []).length > 0 && (
+                                <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+                                    <div className="font-medium text-slate-200">Pairwise Dimer Review</div>
+                                    <div className="mt-3 space-y-2">
+                                        {sequenceQc?.pairwise.map((pair, index) => (
+                                            <div key={`${pair.left_id || pair.left_name}:${pair.right_id || pair.right_name}:${index}`} className="rounded border border-slate-800 bg-slate-950/70 px-3 py-2">
+                                                <div className="text-sm text-slate-200">
+                                                    {(pair.left_name || 'Primer A')} × {(pair.right_name || 'Primer B')}
+                                                </div>
+                                                <div className="mt-1 text-xs text-slate-500">
+                                                    heterodimer {pair.heterodimer_complement} • 3′ heterodimer {pair.three_prime_heterodimer}
+                                                </div>
+                                                {pair.warnings.length > 0 && (
+                                                    <div className="mt-2 text-xs text-amber-300">{pair.warnings.join(' • ')}</div>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </>
                     )}
                 </div>
             )}

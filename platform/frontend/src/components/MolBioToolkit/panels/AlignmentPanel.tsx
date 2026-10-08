@@ -11,6 +11,13 @@ interface AlignmentPanelProps {
     selection: SelectionInfo | null;
     onHighlight: (regions: HighlightedRegion[]) => void;
     onAddFeatures: (features: Feature[]) => void;
+    comparisonTargets?: Array<{
+        id: string;
+        label: string;
+        sequence: string;
+        circular: boolean;
+        sequenceType: SequenceData['sequenceType'];
+    }>;
 }
 
 type AlignmentMode = 'placement' | 'local' | 'global';
@@ -128,13 +135,19 @@ export function AlignmentPanel({
     selection,
     onHighlight,
     onAddFeatures,
+    comparisonTargets = [],
 }: AlignmentPanelProps) {
     const [referenceScope, setReferenceScope] = useState<'full' | 'selection'>('full');
     const [mode, setMode] = useState<AlignmentMode>('placement');
     const [strand, setStrand] = useState<StrandMode>('auto');
     const [circularReference, setCircularReference] = useState(sequenceData.circular);
+    const [comparisonTargetId, setComparisonTargetId] = useState('');
     const [queryName, setQueryName] = useState('');
     const [queryRaw, setQueryRaw] = useState('');
+    const [matchScore, setMatchScore] = useState(2);
+    const [mismatchScore, setMismatchScore] = useState(-1);
+    const [gapOpenScore, setGapOpenScore] = useState(-6);
+    const [gapExtendScore, setGapExtendScore] = useState(-1);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [result, setResult] = useState<SequenceAlignmentResult | null>(null);
@@ -153,6 +166,18 @@ export function AlignmentPanel({
             setCircularReference(sequenceData.circular);
         }
     }, [referenceScope, sequenceData.circular]);
+
+    useEffect(() => {
+        if (!comparisonTargetId) {
+            return;
+        }
+        const target = comparisonTargets.find((item) => item.id === comparisonTargetId);
+        if (!target) {
+            return;
+        }
+        setQueryName(target.label);
+        setQueryRaw(target.sequence);
+    }, [comparisonTargetId, comparisonTargets]);
 
     const referenceSequence = useMemo(() => {
         if (referenceScope === 'selection' && selectionRange) {
@@ -221,6 +246,10 @@ export function AlignmentPanel({
                     mode,
                     strand,
                     reference_is_circular: effectiveCircularReference,
+                    match_score: matchScore,
+                    mismatch_score: mismatchScore,
+                    gap_open_score: gapOpenScore,
+                    gap_extend_score: gapExtendScore,
                 },
             });
             setResult(response.data);
@@ -261,21 +290,29 @@ export function AlignmentPanel({
                     alignment_strand: result.strand,
                     reference_wraps_origin: Boolean(variant.reference_wraps_origin),
                 },
+                qualifiers: {
+                    source: 'alignment',
+                    query_name: queryLabel,
+                    variant_type: variant.type,
+                },
+                provenance: {
+                    workflow: 'alignment',
+                    mode: result.mode,
+                    strand: result.strand,
+                },
             };
 
             if (variant.reference_wraps_origin && referenceScope === 'full') {
                 return [
                     {
-                        id: `align_variant_${Date.now().toString(36)}_${index}_a`,
+                        id: `align_variant_${Date.now().toString(36)}_${index}`,
                         ...baseFeature,
                         start: absoluteStart,
-                        end: sequenceData.sequence.length,
-                    },
-                    {
-                        id: `align_variant_${Date.now().toString(36)}_${index}_b`,
-                        ...baseFeature,
-                        start: 0,
                         end: Math.max(absoluteEnd, 1),
+                        segments: [
+                            { start: absoluteStart, end: sequenceData.sequence.length },
+                            { start: 0, end: Math.max(absoluteEnd, 1) },
+                        ],
                     },
                 ];
             }
@@ -333,6 +370,21 @@ export function AlignmentPanel({
 
                 <div className="grid gap-2 sm:grid-cols-2">
                     <label className="space-y-1">
+                        <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Open workspace comparator</span>
+                        <select
+                            value={comparisonTargetId}
+                            onChange={(event) => setComparisonTargetId(event.target.value)}
+                            className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5"
+                        >
+                            <option value="">Paste or type manually</option>
+                            {comparisonTargets.map((target) => (
+                                <option key={target.id} value={target.id}>
+                                    {target.label} • {target.sequence.length.toLocaleString()} nt
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                    <label className="space-y-1">
                         <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Strand</span>
                         <select
                             value={strand}
@@ -353,6 +405,61 @@ export function AlignmentPanel({
                             onChange={(event) => setCircularReference(event.target.checked)}
                         />
                         Treat reference as circular
+                    </label>
+                </div>
+
+                <div className="grid gap-2 sm:grid-cols-2">
+                    <label className="space-y-1">
+                        <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Match score</span>
+                        <input
+                            type="range"
+                            min={1}
+                            max={5}
+                            step={0.5}
+                            value={matchScore}
+                            onChange={(event) => setMatchScore(Number(event.target.value))}
+                            className="w-full accent-blue-500"
+                        />
+                        <div className="text-xs text-slate-500">{matchScore.toFixed(1)}</div>
+                    </label>
+                    <label className="space-y-1">
+                        <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Mismatch score</span>
+                        <input
+                            type="range"
+                            min={-6}
+                            max={0}
+                            step={0.5}
+                            value={mismatchScore}
+                            onChange={(event) => setMismatchScore(Number(event.target.value))}
+                            className="w-full accent-blue-500"
+                        />
+                        <div className="text-xs text-slate-500">{mismatchScore.toFixed(1)}</div>
+                    </label>
+                    <label className="space-y-1">
+                        <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Gap open</span>
+                        <input
+                            type="range"
+                            min={-12}
+                            max={0}
+                            step={0.5}
+                            value={gapOpenScore}
+                            onChange={(event) => setGapOpenScore(Number(event.target.value))}
+                            className="w-full accent-blue-500"
+                        />
+                        <div className="text-xs text-slate-500">{gapOpenScore.toFixed(1)}</div>
+                    </label>
+                    <label className="space-y-1">
+                        <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Gap extend</span>
+                        <input
+                            type="range"
+                            min={-4}
+                            max={0}
+                            step={0.25}
+                            value={gapExtendScore}
+                            onChange={(event) => setGapExtendScore(Number(event.target.value))}
+                            className="w-full accent-blue-500"
+                        />
+                        <div className="text-xs text-slate-500">{gapExtendScore.toFixed(2)}</div>
                     </label>
                 </div>
 

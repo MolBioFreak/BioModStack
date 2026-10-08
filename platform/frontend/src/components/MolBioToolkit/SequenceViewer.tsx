@@ -88,6 +88,12 @@ export interface Feature {
     color?: string;
     description?: string;
     notes?: Record<string, unknown>;
+    qualifiers?: Record<string, unknown>;
+    provenance?: Record<string, unknown>;
+    segments?: Array<{
+        start: number;
+        end: number;
+    }>;
 }
 
 export interface Primer {
@@ -103,6 +109,15 @@ export interface Primer {
     tm_algorithm?: string;
     tm_salt_correction?: string;
     tm_settings?: PrimerTmSettings;
+    notes?: Record<string, unknown>;
+    provenance?: Record<string, unknown>;
+    sites?: Array<{
+        start: number;
+        end: number;
+        strand: 1 | -1;
+        tm?: number;
+        note?: string;
+    }>;
 }
 
 export interface Translation {
@@ -138,6 +153,13 @@ export interface SequenceData {
     primers?: Primer[];
     translations?: Translation[];
     analysisTracks?: AnalysisTrack[];
+    organism?: string;
+    accession?: string;
+    sourceFile?: string;
+    parentId?: string | null;
+    operation?: string | null;
+    operationParams?: Record<string, unknown> | null;
+    version?: number | null;
 }
 
 export interface VisibilityState {
@@ -154,6 +176,7 @@ export interface SelectionInfo {
     clockwise?: boolean;
     type?: string;
     name?: string;
+    annotationId?: string;
 }
 
 interface SequenceViewerProps {
@@ -206,6 +229,23 @@ export function SequenceViewer({
     colorPalette = 'classic',
     visibleFrames = new Set([1])
 }: SequenceViewerProps) {
+    const featureAnnotations = useMemo(() => {
+        return sequenceData.features.flatMap((feature) => {
+            const segments = feature.segments && feature.segments.length > 0
+                ? feature.segments
+                : [{ start: feature.start, end: feature.end }];
+
+            return segments.map((segment, index) => ({
+                name: segments.length > 1 ? `${feature.name} [${index + 1}/${segments.length}]` : feature.name,
+                start: segment.start,
+                end: segment.end,
+                direction: feature.strand,
+                color: feature.color || "#3b82f6",
+                type: feature.type,
+                id: segments.length > 1 ? `${feature.id}::segment:${index}` : feature.id,
+            }));
+        });
+    }, [sequenceData.features]);
 
     // Build annotations array based on visibility toggles
     const annotations = useMemo(() => {
@@ -216,17 +256,11 @@ export function SequenceViewer({
             direction: 1 | -1;
             color: string;
             type?: string;
+            id?: string;
         }> = [];
 
         if (visibility.features) {
-            result.push(...sequenceData.features.map(f => ({
-                name: f.name,
-                start: f.start,
-                end: f.end,
-                direction: f.strand,
-                color: f.color || "#3b82f6",
-                type: f.type
-            })));
+            result.push(...featureAnnotations);
         }
 
         if (visibility.primers && sequenceData.primers) {
@@ -243,7 +277,7 @@ export function SequenceViewer({
         }
 
         return result;
-    }, [sequenceData.features, sequenceData.primers, visibility.features, visibility.primers]);
+    }, [featureAnnotations, sequenceData.primers, visibility.features, visibility.primers]);
 
     // Build translations array if visible - filter by selected reading frames
     // Also filter overlapping ORFs to prevent visual chaos
@@ -335,7 +369,8 @@ export function SequenceViewer({
                             end: sel.end,
                             clockwise: sel.clockwise,
                             type: sel.type,
-                            name: sel.name
+                            name: sel.name,
+                            annotationId: 'id' in sel ? String((sel as { id?: string }).id || '') || undefined : undefined,
                         });
                     }
                 }}
@@ -367,6 +402,10 @@ export const EMPTY_SEQUENCE: SequenceData = {
     primers: [],
     translations: [],
     analysisTracks: [],
+    parentId: null,
+    operation: null,
+    operationParams: null,
+    version: null,
 };
 
 export const DEFAULT_VISIBILITY: VisibilityState = {
