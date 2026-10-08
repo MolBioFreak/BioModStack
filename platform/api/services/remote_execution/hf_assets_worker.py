@@ -16,7 +16,8 @@ from urllib.parse import parse_qs, quote, urlsplit
 # Direct executable peer must import the worktree API rather than a deployment.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from services.remote_execution.hf_assets import (  # noqa: E402
-    ENDPOINT, ERROR_MESSAGES, HFAssetError, MIN_BYTES, _open_regular, _token, _validate_source, configuration,
+    DELIVERY_ROLES, ENDPOINT, ERROR_MESSAGES, HFAssetError, MIN_BYTES, _open_regular, _token,
+    _validate_source, configuration,
 )
 
 
@@ -81,7 +82,7 @@ def _hash(stream, size, digest):
 def _prepare(request, config, api, http, token):
     import re
     role, digest, size = request.get('role'), request.get('sha256'), request.get('size_bytes')
-    if (role not in {'image', 'runtime', 'source'} or not isinstance(digest, str)
+    if (role not in DELIVERY_ROLES or not isinstance(digest, str)
             or not re.fullmatch('[0-9a-f]{64}', digest) or type(size) is not int
             or not MIN_BYTES <= size <= config.max_bytes):
         raise HFAssetError('HF asset identity or role is invalid')

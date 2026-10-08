@@ -16,7 +16,16 @@ from typing import Literal, TypedDict
 
 MIN_BYTES = 8 * 1024 * 1024
 ENDPOINT = 'https://huggingface.co'
+# Roles whose selected assets may mirror into the private bucket. Weights are a
+# role of their own so the shared weight tree is a declared delivery class, not
+# an anonymous runtime leaf.
+DELIVERY_ROLES = frozenset({'image', 'runtime', 'source', 'weights'})
 _KEYS = ('BMS_HF_ASSET_BUCKET', 'BMS_HF_TOKEN_FILE', 'BMS_HF_ASSET_ALLOW_PUBLISH', 'BMS_HF_ASSET_MAX_BYTES')
+# Optional, and deliberately outside _KEYS: naming the packed weight archive
+# neither enables HF nor changes readiness, it only lets the shared weight tree
+# travel as one already-published object.
+WEIGHTS_ARCHIVE_KEY = 'BMS_HF_WEIGHT_ARCHIVE'
+_ARCHIVE = re.compile(r'[0-9a-f]{64}:[0-9]{1,16}\Z')
 _BUCKET = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]{0,95}/[A-Za-z0-9][A-Za-z0-9_.-]{0,95}\Z')
 
 
@@ -33,6 +42,7 @@ ERROR_MESSAGES = {
     'metadata': 'HF object metadata does not match the selected artifact',
     'local_identity': 'HF local artifact identity changed',
     'identity': 'HF asset identity or role is invalid',
+    'weights_archive': 'HF weight archive configuration is invalid',
     'publish_disabled': 'HF artifact is absent and publishing is not authorized',
     'upload_uncertain': 'HF upload outcome requires a fresh source check',
     'upload_unacknowledged': 'HF upload metadata was not acknowledged',
@@ -118,6 +128,29 @@ def configuration() -> Configuration | None:
         return Configuration(bucket, path, allow == '1', int(limit))
     except Exception:
         raise HFAssetError('HF asset configuration is missing or unsafe') from None
+
+
+def weights_archive() -> tuple[str, int] | None:
+    """The one already-published object holding the packed shared weight tree.
+
+    A declaration, not a capability: it names an object the operator packed and
+    published out of band. Absent means the shared weight tree keeps the existing
+    per-file relay, so a deployment that never packs one is unchanged.
+    """
+    raw = os.environ.get(WEIGHTS_ARCHIVE_KEY)
+    if raw is None:
+        return None
+    try:
+        if not _ARCHIVE.fullmatch(raw):
+            raise ValueError()
+        digest, _, size = raw.partition(':')
+        # Form only. The broker's delivery floor still decides whether an object
+        # of that size is obtained from HF or relayed as files.
+        if int(size) < 1:
+            raise ValueError()
+        return digest, int(size)
+    except Exception:
+        raise HFAssetError(ERROR_MESSAGES['weights_archive']) from None
 
 
 def readiness() -> Readiness:
@@ -247,7 +280,7 @@ async def prepare_sources(entries, *, check_fence) -> dict:
         return {}
     result = {}
     for entry in entries:
-        if (entry.role not in {'image', 'runtime', 'source'} or
+        if (entry.role not in DELIVERY_ROLES or
                 not re.fullmatch('[0-9a-f]{64}', entry.sha256) or
                 type(entry.size_bytes) is not int or entry.size_bytes < 0):
             raise HFAssetError('HF asset identity or role is invalid')

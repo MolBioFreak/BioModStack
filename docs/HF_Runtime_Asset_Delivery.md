@@ -16,6 +16,9 @@ connection or credential. For a missing selected artifact of at least 8 MiB:
    assets and the workflow source archive use `sha256/<selected-sha256>/artifact`.
    The expected digest/size come from the existing authoritative selection, not
    HF filenames, object metadata, a browser request or a new manifest registry.
+   Weight assets are their own delivery class (`weights`); the shared weight tree
+   is selected by the same rule as every other eligible asset, and large weight
+   checkpoints travel as individual HF objects like any other large file.
 3. If the object is absent, publishing requires explicit deployment permission.
    The controller pins the selected local inode, hashes its complete bytes,
    uploads using the pinned HF SDK, and rechecks local identity and remote size.
@@ -36,6 +39,23 @@ connection or credential. For a missing selected artifact of at least 8 MiB:
    these same stores. Acknowledged publication allows removal of that incoming
    batch. Uncertain transfers remain unadmitted, not silently declared complete.
 
+Shared model weights are a delivery role of their own, so their delivery is a
+declared decision rather than an anonymous runtime leaf. Large weight objects
+(the published checkpoints) travel as ordinary content-addressed objects
+(`sha256/<selected-sha256>/artifact`) like any other opaque asset. The
+small-file majority of a shared weight tree does **not** become thousands of
+object requests: when the operator declares the one packed archive it already
+published, the worker downloads that single object, authenticates its bytes
+against the declared digest, and unpacks it locally. Members are accepted only
+by matching a row of the bundle's own authenticated weight layout by digest, and
+a bounded number of small accompanying members (a packer index) may ride along
+without ever entering the content store. The pass records its completion against
+both the archive digest and the layout digest; an interrupted pass leaves
+verified objects but no record, so it can never be read as a complete weight
+tree, and no shared view is published until every selected member is present and
+verified. Rows the archive does not carry (the large checkpoints) keep the
+per-file route, which consults HF first for objects at or above the floor.
+
 Small support files retain the existing efficient batched SSH transport rather
 than incur thousands of cloud requests. Biological inputs, prepared input data,
 user results, credentials and relocated support-python are not HF mirrors.
@@ -55,7 +75,17 @@ BMS_HF_ASSET_BUCKET=YOUR_ACCOUNT/YOUR_PRIVATE_BUCKET
 BMS_HF_TOKEN_FILE=/absolute/service-owned/private/hf-token
 BMS_HF_ASSET_ALLOW_PUBLISH=1
 BMS_HF_ASSET_MAX_BYTES=1000000000000
+BMS_HF_WEIGHT_ARCHIVE=<selected-sha256>:<size-in-bytes>
 ```
+
+- `BMS_HF_WEIGHT_ARCHIVE`: optional. The digest and exact size of the one packed
+  archive of the shared weight tree that the operator already published in the
+  bucket. It is a declaration of an existing object, never authority to publish
+  one: BMS has no local source for it, so an absent object fails visibly instead
+  of being uploaded. It is deliberately outside the settings that enable HF and
+  does not change readiness; unset (or with HF unconfigured) the shared weight
+  tree keeps the existing per-file route unchanged. A malformed value fails
+  visibly, like every other HF setting.
 
 - `BMS_HF_TOKEN_FILE`: current controller UID, regular file, no symlink in any
   path component, one hard link, mode `0600` or `0400`, bounded nonempty HF token.

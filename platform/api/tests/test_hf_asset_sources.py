@@ -238,6 +238,47 @@ async def test_prepare_small_skips_and_invalid_role_fails(configured, artifact, 
     with pytest.raises(broker.HFAssetError): await broker.prepare_sources([artifact], check_fence=broker._noop)
 
 
+def test_weights_role_is_an_eligible_delivery_class(configured, artifact, capability):
+    """A weight asset is a declared delivery class, not an anonymous leaf."""
+    artifact.role = 'weights'
+    assert worker._prepare(request(artifact), broker.configuration(), Api(artifact),
+                           Http(capability), 'token') == capability
+    assert 'weights' in broker.DELIVERY_ROLES and 'input' not in broker.DELIVERY_ROLES
+    artifact.role = 'input'
+    with pytest.raises(broker.HFAssetError):
+        worker._prepare(request(artifact), broker.configuration(), Api(artifact),
+                        Http(capability), 'token')
+
+
+@pytest.mark.asyncio
+async def test_prepare_sources_covers_weights(configured, monkeypatch, artifact, capability):
+    calls = []
+    async def invoke(invocation, *, check_fence):
+        calls.append(invocation)
+        return capability
+    monkeypatch.setattr(broker, '_invoke', invoke)
+    artifact.role = 'weights'
+    assert await broker.prepare_sources([artifact], check_fence=broker._noop) \
+        == {(False, artifact.sha256): capability}
+    assert calls[0]['role'] == 'weights'
+
+
+@pytest.mark.parametrize('value', ['deadbeef', 'a' * 64, 'a' * 64 + ':0', 'A' * 64 + ':1',
+                                   'a' * 64 + ':1:2', 'a' * 63 + 'g:1', 'a' * 64 + ':-1'])
+def test_bad_weight_archive_declaration(monkeypatch, value):
+    monkeypatch.setenv(broker.WEIGHTS_ARCHIVE_KEY, value)
+    with pytest.raises(broker.HFAssetError, match='weight archive'):
+        broker.weights_archive()
+    # Naming a packed archive is not HF configuration on its own.
+    assert broker.readiness()['mode'] == 'ssh'
+
+
+def test_weight_archive_declaration_is_optional_and_form_checked(monkeypatch):
+    assert broker.weights_archive() is None
+    monkeypatch.setenv(broker.WEIGHTS_ARCHIVE_KEY, 'a' * 64 + ':3600000000')
+    assert broker.weights_archive() == ('a' * 64, 3600000000)
+
+
 @pytest.mark.asyncio
 async def test_check_readonly_safe_failure(configured, monkeypatch):
     async def invoke(req, **kw):

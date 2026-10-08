@@ -1123,7 +1123,7 @@ def prepare_remote_bundle(
             if record.link_target is None:
                 weights.append(CacheTransferArtifact(weight_sources[record.relative_path],
                     shared_weights + '/' + record.relative_path.removeprefix('runtime/weights/'),
-                    record.sha256, record.size_bytes, record.mode, 'runtime'))
+                    record.sha256, record.size_bytes, record.mode, 'weights'))
     if images or weight_entries:
         manifest = staging_root / ".bms-runtime-images.json"
         manifest.write_bytes(_canonical_bytes({
