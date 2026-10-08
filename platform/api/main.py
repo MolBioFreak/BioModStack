@@ -14,6 +14,7 @@ import logging
 
 from database import init_db, async_session
 from routers import analyses, analytics, bioxp, boltzgen, designs, files, frameworks, frustrampnn, gpu, inputs, jobs, models, molbio_ops, msa, nucleotide_sequences, queue, rcsb, ribocentre, rna_structure, smiles_converter, system, templates, user_sequences, user_templates
+from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
 from services.analysis_worker import AnalysisWorker
 from services.gpu_orchestrator import GPUOrchestrator
 from routers.gpu import get_gpu_stats
@@ -36,41 +37,47 @@ async def lifespan(app: FastAPI):
     # Initialize database
     await init_db()
     
-    # Initialize GPU orchestrator
-    from services.nextflow import launch_nextflow_job_detached
-    
-    # Wrapper to call the real Nextflow launcher with GPU assignment
-    async def orchestrator_launch_job(job_id, model_id, mode, params, output_dir):
-        """Launch a job via Nextflow with GPU assignment from orchestrator.
-        
-        Uses asyncio.create_task to fire-and-forget, so multiple jobs can launch
-        in parallel without waiting for each to complete.
-        """
-        logger.info(f"[ORCHESTRATOR] Launching job {job_id} on GPU {params.get('gpu_id', 0)}")
-        # Fire-and-forget with immediate registration in the launcher so the
-        # completion reconciler knows the job is still bootstrapping.
-        launch_nextflow_job_detached(
-            job_id=job_id,
-            model_id=model_id,
-            mode=mode,
-            params=params,
-            output_dir=output_dir
+    # Initialize GPU orchestrator only when this runtime is allowed to own workflow launches.
+    if workflow_launches_allowed():
+        from services.nextflow import launch_nextflow_job_detached
+
+        # Wrapper to call the real Nextflow launcher with GPU assignment
+        async def orchestrator_launch_job(job_id, model_id, mode, params, output_dir):
+            """Launch a job via Nextflow with GPU assignment from orchestrator.
+
+            Uses asyncio.create_task to fire-and-forget, so multiple jobs can launch
+            in parallel without waiting for each to complete.
+            """
+            logger.info(f"[ORCHESTRATOR] Launching job {job_id} on GPU {params.get('gpu_id', 0)}")
+            # Fire-and-forget with immediate registration in the launcher so the
+            # completion reconciler knows the job is still bootstrapping.
+            launch_nextflow_job_detached(
+                job_id=job_id,
+                model_id=model_id,
+                mode=mode,
+                params=params,
+                output_dir=output_dir
+            )
+
+        _orchestrator = GPUOrchestrator(
+            db_session_factory=async_session,
+            get_gpu_stats_fn=get_gpu_stats,
+            launch_nextflow_job_fn=orchestrator_launch_job,
+            poll_interval=3.0
         )
-    
-    _orchestrator = GPUOrchestrator(
-        db_session_factory=async_session,
-        get_gpu_stats_fn=get_gpu_stats,
-        launch_nextflow_job_fn=orchestrator_launch_job,
-        poll_interval=3.0
-    )
+
+        # Start orchestrator in background
+        await _orchestrator.start()
+        logger.info("[STARTUP] GPU Orchestrator started")
+    else:
+        _orchestrator = None
+        logger.warning("[STARTUP] %s", workflow_launch_block_detail("start the GPU workflow scheduler"))
+
     _analysis_worker = AnalysisWorker(
         db_session_factory=async_session,
         poll_interval=2.0,
     )
     
-    # Start orchestrator in background
-    await _orchestrator.start()
-    logger.info("[STARTUP] GPU Orchestrator started")
     await _analysis_worker.start()
     logger.info("[STARTUP] Analysis worker started")
     

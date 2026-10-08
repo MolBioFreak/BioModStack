@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import sys
 from pathlib import Path
 
@@ -12,6 +13,19 @@ if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
 from routers import bioxp
+
+
+def test_default_linkage_state_path_uses_bms_data_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    state_root = tmp_path / 'bms-state'
+    monkeypatch.setenv('BMS_DATA', str(state_root))
+    monkeypatch.delenv('BIOXP_LINKAGE_STATE_PATH', raising=False)
+
+    reloaded = importlib.reload(bioxp)
+    try:
+        assert reloaded.LINKAGE_STATE_PATH == state_root.resolve() / 'bioxp_linkage_url'
+    finally:
+        monkeypatch.delenv('BMS_DATA', raising=False)
+        importlib.reload(reloaded)
 
 
 @pytest.mark.asyncio

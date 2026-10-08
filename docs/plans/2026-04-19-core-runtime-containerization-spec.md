@@ -77,6 +77,8 @@ For this repo, “containerize BioModStack itself” means:
 
 - yes: web/control plane containers
 - no: shove Nextflow and robot runtime ownership into those same containers
+- until a real host workflow adapter exists, treat the compose runtime as honest for UI/API/control-plane compatibility, not as the owner of workflow execution truth
+- make that boundary executable: the core-runtime stack should run with `BMS_CORE_RUNTIME_MODE=1`, which disables workflow launch/resume/resubmit and GPU scheduler ownership inside the containerized API
 
 ---
 

@@ -446,6 +446,9 @@ importers:
       redux-thunk:
         specifier: 2.4.1
         version: 2.4.1(redux@4.2.1)
+      safe-buffer:
+        specifier: ^5.2.1
+        version: 5.2.1
       seqviz:
         specifier: ^3.10.14
         version: 3.10.14(react-dom@19.2.3(react@19.2.3))(react@19.2.3)

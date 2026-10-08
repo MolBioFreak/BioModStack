@@ -34,7 +34,8 @@ def test_compose_core_runtime_contract() -> None:
     assert api["ports"] == ["127.0.0.1:${BMS_API_HOST_PORT:-8000}:8000"]
     assert api["extra_hosts"] == ["host.docker.internal:host-gateway"]
     assert api["environment"]["BMS_HOME"] == "/app"
-    assert "BMS_WORKFLOW_ADAPTER_URL" in api["environment"]
+    assert api["environment"]["BMS_CORE_RUNTIME_MODE"] == "${BMS_CORE_RUNTIME_MODE:-1}"
+    assert api["environment"]["BMS_WORKFLOW_ADAPTER_URL"] == "${BMS_WORKFLOW_ADAPTER_URL:-}"
     assert "BIOXP_SERVER_URL" in api["environment"]
 
     web = compose["services"]["bms-web"]
@@ -63,11 +64,23 @@ def test_dockerignore_keeps_local_runtime_state_out_of_images() -> None:
         assert required in dockerignore
 
 
-def test_vite_config_uses_reproducible_stable_pdbe_alias() -> None:
+def test_vite_config_uses_reproducible_stable_pdbe_alias_and_browser_safe_buffer_resolution() -> None:
     vite_config = (REPO_ROOT / "platform" / "frontend" / "vite.config.ts").read_text(encoding="utf-8")
+    frontend_package = (REPO_ROOT / "platform" / "frontend" / "package.json").read_text(encoding="utf-8")
 
     assert "require.resolve('pdbe-molstar-stable/package.json')" in vite_config
     assert "node_modules/.ignored/pdbe-molstar" not in vite_config
+    assert '"safe-buffer":' in frontend_package
+    assert "safe-buffer" in vite_config
+    assert "node_modules/safe-buffer/index.js" in vite_config
+
+
+def test_frontend_router_uses_vite_base_url_for_subpath_deployments() -> None:
+    main_tsx = (REPO_ROOT / "platform" / "frontend" / "src" / "main.tsx").read_text(encoding="utf-8")
+
+    assert "getRouterBasename({ envBaseUrl: import.meta.env.BASE_URL })" in main_tsx
+    assert "basename={routerBasename}" in main_tsx
+    assert "isAppPath(window.location.pathname, '/designer', routerBasename)" in main_tsx
 
 
 def test_core_runtime_env_example_documents_transition_knobs() -> None:
@@ -78,6 +91,7 @@ def test_core_runtime_env_example_documents_transition_knobs() -> None:
         "BMS_CONTAINER_STATE_PATH=",
         "BMS_API_HOST_PORT=8000",
         "BMS_WEB_HOST_PORT=5173",
+        "BMS_CORE_RUNTIME_MODE=1",
         "BMS_WORKFLOW_ADAPTER_URL=",
         "BIOXP_SERVER_URL=",
     ]:
