@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router-dom';
 
-import type { MolstarResidueMetricLayer, MolstarRgbColor } from '../../lib/molstar-metrics';
 import MolstarViewer from '../MolstarViewer';
+import type { ResidueRef } from '../../structureViewer/contracts/structureIdentity';
+import type { MetricSelection } from '../../structureViewer/metrics/metricContracts';
 import {
     cancelCmRequest,
     cmApiError,
@@ -32,6 +33,11 @@ import {
     requireApprovedCmResults,
     type CmAnalysisResult,
 } from './conformationalMappingSemantics';
+import {
+    collectCompleteFrustraMpnnLandscape,
+    createFrustraMpnnViewerMetrics,
+    resolveFrustraMpnnResidueProfile,
+} from './frustraMpnnViewerMetrics';
 
 interface Props { requestId: string; title?: string }
 type DetailTab = 'ensemble' | 'mapping' | 'landscape' | 'analysis' | 'evidence' | 'downloads';
@@ -44,11 +50,13 @@ const shortHash = (value: unknown): string => typeof value === 'string' && value
 const json = (value: unknown) => <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-slate-950 p-3 font-mono text-[11px] leading-5 text-slate-400">{JSON.stringify(value, null, 2)}</pre>;
 const tabClass = (active: boolean) => `rounded-lg px-3 py-2 text-xs font-medium ${active ? 'bg-orange-500 text-slate-950' : 'border border-slate-700 text-slate-300 hover:border-slate-500'}`;
 
-const classColor: Record<string, MolstarRgbColor> = {
-    high: { r: 220, g: 38, b: 38 },
-    neutral: { r: 245, g: 158, b: 11 },
-    minimally_frustrated: { r: 14, g: 165, b: 233 },
-};
+const frustrationClass = (value: string | null): string => value === 'high'
+    ? 'border-red-500/40 bg-red-500/10 text-red-200'
+    : value === 'minimally_frustrated'
+        ? 'border-sky-500/40 bg-sky-500/10 text-sky-200'
+        : value === 'neutral'
+            ? 'border-amber-500/40 bg-amber-500/10 text-amber-100'
+            : 'border-slate-700 bg-slate-900 text-slate-500';
 
 const analysisIdentity = (row: CmAnalysisResult): string => {
     const identity = row.identity;
@@ -64,7 +72,7 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
     const [detailTab, setDetailTab] = useState<DetailTab>('ensemble');
     const [lifecycleTab, setLifecycleTab] = useState<LifecycleTab>('progress');
     const [landscapeOffset, setLandscapeOffset] = useState(0);
-    const [landscapeMutation, setLandscapeMutation] = useState<string>('A');
+    const [frustraMpnnSelection, setFrustraMpnnSelection] = useState<MetricSelection | null>(null);
     const [mappingFilter, setMappingFilter] = useState<'all' | 'mapped' | 'issues'>('all');
     const [expandedAnalysis, setExpandedAnalysis] = useState<string | null>(null);
     const [actionError, setActionError] = useState<string | null>(null);
@@ -118,7 +126,11 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
     useEffect(() => {
         if (selected && selectedCandidateId !== selected.candidate_id) setSelectedCandidateId(selected.candidate_id);
     }, [selected, selectedCandidateId]);
-    useEffect(() => { setLandscapeOffset(0); setOverlayIds((current) => current.filter((id) => id !== selected?.candidate_id)); }, [selected?.candidate_id]);
+    useEffect(() => {
+        setLandscapeOffset(0);
+        setFrustraMpnnSelection(null);
+        setOverlayIds((current) => current.filter((id) => id !== selected?.candidate_id));
+    }, [selected?.candidate_id]);
 
     const selectedArtifact = selected && parsed.data ? candidateStructureArtifact(selected, parsed.data.value.artifacts) : null;
     const structureMap = selected && parsed.data ? candidateStructureMap(parsed.data.value, selected.candidate_id) : null;
@@ -145,34 +157,42 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
         } catch (value) { return { residues: [], error: value instanceof Error ? value.message : 'Landscape validation failed' }; }
     }, [landscape.data, selected?.candidate_id]);
 
-    const residueMetricLayer = useMemo<MolstarResidueMetricLayer | undefined>(() => {
-        const points = landscapeParsed.residues.flatMap((residue) => {
-            const slot = residue.slots.find((item) => item.mutation_aa === landscapeMutation);
-            const color = slot?.class ? classColor[slot.class] : undefined;
-            if (!slot || slot.status !== 'ok' || slot.score == null || !color) return [];
-            const authSeqId = Number(slot.auth_seq_id);
-            if (!Number.isInteger(authSeqId)) return [];
-            return [{
-                residue: { authAsymId: slot.auth_asym_id, authSeqId, insertionCode: slot.insertion_code || null },
-                value: slot.score,
-                color,
-                tooltip: `${slot.auth_asym_id}:${slot.auth_seq_id}${slot.insertion_code || ''} ${slot.wt}→${slot.mutation_aa} · ${slot.class} · ${slot.score}`,
-            }];
-        });
-        if (!points.length || !selected) return undefined;
-        return {
-            scope: 'residue-scalar',
-            descriptor: {
-                id: `cm-frustration:${selected.candidate_id}:${landscapeMutation}`,
-                label: `${landscapeMutation} substitution backbone-context score`,
-                semanticType: 'frustration', units: null, direction: 'neutral',
-                source: 'Canonical persisted FrustraMPNN landscape',
-                provenance: { request_id: requestId, candidate_id: selected.candidate_id, substitution: landscapeMutation },
-            },
-            points,
-            nonSelectedColor: { r: 82, g: 82, b: 91 },
-        };
-    }, [landscapeMutation, landscapeParsed.residues, requestId, selected]);
+    const completeLandscape = useQuery({
+        queryKey: ['cm-landscape-complete', requestId, selected?.candidate_id],
+        queryFn: () => collectCompleteFrustraMpnnLandscape(
+            (offset, limit) => getCmLandscape(requestId, selected!.candidate_id, offset, limit),
+        ),
+        enabled: Boolean(selected && structureMap), retry: false,
+    });
+    const completeLandscapeParsed = useMemo(() => {
+        if (!completeLandscape.data) return { residues: [], error: null as string | null };
+        try {
+            return { residues: groupExact20Landscape(completeLandscape.data), error: null };
+        } catch (value) {
+            return { residues: [], error: value instanceof Error ? value.message : 'Complete landscape validation failed' };
+        }
+    }, [completeLandscape.data]);
+    const frustraMpnnMetricsResult = useMemo(() => {
+        if (!selected || !structureMap || completeLandscapeParsed.residues.length === 0) {
+            return { data: null, error: completeLandscapeParsed.error };
+        }
+        try {
+            return {
+                data: createFrustraMpnnViewerMetrics({
+                    requestId, candidateId: selected.candidate_id,
+                    residues: completeLandscapeParsed.residues, structureMap,
+                }),
+                error: null,
+            };
+        } catch (value) {
+            return { data: null, error: value instanceof Error ? value.message : 'FrustraMPNN viewer metric validation failed' };
+        }
+    }, [completeLandscapeParsed.error, completeLandscapeParsed.residues, requestId, selected, structureMap]);
+    const frustraMpnnMetrics = frustraMpnnMetricsResult.data;
+    const selectedMetricIdentity = frustraMpnnSelection?.identities[0];
+    const selectedFrustraMpnnProfile = frustraMpnnMetrics && selectedMetricIdentity && 'documentId' in selectedMetricIdentity
+        ? resolveFrustraMpnnResidueProfile(frustraMpnnMetrics, selectedMetricIdentity as ResidueRef)
+        : undefined;
 
     const lifecycle = useMutation({
         mutationFn: async (action: 'cancel' | 'retry') => action === 'cancel' ? cancelCmRequest(requestId) : retryCmRequest(requestId),
@@ -232,7 +252,63 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
                 {!statusContractError && parsed.data && selected && selectedArtifact && <>
                     <section className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
                         <aside className="max-h-[760px] overflow-auto rounded-2xl border border-slate-800 bg-slate-900/70 p-3" aria-label="Canonical candidates in API order"><div className="sticky top-0 z-10 mb-2 bg-slate-900 pb-2"><h2 className="text-sm font-semibold text-white">Candidates in API order</h2><p className="mt-1 text-[11px] text-slate-500">Identity and ordering come only from the canonical ensemble record.</p></div>{parsed.data.candidates.map((candidate, index) => <div key={candidate.candidate_id} className={`mb-2 rounded-lg border p-2 ${candidate.candidate_id === selected.candidate_id ? 'border-orange-400/60 bg-orange-500/10' : 'border-slate-800'}`}><button type="button" onClick={() => setSelectedCandidateId(candidate.candidate_id)} className="w-full text-left"><div className="text-xs font-medium text-white">Candidate {index + 1}</div><div className="mt-1 text-[11px] leading-4 text-slate-400">{candidateLabel(candidate)}</div><div className="mt-1 truncate font-mono text-[10px] text-slate-600">{candidate.candidate_id}</div></button><label className="mt-2 flex items-center gap-2 text-[11px] text-slate-400"><input type="checkbox" checked={overlayIds.includes(candidate.candidate_id)} disabled={candidate.candidate_id === selected.candidate_id || (!overlayIds.includes(candidate.candidate_id) && overlayIds.length >= 5)} onChange={(event) => setOverlayIds((current) => event.target.checked ? [...current, candidate.candidate_id] : current.filter((id) => id !== candidate.candidate_id))} />Overlay hypothesis</label></div>)}</aside>
-                        <div className="space-y-3"><section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70"><div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 p-3"><div><span className="text-sm font-medium text-white">Candidate structure</span><span className="ml-2 text-xs text-slate-500">{overlays.length} overlays</span></div><label className="flex items-center gap-2 text-xs text-slate-400">Landscape substitution<select value={landscapeMutation} onChange={(event) => setLandscapeMutation(event.target.value)} className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-white">{CANONICAL_AMINO_ACIDS.map((aa) => <option key={aa}>{aa}</option>)}</select></label></div><MolstarViewer structureUrl={cmArtifactUrl(requestId, selectedArtifact.artifact_id)} format="cif" height={650} label={candidateLabel(selected)} overlayStructures={overlays} residueMetricLayer={residueMetricLayer} /></section><div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3 text-xs"><div className="font-medium text-white">Backend coordinates</div><p className="mt-1 break-words text-slate-400">{formatCoordinate(selected.backend_coordinates)}</p></div></div>
+                        <div className="space-y-3">
+                            <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70">
+                                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 p-3">
+                                    <div>
+                                        <span className="text-sm font-medium text-white">Candidate structure</span>
+                                        <span className="ml-2 text-xs text-slate-500">{overlays.length} overlays</span>
+                                    </div>
+                                    <span className="text-xs text-slate-400">
+                                        {frustraMpnnMetrics ? `${frustraMpnnMetrics.residueProfiles.length} exact mapped residue profiles` : completeLandscape.isLoading ? 'Loading complete FrustraMPNN landscape…' : 'FrustraMPNN visual layers unavailable'}
+                                    </span>
+                                </div>
+                                {frustraMpnnMetrics ? (
+                                    <MolstarViewer
+                                        structureUrl={cmArtifactUrl(requestId, selectedArtifact.artifact_id)}
+                                        format="cif"
+                                        height={650}
+                                        label={candidateLabel(selected)}
+                                        overlayStructures={overlays}
+                                        metricLayers={frustraMpnnMetrics.layers}
+                                        activeMetricId="frustrampnn-native-index"
+                                        showMetricWorkbench
+                                        showSequenceTrack
+                                        onMetricSelection={setFrustraMpnnSelection}
+                                    />
+                                ) : (
+                                    <MolstarViewer structureUrl={cmArtifactUrl(requestId, selectedArtifact.artifact_id)} format="cif" height={650} label={candidateLabel(selected)} overlayStructures={overlays} />
+                                )}
+                            </section>
+                            {(completeLandscape.isError || frustraMpnnMetricsResult.error) && (
+                                <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">
+                                    {frustraMpnnMetricsResult.error || cmApiError(completeLandscape.error, 'Complete FrustraMPNN landscape is unavailable.')}
+                                </div>
+                            )}
+                            {selectedFrustraMpnnProfile && (
+                                <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-3" aria-label="Exact-20 residue profile">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <div>
+                                            <div className="text-sm font-medium text-white">Exact-20 residue profile</div>
+                                            <div className="mt-1 font-mono text-xs text-slate-400">
+                                                {selectedFrustraMpnnProfile.auth_asym_id}:{selectedFrustraMpnnProfile.auth_seq_id}{selectedFrustraMpnnProfile.insertion_code} · sequence {selectedFrustraMpnnProfile.sequence_index} · WT {selectedFrustraMpnnProfile.wt}
+                                            </div>
+                                        </div>
+                                        <span className="text-[11px] text-slate-500">Selected from Mol* or linked sequence</span>
+                                    </div>
+                                    <div className="mt-3 grid grid-cols-5 gap-1 sm:grid-cols-10 xl:grid-cols-20">
+                                        {selectedFrustraMpnnProfile.slots.map((slot) => (
+                                            <div key={slot.mutation_aa} className={`rounded border p-1.5 text-center ${frustrationClass(slot.class)}`} title={`${slot.wt}→${slot.mutation_aa} · ${slot.status}${slot.reason ? ` · ${slot.reason}` : ''}`}>
+                                                <div className="font-semibold">{slot.mutation_aa}</div>
+                                                <div className="mt-0.5 font-mono text-[10px]">{slot.score == null ? '—' : scalar(slot.score)}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <p className="mt-2 text-[11px] text-slate-500">Raw exact-20 model slots; unavailable values remain missing. Scores are backbone-context model outputs, not physical energies or functional effects.</p>
+                                </section>
+                            )}
+                            <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3 text-xs"><div className="font-medium text-white">Backend coordinates</div><p className="mt-1 break-words text-slate-400">{formatCoordinate(selected.backend_coordinates)}</p></div>
+                        </div>
                     </section>
 
                     <nav className="flex flex-wrap gap-2 rounded-2xl border border-slate-800 bg-slate-900/70 p-3" aria-label="Conformational mapping result lenses">{(['ensemble', 'mapping', 'landscape', 'analysis', 'evidence', 'downloads'] as DetailTab[]).map((tab) => <button type="button" key={tab} onClick={() => setDetailTab(tab)} className={tabClass(detailTab === tab)}>{tab === 'mapping' ? 'Residue mapping' : tab === 'landscape' ? 'Exact-20 landscape' : tab[0].toUpperCase() + tab.slice(1)}</button>)}</nav>
@@ -241,7 +317,7 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
 
                     {detailTab === 'mapping' && structureMap && <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 p-4"><div><h2 className="font-semibold text-white">Structure-map identity and residue mapping</h2><p className="mt-1 text-xs text-slate-500">{structureMap.source_format} · source model {structureMap.selected_source_model} · {structureMap.normalizer_version} · {structureMap.altloc_policy}</p></div><select value={mappingFilter} onChange={(event) => setMappingFilter(event.target.value as typeof mappingFilter)} className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs"><option value="all">All rows</option><option value="mapped">Mapped</option><option value="issues">Issues only</option></select></div><div className="grid gap-2 border-b border-slate-800 p-3 text-[11px] sm:grid-cols-3"><div>Original CIF: <span className="font-mono">{shortHash(structureMap.original_cif_sha256)}</span></div><div>Source: <span className="font-mono">{shortHash(structureMap.source_sha256)}</span></div><div>Normalized PDB: <span className="font-mono">{shortHash(structureMap.normalized_pdb_sha256)}</span></div></div><div className="max-h-[560px] overflow-auto"><table className="w-full text-left text-xs"><thead className="sticky top-0 bg-slate-900 text-slate-400"><tr><th className="p-2">Sequence</th><th className="p-2">Source identity</th><th className="p-2">Author identity</th><th className="p-2">Normalized PDB</th><th className="p-2">Backbone</th><th className="p-2">Status / reason</th></tr></thead><tbody>{filteredMapRows.map((row) => <tr key={`${row.entity_instance_id}:${row.sequence_index}`} className="border-t border-slate-800 align-top"><td className="p-2">{row.sequence_index} · {row.residue_name}</td><td className="p-2">{row.source_entity_id} · {row.label_asym_id}:{row.label_seq_id}</td><td className="p-2">{row.auth_asym_id}:{row.auth_seq_id}{row.insertion_code}</td><td className="p-2">{row.pdb_chain_id}:{row.pdb_residue_id}{row.pdb_insertion_code}</td><td className="p-2 font-mono text-[10px]">{Object.entries(row.backbone_atoms).map(([atom, value]) => `${atom}:${value || 'missing'}`).join(' ')}</td><td className="p-2"><span className={row.status === 'mapped' ? 'text-emerald-300' : 'text-amber-200'}>{row.status}</span>{row.reason && <div className="mt-1 text-slate-500">{row.reason}</div>}</td></tr>)}</tbody></table></div>{!filteredMapRows.length && <p className="p-4 text-sm text-slate-500">No mapping rows match this filter.</p>}</section>}
 
-                    {detailTab === 'landscape' && <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 p-4"><div><h2 className="font-semibold text-white">Persisted exact-20 FrustraMPNN landscape</h2><p className="mt-1 text-xs text-slate-500">Every row is one mapped residue; every column is a canonical substitution slot. Missingness and status come directly from the API.</p></div><div className="flex gap-2"><button type="button" disabled={landscapeOffset === 0 || landscape.isFetching} onClick={() => setLandscapeOffset(Math.max(0, landscapeOffset - 1000))} className="rounded border border-slate-700 px-3 py-1.5 text-xs disabled:opacity-30">Previous 50 residues</button><button type="button" disabled={landscape.data?.next_offset == null || landscape.isFetching} onClick={() => setLandscapeOffset(landscape.data!.next_offset!)} className="rounded border border-slate-700 px-3 py-1.5 text-xs disabled:opacity-30">Next 50 residues</button></div></div>{(landscape.isError || landscapeParsed.error) && <div role="alert" className="m-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">{landscapeParsed.error || cmApiError(landscape.error, 'Landscape page is unavailable.')}</div>}{!landscape.isLoading && !landscapeParsed.error && <div className="max-h-[650px] overflow-auto"><table className="min-w-[1500px] text-left text-[10px]"><thead className="sticky top-0 z-10 bg-slate-900 text-slate-400"><tr><th className="sticky left-0 z-20 bg-slate-900 p-2">Residue</th>{CANONICAL_AMINO_ACIDS.map((aa) => <th key={aa} className={`p-2 text-center ${aa === landscapeMutation ? 'text-orange-300' : ''}`}>{aa}</th>)}</tr></thead><tbody>{landscapeParsed.residues.map((residue) => <tr key={residue.key} className="border-t border-slate-800"><th className="sticky left-0 bg-slate-900 p-2 font-medium text-white">{residue.auth_asym_id}:{residue.auth_seq_id}{residue.insertion_code}<span className="ml-1 text-slate-500">{residue.wt}</span></th>{residue.slots.map((slot) => <td key={slot.mutation_aa} title={`${slot.status}${slot.reason ? ` · ${slot.reason}` : ''}`} className={`p-2 text-center font-mono ${slot.status !== 'ok' ? 'bg-slate-800/50 text-slate-500' : slot.class === 'high' ? 'bg-red-500/10 text-red-200' : slot.class === 'minimally_frustrated' ? 'bg-sky-500/10 text-sky-200' : 'bg-amber-500/10 text-amber-100'}`}>{slot.score == null ? 'missing' : scalar(slot.score)}{slot.mutation_aa === residue.wt && <span className="block text-[8px] text-slate-500">native</span>}</td>)}</tr>)}</tbody></table></div>}{landscape.isLoading && <p className="p-4 text-sm text-slate-500">Loading bounded landscape page…</p>}</section>}
+                    {detailTab === 'landscape' && <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 p-4"><div><h2 className="font-semibold text-white">Persisted exact-20 FrustraMPNN landscape</h2><p className="mt-1 text-xs text-slate-500">Every row is one mapped residue; every column is a canonical substitution slot. Missingness and status come directly from the API.</p></div><div className="flex gap-2"><button type="button" disabled={landscapeOffset === 0 || landscape.isFetching} onClick={() => setLandscapeOffset(Math.max(0, landscapeOffset - 1000))} className="rounded border border-slate-700 px-3 py-1.5 text-xs disabled:opacity-30">Previous 50 residues</button><button type="button" disabled={landscape.data?.next_offset == null || landscape.isFetching} onClick={() => setLandscapeOffset(landscape.data!.next_offset!)} className="rounded border border-slate-700 px-3 py-1.5 text-xs disabled:opacity-30">Next 50 residues</button></div></div>{(landscape.isError || landscapeParsed.error) && <div role="alert" className="m-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">{landscapeParsed.error || cmApiError(landscape.error, 'Landscape page is unavailable.')}</div>}{!landscape.isLoading && !landscapeParsed.error && <div className="max-h-[650px] overflow-auto"><table className="min-w-[1500px] text-left text-[10px]"><thead className="sticky top-0 z-10 bg-slate-900 text-slate-400"><tr><th className="sticky left-0 z-20 bg-slate-900 p-2">Residue</th>{CANONICAL_AMINO_ACIDS.map((aa) => <th key={aa} className="p-2 text-center">{aa}</th>)}</tr></thead><tbody>{landscapeParsed.residues.map((residue) => <tr key={residue.key} className="border-t border-slate-800"><th className="sticky left-0 bg-slate-900 p-2 font-medium text-white">{residue.auth_asym_id}:{residue.auth_seq_id}{residue.insertion_code}<span className="ml-1 text-slate-500">{residue.wt}</span></th>{residue.slots.map((slot) => <td key={slot.mutation_aa} title={`${slot.status}${slot.reason ? ` · ${slot.reason}` : ''}`} className={`p-2 text-center font-mono ${slot.status !== 'ok' ? 'bg-slate-800/50 text-slate-500' : slot.class === 'high' ? 'bg-red-500/10 text-red-200' : slot.class === 'minimally_frustrated' ? 'bg-sky-500/10 text-sky-200' : 'bg-amber-500/10 text-amber-100'}`}>{slot.score == null ? 'missing' : scalar(slot.score)}{slot.mutation_aa === residue.wt && <span className="block text-[8px] text-slate-500">native</span>}</td>)}</tr>)}</tbody></table></div>}{landscape.isLoading && <p className="p-4 text-sm text-slate-500">Loading bounded landscape page…</p>}</section>}
 
                     {detailTab === 'analysis' && <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70"><div className="border-b border-slate-800 p-4"><h2 className="font-semibold text-white">Canonical analysis ranking</h2><p className="mt-1 text-xs text-slate-500">Server-persisted ranking order. Each row retains its reconstructable components, sort keys, support, and robustness status.</p></div><div className="grid gap-2 border-b border-slate-800 p-3 text-[11px] sm:grid-cols-3"><div>Analysis: <span className="font-mono">{parsed.data.analysis.analysis_id}</span></div><div>Formula: <span className="font-mono">{parsed.data.analysis.formula_version}</span></div><div>Expected strata: {parsed.data.analysis.expected_strata.length}</div></div><div className="max-h-[680px] overflow-auto"><table className="w-full min-w-[1100px] text-left text-xs"><thead className="sticky top-0 bg-slate-900 text-slate-400"><tr><th className="p-2">Rank / identity</th><th className="p-2">Robustness</th><th className="p-2">Valid support</th><th className="p-2">Outer</th><th className="p-2">Coordinate</th><th className="p-2">Hierarchical mean</th><th className="p-2">Hotspot</th><th className="p-2">Switch</th><th className="p-2">Components</th></tr></thead><tbody>{parsed.data.analysis.results.map((row, index) => <><tr key={row.source_row_key} className="border-t border-slate-800 align-top"><td className="p-2"><div className="font-medium text-white">{index + 1}. {analysisIdentity(row)}</div><div className="mt-1 max-w-64 truncate font-mono text-[10px] text-slate-600">{row.source_row_key}</div>{row.failure_reason && <div className="mt-1 text-red-300">{row.failure_reason}</div>}</td><td className={`p-2 ${row.status === 'robust' ? 'text-emerald-300' : row.status === 'conditional' ? 'text-amber-200' : 'text-red-200'}`}>{row.status}</td><td className="p-2">{row.valid_coordinate_count}/{row.expected_coordinate_count}</td><td className="p-2">{pct(row.outer_support_fraction)}</td><td className="p-2">{pct(row.coordinate_support_fraction)}</td><td className="p-2 font-mono">{scalar(row.hierarchical_mean)}</td><td className="p-2 font-mono">{scalar(row.hotspot_score)}</td><td className="p-2 font-mono">{scalar(row.switch_score)}</td><td className="p-2"><button type="button" onClick={() => setExpandedAnalysis((current) => current === row.source_row_key ? null : row.source_row_key)} className="rounded border border-slate-700 px-2 py-1 text-[10px]">{expandedAnalysis === row.source_row_key ? 'Hide' : 'Inspect'}</button></td></tr>{expandedAnalysis === row.source_row_key && <tr key={`${row.source_row_key}:detail`} className="border-t border-slate-800 bg-slate-950/40"><td colSpan={9} className="p-3"><div className="grid gap-3 lg:grid-cols-3"><div><div className="mb-1 text-[11px] text-slate-500">Persisted components</div>{json(row.components)}</div><div><div className="mb-1 text-[11px] text-slate-500">Persisted sort keys</div>{json(row.sort_keys)}</div><div><div className="mb-1 text-[11px] text-slate-500">Identity</div>{json(row.identity)}</div></div></td></tr>}</>)}</tbody></table></div>{!parsed.data.analysis.results.length && <p className="p-4 text-sm text-slate-500">Canonical analysis is explicitly unavailable.</p>}<details className="border-t border-slate-800 p-4"><summary className="cursor-pointer text-sm font-medium text-slate-300">Ranking policy and exclusions</summary><div className="mt-3 grid gap-3 lg:grid-cols-2"><div>{json(parsed.data.analysis.ranking_policy)}</div><div>{json(parsed.data.analysis.exclusions)}</div></div></details></section>}
 
