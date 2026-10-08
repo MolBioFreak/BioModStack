@@ -58,6 +58,8 @@ class Job(Base):
     source_stage_mode = Column(String(64), nullable=True, index=True)
     source_selection_manifest_path = Column(String(500), nullable=True)
     source_selection_count = Column(Integer, nullable=True)
+    selected_input_artifact_class = Column(String(64), nullable=True, index=True)
+    selected_input_schema_version = Column(Integer, nullable=True)
     selection_source_type = Column(String(64), nullable=True)  # saved_dataset, selected_designs, etc.
     selection_source_job_id = Column(String(36), nullable=True, index=True)
     selection_dataset_name = Column(String(255), nullable=True)
@@ -136,6 +138,8 @@ class Design(Base):
     source_stage_mode = Column(String(64), nullable=True, index=True)
     source_pdb_path = Column(String(500), nullable=True)
     source_design_name = Column(String(255), nullable=True)
+    artifact_class = Column(String(64), nullable=True, index=True)
+    artifact_schema_version = Column(Integer, nullable=True)
     selected_loop_scope = Column(JSON, nullable=True)
     provenance = Column(JSON, nullable=True)
     

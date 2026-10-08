@@ -9,6 +9,7 @@ from paths import get_db_path
 
 from migrations.add_orchestrator_fields import run_migration as migrate_orchestrator_fields
 from migrations.add_antibody_fields import run_migration as migrate_antibody_fields
+from migrations.add_antibody_artifact_contract import migrate as migrate_antibody_artifact_contract
 from migrations.add_cdr_length_columns import migrate as migrate_cdr_lengths
 from migrations.add_rfd_rog import migrate as migrate_rfd_rog
 from migrations.add_sequence_provenance import migrate as migrate_sequence_provenance
@@ -29,6 +30,7 @@ MIGRATIONS: List[Migration] = [
     Migration(4, "add_rfd_rog", migrate_rfd_rog),
     Migration(5, "add_sequence_provenance", migrate_sequence_provenance),
     Migration(6, "add_stage_tracking", migrate_stage_tracking),
+    Migration(7, "add_antibody_artifact_contract", migrate_antibody_artifact_contract),
 ]
 
 

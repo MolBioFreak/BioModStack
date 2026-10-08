@@ -34,6 +34,11 @@ from paths import (
     get_colabfold_db,
     get_msa_cache_dir,
 )
+from antibody_pipeline_contract import (
+    ANTIBODY_DENOVO_PIPELINE,
+    ANTIBODY_REFINEMENT_PIPELINE,
+    is_antibody_pipeline_mode,
+)
 from .gpu_config import read_scheduler_config
 
 # Project root (parent of platform directory)
@@ -2000,9 +2005,11 @@ def build_nextflow_command(
         # Mutagenesis batch workflow - routes to boltz for structure prediction
         ('mutagenesis', 'batch_predict'): 'boltz',
         # Antibody workflows use boltz profile (Boltz2 is the structure predictor)
-        ('antibody_denovo', 'antibody_denovo_pipeline'): 'boltz',
+        ('antibody_denovo', ANTIBODY_DENOVO_PIPELINE): 'boltz',
+        ('antibody_denovo', ANTIBODY_REFINEMENT_PIPELINE): 'boltz',
         ('antibody_denovo', 'default'): 'boltz',
-        ('template_antibody_denovo', 'antibody_denovo_pipeline'): 'boltz',
+        ('template_antibody_denovo', ANTIBODY_DENOVO_PIPELINE): 'boltz',
+        ('template_antibody_denovo', ANTIBODY_REFINEMENT_PIPELINE): 'boltz',
         ('template_antibody_denovo', 'default'): 'boltz',
         # Batch validation jobs (spawned by antibody_denovo logic)
         ('antibody_child', 'validation_batch'): 'boltz',
@@ -2023,9 +2030,11 @@ def build_nextflow_command(
 
     def resolve_antibody_validation_profile(default_profile: str) -> str:
         antibody_modes = {
-            ('antibody_denovo', 'antibody_denovo_pipeline'),
+            ('antibody_denovo', ANTIBODY_DENOVO_PIPELINE),
+            ('antibody_denovo', ANTIBODY_REFINEMENT_PIPELINE),
             ('antibody_denovo', 'default'),
-            ('template_antibody_denovo', 'antibody_denovo_pipeline'),
+            ('template_antibody_denovo', ANTIBODY_DENOVO_PIPELINE),
+            ('template_antibody_denovo', ANTIBODY_REFINEMENT_PIPELINE),
             ('template_antibody_denovo', 'default'),
             ('antibody_child', 'validation_batch'),
         }
@@ -2525,7 +2534,10 @@ def build_nextflow_command(
         # Ensure main.nf routes into the BindCraft workflow branch.
         if not params.get('rfd_mode'):
             params['rfd_mode'] = 'bindcraft'
-    
+    elif model_id in {'antibody_denovo', 'template_antibody_denovo'}:
+        if is_antibody_pipeline_mode(mode) and not params.get('rfd_mode'):
+            params['rfd_mode'] = mode
+
     if complex_components:
         complex_json_path = Path(output_dir) / "complex_definition.json"
         # Ensure output directory exists
