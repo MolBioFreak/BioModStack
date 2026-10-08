@@ -28,6 +28,7 @@ test('normal commands and emergency stop do not require an operator credential',
 
 test('missing mutation-access metadata fails closed instead of crashing the cockpit', () => {
     assert.match(cockpit, /status\?\.mutation_access\?\.enabled\s*===\s*true/);
-    assert.match(cockpit, /mutationAccessEnabled\s*&&\s*isBioXpCommandAvailable/);
+    assert.match(cockpit, /mutationAccessEnabled\s*&&\s*controlPlaneFresh/);
+    assert.match(cockpit, /isBioXpControlPlaneFresh\(connection, nowMs\)/);
     assert.doesNotMatch(cockpit, /status\.mutation_access\.enabled/);
 });

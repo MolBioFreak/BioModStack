@@ -13,6 +13,7 @@ import {
 import {
     deriveBioXpNoCommandsMessage,
     deriveBioXpStatus,
+    isBioXpControlPlaneFresh,
     isBioXpCommandAvailable,
 } from './bioxpInterlinkStatus';
 
@@ -86,6 +87,7 @@ export function BioXpCockpit() {
     const status = statusQuery.isError ? undefined : statusQuery.data;
     const connection = status?.connection;
     const mutationAccessEnabled = status?.mutation_access?.enabled === true;
+    const controlPlaneFresh = isBioXpControlPlaneFresh(connection, nowMs);
     const mutationAccessSetting = status?.mutation_access?.server_setting
         ?? 'BIOMODSTACK_BIOXP_ENABLE_MUTATIONS';
     const derived = useMemo(
@@ -125,6 +127,30 @@ export function BioXpCockpit() {
             stage,
             mode: 'live',
             operator_ack: 'HOME',
+            expected_generation: connection?.generation ?? 0,
+            idempotency_key: crypto.randomUUID(),
+        });
+    };
+
+    const recordOemMotorStageObservation = (stage: OemMotorStage, observedPass: boolean) => {
+        const operatorNote = window.prompt(
+            `Describe the physical observation for ${stage}. This note is recorded in the robot-owned OEM movement ledger.`,
+            '',
+        );
+        if (operatorNote === null) return;
+        const trimmedNote = operatorNote.trim();
+        if (!trimmedNote) {
+            window.alert('A non-empty physical observation note is required.');
+            return;
+        }
+        const verdict = observedPass ? 'PASS' : 'FAIL';
+        if (!window.confirm(`Record ${verdict} for ${stage}? This advances or terminally fails the ordered OEM stage ledger; it does not command motion.`)) return;
+        executeCommand.mutate({
+            command: 'record_oem_motor_stage_observation',
+            stage,
+            observed_pass: observedPass,
+            operator_ack: 'OBSERVE',
+            operator_note: trimmedNote,
             expected_generation: connection?.generation ?? 0,
             idempotency_key: crypto.randomUUID(),
         });
@@ -208,16 +234,25 @@ export function BioXpCockpit() {
                 <p className="mt-2 text-sm text-slate-300">Only the first four completed OEM stages are exposed. Each request is routed to the robot-owned stage ledger; it rejects any out-of-order stage, missing predecessor observation, unavailable runtime, or non-admitted hardware state.</p>
                 <div className="mt-4 grid gap-3 lg:grid-cols-2">
                     {OEM_MOTOR_STAGE_CONTROLS.map(({ stage, label, detail }) => {
-                        const available = mutationAccessEnabled
+                        const available = mutationAccessEnabled && controlPlaneFresh
                             && isBioXpCommandAvailable(status?.available_commands, 'run_oem_motor_stage', derived?.label);
                         const blockedReason = status?.unavailable_commands?.run_oem_motor_stage
                             ?? (statusQuery.isError ? 'Status is unavailable.' : 'Robot has not admitted this source stage.');
+                        const observationAvailable = mutationAccessEnabled && controlPlaneFresh
+                            && isBioXpCommandAvailable(status?.available_commands, 'record_oem_motor_stage_observation', derived?.label);
+                        const observationBlockedReason = status?.unavailable_commands?.record_oem_motor_stage_observation
+                            ?? (statusQuery.isError ? 'Status is unavailable.' : 'Observation recording is not admitted by the server.');
                         return (
                             <article key={stage} className="rounded border border-cyan-700/50 bg-slate-950/40 p-4">
                                 <h3 className="font-semibold">{label}</h3>
                                 <p className="mt-1 text-sm text-slate-300">{detail}</p>
                                 <button type="button" disabled={!available || executeCommand.isPending} onClick={() => runOemMotorStage(stage)} className="mt-3 rounded bg-cyan-700 px-3 py-2 text-sm font-semibold disabled:opacity-40">Queue {label}</button>
                                 {!available && <p className="mt-2 text-xs text-slate-500">Blocked: {blockedReason}</p>}
+                                <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-800 pt-3">
+                                    <button type="button" disabled={!observationAvailable || executeCommand.isPending} onClick={() => recordOemMotorStageObservation(stage, true)} className="rounded bg-emerald-700 px-3 py-2 text-xs font-semibold disabled:opacity-40">Record observed PASS</button>
+                                    <button type="button" disabled={!observationAvailable || executeCommand.isPending} onClick={() => recordOemMotorStageObservation(stage, false)} className="rounded bg-red-800 px-3 py-2 text-xs font-semibold disabled:opacity-40">Record observed FAIL</button>
+                                </div>
+                                {!observationAvailable && <p className="mt-2 text-xs text-slate-500">Observation blocked: {observationBlockedReason}</p>}
                             </article>
                         );
                     })}
@@ -233,7 +268,7 @@ export function BioXpCockpit() {
                 )}
                 <div className="mt-4 grid gap-3 lg:grid-cols-2">
                     {COMMISSIONING_COMMANDS.map(({ command, label, detail, tone, lifecycleStage }) => {
-                        const available = mutationAccessEnabled
+                        const available = mutationAccessEnabled && controlPlaneFresh
                             && isBioXpCommandAvailable(status?.available_commands, command, derived?.label);
                         const stage = lifecycleStage ? connection?.startup_lifecycle?.stages[lifecycleStage] : undefined;
                         const blockedReason = status?.unavailable_commands?.[command]
@@ -256,9 +291,9 @@ export function BioXpCockpit() {
                 </div>
                 {executeCommand.error && <p className="mt-2 text-sm text-red-300">{bioXpErrorText(executeCommand.error)}</p>}
                 {executeCommand.data && (
-                    <section className={`mt-4 rounded border p-4 ${executeCommand.data.status === 'acknowledged' ? 'border-emerald-700/60 bg-emerald-950/20' : 'border-red-700/60 bg-red-950/20'}`}>
+                    <section className={`mt-4 rounded border p-4 ${executeCommand.data.status === 'acknowledged' ? 'border-emerald-700/60 bg-emerald-950/20' : executeCommand.data.status === 'queued' ? 'border-amber-700/60 bg-amber-950/20' : 'border-red-700/60 bg-red-950/20'}`}>
                         <div className="flex flex-wrap items-center justify-between gap-2">
-                            <h3 className="font-semibold">Latest Handler Result</h3>
+                            <h3 className="font-semibold">Latest Delivery Result</h3>
                             <span className="font-mono text-xs">{executeCommand.data.status}</span>
                         </div>
                         <p className="mt-1 text-sm">{executeCommand.data.detail}</p>

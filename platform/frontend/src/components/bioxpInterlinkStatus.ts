@@ -36,6 +36,26 @@ export interface BioXpDerivedStatus {
     detail: string;
 }
 
+function localFreshnessMetadata(
+    connection: BioXpConnectionSnapshot,
+    nowMs: number,
+): 'fresh' | 'expired' | 'invalid' {
+    const observedMs = connection.observed_at ? Date.parse(connection.observed_at) : Number.NaN;
+    const budgetMs = connection.freshness_budget_seconds * 1_000;
+    if (!Number.isFinite(observedMs) || !Number.isFinite(budgetMs) || budgetMs <= 0) return 'invalid';
+    return nowMs <= observedMs + budgetMs ? 'fresh' : 'expired';
+}
+
+export function isBioXpControlPlaneFresh(
+    connection: BioXpConnectionSnapshot | undefined,
+    nowMs: number = Date.now(),
+): boolean {
+    return connection?.active === true
+        && connection.fresh === true
+        && connection.reachable === true
+        && localFreshnessMetadata(connection, nowMs) === 'fresh';
+}
+
 export function isBioXpCommandAvailable(
     availableCommands: readonly string[] | undefined,
     command: string,
@@ -81,9 +101,8 @@ export function deriveBioXpStatus(
         };
     }
     if (connection.fresh === true) {
-        const observedMs = connection.observed_at ? Date.parse(connection.observed_at) : Number.NaN;
-        const budgetMs = connection.freshness_budget_seconds * 1_000;
-        if (!Number.isFinite(observedMs) || !Number.isFinite(budgetMs) || budgetMs <= 0) {
+        const localFreshness = localFreshnessMetadata(connection, nowMs);
+        if (localFreshness === 'invalid') {
             return {
                 label: 'UNKNOWN',
                 ready: false,
@@ -91,7 +110,7 @@ export function deriveBioXpStatus(
                 detail: 'Freshness metadata is missing or malformed.',
             };
         }
-        if (nowMs > observedMs + budgetMs) {
+        if (localFreshness === 'expired') {
             return {
                 label: 'STALE',
                 ready: false,

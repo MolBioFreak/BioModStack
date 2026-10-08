@@ -32,9 +32,12 @@ test('retired hardware and host controls are absent', () => {
     const combined = `${cockpit}\n${client}`;
     for (const marker of [
         'Manual Movement', 'Commissioning Motion', 'AxisControls', 'Aspirate', 'Dispense',
-        'Gripper', 'USB Capture', 'Robot logs', 'Restart runtime', 'Reboot host',
+        'Generic Gripper', 'USB Capture', 'Robot logs', 'Restart runtime', 'Reboot host',
         'HomeXY', 'InitializeMotion', 'Clear Head Lock', 'CameraHoldJog', 'shell', 'SSH',
     ]) {
         assert.doesNotMatch(combined, new RegExp(marker, 'i'));
+    }
+    for (const approvedStage of ['M01 · Z reference', 'M02 · Gripper current 31', 'M03 · Gripper clear +10000', 'M04 · Gripper home']) {
+        assert.match(cockpit, new RegExp(approvedStage.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     }
 });

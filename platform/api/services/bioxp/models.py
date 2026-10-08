@@ -32,7 +32,7 @@ class CommandRecord(BaseModel):
     command: str
     idempotency_key: str
     generation: int
-    status: Literal["acknowledged", "delivered_unacknowledged", "delivery_failed"]
+    status: Literal["queued", "acknowledged", "delivered_unacknowledged", "delivery_failed"]
     started_at: datetime
     finished_at: datetime
     remote_acknowledged: bool
