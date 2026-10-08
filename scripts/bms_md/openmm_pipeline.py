@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 from pathlib import Path
 from typing import Any, Mapping
 
-from .contract import build_run_manifest, load_verified_job_config
+from .contract import build_run_manifest, prepare_verified_worker_inputs
 from .cuda_contract import assert_single_cuda_device
 from .runner import StageLedger, replica_seed
 
@@ -35,19 +34,6 @@ def _resolve(raw: str, config_path: Path) -> Path:
     return path
 
 
-def _copy_prepared_inputs(coordinates: Path, topology: Path, output_dir: Path) -> tuple[Path, Path]:
-    system_dir = output_dir / "system"
-    system_dir.mkdir(parents=True, exist_ok=True)
-    for candidate in topology.parent.iterdir():
-        if candidate.is_file() and candidate.suffix.lower() in {".top", ".itp"}:
-            shutil.copy2(candidate, system_dir / candidate.name)
-    copied_topology = system_dir / topology.name
-    copied_coordinates = system_dir / coordinates.name
-    if not copied_topology.is_file():
-        shutil.copy2(topology, copied_topology)
-    shutil.copy2(coordinates, copied_coordinates)
-    return copied_coordinates, copied_topology
-
 
 def _require_openmm_cuda() -> tuple[Any, Any, Any, Any, Any, Any, str]:
     try:
@@ -66,10 +52,20 @@ def _require_openmm_cuda() -> tuple[Any, Any, Any, Any, Any, Any, str]:
     return openmm, app, unit, Platform, LangevinMiddleIntegrator, MonteCarloBarostat, str(openmm.__version__)
 
 
-def run_openmm_job(config_path: Path, output_dir: Path, *, replica_index: int = 0) -> Path:
+def run_openmm_job(
+    config_path: Path,
+    output_dir: Path,
+    *,
+    replica_index: int = 0,
+    _prepared_config: Mapping[str, Any] | None = None,
+) -> Path:
     config_path = Path(config_path).expanduser().resolve()
     output_dir = Path(output_dir).expanduser().resolve()
-    config = load_verified_job_config(config_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    config = dict(_prepared_config) if _prepared_config is not None else prepare_verified_worker_inputs(
+        config_path,
+        output_dir / ".worker_inputs",
+    )
     if config["engine"] != "openmm":
         raise ValueError("run_openmm_job requires engine=openmm")
     if replica_index < 0 or replica_index >= config["replicas"]:
@@ -79,13 +75,20 @@ def run_openmm_job(config_path: Path, output_dir: Path, *, replica_index: int = 
 
     coordinates = _resolve(str(config["input"]["coordinates"]), config_path)
     topology = _resolve(str(config["input"]["topology"]), config_path)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    coordinates, topology = _copy_prepared_inputs(coordinates, topology, output_dir)
+    closure = config["input"].get("topology_closure")
+    if not isinstance(closure, Mapping):
+        raise ValueError("OpenMM requires a verified private topology closure")
+    private_include_root = Path(str(closure.get("root") or "")).resolve()
+    if private_include_root != topology.parent or not private_include_root.is_dir():
+        raise ValueError("OpenMM topology is outside its verified private include root")
     normalized = output_dir / "job.normalized.json"
     _atomic_json(normalized, config)
 
     gro = app.GromacsGroFile(str(coordinates))
-    include_dir = Path(os.environ.get("OPENMM_GROMACS_INCLUDE_DIR", "/opt/conda/share/gromacs/top"))
+    runtime_includes = closure.get("runtime_includes")
+    include_dir = private_include_root
+    if isinstance(runtime_includes, list) and runtime_includes:
+        include_dir = Path(os.environ.get("OPENMM_GROMACS_INCLUDE_DIR", "/opt/conda/share/gromacs/top"))
     if not include_dir.is_dir():
         raise OpenMMCapabilityError(
             f"{OPENMM_CUDA_UNAVAILABLE}: GROMACS topology include directory is unavailable: {include_dir}"

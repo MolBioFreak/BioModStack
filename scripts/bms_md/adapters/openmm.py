@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-from ..contract import normalize_job_config
+from ..contract import prepare_verified_worker_inputs
 from ..cuda_contract import assert_single_cuda_device
 from ..openmm_pipeline import run_openmm_job
 from .base import EngineAdapterError, ReplicaRequest
@@ -13,7 +12,10 @@ class OpenMMAdapter:
     name = "openmm"
 
     def run(self, request: ReplicaRequest) -> Path:
-        config = normalize_job_config(json.loads(request.config_path.read_text(encoding="utf-8")))
+        config = prepare_verified_worker_inputs(
+            request.config_path,
+            request.output_dir / ".worker_inputs",
+        )
         if config["engine"] != self.name:
             raise EngineAdapterError("MD_ENGINE_ADAPTER_ERROR: OpenMM adapter received another engine")
         inputs = config["input"]
@@ -40,4 +42,5 @@ class OpenMMAdapter:
             request.config_path,
             request.output_dir,
             replica_index=request.replica_index,
+            _prepared_config=config,
         )

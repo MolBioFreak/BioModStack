@@ -40,7 +40,7 @@ def test_parse_compose_ps_supports_json_array_and_json_lines() -> None:
 def test_compose_command_uses_the_profile_runtime_env_file(monkeypatch, tmp_path: Path) -> None:
     controller = load_controller()
     env_file = tmp_path / "core-runtime.env"
-    env_file.write_text("BMS_ANALYTICAL_DB_PASSWORD=test-only\n", encoding="utf-8")
+    env_file.write_text("BMS_STATE_DIR=/tmp/biomodstack-state\n", encoding="utf-8")
     monkeypatch.setenv("BMS_CORE_RUNTIME_ENV_FILE", str(env_file))
 
     assert controller.compose_command("config", "--quiet") == [
@@ -69,15 +69,6 @@ def test_reserve_recovery_persists_and_enforces_budget(monkeypatch, tmp_path: Pa
     with pytest.raises(controller.RuntimeBlockedError, match="Recovery budget exhausted") as raised:
         controller.reserve_recovery("bms-api", now=1002.0)
     assert raised.value.reason == "recovery-budget-exhausted"
-
-
-def test_reserve_recovery_never_automatically_restarts_database(monkeypatch, tmp_path: Path) -> None:
-    controller = load_controller()
-    monkeypatch.setenv("BMS_RUNTIME_SUPERVISOR_STATE_DIR", str(tmp_path))
-
-    with pytest.raises(controller.RuntimeBlockedError, match="Automatic database restart is disabled") as raised:
-        controller.reserve_recovery("bms-db", now=1000.0)
-    assert raised.value.reason == "database-recovery-requires-operator"
 
 
 def test_validate_storage_requires_explicit_existing_state_root(monkeypatch, tmp_path: Path) -> None:
@@ -136,27 +127,24 @@ def test_controller_models_every_compose_service_and_strict_dependency() -> None
     controller = load_controller()
 
     assert controller.ALL_SERVICES == (
-        "bms-db",
         "bms-api",
         "bms-host-agent",
         "bms-cpu-power",
-        "bms-stats-tools",
         "bms-web",
     )
     assert controller.SERVICE_DEPENDENCIES == {
-        "bms-stats-tools": ("bms-db",),
         "bms-web": ("bms-api",),
     }
     assert set(controller.expected_container_names()) == set(controller.ALL_SERVICES)
 
 
-def test_managed_services_includes_optional_profile_only_when_activated(monkeypatch) -> None:
+def test_managed_services_ignores_unowned_compose_profiles(monkeypatch) -> None:
     controller = load_controller()
     monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
 
     assert controller.managed_services() == controller.DEFAULT_SERVICES
 
-    monkeypatch.setenv("COMPOSE_PROFILES", "gpu, stats-tools")
+    monkeypatch.setenv("COMPOSE_PROFILES", "gpu,external-addon")
     assert controller.managed_services() == controller.ALL_SERVICES
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from services.molbio_ops import find_pattern_positions
+from services.molbio_ops import find_pattern_positions, reverse_complement
 
 from .common import orient_fragment
 from .ligation import simulate_ligation
@@ -47,6 +47,26 @@ def simulate_golden_gate(
     oriented = [orient_fragment(fragment) for fragment in fragments]
 
     for fragment in oriented:
+        recognition_sites = find_pattern_positions(
+            fragment.sequence,
+            enzyme.site,
+            circular=False,
+        )
+        reverse_site = reverse_complement(enzyme.site)
+        if reverse_site != enzyme.site:
+            recognition_sites.extend(
+                find_pattern_positions(
+                    fragment.sequence,
+                    reverse_site,
+                    circular=False,
+                )
+            )
+        if recognition_sites:
+            raise AssemblyError(
+                f"Golden Gate fragment '{fragment.name}' contains "
+                f"{len(set(recognition_sites))} internal {enzyme.name} recognition site(s); "
+                "post-digestion fragment geometry is ambiguous"
+            )
         for side_name, end in (("left", fragment.left_end), ("right", fragment.right_end)):
             if end is None:
                 raise AssemblyError(
@@ -64,9 +84,24 @@ def simulate_golden_gate(
 
     product = simulate_ligation(fragments, circular=circular, mode="golden_gate")
     warnings = list(product.warnings)
-    if find_pattern_positions(product.sequence, enzyme.site, circular=product.circular):
+    remaining_sites = find_pattern_positions(
+        product.sequence,
+        enzyme.site,
+        circular=product.circular,
+    )
+    reverse_site = reverse_complement(enzyme.site)
+    if reverse_site != enzyme.site:
+        remaining_sites.extend(
+            find_pattern_positions(
+                product.sequence,
+                reverse_site,
+                circular=product.circular,
+            ),
+        )
+    if remaining_sites:
         warnings.append(
-            f"Final product still contains at least one {enzyme.name} recognition site ({enzyme.site})"
+            f"Final product still contains at least one {enzyme.name} recognition site "
+            f"in either orientation ({enzyme.site}/{reverse_site})"
         )
 
     return AssemblyProduct(

@@ -4,7 +4,11 @@
  * Exposes all pLannotate configuration options to the user.
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import {
+    focusTrapTarget,
+    restoreFocusIfConnected,
+} from './utils/focusManagement';
 
 export interface AutoAnnotateSettings {
     minIdentity: number;      // Minimum percent identity threshold (0-100)
@@ -38,12 +42,56 @@ export function AutoAnnotatePanel({
     isCircular
 }: AutoAnnotatePanelProps) {
     const [settings, setSettings] = useState<AutoAnnotateSettings>(DEFAULT_SETTINGS);
+    const panelRef = useRef<HTMLDivElement | null>(null);
+    const returnFocusRef = useRef<HTMLElement | null>(null);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        returnFocusRef.current = document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null;
+        const focusableSelector = 'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
+        const frame = window.requestAnimationFrame(() => {
+            panelRef.current?.querySelector<HTMLElement>(focusableSelector)?.focus();
+        });
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                onClose();
+                return;
+            }
+            if (event.key !== 'Tab') return;
+            const focusable = Array.from(
+                panelRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? [],
+            );
+            const target = focusTrapTarget(
+                focusable,
+                document.activeElement as HTMLElement | null,
+                event.shiftKey,
+            );
+            if (target) {
+                event.preventDefault();
+                target.focus();
+            } else if (focusable.length === 0) {
+                event.preventDefault();
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => {
+            window.cancelAnimationFrame(frame);
+            window.removeEventListener('keydown', handleKeyDown);
+            restoreFocusIfConnected(returnFocusRef.current, (target) => document.contains(target));
+        };
+    }, [isOpen, onClose]);
 
     if (!isOpen) return null;
 
     return (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
             <div
+                ref={panelRef}
+                role="dialog"
+                aria-modal="true"
+                aria-label="Auto-Annotate Settings"
                 className="bg-slate-800 rounded-lg shadow-xl w-full max-w-md p-6 border border-slate-600"
                 onClick={e => e.stopPropagation()}
             >
@@ -56,6 +104,7 @@ export function AutoAnnotatePanel({
                         Auto-Annotate Settings
                     </h3>
                     <button
+                        aria-label="Close auto-annotate settings"
                         onClick={onClose}
                         className="p-1 hover:bg-slate-700 rounded transition-colors"
                     >

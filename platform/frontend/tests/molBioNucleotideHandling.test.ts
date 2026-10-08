@@ -7,7 +7,6 @@ import {
     displayStrandForMoleculeOrientation,
     inferNucleotideMoleculeMetadataFromParsedRecord,
     inferSequenceTypeFromParsedRecord,
-    moleculeLabelForNucleotide,
     normalizeSequenceForType,
     parseSequenceInput,
     sequenceForDisplayStrand,
@@ -203,7 +202,7 @@ test('MolBio import path uses parser metadata, canonical normalization, and pers
     assert.match(source, /sourceDisplayStrandForSequenceData\(nextSequence\)/);
     assert.match(source, /activeDisplayStrand=\{activeDisplayStrand\}/);
     assert.match(source, /onDisplayStrandChange=\{handleDisplayStrandChange\}/);
-    assert.match(source, /findOpenReadingFrames\(sequenceData\.sequence, 100\)/);
+    assert.match(source, /findOpenReadingFrames\([\s\S]*sequenceData\.sequence,[\s\S]*100,[\s\S]*sequenceData\.circular,[\s\S]*\)/);
 });
 
 test('viewer labels expose molecule labels and SeqViz receives polymer type, not molecule label', () => {
@@ -216,9 +215,11 @@ test('viewer labels expose molecule labels and SeqViz receives polymer type, not
     assert.match(headerSource, /onDisplayStrandChange/);
     assert.match(headerSource, /displayStrandSymbol\(strand\)/);
     assert.match(modalSource, /label=\{sequence\.molecule_label\}/);
-    assert.match(viewerSource, /const seqVizSeqType = normalizedSequenceType === 'protein' \? 'aa' : nucleotideSequenceType/);
+    assert.match(viewerSource, /const seqVizSeqType = sequenceData\.sequenceType === 'protein' \? 'aa' : sequenceData\.sequenceType/);
     assert.match(viewerSource, /sequenceForDisplayStrand\(/);
-    assert.match(viewerSource, /const sourceRange = transformRangeForDisplayStrand\(/);
-    assert.match(viewerSource, /highlights=\{displayHighlightedRegions\}/);
+    assert.match(viewerSource, /const sourceSelection = mapSeqVizSelectionToSource\(/);
+    assert.match(viewerSource, /shouldReverseComplementForDisplay\(sourceDisplayStrand, resolvedDisplayStrand\)/);
+    assert.match(viewerSource, /const mergedHighlightedRegions = useMemo\(/);
+    assert.match(viewerSource, /highlights=\{mergedHighlightedRegions\}/);
     assert.match(viewerSource, /seqType=\{seqVizSeqType\}/);
 });

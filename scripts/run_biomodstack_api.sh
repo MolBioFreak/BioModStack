@@ -45,21 +45,6 @@ if [ "${BMS_RUNTIME_MODE,,}" = "dev" ]; then
     unset BMS_WORKFLOW_ADAPTER_URL
 fi
 
-# The native dev API and the stable analytical DB share only the DB credential,
-# not the container runtime routing boundary. Load that one operator-local value
-# without sourcing the whole core-runtime environment into the dev process.
-core_runtime_env_file="${BMS_CORE_RUNTIME_ENV_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/biomodstack/core-runtime.env}"
-if [ -z "${BMS_ANALYTICAL_DB_PASSWORD:-}" ] && [ -f "$core_runtime_env_file" ]; then
-    while IFS= read -r line || [ -n "$line" ]; do
-        case "$line" in
-            BMS_ANALYTICAL_DB_PASSWORD=*)
-                export BMS_ANALYTICAL_DB_PASSWORD="${line#*=}"
-                break
-                ;;
-        esac
-    done < "$core_runtime_env_file"
-fi
-export BMS_ANALYTICAL_DB_PORT="${BMS_ANALYTICAL_DB_PORT:-55432}"
 pin_nextflow_java
 
 API_MODE_RAW="${BMS_API_MODE:-dev}"

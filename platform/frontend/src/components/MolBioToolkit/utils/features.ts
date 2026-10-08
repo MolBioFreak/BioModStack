@@ -1,4 +1,19 @@
-import type { Feature } from '../types';
+export interface FeatureRecord {
+    id: string;
+    name: string;
+    type: string;
+    start: number;
+    end: number;
+    strand: 1 | -1;
+    color?: string;
+    description?: string;
+    notes?: Record<string, unknown>;
+    qualifiers?: Record<string, unknown>;
+    provenance?: Record<string, unknown>;
+    segments?: Array<{ start: number; end: number }>;
+}
+
+type Feature = FeatureRecord;
 
 type Segment = { start: number; end: number };
 type TransformOperation = 'reverse' | 'complement' | 'reverse_complement';
@@ -6,8 +21,7 @@ type TransformOperation = 'reverse' | 'complement' | 'reverse_complement';
 export function featureSegments(feature: Feature): Array<{ start: number; end: number }> {
     if (feature.segments && feature.segments.length > 0) {
         return [...feature.segments]
-            .map((segment) => ({ start: segment.start, end: segment.end }))
-            .sort((left, right) => left.start - right.start || left.end - right.end);
+            .map((segment) => ({ start: segment.start, end: segment.end }));
     }
     return [{ start: feature.start, end: feature.end }];
 }
@@ -24,11 +38,63 @@ export function featureLength(feature: Feature): number {
     return featureSegments(feature).reduce((sum, segment) => sum + (segment.end - segment.start), 0);
 }
 
+function mergedCoverageSegments(feature: Feature): Segment[] {
+    const sorted = [...featureSegments(feature)].sort(
+        (left, right) => left.start - right.start || left.end - right.end,
+    );
+    const merged: Segment[] = [];
+    for (const segment of sorted) {
+        const previous = merged[merged.length - 1];
+        if (!previous || segment.start > previous.end) {
+            merged.push({ ...segment });
+        } else {
+            previous.end = Math.max(previous.end, segment.end);
+        }
+    }
+    return merged;
+}
+
+export function featureOverlapLength(left: Feature, right: Feature): number {
+    const leftSegments = mergedCoverageSegments(left);
+    const rightSegments = mergedCoverageSegments(right);
+    let leftIndex = 0;
+    let rightIndex = 0;
+    let overlap = 0;
+    while (leftIndex < leftSegments.length && rightIndex < rightSegments.length) {
+        const leftSegment = leftSegments[leftIndex];
+        const rightSegment = rightSegments[rightIndex];
+        overlap += Math.max(
+            0,
+            Math.min(leftSegment.end, rightSegment.end) - Math.max(leftSegment.start, rightSegment.start),
+        );
+        if (leftSegment.end <= rightSegment.end) {
+            leftIndex += 1;
+        } else {
+            rightIndex += 1;
+        }
+    }
+    return overlap;
+}
+
+export function featureHighlightRegions(feature: Feature, color: string) {
+    return featureSegments(feature).map((segment) => ({
+        start: segment.start,
+        end: segment.end,
+        color,
+        label: feature.name,
+    }));
+}
+
+export function featureCoordinateLabel(feature: Feature): string {
+    return featureSegments(feature)
+        .map((segment) => `${segment.start + 1}–${segment.end}`)
+        .join(' + ');
+}
+
 function normalizeSegments(segments: Segment[]): Segment[] {
     return [...segments]
         .filter((segment) => Number.isFinite(segment.start) && Number.isFinite(segment.end) && segment.end > segment.start)
-        .map((segment) => ({ start: segment.start, end: segment.end }))
-        .sort((left, right) => left.start - right.start || left.end - right.end);
+        .map((segment) => ({ start: segment.start, end: segment.end }));
 }
 
 function withFeatureSegments(feature: Feature, segments: Segment[]): Feature | null {
