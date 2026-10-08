@@ -14,6 +14,7 @@ from services import db_service
 def _running_container() -> dict[str, object]:
     return {
         "service_name": "bms-analytical-postgres",
+        "implementation_service_name": "bms-analytical-postgres",
         "container_name": "biomodstack-analytical-postgres",
         "source": "configured-name",
     }
@@ -28,7 +29,7 @@ def _running_inspection() -> dict[str, object]:
     }
 
 
-def test_db_service_status_reports_product_name_and_transitional_container(monkeypatch) -> None:
+def test_db_service_status_reports_product_name_and_legacy_container(monkeypatch) -> None:
     monkeypatch.setenv("BMS_ANALYTICAL_DATABASE_URL", "postgresql+asyncpg://bms_assay:[REDACTED]@127.0.0.1:55432/bms_analytical_data")
     monkeypatch.setattr(db_service, "_docker_available", lambda: (True, None), raising=False)
     monkeypatch.setattr(db_service, "_find_container_by_label_or_name", _running_container, raising=False)
@@ -63,7 +64,8 @@ def test_db_service_status_reports_product_name_and_transitional_container(monke
     assert payload["component"] == "db-service"
     assert payload["service_id"] == "bms-db-service"
     assert payload["display_name"] == "BMS DB service"
-    assert payload["service_name"] == "bms-analytical-postgres"
+    assert payload["service_name"] == "bms-db"
+    assert payload["implementation_service_name"] == "bms-analytical-postgres"
     assert payload["container_name"] == "biomodstack-analytical-postgres"
     assert payload["optional_at_boot"] is True
     assert payload["host_agent_available"] is False
@@ -232,7 +234,6 @@ def test_db_service_missing_container_compose_fallback_uses_no_build(monkeypatch
     monkeypatch.setattr(db_service, "_docker_available", lambda: (True, None), raising=False)
     monkeypatch.setattr(db_service, "_find_container_by_label_or_name", lambda: None, raising=False)
     monkeypatch.setattr(db_service, "_compose_available", lambda: (True, None), raising=False)
-    monkeypatch.setattr(db_service, "_configured_service_names", lambda: ["bms-analytical-postgres"], raising=False)
     monkeypatch.setattr(db_service, "_inspect_container", lambda container_name: _running_inspection(), raising=False)
     monkeypatch.setattr(db_service, "_logical_database_statuses", lambda: [], raising=False)
 
@@ -246,7 +247,7 @@ def test_db_service_missing_container_compose_fallback_uses_no_build(monkeypatch
 
     assert payload["last_action"] == "start"
     assert payload["action_returncode"] == 0
-    assert compose_calls == [["up", "-d", "--no-build", "bms-analytical-postgres"]]
+    assert compose_calls == [["up", "-d", "--no-build", "bms-db"]]
 
 
 def test_db_service_rejects_unsupported_action() -> None:

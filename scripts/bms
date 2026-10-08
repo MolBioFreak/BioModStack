@@ -117,8 +117,10 @@ run_db_service_descriptor() {
   PYTHONPATH="$api_root" \
   BMS_DB_SERVICE_ID="${BMS_DB_SERVICE_ID:-bms-db-service}" \
   BMS_DB_COMPOSE_FILE="$compose_file" \
-  BMS_DB_COMPOSE_SERVICES="${BMS_DB_COMPOSE_SERVICES:-bms-db,bms-analytical-postgres}" \
-  BMS_DB_CONTAINER_NAMES="${BMS_DB_CONTAINER_NAMES:-biomodstack-db,biomodstack-analytical-postgres}" \
+  BMS_DB_COMPOSE_SERVICES="${BMS_DB_COMPOSE_SERVICES:-bms-db}" \
+  BMS_DB_CONTAINER_NAMES="${BMS_DB_CONTAINER_NAMES:-biomodstack-db}" \
+  BMS_DB_LEGACY_COMPOSE_SERVICES="${BMS_DB_LEGACY_COMPOSE_SERVICES:-bms-analytical-postgres}" \
+  BMS_DB_LEGACY_CONTAINER_NAMES="${BMS_DB_LEGACY_CONTAINER_NAMES:-biomodstack-analytical-postgres}" \
     "$python_bin" -m services.db_service "$action" --tail "$tail_lines" "${advanced_args[@]}"
 }
 

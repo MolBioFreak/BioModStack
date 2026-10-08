@@ -219,6 +219,46 @@ def test_panel_summarizes_bioxp_interlink_state(monkeypatch) -> None:
     assert "http://100.124.140.56:8123" in summary
 
 
+def test_panel_bioxp_summary_fails_closed_on_stale_interlink_success(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+
+    summary = module.summarize_bioxp_interlink_state(
+        {
+            "active": True,
+            "configured": True,
+            "reachable": True,
+            "hardware_connected": True,
+            "last_probe_reachable": True,
+            "last_probe_hardware_connected": True,
+            "last_probe_at": "2026-05-23T20:58:00+00:00",
+            "probe_fresh_window_seconds": 60,
+            "robot_api_url": "http://robot:8123",
+        }
+    )
+
+    assert summary.startswith("STALE")
+    assert "LINKED" not in summary
+
+
+def test_panel_bioxp_summary_uses_backend_probe_stale_flag(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+
+    summary = module.summarize_bioxp_interlink_state(
+        {
+            "active": True,
+            "configured": True,
+            "reachable": None,
+            "hardware_connected": None,
+            "last_probe_reachable": True,
+            "probe_stale": True,
+            "robot_api_url": "http://robot:8123",
+        }
+    )
+
+    assert summary.startswith("STALE")
+    assert "reachable=stale" in summary
+
+
 def test_panel_bioxp_runtime_reset_uses_governed_proxy_route(monkeypatch) -> None:
     module = load_module(monkeypatch)
     captured: list[tuple[str, str, dict, float]] = []
