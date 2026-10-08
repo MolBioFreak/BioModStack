@@ -2963,6 +2963,9 @@ def build_nextflow_command(
             'context_store_mode': 'bcp_context_store_mode',
             'context_store_root': 'bcp_context_store_root',
             'context_query_tile_tokens': 'bcp_context_query_tile_tokens',
+            'context_store_logical_size_cp': 'bcp_context_store_logical_size_cp',
+            'context_store_pair_tile_tokens': 'bcp_context_store_pair_tile_tokens',
+            'context_store_key_tile_tokens': 'bcp_context_store_key_tile_tokens',
             'repo_path': 'bcp_repo_path',
         }
         for src_key, dest_key in boltz_cp_mappings.items():
