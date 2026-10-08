@@ -16,6 +16,7 @@ import os
 import json as json_lib
 import hashlib
 import gzip
+import time
 
 from database import Job, NucleotideSequence, get_session
 from services.gpu_orchestrator import estimate_vram
@@ -32,6 +33,16 @@ from paths import get_results_dir, get_msa_cache_dir
 
 
 router = APIRouter(prefix="/api/msa", tags=["msa"])
+
+
+_msa_server_status_cache: dict[str, dict] = {}
+_msa_server_status_cache_time: dict[str, float] = {}
+_MSA_SERVER_STATUS_CACHE_TTL_SECONDS = 5.0
+
+
+def _invalidate_msa_server_status_cache() -> None:
+    _msa_server_status_cache.clear()
+    _msa_server_status_cache_time.clear()
 
 
 class MSASequence(BaseModel):
@@ -247,8 +258,26 @@ async def get_msa_server_status(
             )
         )
         has_active_batch_job = int(active_batch_result.scalar() or 0) > 0
+        cache_key = json_lib.dumps(
+            {
+                "gpu_id": effective_gpu_id,
+                "include_envdb": include_envdb,
+                "max_seqs": int(max_seqs),
+                "prefilter_mode": int(prefilter_mode),
+                "db_load_mode": int(db_load_mode),
+                "has_active_batch_job": bool(has_active_batch_job),
+                "settings": settings,
+            },
+            sort_keys=True,
+            default=str,
+        )
+        now = time.monotonic()
+        cached = _msa_server_status_cache.get(cache_key)
+        cached_time = _msa_server_status_cache_time.get(cache_key, 0.0)
+        if cached is not None and (now - cached_time) < _MSA_SERVER_STATUS_CACHE_TTL_SECONDS:
+            return cached
 
-        return server_status(
+        payload = server_status(
             gpu_id=effective_gpu_id,
             include_envdb=include_envdb,
             max_seqs=max_seqs,
@@ -256,6 +285,9 @@ async def get_msa_server_status(
             db_load_mode=db_load_mode,
             has_active_batch_job=has_active_batch_job,
         )
+        _msa_server_status_cache[cache_key] = payload
+        _msa_server_status_cache_time[cache_key] = now
+        return payload
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to read MSA server status: {exc}")
 
@@ -277,6 +309,7 @@ async def update_msa_server_settings(request: MSAServerSettingsUpdate):
         patch = {field: getattr(request, field) for field in request.model_fields_set}
         merged = {**current, **patch}
         settings = write_server_settings(merged)
+        _invalidate_msa_server_status_cache()
         return {"success": True, "settings": settings}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to update MSA server settings: {exc}")
@@ -327,6 +360,7 @@ async def start_msa_server(request: MSAServerStartRequest):
                 "include_envdb": include_envdb,
             }
         )
+        _invalidate_msa_server_status_cache()
         return {
             "success": True,
             "gpu_id": gpu_id,
@@ -345,6 +379,7 @@ async def stop_msa_server(request: MSAServerStopRequest):
         settings = read_server_settings()
         effective_gpu_id = request.gpu_id if request.gpu_id is not None else settings.get("pinned_gpu_id")
         result = stop_servers(gpu_id=effective_gpu_id)
+        _invalidate_msa_server_status_cache()
         return {
             "success": True,
             **result,

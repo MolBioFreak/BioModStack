@@ -7,6 +7,7 @@ Handles launching and managing Nextflow pipeline processes.
 import asyncio
 import subprocess
 import os
+import signal
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
@@ -187,6 +188,13 @@ def _normalize_msa_preset(value: object) -> str:
     return "fast"
 
 
+def _normalize_protenix_msa_backend(value: object) -> str:
+    backend = str(value).strip().lower() if value is not None else ""
+    if backend in {"auto", "local", "colabfold_api"}:
+        return backend
+    return ""
+
+
 def _estimate_protenix_token_count(params: Dict[str, Any]) -> int:
     """
     Approximate Protenix token count from input payload.
@@ -240,7 +248,7 @@ def _apply_protenix_preflight(params: Dict[str, Any]) -> Tuple[Dict[str, Any], L
     if use_msa:
         if token_count >= 1700 or (token_count >= 1400 and msa_preset in {"balanced", "maximum"}):
             tier = "high"
-        elif token_count >= 1200 or msa_preset == "maximum":
+        elif token_count >= 1200:
             tier = "medium"
     else:
         if token_count >= 2400:
@@ -249,9 +257,6 @@ def _apply_protenix_preflight(params: Dict[str, Any]) -> Tuple[Dict[str, Any], L
             tier = "medium"
 
     if tier == "medium":
-        if use_msa and msa_preset == "maximum":
-            tuned["msa_preset"] = "balanced"
-            notes.append("msa_preset: maximum -> balanced")
         if n_sample > 3:
             tuned["protenix_n_sample"] = 3
             notes.append(f"protenix_n_sample: {n_sample} -> 3")
@@ -266,9 +271,6 @@ def _apply_protenix_preflight(params: Dict[str, Any]) -> Tuple[Dict[str, Any], L
         if n_cycle > 4:
             tuned["protenix_n_cycle"] = 4
             notes.append(f"protenix_n_cycle: {n_cycle} -> 4")
-        if use_msa and msa_preset != "fast":
-            tuned["msa_preset"] = "fast"
-            notes.append(f"msa_preset: {msa_preset} -> fast")
 
     # Allow override; default to 2 OOM retries for protenix jobs.
     if "protenix_oom_retry_attempts" not in tuned:
@@ -871,6 +873,11 @@ async def launch_nextflow_job(
     from schemas import JobStatus
     
     logger.info(f"Launching job {job_id} (model={model_id}, mode={mode})")
+
+    existing_process = _running_processes.get(job_id)
+    if existing_process and existing_process.returncode is None:
+        logger.warning(f"Skipping duplicate launch request for active job {job_id}")
+        return
     
     # ═══════════════════════════════════════════════════════════════════════════
     # MSA BATCH JOBS: Run batch_msa.py directly (not Nextflow)
@@ -881,6 +888,20 @@ async def launch_nextflow_job(
 
     # Use a mutable launch-params copy so retries can downshift Protenix safely.
     launch_params: Dict[str, Any] = dict(params or {})
+
+    structure_validator = str(launch_params.get("structure_validator", "")).strip().lower()
+    uses_protenix_validation = _is_protenix_job(model_id, launch_params) or structure_validator == "protenix"
+    use_protenix_msa = _coerce_bool(launch_params.get("protenix_use_msa", True), default=True)
+    normalized_protenix_backend = _normalize_protenix_msa_backend(launch_params.get("protenix_msa_backend"))
+    if uses_protenix_validation:
+        if normalized_protenix_backend:
+            launch_params["protenix_msa_backend"] = normalized_protenix_backend
+        elif use_protenix_msa:
+            launch_params["protenix_msa_backend"] = (
+                "colabfold_api"
+                if _normalize_msa_preset(launch_params.get("msa_preset", "fast")) == "maximum"
+                else "auto"
+            )
 
     preflight_notes: List[str] = []
     is_protenix = _is_protenix_job(model_id, launch_params)
@@ -899,6 +920,10 @@ async def launch_nextflow_job(
         
         if not job:
             logger.error(f"Job {job_id} not found in database")
+            return
+
+        if job.status == JobStatus.RUNNING.value and job.started_at is not None:
+            logger.warning(f"Job {job_id} is already marked running; skipping duplicate launcher entry")
             return
         
         # Check if job was cancelled while queued
@@ -1008,15 +1033,170 @@ async def launch_nextflow_job(
                     f"protenix_oom_retries={protenix_oom_retries_used}/{max_protenix_oom_retries})"
                 )
 
-                # Run Nextflow with stdout piped for real-time monitoring
-                process = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    cwd=str(PROJECT_ROOT),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                    env=env,
-                    close_fds=True
-                )
+                log_path = Path(output_dir) / "nextflow.log"
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                log_offset = log_path.stat().st_size if log_path.exists() else 0
+                pending_fragment = ""
+
+                async def handle_log_line(line_str: str) -> None:
+                    nonlocal last_stage
+                    attempt_log.append(line_str)
+                    full_log.append(line_str)
+
+                    # Check for stage update
+                    # Example: "[4b/123456] process > NF_CORE:FAMPNN (1) [ 0%]"
+                    match = process_regex.search(line_str)
+                    if match:
+                        # Extract stage name (e.g. "NF_CORE:FAMPNN" or "FAMPNN")
+                        raw_stage = match.group(1).strip()
+                        # Clean up: Remove workflow prefix if present
+                        stage_clean = raw_stage.split(':')[-1].lower()
+
+                        # Map to frontend stage IDs
+                        stage = stage_clean
+                        if 'fampnn' in stage_clean:
+                            stage = 'fampnn'
+                        elif 'rfantibody' in stage_clean:
+                            stage = 'rfantibody'
+                        elif 'boltz' in stage_clean:
+                            stage = 'boltz2' # Frontend uses boltz2
+                        elif 'rf3' in stage_clean:
+                            stage = 'rf3'
+                        # ──────────────────────────────────────────────────────────────
+                        # MPNN VARIANTS - Check specific variants BEFORE generic 'mpnn'
+                        # Order matters: most specific first, generic last
+                        # ──────────────────────────────────────────────────────────────
+                        elif 'frustra' in stage_clean:
+                            stage = 'frustrampnn'  # FrustraMPNN (frustration analysis)
+                        elif 'ligandmpnn' in stage_clean or 'ligand_mpnn' in stage_clean:
+                            stage = 'ligandmpnn'   # LigandMPNN (ligand-aware design)
+                        elif 'thermompnn' in stage_clean or 'thermo_mpnn' in stage_clean:
+                            stage = 'thermompnn'   # ThermoMPNN (thermal stability)
+                        elif 'proteinmpnn' in stage_clean or ('mpnn' in stage_clean and 'fa' not in stage_clean):
+                            stage = 'proteinmpnn'  # ProteinMPNN (vanilla)
+                        elif 'protenix' in stage_clean:
+                            stage = 'protenix'  # Protenix structure prediction
+                        elif 'doradobasecall' in stage_clean:
+                            stage = 'dorado_basecall'
+                        elif 'doradoalign' in stage_clean:
+                            stage = 'dorado_align'
+                        elif (
+                            'bamprepare' in stage_clean
+                            or 'bam_prepare' in stage_clean
+                            or 'preparebamforanalysis' in stage_clean
+                            or 'bammappedcheck' in stage_clean
+                            or 'bam_mapped_check' in stage_clean
+                            or 'referenceprepareforigv' in stage_clean
+                            or 'reference_prepare' in stage_clean
+                        ):
+                            stage = 'bam_prepare'
+                        elif 'fastqalign' in stage_clean or 'fastq_align' in stage_clean:
+                            stage = 'fastq_align'
+                        elif (
+                            'fastqplasmidqc' in stage_clean
+                            or 'fastq_qc' in stage_clean
+                            or 'fastqqc' in stage_clean
+                        ):
+                            stage = 'fastq_qc'
+                        elif 'modkit' in stage_clean:
+                            stage = 'modkit'
+                        elif 'multimer' in stage_clean:
+                            stage = 'multimer_qc'
+                        elif 'fastqdimeranalysis' in stage_clean or 'dimeranalysis' in stage_clean:
+                            stage = 'dimer_analysis'
+                        elif (
+                            'runclonevalidation' in stage_clean
+                            or 'clonevalidation' in stage_clean
+                            or 'clone-validation' in stage_clean
+                            or 'wf_clone' in stage_clean
+                            or 'wf-clone' in stage_clean
+                        ):
+                            stage = 'wf_clone_validation'
+                        elif 'af2' in stage_clean:
+                            stage = 'af2'
+                        elif 'rfdiffusion' in stage_clean:
+                            stage = 'rfdiffusion'
+
+                        if stage != last_stage:
+                            logger.info(f"[JOB {job_id}] Entering stage: {stage} (raw: {raw_stage})")
+                            last_stage = stage
+
+                            # Update DB (separate session to avoid long-held locks)
+                            try:
+                                async with async_session() as update_session:
+                                    j_stats = await update_session.execute(select(Job).where(Job.id == job_id))
+                                    j = j_stats.scalar_one_or_none()
+                                    if j:
+                                        j.current_stage = stage
+                                        j.stage_progress = None  # Reset progress on new stage
+                                        await update_session.commit()
+                            except Exception as db_err:
+                                logger.warning(f"Failed to update stage for {job_id}: {db_err}")
+
+                    # Check for work directory in TaskHandler output
+                    # Example: "workDir: /home/.../work/91/0cd0da..."
+                    workdir_match = re.search(r'workDir:\s*(/[^\s\]]+)', line_str)
+                    if workdir_match:
+                        current_work_dir = workdir_match.group(1)
+
+                        # Update work dir and parse progress
+                        try:
+                            async with async_session() as update_session:
+                                j_stats = await update_session.execute(select(Job).where(Job.id == job_id))
+                                j = j_stats.scalar_one_or_none()
+                                if j:
+                                    j.stage_work_dir = current_work_dir
+                                    # Parse progress from the work dir log
+                                    progress = parse_stage_progress(
+                                        current_work_dir,
+                                        j.current_stage,
+                                        j.params.get('rfantibody_num_designs') if j.params else None
+                                    )
+                                    if progress:
+                                        j.stage_progress = progress
+                                    await update_session.commit()
+                        except Exception as db_err:
+                            logger.debug(f"Failed to update work dir for {job_id}: {db_err}")
+
+                async def consume_new_log(final: bool = False) -> None:
+                    nonlocal log_offset, pending_fragment
+                    if not log_path.exists():
+                        return
+                    with open(log_path, "rb") as reader:
+                        reader.seek(log_offset)
+                        chunk = reader.read()
+                    if chunk:
+                        log_offset += len(chunk)
+                        text = pending_fragment + chunk.decode("utf-8", errors="replace")
+                    elif final and pending_fragment:
+                        text = pending_fragment
+                    else:
+                        return
+
+                    pending_fragment = ""
+                    lines = text.splitlines(keepends=True)
+                    if lines and not lines[-1].endswith(("\n", "\r")):
+                        pending_fragment = lines.pop()
+
+                    if final and pending_fragment:
+                        lines.append(pending_fragment)
+                        pending_fragment = ""
+
+                    for line_str in lines:
+                        await handle_log_line(line_str)
+
+                with open(log_path, "ab", buffering=0) as log_sink:
+                    # Launch in a new session and write directly to a durable log file so
+                    # the workflow survives API reloads/restarts instead of depending on a pipe reader.
+                    process = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        cwd=str(PROJECT_ROOT),
+                        stdout=log_sink,
+                        stderr=asyncio.subprocess.STDOUT,
+                        env=env,
+                        close_fds=True,
+                        start_new_session=True,
+                    )
                 # Store process reference for potential cancellation
                 _running_processes[job_id] = process
                 # Store the Nextflow run ID (PID for now)
@@ -1025,135 +1205,15 @@ async def launch_nextflow_job(
 
                 attempt_log: List[str] = []
                 try:
-                    # Read line by line
                     while True:
-                        line = await process.stdout.readline()
-                        if not line:
+                        try:
+                            exit_code = await asyncio.wait_for(process.wait(), timeout=1.0)
+                            await consume_new_log(final=True)
                             break
-
-                        line_str = line.decode('utf-8', errors='replace')
-                        attempt_log.append(line_str)
-                        full_log.append(line_str)
-
-                        # Check for stage update
-                        # Example: "[4b/123456] process > NF_CORE:FAMPNN (1) [ 0%]"
-                        match = process_regex.search(line_str)
-                        if match:
-                            # Extract stage name (e.g. "NF_CORE:FAMPNN" or "FAMPNN")
-                            raw_stage = match.group(1).strip()
-                            # Clean up: Remove workflow prefix if present
-                            stage_clean = raw_stage.split(':')[-1].lower()
-
-                            # Map to frontend stage IDs
-                            stage = stage_clean
-                            if 'fampnn' in stage_clean:
-                                stage = 'fampnn'
-                            elif 'rfantibody' in stage_clean:
-                                stage = 'rfantibody'
-                            elif 'boltz' in stage_clean:
-                                stage = 'boltz2' # Frontend uses boltz2
-                            elif 'rf3' in stage_clean:
-                                stage = 'rf3'
-                            # ──────────────────────────────────────────────────────────────
-                            # MPNN VARIANTS - Check specific variants BEFORE generic 'mpnn'
-                            # Order matters: most specific first, generic last
-                            # ──────────────────────────────────────────────────────────────
-                            elif 'frustra' in stage_clean:
-                                stage = 'frustrampnn'  # FrustraMPNN (frustration analysis)
-                            elif 'ligandmpnn' in stage_clean or 'ligand_mpnn' in stage_clean:
-                                stage = 'ligandmpnn'   # LigandMPNN (ligand-aware design)
-                            elif 'thermompnn' in stage_clean or 'thermo_mpnn' in stage_clean:
-                                stage = 'thermompnn'   # ThermoMPNN (thermal stability)
-                            elif 'proteinmpnn' in stage_clean or ('mpnn' in stage_clean and 'fa' not in stage_clean):
-                                stage = 'proteinmpnn'  # ProteinMPNN (vanilla)
-                            elif 'protenix' in stage_clean:
-                                stage = 'protenix'  # Protenix structure prediction
-                            elif 'doradobasecall' in stage_clean:
-                                stage = 'dorado_basecall'
-                            elif 'doradoalign' in stage_clean:
-                                stage = 'dorado_align'
-                            elif (
-                                'bamprepare' in stage_clean
-                                or 'bam_prepare' in stage_clean
-                                or 'preparebamforanalysis' in stage_clean
-                                or 'bammappedcheck' in stage_clean
-                                or 'bam_mapped_check' in stage_clean
-                                or 'referenceprepareforigv' in stage_clean
-                                or 'reference_prepare' in stage_clean
-                            ):
-                                stage = 'bam_prepare'
-                            elif 'fastqalign' in stage_clean or 'fastq_align' in stage_clean:
-                                stage = 'fastq_align'
-                            elif (
-                                'fastqplasmidqc' in stage_clean
-                                or 'fastq_qc' in stage_clean
-                                or 'fastqqc' in stage_clean
-                            ):
-                                stage = 'fastq_qc'
-                            elif 'modkit' in stage_clean:
-                                stage = 'modkit'
-                            elif 'multimer' in stage_clean:
-                                stage = 'multimer_qc'
-                            elif 'fastqdimeranalysis' in stage_clean or 'dimeranalysis' in stage_clean:
-                                stage = 'dimer_analysis'
-                            elif (
-                                'runclonevalidation' in stage_clean
-                                or 'clonevalidation' in stage_clean
-                                or 'clone-validation' in stage_clean
-                                or 'wf_clone' in stage_clean
-                                or 'wf-clone' in stage_clean
-                            ):
-                                stage = 'wf_clone_validation'
-                            elif 'af2' in stage_clean:
-                                stage = 'af2'
-                            elif 'rfdiffusion' in stage_clean:
-                                stage = 'rfdiffusion'
-
-                            if stage != last_stage:
-                                logger.info(f"[JOB {job_id}] Entering stage: {stage} (raw: {raw_stage})")
-                                last_stage = stage
-
-                                # Update DB (separate session to avoid long-held locks)
-                                try:
-                                    async with async_session() as update_session:
-                                        j_stats = await update_session.execute(select(Job).where(Job.id == job_id))
-                                        j = j_stats.scalar_one_or_none()
-                                        if j:
-                                            j.current_stage = stage
-                                            j.stage_progress = None  # Reset progress on new stage
-                                            await update_session.commit()
-                                except Exception as db_err:
-                                    logger.warning(f"Failed to update stage for {job_id}: {db_err}")
-
-                        # Check for work directory in TaskHandler output
-                        # Example: "workDir: /home/.../work/91/0cd0da..."
-                        workdir_match = re.search(r'workDir:\s*(/[^\s\]]+)', line_str)
-                        if workdir_match:
-                            current_work_dir = workdir_match.group(1)
-
-                            # Update work dir and parse progress
-                            try:
-                                async with async_session() as update_session:
-                                    j_stats = await update_session.execute(select(Job).where(Job.id == job_id))
-                                    j = j_stats.scalar_one_or_none()
-                                    if j:
-                                        j.stage_work_dir = current_work_dir
-                                        # Parse progress from the work dir log
-                                        progress = parse_stage_progress(
-                                            current_work_dir,
-                                            j.current_stage,
-                                            j.params.get('rfantibody_num_designs') if j.params else None
-                                        )
-                                        if progress:
-                                            j.stage_progress = progress
-                                        await update_session.commit()
-                            except Exception as db_err:
-                                logger.debug(f"Failed to update work dir for {job_id}: {db_err}")
-
-                    # Wait for process to fully exit
-                    exit_code = await process.wait()
+                        except asyncio.TimeoutError:
+                            await consume_new_log()
                 finally:
-                    pass
+                    _running_processes.pop(job_id, None)
 
                 lock_failed = (
                     exit_code != 0
@@ -1584,6 +1644,31 @@ def build_nextflow_command(
             if excluded_ids:
                 params["msa_excluded_gpus"] = sorted(set(excluded_ids))
                 logger.info(f"[MSA] Injected excluded GPUs from scheduler config: {params['msa_excluded_gpus']}")
+
+        preferred_ids = params.get("msa_preferred_gpus")
+        excluded_ids = params.get("msa_excluded_gpus")
+        if preferred_ids not in (None, "") and excluded_ids not in (None, ""):
+            preferred_set = {
+                int(gpu_id)
+                for gpu_id in (preferred_ids if isinstance(preferred_ids, list) else str(preferred_ids).split(","))
+                if str(gpu_id).strip()
+            }
+            excluded_set = {
+                int(gpu_id)
+                for gpu_id in (excluded_ids if isinstance(excluded_ids, list) else str(excluded_ids).split(","))
+                if str(gpu_id).strip()
+            }
+            overlap = preferred_set & excluded_set
+            if overlap:
+                preferred_set -= overlap
+                if preferred_set:
+                    params["msa_preferred_gpus"] = sorted(preferred_set)
+                else:
+                    params.pop("msa_preferred_gpus", None)
+                logger.info(
+                    f"[MSA] Removed overlapping preferred/excluded GPU IDs {sorted(overlap)}; "
+                    f"preferred now {params.get('msa_preferred_gpus')}"
+                )
     except Exception as exc:
         logger.warning(f"[MSA] Could not load scheduler GPU policy defaults: {exc}")
     
@@ -1675,6 +1760,8 @@ def build_nextflow_command(
         'msa_gpu_server_wait_timeout': 'msa_gpu_server_wait_timeout',
         'msa_gpu_server_db_load_mode': 'msa_gpu_server_db_load_mode',
         'msa_gpu_server_startup_wait': 'msa_gpu_server_startup_wait',
+        'lock_target_chains': 'lock_target_chains',
+        'lock_antibody_framework': 'lock_antibody_framework',
         # NA-MPNN sequence design params (Oligo Designer)
         'nampnn_temperature': 'nampnn_temperature',
         'nampnn_num_seqs': 'nampnn_num_seqs',
@@ -1828,8 +1915,12 @@ async def cancel_nextflow_job(nextflow_run_id: str) -> bool:
     """Cancel a running Nextflow job."""
     try:
         pid = int(nextflow_run_id)
-        os.kill(pid, 15)  # SIGTERM
-        logger.info(f"Sent SIGTERM to Nextflow process {pid}")
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGTERM)
+            logger.info(f"Sent SIGTERM to Nextflow process group led by {pid}")
+        except Exception:
+            os.kill(pid, signal.SIGTERM)
+            logger.info(f"Sent SIGTERM to Nextflow process {pid}")
         return True
     except (ValueError, ProcessLookupError) as e:
         logger.warning(f"Could not cancel Nextflow process: {e}")

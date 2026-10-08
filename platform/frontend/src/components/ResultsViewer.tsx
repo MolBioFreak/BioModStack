@@ -2,8 +2,8 @@ import { useState, useEffect, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate } from 'react-router-dom';
 
-import { fetchJobs, fetchDesigns, fetchStructureAnalysis, fetchAntibodyData, fetchBackboneSummary, launchAntibodyIteration } from '../lib/api';
-import type { AntibodyCdrIndelConfig, AntibodyIterationAction, Job } from '../lib/api';
+import { fetchJobs, fetchDesigns, fetchStructureAnalysis, fetchAntibodyData, fetchBackboneSummary, launchAntibodyIteration, launchManualMutagenesis } from '../lib/api';
+import type { AntibodyCdrIndelConfig, AntibodyIterationAction, Job, ManualMutagenesisConfig } from '../lib/api';
 import MolstarViewer from './MolstarViewer';
 // FloatingViewer - unused, kept for reference
 import { StabilityHeatmap } from './MetricCharts';
@@ -152,6 +152,7 @@ export function ResultsViewer() {
     const [outputSourceFilter, setOutputSourceFilter] = useState<OutputSourceFilter>('all');
     const [antibodySourceFilter, setAntibodySourceFilter] = useState<OutputSourceFilter>('all');
     const [showCdrIndelModal, setShowCdrIndelModal] = useState(false);
+    const [showManualMutagenesisModal, setShowManualMutagenesisModal] = useState(false);
     const [cdrIndelConfig, setCdrIndelConfig] = useState<AntibodyCdrIndelConfig>({
         loop_ids: [],
         variants_per_design: 10,
@@ -163,11 +164,21 @@ export function ResultsViewer() {
         predictor: 'protenix',
         msa_provider: 'local',
     });
+    const [manualMutagenesisConfig, setManualMutagenesisConfig] = useState<ManualMutagenesisConfig & { mutation_sets_text: string }>({
+        chain_id: '',
+        mutation_sets: [],
+        mutation_sets_text: '',
+        predictor: 'protenix',
+        msa_provider: 'local',
+    });
 
     const [pipelineOverrides, setPipelineOverrides] = useState({
         run_structure_validation: false,
         structure_validator: 'boltz2',
         run_ppiflow: false,
+        maturation_redesign_temp: 0.01,
+        lock_target_chains: true,
+        lock_antibody_framework: true,
         run_frustrampnn: false,
         interactive_gating: true,
     });
@@ -236,6 +247,16 @@ export function ResultsViewer() {
             })(),
         }));
     }, [availableCdrLoopIds]);
+
+    useEffect(() => {
+        const antibodyChains = String(activeJob?.params?.antibody_chains || '')
+            .split(',')
+            .map((value) => value.trim().toUpperCase())
+            .filter(Boolean);
+        const preferredChain = antibodyChains[0] || '';
+        if (!preferredChain) return;
+        setManualMutagenesisConfig((current) => current.chain_id ? current : { ...current, chain_id: preferredChain });
+    }, [activeJob?.params?.antibody_chains]);
 
     // Sync URL with selection
     useEffect(() => {
@@ -671,6 +692,56 @@ export function ResultsViewer() {
         },
     });
 
+    const launchManualMutagenesisMutation = useMutation({
+        mutationFn: async () => {
+            if (!selectedJobId) {
+                throw new Error('Select a job before launching a new round.');
+            }
+            if (selectedDesignIds.length === 0) {
+                throw new Error('Select at least one design before launching a new round.');
+            }
+            const mutationSets = manualMutagenesisConfig.mutation_sets_text
+                .split('\n')
+                .map((entry) => entry.trim())
+                .filter(Boolean);
+            if (mutationSets.length === 0) {
+                throw new Error('Add at least one manual mutation set, one per line.');
+            }
+            return launchManualMutagenesis({
+                source_job_id: selectedJobId,
+                design_ids: selectedDesignIds,
+                config: {
+                    chain_id: manualMutagenesisConfig.chain_id?.trim() || undefined,
+                    mutation_sets: mutationSets,
+                    predictor: manualMutagenesisConfig.predictor,
+                    msa_provider: manualMutagenesisConfig.msa_provider,
+                },
+            });
+        },
+        onSuccess: (response) => {
+            const launchedJob = response.data.launched_job;
+            setIterationMessage({
+                kind: 'success',
+                text: `${response.data.message} New job: ${launchedJob.name} (${launchedJob.id}).`,
+            });
+            setShowManualMutagenesisModal(false);
+            queryClient.invalidateQueries({ queryKey: ['jobs'] });
+            queryClient.invalidateQueries({ queryKey: ['jobs', 'include_children'] });
+        },
+        onError: (error) => {
+            setIterationMessage({
+                kind: 'error',
+                text: getErrorMessage(error),
+            });
+        },
+    });
+
+    const launchBusy = launchIterationMutation.isPending || launchManualMutagenesisMutation.isPending;
+    const manualMutationSetCount = manualMutagenesisConfig.mutation_sets_text
+        .split('\n')
+        .map((entry) => entry.trim())
+        .filter(Boolean).length;
+
     return (
         <div className="min-h-screen bg-slate-950 text-slate-200">
             {/* Background */}
@@ -906,9 +977,11 @@ export function ResultsViewer() {
                                             <span className="rounded-full border border-slate-700 bg-slate-900/70 px-2 py-1 text-slate-400">
                                                 {sortedDesigns.length} on current filtered page
                                             </span>
-                                            {launchIterationMutation.isPending && (
+                                            {launchBusy && (
                                                 <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-200">
-                                                    Launching {launchIterationMutation.variables?.action}...
+                                                    Launching {launchIterationMutation.isPending
+                                                        ? launchIterationMutation.variables?.action
+                                                        : 'manual_mutagenesis'}...
                                                 </span>
                                             )}
                                         </div>
@@ -963,8 +1036,11 @@ export function ResultsViewer() {
                                                             ...(pipelineOverrides.run_ppiflow && {
                                                                 run_post_validation_maturation: true,
                                                                 run_post_boltz_maturation: true,
-                                                                run_maturation: true
+                                                                run_maturation: true,
+                                                                maturation_redesign_temp: pipelineOverrides.maturation_redesign_temp,
                                                             }),
+                                                            lock_target_chains: pipelineOverrides.lock_target_chains,
+                                                            lock_antibody_framework: pipelineOverrides.lock_antibody_framework,
                                                             ...(pipelineOverrides.run_frustrampnn && {
                                                                 run_frustrampnn: true
                                                             }),
@@ -974,7 +1050,7 @@ export function ResultsViewer() {
 
                                                     launchIterationMutation.mutate({ action, paramOverrides });
                                                 }}
-                                                disabled={selectedDesignIds.length === 0 || launchIterationMutation.isPending}
+                                                disabled={selectedDesignIds.length === 0 || launchBusy}
                                                 className={`rounded-lg border px-3 py-2 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${action === 'validate_protenix'
                                                     ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200 hover:border-cyan-400'
                                                     : action === 'validate_boltz2'
@@ -1006,11 +1082,23 @@ export function ResultsViewer() {
                                                 setIterationMessage(null);
                                                 setShowCdrIndelModal(true);
                                             }}
-                                            disabled={selectedDesignIds.length === 0 || launchIterationMutation.isPending}
+                                            disabled={selectedDesignIds.length === 0 || launchBusy}
                                             className="rounded-lg border border-fuchsia-500/40 bg-fuchsia-500/10 px-3 py-2 text-xs text-fuchsia-200 transition-colors hover:border-fuchsia-400 disabled:cursor-not-allowed disabled:opacity-50"
                                             title="Generate explicit CDR insertion/deletion variants from the selected set, then validate them as a new round."
                                         >
                                             CDR Indels
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setIterationMessage(null);
+                                                setShowManualMutagenesisModal(true);
+                                            }}
+                                            disabled={selectedDesignIds.length === 0 || launchBusy}
+                                            className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200 transition-colors hover:border-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                                            title="Apply explicit manual mutation sets to a chosen chain while preserving all other protein chains exactly as-is."
+                                        >
+                                            Manual Mutagenesis
                                         </button>
                                         <div className="w-px h-6 bg-slate-700/50 mx-1"></div>
                                         <button
@@ -1040,7 +1128,7 @@ export function ResultsViewer() {
                                 {showParamOverrides && (
                                     <div className="mt-4 border-t border-slate-700/50 pt-4">
                                         <div className="text-xs text-indigo-300 font-medium mb-3">Pipeline Add-ons & Overrides</div>
-                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-7 gap-4">
                                             <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300 transition-colors hover:border-slate-600 cursor-pointer">
                                                 <input
                                                     type="checkbox"
@@ -1072,6 +1160,53 @@ export function ResultsViewer() {
                                                     className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-slate-900"
                                                 />
                                                 PPIFlow Maturation
+                                            </label>
+
+                                            <label className="rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300 transition-colors hover:border-slate-600">
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <span className="text-slate-400">Redesign temp</span>
+                                                    <input
+                                                        type="number"
+                                                        min={0.0001}
+                                                        max={1}
+                                                        step={0.0001}
+                                                        value={pipelineOverrides.maturation_redesign_temp}
+                                                        onChange={(e) => {
+                                                            const next = Number(e.target.value);
+                                                            setPipelineOverrides(prev => ({
+                                                                ...prev,
+                                                                maturation_redesign_temp: Number.isFinite(next)
+                                                                    ? Math.min(1, Math.max(0.0001, next))
+                                                                    : prev.maturation_redesign_temp,
+                                                            }));
+                                                        }}
+                                                        disabled={!pipelineOverrides.run_ppiflow}
+                                                        className="w-24 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-right text-xs text-slate-200 outline-none focus:border-indigo-500 disabled:opacity-50"
+                                                    />
+                                                </div>
+                                                <div className="mt-1 text-[10px] text-slate-500">
+                                                    Sent as `maturation_redesign_temp` with quick PPIFlow launches.
+                                                </div>
+                                            </label>
+
+                                            <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300 transition-colors hover:border-slate-600 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={pipelineOverrides.lock_target_chains}
+                                                    onChange={(e) => setPipelineOverrides(prev => ({ ...prev, lock_target_chains: e.target.checked }))}
+                                                    className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-slate-900"
+                                                />
+                                                Lock Target Chains
+                                            </label>
+
+                                            <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300 transition-colors hover:border-slate-600 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={pipelineOverrides.lock_antibody_framework}
+                                                    onChange={(e) => setPipelineOverrides(prev => ({ ...prev, lock_antibody_framework: e.target.checked }))}
+                                                    className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-slate-900"
+                                                />
+                                                Lock Framework
                                             </label>
 
                                             <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300 transition-colors hover:border-slate-600 cursor-pointer">
@@ -1327,8 +1462,11 @@ export function ResultsViewer() {
                                                             ...(pipelineOverrides.run_ppiflow && {
                                                                 run_post_validation_maturation: true,
                                                                 run_post_boltz_maturation: true,
-                                                                run_maturation: true
+                                                                run_maturation: true,
+                                                                maturation_redesign_temp: pipelineOverrides.maturation_redesign_temp,
                                                             }),
+                                                            lock_target_chains: pipelineOverrides.lock_target_chains,
+                                                            lock_antibody_framework: pipelineOverrides.lock_antibody_framework,
                                                             ...(pipelineOverrides.run_frustrampnn && {
                                                                 run_frustrampnn: true
                                                             }),
@@ -1343,13 +1481,139 @@ export function ResultsViewer() {
                                                     });
                                                 }}
                                                 disabled={
-                                                    launchIterationMutation.isPending ||
+                                                    launchBusy ||
                                                     cdrIndelConfig.loop_ids.length === 0 ||
                                                     (!cdrIndelConfig.allow_insertions && !cdrIndelConfig.allow_deletions)
                                                 }
                                                 className="rounded-lg border border-fuchsia-500/40 bg-fuchsia-500/10 px-3 py-2 text-xs text-fuchsia-200 transition-colors hover:border-fuchsia-400 disabled:cursor-not-allowed disabled:opacity-50"
                                             >
                                                 Launch CDR Indel Round
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {showManualMutagenesisModal && (
+                            <div className="mb-4 rounded-xl border border-emerald-500/30 bg-slate-950/95 p-4 shadow-2xl">
+                                <div className="flex items-start justify-between gap-4">
+                                    <div>
+                                        <div className="text-sm font-medium text-emerald-200">Manual Mutagenesis Round</div>
+                                        <p className="mt-1 text-xs text-slate-400">
+                                            Apply explicit substitution sets to one protein chain while preserving every other protein chain exactly as-is.
+                                        </p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowManualMutagenesisModal(false)}
+                                        className="rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:border-slate-600"
+                                    >
+                                        Close
+                                    </button>
+                                </div>
+
+                                <div className="mt-4 grid gap-4 lg:grid-cols-[1.3fr_0.7fr]">
+                                    <div className="space-y-4">
+                                        <label className="block text-xs text-slate-500">
+                                            Mutation sets
+                                            <textarea
+                                                value={manualMutagenesisConfig.mutation_sets_text}
+                                                onChange={(e) => setManualMutagenesisConfig((current) => ({
+                                                    ...current,
+                                                    mutation_sets_text: e.target.value,
+                                                }))}
+                                                placeholder={'One variant set per line\nS31Y\nS31Y,K58R'}
+                                                className="mt-1 h-40 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                                            />
+                                            <span className="mt-1 block text-[10px] text-slate-500">
+                                                Use one substitution set per line. Format each mutation as `W52A` or comma-separate multiple substitutions on a line.
+                                            </span>
+                                        </label>
+                                    </div>
+
+                                    <div className="space-y-4">
+                                        <label className="block text-xs text-slate-500">
+                                            Chain to mutate
+                                            <input
+                                                type="text"
+                                                value={manualMutagenesisConfig.chain_id || ''}
+                                                onChange={(e) => setManualMutagenesisConfig((current) => ({
+                                                    ...current,
+                                                    chain_id: e.target.value.toUpperCase().slice(0, 2),
+                                                }))}
+                                                placeholder="H"
+                                                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                                            />
+                                            <span className="mt-1 block text-[10px] text-slate-500">
+                                                Leave blank only for single-chain designs. Antibody jobs default to the binder chain when available.
+                                            </span>
+                                        </label>
+
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <label className="text-xs text-slate-500">
+                                                Validator
+                                                <select
+                                                    value={manualMutagenesisConfig.predictor}
+                                                    onChange={(e) => setManualMutagenesisConfig((current) => ({
+                                                        ...current,
+                                                        predictor: e.target.value === 'boltz2' ? 'boltz2' : 'protenix',
+                                                    }))}
+                                                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                                                >
+                                                    <option value="protenix">Protenix</option>
+                                                    <option value="boltz2">Boltz-2</option>
+                                                </select>
+                                            </label>
+
+                                            <label className="text-xs text-slate-500">
+                                                MSA provider
+                                                <select
+                                                    value={manualMutagenesisConfig.msa_provider}
+                                                    onChange={(e) => setManualMutagenesisConfig((current) => ({
+                                                        ...current,
+                                                        msa_provider: e.target.value === 'colabfold_api' ? 'colabfold_api' : 'local',
+                                                    }))}
+                                                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                                                >
+                                                    <option value="local">Local</option>
+                                                    <option value="colabfold_api">ColabFold API</option>
+                                                </select>
+                                            </label>
+                                        </div>
+
+                                        <div className="rounded-lg border border-slate-700/60 bg-slate-900/60 p-3 text-xs text-slate-400">
+                                            <div className="text-slate-200 font-medium mb-1">Launch summary</div>
+                                            <div>{selectedDesignIds.length} selected design{selectedDesignIds.length === 1 ? '' : 's'}</div>
+                                            <div>{manualMutationSetCount} manual variant set{manualMutationSetCount === 1 ? '' : 's'}</div>
+                                            <div className="mt-1 text-emerald-200">
+                                                {selectedDesignIds.length * manualMutationSetCount} total variant predictions
+                                            </div>
+                                            {manualMutagenesisConfig.msa_provider === 'colabfold_api' && (
+                                                <div className="mt-2 text-amber-300">
+                                                    Batch mutagenesis currently downgrades ColabFold API requests to local MSA.
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        <div className="flex justify-end gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowManualMutagenesisModal(false)}
+                                                className="rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-2 text-xs text-slate-300 transition-colors hover:border-slate-600"
+                                            >
+                                                Cancel
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setIterationMessage(null);
+                                                    launchManualMutagenesisMutation.mutate();
+                                                }}
+                                                disabled={launchBusy || manualMutationSetCount === 0}
+                                                className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200 transition-colors hover:border-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                                            >
+                                                Launch Manual Mutation Round
                                             </button>
                                         </div>
                                     </div>

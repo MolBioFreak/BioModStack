@@ -773,9 +773,12 @@ async def ingest_loose_files(
     """Ingest designs from individual JSON/PDB files (fallback)."""
     
     job_params: Dict[str, Any] = {}
-    job_result = await session.execute(select(Job.params).where(Job.id == job_id))
-    raw_job_params = job_result.scalar_one_or_none()
+    job_result = await session.execute(select(Job.mode, Job.params).where(Job.id == job_id))
+    job_row = job_result.one_or_none()
+    job_mode = job_row[0] if job_row else None
+    raw_job_params = job_row[1] if job_row else None
     job_params = _parse_job_params(raw_job_params)
+    is_maturation_child = str(job_mode or "").strip().lower() == "maturation_child"
 
     epitope_residues = _parse_epitope_residues(
         job_params.get("epitope_residues") or job_params.get("selected_residues")
@@ -1378,20 +1381,47 @@ async def ingest_loose_files(
         # --- Standard (non-oligo) ingestion ---
         else:
             structure_paths = []
-            
+
+            if is_maturation_child:
+                published_results_dir = output_path / "run" / "ppiflow" / "results"
+                if published_results_dir.exists():
+                    # For maturation children, only ingest the published final outputs.
+                    # Do not recurse into the whole directory tree because that can pull
+                    # in intermediate PPIFlow/redesign artifacts and misrepresent them
+                    # as final matured designs.
+                    approved_names = {
+                        report.stem.replace("_maturation_filter", "")
+                        for report in published_results_dir.glob("*_maturation_filter.json")
+                    }
+                    if approved_names:
+                        for name in sorted(approved_names):
+                            for ext in ("pdb", "cif", "mmcif"):
+                                candidate = published_results_dir / f"{name}.{ext}"
+                                if candidate.exists():
+                                    structure_paths.append(candidate)
+                                    break
+                    else:
+                        structure_paths.extend(sorted(published_results_dir.glob("*.pdb")))
+                        structure_paths.extend(sorted(published_results_dir.glob("*.cif")))
+                        structure_paths.extend(sorted(published_results_dir.glob("*.mmcif")))
+                if not structure_paths:
+                    print(f"[Ingester] No published maturation result structures found under {output_path}")
+                    return 0
+
             # For non-oligo jobs: prefer run/rebuilt/ over raw structures
-            rebuilt_dir = output_path / "run" / "rebuilt"
-            if rebuilt_dir.exists():
-                structure_paths.extend(list(rebuilt_dir.glob("*.pdb")))
-                nested = rebuilt_dir / "rebuilt"
-                if nested.exists():
-                    structure_paths.extend(list(nested.glob("*.pdb")))
-                print(f"[Ingester] Found {len(structure_paths)} rebuilt PDBs in {rebuilt_dir}")
-            
-            if not structure_paths:
-                structure_paths.extend(list(output_path.rglob("*.pdb")))
-                structure_paths.extend(list(output_path.rglob("*.cif")))
-                structure_paths.extend(list(output_path.rglob("*.mmcif")))
+            if not is_maturation_child:
+                rebuilt_dir = output_path / "run" / "rebuilt"
+                if rebuilt_dir.exists():
+                    structure_paths.extend(list(rebuilt_dir.glob("*.pdb")))
+                    nested = rebuilt_dir / "rebuilt"
+                    if nested.exists():
+                        structure_paths.extend(list(nested.glob("*.pdb")))
+                    print(f"[Ingester] Found {len(structure_paths)} rebuilt PDBs in {rebuilt_dir}")
+
+                if not structure_paths:
+                    structure_paths.extend(list(output_path.rglob("*.pdb")))
+                    structure_paths.extend(list(output_path.rglob("*.cif")))
+                    structure_paths.extend(list(output_path.rglob("*.mmcif")))
 
             if not structure_paths:
                 print(f"[Ingester] No raw structures found under {output_path}")

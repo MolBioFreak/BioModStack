@@ -208,10 +208,12 @@ def parse_chain_position_spec(spec):
     return {k: sorted(v) for k, v in mapping.items()}
 
 
-def compute_fixed_residues(mode, chains_data, cdr_dict, tetrad_positions, 
+def compute_fixed_residues(mode, chains_data, cdr_dict, tetrad_positions,
                            selected_loops, protect_tetrad, antibody_chains,
                            extra_protected_positions=None, extra_fixed_by_chain=None,
-                           cdr_override_by_chain=None):
+                           cdr_override_by_chain=None,
+                           lock_target_chains=True,
+                           lock_antibody_framework=True):
     """
     Compute which residues should be fixed based on design mode.
     
@@ -234,10 +236,12 @@ def compute_fixed_residues(mode, chains_data, cdr_dict, tetrad_positions,
     extra_protected = set(extra_protected_positions or [])
     extra_fixed_by_chain = extra_fixed_by_chain or {}
     
-    # Always fix target chain(s) completely
+    # By default, keep non-antibody chains sequence-locked so redesign never
+    # mutates the experimental antigen or other partner chains.
     target_chains = [c for c in chains_data.keys() if c not in antibody_chains]
-    for chain in target_chains:
-        fixed_residues[chain] = chains_data[chain]
+    if lock_target_chains:
+        for chain in target_chains:
+            fixed_residues[chain] = chains_data[chain]
     
     cdr_override_by_chain = cdr_override_by_chain or {}
 
@@ -281,11 +285,11 @@ def compute_fixed_residues(mode, chains_data, cdr_dict, tetrad_positions,
 
         if mode == 'cdr_only':
             # Fix everything EXCEPT CDRs
-            fixed = all_residues - all_cdr_residues
+            fixed = all_residues - all_cdr_residues if lock_antibody_framework else set()
             
         elif mode == 'cdr_selective':
             # Fix everything EXCEPT selected CDRs
-            fixed = all_residues - selected_cdr_residues
+            fixed = all_residues - selected_cdr_residues if lock_antibody_framework else (all_cdr_residues - selected_cdr_residues)
             
         elif mode == 'framework_allowed':
             # Everything designable, but protect tetrad if requested
@@ -354,6 +358,10 @@ def main():
                         help="Protect all FR contact hotspots from Zavrtanik 2018 (default: false)")
     parser.add_argument("--protect_disulfides", default="true",
                         help="Protect conserved disulfide cysteines (default: true)")
+    parser.add_argument("--lock_target_chains", default="true",
+                        help="Fix all non-antibody chains during redesign (default: true)")
+    parser.add_argument("--lock_antibody_framework", default="true",
+                        help="Keep non-CDR antibody framework fixed in CDR-focused modes (default: true)")
     
     args = parser.parse_args()
 
@@ -365,6 +373,8 @@ def main():
     selected_loops = [l.strip().upper() for l in args.design_loops.split(',')]
     protect_tetrad = args.protect_tetrad.lower() in ('true', '1', 'yes')
     antibody_chains = [c.strip().upper() for c in args.antibody_chains.split(',')]
+    lock_target_chains = args.lock_target_chains.lower() in ('true', '1', 'yes')
+    lock_antibody_framework = args.lock_antibody_framework.lower() in ('true', '1', 'yes')
     
     # Parse additional protection options
     protect_fr_contacts = args.protect_fr_contacts.lower() in ('true', '1', 'yes')
@@ -410,6 +420,8 @@ def main():
     print(f"Selected loops: {selected_loops}")
     print(f"Protect VHH tetrad: {protect_tetrad}")
     print(f"Antibody chains: {antibody_chains}")
+    print(f"Lock target chains: {lock_target_chains}")
+    print(f"Lock antibody framework: {lock_antibody_framework}")
     if extra_protected_imgt:
         print(f"Extra protected IMGT positions: {sorted(extra_protected_imgt)}")
     if extra_fixed_by_chain:
@@ -425,16 +437,26 @@ def main():
         
         # Parse CDR labels from HLT format
         cdr_dict = parse_hlt_cdr_labels(pdb)
-        if cdr_positions_by_loop:
-            cdr_dict = {k: list(map(int, v)) for k, v in cdr_positions_by_loop.items() if v}
+        loop_override = {k: list(map(int, v)) for k, v in cdr_positions_by_loop.items() if v} if cdr_positions_by_loop else {}
+        if loop_override:
+            cdr_dict = loop_override
         
+        effective_antibody_chains = list(antibody_chains)
+        override_chains = [chain for chain, residues in cdr_override_by_chain.items() if residues and chain in chains_data]
+        if override_chains and not any(chain in chains_data for chain in effective_antibody_chains):
+            # PPIFlow partial-flow backbones are often relabeled to A/B. If ANARCII
+            # did not recover loop-by-loop labels, the chain-level CDR override from
+            # IdentifyAnchorResidues is the best source of truth for which chain is
+            # antibody and should remain designable.
+            effective_antibody_chains = override_chains
+
         # Check if we found any CDR labels or override positions
         has_cdr_labels = any(len(v) > 0 for v in cdr_dict.values()) or bool(cdr_override_by_chain)
         
         if not has_cdr_labels:
             # Fallback: If no HLT labels, use heuristic (fix entire target chain)
             print(f"  {pdb_name}: No HLT CDR labels found, using chain-based fallback")
-            chains_to_fix = [c for c in chains_data.keys() if c not in antibody_chains]
+            chains_to_fix = [c for c in chains_data.keys() if c not in effective_antibody_chains] if lock_target_chains else []
             
             # For FAMPNN
             fampnn_constraints = []
@@ -487,12 +509,28 @@ def main():
             tetrad_positions=tetrad_positions,
             selected_loops=selected_loops,
             protect_tetrad=protect_tetrad,
-            antibody_chains=antibody_chains,
+            antibody_chains=effective_antibody_chains,
             extra_protected_positions=extra_protected_pdb,
             extra_fixed_by_chain=extra_fixed_by_chain,
-            cdr_override_by_chain=cdr_override_by_chain
+            cdr_override_by_chain=cdr_override_by_chain,
+            lock_target_chains=lock_target_chains,
+            lock_antibody_framework=lock_antibody_framework,
         )
         
+        designable_counts = {}
+        for chain in effective_antibody_chains:
+            if chain not in chains_data:
+                continue
+            all_residues = set(chains_data[chain])
+            fixed = set(fixed_residues.get(chain, []))
+            designable_counts[chain] = len(all_residues - fixed)
+
+        if design_mode in {"cdr_only", "cdr_selective"} and designable_counts and all(count == 0 for count in designable_counts.values()):
+            raise RuntimeError(
+                f"{pdb_name}: no antibody residues remain designable after constraint generation "
+                f"(antibody_chains={effective_antibody_chains}, override_chains={sorted(override_chains)})"
+            )
+
         # Generate FAMPNN constraints (chain + residue ranges)
         fampnn_constraints = []
         for chain, residues in sorted(fixed_residues.items()):
@@ -505,14 +543,17 @@ def main():
         
         # Generate ProteinMPNN constraints (entire chains)
         # For MPNN, we still use chain-level fixing for target chains
-        target_chains = [c for c in chains_data.keys() if c not in antibody_chains]
+        target_chains = [c for c in chains_data.keys() if c not in effective_antibody_chains]
         if target_chains:
             mpnn_fixed_chains[pdb_name] = target_chains
         
         # Report summary
-        cdr_count = sum(len(v) for v in cdr_dict.values())
+        cdr_count = sum(len(v) for v in cdr_dict.values()) or sum(len(v) for v in cdr_override_by_chain.values())
         fixed_count = sum(len(v) for v in fixed_residues.values())
-        print(f"  {pdb_name}: {cdr_count} CDR residues, {fixed_count} fixed residues, tetrad: {tetrad_positions}")
+        print(
+            f"  {pdb_name}: {cdr_count} CDR residues, {fixed_count} fixed residues, "
+            f"designable={designable_counts}, tetrad: {tetrad_positions}"
+        )
 
     # Write outputs
     with open(args.out_mpnn, 'w') as f:

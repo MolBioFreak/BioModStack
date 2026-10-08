@@ -6,7 +6,6 @@ include { FilterRFD ; RunRFDiffusion } from './modules/rfdiffusion.nf'
 include { PrepRFD3Input ; RunRFD3 ; FilterRFD3 } from './modules/rfd3.nf'
 include { RunRF3 ; FilterRF3 } from './modules/rf3.nf'
 include { PrepFAMPNN ; FilterFAMPNN ; RunFAMPNN } from './modules/fampnn.nf'
-include { IdentifyAnchorResidues ; RunPartialFlow ; PrepMaturationRedesign ; RunMaturationFAMPNN ; ScoreMaturationImprovement ; ScorePartialFlowImprovement ; FilterByMaturation } from './modules/ppiflow.nf'
 include { FilterMPNN ; PrepMPNN ; RunMPNN } from './modules/proteinmpnn.nf'
 include { AlignAF2 ; FilterAF2 ; RunAF2 } from './modules/af2.nf'
 include { AnalyseBestDesigns } from './modules/analysis.nf'
@@ -27,7 +26,6 @@ include { PrepareComplexWithMSA ; BoltzFromComplex } from './modules/structure_p
 include { RF3FromSequence } from './modules/structure_prediction.nf'
 include { structure_prediction_wf ; complex_prediction_wf } from './modules/structure_prediction.nf'
 include { OpenMMRelaxation ; OpenMMScore } from './modules/openmm.nf'
-include { ANARCII } from './modules/utils/anarci'
 include { FrustrampnnQC ; AggregateFrustrationReports } from './modules/frustrampnn.nf'
 include { DoradoBasecall ; DoradoAlign ; PrepareBamForAnalysis ; ValidateMappedBam ; PrepareReferenceForIGV ; ModkitPileup ; ModkitSummary ; FastqAlign ; FastqPlasmidQC ; RunCloneValidation } from './modules/dorado.nf'
 
@@ -39,6 +37,7 @@ include { ANTIBODY_DENOVO } from './workflows/antibody_denovo.nf'
 
 include { ANTIBODY_CHILD } from './workflows/antibody_child.nf'
 include { RFANTIBODY_BACKBONE } from './workflows/rfantibody_backbone.nf'
+include { MATURATION_CHILD_CORE } from './workflows/maturation_child_core.nf'
 
 include { BINDCRAFT_DESIGN } from './workflows/bindcraft_design.nf'
 
@@ -556,99 +555,7 @@ workflow {
         }
 
         println("* Processing ${pdb_list.size()} PDBs")
-
-        def anchor_inputs = Channel.from(pdb_list).map { pdb ->
-            def meta = [id: pdb.baseName]
-            tuple(meta, pdb)
-        }
-
-        IdentifyAnchorResidues(anchor_inputs)
-        RunPartialFlow(IdentifyAnchorResidues.out.anchor_inputs)
-
-        def anchor_lookup = IdentifyAnchorResidues.out.anchor_inputs
-            .map { meta, original_pdb, anchors_json, cdr_positions ->
-                tuple(meta, original_pdb, anchors_json, cdr_positions)
-            }
-        def anchor_original_lookup = anchor_lookup
-            .map { meta, original_pdb, anchors_json, cdr_positions -> tuple(meta, original_pdb) }
-        def anchor_redesign_lookup = anchor_lookup
-            .map { meta, original_pdb, anchors_json, cdr_positions -> tuple(meta, anchors_json, cdr_positions) }
-
-        def partial_score_inputs = RunPartialFlow.out.backbones.join(anchor_original_lookup)
-            .map { meta, backbone_pdb, original_pdb ->
-                tuple(meta, original_pdb, backbone_pdb)
-            }
-
-        ScorePartialFlowImprovement(partial_score_inputs)
-
-        // ANARCII loop positions for selective redesign (uses IMGT numbering)
-        ANARCII(RunPartialFlow.out.backbones)
-        def cdr_loop_lookup = ANARCII.out.cdr_positions
-            .map { meta, cdr_positions_by_loop -> tuple(meta, cdr_positions_by_loop) }
-
-        def partial_scored = ScorePartialFlowImprovement.out.scores
-            .join(RunPartialFlow.out.backbones)
-            .map { meta, score_json, backbone_pdb ->
-                def score = 0.0
-                try {
-                    score = new groovy.json.JsonSlurper().parse(score_json).delta_interface_score ?: 0.0
-                } catch (Exception e) {
-                    score = 0.0
-                }
-                tuple(meta, backbone_pdb, score_json, score)
-            }
-
-        def redesign_top_n = params.maturation_redesign_top_n ?: 0
-        def partial_selected = partial_scored
-        if (redesign_top_n > 0) {
-            partial_selected = partial_scored.collect().flatMap { items ->
-                def sorted = items.sort { a, b -> a[3] <=> b[3] }
-                return sorted.take(redesign_top_n)
-            }
-        }
-
-        def redesign_enabled = params.maturation_redesign_enabled != false
-
-        def final_matured
-        def final_scores
-
-        if (redesign_enabled) {
-            def redesign_inputs = partial_selected
-                .map { meta, backbone_pdb, score_json, score -> tuple(meta, backbone_pdb) }
-                .join(anchor_redesign_lookup.join(cdr_loop_lookup)
-                    .map { meta, anchors_json, cdr_positions, cdr_positions_by_loop ->
-                        tuple(meta, anchors_json, cdr_positions, cdr_positions_by_loop)
-                    }
-                )
-                .map { meta, backbone_pdb, anchors_json, cdr_positions, cdr_positions_by_loop ->
-                    tuple(meta, backbone_pdb, anchors_json, cdr_positions, cdr_positions_by_loop)
-                }
-
-            PrepMaturationRedesign(redesign_inputs)
-            RunMaturationFAMPNN(PrepMaturationRedesign.out.prep)
-
-            final_matured = RunMaturationFAMPNN.out.redesigned.map { meta, matured_pdb, matured_json ->
-                tuple(meta, matured_pdb)
-            }
-
-            def score_inputs = RunMaturationFAMPNN.out.redesigned.join(anchor_original_lookup)
-                .map { meta, matured_pdb, matured_json, original_pdb ->
-                    tuple(meta, original_pdb, matured_pdb)
-                }
-
-            ScoreMaturationImprovement(score_inputs)
-            final_scores = ScoreMaturationImprovement.out.scores
-        } else {
-            final_matured = partial_selected.map { meta, backbone_pdb, score_json, score -> tuple(meta, backbone_pdb) }
-            final_scores = ScorePartialFlowImprovement.out.scores
-        }
-
-        def filter_inputs = final_scores.join(final_matured)
-            .map { meta, score_json, matured_pdb ->
-                tuple(meta, matured_pdb, score_json)
-            }
-
-        FilterByMaturation(filter_inputs)
+        MATURATION_CHILD_CORE(pdb_list)
 
         println("PPIFlow maturation child job complete")
         return null

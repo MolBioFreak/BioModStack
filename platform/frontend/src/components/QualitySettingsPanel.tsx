@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from 'react';
 
 export interface QualitySettings {
+    // Local MSA search quality (used by MSA-consuming validators)
+    msa_preset: 'maximum' | 'balanced' | 'fast';
+
     // RFantibody settings (backbone diffusion)
     rfantibody_diffusion_steps: number;
     rfantibody_noise_scale_ca: number;
@@ -25,6 +28,7 @@ export interface QualitySettings {
     protenix_n_step: number;
     protenix_n_cycle: number;
     protenix_use_msa: boolean;
+    protenix_msa_backend: 'auto' | 'local' | 'colabfold_api';
     protenix_use_template: boolean;
     protenix_enable_cache: boolean;
     protenix_enable_fusion: boolean;
@@ -35,6 +39,8 @@ export interface QualitySettings {
     fampnn_temperature: number;
     fampnn_num_steps: number;
     fampnn_psce_threshold: number;
+    lock_target_chains: boolean;
+    lock_antibody_framework: boolean;
 
     // PPIFlow maturation (interface rotamer enrichment + partial flow)
     run_maturation: boolean;
@@ -112,8 +118,17 @@ const FAMPNN_CHECKPOINT_OPTIONS = [
     },
 ] as const;
 
+const DEFAULT_FAMPNN_CHECKPOINT = 'fampnn_0_0.pt';
+const DEFAULT_PPIFLOW_CHECKPOINT = 'nanobody';
+const FAMPNN_TEMPERATURE_PRESETS = [
+    { label: 'Deterministic', value: 0.03 },
+    { label: 'Balanced', value: 0.1 },
+    { label: 'Creative', value: 0.3 },
+] as const;
+
 const PRESETS: Record<QualityPreset, QualitySettings> = {
     speed: {
+        msa_preset: 'fast',
         // RFantibody: Fast screening
         rfantibody_diffusion_steps: 20,
         rfantibody_noise_scale_ca: 1.0,
@@ -135,11 +150,12 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         protenix_n_step: 100,
         protenix_n_cycle: 4,
         protenix_use_msa: false,
+        protenix_msa_backend: 'auto',
         protenix_use_template: false,
         protenix_enable_cache: true,
         protenix_enable_fusion: true,
         // FAMPNN
-        fampnn_checkpoint: '',
+        fampnn_checkpoint: DEFAULT_FAMPNN_CHECKPOINT,
         fampnn_checkpoint_path: '',
         fampnn_temperature: 0.2,
         fampnn_num_steps: 50,
@@ -162,10 +178,12 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         maturation_filter_percentile: 0,
         maturation_redesign_enabled: true,
         maturation_redesign_top_n: 0,
-        ppiflow_checkpoint: 'antibody',
+        ppiflow_checkpoint: DEFAULT_PPIFLOW_CHECKPOINT,
         ppiflow_antigen_chain: '',
         ppiflow_heavy_chain: '',
         ppiflow_light_chain: '',
+        lock_target_chains: true,
+        lock_antibody_framework: true,
         // Pre-Boltz filter (null = disabled for speed mode, let everything through)
         fampnn_max_psce: null,
         fampnn_max_residue_psce: null,
@@ -189,6 +207,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         boltz_min_ptm_interface: null,
     },
     balanced: {
+        msa_preset: 'fast',
         // RFantibody: Default quality
         rfantibody_diffusion_steps: 50,
         rfantibody_noise_scale_ca: 1.0,
@@ -210,11 +229,12 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         protenix_n_step: 200,
         protenix_n_cycle: 8,
         protenix_use_msa: true,
+        protenix_msa_backend: 'auto',
         protenix_use_template: false,
         protenix_enable_cache: true,
         protenix_enable_fusion: true,
         // FAMPNN
-        fampnn_checkpoint: '',
+        fampnn_checkpoint: DEFAULT_FAMPNN_CHECKPOINT,
         fampnn_checkpoint_path: '',
         fampnn_temperature: 0.1,
         fampnn_num_steps: 100,
@@ -237,10 +257,12 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         maturation_filter_percentile: 0,
         maturation_redesign_enabled: true,
         maturation_redesign_top_n: 0,
-        ppiflow_checkpoint: 'antibody',
+        ppiflow_checkpoint: DEFAULT_PPIFLOW_CHECKPOINT,
         ppiflow_antigen_chain: '',
         ppiflow_heavy_chain: '',
         ppiflow_light_chain: '',
+        lock_target_chains: true,
+        lock_antibody_framework: true,
         // Pre-Boltz filter: moderate filtering to save compute
         fampnn_max_psce: 2.5,
         fampnn_max_residue_psce: 5.0,
@@ -264,6 +286,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         boltz_min_ptm_interface: null,
     },
     quality: {
+        msa_preset: 'balanced',
         // RFantibody: Higher quality designs
         rfantibody_diffusion_steps: 50,
         rfantibody_noise_scale_ca: 0.8,
@@ -285,11 +308,12 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         protenix_n_step: 200,
         protenix_n_cycle: 10,
         protenix_use_msa: true,
+        protenix_msa_backend: 'auto',
         protenix_use_template: false,
         protenix_enable_cache: true,
         protenix_enable_fusion: true,
         // FAMPNN
-        fampnn_checkpoint: '',
+        fampnn_checkpoint: DEFAULT_FAMPNN_CHECKPOINT,
         fampnn_checkpoint_path: '',
         fampnn_temperature: 0.01,
         fampnn_num_steps: 200,
@@ -312,10 +336,12 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         maturation_filter_percentile: 20,
         maturation_redesign_enabled: true,
         maturation_redesign_top_n: 0,
-        ppiflow_checkpoint: 'antibody',
+        ppiflow_checkpoint: DEFAULT_PPIFLOW_CHECKPOINT,
         ppiflow_antigen_chain: '',
         ppiflow_heavy_chain: '',
         ppiflow_light_chain: '',
+        lock_target_chains: true,
+        lock_antibody_framework: true,
         // Pre-Boltz filter: stricter filtering for quality runs
         fampnn_max_psce: 2.0,
         fampnn_max_residue_psce: 4.0,
@@ -339,6 +365,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         boltz_min_ptm_interface: 0.5,
     },
     maximum: {
+        msa_preset: 'maximum',
         // RFantibody: Best possible quality
         rfantibody_diffusion_steps: 50,
         rfantibody_noise_scale_ca: 0.7,
@@ -360,11 +387,12 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         protenix_n_step: 300,
         protenix_n_cycle: 12,
         protenix_use_msa: true,
+        protenix_msa_backend: 'colabfold_api',
         protenix_use_template: false,
         protenix_enable_cache: true,
         protenix_enable_fusion: true,
         // FAMPNN
-        fampnn_checkpoint: '',
+        fampnn_checkpoint: DEFAULT_FAMPNN_CHECKPOINT,
         fampnn_checkpoint_path: '',
         fampnn_temperature: 0.0001,
         fampnn_num_steps: 500,
@@ -387,10 +415,12 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         maturation_filter_percentile: 10,
         maturation_redesign_enabled: true,
         maturation_redesign_top_n: 0,
-        ppiflow_checkpoint: 'antibody',
+        ppiflow_checkpoint: DEFAULT_PPIFLOW_CHECKPOINT,
         ppiflow_antigen_chain: '',
         ppiflow_heavy_chain: '',
         ppiflow_light_chain: '',
+        lock_target_chains: true,
+        lock_antibody_framework: true,
         // Pre-Boltz filter: strictest filtering for maximum quality
         fampnn_max_psce: 1.5,
         fampnn_max_residue_psce: 3.0,
@@ -646,9 +676,24 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
 
             <div className="grid grid-cols-2 gap-4">
                 <div>
-                    <label className="block text-xs text-slate-500 mb-1">
-                        Redesign Temperature <span className="text-slate-600">({settings.maturation_redesign_temp.toFixed(4)})</span>
-                    </label>
+                    <div className="mb-1 flex items-center justify-between gap-3">
+                        <label className="block text-xs text-slate-500">
+                            Redesign Temperature <span className="text-slate-600">({settings.maturation_redesign_temp.toFixed(4)})</span>
+                        </label>
+                        <input
+                            type="number"
+                            min={0.0001}
+                            max={1}
+                            step={0.0001}
+                            value={settings.maturation_redesign_temp}
+                            onChange={(e) => {
+                                const next = Number(e.target.value);
+                                if (!Number.isFinite(next)) return;
+                                updateSetting('maturation_redesign_temp', Math.min(1, Math.max(0.0001, next)));
+                            }}
+                            className="w-28 rounded border border-slate-700 bg-slate-900 px-2 py-1 text-right text-xs text-slate-200 outline-none focus:border-teal-500"
+                        />
+                    </div>
                     <input
                         type="range"
                         min={-4}
@@ -772,6 +817,9 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                     <p className="text-[10px] text-slate-600 mt-1">
                         Inherit uses the main workflow design mode. Override only if needed.
                     </p>
+                    <p className="text-[10px] text-slate-600 mt-1">
+                        PPIFlow redesign also honors the sequence-design protection toggles below: target chains can stay locked, and framework residues can remain fixed outside active CDRs.
+                    </p>
                 </div>
             </div>
 
@@ -806,8 +854,8 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                         onChange={(e) => updateSetting('ppiflow_checkpoint', e.target.value)}
                         className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-slate-300"
                     >
-                        <option value="antibody">Antibody</option>
                         <option value="nanobody">Nanobody</option>
+                        <option value="antibody">Antibody</option>
                         <option value="binder">Binder</option>
                     </select>
                     <p className="text-[10px] text-slate-600 mt-1">
@@ -937,6 +985,9 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
             ...PRESETS[newPreset],
             fampnn_checkpoint: settings.fampnn_checkpoint,
             fampnn_checkpoint_path: settings.fampnn_checkpoint_path,
+            fampnn_temperature: settings.fampnn_temperature,
+            lock_target_chains: settings.lock_target_chains,
+            lock_antibody_framework: settings.lock_antibody_framework,
         });
     };
 
@@ -1269,6 +1320,26 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                     </label>
                                 </div>
 
+                                {settings.protenix_use_msa && (
+                                    <div>
+                                        <label className="block text-xs text-slate-500 mb-1">
+                                            Protenix MSA Backend
+                                        </label>
+                                        <select
+                                            value={settings.protenix_msa_backend}
+                                            onChange={(e) => updateSetting('protenix_msa_backend', e.target.value as QualitySettings['protenix_msa_backend'])}
+                                            className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300"
+                                        >
+                                            <option value="auto">Auto</option>
+                                            <option value="colabfold_api">ColabFold Server</option>
+                                            <option value="local">Local MMseqs/ColabFold DB</option>
+                                        </select>
+                                        <p className="mt-1 text-[10px] text-slate-600">
+                                            `Maximum` defaults to `ColabFold Server`; `Auto` keeps the backend-size heuristic.
+                                        </p>
+                                    </div>
+                                )}
+
                                 {settings.protenix_use_template && (
                                     <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
                                         Template mode requires local mmCIF data under <code>.protenix_cache/mmcif</code>. Submission is rejected if that cache is missing.
@@ -1396,19 +1467,15 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                 <select
                                     value={settings.fampnn_checkpoint}
                                     onChange={(e) => updateSetting('fampnn_checkpoint', e.target.value)}
-                                    className={`w-full bg-slate-800 border rounded px-2 py-1 text-sm ${
-                                        settings.fampnn_checkpoint
-                                            ? 'border-slate-700 text-slate-300'
-                                            : 'border-red-500/50 text-red-200'
-                                    }`}
+                                    className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-slate-300"
                                 >
-                                    <option value="">Select FAMPNN weights...</option>
+                                    <option value="">Default: FAMPNN (0.0A)</option>
                                     {FAMPNN_CHECKPOINT_OPTIONS.map((option) => (
                                         <option key={option.value} value={option.value}>{option.label}</option>
                                     ))}
                                 </select>
                                 <p className="mt-1 text-[10px] text-slate-600">
-                                    No hidden default is applied. Pick the checkpoint explicitly for every campaign.
+                                    Defaults to FAMPNN (0.0A). Pick a different preset or override path if needed.
                                 </p>
                             </div>
 
@@ -1457,6 +1524,27 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                     <span>0.01</span>
                                     <span>1.0</span>
                                 </div>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                    {FAMPNN_TEMPERATURE_PRESETS.map((preset) => {
+                                        const isActive = Math.abs(settings.fampnn_temperature - preset.value) < 1e-9;
+                                        return (
+                                            <button
+                                                key={preset.label}
+                                                type="button"
+                                                onClick={() => updateSetting('fampnn_temperature', preset.value)}
+                                                className={`rounded border px-2 py-1 text-[10px] transition-colors ${isActive
+                                                    ? 'border-blue-500 bg-blue-500/15 text-blue-300'
+                                                    : 'border-slate-700 bg-slate-900/60 text-slate-400 hover:border-slate-600'
+                                                    }`}
+                                            >
+                                                {preset.label} {preset.value}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                                <p className="mt-2 text-[10px] text-slate-600">
+                                    Quality preset changes will not overwrite your FAMPNN temperature.
+                                </p>
                             </div>
 
                             <div>
@@ -1498,6 +1586,38 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                 <span>0.3</span>
                                 <span>0.5 (permissive)</span>
                             </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                            <label className="flex items-start gap-3 rounded-lg border border-slate-700/60 bg-slate-950/40 px-3 py-3 text-sm text-slate-300">
+                                <input
+                                    type="checkbox"
+                                    checked={settings.lock_target_chains}
+                                    onChange={(e) => updateSetting('lock_target_chains', e.target.checked)}
+                                    className="mt-0.5 h-4 w-4 rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500"
+                                />
+                                <span>
+                                    <span className="font-medium text-slate-200">Lock target chains</span>
+                                    <span className="mt-1 block text-[10px] text-slate-500">
+                                        Keeps all non-antibody protein chains sequence-fixed during FAMPNN and maturation redesign so the antigen is never mutated.
+                                    </span>
+                                </span>
+                            </label>
+
+                            <label className="flex items-start gap-3 rounded-lg border border-slate-700/60 bg-slate-950/40 px-3 py-3 text-sm text-slate-300">
+                                <input
+                                    type="checkbox"
+                                    checked={settings.lock_antibody_framework}
+                                    onChange={(e) => updateSetting('lock_antibody_framework', e.target.checked)}
+                                    className="mt-0.5 h-4 w-4 rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500"
+                                />
+                                <span>
+                                    <span className="font-medium text-slate-200">Lock framework outside active CDRs</span>
+                                    <span className="mt-1 block text-[10px] text-slate-500">
+                                        Applies to CDR-focused redesign modes. Disable only if you explicitly want framework drift during FAMPNN/PPIFlow redesign.
+                                    </span>
+                                </span>
+                            </label>
                         </div>
                     </div>
 

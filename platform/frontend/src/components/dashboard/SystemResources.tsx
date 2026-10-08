@@ -1128,13 +1128,17 @@ export function SystemResources() {
     const { data: systemData } = useQuery({
         queryKey: ['system'],
         queryFn: fetchSystemStatus,
-        refetchInterval: 2000,
+        refetchInterval: 5000,
+        refetchIntervalInBackground: false,
+        refetchOnWindowFocus: false,
     });
 
     const { data: powerControlData } = useQuery({
         queryKey: ['powerControl'],
         queryFn: fetchPowerControl,
-        refetchInterval: 5000,
+        refetchInterval: 10000,
+        refetchIntervalInBackground: false,
+        refetchOnWindowFocus: false,
     });
 
     const manualMutation = useMutation({
@@ -1150,7 +1154,9 @@ export function SystemResources() {
     const { data: schedulerConfigData } = useQuery({
         queryKey: ['schedulerConfig'],
         queryFn: fetchSchedulerConfig,
-        refetchInterval: 5000,
+        refetchInterval: 10000,
+        refetchIntervalInBackground: false,
+        refetchOnWindowFocus: false,
     });
 
     const toggleDisableMutation = useMutation({
@@ -1163,6 +1169,7 @@ export function SystemResources() {
     const gpuOverrides = schedulerConfigData?.data?.overrides ?? {};
     const currentLimits = powerControlData?.data.limits ?? {};
     const gpus = systemData?.data.gpus ?? [];
+    const gpuError = systemData?.data.gpu_error ?? null;
     const cpu = systemData?.data.cpu;
     const ram = systemData?.data.ram;
     const cpuHistory = systemData?.data.cpu_history ?? [];
@@ -1220,8 +1227,13 @@ export function SystemResources() {
                         />
                     ))}
                     {gpus.length === 0 && (
-                        <div className="col-span-full text-slate-500 text-center py-8">
-                            No GPU data available
+                        <div className="col-span-full text-center py-8">
+                            <div className="text-slate-400">GPU telemetry unavailable</div>
+                            {gpuError && (
+                                <div className="mt-2 text-xs text-amber-400">
+                                    {gpuError}
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>

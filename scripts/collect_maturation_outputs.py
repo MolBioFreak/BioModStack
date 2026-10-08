@@ -8,8 +8,29 @@ import shutil
 from pathlib import Path
 
 
+def resolve_dest_name(path: Path, job_idx: int) -> Path:
+    """Preserve the original filename unless it collides."""
+    dest = Path(path.name)
+    if not dest.exists():
+        return dest
+
+    prefixed = Path(f"job{job_idx}_{path.name}")
+    if not prefixed.exists():
+        return prefixed
+
+    stem = path.stem
+    suffix = path.suffix
+    counter = 2
+    while True:
+        candidate = Path(f"job{job_idx}_{stem}_{counter}{suffix}")
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
 def collect_files(output_dirs, patterns, subdirs):
     collected = []
+    seen_names = set()
     for job_idx, output_dir in enumerate(output_dirs):
         dir_path = Path(output_dir)
         if not dir_path.exists():
@@ -22,10 +43,13 @@ def collect_files(output_dirs, patterns, subdirs):
                 continue
             for pattern in patterns:
                 for path in search_path.glob(pattern):
-                    dest = Path(f"job{job_idx}_{path.name}")
+                    if path.name in seen_names:
+                        continue
+                    dest = resolve_dest_name(path, job_idx)
                     if not dest.exists():
                         shutil.copy2(path, dest)
                         collected.append(str(dest))
+                        seen_names.add(path.name)
                         print(f"Collected: {path} -> {dest}")
     return collected
 
@@ -45,13 +69,13 @@ def main():
     pdbs = collect_files(
         output_dirs,
         patterns=["*.pdb"],
-        subdirs=["run/ppiflow/results", "ppiflow/results", "pdb_files", ""],
+        subdirs=["run/ppiflow/results", "ppiflow/results"],
     )
 
     scores = collect_files(
         output_dirs,
         patterns=["*maturation_score.json", "*maturation_filter.json", "*_matured.json"],
-        subdirs=["run/ppiflow/results", "ppiflow/results", "run/ppiflow", "ppiflow", ""],
+        subdirs=["run/ppiflow/results", "ppiflow/results"],
     )
 
     manifest = {
