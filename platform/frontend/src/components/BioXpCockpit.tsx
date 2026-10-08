@@ -27,11 +27,10 @@ type CommissioningCommandName =
     | 'collect_hardware_snapshot'
     | 'initialize_oem_environment';
 
-type OemMotorStage = 'z-home' | 'gripper-current-31' | 'gripper-clear-10000' | 'gripper-home';
+type OemMotorStage = 'z-home' | 'gripper-clear-10000' | 'gripper-home';
 
 const OEM_MOTOR_STAGE_CONTROLS: ReadonlyArray<{ stage: OemMotorStage; label: string; detail: string }> = [
     { stage: 'z-home', label: 'M01 · Z reference', detail: 'OEM stage M01: source-bound Z axis search-home.' },
-    { stage: 'gripper-current-31', label: 'M02 · Gripper current 31', detail: 'OEM stage M02: source-bound gripper current parameter = 31.' },
     { stage: 'gripper-clear-10000', label: 'M03 · Gripper clear +10000', detail: 'OEM stage M03: source-bound +10000 relative clearance and stopped wait.' },
     { stage: 'gripper-home', label: 'M04 · Gripper home', detail: 'OEM stage M04: source-bound gripper home.' },
 ];
