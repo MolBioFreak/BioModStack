@@ -1,7 +1,8 @@
 import { Position, OverlayToaster, Intent, Classes } from "@blueprintjs/core";
 import classNames from "classnames";
+import { createRoot } from "react-dom/client";
 
-// BlueprintJS 5: Use OverlayToaster.createAsync() instead of Toaster.create()
+// BlueprintJS 5: Use OverlayToaster.createAsync() with domRenderer
 // These will be initialized asynchronously
 let TopToaster = null;
 let BottomToaster = null;
@@ -13,23 +14,30 @@ const initToasters = async () => {
   initializationAttempted = true;
 
   try {
-    // Check if OverlayToaster and createAsync exist
-    if (!OverlayToaster || typeof OverlayToaster.createAsync !== 'function') {
-      console.warn("OverlayToaster.createAsync not available, toasts will be disabled");
+    // Check if OverlayToaster exists
+    if (!OverlayToaster) {
+      console.warn("OverlayToaster not available, toasts will be disabled");
       return;
     }
+
+    // BP5.x requires domRenderer option for createAsync
+    const domRenderer = (node, container) => {
+      const root = createRoot(container);
+      root.render(node);
+      return () => root.unmount();
+    };
 
     if (!TopToaster) {
       TopToaster = await OverlayToaster.createAsync({
         className: "top-toaster",
         position: Position.TOP
-      });
+      }, { domRenderer });
     }
     if (!BottomToaster) {
       BottomToaster = await OverlayToaster.createAsync({
         className: "bottom-toaster",
         position: Position.BOTTOM
-      });
+      }, { domRenderer });
     }
   } catch (err) {
     console.warn("Failed to initialize toasters:", err);
