@@ -8,7 +8,9 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import create_engine
 
-from database import Base
+from database import Base, _attest_sqlite_migration_33, _attest_sqlite_migration_34
+from migrations import add_ont_external_move_bam_receipts as migration_33
+from migrations import add_ont_move_source_attempt_lineage as migration_34
 from migrations import runner
 
 from migrations.runner import (
@@ -55,6 +57,8 @@ def test_migration_versions_are_unique_with_md_before_ont() -> None:
         (32, "add_ont_signal_workbench"),
         (33, "add_ont_external_move_bam_receipts"),
         (34, "add_ont_move_source_attempt_lineage"),
+        (35, "add_scientific_artifact_receipts"),
+        (36, "add_frustrampnn_landscape_index_slimming"),
     ]
     assert len({migration.version for migration in MIGRATIONS}) == len(MIGRATIONS)
 
@@ -329,6 +333,107 @@ def exact_v33_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def _copy_database(source: Path, destination: Path) -> None:
     with sqlite3.connect(source) as source_connection, sqlite3.connect(destination) as destination_connection:
         source_connection.backup(destination_connection)
+
+
+def _rebuild_receipt_table_without_constraint(database: Path, omission: str) -> None:
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA foreign_keys=OFF")
+        for trigger_name in migration_33.MIGRATION_33_TRIGGER_SQL:
+            connection.execute(f'DROP TRIGGER IF EXISTS "{trigger_name}"')
+        table_name = "ont_external_move_bam_registration_receipts"
+        old_table_name = f"{table_name}_old"
+        table_sql = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+            (table_name,),
+        ).fetchone()[0]
+        if omission == "unique":
+            table_sql = table_sql.replace(
+                ",\n                CONSTRAINT uq_ont_external_move_bam_registration\n"
+                "                    UNIQUE (run_id, observed_generation, raw_representation_id, candidate_id, molecule_type)\n",
+                "",
+            )
+        elif omission == "foreign_key":
+            table_sql = table_sql.replace(
+                "REFERENCES ont_instrument_runs(id) ON DELETE RESTRICT",
+                "",
+            )
+        elif omission == "check":
+            table_sql = table_sql.replace("CHECK (artifact_size_bytes > 0)", "")
+        else:
+            raise AssertionError(omission)
+        connection.execute(f"ALTER TABLE {table_name} RENAME TO {old_table_name}")
+        connection.execute(table_sql)
+        columns = [row[1] for row in connection.execute(f"PRAGMA table_info('{old_table_name}')")]
+        quoted_columns = ", ".join(f'"{column}"' for column in columns)
+        connection.execute(
+            f"INSERT INTO {table_name} ({quoted_columns}) SELECT {quoted_columns} FROM {old_table_name}"
+        )
+        connection.execute(f"DROP TABLE {old_table_name}")
+        for trigger_sql in migration_33.MIGRATION_33_TRIGGER_SQL.values():
+            connection.execute(trigger_sql)
+        connection.commit()
+
+
+def _rebuild_source_table_without_claim_token_unique(database: Path) -> None:
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA foreign_keys=OFF")
+        for trigger_name in (*migration_34.MIGRATION_34_TRIGGER_SQL, *migration_33.MIGRATION_33_TRIGGER_SQL):
+            connection.execute(f'DROP TRIGGER IF EXISTS "{trigger_name}"')
+        table_name = "ont_move_table_sources"
+        old_table_name = f"{table_name}_old"
+        table_sql = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+            (table_name,),
+        ).fetchone()[0]
+        table_sql = table_sql.replace("claim_token VARCHAR(96) UNIQUE,", "claim_token VARCHAR(96),")
+        connection.execute(f"ALTER TABLE {table_name} RENAME TO {old_table_name}")
+        connection.execute(table_sql)
+        columns = [row[1] for row in connection.execute(f"PRAGMA table_info('{old_table_name}')")]
+        quoted_columns = ", ".join(f'"{column}"' for column in columns)
+        connection.execute(
+            f"INSERT INTO {table_name} ({quoted_columns}) SELECT {quoted_columns} FROM {old_table_name}"
+        )
+        connection.execute(f"DROP TABLE {old_table_name}")
+        migration_34._create_indexes_and_triggers(connection)
+        connection.commit()
+
+
+@pytest.mark.parametrize("omission", ("unique", "foreign_key", "check"))
+def test_migration_33_attestation_rejects_missing_receipt_constraints(
+    exact_v33_database: Path,
+    tmp_path: Path,
+    omission: str,
+) -> None:
+    database = tmp_path / f"missing-v33-{omission}.db"
+    _copy_database(exact_v33_database, database)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE schema_migrations SET content_sha256=? WHERE version=33",
+            (runner._migration_content_sha256(MIGRATIONS[32]),),
+        )
+        connection.commit()
+    _rebuild_receipt_table_without_constraint(database, omission)
+
+    with pytest.raises(RuntimeError, match="migration 33 startup attestation failed"):
+        _attest_sqlite_migration_33(str(database))
+
+
+def test_migration_34_attestation_rejects_missing_claim_token_unique_constraint(
+    exact_v33_database: Path,
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "missing-v34-claim-token-unique.db"
+    _copy_database(exact_v33_database, database)
+    runner.run_all(str(database))
+    _rebuild_source_table_without_claim_token_unique(database)
+    with sqlite3.connect(database) as connection:
+        rebuilt_sql = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='ont_move_table_sources'"
+        ).fetchone()[0]
+    assert "claim_token VARCHAR(96) UNIQUE" not in rebuilt_sql
+
+    with pytest.raises(RuntimeError, match="migration 34 startup attestation failed"):
+        _attest_sqlite_migration_34(str(database))
 
 
 def test_runner_truthfully_transitions_exact_null_v33_before_v34(

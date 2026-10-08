@@ -9,6 +9,7 @@ from migrations.add_ont_external_move_bam_receipts import (
     MIGRATION_33_TRIGGER_SQL_DIGESTS,
     migration_33_trigger_sql_digest,
 )
+from migrations.ont_sqlite_schema_contract import assert_sqlite_table_contract
 
 
 _SOURCE_TABLE = "ont_move_table_sources"
@@ -177,6 +178,63 @@ _OLD_COLUMNS = (
     "validated_at",
 )
 
+_SOURCE_COLUMN_CONTRACT = (
+    ("id", "VARCHAR(96)", 1, None, 1),
+    ("run_id", "VARCHAR(80)", 1, None, 0),
+    ("observed_generation", "INTEGER", 1, None, 0),
+    ("raw_representation_id", "VARCHAR(96)", 1, None, 0),
+    ("input_file_id", "VARCHAR(36)", 1, None, 0),
+    ("source_job_id", "VARCHAR(36)", 0, None, 0),
+    ("external_registration_receipt_id", "VARCHAR(128)", 0, None, 0),
+    ("artifact_sha256", "VARCHAR(64)", 1, None, 0),
+    ("artifact_size_bytes", "INTEGER", 1, None, 0),
+    ("bam_header_sha256", "VARCHAR(64)", 0, None, 0),
+    ("record_count", "INTEGER", 0, None, 0),
+    ("unique_read_count", "INTEGER", 0, None, 0),
+    ("mv_tag_count", "INTEGER", 0, None, 0),
+    ("ts_tag_count", "INTEGER", 0, None, 0),
+    ("ns_tag_count", "INTEGER", 0, None, 0),
+    ("basecall_model_id", "VARCHAR(255)", 0, None, 0),
+    ("molecule_type", "VARCHAR(16)", 1, None, 0),
+    ("source_runtime_identity", "JSON", 1, None, 0),
+    ("read_inventory_sha256", "VARCHAR(64)", 0, None, 0),
+    ("validation_state", "VARCHAR(32)", 1, None, 0),
+    ("reason_code", "VARCHAR(96)", 1, None, 0),
+    ("validation_receipt", "JSON", 1, None, 0),
+    ("claim_token", "VARCHAR(96)", 0, None, 0),
+    ("lease_expires_at", "VARCHAR", 0, None, 0),
+    ("created_at", "VARCHAR", 1, None, 0),
+    ("validated_at", "VARCHAR", 0, None, 0),
+    ("attempt_number", "INTEGER", 1, "1", 0),
+    ("predecessor_move_source_id", "VARCHAR(96)", 0, None, 0),
+)
+_SOURCE_INDEX_CONTRACT = frozenset(
+    {
+        (True, ("id",)),
+        (True, ("claim_token",)),
+        (True, ("run_id", "observed_generation", "artifact_sha256", "attempt_number")),
+        (True, ("predecessor_move_source_id",)),
+        (False, ("run_id", "observed_generation")),
+        (False, ("validation_state",)),
+        (False, ("predecessor_move_source_id",)),
+    }
+)
+_SOURCE_FOREIGN_KEY_CONTRACT = frozenset(
+    {
+        ("predecessor_move_source_id", "ont_move_table_sources", "id", "NO ACTION", "RESTRICT", "NONE"),
+        ("source_job_id", "jobs", "id", "NO ACTION", "RESTRICT", "NONE"),
+        ("input_file_id", "input_files", "id", "NO ACTION", "RESTRICT", "NONE"),
+        ("raw_representation_id", "ont_raw_signal_representations", "id", "NO ACTION", "RESTRICT", "NONE"),
+        ("run_id", "ont_instrument_runs", "id", "NO ACTION", "RESTRICT", "NONE"),
+    }
+)
+_SOURCE_SQL_FRAGMENTS = (
+    "CHECK (molecule_type IN ('dna','rna'))",
+    "CHECK (validation_state IN ('requested','running','ready','failed'))",
+    "CHECK (attempt_number >= 1)",
+    "CHECK ( (attempt_number = 1 AND predecessor_move_source_id IS NULL) OR (attempt_number > 1 AND predecessor_move_source_id IS NOT NULL) )",
+)
+
 
 def _table_columns(connection: sqlite3.Connection) -> tuple[str, ...]:
     return tuple(
@@ -205,25 +263,15 @@ def _create_indexes_and_triggers(connection: sqlite3.Connection) -> None:
 
 
 def attest(connection: sqlite3.Connection) -> None:
-    expected_columns = _OLD_COLUMNS + (
-        "attempt_number",
-        "predecessor_move_source_id",
+    assert_sqlite_table_contract(
+        connection,
+        table_name=_SOURCE_TABLE,
+        columns=_SOURCE_COLUMN_CONTRACT,
+        indexes=_SOURCE_INDEX_CONTRACT,
+        foreign_keys=_SOURCE_FOREIGN_KEY_CONTRACT,
+        sql_fragments=_SOURCE_SQL_FRAGMENTS,
+        label="ONT move-source attempt-lineage table",
     )
-    if _table_columns(connection) != expected_columns:
-        raise RuntimeError("ONT move-source attempt-lineage columns diverged")
-    table_sql_row = connection.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
-        (_SOURCE_TABLE,),
-    ).fetchone()
-    table_sql = "" if table_sql_row is None else str(table_sql_row[0] or "")
-    normalized_table_sql = " ".join(table_sql.split())
-    required_fragments = (
-        "CHECK (attempt_number >= 1)",
-        "UNIQUE (run_id, observed_generation, artifact_sha256, attempt_number)",
-        "UNIQUE (predecessor_move_source_id)",
-    )
-    if any(fragment not in normalized_table_sql for fragment in required_fragments):
-        raise RuntimeError("ONT move-source attempt-lineage constraints diverged")
     source_fks = {
         (str(row[3]), str(row[2]), str(row[4]), str(row[6]))
         for row in connection.execute(

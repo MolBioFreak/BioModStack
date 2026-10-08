@@ -2356,12 +2356,50 @@ class MdReconcilerLease(Base):
 # MSACache removed - now using file-based caching (see BMS_MSA_CACHE).
 
 
+_ONT_RECEIPT_COLUMN_CONTRACT = (
+    ("id", "VARCHAR(128)", 1, None, 1),
+    ("candidate_id", "VARCHAR(64)", 1, None, 0),
+    ("run_id", "VARCHAR(80)", 1, None, 0),
+    ("observed_generation", "INTEGER", 1, None, 0),
+    ("raw_representation_id", "VARCHAR(96)", 1, None, 0),
+    ("server_relative_path", "TEXT", 1, None, 0),
+    ("root_device", "INTEGER", 1, None, 0),
+    ("root_inode", "INTEGER", 1, None, 0),
+    ("file_device", "INTEGER", 1, None, 0),
+    ("file_inode", "INTEGER", 1, None, 0),
+    ("file_mtime_ns", "INTEGER", 1, None, 0),
+    ("file_ctime_ns", "INTEGER", 1, None, 0),
+    ("artifact_sha256", "VARCHAR(64)", 1, None, 0),
+    ("artifact_size_bytes", "INTEGER", 1, None, 0),
+    ("molecule_type", "VARCHAR(16)", 1, None, 0),
+    ("created_at", "VARCHAR", 1, None, 0),
+)
+_ONT_RECEIPT_INDEX_CONTRACT = frozenset(
+    {
+        (True, ("id",)),
+        (True, ("run_id", "observed_generation", "raw_representation_id", "candidate_id", "molecule_type")),
+        (False, ("run_id", "observed_generation")),
+    }
+)
+_ONT_RECEIPT_FOREIGN_KEY_CONTRACT = frozenset(
+    {
+        ("raw_representation_id", "ont_raw_signal_representations", "id", "NO ACTION", "RESTRICT", "NONE"),
+        ("run_id", "ont_instrument_runs", "id", "NO ACTION", "RESTRICT", "NONE"),
+    }
+)
+_ONT_RECEIPT_SQL_FRAGMENTS = (
+    "CHECK (artifact_size_bytes > 0)",
+    "CHECK (molecule_type IN ('dna','rna'))",
+)
+
+
 def _attest_sqlite_migration_33(db_path: str) -> None:
     """Prove migration 33 ledger and schema authority without synthesizing history."""
     from migrations.add_ont_external_move_bam_receipts import (
         MIGRATION_33_TRIGGER_SQL_DIGESTS,
         migration_33_trigger_sql_digest,
     )
+    from migrations.ont_sqlite_schema_contract import assert_sqlite_table_contract
     from migrations import runner as migration_runner
 
     with sqlite3.connect(db_path) as connection:
@@ -2380,6 +2418,18 @@ def _attest_sqlite_migration_33(db_path: str) -> None:
         next(migration for migration in migration_runner.MIGRATIONS if migration.version == 33)
     )
     with sqlite3.connect(db_path) as connection:
+        try:
+            assert_sqlite_table_contract(
+                connection,
+                table_name="ont_external_move_bam_registration_receipts",
+                columns=_ONT_RECEIPT_COLUMN_CONTRACT,
+                indexes=_ONT_RECEIPT_INDEX_CONTRACT,
+                foreign_keys=_ONT_RECEIPT_FOREIGN_KEY_CONTRACT,
+                sql_fragments=_ONT_RECEIPT_SQL_FRAGMENTS,
+                label="ONT external move-BAM receipt table",
+            )
+        except RuntimeError as exc:
+            raise RuntimeError("migration 33 startup attestation failed") from exc
         ledger = connection.execute(
             "SELECT name, content_sha256 FROM schema_migrations WHERE version=33"
         ).fetchone()
