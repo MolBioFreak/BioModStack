@@ -482,8 +482,18 @@ async def launch_nextflow_job(
                         stage = 'boltz2' # Frontend uses boltz2
                     elif 'rf3' in stage_clean:
                         stage = 'rf3'
-                    elif 'proteinmpnn' in stage_clean or 'mpnn' in stage_clean:
-                        stage = 'proteinmpnn'
+                    # ──────────────────────────────────────────────────────────────
+                    # MPNN VARIANTS - Check specific variants BEFORE generic 'mpnn'
+                    # Order matters: most specific first, generic last
+                    # ──────────────────────────────────────────────────────────────
+                    elif 'frustra' in stage_clean:
+                        stage = 'frustrampnn'  # FrustraMPNN (frustration analysis)
+                    elif 'ligandmpnn' in stage_clean or 'ligand_mpnn' in stage_clean:
+                        stage = 'ligandmpnn'   # LigandMPNN (ligand-aware design)
+                    elif 'thermompnn' in stage_clean or 'thermo_mpnn' in stage_clean:
+                        stage = 'thermompnn'   # ThermoMPNN (thermal stability)
+                    elif 'proteinmpnn' in stage_clean or ('mpnn' in stage_clean and 'fa' not in stage_clean):
+                        stage = 'proteinmpnn'  # ProteinMPNN (vanilla)
                     elif 'af2' in stage_clean:
                         stage = 'af2'
                     elif 'rfdiffusion' in stage_clean:
