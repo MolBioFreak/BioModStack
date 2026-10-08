@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -81,5 +82,48 @@ async def test_jobs_list_summary_omits_heavy_fields_but_keeps_rows_selectable(tm
     assert full_job["params"]["antibody_chains"] == "H"
     assert len(full_job["provenance"]["selected_design_ids"]) == 1000
     assert len(full_job["stage_outputs"]["fampnn"]) == 250
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_jobs_list_tolerates_rfc3339_z_timestamp_rows(tmp_path: Path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'jobs-z-timestamps.db'}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(
+            text(
+                """
+                INSERT INTO jobs (
+                    id, name, status, model_id, mode, params,
+                    created_at, completed_at, queue_status
+                ) VALUES (
+                    'job-z-timestamp', 'imported z timestamp job', 'completed',
+                    'external_import', 'structure_import', '{}',
+                    '2026-07-05T03:55:04.487348Z',
+                    '2026-07-05T03:55:04.487348Z',
+                    'completed'
+                )
+                """
+            )
+        )
+
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    async def override_get_session():
+        async with session_factory() as session:
+            yield session
+
+    app = FastAPI()
+    app.dependency_overrides[jobs_router.get_session] = override_get_session
+    app.include_router(jobs_router.router, prefix="/api/jobs")
+    client = TestClient(app)
+
+    response = client.get("/api/jobs", params={"limit": 10})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["jobs"][0]["id"] == "job-z-timestamp"
+    assert payload["jobs"][0]["created_at"].startswith("2026-07-05T03:55:04.487348")
 
     await engine.dispose()

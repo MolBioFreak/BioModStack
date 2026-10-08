@@ -1,4 +1,7 @@
+from datetime import datetime, timedelta, timezone
+
 from routers.nucleotide_sequences import (
+    _sortable_timestamp,
     clean_sequence,
     molecule_label_for,
     normalize_molecule_orientation,
@@ -43,3 +46,12 @@ def test_backend_persists_ds_ss_dna_rna_strandedness_and_orientation() -> None:
         assert normalized_strandedness == strandedness
         assert normalized_orientation == orientation
         assert molecule_label_for(sequence_type, normalized_strandedness, normalized_orientation) == label
+
+
+def test_sortable_timestamp_normalizes_none_naive_and_offset_aware_values() -> None:
+    naive = datetime(2026, 7, 12, 8, 30)
+    eastern = datetime(2026, 7, 12, 4, 30, tzinfo=timezone(timedelta(hours=-4)))
+
+    assert _sortable_timestamp(None) == datetime.min.replace(tzinfo=timezone.utc)
+    assert _sortable_timestamp(naive) == datetime(2026, 7, 12, 8, 30, tzinfo=timezone.utc)
+    assert _sortable_timestamp(eastern) == datetime(2026, 7, 12, 8, 30, tzinfo=timezone.utc)
