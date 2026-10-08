@@ -12,41 +12,78 @@ The repo is not just a protein-design launcher. The live system spans structure
 design, binder refinement, sequence design, docking, analysis, nanopore
 sequencing, molecular biology tooling, and a BioXP robotics control surface.
 
-## Current Tool Surface
+## Live Workflow and Model Surface
 
-### Backbone and generative design
+### Antibody and binder workflows
 
-- RFantibody
-- RFdiffusion
-- BindCraft
-- BoltzGen
-- Oligo Designer / RFDpoly
-- Protein local redesign
+- Antibody de novo and staged refinement:
+  RFantibody, FAMPNN, AntiFold, ProteinMPNN, Boltz-2, Protenix,
+  ThermoMPNN, AntiBERTy, IgGM, OpenMM, and PPIFlow-linked review stages.
+- Antibody toolkit / shell-driven design modes:
+  template-driven antibody setup, nanobody/VHH flows, and antibody review /
+  resume paths.
+- Generic binder generation and redesign:
+  RFdiffusion, BindCraft, BoltzGen, and constrained protein local redesign.
+- Oligomer / nucleic-acid-aware generation:
+  Oligo Designer / RFDpoly.
 
-### Sequence design and redesign
+### Prediction, validation, and redesign models
 
-- FAMPNN
-- AntiFold
-- ProteinMPNN
-- IgGM
-- FrustraMPNN
+- Structure prediction:
+  AlphaFold2, RF3, Boltz-2, Protenix, and ImmuneBuilder-facing antibody
+  structure prediction.
+- Sequence design and redesign:
+  FAMPNN, ProteinMPNN, LigandMPNN, AntiFold, FrustraMPNN, and IgGM.
+- Mutation and local edit surfaces:
+  mutagenesis and local structure redesign workflows.
 
-### Prediction and validation
+### Docking, scoring, and post-processing
 
-- Boltz-2
-- Protenix
-- AlphaFold2
-- RF3
-- ImmuneBuilder-facing antibody structure prediction
+- Docking:
+  DiffDock, Uni-Dock, and the generic docking wrapper surface.
+- Scoring / analysis / cleanup:
+  OpenMM, ThermoMPNN, AntiBERTy, and ANARCI / ANARCII.
 
-### Docking and post-processing
+### Sequencing, molecular biology, and operations systems
 
-- DiffDock
-- Uni-Dock
-- OpenMM
-- ThermoMPNN
-- AntiBERTy
-- ANARCI / ANARCII
+- Nanopore / NGS:
+  Oxford Nanopore launch + review, Dorado basecalling/alignment, modkit
+  methylation reporting, plasmid QC, and IGV-ready outputs.
+- Molecular biology toolkit:
+  DNA/RNA sequence libraries, construct editing, annotation, restriction-site
+  mapping, primer design, PCR, Gibson, Golden Gate, search, diagnostics, and
+  RNA secondary-structure review.
+- Workstation and robotics:
+  dashboard, results/review UI, infra telemetry and scheduler controls, BioXP
+  cockpit, local GTK launchers, and system tray tooling.
+
+### Model registry entrypoints
+
+The current top-level model registry includes:
+
+- `af2`
+- `antibody_denovo`
+- `antibody_design`
+- `bindcraft`
+- `boltz2`
+- `boltzgen`
+- `diffdock`
+- `docking`
+- `fampnn`
+- `ligandmpnn`
+- `mutagenesis`
+- `nanopore`
+- `oligo_design`
+- `protein_local_redesign`
+- `proteinmpnn`
+- `protenix`
+- `rf3`
+- `rfdiffusion`
+- `unidock`
+
+There are also internal child/orchestrator entries such as
+`antibody_child`, `rfantibody_child`, `fampnn_child`, and `boltzgen_child`
+that exist for execution flow but are not primary user launch targets.
 
 ## What BMS Covers
 
@@ -65,13 +102,14 @@ sequencing, molecular biology tooling, and a BioXP robotics control surface.
 
 - Job, design, and lineage tracking in the API database.
 - Persisted design analyses, review metadata, and stage-aware output tracking.
-- Results/analytics views for structure confidence, lineage, and stage outputs.
+- Results/analytics views for structure confidence, lineage, stage outputs,
+  cached analyses, and design provenance.
 
 ### Molecular biology
 
 - Sequence library management for DNA and RNA constructs.
 - Construct import, editing, annotation, primers, digest, PCR, Gibson, Golden
-  Gate, search, and GC-content visualization.
+  Gate, search, sequence diagnostics, and RNA-aware review tooling.
 
 ### Sequencing / NGS
 
@@ -83,6 +121,24 @@ sequencing, molecular biology tooling, and a BioXP robotics control surface.
 
 - BioXP remote cockpit for daemon linkage, remote status, cameras, motion
   control, thermal/chiller controls, and interlock-aware device actions.
+
+## Main UI Surfaces
+
+- `/`
+  dashboard with quick structure viewing, live queue state, GPU scheduler, and
+  telemetry
+- `/submit`
+  job launcher across workflow families
+- `/results`, `/designs`, `/jobs/:jobId`
+  results, lineage, analytics, and job detail review
+- `/designer`
+  molecular biology toolkit
+- `/ngs`
+  nanopore / sequencing toolkit
+- `/infra`
+  workstation telemetry and controls
+- `/bioxp`
+  BioXP robotics cockpit
 
 ## Quick Start
 
