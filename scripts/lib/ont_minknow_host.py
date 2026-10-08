@@ -141,7 +141,10 @@ def normalize_protocol_run(run: Any) -> dict[str, Any]:
 
 def normalize_protocol_runs(payload: Any) -> list[dict[str, Any]]:
     runs = _message_repeated(payload, "protocol_runs") or _message_repeated(payload, "runs")
-    return [normalize_protocol_run(run) for run in runs]
+    if runs:
+        return [normalize_protocol_run(run) for run in runs]
+    run_ids = _message_repeated(payload, "run_ids")
+    return [{"run_id": _string_or_none(run_id) or str(run_id)} for run_id in run_ids]
 
 
 def normalize_acquisition_run(run: Any) -> dict[str, Any]:
@@ -155,7 +158,10 @@ def normalize_acquisition_run(run: Any) -> dict[str, Any]:
 
 def normalize_acquisition_runs(payload: Any) -> list[dict[str, Any]]:
     runs = _message_repeated(payload, "acquisition_runs") or _message_repeated(payload, "runs")
-    return [normalize_acquisition_run(run) for run in runs]
+    if runs:
+        return [normalize_acquisition_run(run) for run in runs]
+    run_ids = _message_repeated(payload, "run_ids")
+    return [{"run_id": _string_or_none(run_id) or str(run_id)} for run_id in run_ids]
 
 def normalize_current_protocol(protocol_run: Any) -> dict[str, Any] | None:
     if protocol_run is None:
@@ -165,6 +171,10 @@ def normalize_current_protocol(protocol_run: Any) -> dict[str, Any] | None:
         value = _safe_get(protocol_run, key)
         if value is not None:
             result[key] = _string_or_none(value) or value
+    protocol_text = str(result.get("protocol_id") or "").lower()
+    raw_text = str(protocol_run).lower()
+    if "hardware_check" in protocol_text or "hardware_validation" in protocol_text or "hardwarecheck" in raw_text:
+        result["hardware_check_like"] = True
     return result or {"raw": str(protocol_run)}
 
 
@@ -263,7 +273,7 @@ def normalize_position(position: Any) -> dict[str, Any]:
         "current_protocol": current_protocol,
         "protocol_runs": protocol_runs,
         "acquisition_runs": acquisition_runs,
-        "hardware_check_runs": [run for run in protocol_runs if run.get("hardware_check_like")],
+        "hardware_check_runs": ([current_protocol] if current_protocol and current_protocol.get("hardware_check_like") else []) + [run for run in protocol_runs if run.get("hardware_check_like")],
         "rpc_ports": {"secure": secure_port} if secure_port is not None else {},
         "connection_error": connection_error,
     }
