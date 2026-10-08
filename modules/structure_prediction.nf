@@ -27,7 +27,9 @@ process GenerateLocalMSA {
     def useGpu = params.msa_use_gpu != false ? "" : "--cpu-only"
     def refSeq = params.msa_reference_sequence ? "--reference-sequence \"${params.msa_reference_sequence}\"" : ""
     def forceRefresh = params.msa_force_refresh ? "--force_refresh" : ""
-    // MSA Quality Parameters
+    // MSA Quality Preset (Maximum/Balanced/Fast)
+    def msaPreset = params.msa_preset ?: "maximum"
+    // MSA Quality Parameters (can override preset)
     def evalue = params.msa_evalue ? "--evalue ${params.msa_evalue}" : ""
     def sensitivity = params.msa_sensitivity ? "--sensitivity ${params.msa_sensitivity}" : ""
     def minSeqId = params.msa_min_seq_id ? "--min-seq-id ${params.msa_min_seq_id}" : ""
@@ -43,6 +45,7 @@ process GenerateLocalMSA {
         --db_path ${dbPath} \\
         --cache_dir ${cacheDir} \\
         --threads ${threads} \\
+        --preset ${msaPreset} \\
         --min-depth-warning ${minDepthWarning} \\
         --min-depth-fail ${minDepthFail} \\
         ${useGpu} \\
@@ -412,6 +415,7 @@ process BoltzFromComplex {
     def msaForceRefresh = params.msa_force_refresh ? "true" : "false"
     def useMsa = params.boltz_use_msa == null || params.boltz_use_msa.toString() == 'true'
     // MSA Quality Parameters
+    def msaPreset = params.msa_preset ?: "maximum"
     def msaTaxonList = params.msa_taxon_list ?: ""
     def msaEvalue = params.msa_evalue ?: "0.001"
     def msaMinSeqId = params.msa_min_seq_id ?: ""
@@ -449,6 +453,7 @@ use_msa = "${useMsa}" == "true"
 force_refresh = "${msaForceRefresh}" == "true"
 complex_name = "${complex_name}"
 # MSA Quality params
+msa_preset = "${msaPreset}"
 msa_taxon_list = "${msaTaxonList}"
 msa_evalue = "${msaEvalue}"
 msa_min_seq_id = "${msaMinSeqId}"
@@ -509,13 +514,14 @@ for comp in complex_def.get("components", []):
                         "--out_dir", msa_dir,
                         "--db_path", msa_db_path,
                         "--cache_dir", cache_dir,
-                        "--threads", str(msa_threads)
+                        "--threads", str(msa_threads),
+                        "--preset", msa_preset
                     ]
                     if ref_seq:
                         cmd.extend(["--reference-sequence", ref_seq])
                     if force_refresh:
                         cmd.append("--force_refresh")
-                    # Add MSA quality params
+                    # Add MSA quality params (can override preset)
                     if msa_taxon_list:
                         cmd.extend(["--taxon-list", msa_taxon_list])
                     if msa_evalue:
@@ -609,7 +615,8 @@ for comp in complex_def.get("components", []):
                         "--out_dir", "msa",
                         "--db_path", msa_db_path,
                         "--cache_dir", cache_dir,
-                        "--threads", str(msa_threads)
+                        "--threads", str(msa_threads),
+                        "--preset", msa_preset
                     ]
                     result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
                     if result.returncode == 0 and Path(msa_file).exists():

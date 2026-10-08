@@ -48,6 +48,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
 
     // MSA Quality Options (advanced)
     const [showMsaOptions, setShowMsaOptions] = useState(false);
+    const [msaPreset, setMsaPreset] = useState<'maximum' | 'balanced' | 'fast'>(initialValues?.msa_preset || 'maximum');
     const [msaTaxonomy, setMsaTaxonomy] = useState<string>(initialValues?.msa_taxon_list || '');
     const [msaEvalue, setMsaEvalue] = useState<string>(initialValues?.msa_evalue?.toString() || '0.001');
     const [msaMinSeqId, setMsaMinSeqId] = useState<string>(initialValues?.msa_min_seq_id?.toString() || '');
@@ -123,6 +124,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
 
         // MSA Quality parameters (when MSA is enabled)
         if ((predictor === 'boltz' && boltzUseMsa) || (predictor === 'rf3' && rf3UseMsa) || predictor === 'both') {
+            params.msa_preset = msaPreset;  // Maximum (default), Balanced, or Fast
             if (msaTaxonomy) params.msa_taxon_list = msaTaxonomy;
             if (msaEvalue) params.msa_evalue = parseFloat(msaEvalue);
             if (msaMinSeqId) params.msa_min_seq_id = parseFloat(msaMinSeqId);
@@ -578,9 +580,49 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                         </button>
                         {showMsaOptions && (
                             <div className="p-4 space-y-4 bg-[var(--bg-secondary)]">
+                                {/* MSA Quality Preset - Primary Setting */}
+                                <div>
+                                    <label className="text-sm font-medium text-[var(--text-primary)] block mb-2">MSA Quality Preset</label>
+                                    <div className="grid grid-cols-3 gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => setMsaPreset('maximum')}
+                                            className={`p-3 rounded-lg border text-left transition-colors ${msaPreset === 'maximum'
+                                                    ? 'border-[var(--accent-primary)] bg-[var(--accent-primary)]/10'
+                                                    : 'border-[var(--border-primary)] hover:border-[var(--border-secondary)]'
+                                                }`}
+                                        >
+                                            <div className="text-sm font-medium text-[var(--text-primary)]">Maximum</div>
+                                            <div className="text-xs text-[var(--text-muted)] mt-1">Full ColabFold workflow with environmental DB. Best quality. ~15-30s</div>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setMsaPreset('balanced')}
+                                            className={`p-3 rounded-lg border text-left transition-colors ${msaPreset === 'balanced'
+                                                    ? 'border-[var(--accent-primary)] bg-[var(--accent-primary)]/10'
+                                                    : 'border-[var(--border-primary)] hover:border-[var(--border-secondary)]'
+                                                }`}
+                                        >
+                                            <div className="text-sm font-medium text-[var(--text-primary)]">Balanced</div>
+                                            <div className="text-xs text-[var(--text-muted)] mt-1">Environmental search, no expansion. Good quality. ~8-15s</div>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setMsaPreset('fast')}
+                                            className={`p-3 rounded-lg border text-left transition-colors ${msaPreset === 'fast'
+                                                    ? 'border-[var(--accent-primary)] bg-[var(--accent-primary)]/10'
+                                                    : 'border-[var(--border-primary)] hover:border-[var(--border-secondary)]'
+                                                }`}
+                                        >
+                                            <div className="text-sm font-medium text-[var(--text-primary)]">Fast</div>
+                                            <div className="text-xs text-[var(--text-muted)] mt-1">UniRef30 only. Quick screening. ~3-5s</div>
+                                        </button>
+                                    </div>
+                                </div>
+
                                 <p className="text-xs text-[var(--text-muted)]">
-                                    These options control the MSA (Multiple Sequence Alignment) search.
-                                    Use taxonomy filtering to restrict to relevant organisms and prevent false positive hits.
+                                    Advanced options below can override preset defaults.
+                                    Use taxonomy filtering to restrict to relevant organisms.
                                 </p>
                                 <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                                     {/* Taxonomy Filter */}
