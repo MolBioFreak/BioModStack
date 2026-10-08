@@ -671,24 +671,29 @@ export function JobSubmission() {
                                     <p className="text-slate-400 text-sm">Choose a preset workflow for your experiment goal:</p>
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                         {[
-                                            // Dynamic templates from API (filter out boltzgen_ligand - using hardcoded version)
-                                            ...(templatesData?.data ?? []).filter((t: any) => t.id !== 'boltzgen_ligand'),
-                                            // Hardcoded Mutagenesis Template
-                                            {
+                                            // Dynamic templates from API - filter out hidden/removed templates
+                                            ...(templatesData?.data ?? []).filter((t: any) =>
+                                                // Remove: boltzgen_ligand (using hardcoded), binder_design, structure_validation
+                                                !['boltzgen_ligand', 'binder_design', 'structure_validation'].includes(t.id) &&
+                                                // Hide dna_polymerase unless debug mode
+                                                (t.id !== 'dna_polymerase' || (window as any).__DEBUG_MODE__)
+                                            ),
+                                            // Hardcoded Mutagenesis Template - DEBUG: mainly for orchestrator testing
+                                            ...((window as any).__DEBUG_MODE__ ? [{
                                                 id: 'mutagenesis',
-                                                name: 'Mutagenesis Library',
-                                                description: 'Generate amino acid variants and predict their structures. Supports random libraries and manual editing.',
+                                                name: 'Mutagenesis Library [DEBUG]',
+                                                description: 'Generate amino acid variants and predict their structures. DEBUG: Used for orchestrator testing.',
                                                 icon: 'dna',
                                                 color: '#A855F7', // Purple
                                                 stages: [
                                                     { tool: 'Library Gen' },
                                                     { tool: 'Structure Prediction' }
                                                 ]
-                                            },
-                                            // De Novo Antibody Design Workflow
+                                            }] : []),
+                                            // RFantibody+ (De Novo Antibody Design)
                                             {
                                                 id: 'antibody_denovo',
-                                                name: 'De Novo Antibody Design',
+                                                name: 'RFantibody+',
                                                 description: 'Generate novel antibodies targeting an antigen. Uses RFantibody for backbone generation, FAMPNN for sequence design, and Boltz2 for validation.',
                                                 icon: 'flask',
                                                 color: '#10B981', // Emerald
@@ -699,10 +704,10 @@ export function JobSubmission() {
                                                     { tool: 'AntiBERTy' }
                                                 ]
                                             },
-                                            // Ligand-Aware Binder Design (BoltzGen)
+                                            // BoltzGEN (Ligand-Aware Binder Design)
                                             {
                                                 id: 'boltzgen_design',
-                                                name: 'Ligand-Aware Binder',
+                                                name: 'BoltzGEN',
                                                 description: 'Design proteins that bind small molecules, NTPs, or other ligands. Uses BoltzGen for all-atom structure generation with optional docking validation.',
                                                 icon: 'pill',
                                                 color: '#F59E0B', // Amber
