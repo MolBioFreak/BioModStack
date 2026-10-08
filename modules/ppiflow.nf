@@ -29,11 +29,7 @@ process IdentifyAnchorResidues {
 process RunPartialFlow {
     label 'gpu'
     container "${params.container_dir}/ppiflow.sif"
-    ext {
-        containerOptions = params.ppiflow_weights_dir
-            ? "--bind ${params.ppiflow_weights_dir}:/opt/ppiflow/ckpt"
-            : ""
-    }
+    containerOptions { params.ppiflow_weights_dir ? "--nv --bind ${params.ppiflow_weights_dir}:/opt/ppiflow/ckpt" : "--nv" }
 
     input:
     tuple val(meta), path(complex_pdb), path(anchors_json), path(cdr_positions)
@@ -285,12 +281,12 @@ process FilterByMaturation {
 
     output:
     tuple val(meta), path("filtered_output/*.pdb"), emit: pdbs, optional: true
-    path("${meta.id}_maturation_filter.json"), emit: filter_reports
+    path ("${meta.id}_maturation_filter.json"), emit: filter_reports
 
     script:
     def minImprovement = params.maturation_min_improvement ?: -1.0
     def percentile = params.maturation_filter_percentile
-    def percentileArg = (percentile != null && percentile > 0) ? "--percentile ${percentile}" : ""
+    def percentileArg = percentile != null && percentile > 0 ? "--percentile ${percentile}" : ""
     """
     python /scripts/filter_maturation.py \\
         --score_json "${score_json}" \\
