@@ -562,8 +562,9 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
     });
 
     const miniConfig = { responsive: true, displayModeBar: true };
-    const chartStyle = { width: '100%', height: '500px' };
-    const chart3DStyle = { width: '100%', height: '600px' };
+    const chartStyle = { width: '100%', height: '280px' };  // Compact for 4-col grid
+    const chart3DStyle = { width: '100%', height: '450px' };
+    const scatterStyle = { width: '100%', height: '350px' };  // Medium for 2-col scatter plots
 
     if (designs.length === 0) {
         return (
@@ -855,12 +856,14 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
                                 type: 'heatmap',
                                 z: paeMatrix.pae_matrix,
                                 colorscale: [
-                                    [0, '#1e3a5f'],
-                                    [0.1, '#2196f3'],
-                                    [0.25, '#4caf50'],
-                                    [0.5, '#ffeb3b'],
-                                    [0.75, '#ff9800'],
-                                    [1, '#f44336']
+                                    [0, '#0d1f2d'],       // Very dark blue-gray (best alignment)
+                                    [0.1, '#1a4a5e'],    // Deep teal
+                                    [0.25, '#2d8a8a'],   // Soft teal
+                                    [0.4, '#4fb3a0'],    // Seafoam green
+                                    [0.55, '#90cfa0'],   // Sage green
+                                    [0.7, '#d4e8b0'],    // Pale lime
+                                    [0.85, '#f5e8c0'],   // Soft cream
+                                    [1, '#f8d8c8']       // Warm peach (worst alignment)
                                 ],
                                 zmin: 0,
                                 zmax: 30,
@@ -909,51 +912,59 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
                 )}
             </div>
 
-            {/* Chart Grid - 2 columns for larger charts */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Chart Grid - 4 columns for histograms, 2 for scatter plots */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
 
-                {/* Row 1: Scatter plots */}
-                <ChartCard
-                    title="pLDDT vs PAE"
-                    hasData={hasScatterData('plddt_overall', 'pae_overall')}
-                    isHidden={hiddenCharts.has('plddt-pae')}
-                    onToggleHidden={() => toggleHidden('plddt-pae')}
-                    onToggleExpanded={() => setExpandedChart('plddt-pae')}
-                >
-                    <Plot data={makeScatter('plddt_overall', 'pae_overall', 'iptm')} layout={miniLayout()} config={miniConfig} style={chartStyle} onSelected={handlePlotlySelect} />
-                </ChartCard>
+                {/* Row 1: Scatter plots - span 2 columns each */}
+                <div className="col-span-2">
+                    <ChartCard
+                        title="pLDDT vs PAE"
+                        hasData={hasScatterData('plddt_overall', 'pae_overall')}
+                        isHidden={hiddenCharts.has('plddt-pae')}
+                        onToggleHidden={() => toggleHidden('plddt-pae')}
+                        onToggleExpanded={() => setExpandedChart('plddt-pae')}
+                    >
+                        <Plot data={makeScatter('plddt_overall', 'pae_overall', 'iptm')} layout={miniLayout()} config={miniConfig} style={scatterStyle} onSelected={handlePlotlySelect} />
+                    </ChartCard>
+                </div>
 
-                <ChartCard
-                    title="Confidence vs iPTM"
-                    hasData={hasScatterData('conf_score', 'iptm')}
-                    isHidden={hiddenCharts.has('conf-iptm')}
-                    onToggleHidden={() => toggleHidden('conf-iptm')}
-                    onToggleExpanded={() => setExpandedChart('conf-iptm')}
-                >
-                    <Plot data={makeScatter('conf_score', 'iptm', 'plddt_overall')} layout={miniLayout()} config={miniConfig} style={chartStyle} onSelected={handlePlotlySelect} />
-                </ChartCard>
+                <div className="col-span-2">
+                    <ChartCard
+                        title="Confidence vs iPTM"
+                        hasData={hasScatterData('conf_score', 'iptm')}
+                        isHidden={hiddenCharts.has('conf-iptm')}
+                        onToggleHidden={() => toggleHidden('conf-iptm')}
+                        onToggleExpanded={() => setExpandedChart('conf-iptm')}
+                    >
+                        <Plot data={makeScatter('conf_score', 'iptm', 'plddt_overall')} layout={miniLayout()} config={miniConfig} style={scatterStyle} onSelected={handlePlotlySelect} />
+                    </ChartCard>
+                </div>
 
-                <ChartCard
-                    title="Affinity vs Binder Prob."
-                    hasData={hasScatterData('affinity_score', 'binder_probability')}
-                    isHidden={hiddenCharts.has('affinity-binder')}
-                    onToggleHidden={() => toggleHidden('affinity-binder')}
-                    onToggleExpanded={() => setExpandedChart('affinity-binder')}
-                >
-                    <Plot data={makeScatter('affinity_score', 'binder_probability', 'plddt_overall')} layout={miniLayout()} config={miniConfig} style={chartStyle} onSelected={handlePlotlySelect} />
-                </ChartCard>
+                <div className="col-span-2">
+                    <ChartCard
+                        title="Affinity vs Binder Prob."
+                        hasData={hasScatterData('affinity_score', 'binder_probability')}
+                        isHidden={hiddenCharts.has('affinity-binder')}
+                        onToggleHidden={() => toggleHidden('affinity-binder')}
+                        onToggleExpanded={() => setExpandedChart('affinity-binder')}
+                    >
+                        <Plot data={makeScatter('affinity_score', 'binder_probability', 'plddt_overall')} layout={miniLayout()} config={miniConfig} style={scatterStyle} onSelected={handlePlotlySelect} />
+                    </ChartCard>
+                </div>
 
-                <ChartCard
-                    title="pLDDT vs RoG"
-                    hasData={hasScatterData('plddt_overall', 'rog')}
-                    isHidden={hiddenCharts.has('plddt-rog')}
-                    onToggleHidden={() => toggleHidden('plddt-rog')}
-                    onToggleExpanded={() => setExpandedChart('plddt-rog')}
-                >
-                    <Plot data={makeScatter('plddt_overall', 'rog', 'mpnn_score')} layout={miniLayout()} config={miniConfig} style={chartStyle} onSelected={handlePlotlySelect} />
-                </ChartCard>
+                <div className="col-span-2">
+                    <ChartCard
+                        title="pLDDT vs RoG"
+                        hasData={hasScatterData('plddt_overall', 'rog')}
+                        isHidden={hiddenCharts.has('plddt-rog')}
+                        onToggleHidden={() => toggleHidden('plddt-rog')}
+                        onToggleExpanded={() => setExpandedChart('plddt-rog')}
+                    >
+                        <Plot data={makeScatter('plddt_overall', 'rog', 'mpnn_score')} layout={miniLayout()} config={miniConfig} style={scatterStyle} onSelected={handlePlotlySelect} />
+                    </ChartCard>
+                </div>
 
-                {/* Row 2: Histograms */}
+                {/* Row 2: Histograms - 1 column each = 4 per row */}
                 <ChartCard
                     title="pLDDT Distribution"
                     hasData={hasHistogramData('plddt_overall')}
