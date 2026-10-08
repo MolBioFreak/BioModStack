@@ -10,7 +10,8 @@ import socket
 import uuid
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Job, MdReconcilerLease, MdReplicaRun, MdRun
@@ -48,15 +49,18 @@ async def acquire_reconciler_lease(
     session: AsyncSession, *, owner_id: str, lease_seconds: int = 60,
 ) -> bool:
     now = datetime.utcnow(); expires = now + timedelta(seconds=lease_seconds)
-    lease = await session.get(MdReconcilerLease, "md-lifecycle")
-    if lease is None:
-        session.add(MdReconcilerLease(name="md-lifecycle", owner_id=owner_id,
-                                      expires_at=expires, updated_at=now))
-        await session.flush(); return True
-    if lease.owner_id != owner_id and lease.expires_at > now:
-        return False
-    lease.owner_id = owner_id; lease.expires_at = expires; lease.updated_at = now
-    await session.flush(); return True
+    statement = sqlite_insert(MdReconcilerLease).values(
+        name="md-lifecycle", owner_id=owner_id, expires_at=expires, updated_at=now,
+    ).on_conflict_do_update(
+        index_elements=[MdReconcilerLease.name],
+        set_={"owner_id": owner_id, "expires_at": expires, "updated_at": now},
+        where=or_(
+            MdReconcilerLease.owner_id == owner_id,
+            MdReconcilerLease.expires_at <= now,
+        ),
+    )
+    result = await session.execute(statement)
+    return result.rowcount == 1
 
 
 async def reconcile_md_state(
