@@ -134,6 +134,11 @@ export function Layout({ children }: LayoutProps) {
     const isActive = (path: string) => location.pathname === path;
     const showSystemMenus = location.pathname !== '/ngs';
 
+    useEffect(() => {
+        const activeTab = document.querySelector<HTMLElement>('[data-bms-primary-nav-active="true"]');
+        activeTab?.scrollIntoView({ block: 'nearest', inline: 'center' });
+    }, [location.pathname, showSystemAnalyticsTab]);
+
     const handleSetShowSystemAnalyticsTab = (enabled: boolean) => {
         setShowSystemAnalyticsTab(enabled);
         try {
@@ -161,118 +166,139 @@ export function Layout({ children }: LayoutProps) {
                 }}
             >
                 <div className="max-w-7xl mx-auto px-2 sm:px-3 lg:px-4">
-                    <div className="flex items-center justify-between h-16 min-w-0 gap-3">
-                        <DiagnosticsMenu />
-                        {/* Logo / Brand */}
-                        <Link to="/" className="flex items-center shrink-0">
-                            <span
-                                className="text-lg font-bold whitespace-nowrap"
-                                style={{
-                                    color: 'var(--accent-primary)'
-                                }}
-                            >
-                                <span className="inline 2xl:hidden">BMS</span>
-                                <span className="hidden 2xl:inline">BioModStack</span>
-                            </span>
-                        </Link>
+                    <div className="flex min-w-0 flex-col gap-2 py-2 xl:h-16 xl:flex-row xl:items-center xl:gap-3 xl:py-0">
+                        <div className="flex items-center gap-2 shrink-0" data-bms-topbar-left="true">
+                            <DiagnosticsMenu />
+                            {/* Logo / Brand */}
+                            <Link to="/" className="flex items-center shrink-0">
+                                <span
+                                    className="text-lg font-bold whitespace-nowrap"
+                                    style={{
+                                        color: 'var(--accent-primary)'
+                                    }}
+                                >
+                                    <span className="inline 2xl:hidden">BMS</span>
+                                    <span className="hidden 2xl:inline">BioModStack</span>
+                                </span>
+                            </Link>
+                        </div>
 
                         {/* Navigation Links */}
-                        <div className="flex items-center gap-1.5 min-w-0 flex-1 ml-2">
-                            <Link
-                                to="/"
-                                className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all shrink-0 whitespace-nowrap"
-                                style={{
-                                    backgroundColor: isActive('/') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
-                                    color: isActive('/') ? 'var(--accent-primary)' : 'var(--text-secondary)'
-                                }}
-                            >
-                                <span className="inline 2xl:hidden">Home</span>
-                                <span className="hidden 2xl:inline">Dashboard</span>
-                            </Link>
-                            <Link
-                                to="/submit"
-                                className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all shrink-0 whitespace-nowrap"
-                                style={{
-                                    backgroundColor: isActive('/submit') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
-                                    color: isActive('/submit') ? 'var(--accent-primary)' : 'var(--text-secondary)'
-                                }}
-                            >
-                                <span className="inline 2xl:hidden">Launcher</span>
-                                <span className="hidden 2xl:inline">Job Launcher</span>
-                            </Link>
-                            <Link
-                                to="/designs"
-                                className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all shrink-0 whitespace-nowrap"
-                                style={{
-                                    backgroundColor: isActive('/designs') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
-                                    color: isActive('/designs') ? 'var(--accent-primary)' : 'var(--text-secondary)'
-                                }}
-                            >
-                                <span className="inline 2xl:hidden">Viewer</span>
-                                <span className="hidden 2xl:inline">Data Viewer</span>
-                            </Link>
-                            <Link
-                                to="/designer"
-                                className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap shrink-0"
-                                style={{
-                                    backgroundColor: isActive('/designer') ? 'color-mix(in srgb, var(--success) 20%, transparent)' : 'transparent',
-                                    color: isActive('/designer') ? 'var(--success)' : 'var(--text-secondary)'
-                                }}
-                                title="Molecular Biology Toolkit"
-                            >
-                                <span className="inline 2xl:hidden">Mol Bio Toolkit</span>
-                                <span className="hidden 2xl:inline">Molecular Biology Toolkit</span>
-                            </Link>
-                            <Link
-                                to="/ngs"
-                                className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap shrink-0"
-                                style={{
-                                    backgroundColor: isActive('/ngs') ? 'color-mix(in srgb, var(--accent-secondary) 20%, transparent)' : 'transparent',
-                                    color: isActive('/ngs') ? 'var(--accent-secondary)' : 'var(--text-secondary)'
-                                }}
-                                title="NGS Data Visualization Toolkit"
-                            >
-                                <span className="inline 2xl:hidden">NGS Toolkit</span>
-                                <span className="hidden 2xl:inline">NGS Data Visualization Toolkit</span>
-                            </Link>
-                            <Link
-                                to="/assay"
-                                className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap shrink-0"
-                                style={{
-                                    backgroundColor: isActive('/assay') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
-                                    color: isActive('/assay') ? 'var(--accent-primary)' : 'var(--text-secondary)'
-                                }}
-                                title="Assay Analytics"
-                            >
-                                <span className="inline 2xl:hidden">Assay</span>
-                                <span className="hidden 2xl:inline">Assay Analytics</span>
-                            </Link>
-                            {showSystemAnalyticsTab && (
+                        <div
+                            className="order-3 min-w-0 max-w-full overflow-x-auto overscroll-x-contain xl:order-none xl:flex-1 [&::-webkit-scrollbar]:hidden [scrollbar-width:none]"
+                            data-bms-primary-nav-rail="true"
+                        >
+                            <div className="mx-auto flex w-max items-center gap-1.5">
                                 <Link
-                                    to="/infra"
+                                    to="/"
+                                    data-bms-primary-nav-active={isActive('/') ? 'true' : undefined}
+                                    className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all shrink-0 whitespace-nowrap"
+                                    style={{
+                                        backgroundColor: isActive('/') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
+                                        color: isActive('/') ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                                    }}
+                                >
+                                    <span className="inline 2xl:hidden">Home</span>
+                                    <span className="hidden 2xl:inline">Dashboard</span>
+                                </Link>
+                                <Link
+                                    to="/submit"
+                                    data-bms-primary-nav-active={isActive('/submit') ? 'true' : undefined}
+                                    className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all shrink-0 whitespace-nowrap"
+                                    style={{
+                                        backgroundColor: isActive('/submit') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
+                                        color: isActive('/submit') ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                                    }}
+                                >
+                                    <span className="inline 2xl:hidden">Launcher</span>
+                                    <span className="hidden 2xl:inline">Job Launcher</span>
+                                </Link>
+                                <Link
+                                    to="/designs"
+                                    data-bms-primary-nav-active={isActive('/designs') ? 'true' : undefined}
+                                    className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all shrink-0 whitespace-nowrap"
+                                    style={{
+                                        backgroundColor: isActive('/designs') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
+                                        color: isActive('/designs') ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                                    }}
+                                >
+                                    <span className="inline 2xl:hidden">Viewer</span>
+                                    <span className="hidden 2xl:inline">Data Viewer</span>
+                                </Link>
+                                <Link
+                                    to="/designer"
+                                    data-bms-primary-nav-active={isActive('/designer') ? 'true' : undefined}
                                     className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap shrink-0"
                                     style={{
-                                        backgroundColor: isActive('/infra') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
-                                        color: isActive('/infra') ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                                        backgroundColor: isActive('/designer') ? 'color-mix(in srgb, var(--success) 20%, transparent)' : 'transparent',
+                                        color: isActive('/designer') ? 'var(--success)' : 'var(--text-secondary)'
                                     }}
-                                    title="System Analytics"
+                                    title="Molecular Biology Toolkit"
                                 >
-                                    <span>System Analytics</span>
+                                    <span className="inline 2xl:hidden">Mol Bio Toolkit</span>
+                                    <span className="hidden 2xl:inline">Molecular Biology Toolkit</span>
                                 </Link>
-                            )}
-                            <Link
-                                to="/bioxp"
-                                className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap shrink-0"
-                                style={{
-                                    backgroundColor: isActive('/bioxp') ? 'color-mix(in srgb, var(--warning) 20%, transparent)' : 'transparent',
-                                    color: isActive('/bioxp') ? 'var(--warning)' : 'var(--text-secondary)'
-                                }}
-                                title="BioXP Control Surface"
-                            >
-                                <span className="hidden 2xl:inline">BioXP Control Surface</span>
-                                <span className="inline 2xl:hidden">BioXP Cockpit</span>
-                            </Link>
+                                <Link
+                                    to="/ngs"
+                                    data-bms-primary-nav-active={isActive('/ngs') ? 'true' : undefined}
+                                    className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap shrink-0"
+                                    style={{
+                                        backgroundColor: isActive('/ngs') ? 'color-mix(in srgb, var(--accent-secondary) 20%, transparent)' : 'transparent',
+                                        color: isActive('/ngs') ? 'var(--accent-secondary)' : 'var(--text-secondary)'
+                                    }}
+                                    title="NGS Data Visualization Toolkit"
+                                >
+                                    <span className="inline 2xl:hidden">NGS Toolkit</span>
+                                    <span className="hidden 2xl:inline">NGS Data Visualization Toolkit</span>
+                                </Link>
+                                <Link
+                                    to="/assay"
+                                    data-bms-primary-nav-active={isActive('/assay') ? 'true' : undefined}
+                                    className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap shrink-0"
+                                    style={{
+                                        backgroundColor: isActive('/assay') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
+                                        color: isActive('/assay') ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                                    }}
+                                    title="Assay Analytics"
+                                >
+                                    <span className="inline 2xl:hidden">Assay</span>
+                                    <span className="hidden 2xl:inline">Assay Analytics</span>
+                                </Link>
+                                {showSystemAnalyticsTab && (
+                                    <Link
+                                        to="/infra"
+                                        data-bms-primary-nav-active={isActive('/infra') ? 'true' : undefined}
+                                        className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap shrink-0"
+                                        style={{
+                                            backgroundColor: isActive('/infra') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
+                                            color: isActive('/infra') ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                                        }}
+                                        title="System Analytics"
+                                    >
+                                        <span className="hidden 2xl:inline">System Analytics</span>
+                                        <span className="inline 2xl:hidden">System</span>
+                                    </Link>
+                                )}
+                                <Link
+                                    to="/bioxp"
+                                    data-bms-primary-nav-active={isActive('/bioxp') ? 'true' : undefined}
+                                    className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap shrink-0"
+                                    style={{
+                                        backgroundColor: isActive('/bioxp') ? 'color-mix(in srgb, var(--warning) 20%, transparent)' : 'transparent',
+                                        color: isActive('/bioxp') ? 'var(--warning)' : 'var(--text-secondary)'
+                                    }}
+                                    title="BioXP Control Surface"
+                                >
+                                    <span className="hidden 2xl:inline">BioXP Control Surface</span>
+                                    <span className="inline 2xl:hidden">BioXP Cockpit</span>
+                                </Link>
+                            </div>
+                        </div>
 
+                        <div
+                            className="order-2 flex max-w-full items-center gap-1.5 overflow-x-auto overscroll-x-contain xl:order-none xl:shrink-0 xl:overflow-visible [&::-webkit-scrollbar]:hidden [scrollbar-width:none]"
+                            data-bms-topbar-utilities="true"
+                        >
                             {/* Theme Selector */}
                             <ThemeSelector />
 

@@ -34,7 +34,7 @@ const tabs: Array<AssayNavItem<AssayTab>> = [
         label: 'DOE + Statistics',
         eyebrow: 'JMP-like workbench',
         description:
-            'DOE generation, RSM/regression, SPC, process capability, hypothesis testing, and Plotly visualization.',
+            'Manual analytical QC, DOE generation, RSM/regression, SPC, process capability, hypothesis testing, and Plotly visualization.',
     },
 ];
 
@@ -50,7 +50,7 @@ const assayStatus = [
     },
     {
         title: 'Visualization',
-        value: 'Plotly workbench panels, explicit empty states, calibration tables, and QC summaries',
+        value: 'Plotly workbench panels, manual QC summaries, cross-run rollups, calibration tables, and explicit empty states',
     },
 ];
 

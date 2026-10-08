@@ -10,10 +10,11 @@ import {
     AssayWorkbenchIntro,
     type AssayNavItem,
 } from '../assay/AssayWorkbenchPrimitives';
+import { AnalyticalQcWorkbench } from '../assay/AnalyticalQcWorkbench';
 import { ChromatogramAnalysis, CalibrationCurve, HplcQuantification } from './ChromatogramAnalysis';
 import { EmpowerImport } from './EmpowerImport';
 
-type AnalysisType = 'chromatogram' | 'calibration' | 'quantify' | 'empower';
+type AnalysisType = 'empower' | 'qc' | 'chromatogram' | 'calibration' | 'quantify';
 
 const analysisOptions: Array<AssayNavItem<AnalysisType>> = [
     {
@@ -21,6 +22,12 @@ const analysisOptions: Array<AssayNavItem<AnalysisType>> = [
         label: 'Empower AIA/ARW/CSV Import',
         status: 'Waters chromatogram review',
         description: 'Import real Empower AIA .cdf, ARW chromatogram text, ZIP batches, or CSV/ASCII peak-table exports; review chromatograms, peaks, SST summaries, and plasmid tracking logs.',
+    },
+    {
+        id: 'qc',
+        label: 'Manual QC + Cross-run Stats',
+        status: 'Clean, bunch, compare',
+        description: 'Paste or export real assay rows, sanitize numeric values, manually exclude bad rows, bunch labels, and compute group/run/cross-run QC statistics.',
     },
     {
         id: 'chromatogram',
@@ -76,12 +83,15 @@ export function HplcPage() {
                 items={analysisOptions}
                 activeId={activeAnalysis}
                 onChange={setActiveAnalysis}
-                columnsClass="sm:grid-cols-2 xl:grid-cols-4"
+                columnsClass="sm:grid-cols-2 xl:grid-cols-5"
             />
 
             <AssayPanel className="p-4">
                 <div hidden={activeAnalysis !== 'empower'}>
                     <EmpowerImport />
+                </div>
+                <div hidden={activeAnalysis !== 'qc'}>
+                    <AnalyticalQcWorkbench />
                 </div>
                 <div hidden={activeAnalysis !== 'chromatogram'}>
                     <ChromatogramAnalysis />

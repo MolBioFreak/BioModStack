@@ -55,6 +55,13 @@ test('layout exposes one far-left diagnostics top-bar entry with copy support', 
   assert.match(layoutSource, /\/api\/system\/runtime-ports/);
   assert.match(layoutSource, /\/api\/system\/runtime\/start-target/);
   assert.match(layoutSource, /\/api\/health/);
+  assert.match(layoutSource, /data-bms-topbar-left=\"true\"/);
+  assert.match(layoutSource, /data-bms-primary-nav-rail=\"true\"/);
+  assert.match(layoutSource, /data-bms-topbar-utilities=\"true\"/);
+  assert.match(layoutSource, /data-bms-primary-nav-active=\{isActive\('\/assay'\) \? 'true' : undefined\}/);
+  assert.match(layoutSource, /overflow-x-auto overscroll-x-contain/);
+  assert.match(layoutSource, /xl:h-16 xl:flex-row/);
+  assert.match(layoutSource, /scrollIntoView\(\{ block: 'nearest', inline: 'center' \}\)/);
 
   const diagnosticsIndex = layoutSource.indexOf('<DiagnosticsMenu');
   const logoIndex = layoutSource.indexOf('{/* Logo / Brand */}');

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import subprocess
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 import sqlalchemy
 
 import database
+from biomodstack_services import ServiceManagerError, start_runtime_target
 from services import nextflow
 
 
@@ -45,9 +47,39 @@ class WorkflowAdapterRunningJobsResponse(BaseModel):
     running_jobs: dict[str, int]
 
 
+class WorkflowAdapterRuntimeStartTargetRequest(BaseModel):
+    target: str | None = None
+
+
+LOCAL_ADAPTER_HOSTS = {None, "127.0.0.1", "::1", "localhost", "testclient"}
+
+
+def _require_local_adapter_request(request: Request) -> None:
+    # Core-runtime uses host networking for bms-api, so API-to-adapter calls land
+    # on the host adapter as loopback. Do not widen this to Docker bridge/LAN
+    # clients; the host adapter owns systemd/runtime controls.
+    if request.client and request.client.host not in LOCAL_ADAPTER_HOSTS:
+        raise HTTPException(status_code=403, detail="BioModStack workflow-adapter control routes are local-only")
+
+
 @router.get("/health")
 async def workflow_adapter_health() -> dict[str, str]:
     return {"status": "healthy", "service": "biomodstack-workflow-adapter"}
+
+
+@router.post("/runtime/start-target")
+async def workflow_adapter_start_runtime_target(
+    request: Request,
+    payload: WorkflowAdapterRuntimeStartTargetRequest | None = None,
+    target: str | None = None,
+) -> dict[str, str]:
+    _require_local_adapter_request(request)
+    normalized_target = str(target or (payload.target if payload else None) or "prod").strip().lower()
+    try:
+        start_runtime_target(target=normalized_target)
+    except (ServiceManagerError, FileNotFoundError, OSError, subprocess.CalledProcessError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"target": normalized_target, "control_mode": "host-adapter"}
 
 
 @router.post("/launch", response_model=WorkflowAdapterLaunchResponse, status_code=202)

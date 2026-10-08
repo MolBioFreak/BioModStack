@@ -10,15 +10,22 @@ import {
     AssayWorkbenchIntro,
     type AssayNavItem,
 } from '../assay/AssayWorkbenchPrimitives';
+import { AnalyticalQcWorkbench } from '../assay/AnalyticalQcWorkbench';
 import { ControlChart } from './ControlChart';
 import { ProcessCapability } from './ProcessCapability';
 import { HypothesisTesting } from './HypothesisTesting';
 import { RegressionAnalysis } from './RegressionAnalysis';
 import { DoEPanel } from './DoEPanel';
 
-type AnalysisType = 'spc' | 'capability' | 'doe' | 'hypothesis' | 'regression';
+type AnalysisType = 'qc' | 'spc' | 'capability' | 'doe' | 'hypothesis' | 'regression';
 
 const analysisOptions: Array<AssayNavItem<AnalysisType>> = [
+    {
+        id: 'qc',
+        label: 'Manual Analytical QC',
+        status: 'Clean + group data',
+        description: 'Sanitize numeric assay rows, manually exclude bad data, bunch labels, and compute group/run/cross-run statistics before downstream analysis.',
+    },
     {
         id: 'spc',
         label: 'Control Chart (SPC)',
@@ -63,13 +70,13 @@ const statusItems = [
     },
     {
         title: 'Data policy',
-        value: 'Empty workbench until pasted values or generated DOE output exists',
+        value: 'Empty workbench until pasted values or generated DOE output exists; manual QC never fabricates rows',
         tone: 'warning' as const,
     },
 ];
 
 export function StatisticsPage() {
-    const [activeAnalysis, setActiveAnalysis] = useState<AnalysisType>('spc');
+    const [activeAnalysis, setActiveAnalysis] = useState<AnalysisType>('qc');
 
     return (
         <div className="space-y-6 p-6">
@@ -85,15 +92,28 @@ export function StatisticsPage() {
                 items={analysisOptions}
                 activeId={activeAnalysis}
                 onChange={setActiveAnalysis}
-                columnsClass="sm:grid-cols-2 xl:grid-cols-5"
+                columnsClass="sm:grid-cols-2 xl:grid-cols-6"
             />
 
             <AssayPanel className="p-4">
-                {activeAnalysis === 'spc' && <ControlChart />}
-                {activeAnalysis === 'capability' && <ProcessCapability />}
-                {activeAnalysis === 'doe' && <DoEPanel />}
-                {activeAnalysis === 'hypothesis' && <HypothesisTesting />}
-                {activeAnalysis === 'regression' && <RegressionAnalysis />}
+                <div hidden={activeAnalysis !== 'qc'}>
+                    <AnalyticalQcWorkbench />
+                </div>
+                <div hidden={activeAnalysis !== 'spc'}>
+                    <ControlChart />
+                </div>
+                <div hidden={activeAnalysis !== 'capability'}>
+                    <ProcessCapability />
+                </div>
+                <div hidden={activeAnalysis !== 'doe'}>
+                    <DoEPanel />
+                </div>
+                <div hidden={activeAnalysis !== 'hypothesis'}>
+                    <HypothesisTesting />
+                </div>
+                <div hidden={activeAnalysis !== 'regression'}>
+                    <RegressionAnalysis />
+                </div>
             </AssayPanel>
         </div>
     );
