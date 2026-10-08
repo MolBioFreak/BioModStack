@@ -81,6 +81,7 @@ async def test_producer_ingest_persist_filter_profile_replay(tmp_path, monkeypat
             differing, reused = await request_design_analysis(session, design, 'fampnn_psce_profile', explicit)
             assert not reused and differing.id != run_id
             assert await analysis_subprocess._run_analysis(differing.id) == 0
+            await session.refresh(differing)
             assert build_fampnn_psce_profile_signature(design, explicit, session) != signature
             assert _compute_fampnn_psce_profile(design, {})[1] == summary
             # Filter owner consumes exactly the producer scalar, as does SQL filtering.
@@ -92,6 +93,42 @@ async def test_producer_ingest_persist_filter_profile_replay(tmp_path, monkeypat
             assert len(module.filter_designs(rows, expected, None)) == 1
             assert len(module.filter_designs(rows, expected - 0.01, None)) == 0
             assert (await session.scalars(select(Design).where(Design.fampnn_psce <= expected))).one().id == design.id
+            # Exercise typed HTTP GET/POST policy transport, including historical reanalysis.
+            import httpx
+            from fastapi import FastAPI
+            from routers.analyses import router
+            from database import get_session
+            app = FastAPI()
+            app.include_router(router)
+            async def isolated_session():
+                yield session
+            app.dependency_overrides[get_session] = isolated_session
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                url = f"/designs/{design.id}/analyses/fampnn_psce_profile"
+                response = await client.get(url, params=explicit)
+                assert response.status_code == 200, response.text
+                assert response.json()['run_id'] == differing.id
+                assert response.json()['result']['ignore_cbeta'] is False
+                assert (await client.get(url)).json()['run_id'] == run_id
+                design.confidence_metrics = {'fampnn': {'fampnn_avg_psce': expected}}
+                design.provenance = {}
+                await session.commit()
+                requested = await client.post(url, json={'params': {}})
+                assert requested.status_code == 200, requested.text
+                assert await analysis_subprocess._run_analysis(requested.json()['run_id']) == 0
+                session.expire_all()
+                unknown = await client.get(url)
+                assert unknown.json()['result']['reason'] == 'historical_psce_policy_unknown'
+                requested = await client.post(url, json={'params': {'chain_id': 'B', 'ignore_cbeta': True}})
+                assert requested.status_code == 200, requested.text
+                assert await analysis_subprocess._run_analysis(requested.json()['run_id']) == 0
+                session.expire_all()
+                explicit_read = await client.get(url, params={'chain_id': 'B', 'ignore_cbeta': True})
+                assert explicit_read.status_code == 200, explicit_read.text
+                assert explicit_read.json()['result']['scope'] == 'B'
+                assert explicit_read.json()['result']['chains']['B']['avg_psce'] == 12
+                assert (await session.scalars(select(Design))).one().fampnn_psce == expected
+
     finally:
         await engine.dispose()
 
@@ -141,3 +178,14 @@ def test_malformed_science_not_silently_dropped(tmp_path):
     owner = fampnn_psce_authority()
     with pytest.raises(ValueError, match='nonnegative'):
         owner.compute_psce_profile(path, owner.psce_policy('A', True))
+
+
+def test_policy_resolves_actual_provenance_without_guessing_and_rejects_conflict():
+    from services.structure_utils import resolve_fampnn_psce_policy
+    owner = fampnn_psce_authority()
+    policy = owner.psce_policy('Z', True)
+    design = Design(provenance={'ppiflow': {'fampnn': {'psce_policy': policy}}})
+    assert resolve_fampnn_psce_policy(design, {}) == policy
+    design.confidence_metrics = {'fampnn': {'psce_policy': owner.psce_policy('A', False)}}
+    with pytest.raises(ValueError, match='Conflicting'):
+        resolve_fampnn_psce_policy(design, {})

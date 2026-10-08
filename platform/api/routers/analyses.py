@@ -54,8 +54,10 @@ def _normalize_design_ids_query(raw: Optional[str]) -> list[str]:
     return sorted({part.strip() for part in raw.split(",") if part.strip()})
 
 
-def _design_analysis_params_from_query(analysis_type: str, max_size: Optional[int]) -> dict[str, Any]:
+def _design_analysis_params_from_query(analysis_type: str, max_size: Optional[int], chain_id: str | None = None, ignore_cbeta: bool | None = None) -> dict[str, Any]:
     normalized = str(analysis_type or "").strip().lower()
+    if normalized == "fampnn_psce_profile":
+        return {key: value for key, value in {"chain_id": chain_id, "ignore_cbeta": ignore_cbeta}.items() if value is not None}
     if normalized in {"contact_map", "pae_matrix"}:
         return {"max_size": max_size if max_size is not None else (300 if normalized == "contact_map" else 200)}
     return {}
@@ -84,6 +86,8 @@ async def get_design_analysis(
     analysis_type: str,
     max_size: Optional[int] = Query(None, description="Matrix dimension cap for contact-map / PAE analyses"),
     session: AsyncSession = Depends(get_session),
+    chain_id: Optional[str] = None,
+    ignore_cbeta: Optional[bool] = None,
 ):
     result = await session.execute(select(Design).where(Design.id == design_id))
     design = result.scalar_one_or_none()
@@ -91,7 +95,7 @@ async def get_design_analysis(
         raise HTTPException(status_code=404, detail="Design not found")
     _enforce_design_analysis_contract(design, analysis_type)
 
-    params = _design_analysis_params_from_query(analysis_type, max_size)
+    params = _design_analysis_params_from_query(analysis_type, max_size, chain_id, ignore_cbeta)
     try:
         run, definition, normalized_params, _cache_key = await get_matching_design_analysis_run(
             session,

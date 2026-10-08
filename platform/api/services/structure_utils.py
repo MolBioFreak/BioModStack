@@ -371,9 +371,15 @@ def fampnn_psce_authority():
 def resolve_fampnn_psce_policy(design, params):
     """Missing historical scope is unknown, never inferred from chain names."""
     owner = fampnn_psce_authority()
-    stored = ((getattr(design, "confidence_metrics", None) or {}).get("fampnn") or {}).get("psce_policy")
-    if stored is not None:
-        stored = owner.validate_psce_policy(stored)
+    confidence = getattr(design, "confidence_metrics", None) or {}
+    provenance = getattr(design, "provenance", None) or {}
+    records = [confidence.get("fampnn"), provenance.get("fampnn"),
+               (provenance.get("ppiflow") or {}).get("fampnn")]
+    policies = [owner.validate_psce_policy(record["psce_policy"])
+                for record in records if isinstance(record, dict) and record.get("psce_policy") is not None]
+    if policies and any(policy != policies[0] for policy in policies):
+        raise ValueError("Conflicting persisted pSCE policies")
+    stored = policies[0] if policies else None
     params = params or {}
     if not params:
         return stored
