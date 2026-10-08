@@ -1,7 +1,13 @@
-"""Fail-closed package source-revision authority shared by governed receipts."""
+"""Execution provenance from the deployed build, not release-audit source files."""
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+from functools import lru_cache
+from pathlib import Path
+
+from build_identity import current_build_identity
 
 
 class SourceBuildRevisionError(RuntimeError):
@@ -9,16 +15,27 @@ class SourceBuildRevisionError(RuntimeError):
 
 
 def source_build_revision() -> str:
-    try:
-        from services.ngs_molbio_runtime_status import runtime_implementation_record
+    revision = current_build_identity()["revision"]
+    if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+        raise SourceBuildRevisionError("deployed build revision is unavailable")
+    return revision
 
-        value = runtime_implementation_record().get("successor_source_commit")
-    except (ImportError, OSError, RuntimeError, ValueError) as exc:
-        raise SourceBuildRevisionError(
-            "package-local runtime source authority is unavailable"
-        ) from exc
-    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
-        raise SourceBuildRevisionError(
-            "package-local runtime source revision is invalid"
-        )
-    return value
+
+@lru_cache(maxsize=4)
+def _checkout_tree(revision: str) -> str:
+    # Development checkouts predating BMS_BUILD_TREE still have this Git object.
+    try:
+        return subprocess.run(
+            ["git", "-C", str(Path(__file__).resolve().parents[3]), "rev-parse", "--verify", f"{revision}^{{tree}}"],
+            check=True, capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise SourceBuildRevisionError("deployed build tree is unavailable") from exc
+
+
+def source_build_identity() -> tuple[str, str]:
+    revision = source_build_revision()
+    tree = os.environ.get("BMS_BUILD_TREE") or _checkout_tree(revision)
+    if re.fullmatch(r"[0-9a-f]{40}", tree) is None:
+        raise SourceBuildRevisionError("deployed build tree is invalid")
+    return revision, tree

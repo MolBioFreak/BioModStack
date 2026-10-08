@@ -8,8 +8,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, literal_column, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from experiment_models import (
     ExperimentAggregateHead,
@@ -36,7 +37,6 @@ from services.global_experiments.result_surfaces import result_surface_for_recei
 from services.protein_project_capabilities import protein_capability_record
 
 
-MAX_TREE_NODES = 1_000
 MAX_MAP_NODES = 100
 MAX_PAGE_ITEMS = 100
 DEFAULT_MAP_NODES = 50
@@ -47,7 +47,6 @@ ATTACHMENT_MODES = ("references", "uses_input", "produced", "validated_by")
 RESULT_ATTACHMENT_MODES = ("produced",)
 SOURCE_REVERIFICATION_TTL = timedelta(hours=24)
 SOURCE_REVERIFICATION_FUTURE_SKEW = timedelta(minutes=5)
-MAX_REVERIFICATION_SCAN_ROWS = 10_000
 SOURCE_REVERIFICATION_RECEIPT_KEYS = frozenset({
     "schema",
     "reverification_receipt_id",
@@ -182,7 +181,7 @@ async def _attachment_page(
     limit: int,
     edge_modes: tuple[str, ...] = ATTACHMENT_MODES,
 ) -> tuple[list[tuple[ExperimentLineageEdge, ExperimentExternalEntityReceipt]], str | None]:
-    if not focused_domain_ids:
+    if isinstance(focused_domain_ids, list) and not focused_domain_ids:
         if cursor is not None:
             _decode_cursor(cursor, family)
         return [], None
@@ -220,7 +219,7 @@ async def _attachment_count(
     project_id: str,
     focused_domain_ids: list[str],
 ) -> int:
-    if not focused_domain_ids:
+    if isinstance(focused_domain_ids, list) and not focused_domain_ids:
         return 0
     return int(
         (
@@ -235,35 +234,6 @@ async def _attachment_count(
             )
         ).scalar_one()
     )
-
-
-async def _complete_attachment_receipts(
-    session: AsyncSession,
-    *,
-    project_id: str,
-    focused_domain_ids: list[str],
-) -> list[ExperimentExternalEntityReceipt]:
-    if not focused_domain_ids:
-        return []
-    receipts = list(
-        await session.scalars(
-            select(ExperimentExternalEntityReceipt)
-            .join(
-                ExperimentLineageEdge,
-                ExperimentLineageEdge.target_resource_id == ExperimentExternalEntityReceipt.id,
-            )
-            .where(*_attachment_predicates(project_id, focused_domain_ids))
-            .distinct()
-            .order_by(
-                ExperimentExternalEntityReceipt.created_at.desc(),
-                ExperimentExternalEntityReceipt.id.desc(),
-            )
-            .limit(MAX_TREE_NODES + 1)
-        )
-    )
-    if len(receipts) > MAX_TREE_NODES:
-        raise ValidationFailure("Focused source receipt set exceeds the supported bound")
-    return receipts
 
 
 def _receipt_acknowledgement(receipt: ExperimentExternalEntityReceipt) -> dict[str, Any] | None:
@@ -833,7 +803,7 @@ async def _dataset_page(
     limit: int,
 ) -> tuple[list[dict[str, Any]], str | None]:
     decoded = _decode_cursor(cursor, "datasets")
-    if not domain_ids:
+    if isinstance(domain_ids, list) and not domain_ids:
         return [], None
     statement = select(ExperimentAggregateHead).where(
         ExperimentAggregateHead.workspace_id == project_id,
@@ -885,7 +855,7 @@ async def _run_page(
     cursor: str | None,
     limit: int,
 ) -> tuple[list[dict[str, Any]], dict[str, str], str | None]:
-    if not workflow_ids:
+    if isinstance(workflow_ids, list) and not workflow_ids:
         if cursor is not None:
             _decode_cursor(cursor, "runs")
         return [], {}, None
@@ -951,13 +921,6 @@ async def _run_page(
     return items, workflow_by_run, next_cursor
 
 
-def _count_states(heads: list[ExperimentAggregateHead]) -> dict[str, int]:
-    result: dict[str, int] = {}
-    for head in heads:
-        result[head.lifecycle_state] = result.get(head.lifecycle_state, 0) + 1
-    return result
-
-
 def _dedupe_nodes(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -984,6 +947,11 @@ async def build_project_manager_read_model(
     project_id: str,
     focus_id: str | None = None,
     selected_node_key: str | None = None,
+    tree_parent_node_key: str | None = None,
+    tree_cursor: str | None = None,
+    tree_limit: int = 100,
+    task_cursor: str | None = None,
+    task_limit: int = DEFAULT_PAGE_ITEMS,
     map_cursor: str | None = None,
     run_cursor: str | None = None,
     result_cursor: str | None = None,
@@ -1001,6 +969,8 @@ async def build_project_manager_read_model(
     dataset_limit: int = DEFAULT_PAGE_ITEMS,
     activity_limit: int = DEFAULT_PAGE_ITEMS,
 ) -> dict[str, Any]:
+    _validate_limit("tree", tree_limit)
+    _validate_limit("task", task_limit)
     _validate_limit("map", map_limit, MAX_MAP_NODES)
     _validate_limit("run", run_limit)
     _validate_limit("result", result_limit)
@@ -1014,60 +984,101 @@ async def build_project_manager_read_model(
     if project is None or project.aggregate_kind != "workspace":
         raise NotFound(f"project not found: {project_id}")
     project_payload = await _payload(session, project)
-    global_heads = (
-        await session.execute(
-            select(ExperimentAggregateHead)
-            .where(
-                ExperimentAggregateHead.workspace_id == project_id,
-                ExperimentAggregateHead.aggregate_kind == "experiment",
-            )
-            .order_by(ExperimentAggregateHead.updated_at.desc(), ExperimentAggregateHead.aggregate_id)
-            .limit(MAX_TREE_NODES + 1)
-        )
-    ).scalars().all()
-    if len(global_heads) > MAX_TREE_NODES:
-        raise ValidationFailure("Project hierarchy exceeds the supported complete-tree bound")
-    global_ids = [head.aggregate_id for head in global_heads]
-    domain_heads: list[ExperimentAggregateHead] = []
-    if global_ids:
-        domain_heads = (
-            await session.execute(
-                select(ExperimentAggregateHead)
-                .where(
-                    ExperimentAggregateHead.workspace_id == project_id,
-                    ExperimentAggregateHead.aggregate_kind == "domain_experiment",
-                    ExperimentAggregateHead.parent_id.in_(global_ids),
-                )
-                .order_by(ExperimentAggregateHead.created_at, ExperimentAggregateHead.aggregate_id)
-                .limit(MAX_TREE_NODES + 1)
-            )
-        ).scalars().all()
-    projected_tree_nodes = 1 + len(global_heads) + len(domain_heads) * (1 + len(VIRTUAL_FOLDERS))
-    if projected_tree_nodes > MAX_TREE_NODES:
-        raise ValidationFailure("Project hierarchy exceeds the supported complete-tree bound")
+    global_scope = select(ExperimentAggregateHead).where(
+        ExperimentAggregateHead.workspace_id == project_id,
+        ExperimentAggregateHead.parent_id == project_id,
+        ExperimentAggregateHead.aggregate_kind == "experiment",
+    )
+    focus = None
+    if focus_id is None:
+        focus = await session.scalar(global_scope.where(
+            ExperimentAggregateHead.lifecycle_state != "archived",
+        ).order_by(ExperimentAggregateHead.updated_at.desc(), ExperimentAggregateHead.aggregate_id).limit(1))
+    elif focus_id != project_id:
+        focus = await session.scalar(global_scope.where(ExperimentAggregateHead.aggregate_id == focus_id))
+        if focus is None:
+            raise ValidationFailure("focus_id does not identify this Project or one of its Global Experiments")
+    global_id_scope = global_scope.with_only_columns(ExperimentAggregateHead.aggregate_id)
+    domain_scope = select(ExperimentAggregateHead).where(
+        ExperimentAggregateHead.workspace_id == project_id,
+        ExperimentAggregateHead.aggregate_kind == "domain_experiment",
+        ExperimentAggregateHead.parent_id.in_(global_id_scope),
+    )
+    focused_domain_scope = domain_scope
+    if focus is not None:
+        focused_domain_scope = focused_domain_scope.where(ExperimentAggregateHead.parent_id == focus.aggregate_id)
+    focused_domain_ids = focused_domain_scope.with_only_columns(ExperimentAggregateHead.aggregate_id)
+    folder_domain_id = None
+    selected_domain = None
+    if selected_node_key and selected_node_key.startswith(("virtual_folder:", "domain_experiment:")):
+        parts = selected_node_key.split(":")
+        if parts[0] == "virtual_folder" and (len(parts) != 3 or parts[2] not in VIRTUAL_FOLDERS):
+            raise ValidationFailure("selected virtual folder is invalid")
+        selected_domain = await session.scalar(focused_domain_scope.where(ExperimentAggregateHead.aggregate_id == parts[1]))
+        if selected_domain is None:
+            raise ValidationFailure("selected Domain does not belong to the focused hierarchy")
+        if parts[0] == "virtual_folder":
+            folder_domain_id = selected_domain.aggregate_id
+    collection_domain_ids = [folder_domain_id] if folder_domain_id else focused_domain_ids
 
+    # Tree pages are presentation, never the membership authority for collections.
+    tree_parent_node_key = tree_parent_node_key or (
+        _key("global_experiment", focus.aggregate_id) if focus is not None else _key("project", project_id)
+    )
+    if tree_parent_node_key == _key("project", project_id):
+        branch_scope = global_scope
+        branch_global = None
+    elif tree_parent_node_key.startswith("global_experiment:"):
+        branch_global = await session.scalar(global_scope.where(
+            ExperimentAggregateHead.aggregate_id == tree_parent_node_key.split(":", 1)[1],
+        ))
+        if branch_global is None:
+            raise ValidationFailure("tree parent does not belong to this Project")
+        branch_scope = domain_scope.where(ExperimentAggregateHead.parent_id == branch_global.aggregate_id)
+    else:
+        raise ValidationFailure("tree parent must identify this Project or a Global Experiment")
+    tree_family = "tree-" + sha256_text(canonical_json([project_id, project.head_generation, focus.aggregate_id if focus is not None else project_id, selected_node_key, tree_parent_node_key, tree_limit]))
+    tree_total = int(await session.scalar(select(func.count()).select_from(branch_scope.subquery())) or 0)
+    tree_after = _after_cursor(ExperimentAggregateHead.created_at, ExperimentAggregateHead.aggregate_id, _decode_cursor(tree_cursor, tree_family))
+    if tree_after is not None:
+        branch_scope = branch_scope.where(tree_after)
+    branch_rows = list(await session.scalars(branch_scope.order_by(
+        ExperimentAggregateHead.created_at.desc(), ExperimentAggregateHead.aggregate_id.desc(),
+    ).limit(tree_limit + 1)))
+    tree_next_cursor = _encode_cursor(tree_family, branch_rows[tree_limit - 1].created_at, branch_rows[tree_limit - 1].aggregate_id) if len(branch_rows) > tree_limit else None
+    global_heads = branch_rows[:tree_limit] if branch_global is None else [branch_global]
+    domain_heads = branch_rows[:tree_limit] if branch_global is not None else []
+    if focus is not None and all(head.aggregate_id != focus.aggregate_id for head in global_heads):
+        global_heads.append(focus)
+    if selected_domain is not None and all(head.aggregate_id != selected_domain.aggregate_id for head in domain_heads):
+        domain_heads.append(selected_domain)
+    if selected_node_key and selected_node_key.startswith("global_experiment:"):
+        selected_global = await session.scalar(global_scope.where(
+            ExperimentAggregateHead.aggregate_id == selected_node_key.split(":", 1)[1],
+        ))
+        if selected_global is None:
+            raise ValidationFailure("selected Global Experiment does not belong to this Project")
+        if all(head.aggregate_id != selected_global.aggregate_id for head in global_heads):
+            global_heads.append(selected_global)
+    for domain in domain_heads:
+        if all(head.aggregate_id != domain.parent_id for head in global_heads):
+            global_heads.append(await session.scalar(global_scope.where(ExperimentAggregateHead.aggregate_id == domain.parent_id)))
     global_payloads = {head.aggregate_id: await _payload(session, head) for head in global_heads}
     domain_payloads = {head.aggregate_id: await _payload(session, head) for head in domain_heads}
-    globals_by_id = {head.aggregate_id: head for head in global_heads}
     domains_by_parent: dict[str, list[ExperimentAggregateHead]] = {}
     for head in domain_heads:
         domains_by_parent.setdefault(str(head.parent_id), []).append(head)
-    if focus_id is None:
-        focus = next((head for head in global_heads if head.lifecycle_state != "archived"), None)
-    elif focus_id == project_id:
-        focus = None
-    else:
-        focus = globals_by_id.get(focus_id)
-        if focus is None:
-            raise ValidationFailure("focus_id does not identify this Project or one of its Global Experiments")
-    focused_domains = domain_heads if focus is None else domains_by_parent.get(focus.aggregate_id, [])
-    focused_domain_ids = [head.aggregate_id for head in focused_domains]
-    folder_domain_id = None
-    if selected_node_key and selected_node_key.startswith("virtual_folder:"):
-        parts = selected_node_key.split(":", 2)
-        if len(parts) == 3 and parts[1] in focused_domain_ids:
-            folder_domain_id = parts[1]
-    collection_domain_ids = [folder_domain_id] if folder_domain_id else focused_domain_ids
+    focused_domains = [head for head in domain_heads if focus is None or head.parent_id == focus.aggregate_id]
+    global_states = dict((await session.execute(global_scope.with_only_columns(
+        ExperimentAggregateHead.lifecycle_state, func.count(),
+    ).group_by(ExperimentAggregateHead.lifecycle_state))).all())
+    domain_states = dict((await session.execute(domain_scope.with_only_columns(
+        ExperimentAggregateHead.lifecycle_state, func.count(),
+    ).group_by(ExperimentAggregateHead.lifecycle_state))).all())
+    global_total, domain_total = sum(global_states.values()), sum(domain_states.values())
+    domain_counts = dict((await session.execute(domain_scope.where(
+        ExperimentAggregateHead.parent_id.in_([head.aggregate_id for head in global_heads]),
+    ).with_only_columns(ExperimentAggregateHead.parent_id, func.count()).group_by(ExperimentAggregateHead.parent_id))).all())
 
     tree_nodes = [
         _tree_node(
@@ -1077,7 +1088,7 @@ async def build_project_manager_read_model(
             parent_node_key=None,
             label=str(project_payload.get("name") or project.display_name),
             lifecycle_state=project.lifecycle_state,
-            counts={"global_experiments": len(global_heads), "domain_experiments": len(domain_heads)},
+            counts={"global_experiments": global_total, "domain_experiments": domain_total},
             has_children=bool(global_heads),
             allowed_actions=["edit", "archive"] if project.lifecycle_state != "archived" else ["restore"],
         )
@@ -1093,8 +1104,8 @@ async def build_project_manager_read_model(
                 parent_node_key=_key("project", project_id),
                 label=str(global_payloads[global_head.aggregate_id].get("name") or global_head.display_name),
                 lifecycle_state=global_head.lifecycle_state,
-                counts={"domain_experiments": len(children)},
-                has_children=bool(children),
+                counts={"domain_experiments": domain_counts.get(global_head.aggregate_id, 0)},
+                has_children=bool(domain_counts.get(global_head.aggregate_id, 0)),
                 allowed_actions=["edit", "archive"] if global_head.lifecycle_state != "archived" else ["restore"],
             )
         )
@@ -1138,7 +1149,7 @@ async def build_project_manager_read_model(
             "label": str(project_payload.get("name") or project.display_name),
             "normalized_state": project.lifecycle_state,
             "canonical_identity": {"store_id": "global", "entity_id": project_id},
-            "counts": {"global_experiments": len(global_heads)},
+            "counts": {"global_experiments": global_total},
             "reconciliation": {"state": "current", "last_verified_at": None, "reason": None},
             "allowed_actions": ["edit"],
         }
@@ -1160,10 +1171,17 @@ async def build_project_manager_read_model(
             )
         ).all()
     )
-    if len(ngs_project_links) > MAX_MAP_NODES:
-        raise ValidationFailure("NGS/MolBio Project links exceed the supported relationship-map bound")
+    ngs_links_truncated = len(ngs_project_links) > MAX_MAP_NODES
+    ngs_project_links = ngs_project_links[:MAX_MAP_NODES]
     linked_local_ids = sorted({edge.target_resource_id for edge in ngs_project_links})
-    stable_map_nodes[0]["counts"]["linked_ngs_molbio_projects"] = len(linked_local_ids)
+    stable_map_nodes[0]["counts"]["linked_ngs_molbio_projects"] = int(await session.scalar(
+        select(func.count(func.distinct(ExperimentLineageEdge.target_resource_id))).where(
+            ExperimentLineageEdge.workspace_id == project_id,
+            ExperimentLineageEdge.source_resource_id == project_id,
+            ExperimentLineageEdge.edge_mode == "references",
+            ExperimentLineageEdge.edge_key.like("ngs-molbio-project-link:%"),
+        )
+    ) or 0)
     linked_local_heads = list(
         (
             await session.scalars(
@@ -1315,7 +1333,7 @@ async def build_project_manager_read_model(
                 "label": str(global_payloads[global_head.aggregate_id].get("name") or global_head.display_name),
                 "normalized_state": global_head.lifecycle_state,
                 "canonical_identity": {"store_id": "global", "entity_id": global_head.aggregate_id},
-                "counts": {"domain_experiments": len(domains_by_parent.get(global_head.aggregate_id, []))},
+                "counts": {"domain_experiments": domain_counts.get(global_head.aggregate_id, 0)},
                 "reconciliation": {"state": "current", "last_verified_at": None, "reason": None},
                 "allowed_actions": ["select", "edit"],
             }
@@ -1353,29 +1371,28 @@ async def build_project_manager_read_model(
             }
         )
 
-    workflow_parent_ids = collection_domain_ids + [head.aggregate_id for head in context_globals]
-    workflows: list[ExperimentAggregateHead] = []
-    if workflow_parent_ids:
-        workflows = (
-            await session.execute(
-                select(ExperimentAggregateHead)
-                .where(
-                    ExperimentAggregateHead.workspace_id == project_id,
-                    ExperimentAggregateHead.aggregate_kind == "workflow",
-                    ExperimentAggregateHead.parent_id.in_(workflow_parent_ids),
-                )
-                .order_by(ExperimentAggregateHead.created_at, ExperimentAggregateHead.aggregate_id)
-                .limit(MAX_TREE_NODES + 1)
-            )
-        ).scalars().all()
-    if len(workflows) > MAX_TREE_NODES:
-        raise ValidationFailure("Focused workflow hierarchy exceeds the supported bound")
+    legacy_global_ids = [focus.aggregate_id] if focus is not None else global_id_scope
+    workflow_scope = select(ExperimentAggregateHead).where(
+        ExperimentAggregateHead.workspace_id == project_id,
+        ExperimentAggregateHead.aggregate_kind == "workflow",
+        or_(
+            ExperimentAggregateHead.parent_id.in_(collection_domain_ids),
+            ExperimentAggregateHead.parent_id.in_(legacy_global_ids) if not folder_domain_id else False,
+        ),
+    )
+    workflows = list(await session.scalars(workflow_scope.order_by(
+        ExperimentAggregateHead.created_at.desc(), ExperimentAggregateHead.aggregate_id.desc(),
+    ).limit(MAX_MAP_NODES)))
     workflow_payloads = {head.aggregate_id: await _payload(session, head) for head in workflows}
-    workflow_ids = [head.aggregate_id for head in workflows]
+    workflow_ids = workflow_scope.with_only_columns(ExperimentAggregateHead.aggregate_id)
+    legacy_parent_ids = set(await session.scalars(global_id_scope.where(
+        ExperimentAggregateHead.aggregate_id.in_([head.parent_id for head in workflows]),
+    )))
+    workflow_total = int(await session.scalar(select(func.count()).select_from(workflow_scope.subquery())) or 0)
     workflow_nodes: list[dict[str, Any]] = []
     workflow_edges: list[dict[str, Any]] = []
     for workflow in workflows:
-        parent_kind = "domain_experiment" if workflow.parent_id in collection_domain_ids else "global_experiment"
+        parent_kind = "global_experiment" if workflow.parent_id in legacy_parent_ids else "domain_experiment"
         workflow_nodes.append(
             {
                 "node_key": _key("workflow", workflow.aggregate_id),
@@ -1555,7 +1572,9 @@ async def build_project_manager_read_model(
     all_map_edges = _dedupe_edges(stable_map_edges + workflow_edges + run_edges + receipt_edges)
     default_selection = _key("global_experiment", focus.aggregate_id) if focus is not None else _key("project", project_id)
     selection_key = selected_node_key or default_selection
-    map_nodes_truncated = native_lineage_truncated or len(all_context_map_nodes) > len(context_map_nodes)
+    map_nodes_truncated = (native_lineage_truncated or ngs_links_truncated
+                           or workflow_total > len(workflows) or tree_next_cursor is not None
+                           or len(all_context_map_nodes) > len(context_map_nodes))
     map_nodes = all_map_nodes
     visible_map_keys = {node["node_key"] for node in map_nodes}
     map_edges = [
@@ -1573,7 +1592,7 @@ async def build_project_manager_read_model(
         (item for item in run_items if _key("workflow_run", item["run_id"]) == selection_key),
         None,
     )
-    if selected is None and selection_key.startswith("workflow_run:") and workflow_ids:
+    if selected is None and selection_key.startswith("workflow_run:"):
         selected_run_id = selection_key.split(":", 1)[1]
         row = (
             await session.execute(
@@ -1656,7 +1675,8 @@ async def build_project_manager_read_model(
             and revision_id
             and dataset.workspace_id == project_id
             and dataset.aggregate_kind == "dataset"
-            and dataset.parent_id in collection_domain_ids
+            and await session.scalar(focused_domain_scope.where(ExperimentAggregateHead.aggregate_id == dataset.parent_id)) is not None
+            and (folder_domain_id is None or dataset.parent_id == folder_domain_id)
         ):
             revision = await session.get(ExperimentRevision, revision_id)
             if revision is not None and revision.subject_id == dataset.aggregate_id:
@@ -1757,84 +1777,51 @@ async def build_project_manager_read_model(
         focused_domain_ids=collection_domain_ids,
     )
     receipt_domain_ids = collection_domain_ids
-    selected_domain_id: str | None = None
-    if selected.get("node_type") == "domain_experiment":
-        candidate = str((selected.get("canonical_identity") or {}).get("entity_id") or "")
-        if candidate in collection_domain_ids:
-            selected_domain_id = candidate
-    else:
-        parent_node_key = str(selected.get("parent_node_key") or "")
-        if parent_node_key.startswith("domain_experiment:"):
-            candidate = parent_node_key.split(":", 1)[1]
-            if candidate in collection_domain_ids:
-                selected_domain_id = candidate
-    if selected_domain_id is not None:
-        receipt_domain_ids = [selected_domain_id]
-
-    source_receipts = await _complete_attachment_receipts(
-        session,
-        project_id=project_id,
-        focused_domain_ids=receipt_domain_ids,
-    )
+    if selected_domain is not None:
+        receipt_domain_ids = [selected_domain.aggregate_id]
+    displayed_receipt_ids = {receipt.id for _edge, receipt in map_rows + lineage_rows + result_rows}
+    if selected.get("node_type") == "external_entity_receipt":
+        displayed_receipt_ids.add(str(selected["canonical_identity"]["receipt_id"]))
+    # Exact visible receipts only. SQL counts preserve honest incomplete scope.
+    source_receipts = list(await session.scalars(
+        select(ExperimentExternalEntityReceipt).join(
+            ExperimentLineageEdge,
+            ExperimentLineageEdge.target_resource_id == ExperimentExternalEntityReceipt.id,
+        ).where(
+            *_attachment_predicates(project_id, receipt_domain_ids),
+            ExperimentExternalEntityReceipt.id.in_(displayed_receipt_ids),
+        ).distinct().order_by(ExperimentExternalEntityReceipt.id)
+    )) if displayed_receipt_ids else []
+    source_total = int(await session.scalar(select(func.count(func.distinct(ExperimentExternalEntityReceipt.id))).join(
+        ExperimentLineageEdge, ExperimentLineageEdge.target_resource_id == ExperimentExternalEntityReceipt.id,
+    ).where(*_attachment_predicates(project_id, receipt_domain_ids))) or 0)
     source_receipts_by_id = {receipt.id: receipt for receipt in source_receipts}
     reverifications_by_receipt: dict[str, dict[str, Any] | None] = {}
-    if source_receipts:
-        reverification_rows = list(
-            (
-                await session.scalars(
-                    select(ExperimentDomainAdapterReceipt)
-                    .where(
-                        ExperimentDomainAdapterReceipt.workspace_id == project_id,
-                        ExperimentDomainAdapterReceipt.domain_experiment_id.in_(receipt_domain_ids),
-                        ExperimentDomainAdapterReceipt.operation_kind == "reverify_source",
-                    )
-                    .order_by(
-                        ExperimentDomainAdapterReceipt.created_at.desc(),
-                        ExperimentDomainAdapterReceipt.resource_id.desc(),
-                    )
-                    .limit(MAX_REVERIFICATION_SCAN_ROWS + 1)
-                )
-            ).all()
-        )
-        target_receipt_ids = set(source_receipts_by_id)
-        domain_global_ids = {
-            head.aggregate_id: str(head.parent_id or "")
-            for head in domain_heads
-            if head.aggregate_id in receipt_domain_ids
-        }
-        for row in reverification_rows:
-            try:
-                payload = json.loads(row.receipt_json)
-            except json.JSONDecodeError as exc:
-                raise ValidationFailure("Stored source re-verification receipt is malformed") from exc
-            source_receipt_id = payload.get("source_receipt_id") if isinstance(payload, dict) else None
-            if not isinstance(source_receipt_id, str):
-                raise ValidationFailure("Stored source re-verification receipt has no source identity")
-            if source_receipt_id not in target_receipt_ids or source_receipt_id in reverifications_by_receipt:
-                continue
-            expected_global_id = domain_global_ids.get(row.domain_experiment_id)
-            if expected_global_id is None:
-                continue
-            reverifications_by_receipt[source_receipt_id] = _validated_reverification_payload(
-                row,
-                payload,
-                source_receipt=source_receipts_by_id[source_receipt_id],
-                project_id=project_id,
-                global_experiment_id=expected_global_id,
-                domain_experiment_id=row.domain_experiment_id,
+    source_identity = case((func.json_valid(ExperimentDomainAdapterReceipt.receipt_json),
+        func.json_extract(ExperimentDomainAdapterReceipt.receipt_json, literal_column("'$.source_receipt_id'"))))
+    for receipt in source_receipts:
+        row = await session.scalar(select(ExperimentDomainAdapterReceipt).where(
+            ExperimentDomainAdapterReceipt.workspace_id == project_id,
+            ExperimentDomainAdapterReceipt.operation_kind == "reverify_source",
+            source_identity == receipt.id,
+            ExperimentDomainAdapterReceipt.domain_experiment_id.in_(receipt_domain_ids),
+        ).order_by(ExperimentDomainAdapterReceipt.created_at.desc(), ExperimentDomainAdapterReceipt.resource_id.desc()).limit(1))
+        if row is None:
+            continue
+        domain = await session.scalar(domain_scope.where(ExperimentAggregateHead.aggregate_id == row.domain_experiment_id))
+        if domain is not None:
+            reverifications_by_receipt[receipt.id] = _validated_reverification_payload(
+                row, json.loads(row.receipt_json), source_receipt=receipt,
+                project_id=project_id, global_experiment_id=domain.parent_id,
+                domain_experiment_id=domain.aggregate_id,
             )
-            if len(reverifications_by_receipt) == len(target_receipt_ids):
-                break
-        if (
-            len(reverification_rows) > MAX_REVERIFICATION_SCAN_ROWS
-            and len(reverifications_by_receipt) < len(target_receipt_ids)
-        ):
-            raise ValidationFailure("Source re-verification history exceeds the supported scan bound")
-    source_reconciliation = _source_reconciliation(
-        source_receipts,
-        reverifications_by_receipt,
-    )
-    source_receipts_by_id = {receipt.id: receipt for receipt in source_receipts}
+    source_reconciliation = _source_reconciliation(source_receipts, reverifications_by_receipt)
+    source_projection_complete = len(source_receipts) == source_total
+    if not source_projection_complete and source_reconciliation["state"] in {"current", "stale"}:
+        source_reconciliation = {
+            "state": "pending", "last_verified_at": source_reconciliation["last_verified_at"],
+            "reason": "reconciliation covers displayed receipts only; additional attached sources are not evaluated",
+        }
     for node in map_nodes:
         if node.get("node_type") != "external_entity_receipt":
             continue
@@ -1876,33 +1863,40 @@ async def build_project_manager_read_model(
     )
     page_context_keys = [node["node_key"] for node in context_map_nodes]
 
-    setup_rows = list(
-        (
-            await session.scalars(
-                select(ExperimentWorkflowSetupContext)
-                .where(ExperimentWorkflowSetupContext.project_id == project_id)
-                .order_by(
-                    ExperimentWorkflowSetupContext.updated_at.desc(),
-                    ExperimentWorkflowSetupContext.setup_context_id.desc(),
-                )
-                .limit(MAX_TREE_NODES + 1)
-            )
-        ).all()
+    setup_global = aliased(ExperimentAggregateHead)
+    setup_domain = aliased(ExperimentAggregateHead)
+    setup_workflow = aliased(ExperimentAggregateHead)
+    setup_scope = select(ExperimentWorkflowSetupContext, setup_global, setup_workflow).join(
+        setup_global, setup_global.aggregate_id == ExperimentWorkflowSetupContext.global_experiment_id,
+    ).join(setup_domain, setup_domain.aggregate_id == ExperimentWorkflowSetupContext.domain_experiment_id).join(
+        setup_workflow, setup_workflow.aggregate_id == ExperimentWorkflowSetupContext.workflow_id,
+    ).where(
+        ExperimentWorkflowSetupContext.project_id == project_id,
+        ExperimentWorkflowSetupContext.deleted_at.is_(None),
+        ExperimentWorkflowSetupContext.lifecycle_state != "deleted",
+        ExperimentWorkflowSetupContext.domain_experiment_id.in_(collection_domain_ids),
+        setup_global.workspace_id == project_id, setup_global.aggregate_kind == "experiment",
+        setup_global.parent_id == project_id,
+        setup_domain.workspace_id == project_id, setup_domain.aggregate_kind == "domain_experiment",
+        setup_domain.parent_id == setup_global.aggregate_id,
+        setup_workflow.workspace_id == project_id, setup_workflow.aggregate_kind == "workflow",
+        setup_workflow.parent_id == setup_domain.aggregate_id,
     )
-    if len(setup_rows) > MAX_TREE_NODES:
-        raise ValidationFailure("Project workflow setup task list exceeds the supported bound")
-    workflow_heads_by_id = {head.aggregate_id: head for head in workflows}
-    latest_run_by_workflow: dict[str, dict[str, Any]] = {}
-    for run_item in run_items:
-        latest_run_by_workflow.setdefault(str(run_item["workflow_id"]), run_item)
+    task_family = "tasks-" + sha256_text(canonical_json([project_id, project.head_generation, focus.aggregate_id if focus is not None else project_id, selected_node_key, task_limit]))
+    task_after = _after_cursor(ExperimentWorkflowSetupContext.updated_at, ExperimentWorkflowSetupContext.setup_context_id, _decode_cursor(task_cursor, task_family))
+    if task_after is not None:
+        setup_scope = setup_scope.where(task_after)
+    setup_rows = (await session.execute(setup_scope.order_by(
+        ExperimentWorkflowSetupContext.updated_at.desc(), ExperimentWorkflowSetupContext.setup_context_id.desc(),
+    ).limit(task_limit + 1))).all()
+    task_next_cursor = _encode_cursor(task_family, setup_rows[task_limit - 1][0].updated_at, setup_rows[task_limit - 1][0].setup_context_id) if len(setup_rows) > task_limit else None
     task_items: list[dict[str, Any]] = []
-    for setup in setup_rows:
-        global_head = globals_by_id.get(setup.global_experiment_id)
-        workflow_head = workflow_heads_by_id.get(setup.workflow_id)
-        if global_head is None or workflow_head is None:
-            raise ValidationFailure("Project workflow setup task ownership is incomplete")
+    for setup, global_head, workflow_head in setup_rows[:task_limit]:
         capability = protein_capability_record(setup.capability_id)
-        latest_run = latest_run_by_workflow.get(setup.workflow_id)
+        task_runs, _task_workflows, _task_cursor = await _run_page(
+            session, project_id=project_id, workflow_ids=[setup.workflow_id], cursor=None, limit=1,
+        )
+        latest_run = task_runs[0] if task_runs else None
         actions: list[str] = []
         if setup.lifecycle_state == "open":
             actions = ["resume", "edit", "delete"]
@@ -1940,24 +1934,26 @@ async def build_project_manager_read_model(
         "subject_generation": project.head_generation,
         "assembled_at": _utc_now(),
         "source_receipt_ids": [receipt.id for receipt in source_receipts],
+        "source_projection": {"scope": "displayed_receipts", "complete": source_projection_complete, "total": source_total},
         "source_digest_set_sha256": source_digest_set_sha256,
         "adapter_versions": [
             {"adapter_id": adapter_id, "version": version} for adapter_id, version in adapter_versions
         ],
         "reconciliation": source_reconciliation,
         "counts": {
-            "global_experiments": len(global_heads),
-            "domain_experiments": len(domain_heads),
+            "global_experiments": global_total,
+            "domain_experiments": domain_total,
             "attached_entities": attached_count,
         },
         "status_summary": {
             "projects": {project.lifecycle_state: 1},
-            "global_experiments": _count_states(global_heads),
-            "domain_experiments": _count_states(domain_heads),
+            "global_experiments": global_states,
+            "domain_experiments": domain_states,
         },
         "recent_activity": activity_items,
         "result_previews": [item for item in result_items if item.get("canonical_surface", True) is not None],
         "pagination": {
+            "task_next_cursor": task_next_cursor,
             "map_next_cursor": map_next_cursor,
             "run_next_cursor": run_next_cursor,
             "result_next_cursor": result_next_cursor,
@@ -1984,7 +1980,8 @@ async def build_project_manager_read_model(
         },
         "project": _head_summary(project, project_payload),
         "tasks": task_items,
-        "tree": {"nodes": tree_nodes},
+        "tree": {"nodes": tree_nodes, "parent_node_key": tree_parent_node_key,
+                 "next_cursor": tree_next_cursor, "has_more": tree_next_cursor is not None, "total": tree_total},
         "map": {
             "focus_node_key": _key("global_experiment", focus.aggregate_id)
             if focus is not None
@@ -2023,6 +2020,5 @@ __all__ = [
     "DEFAULT_RUNS",
     "MAX_MAP_NODES",
     "MAX_PAGE_ITEMS",
-    "MAX_TREE_NODES",
     "build_project_manager_read_model",
 ]

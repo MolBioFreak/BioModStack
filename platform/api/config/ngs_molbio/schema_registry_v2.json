@@ -1,7 +1,7 @@
 {
   "baseline_source_commit": "1d41fb50300a4e574670f6a02a0345e597ac9ed4",
   "baseline_source_tree": "af85061039a5fafdcb828336f09ea6355713d1a9",
-  "content_sha256": "26712f6cb4619b990bc89e9efdedb33e8ba557bcc76564a14cc86a9b8f01d960",
+  "content_sha256": "2911005a2277f9e41cbe0cad88e7f5d6e3ff5d41488c80affe7dd325269e2a87",
   "entries": [
     {
       "path": "schemas/ngs_molbio/domain-experiment-v2.schema.json",
@@ -17,9 +17,9 @@
     },
     {
       "path": "schemas/ngs_molbio/domain-experiment-v4.schema.json",
-      "schema_canonical_sha256": "90402820e4894262cf99dda36d55420906c2dcc25f795010d8dbfd20e3758e2f",
+      "schema_canonical_sha256": "43c780b6662484fc013ab5cf3d4ede16a0f07d5d64028b4bdcf477b0d6aacaef",
       "schema_id": "bms.domain-experiment.v4",
-      "schema_sha256": "d23b14f740cbdba948d9c8d11f3c251fedd7d2eecb413a729411a38fb540a401"
+      "schema_sha256": "f56d33afaea9af42d25964410886a5dbfb6c6777135bd96e9be9d1953fafe362"
     },
     {
       "path": "schemas/ngs_molbio/evidence-requirement-native-receipt-v1.schema.json",
@@ -383,9 +383,9 @@
     },
     {
       "path": "schemas/ngs_molbio/protein-in-silico-experiment-v3.schema.json",
-      "schema_canonical_sha256": "69ad18a2b7c2ecd5745c9c579eb0901aaae44649d97642cd348819a392c27b0b",
+      "schema_canonical_sha256": "12822df486785c775966c37b31caf6b58734ad11c349a6e95fcf6118ab4a23c0",
       "schema_id": "bms.protein-in-silico-experiment.v3",
-      "schema_sha256": "729887e07857d51b09cef9fa3c0a286f246aa8528c50d32000fdcd591e85cfb8"
+      "schema_sha256": "3d2cdae25ac8b67c45285461b4c60145cd7093340f8a744ecd66674fb7f67704"
     },
     {
       "path": "schemas/ngs_molbio/protein-target-v2.schema.json",
@@ -395,9 +395,9 @@
     },
     {
       "path": "schemas/ngs_molbio/protein-target-v3.schema.json",
-      "schema_canonical_sha256": "dc3fcd515344ea02eff1bb92230e8b0775cf63a0a650c69891c56623d2ff6576",
+      "schema_canonical_sha256": "a7b309880180252f0e363209845f89c48b23b50f8f0305b1ab8ca677b0eb3bb4",
       "schema_id": "bms.protein-target.v3",
-      "schema_sha256": "a3eddcfa89d1c4d30b0dd65c95a8bb76be066d292649aafaa9be9f02e72f6a41"
+      "schema_sha256": "9f734443fe49c92dd9bef888db20ba389fbc0892fec2fa6314b48ec06f41af14"
     },
     {
       "path": "schemas/ngs_molbio/constraint-payload-registry-v1.schema.json",

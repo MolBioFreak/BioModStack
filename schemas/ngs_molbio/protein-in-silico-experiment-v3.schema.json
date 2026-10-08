@@ -38,7 +38,6 @@
     },
     "targets": {
       "type": "array",
-      "minItems": 1,
       "maxItems": 64,
       "items": {
         "$ref": "bms.protein-target.v3"

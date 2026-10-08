@@ -1248,10 +1248,9 @@ def _validate_hierarchy_payload(aggregate_kind: str, payload: dict[str, Any]) ->
         if not isinstance(payload.get("needs_metadata_review"), bool):
             raise ValidationFailure("Project v2 needs_metadata_review must be boolean")
     if aggregate_kind == "experiment":
-        if payload.get("status") == "active":
-            criteria = payload.get("success_criteria")
-            if not isinstance(criteria, list) or not criteria:
-                raise ValidationFailure("active global experiments require success criteria")
+        criteria = payload.get("success_criteria")
+        if not isinstance(criteria, list) or any(not isinstance(item, str) or not item.strip() for item in criteria):
+            raise ValidationFailure("global experiment success criteria must be an array of non-empty strings")
         if payload.get("status") == "completed":
             if not str(payload.get("review_summary") or "").strip() or not str(payload.get("conclusion") or "").strip():
                 raise ValidationFailure("completed global experiments require review_summary and conclusion")
@@ -1970,6 +1969,10 @@ async def archive_aggregate(
         payload = json.loads(current_revision.canonical_payload)
         payload["status"] = "archived"
         payload["change_summary"] = "archived"
+        if payload.get("schema") == "bms.domain-experiment.v4":
+            import rfc8785
+            payload.pop("canonical_size_bytes", None)
+            payload["canonical_size_bytes"] = len(rfc8785.dumps(payload))
         await _save_revision(
             session,
             aggregate_id=aggregate_id,
@@ -2024,12 +2027,18 @@ async def restore_aggregate(
             if archived_revision.parent_revision_id
             else None
         )
-        prior_payload = json.loads(prior_revision.canonical_payload) if prior_revision is not None else {}
-        lifecycle_state = str(prior_payload.get("status") or "draft")
-        if lifecycle_state == "archived":
-            lifecycle_state = "draft"
-        archived_payload["status"] = lifecycle_state
+        if prior_revision is None or prior_revision.subject_id != aggregate_id or sha256_text(prior_revision.canonical_payload) != prior_revision.payload_sha256:
+            raise ValidationFailure("restore requires an intact immediate predecessor")
+        prior_payload = json.loads(prior_revision.canonical_payload)
+        lifecycle_state = str(prior_payload.get("status") or "")
+        if not lifecycle_state or lifecycle_state == "archived" or prior_payload.get("schema") != archived_payload.get("schema"):
+            raise ValidationFailure("restore requires a non-archived predecessor with the same contract")
+        archived_payload = dict(prior_payload)
         archived_payload["change_summary"] = "restored"
+        if archived_payload.get("schema") == "bms.domain-experiment.v4":
+            import rfc8785
+            archived_payload.pop("canonical_size_bytes", None)
+            archived_payload["canonical_size_bytes"] = len(rfc8785.dumps(archived_payload))
         await _save_revision(
             session,
             aggregate_id=aggregate_id,

@@ -579,6 +579,7 @@ export interface ProjectManagerReadModel {
         decision_next_cursor: string | null;
         dataset_next_cursor: string | null;
         activity_next_cursor: string | null;
+        task_next_cursor?: string | null;
         map: BoundedPage<JsonObject> & { repeated_context_node_keys: string[] };
         runs: BoundedPage<ProjectRun>;
         results: BoundedPage<JsonObject>;
@@ -589,8 +590,9 @@ export interface ProjectManagerReadModel {
         activity: BoundedPage<ProjectActivity>;
     };
     project: ProjectHeadSummary;
+    source_projection?: { scope: 'displayed_receipts'; complete: boolean; total: number };
     tasks: ProjectWorkflowTask[];
-    tree: { nodes: ProjectTreeNode[] };
+    tree: { nodes: ProjectTreeNode[]; next_cursor?: string | null; parent_node_key?: string | null; has_more?: boolean; total?: number | null };
     map: {
         focus_node_key: string;
         nodes: ProjectMapNode[];
@@ -717,6 +719,11 @@ export interface CreateLaunchContextRequest {
 }
 
 export interface ProjectSummaryOptions {
+    treeParentNodeKey?: string;
+    treeCursor?: string;
+    treeLimit?: number;
+    taskCursor?: string;
+    taskLimit?: number;
     focusId?: string;
     selectedNodeKey?: string;
     mapCursor?: string;
@@ -738,22 +745,6 @@ export interface ProjectSummaryOptions {
     signal?: AbortSignal;
 }
 
-export interface ProjectV1CreateRequest {
-    schema: 'bms.project.v1';
-    name: string;
-    description?: string;
-    research_objective?: string;
-    owner?: string | null;
-    contributors?: string[];
-    tags?: string[];
-    status?: 'draft' | 'active' | 'on_hold' | 'completed';
-    start_date?: string | null;
-    target_end_date?: string | null;
-    created_by?: string | null;
-    change_summary?: string;
-    project_scope?: 'global' | 'ngs_molbio_local';
-}
-
 export interface ProjectV2CreateRequest {
     schema: 'bms.project.v2';
     project_scope: 'global' | 'ngs_molbio_local';
@@ -770,7 +761,7 @@ export interface ProjectV2CreateRequest {
     change_summary?: string;
 }
 
-export type ProjectCreateRequest = ProjectV1CreateRequest | ProjectV2CreateRequest;
+export type ProjectCreateRequest = ProjectV2CreateRequest;
 
 export type ProjectUpgradeRequest = ProjectV2CreateRequest & { expected_head_generation: number };
 
@@ -797,20 +788,6 @@ export interface NgsMolBioShareableResult {
     created_at: string;
 }
 
-export interface GlobalExperimentV1CreateRequest {
-    schema: 'bms.global-experiment.v1';
-    name: string;
-    objective?: string;
-    scientific_question?: string;
-    hypothesis?: string | null;
-    description?: string;
-    status?: 'draft' | 'planned' | 'active' | 'analysis' | 'review' | 'completed' | 'blocked';
-    priority?: 'low' | 'normal' | 'high' | 'critical';
-    tags?: string[];
-    success_criteria?: string[];
-    change_summary?: string;
-}
-
 export interface GlobalExperimentV2CreateRequest {
     schema: 'bms.global-experiment.v2';
     name: string;
@@ -830,23 +807,9 @@ export interface GlobalExperimentV2CreateRequest {
     change_summary?: string;
 }
 
-export type GlobalExperimentCreateRequest = GlobalExperimentV1CreateRequest | GlobalExperimentV2CreateRequest;
+export type GlobalExperimentCreateRequest = GlobalExperimentV2CreateRequest;
 
 export type GlobalExperimentUpgradeRequest = GlobalExperimentV2CreateRequest & { expected_head_generation: number };
-
-export interface DomainExperimentV2CreateRequest {
-    schema: 'bms.domain-experiment.v2';
-    domain_kind: 'protein_in_silico' | 'ngs_molbio';
-    domain_contract_version: '2';
-    name: string;
-    objective: string;
-    status: 'draft' | 'planned' | 'active' | 'analysis' | 'review' | 'completed' | 'blocked' | 'archived';
-    tags: string[];
-    source_receipt_ids: string[];
-    dataset_revision_ids: string[];
-    change_summary: string;
-    domain_payload: JsonObject;
-}
 
 export interface DomainExperimentV4CreateRequest {
     schema: 'bms.domain-experiment.v4';
@@ -862,7 +825,7 @@ export interface DomainExperimentV4CreateRequest {
     domain_payload: JsonObject;
 }
 
-export type DomainExperimentCreateRequest = DomainExperimentV2CreateRequest | DomainExperimentV4CreateRequest;
+export type DomainExperimentCreateRequest = DomainExperimentV4CreateRequest;
 
 export interface HierarchyMutationResult {
     id: string;
@@ -1438,15 +1401,19 @@ export function normalizeProjectManagerReadModel(value: unknown): ProjectManager
         'schema', 'subject_id', 'subject_generation', 'assembled_at', 'source_receipt_ids', 'source_digest_set_sha256',
         'adapter_versions', 'reconciliation', 'counts', 'status_summary', 'recent_activity', 'result_previews', 'pagination',
         'project', 'tree', 'map', 'selection', 'runs', 'warnings', 'allowed_actions',
-    ], ['tasks']);
+    ], ['tasks', 'source_projection']);
+    const sourceProjection = record.source_projection === undefined ? undefined : exactRecord(record.source_projection, `${label}.source_projection`, ['scope', 'complete', 'total']);
     const project = exactRecord(record.project, `${label}.project`, ['id', 'project_scope', 'name', 'objective', 'lifecycle_state', 'head_generation', 'current_revision_id', 'updated_at']);
-    const tree = exactRecord(record.tree, `${label}.tree`, ['nodes']);
+    const tree = exactRecord(record.tree, `${label}.tree`, ['nodes'], ['next_cursor', 'parent_node_key', 'has_more', 'total']);
+    if (tree.has_more !== undefined && requireBoolean(tree.has_more, `${label}.tree.has_more`) !== Boolean(tree.next_cursor)) throw new Error('Project tree continuation metadata is inconsistent.');
+    if (tree.total !== undefined && tree.total !== null && requireInteger(tree.total, `${label}.tree.total`) < 0) throw new Error('Project tree total cannot be negative.');
+    if (sourceProjection && requireInteger(sourceProjection.total, `${label}.source_projection.total`) < 0) throw new Error('Source projection total cannot be negative.');
     const map = exactRecord(record.map, `${label}.map`, ['focus_node_key', 'nodes', 'edges', 'truncated', 'next_cursor']);
     const runs = exactRecord(record.runs, `${label}.runs`, ['items', 'next_cursor']);
     const pagination = exactRecord(record.pagination, `${label}.pagination`, [
         'map_next_cursor', 'run_next_cursor', 'result_next_cursor', 'lineage_next_cursor', 'note_next_cursor', 'decision_next_cursor', 'dataset_next_cursor', 'activity_next_cursor',
         'map', 'runs', 'results', 'lineage', 'notes', 'decisions', 'datasets', 'activity',
-    ]);
+    ], ['task_next_cursor']);
     const paginationRuns = exactRecord(pagination.runs, `${label}.pagination.runs`, ['items', 'next_cursor']);
     const paginationActivity = exactRecord(pagination.activity, `${label}.pagination.activity`, ['items', 'next_cursor']);
     return {
@@ -1468,6 +1435,7 @@ export function normalizeProjectManagerReadModel(value: unknown): ProjectManager
         recent_activity: requireArray(record.recent_activity, `${label}.recent_activity`, parseActivity),
         result_previews: requireArray(record.result_previews, `${label}.result_previews`, parseResultSurface),
         pagination: {
+            task_next_cursor: requireNullableString(pagination.task_next_cursor ?? null, `${label}.pagination.task_next_cursor`),
             map_next_cursor: requireNullableString(pagination.map_next_cursor, `${label}.pagination.map_next_cursor`),
             run_next_cursor: requireNullableString(pagination.run_next_cursor, `${label}.pagination.run_next_cursor`),
             result_next_cursor: requireNullableString(pagination.result_next_cursor, `${label}.pagination.result_next_cursor`),
@@ -1495,8 +1463,15 @@ export function normalizeProjectManagerReadModel(value: unknown): ProjectManager
             current_revision_id: requireNullableString(project.current_revision_id, `${label}.project.current_revision_id`),
             updated_at: requireString(project.updated_at, `${label}.project.updated_at`),
         },
+        ...(sourceProjection ? { source_projection: { scope: requireLiteral(sourceProjection.scope, `${label}.source_projection.scope`, ['displayed_receipts'] as const), complete: requireBoolean(sourceProjection.complete, `${label}.source_projection.complete`), total: requireInteger(sourceProjection.total, `${label}.source_projection.total`) } } : {}),
         tasks: requireArray(record.tasks ?? [], `${label}.tasks`, parseProjectWorkflowTask),
-        tree: { nodes: requireArray(tree.nodes, `${label}.tree.nodes`, parseTreeNode) },
+        tree: {
+            nodes: requireArray(tree.nodes, `${label}.tree.nodes`, parseTreeNode),
+            ...(tree.next_cursor !== undefined ? { next_cursor: requireNullableString(tree.next_cursor, `${label}.tree.next_cursor`) } : {}),
+            ...(tree.parent_node_key !== undefined ? { parent_node_key: requireNullableString(tree.parent_node_key, `${label}.tree.parent_node_key`) } : {}),
+            ...(tree.has_more !== undefined ? { has_more: requireBoolean(tree.has_more, `${label}.tree.has_more`) } : {}),
+            ...(tree.total !== undefined ? { total: tree.total === null ? null : requireInteger(tree.total, `${label}.tree.total`) } : {}),
+        },
         map: {
             focus_node_key: requireString(map.focus_node_key, `${label}.map.focus_node_key`),
             nodes: requireArray(map.nodes, `${label}.map.nodes`, parseMapNode),
@@ -1783,6 +1758,11 @@ export async function getProjectSummary(projectId: string, options: ProjectSumma
         params: {
             focus_id: options.focusId,
             selected_node_key: options.selectedNodeKey,
+            tree_parent_node_key: options.treeParentNodeKey,
+            tree_cursor: options.treeCursor,
+            tree_limit: options.treeLimit,
+            task_cursor: options.taskCursor,
+            task_limit: options.taskLimit,
             map_cursor: options.mapCursor,
             run_cursor: options.runCursor,
             result_cursor: options.resultCursor,
@@ -2131,10 +2111,11 @@ export async function listDomainResearchRecords(
     globalExperimentId: string,
     domainExperimentId: string,
     signal?: AbortSignal,
+    cursor?: string,
 ): Promise<{ items: ResearchRecordItem[]; next_cursor: string | null }> {
     return (await api.get<{ items: ResearchRecordItem[]; next_cursor: string | null }>(
         `/api/projects/${segment(projectId)}/experiments/${segment(globalExperimentId)}/domains/${segment(domainExperimentId)}/records`,
-        { params: { limit: 100 }, signal },
+        { params: { limit: 100, cursor }, signal },
     )).data;
 }
 

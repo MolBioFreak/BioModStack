@@ -1212,6 +1212,7 @@ def git_build_identity(project_root: Path) -> dict[str, str]:
         build_time = "unknown"
     return {
         "revision": revision,
+        "source_tree": git_value("rev-parse", f"{revision}^{{tree}}"),
         "build_id": f"{branch}-{revision[:12]}",
         "build_time": build_time,
     }
@@ -1375,6 +1376,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     _assert_runtime_port_contract(resolved)
     build_identity = git_build_identity(root)
     build_revision = build_identity["revision"]
+    build_tree = build_identity.get("source_tree", "unknown")
     build_id = build_identity["build_id"]
     build_time = build_identity["build_time"]
     log_rotator = root / "scripts" / "rotate_biomodstack_logs.py"
@@ -1483,6 +1485,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
             {_runtime_reference_directive(runtime_image_store, 'production')}
             Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_PORT={PRODUCTION_WORKFLOW_ADAPTER_PORT}")}
             Environment={systemd_value(f"BMS_BUILD_SHA={build_revision}")}
+            Environment={systemd_value(f"BMS_BUILD_TREE={build_tree}")}
             Environment={systemd_value(f"BMS_BUILD_ID={build_id}")}
             Environment={systemd_value(f"BMS_BUILD_TIME={build_time}")}
             ExecStartPre=/usr/bin/env python3 {systemd_exec_arg(log_rotator)}
@@ -1740,6 +1743,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1
         Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_PORT={DEVELOPMENT_WORKFLOW_ADAPTER_PORT}")}
         Environment={systemd_value(f"BMS_BUILD_SHA={build_revision}")}
+        Environment={systemd_value(f"BMS_BUILD_TREE={build_tree}")}
         Environment={systemd_value(f"BMS_BUILD_ID={build_id}")}
         Environment={systemd_value(f"BMS_BUILD_TIME={build_time}")}
         ExecStartPre=/usr/bin/mkdir -p {systemd_exec_arg(dev_data_root)} {systemd_exec_arg(dev_inputs_dir)} {systemd_exec_arg(dev_work_dir)} {systemd_exec_arg(dev_results_root)} {systemd_exec_arg(dev_container_dir)}
@@ -1820,6 +1824,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment={systemd_value(f"BMS_ONT_LIVE_CONVERSION_ENABLED={ont_live_conversion_enabled}")}
         Environment={systemd_value(f"BMS_ONT_RAW_SIGNAL_RETENTION_POLICY={ont_retention_policy}")}
         Environment={systemd_value(f"BMS_BUILD_SHA={build_revision}")}
+        Environment={systemd_value(f"BMS_BUILD_TREE={build_tree}")}
         Environment={systemd_value(f"BMS_BUILD_ID={build_id}")}
         Environment={systemd_value(f"BMS_BUILD_TIME={build_time}")}
         Environment=PYTHONUNBUFFERED=1

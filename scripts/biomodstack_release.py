@@ -516,6 +516,7 @@ class ProductionReleaseBackend:
                 materialized_root,
                 identity,
                 image_refs=self.image_refs,
+                source_tree=self._run(["git", "rev-parse", f"{identity.revision}^{{tree}}"]).stdout.strip(),
             )
 
     @staticmethod
@@ -524,9 +525,11 @@ class ProductionReleaseBackend:
         identity: BuildIdentity,
         *,
         image_refs: Mapping[str, str],
+        source_tree: str,
     ) -> None:
         merged_env = os.environ.copy()
         merged_env.update(identity.as_environment())
+        merged_env["BMS_BUILD_TREE"] = source_tree
         merged_env.update(
             {
                 IMAGE_REFS[service]: image_ref

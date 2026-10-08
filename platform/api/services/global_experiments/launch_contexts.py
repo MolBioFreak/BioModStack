@@ -7,7 +7,7 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Sequence
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlsplit
 
 from sqlalchemy import case, exists, func, select, update
 from sqlalchemy.exc import SQLAlchemyError
@@ -143,7 +143,7 @@ def _validate_return_uri(
     domain_experiment_id: str,
     workflow_id: str | None,
 ) -> str:
-    if not return_uri or len(return_uri) > 1000:
+    if not return_uri or len(return_uri) > 1000 or "\\" in unquote(return_uri) or any(ord(char) < 32 or ord(char) == 127 for char in unquote(return_uri)):
         raise LaunchContextError(
             "launch_context_return_uri_invalid",
             "Return URI must be a bounded internal Project route.",
@@ -189,7 +189,7 @@ def _validate_return_uri(
             "Return URI selection is malformed.",
             status_code=422,
         )
-    return return_uri
+    return f"/projects/{quote(project_id, safe='')}?{urlencode({'focus': global_experiment_id, 'selected': selected})}"
 
 
 async def _validate_return_selection(
@@ -199,17 +199,60 @@ async def _validate_return_selection(
     global_experiment_id: str,
     selected_node_key: str,
 ) -> None:
-    from services.global_experiments.read_models import build_project_manager_read_model
+    # Navigation ownership is an exact lookup, not a dashboard projection.
+    from experiment_models import ExperimentExternalEntityReceipt, ExperimentLineageEdge, ExperimentResearchRecord
 
-    summary = await build_project_manager_read_model(
-        session,
-        project_id=project_id,
-        focus_id=global_experiment_id,
-        selected_node_key=selected_node_key,
-        run_limit=1,
-        map_limit=1,
-    )
-    if summary["selection"]["node_key"] != selected_node_key:
+    kind, _, identity = selected_node_key.partition(":")
+    owned = False
+    if kind == "project":
+        owned = identity == project_id
+    elif kind == "global_experiment":
+        owned = identity == global_experiment_id
+    elif kind == "external_entity_receipt":
+        owned = bool(await session.scalar(
+            select(ExperimentLineageEdge.id)
+            .join(ExperimentAggregateHead, ExperimentAggregateHead.aggregate_id == ExperimentLineageEdge.source_resource_id)
+            .join(ExperimentExternalEntityReceipt, ExperimentExternalEntityReceipt.id == ExperimentLineageEdge.target_resource_id)
+            .where(
+                ExperimentLineageEdge.workspace_id == project_id,
+                ExperimentLineageEdge.target_resource_id == identity,
+                ExperimentLineageEdge.edge_mode.in_(("references", "uses_input", "produced", "validated_by")),
+                ExperimentAggregateHead.aggregate_kind == "domain_experiment",
+                ExperimentAggregateHead.workspace_id == project_id,
+                ExperimentAggregateHead.parent_id == global_experiment_id,
+                ExperimentExternalEntityReceipt.workspace_id == project_id,
+            ).limit(1)
+        ))
+    else:
+        expected_kind = kind
+        if kind == "virtual_folder":
+            identity, _, folder = identity.rpartition(":")
+            expected_kind = "domain_experiment" if folder in {"plans", "runs", "results", "datasets", "notes", "decisions", "activity"} else "invalid"
+        elif kind == "workflow_run":
+            run = await session.get(ExperimentWorkflowRun, identity)
+            preparation = await session.get(ExperimentWorkflowPreparation, run.preparation_id) if run and run.workspace_id == project_id else None
+            revision = await session.get(ExperimentRevision, preparation.workflow_revision_id) if preparation and preparation.workspace_id == project_id else None
+            identity = revision.subject_id if revision else ""
+            expected_kind = "workflow"
+        elif kind == "dataset":
+            identity, _, revision_id = identity.partition(":")
+            revision = await session.get(ExperimentRevision, revision_id)
+            if revision is None or revision.subject_id != identity:
+                identity = ""
+        elif kind == "research_record":
+            record = await session.get(ExperimentResearchRecord, identity)
+            identity = record.subject_resource_id if record and record.workspace_id == project_id else ""
+            expected_kind = None
+        if expected_kind in {None, "domain_experiment", "workflow", "dataset"}:
+            head = await session.get(ExperimentAggregateHead, identity)
+            if head and head.workspace_id == project_id and (expected_kind is None or head.aggregate_kind == expected_kind):
+                if head.aggregate_kind in {"workflow", "dataset"}:
+                    head = await session.get(ExperimentAggregateHead, head.parent_id)
+                owned = bool(head and head.workspace_id == project_id and (
+                    (head.aggregate_kind == "domain_experiment" and head.parent_id == global_experiment_id)
+                    or (kind == "research_record" and head.aggregate_id in {project_id, global_experiment_id})
+                ))
+    if not owned:
         raise LaunchContextError(
             "launch_context_return_uri_mismatch",
             "Return URI selection is not owned by the bound Project context.",

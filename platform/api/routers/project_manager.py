@@ -476,7 +476,7 @@ async def create_project_workflow_setup(
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     try:
-        await _require_mutation_owner(request, session, resource_id=project_id)
+        actor_id = await _require_mutation_owner(request, session, resource_id=project_id)
         response = await create_workflow_setup(
             session,
             project_id=project_id,
@@ -486,6 +486,7 @@ async def create_project_workflow_setup(
             experiment_objective=payload.experiment.objective if payload.experiment else None,
             domain_kind=payload.domain_kind,
             capability_id=payload.capability_id,
+            actor_id=actor_id,
             idempotency_key=_idempotency_key(request),
         )
         await session.commit()
@@ -2149,6 +2150,18 @@ async def get_domain_preparation(project_id: str, experiment_id: str, domain_id:
 async def issue_prepared_handoff(project_id: str, experiment_id: str, domain_id: str, preparation_id: str, payload: PreparedHandoffRequest, request: Request, session: AsyncSession = Depends(get_experiment_session), core_session: AsyncSession = Depends(get_core_session), domain_session: AsyncSession = Depends(get_molbio_ngs_session)) -> dict:
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
+        key = _idempotency_key(request)
+        normalized = {"project_id": project_id, "experiment_id": experiment_id, "domain_id": domain_id, "preparation_id": preparation_id, "return_uri": payload.return_uri}
+        digest = hashlib.sha256(json.dumps(normalized, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        scope = f"handoff:{hashlib.sha256(preparation_id.encode()).hexdigest()}"
+        claim = await session.get(ExperimentIdempotencyClaim, (scope, key))
+        if claim:
+            if claim.request_sha256 != digest:
+                raise IdempotencyConflict("idempotency key was reused with a different handoff request")
+            response = json.loads(claim.response_json)
+            if response.get("schema") != "bms.launch-context.v2" or response.get("launch_context_id") != claim.result_resource_id:
+                raise ValidationFailure("original launch-context issuance response is unavailable")
+            return response
         _project, _experiment, _domain = await _domain_hierarchy(session, project_id, experiment_id, domain_id)
         preparation = await session.get(ExperimentWorkflowPreparation, preparation_id)
         revision = await session.get(ExperimentRevision, preparation.workflow_revision_id if preparation else "")
@@ -2170,24 +2183,9 @@ async def issue_prepared_handoff(project_id: str, experiment_id: str, domain_id:
         )
         if capability_contract["capability"].get("launch_mode") != "typed_launcher_handoff":
             raise ValidationFailure("capability does not use typed launcher handoff")
-        key = _idempotency_key(request)
-        normalized = {"project_id": project_id, "experiment_id": experiment_id, "domain_id": domain_id, "preparation_id": preparation_id, "return_uri": payload.return_uri}
-        digest = hashlib.sha256(json.dumps(normalized, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        scope = f"handoff:{hashlib.sha256(preparation_id.encode()).hexdigest()}"
-        claim = await session.get(ExperimentIdempotencyClaim, (scope, key))
-        if claim:
-            if claim.request_sha256 != digest:
-                raise IdempotencyConflict("idempotency key was reused with a different handoff request")
-            context = await session.get(ExperimentLaunchContext, claim.result_resource_id)
-            if (
-                context is None
-                or context.launch_context_id != claim.result_resource_id
-                or context.return_uri != payload.return_uri
-            ):
-                raise ValidationFailure("launch-context idempotency authority is unavailable or mismatched")
-        else:
-            context = await create_prepared_launch_context(session, project_id=project_id, global_experiment_id=experiment_id, domain_experiment_id=domain_id, preparation_id=preparation_id, return_uri=payload.return_uri)
-            session.add(ExperimentIdempotencyClaim(scope=scope, idempotency_key=key, request_sha256=digest, result_resource_id=context.launch_context_id, response_json=json.dumps({"launch_context_id": context.launch_context_id}), created_at=datetime.now(timezone.utc).isoformat()))
+        context = await create_prepared_launch_context(session, project_id=project_id, global_experiment_id=experiment_id, domain_experiment_id=domain_id, preparation_id=preparation_id, return_uri=payload.return_uri)
+        response = context_document(context)
+        session.add(ExperimentIdempotencyClaim(scope=scope, idempotency_key=key, request_sha256=digest, result_resource_id=context.launch_context_id, response_json=json.dumps(response), created_at=datetime.now(timezone.utc).isoformat()))
         await _require_v2_plan_launch_context(
             session,
             project_id=project_id,
@@ -2771,6 +2769,11 @@ async def project_manager_summary(
     project_id: str,
     focus_id: str | None = Query(default=None),
     selected_node_key: str | None = Query(default=None),
+    tree_parent_node_key: str | None = Query(default=None, max_length=512),
+    tree_cursor: str | None = Query(default=None, max_length=512),
+    tree_limit: int = Query(default=100, ge=1, le=100),
+    task_cursor: str | None = Query(default=None, max_length=512),
+    task_limit: int = Query(default=25, ge=1, le=100),
     map_cursor: str | None = Query(default=None, max_length=512),
     run_cursor: str | None = Query(default=None, max_length=512),
     result_cursor: str | None = Query(default=None, max_length=512),
@@ -2795,6 +2798,11 @@ async def project_manager_summary(
             project_id=project_id,
             focus_id=focus_id,
             selected_node_key=selected_node_key,
+            tree_parent_node_key=tree_parent_node_key,
+            tree_cursor=tree_cursor,
+            tree_limit=tree_limit,
+            task_cursor=task_cursor,
+            task_limit=task_limit,
             map_cursor=map_cursor,
             run_cursor=run_cursor,
             result_cursor=result_cursor,

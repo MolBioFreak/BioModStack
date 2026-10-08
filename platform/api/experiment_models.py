@@ -454,6 +454,14 @@ class ExperimentResearchRecord(ExperimentBase):
 
 class ExperimentDomainAdapterReceipt(ExperimentBase):
     __tablename__ = "domain_adapter_receipts"
+    __table_args__ = (
+        Index(
+            "ix_experiment_domain_adapter_receipts_source_latest",
+            "workspace_id", "operation_kind",
+            text("CASE WHEN json_valid(receipt_json) THEN json_extract(receipt_json, '$.source_receipt_id') END"),
+            text("created_at DESC"), text("resource_id DESC"),
+        ),
+    )
 
     resource_id = Column(String(128), ForeignKey("resources.id"), primary_key=True)
     workspace_id = Column(String(128), ForeignKey("resources.id"), nullable=False)

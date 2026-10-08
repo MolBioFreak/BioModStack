@@ -36,7 +36,6 @@
     "role",
     "source_receipt_ids",
     "dataset_member_refs",
-    "entity_map_reference",
     "expected_content_sha256"
   ],
   "properties": {

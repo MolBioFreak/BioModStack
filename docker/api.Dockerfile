@@ -2,6 +2,7 @@ ARG SOURCE_DATE_EPOCH=1
 FROM python:3.10-slim-bookworm@sha256:9643927a6fc74bd81b0f1bbb5cce3cb4a491f46b4c5dbee770f28e575f180015 AS api-base
 ARG SOURCE_DATE_EPOCH
 ARG BMS_BUILD_SHA=unknown
+ARG BMS_BUILD_TREE=unknown
 ARG BMS_BUILD_ID=development
 ARG BMS_BUILD_TIME=unknown
 
@@ -10,6 +11,7 @@ LABEL org.opencontainers.image.revision=$BMS_BUILD_SHA \
       org.opencontainers.image.version=$BMS_BUILD_ID
 
 ENV BMS_BUILD_SHA=$BMS_BUILD_SHA \
+    BMS_BUILD_TREE=$BMS_BUILD_TREE \
     BMS_BUILD_ID=$BMS_BUILD_ID \
     BMS_BUILD_TIME=$BMS_BUILD_TIME \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -136,6 +138,7 @@ RUN mkdir -p "${MAMBA_ROOT_PREFIX}" \
 FROM scratch AS api-runtime
 
 ARG BMS_BUILD_SHA=unknown
+ARG BMS_BUILD_TREE=unknown
 ARG BMS_BUILD_ID=development
 ARG BMS_BUILD_TIME=unknown
 
@@ -148,6 +151,7 @@ COPY --from=api-runtime-prepared / /
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     BMS_BUILD_SHA=$BMS_BUILD_SHA \
+    BMS_BUILD_TREE=$BMS_BUILD_TREE \
     BMS_BUILD_ID=$BMS_BUILD_ID \
     BMS_BUILD_TIME=$BMS_BUILD_TIME \
     UV_LINK_MODE=copy \

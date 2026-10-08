@@ -7,9 +7,13 @@ interface ProjectTreeProps {
     selectedNodeKey: string;
     onSelect: (nodeKey: string) => void;
     onClose?: () => void;
+    onBrowse?: (nodeKey: string) => void;
+    onNextPage?: () => void;
+    onFirstPage?: () => void;
+    loading?: boolean;
 }
 
-export function ProjectTree({ nodes, selectedNodeKey, onSelect, onClose }: ProjectTreeProps) {
+export function ProjectTree({ nodes, selectedNodeKey, onSelect, onClose, onBrowse, onNextPage, onFirstPage, loading }: ProjectTreeProps) {
     const [query, setQuery] = useState('');
     // Store only explicit choices; refreshed/new nodes retain sensible defaults.
     const [expansion, setExpansion] = useState<Record<string, boolean>>({});
@@ -65,11 +69,13 @@ export function ProjectTree({ nodes, selectedNodeKey, onSelect, onClose }: Proje
                                     <span className="flex items-start gap-2"><span className={`mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded text-[9px] font-bold ${selected ? 'bg-accent text-white' : 'bg-surface-tertiary text-content-muted'}`}>{initial}</span><span className="min-w-0 flex-1"><span className="block truncate text-xs font-semibold text-content">{node.label}</span><span className="mt-0.5 block truncate text-[9px] uppercase tracking-[0.12em] text-content-muted">{node.lifecycle_state ? displayLabel(node.lifecycle_state) : displayLabel(node.node_type)}{Object.keys(node.counts).length ? ` · ${Object.values(node.counts).reduce((sum, value) => sum + value, 0)}` : ''}</span></span></span>
                                 </button>
                             </div>
+                            {['project', 'global_experiment'].includes(node.node_type) && node.has_children && onBrowse && <button type="button" disabled={loading} onClick={() => onBrowse(node.node_key)} className="px-8 py-1 text-[10px] text-accent">Browse {node.label} children</button>}
                             {isFolder && isExpanded && <p className="px-8 py-1 text-[9px] text-content-muted">First bounded page · persisted hierarchy unchanged</p>}
                         </div>
                     );
                 })}
                 {!visible.length && <p className="px-3 py-8 text-center text-xs text-content-muted">No Project items match this filter.</p>}
+                <div className="flex gap-2 p-2">{onFirstPage && <button type="button" disabled={loading} onClick={onFirstPage} className="text-xs text-accent">First tree page</button>}{onNextPage && <button type="button" disabled={loading} onClick={onNextPage} className="text-xs text-accent">Next tree page</button>}</div>
             </nav>
         </aside>
     );

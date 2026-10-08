@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
@@ -31,13 +31,15 @@ function normalizedReceiptIds(value: string): string[] {
 export function ProteinEvidenceOperator({ projectId, globalExperimentId, domainExperimentId }: ProteinEvidenceOperatorProps) {
     const queryClient = useQueryClient();
     const scope = [projectId, globalExperimentId, domainExperimentId] as const;
+    const [cursor, setCursor] = useState<string | undefined>();
+    useEffect(() => setCursor(undefined), [projectId, globalExperimentId, domainExperimentId]);
     const [kind, setKind] = useState<RecordKind>('note');
     const [body, setBody] = useState('');
     const [receiptIds, setReceiptIds] = useState('');
 
     const records = useQuery({
-        queryKey: ['protein-project', ...scope, 'research-records'],
-        queryFn: ({ signal }) => listDomainResearchRecords(...scope, signal),
+        queryKey: ['protein-project', ...scope, 'research-records', cursor],
+        queryFn: ({ signal }) => listDomainResearchRecords(...scope, signal, cursor),
         retry: false,
     });
     const createRecord = useMutation({
@@ -50,6 +52,7 @@ export function ProteinEvidenceOperator({ projectId, globalExperimentId, domainE
             },
         ),
         onSuccess: async () => {
+            setCursor(undefined);
             setBody('');
             setReceiptIds('');
             await queryClient.invalidateQueries({ queryKey: ['protein-project', ...scope, 'research-records'] });
@@ -109,8 +112,9 @@ export function ProteinEvidenceOperator({ projectId, globalExperimentId, domainE
                         <p className="rounded-lg border border-dashed border-border-primary p-4 text-sm text-content-muted">No research records are attached to this exact Protein Domain.</p>
                     )}
                 </div>
+                {cursor && <button type="button" className={BUTTON} onClick={() => setCursor(undefined)}>First research records page</button>}
                 {records.data?.next_cursor && (
-                    <p className="mt-3 text-xs text-warning">The bounded record page has additional server rows. Use Project Manager history for the complete record.</p>
+                    <button type="button" className={BUTTON} disabled={records.isFetching} onClick={() => setCursor(records.data?.next_cursor ?? undefined)}>Next research records page</button>
                 )}
             </section>
         </div>

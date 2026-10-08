@@ -31,16 +31,13 @@ export function ProjectReturnBanner() {
     return (
         <aside className="border-b border-accent/30 bg-accent/10 px-4 py-2 text-content" aria-label="Project return context">
             <div className="mx-auto flex max-w-7xl items-center justify-between gap-3">
-                <div className="min-w-0 text-xs text-content-secondary">
-                    <p className="truncate">
-                        Project {context.project_id} / Experiment {context.global_experiment_id} / Domain {context.domain_experiment_id}
-                    </p>
+                <details className="min-w-0 text-xs text-content-secondary">
+                    <summary className="cursor-pointer">Project context details</summary>
+                    <p className="break-all">Project {context.project_id} / Experiment {context.global_experiment_id} / Domain {context.domain_experiment_id}</p>
                     {context.schema === 'bms.launch-context.v2' && (
-                        <p className="truncate">
-                            Prepared workflow {context.workflow_id} / Preparation {context.preparation_id} / Attempt {context.run_attempt_id}
-                        </p>
+                        <p className="break-all">Workflow {context.workflow_id} / Preparation {context.preparation_id} / Attempt {context.run_attempt_id}</p>
                     )}
-                </div>
+                </details>
                 <Link
                     to={returnUri}
                     aria-label="Return to Project context"

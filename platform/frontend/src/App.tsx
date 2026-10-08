@@ -13,6 +13,7 @@ const ResultsViewer = lazy(() => import('./components/ResultsViewer').then((modu
 const JobDetailPage = lazy(() => import('./components/JobDetailPage').then((module) => ({ default: module.JobDetailPage })));
 const MolBioToolkitV2 = lazy(() => import('./components/MolBioToolkit/indexV2').then((module) => ({ default: module.MolBioToolkitV2 })));
 const NGSToolkit = lazy(() => import('./components/NGSToolkit').then((module) => ({ default: module.NGSToolkit })));
+const DomainExperimentWorkspace = lazy(() => import('./components/molbio-ngs/DomainExperimentWorkspace'));
 const BioXpCockpit = lazy(() => import('./components/BioXpCockpit').then((module) => ({ default: module.BioXpCockpit })));
 const StatsToolkitLauncher = lazy(() => import('./components/StatsToolkitLauncher').then((module) => ({ default: module.StatsToolkitLauncher })));
 
@@ -57,6 +58,17 @@ function HistoricalDomainExperimentReopenRoute() {
   return <Navigate replace to={`/ngs${search ? `?${search}` : ''}`} />;
 }
 
+function ScientificToolkitRoute({ toolkit }: { toolkit: 'molbio' | 'ngs' }) {
+  const { search } = useLocation();
+  const params = new URLSearchParams(search);
+  const section = params.get('section');
+  const molecularAction = toolkit === 'molbio' && ['molbio_sequence_id', 'molbio_revision_id', 'molbio_operation_id', 'pcr_experiment_id', 'pcr_revision_id', 'primer_revision_id', 'action'].some((key) => params.has(key));
+  const domainView = section === 'workflow-plans' || section === 'datasets'
+    || (toolkit === 'molbio' && !molecularAction && ['overview', 'plasmids', 'sequence-data', 'experiments', 'results', 'activity', 'samples', 'references', 'molecular-inputs', 'evidence', 'history'].includes(section ?? ''));
+  if (domainView) return <><NgsMolBioProjectHub /><DomainExperimentWorkspace /></>;
+  return toolkit === 'molbio' ? <><NgsMolBioProjectHub /><MolBioToolkitV2 /></> : <NGSToolkit />;
+}
+
 function App() {
   const { features: bmsFeatures, resolved: bmsFeaturesResolved } = useResolvedBmsFeatures();
 
@@ -85,21 +97,12 @@ function App() {
             {/* Molecular Biology Toolkit - Seqviz-based sequence editor */}
             <Route
               path="/designer"
-              element={(
-                  <div className="w-full max-w-none">
-                    <NgsMolBioProjectHub />
-                    <MolBioToolkitV2 />
-                  </div>
-                )}
+              element={<ScientificToolkitRoute toolkit="molbio" />}
             />
             {/* NGS Data Visualization Toolkit - Nanopore-focused orchestration surface */}
             <Route
               path="/ngs"
-              element={(
-                  <div className="w-full max-w-none">
-                    <NGSToolkit />
-                  </div>
-                )}
+              element={<ScientificToolkitRoute toolkit="ngs" />}
             />
             {/* Isolated Stats Toolkit rendered inside the BioModStack workspace. */}
             <Route path="/stats" element={<StatsToolkitLauncher />} />

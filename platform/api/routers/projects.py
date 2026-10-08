@@ -70,23 +70,6 @@ class ExternalReference(StrictRequestModel):
     label: str = ""
 
 
-class ProjectV1CreateRequest(StrictRequestModel):
-    schema_: Literal["bms.project.v1"] = Field(default="bms.project.v1", alias="schema")
-    name: str = Field(min_length=1, max_length=255)
-    description: str = ""
-    research_objective: str = ""
-    owner: str | None = None
-    contributors: list[str] = Field(default_factory=list)
-    tags: list[str] = Field(default_factory=list)
-    status: Literal["draft", "active", "on_hold", "completed"] = "draft"
-    start_date: date | None = None
-    target_end_date: date | None = None
-    external_references: list[ExternalReference] = Field(default_factory=list)
-    created_by: str | None = None
-    change_summary: str = "created"
-    project_scope: Literal["global", "ngs_molbio_local"] = "global"
-
-
 class ProjectV2CreateRequest(StrictRequestModel):
     schema_: Literal["bms.project.v2"] = Field(alias="schema")
     project_scope: Literal["global", "ngs_molbio_local"]
@@ -108,7 +91,7 @@ class ProjectUpgradeRequest(ProjectV2CreateRequest):
     expected_head_generation: int = Field(ge=0)
 
 
-ProjectCreateRequest = ProjectV1CreateRequest | ProjectV2CreateRequest
+ProjectCreateRequest = ProjectV2CreateRequest
 
 
 class ProjectPatchRequest(StrictRequestModel):
@@ -139,26 +122,6 @@ class NgsMolBioProjectLinkRequest(StrictRequestModel):
     )
 
 
-class GlobalExperimentV1CreateRequest(StrictRequestModel):
-    schema_: Literal["bms.global-experiment.v1"] = Field(default="bms.global-experiment.v1", alias="schema")
-    name: str = Field(min_length=1, max_length=255)
-    objective: str = ""
-    scientific_question: str = ""
-    hypothesis: str | None = None
-    description: str = ""
-    status: Literal["draft", "planned", "active", "analysis", "review", "completed", "blocked"] = "draft"
-    priority: Literal["low", "normal", "high", "critical"] = "normal"
-    tags: list[str] = Field(default_factory=list)
-    shared_source_receipt_ids: list[str] = Field(default_factory=list)
-    shared_dataset_ids: list[str] = Field(default_factory=list)
-    comparison_plan: str | None = None
-    success_criteria: list[str] = Field(default_factory=list)
-    review_summary: str | None = None
-    conclusion: str | None = None
-    created_by: str | None = None
-    change_summary: str = "created"
-
-
 class GlobalExperimentV2CreateRequest(StrictRequestModel):
     schema_: Literal["bms.global-experiment.v2"] = Field(alias="schema")
     name: str = Field(min_length=1, max_length=255)
@@ -183,7 +146,7 @@ class GlobalExperimentUpgradeRequest(GlobalExperimentV2CreateRequest):
     expected_head_generation: int = Field(ge=0)
 
 
-GlobalExperimentCreateRequest = GlobalExperimentV1CreateRequest | GlobalExperimentV2CreateRequest
+GlobalExperimentCreateRequest = GlobalExperimentV2CreateRequest
 
 
 class GlobalExperimentPatchRequest(StrictRequestModel):
@@ -269,35 +232,6 @@ class NgsMolBioV2Payload(StrictRequestModel):
     evidence_plan: list[dict[str, Any]] = Field(max_length=128)
 
 
-class DomainExperimentV1CreateRequest(StrictRequestModel):
-    schema_: Literal["bms.domain-experiment.v1"] = Field(default="bms.domain-experiment.v1", alias="schema")
-    domain_kind: Literal["protein_in_silico", "ngs_molbio"]
-    domain_contract_version: str = Field(default="1", min_length=1)
-    name: str = Field(min_length=1, max_length=255)
-    objective: str = ""
-    status: Literal["draft", "planned", "active", "analysis", "review", "completed", "blocked"] = "draft"
-    tags: list[str] = Field(default_factory=list)
-    source_receipt_ids: list[str] = Field(default_factory=list)
-    dataset_ids: list[str] = Field(default_factory=list)
-    created_by: str | None = None
-    change_summary: str = "created"
-    domain_payload: ProteinInSilicoPayload | NgsMolBioPayload
-
-
-class DomainExperimentV2CreateRequest(StrictRequestModel):
-    schema_: Literal["bms.domain-experiment.v2"] = Field(alias="schema")
-    domain_kind: Literal["protein_in_silico", "ngs_molbio"]
-    domain_contract_version: Literal["2"]
-    name: str = Field(min_length=1, max_length=255)
-    objective: str = Field(max_length=8192)
-    status: Literal["draft", "planned", "active", "analysis", "review", "completed", "blocked", "archived"]
-    tags: list[str] = Field(max_length=64)
-    source_receipt_ids: list[str] = Field(max_length=256)
-    dataset_revision_ids: list[str] = Field(max_length=128)
-    change_summary: str = Field(min_length=1, max_length=1024)
-    domain_payload: ProteinInSilicoV2Payload | NgsMolBioV2Payload
-
-
 class DomainExperimentV4CreateRequest(StrictRequestModel):
     schema_: Literal["bms.domain-experiment.v4"] = Field(alias="schema")
     domain_kind: Literal["protein_in_silico", "ngs_molbio"]
@@ -312,7 +246,7 @@ class DomainExperimentV4CreateRequest(StrictRequestModel):
     domain_payload: dict[str, Any]
 
 
-DomainExperimentCreateRequest = DomainExperimentV1CreateRequest | DomainExperimentV2CreateRequest | DomainExperimentV4CreateRequest
+DomainExperimentCreateRequest = DomainExperimentV4CreateRequest
 
 
 class DomainExperimentPatchRequest(StrictRequestModel):
@@ -980,7 +914,8 @@ async def patch_project(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _project(session, project_id)
-        _require_current_contract(await _payload(session, head), aggregate_kind="workspace")
+        if payload.model_fields_set - {'expected_head_generation', 'name', 'change_summary', 'description', 'tags'}:
+            _require_current_contract(await _payload(session, head), aggregate_kind="workspace")
         await save_hierarchy_revision(
             session,
             project_id,
@@ -1006,7 +941,6 @@ async def archive_project(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _project(session, project_id)
-        _require_current_contract(await _payload(session, head), aggregate_kind="workspace")
         archived = await archive_aggregate(session, head.aggregate_id, expected_head_generation=payload.expected_head_generation)
         await session.commit()
         return await _head_json(session, archived, exposed_kind="project", storage_kind="workspace")
@@ -1025,7 +959,6 @@ async def restore_project(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _project(session, project_id)
-        _require_current_contract(await _payload(session, head), aggregate_kind="workspace")
         restored = await restore_aggregate(session, head.aggregate_id, expected_head_generation=payload.expected_head_generation)
         await session.commit()
         return await _head_json(session, restored, exposed_kind="project", storage_kind="workspace")
@@ -1262,9 +1195,11 @@ async def create_global_experiment_route(
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     try:
-        await _require_mutation_owner(request, session, resource_id=project_id)
+        actor = await _require_mutation_owner(request, session, resource_id=project_id)
         await _project(session, project_id)
-        head = await create_global_experiment(session, project_id, payload.model_dump(mode="json", by_alias=True))
+        global_payload = payload.model_dump(mode="json", by_alias=True)
+        global_payload["created_by"] = actor
+        head = await create_global_experiment(session, project_id, global_payload)
         await session.commit()
         return await _head_json(
             session,
@@ -1345,7 +1280,8 @@ async def patch_global_experiment(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _global_experiment(session, project_id, experiment_id)
-        _require_current_contract(await _payload(session, head), aggregate_kind="experiment")
+        if payload.model_fields_set - {'expected_head_generation', 'name', 'change_summary', 'description', 'tags'}:
+            _require_current_contract(await _payload(session, head), aggregate_kind="experiment")
         await save_hierarchy_revision(
             session,
             experiment_id,
@@ -1378,7 +1314,6 @@ async def archive_global_experiment(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _global_experiment(session, project_id, experiment_id)
-        _require_current_contract(await _payload(session, head), aggregate_kind="experiment")
         archived = await archive_aggregate(session, head.aggregate_id, expected_head_generation=payload.expected_head_generation)
         await session.commit()
         return await _head_json(session, archived, exposed_kind="global_experiment", storage_kind="experiment", parent_id=project_id)
@@ -1398,7 +1333,6 @@ async def restore_global_experiment(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _global_experiment(session, project_id, experiment_id)
-        _require_current_contract(await _payload(session, head), aggregate_kind="experiment")
         restored = await restore_aggregate(session, head.aggregate_id, expected_head_generation=payload.expected_head_generation)
         await session.commit()
         return await _head_json(session, restored, exposed_kind="global_experiment", storage_kind="experiment", parent_id=project_id)
@@ -1444,8 +1378,6 @@ async def create_domain_experiment_route(
         actor = await _require_mutation_owner(request, session, resource_id=project_id)
         await _global_experiment(session, project_id, experiment_id)
         domain_payload = payload.model_dump(mode="json", by_alias=True)
-        if domain_payload.get("domain_contract_version") not in {"2", "3"}:
-            raise ValidationFailure("new Domain Experiments require the frozen v2 or v4 contract")
         domain_payload["created_by"] = actor
         domain_payload = _complete_domain_v4_attestations(domain_payload)
         head = await create_domain_experiment(
@@ -1756,7 +1688,8 @@ async def patch_domain_experiment(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _domain_experiment(session, project_id, experiment_id, domain_id)
-        _require_current_contract(await _payload(session, head), aggregate_kind="domain_experiment")
+        if payload.model_fields_set - {'expected_head_generation', 'name', 'change_summary', 'tags'}:
+            _require_current_contract(await _payload(session, head), aggregate_kind="domain_experiment")
         revision = await save_hierarchy_revision(
             session,
             domain_id,
@@ -1766,7 +1699,7 @@ async def patch_domain_experiment(
         )
         command = None
         refreshed_payload = await _payload(session, head)
-        if refreshed_payload.get("domain_kind") == "ngs_molbio":
+        if refreshed_payload.get("domain_kind") == "ngs_molbio" and refreshed_payload.get("schema") == "bms.domain-experiment.v4":
             command = await _issue_domain_revision_reverification(
                 session,
                 domain_session,
@@ -1806,7 +1739,6 @@ async def archive_domain_experiment(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _domain_experiment(session, project_id, experiment_id, domain_id)
-        _require_current_contract(await _payload(session, head), aggregate_kind="domain_experiment")
         domain_payload = await _payload(session, head)
         archived = await archive_aggregate(
             session,
@@ -1814,7 +1746,7 @@ async def archive_domain_experiment(
             expected_head_generation=payload.expected_head_generation,
         )
         command = None
-        if domain_payload.get("domain_kind") == "ngs_molbio":
+        if domain_payload.get("domain_kind") == "ngs_molbio" and domain_payload.get("schema") == "bms.domain-experiment.v4":
             command = await _issue_domain_revision_reverification(
                 session,
                 domain_session,
@@ -1853,7 +1785,6 @@ async def restore_domain_experiment(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _domain_experiment(session, project_id, experiment_id, domain_id)
-        _require_current_contract(await _payload(session, head), aggregate_kind="domain_experiment")
         domain_payload = await _payload(session, head)
         restored = await restore_aggregate(
             session,
@@ -1861,7 +1792,7 @@ async def restore_domain_experiment(
             expected_head_generation=payload.expected_head_generation,
         )
         command = None
-        if domain_payload.get("domain_kind") == "ngs_molbio":
+        if domain_payload.get("domain_kind") == "ngs_molbio" and domain_payload.get("schema") == "bms.domain-experiment.v4":
             command = await _issue_domain_revision_reverification(
                 session,
                 domain_session,

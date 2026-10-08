@@ -229,7 +229,7 @@ def _validate(
     Draft202012Validator.check_schema(schema)
     validator = NgsMolBioContractValidator(
         schema,
-        registry=registry or Registry(),
+        registry=registry if registry is not None else Registry(),
         format_checker=_FORMAT_CHECKER,
     )
     errors = sorted(validator.iter_errors(value), key=lambda item: list(item.absolute_path))
@@ -500,13 +500,6 @@ def _verify_ngs_molbio_domain_semantics(value: dict[str, Any]) -> None:
     if value.get("domain_kind") != "ngs_molbio":
         return
     payload = value["domain_payload"]
-    if value.get("status") in {"planned", "active"}:
-        for field in ("planned_capability_ids", "acceptance_criteria", "evidence_plan"):
-            items = payload.get(field)
-            if not isinstance(items, list) or not items:
-                raise NgsMolBioCapabilityError(
-                    f"{value['status']} NGS/MolBio Domains require non-empty {field}"
-                )
     _assert_unique_values(
         (row["group_id"] for row in payload["grouping_intent"]),
         label="group ID",
@@ -701,13 +694,6 @@ def _verify_protein_domain_semantics(
             schema_entries=schema_entries,
             label="Protein evidence requirement",
         )
-
-    if value.get("status") in {"planned", "active"}:
-        for field in ("planned_capability_ids", "acceptance_criteria", "evidence_plan"):
-            if not payload[field]:
-                raise NgsMolBioCapabilityError(
-                    f"{value['status']} Protein Domains require non-empty {field}"
-                )
 
 
 def validate_domain_experiment(value: dict[str, Any]) -> dict[str, Any]:

@@ -42,18 +42,6 @@ const MAP_LIMIT = 50;
 const RUN_LIMIT = 25;
 const COLLECTION_LIMIT = 25;
 
-function mergeJsonPages(current: JsonObject[], incoming: JsonObject[]): JsonObject[] {
-    const merged = new Map<string, JsonObject>();
-    const keyFor = (item: JsonObject, index: number) => {
-        for (const key of ['id', 'resource_id', 'receipt_id', 'edge_key', 'entity_id']) {
-            if (typeof item[key] === 'string') return `${key}:${item[key]}`;
-        }
-        return `index:${index}:${JSON.stringify(item)}`;
-    };
-    current.forEach((item, index) => merged.set(keyFor(item, index), item));
-    incoming.forEach((item, index) => merged.set(keyFor(item, current.length + index), item));
-    return Array.from(merged.values());
-}
 
 function folderKindFromNodeKey(nodeKey: string | undefined): FolderKind | null {
     if (!nodeKey?.startsWith('virtual_folder:')) return null;
@@ -312,6 +300,8 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
     const stateRevisionId = searchParams.get('state_revision_id');
     const selectedNodeKey = searchParams.get('selected')
         ?? (routeDomainId ? `domain_experiment:${routeDomainId}` : routeFocusId ? `global_experiment:${routeFocusId}` : undefined);
+    const [treeParentNodeKey, setTreeParentNodeKey] = useState<string | undefined>();
+    const [treeCursor, setTreeCursor] = useState<string | undefined>();
     const [mapCursor, setMapCursor] = useState<string | undefined>();
     const [runCursor, setRunCursor] = useState<string | undefined>();
     const [resultCursor, setResultCursor] = useState<string | undefined>();
@@ -364,30 +354,12 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
     const [dialogMode, setDialogMode] = useState<ManagerDialogMode | null>(null);
     const [newExperimentOpen, setNewExperimentOpen] = useState(false);
 
-    const [accumulatedMap, setAccumulatedMap] = useState<{
-        contextKey: string;
-        nodes: ProjectManagerReadModel['map']['nodes'];
-        edges: ProjectManagerReadModel['map']['edges'];
-    } | null>(null);
-    const [accumulatedRuns, setAccumulatedRuns] = useState<{
-        contextKey: string;
-        items: ProjectManagerReadModel['runs']['items'];
-    } | null>(null);
-    const [accumulatedCollections, setAccumulatedCollections] = useState<{
-        contextKey: string;
-        results: JsonObject[];
-        lineage: JsonObject[];
-        notes: JsonObject[];
-        decisions: JsonObject[];
-        datasets: JsonObject[];
-        activity: JsonObject[];
-    } | null>(null);
-
     const summaryQuery = useQuery({
-        queryKey: ['project-manager', 'summary', projectId, focusId ?? null, selectedNodeKey ?? null, mapCursor ?? null, runCursor ?? null, resultCursor ?? null, lineageCursor ?? null, noteCursor ?? null, decisionCursor ?? null, datasetCursor ?? null, activityCursor ?? null],
+        queryKey: ['project-manager', 'summary', projectId, focusId ?? null, selectedNodeKey ?? null, treeParentNodeKey ?? null, treeCursor ?? null, mapCursor ?? null, runCursor ?? null, resultCursor ?? null, lineageCursor ?? null, noteCursor ?? null, decisionCursor ?? null, datasetCursor ?? null, activityCursor ?? null],
         queryFn: ({ signal }) => getProjectSummary(projectId, {
             focusId,
             selectedNodeKey,
+            treeParentNodeKey, treeCursor, treeLimit: 100,
             mapCursor,
             runCursor,
             resultCursor,
@@ -426,90 +398,11 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
         enabled: rawSummary?.project.project_scope === 'ngs_molbio_local',
     });
     const projectLevelError = summaryQuery.isError && !invalidSelection;
-    const mapContextKey = `${projectId}:${focusId ?? 'default'}`;
-    const selectedDomainScope = selectedNodeKey?.startsWith('virtual_folder:')
-        ? selectedNodeKey.split(':')[1]
-        : selectedNodeKey?.startsWith('domain_experiment:')
-            ? selectedNodeKey.split(':')[1]
-            : 'all-domains';
-    const collectionContextKey = `${mapContextKey}:${selectedDomainScope}`;
+    const summary = rawSummary;
 
     useEffect(() => {
-        if (!rawSummary || selectionPending) return;
-        setAccumulatedMap((current) => {
-            if (!current || current.contextKey !== mapContextKey) {
-                return { contextKey: mapContextKey, nodes: rawSummary.map.nodes, edges: rawSummary.map.edges };
-            }
-            const nodes = new Map(current.nodes.map((item) => [item.node_key, item]));
-            for (const item of rawSummary.map.nodes) nodes.set(item.node_key, item);
-            const edges = new Map(current.edges.map((item) => [item.edge_key, item]));
-            for (const item of rawSummary.map.edges) edges.set(item.edge_key, item);
-            return {
-                contextKey: mapContextKey,
-                nodes: Array.from(nodes.values()),
-                edges: Array.from(edges.values()),
-            };
-        });
-    }, [mapContextKey, rawSummary, selectionPending]);
-
-    useEffect(() => {
-        if (!rawSummary || selectionPending) return;
-        setAccumulatedRuns((current) => {
-            if (!current || current.contextKey !== mapContextKey) return { contextKey: mapContextKey, items: rawSummary.runs.items };
-            const items = new Map(current.items.map((item) => [item.run_id, item]));
-            for (const item of rawSummary.runs.items) items.set(item.run_id, item);
-            return { contextKey: mapContextKey, items: Array.from(items.values()) };
-        });
-    }, [mapContextKey, rawSummary, selectionPending]);
-
-    useEffect(() => {
-        if (!rawSummary || selectionPending) return;
-        const pages = rawSummary.pagination;
-        const incoming = {
-            results: pages.results.items,
-            lineage: pages.lineage.items,
-            notes: pages.notes.items,
-            decisions: pages.decisions.items,
-            datasets: pages.datasets.items,
-            activity: pages.activity.items as unknown as JsonObject[],
-        };
-        setAccumulatedCollections((current) => {
-            if (!current || current.contextKey !== collectionContextKey) return { contextKey: collectionContextKey, ...incoming };
-            return {
-                contextKey: collectionContextKey,
-                results: mergeJsonPages(current.results, incoming.results),
-                lineage: mergeJsonPages(current.lineage, incoming.lineage),
-                notes: mergeJsonPages(current.notes, incoming.notes),
-                decisions: mergeJsonPages(current.decisions, incoming.decisions),
-                datasets: mergeJsonPages(current.datasets, incoming.datasets),
-                activity: mergeJsonPages(current.activity, incoming.activity),
-            };
-        });
-    }, [collectionContextKey, rawSummary, selectionPending]);
-
-    const summary = useMemo(() => {
-        if (!rawSummary) return undefined;
-        const map = accumulatedMap?.contextKey === mapContextKey
-            ? { ...rawSummary.map, nodes: accumulatedMap.nodes, edges: accumulatedMap.edges }
-            : rawSummary.map;
-        const runs = accumulatedRuns?.contextKey === mapContextKey
-            ? { ...rawSummary.runs, items: accumulatedRuns.items }
-            : rawSummary.runs;
-        const pagination = accumulatedCollections?.contextKey === collectionContextKey
-            ? {
-                ...rawSummary.pagination,
-                results: { ...rawSummary.pagination.results, items: accumulatedCollections.results },
-                lineage: { ...rawSummary.pagination.lineage, items: accumulatedCollections.lineage },
-                notes: { ...rawSummary.pagination.notes, items: accumulatedCollections.notes },
-                decisions: { ...rawSummary.pagination.decisions, items: accumulatedCollections.decisions },
-                datasets: { ...rawSummary.pagination.datasets, items: accumulatedCollections.datasets },
-                activity: { ...rawSummary.pagination.activity, items: accumulatedCollections.activity as unknown as ProjectManagerReadModel['pagination']['activity']['items'] },
-            }
-            : rawSummary.pagination;
-        return { ...rawSummary, map, runs, pagination };
-    }, [accumulatedCollections, accumulatedMap, accumulatedRuns, collectionContextKey, mapContextKey, rawSummary]);
-
-    useEffect(() => {
+        setTreeCursor(undefined);
+        setTreeParentNodeKey(undefined);
         setMapCursor(undefined);
         setRunCursor(undefined);
         setResultCursor(undefined);
@@ -518,7 +411,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
         setDecisionCursor(undefined);
         setDatasetCursor(undefined);
         setActivityCursor(undefined);
-    }, [focusId]);
+    }, [focusId, selectedNodeKey]);
 
     useEffect(() => {
         if (!summary || invalidSelection) return;
@@ -543,6 +436,8 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
         next.delete('map_cursor');
         setSearchParams(next);
 
+        setTreeCursor(undefined);
+        setTreeParentNodeKey(undefined);
         setMapCursor(undefined);
         setRunCursor(undefined);
         setResultCursor(undefined);
@@ -714,6 +609,10 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                     const destination = new URL(proteinWorkspaceHref(projectId, globalExperimentId, domainExperimentId, 'plans'), window.location.origin);
                     destination.searchParams.set('run_group_id', run.batch_or_run_group_id);
                     destination.searchParams.set('run_group_action', action);
+                    const sourceAttempt = run.attempts.at(-1);
+                    if (!sourceAttempt) throw new Error('The selected run has no exact source attempt.');
+                    destination.searchParams.set('source_run_id', run.run_id);
+                    destination.searchParams.set('source_attempt_id', sourceAttempt.attempt_id);
                     return { kind: 'route' as const, route: `${destination.pathname}${destination.search}` };
                 }
                 if (action === 'retry' && run.adapter_id === 'bms.core-job.esmfold2.adapter.v1') {
@@ -900,20 +799,14 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
         );
     }
 
-    if (summary.project.project_scope === 'ngs_molbio_local' && globalLinksQuery.isPending) {
-        return <div aria-busy="true" className="grid min-h-[32rem] place-items-center p-6 text-sm text-content-secondary">Loading Project relationship state…</div>;
-    }
-    if (summary.project.project_scope === 'ngs_molbio_local' && globalLinksQuery.isError) {
-        return <ProjectManagerErrorState error={globalLinksQuery.error} onRetry={() => void globalLinksQuery.refetch()} />;
-    }
-
     const selectionUnavailable = invalidSelection ? projectManagerErrorMessage(summaryQuery.error) : selectionPending ? 'Validating selected item…' : null;
     const busy = summaryQuery.isFetching || fallbackQuery.isFetching;
     const isStandaloneNativeProject = summary.project.project_scope === 'ngs_molbio_local'
         && globalLinksQuery.isSuccess
         && globalLinksQuery.data.length === 0;
-    const projectTreeVisible = treeOpen && !isStandaloneNativeProject;
-    const projectInspectorVisible = inspectorOpen && !isStandaloneNativeProject;
+    const relationshipsAvailable = summary.project.project_scope !== 'ngs_molbio_local' || globalLinksQuery.isSuccess;
+    const projectTreeVisible = treeOpen && !isStandaloneNativeProject && relationshipsAvailable;
+    const projectInspectorVisible = inspectorOpen && !isStandaloneNativeProject && relationshipsAvailable;
     const folderKind = folderKindFromNodeKey(selectedNodeKey);
     const loadMoreFolder = (folder: FolderKind) => {
         if (folder === 'plans') setMapCursor(summary.map.next_cursor ?? undefined);
@@ -971,7 +864,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                             {summary.allowed_actions.includes('create_global_experiment') && <button type="button" disabled={!selectionReady} onClick={() => { if (creationRef.current) creationRef.current.open = false; setDialogMode('create_global'); }} className="w-full rounded-lg p-2 text-left text-sm font-semibold text-content hover:bg-surface">Empty experiment group<span className="mt-1 block text-xs font-normal text-content-secondary">Create a Global Experiment, then add its domain experiments.</span></button>}
                         </div>
                     </details>}
-                    <button type="button" disabled={!selectionReady} onClick={() => setAttachOpen(true)} className="rounded-lg border border-border-primary px-3 py-2 text-xs font-semibold text-content-secondary focus:ring-2 focus:ring-accent">{isStandaloneNativeProject ? 'Link Project or attach record' : 'Attach existing record'}</button>
+                    <button type="button" disabled={!selectionReady || !relationshipsAvailable} onClick={() => setAttachOpen(true)} className="rounded-lg border border-border-primary px-3 py-2 text-xs font-semibold text-content-secondary focus:ring-2 focus:ring-accent">{isStandaloneNativeProject ? 'Link Project or attach record' : 'Attach existing record'}</button>
                     {!isStandaloneNativeProject && <details ref={viewRef} className="relative">
                         <summary className="cursor-pointer rounded-lg border border-border-primary px-3 py-2 text-xs text-content-secondary focus:ring-2 focus:ring-accent">View</summary>
                         <div className="absolute right-0 z-40 mt-2 w-44 rounded-lg border border-border-primary bg-surface-secondary p-2 shadow-xl">
@@ -1001,6 +894,10 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                     <div ref={overlay === 'tree' ? drawerRef : undefined} role={overlay === 'tree' ? 'dialog' : undefined} aria-modal={overlay === 'tree' || undefined} aria-label={overlay === 'tree' ? 'Project tree drawer' : undefined} className="fixed inset-y-0 left-0 z-[70] w-[min(88vw,25rem)] shadow-2xl md:static md:z-auto md:w-auto md:shadow-none">
                         <ProjectTree
                             nodes={summary.tree.nodes}
+                            onBrowse={summary.tree.parent_node_key !== undefined ? (nodeKey) => { setTreeParentNodeKey(nodeKey); setTreeCursor(undefined); } : undefined}
+                            onNextPage={summary.tree.next_cursor ? () => setTreeCursor(summary.tree.next_cursor ?? undefined) : undefined}
+                            onFirstPage={treeCursor ? () => setTreeCursor(undefined) : undefined}
+                            loading={busy}
                             selectedNodeKey={selectedNodeKey ?? summary.selection.node_key}
                             onSelect={(nodeKey) => {
                                 const node = summary.tree.nodes.find((item) => item.node_key === nodeKey);
@@ -1013,7 +910,8 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                 {projectTreeVisible && <div role="separator" aria-orientation="vertical" aria-label="Resize Project tree" tabIndex={0} onPointerDown={(event) => startRailResize('tree', event)} onKeyDown={(event) => { if (event.key === 'ArrowLeft') setTreeWidth((value) => Math.max(208, value - 16)); if (event.key === 'ArrowRight') setTreeWidth((value) => Math.min(400, value + 16)); }} className="hidden cursor-col-resize bg-border-primary outline-none focus:bg-accent md:block" />}
                 <main className="flex min-h-0 min-w-0 flex-col overflow-y-auto">
                     <NativeProjectDataPanel summary={summary} stateRevisionId={stateRevisionId} />
-                    {!isStandaloneNativeProject && (
+                    {summary.project.project_scope === 'ngs_molbio_local' && !globalLinksQuery.isSuccess && <div role="status" className="p-3 text-sm text-content-secondary">{globalLinksQuery.isError ? 'Project relationships unavailable. Native Project data remains available.' : 'Loading Project relationships…'}<button type="button" onClick={() => void globalLinksQuery.refetch()}>Retry relationships</button></div>}
+                    {!isStandaloneNativeProject && relationshipsAvailable && !selectionPending && (
                         <>
                             <RelationshipMap
                                 summary={summary}
@@ -1025,7 +923,9 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                             <div className="shrink-0 p-3">
                                 <VirtualFolderPanel folder={folderKind} summary={summary} onLoadMore={loadMoreFolder} onSelectRecord={selectFolderRecord} loading={busy} />
                             </div>
+                            <details key={folderKind} open={folderKind === 'runs'}><summary className="cursor-pointer px-4 py-2 text-sm font-semibold text-content">Runs · {summary.runs.items.length} on this page{summary.runs.next_cursor ? ' · more available' : ''}</summary>
                             <RunPanel runs={summary.runs.items} selectedNodeKey={selectedNodeKey ?? summary.selection.node_key} onSelect={inspectExecution} onAction={requestRunAction} actionsDisabled={!selectionReady} pendingAction={runActionMutation.isPending && runActionMutation.variables ? { runId: runActionMutation.variables.run.run_id, action: runActionMutation.variables.action } : null} onLoadMore={summary.runs.next_cursor ? () => setRunCursor(summary.runs.next_cursor ?? undefined) : undefined} />
+                            </details>
                         </>
                     )}
                 </main>

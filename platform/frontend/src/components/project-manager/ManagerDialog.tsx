@@ -22,8 +22,6 @@ import {
     updateDomainExperiment,
     updateGlobalExperiment,
     updateProject,
-    upgradeGlobalExperiment,
-    upgradeProject,
     type AdapterEntityProjection,
     type JsonObject,
     type ProjectManagerReadModel,
@@ -39,46 +37,22 @@ function completeNgsDomainPayload(objective: string, experimentMode: string): Js
         schema: 'bms.ngs-molbio-experiment.v2',
         experiment_mode: experimentMode,
         scientific_objective: objective,
-        planned_capability_ids: ['ngs.ont.fastq_qc'],
+        planned_capability_ids: [],
         grouping_intent: [],
-        acceptance_criteria: [{
-            criterion_id: 'ngs-result-manifest-present',
-            schema_id: 'bms.scientific-criterion.artifact-presence.v1',
-            schema_sha256: '3f03a62f9bc39f61c4bdfa938cca5453da91e68ef16b30effdd0f4195cc2bdc6',
-            subject_role: 'result',
-            payload: { artifact_role: 'ngs_result_manifest', minimum_count: 1 },
-        }],
-        evidence_plan: [{
-            requirement_id: 'ngs-result-manifest-receipt',
-            schema_id: 'bms.evidence-requirement.native-receipt.v1',
-            schema_sha256: '4f1ea5545016d8d49739c2d1f1a94bc64f321667d2eb98205d0f727088da5d10',
-            subject_role: 'result',
-            required: true,
-            payload: { receipt_kind: 'ngs_result_manifest', minimum_count: 1 },
-        }],
+        acceptance_criteria: [],
+        evidence_plan: [],
     };
 }
 
 type ProteinTargetRole = 'target' | 'binder' | 'partner' | 'template' | 'reference' | 'control' | 'motif' | 'ligand_context' | 'other';
-type ProteinEntityType = 'protein' | 'dna' | 'rna' | 'ligand' | 'ion' | 'other';
 type ComparisonRole = 'reference' | 'target' | 'panel' | 'control';
 type SubjectRole = 'input' | 'sample' | 'reference' | 'target' | 'panel' | 'control' | 'result' | 'comparison' | 'evidence' | 'other';
 
 interface ProteinDatasetMemberDraft { datasetRevisionId: string; memberId: string }
-interface ProteinDisplayEntityDraft {
-    entityInstanceId: string;
-    sourceEntityId: string;
-    entityType: ProteinEntityType;
-    labelAsymId: string;
-    authAsymId: string;
-}
 interface ProteinTargetDraft {
     targetId: string; label: string; role: ProteinTargetRole; sourceReceiptIds: string[];
     datasetMembers: ProteinDatasetMemberDraft[]; expectedContentSha256: string;
-    mapAuthorityKind: 'native_receipt' | 'governed_artifact_receipt'; mapReceiptId: string;
-    mapReceiptSha256: string; mapContentSha256: string; mapSizeBytes: string;
-    mapEntityCount: string; mapResidueCount: string; mapDisplayEntities: ProteinDisplayEntityDraft[];
-    mapDisplayEntitiesValid: boolean;
+    entityMapReference?: JsonObject;
 }
 interface ComparisonMemberDraft { targetId: string; role: ComparisonRole }
 interface ComparisonGroupDraft { groupId: string; label: string; compatibilityContractId: string; members: ComparisonMemberDraft[] }
@@ -90,73 +64,10 @@ const MANUAL_REVIEW_SCHEMA_SHA256 = '581b25b646a8d581d234eef6948a3cc66e66ece0d00
 const OPERATOR_OBSERVATION_SCHEMA_SHA256 = '4122ba416790375dc99abbf028a1d494e1f0a9d11967dd138b4b4fde5a03bc06';
 const blankProteinTarget = (): ProteinTargetDraft => ({
     targetId: '', label: '', role: 'target', sourceReceiptIds: [], datasetMembers: [], expectedContentSha256: '',
-    mapAuthorityKind: 'native_receipt', mapReceiptId: '', mapReceiptSha256: '', mapContentSha256: '',
-    mapSizeBytes: '', mapEntityCount: '', mapResidueCount: '0', mapDisplayEntities: [], mapDisplayEntitiesValid: true,
-});
-const blankProteinDisplayEntity = (): ProteinDisplayEntityDraft => ({
-    entityInstanceId: '', sourceEntityId: '', entityType: 'protein', labelAsymId: '', authAsymId: '',
+
 });
 const nonEmptyStrings = (value: unknown): string[] => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())) : [];
 const jsonRecord = (value: unknown): JsonObject | null => value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : null;
-const PROTEIN_ENTITY_TYPES = new Set<ProteinEntityType>(['protein', 'dna', 'rna', 'ligand', 'ion', 'other']);
-function proteinDisplayEntities(value: unknown): { entities: ProteinDisplayEntityDraft[]; valid: boolean } {
-    if (!Array.isArray(value)) return { entities: [], valid: false };
-    const entities: ProteinDisplayEntityDraft[] = [];
-    for (const item of value) {
-        const row = jsonRecord(item);
-        if (
-            !row
-            || typeof row.entity_instance_id !== 'string'
-            || typeof row.source_entity_id !== 'string'
-            || typeof row.entity_type !== 'string'
-            || !PROTEIN_ENTITY_TYPES.has(row.entity_type as ProteinEntityType)
-            || typeof row.label_asym_id !== 'string'
-            || typeof row.auth_asym_id !== 'string'
-        ) return { entities: [], valid: false };
-        entities.push({
-            entityInstanceId: row.entity_instance_id,
-            sourceEntityId: row.source_entity_id,
-            entityType: row.entity_type as ProteinEntityType,
-            labelAsymId: row.label_asym_id,
-            authAsymId: row.auth_asym_id,
-        });
-    }
-    return { entities, valid: true };
-}
-
-function ProteinDisplayEntityEditor({
-    targetIndex,
-    entities,
-    valid,
-    onChange,
-}: {
-    targetIndex: number;
-    entities: ProteinDisplayEntityDraft[];
-    valid: boolean;
-    onChange: (entities: ProteinDisplayEntityDraft[]) => void;
-}) {
-    if (!valid) {
-        return <fieldset className="space-y-2 rounded border border-error p-2">
-            <legend className="px-1 text-xs font-semibold text-error">Entity rows</legend>
-            <p className="text-xs text-error">Entity rows use unsupported data. Resolve the stored entity-map contract before saving a new immutable revision.</p>
-        </fieldset>;
-    }
-    const update = (index: number, patch: Partial<ProteinDisplayEntityDraft>) => {
-        onChange(entities.map((entity, entityIndex) => entityIndex === index ? { ...entity, ...patch } : entity));
-    };
-    return <fieldset className="space-y-2 rounded border border-border-primary p-2">
-        <div className="flex items-center justify-between gap-2"><legend className="px-1 text-xs font-semibold text-content-secondary">Entity rows</legend><button type="button" disabled={entities.length >= 32} onClick={() => onChange([...entities, blankProteinDisplayEntity()])} className="text-xs text-accent disabled:opacity-50">Add entity</button></div>
-        {entities.length === 0 ? <p className="text-xs text-content-muted">No bounded display entity rows are recorded.</p> : entities.map((entity, entityIndex) => <div key={entityIndex} className="grid gap-2 rounded border border-border-primary p-2 sm:grid-cols-2 lg:grid-cols-3">
-            <label className="text-xs">Instance ID<input aria-label={`Protein entity instance ID ${targetIndex + 1}.${entityIndex + 1}`} value={entity.entityInstanceId} onChange={(event) => update(entityIndex, { entityInstanceId: event.target.value })} className="mt-1 w-full rounded border border-border-primary bg-surface px-2 py-1.5" /></label>
-            <label className="text-xs">Source entity ID<input aria-label={`Protein entity source ID ${targetIndex + 1}.${entityIndex + 1}`} value={entity.sourceEntityId} onChange={(event) => update(entityIndex, { sourceEntityId: event.target.value })} className="mt-1 w-full rounded border border-border-primary bg-surface px-2 py-1.5" /></label>
-            <label className="text-xs">Entity type<select aria-label={`Protein entity type ${targetIndex + 1}.${entityIndex + 1}`} value={entity.entityType} onChange={(event) => update(entityIndex, { entityType: event.target.value as ProteinEntityType })} className="mt-1 w-full rounded border border-border-primary bg-surface px-2 py-1.5">{Array.from(PROTEIN_ENTITY_TYPES).map((type) => <option key={type} value={type}>{type}</option>)}</select></label>
-            <label className="text-xs">Label chain<input aria-label={`Protein entity label chain ${targetIndex + 1}.${entityIndex + 1}`} value={entity.labelAsymId} onChange={(event) => update(entityIndex, { labelAsymId: event.target.value })} className="mt-1 w-full rounded border border-border-primary bg-surface px-2 py-1.5" /></label>
-            <label className="text-xs">Author chain<input aria-label={`Protein entity auth chain ${targetIndex + 1}.${entityIndex + 1}`} value={entity.authAsymId} onChange={(event) => update(entityIndex, { authAsymId: event.target.value })} className="mt-1 w-full rounded border border-border-primary bg-surface px-2 py-1.5" /></label>
-            <div className="flex items-end"><button type="button" onClick={() => onChange(entities.filter((_, index) => index !== entityIndex))} className="px-2 py-1.5 text-xs text-error">Remove entity</button></div>
-        </div>)}
-    </fieldset>;
-}
-
 function parseProteinCapabilityInventory(value: unknown): ProteinCapabilityOption[] {
     const inventory = jsonRecord(value);
     if (inventory?.schema !== 'bms.protein-project-capability-inventory.v1' || typeof inventory.content_sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(inventory.content_sha256) || !Array.isArray(inventory.capabilities)) {
@@ -193,7 +104,6 @@ function completeProteinDomainPayload(
     preservedAcceptanceCriteria: JsonObject[],
     preservedEvidenceRequirements: JsonObject[],
 ): JsonObject {
-    if (!targets.length) throw new Error('Add at least one Protein target.');
     return {
         schema: 'bms.protein-in-silico-experiment.v3',
         experiment_mode: experimentMode,
@@ -202,19 +112,7 @@ function completeProteinDomainPayload(
             target_id: target.targetId.trim(), label: target.label.trim(), role: target.role,
             source_receipt_ids: target.sourceReceiptIds,
             dataset_member_refs: target.datasetMembers.map((member) => ({ dataset_revision_id: member.datasetRevisionId.trim(), member_id: member.memberId.trim() })),
-            entity_map_reference: {
-                schema: 'bms.protein-entity-map-reference.v1', authority_kind: target.mapAuthorityKind,
-                receipt_id: target.mapReceiptId.trim(), receipt_sha256: target.mapReceiptSha256.trim().toLowerCase(),
-                content_sha256: target.mapContentSha256.trim().toLowerCase(), canonical_size_bytes: Number(target.mapSizeBytes),
-                entity_count: Number(target.mapEntityCount), residue_mapping_count: Number(target.mapResidueCount),
-                display_entities: target.mapDisplayEntities.map((entity) => ({
-                    entity_instance_id: entity.entityInstanceId.trim(),
-                    source_entity_id: entity.sourceEntityId.trim(),
-                    entity_type: entity.entityType,
-                    label_asym_id: entity.labelAsymId.trim(),
-                    auth_asym_id: entity.authAsymId.trim(),
-                })),
-            },
+            ...(target.entityMapReference ? { entity_map_reference: target.entityMapReference } : {}),
             expected_content_sha256: target.expectedContentSha256.trim().toLowerCase(),
         })),
         design_constraints: [],
@@ -267,7 +165,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
     const [domainKind, setDomainKind] = useState<'protein_in_silico' | 'ngs_molbio'>('protein_in_silico');
     const [ngsExperimentMode, setNgsExperimentMode] = useState('analysis');
     const [proteinExperimentMode, setProteinExperimentMode] = useState<ProteinExperimentMode>('design');
-    const [proteinTargets, setProteinTargets] = useState<ProteinTargetDraft[]>([blankProteinTarget()]);
+    const [proteinTargets, setProteinTargets] = useState<ProteinTargetDraft[]>([]);
     const [activeProteinTarget, setActiveProteinTarget] = useState(0);
     const [plannedCapabilityIds, setPlannedCapabilityIds] = useState<string[]>([]);
     const [validationCapabilityIds, setValidationCapabilityIds] = useState<string[]>([]);
@@ -314,19 +212,24 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
         mutationFn: () => searchAdapterEntities(proteinSourceAdapterId, proteinSourceQuery, 25),
         onSuccess: () => setProteinSourceSelection(null),
     });
+    const expectedSchema = selection?.node_type === 'project' ? 'bms.project.v2' : selection?.node_type === 'global_experiment' ? 'bms.global-experiment.v2' : 'bms.domain-experiment.v4';
+    const historicalMetadataOnly = mode === 'edit' && typeof detailQuery.data?.payload?.schema === 'string' && detailQuery.data.payload.schema !== expectedSchema;
     const proteinReceiptIssue = useMutation({
         mutationFn: async () => {
             if (!projectId || !proteinSourceAdapterId || !proteinSourceSelection) throw new Error('Select one verified Protein source.');
+            const receivingTarget = proteinTargets[activeProteinTarget];
+            if (!receivingTarget) throw new Error('Add a target before choosing its verified source.');
             const result = await issueAdapterReceipt(proteinSourceAdapterId, proteinSourceSelection.entity_id, projectId);
             const digest = result.receipt.content_digest;
             if (typeof digest !== 'string' || !/^[0-9a-f]{64}$/.test(digest)) throw new Error('The verified source receipt has no exact content digest.');
-            return { result, digest };
+            return { result, receivingTarget, digest };
         },
-        onSuccess: ({ result, digest }) => {
-            setProteinTargets((current) => current.map((target, index) => index === activeProteinTarget ? {
+        onSuccess: ({ result, receivingTarget, digest }) => {
+            setProteinTargets((current) => current.map((target) => target === receivingTarget ? {
                 ...target,
-                sourceReceiptIds: Array.from(new Set([...target.sourceReceiptIds, result.receipt_id])),
+                sourceReceiptIds: [result.receipt_id], datasetMembers: [],
                 expectedContentSha256: digest,
+                entityMapReference: undefined,
             } : target));
         },
     });
@@ -350,7 +253,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
         setDomainKind('protein_in_silico');
         setNgsExperimentMode('analysis');
         setProteinExperimentMode('design');
-        setProteinTargets([blankProteinTarget()]);
+        setProteinTargets([]);
         setActiveProteinTarget(0);
         setPlannedCapabilityIds([]);
         setValidationCapabilityIds([]);
@@ -400,7 +303,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
             const parsedTargets = Array.isArray(proteinPayload.targets) ? proteinPayload.targets.flatMap((value) => {
                 const target = jsonRecord(value);
                 const map = jsonRecord(target?.entity_map_reference);
-                if (!target || !map) return [];
+                if (!target) return [];
                 const role = typeof target.role === 'string' ? target.role as ProteinTargetRole : 'target';
                 const datasetMembers = Array.isArray(target.dataset_member_refs) ? target.dataset_member_refs.flatMap((memberValue) => {
                     const member = jsonRecord(memberValue);
@@ -408,24 +311,15 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
                         ? [{ datasetRevisionId: member.dataset_revision_id, memberId: member.member_id }]
                         : [];
                 }) : [];
-                const displayEntities = proteinDisplayEntities(map.display_entities);
                 return [{
                     targetId: typeof target.target_id === 'string' ? target.target_id : '',
                     label: typeof target.label === 'string' ? target.label : '', role,
                     sourceReceiptIds: nonEmptyStrings(target.source_receipt_ids), datasetMembers,
                     expectedContentSha256: typeof target.expected_content_sha256 === 'string' ? target.expected_content_sha256 : '',
-                    mapAuthorityKind: map.authority_kind === 'governed_artifact_receipt' ? 'governed_artifact_receipt' as const : 'native_receipt' as const,
-                    mapReceiptId: typeof map.receipt_id === 'string' ? map.receipt_id : '',
-                    mapReceiptSha256: typeof map.receipt_sha256 === 'string' ? map.receipt_sha256 : '',
-                    mapContentSha256: typeof map.content_sha256 === 'string' ? map.content_sha256 : '',
-                    mapSizeBytes: typeof map.canonical_size_bytes === 'number' ? String(map.canonical_size_bytes) : '',
-                    mapEntityCount: typeof map.entity_count === 'number' ? String(map.entity_count) : '',
-                    mapResidueCount: typeof map.residue_mapping_count === 'number' ? String(map.residue_mapping_count) : '0',
-                    mapDisplayEntities: displayEntities.entities,
-                    mapDisplayEntitiesValid: displayEntities.valid,
+                    ...(map ? { entityMapReference: map } : {}),
                 }];
             }) : [];
-            setProteinTargets(parsedTargets.length ? parsedTargets : [blankProteinTarget()]);
+            setProteinTargets(parsedTargets);
             setPlannedCapabilityIds(nonEmptyStrings(proteinPayload.planned_capability_ids));
             setValidationCapabilityIds(nonEmptyStrings(proteinPayload.validation_capability_ids));
             setComparisonGroups(Array.isArray(proteinPayload.comparison_groups) ? proteinPayload.comparison_groups.flatMap((value) => {
@@ -558,23 +452,13 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
             const detail = detailQuery.data;
             if (!detail || !selectionId || !selection) throw new Error('Current generation is still loading.');
             if (mode === 'edit') {
+                if (historicalMetadataOnly) {
+                    const metadata = { expected_head_generation: detail.head_generation, name, tags: tags.split(',').map(value => value.trim()).filter(Boolean), change_summary: 'Edited organizational metadata in Project Manager' };
+                    if (selection.node_type === 'project') return updateProject(projectId, { ...metadata, description });
+                    if (selection.node_type === 'global_experiment') return updateGlobalExperiment(projectId, selectionId, { ...metadata, description });
+                    if (selection.node_type === 'domain_experiment' && selectedGlobalId) return updateDomainExperiment(projectId, selectedGlobalId, selectionId, metadata);
+                }
                 if (selection.node_type === 'project') {
-                    if (detail.payload?.schema === 'bms.project.v1') {
-                        return upgradeProject(projectId, {
-                            expected_head_generation: detail.head_generation,
-                            schema: 'bms.project.v2',
-                            project_scope: detail.payload.project_scope === 'ngs_molbio_local' ? 'ngs_molbio_local' : 'global',
-                            name,
-                            description,
-                            research_objective: objective,
-                            contributors: contributors.split(',').map((value) => value.trim()).filter(Boolean),
-                            tags: tags.split(',').map((value) => value.trim()).filter(Boolean),
-                            status: detail.status as 'draft' | 'active' | 'on_hold' | 'completed' | 'archived',
-                            start_date: startDate || null,
-                            target_end_date: targetEndDate || null,
-                            change_summary: 'Upgraded Project to v2 from Project Manager',
-                        });
-                    }
                     return updateProject(projectId, {
                         expected_head_generation: detail.head_generation,
                         name,
@@ -588,27 +472,6 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
                     });
                 }
                 if (selection.node_type === 'global_experiment') {
-                    if (detail.payload?.schema === 'bms.global-experiment.v1') {
-                        return upgradeGlobalExperiment(projectId, selectionId, {
-                            expected_head_generation: detail.head_generation,
-                            schema: 'bms.global-experiment.v2',
-                            name,
-                            objective,
-                            scientific_question: question,
-                            hypothesis: hypothesis || null,
-                            description,
-                            status: detail.status as 'draft' | 'planned' | 'active' | 'analysis' | 'review' | 'completed' | 'blocked' | 'archived',
-                            priority,
-                            tags: tags.split(',').map((value) => value.trim()).filter(Boolean),
-                            shared_source_receipt_ids: [],
-                            shared_dataset_ids: [],
-                            comparison_plan: null,
-                            success_criteria: successCriteria.split('\n').map((value) => value.trim()).filter(Boolean),
-                            review_summary: reviewSummary || null,
-                            conclusion: conclusion || null,
-                            change_summary: 'Upgraded Global Experiment to v2 from Project Manager',
-                        });
-                    }
                     return updateGlobalExperiment(projectId, selectionId, {
                         expected_head_generation: detail.head_generation,
                         name,
@@ -683,24 +546,12 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
     const proteinEditing = mode === 'edit'
         && selection?.node_type === 'domain_experiment'
         && jsonRecord(detailQuery.data?.payload?.domain_payload)?.schema === 'bms.protein-in-silico-experiment.v3';
-    const proteinTargetsReady = proteinTargets.length > 0 && proteinTargets.every((target) => (
+    const proteinTargetsReady = proteinTargets.every((target) => (
         target.targetId.trim().length > 0 && target.label.trim().length > 0
         && (target.sourceReceiptIds.length > 0 || target.datasetMembers.length > 0)
         && target.datasetMembers.every((member) => member.datasetRevisionId.trim() && member.memberId.trim())
         && /^[0-9a-f]{64}$/i.test(target.expectedContentSha256.trim())
-        && target.mapReceiptId.trim().length > 0
-        && /^[0-9a-f]{64}$/i.test(target.mapReceiptSha256.trim())
-        && /^[0-9a-f]{64}$/i.test(target.mapContentSha256.trim())
-        && Number(target.mapSizeBytes) >= 2 && Number(target.mapEntityCount) >= 1 && Number(target.mapResidueCount) >= 0
-        && target.mapDisplayEntitiesValid
-        && target.mapDisplayEntities.length <= 32
-        && target.mapDisplayEntities.every((entity) => (
-            entity.entityInstanceId.trim().length > 0
-            && entity.sourceEntityId.trim().length > 0
-            && PROTEIN_ENTITY_TYPES.has(entity.entityType)
-            && entity.labelAsymId.trim().length > 0
-            && entity.authAsymId.trim().length > 0
-        ))
+
     ));
     const proteinPlansReady = comparisonGroups.every((group) => group.groupId.trim() && group.label.trim() && group.compatibilityContractId.trim() && group.members.length > 0 && group.members.every((member) => member.targetId))
         && acceptanceCriteria.every((criterion) => criterion.criterionId.trim() && criterion.question.trim())
@@ -714,7 +565,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
             ? body.trim().length > 0
             : name.trim().length > 0
                 && (mode !== 'create_domain' || domainCreationReady)
-                && (!proteinEditing || (proteinTargetsReady && proteinPlansReady));
+                && (historicalMetadataOnly || !proteinEditing || (proteinTargetsReady && proteinPlansReady));
 
     return (
         <div className="fixed inset-0 z-[95] grid place-items-center bg-black/65 p-3" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
@@ -736,6 +587,8 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
                                 <><p className="font-semibold text-success">Restore returns this item to active Project navigation.</p><p className="mt-2">The mutation uses the current server generation and creates an audited lifecycle transition.</p></>
                             )}
                         </div>
+                    ) : historicalMetadataOnly ? (
+                        <div className="space-y-3"><p className="text-sm text-content-secondary">Edit organizational metadata without upgrading this historical scientific revision.</p><label className="block text-xs">Name<input className="mt-1 w-full rounded border border-border-primary bg-surface p-2" value={name} onChange={event => setName(event.target.value)}/></label>{selection?.node_type !== 'domain_experiment' && <label className="block text-xs">Description<textarea className="mt-1 w-full rounded border border-border-primary bg-surface p-2" value={description} onChange={event => setDescription(event.target.value)}/></label>}<label className="block text-xs">Tags<input className="mt-1 w-full rounded border border-border-primary bg-surface p-2" value={tags} onChange={event => setTags(event.target.value)}/></label></div>
                     ) : mode === 'record' ? (
                         <>
                             <label className="block text-xs font-semibold text-content-secondary">Record type
@@ -805,7 +658,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
                             </label>}
                             {((mode === 'create_domain' && domainKind === 'protein_in_silico') || proteinEditing) && (
                                 <div className="space-y-4 rounded-xl border border-border-primary bg-surface p-3">
-                                    <p className="text-xs text-content-secondary">Define the Protein work before launching a model. Source receipts, content digests, and entity-map references are checked by the server.</p>
+                                    <p className="text-xs text-content-secondary">Define the Protein work before launching a model. Verified source receipts and content digests are checked by the server. Replacing a target source removes any historical map metadata bound to the old source.</p>
                                     <label className="block text-xs font-semibold text-content-secondary">Protein experiment mode
                                         <select aria-label="Protein experiment mode" value={proteinExperimentMode} onChange={(event) => setProteinExperimentMode(event.target.value as ProteinExperimentMode)} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-content">
                                             {['exploration', 'design', 'redesign', 'prediction', 'validation', 'comparison', 'simulation', 'analysis'].map((value) => <option key={value} value={value}>{value[0].toUpperCase() + value.slice(1)}</option>)}
@@ -819,7 +672,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
                                         </select>
                                         <div className="flex gap-2"><input aria-label="Search Protein source records" value={proteinSourceQuery} onChange={(event) => setProteinSourceQuery(event.target.value)} placeholder="Source record ID" className="min-w-0 flex-1 rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-xs text-content" /><button type="button" disabled={!proteinSourceAdapterId || proteinSourceSearch.isPending} onClick={() => proteinSourceSearch.mutate()} className="rounded-lg border border-border-primary px-3 py-2 text-xs font-semibold text-content-secondary disabled:opacity-50">Search</button></div>
                                         {(proteinSourceSearch.data?.items ?? []).map((item) => <label key={item.entity_id} className="flex gap-2 rounded-lg border border-border-primary p-2 text-xs text-content-secondary"><input type="radio" name="protein-source-record" value={item.entity_id} checked={proteinSourceSelection?.entity_id === item.entity_id} disabled={!item.attachable} onChange={() => setProteinSourceSelection(item)} /><span><strong className="text-content">{item.label}</strong><br />{item.canonical_state}{item.reason ? ` · ${item.reason}` : ''}</span></label>)}
-                                        <button type="button" disabled={!proteinSourceSelection?.attachable || proteinReceiptIssue.isPending} onClick={() => proteinReceiptIssue.mutate()} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">Verify and add to target</button>
+                                        <button type="button" disabled={!proteinTargets[activeProteinTarget] || !proteinSourceSelection?.attachable || proteinReceiptIssue.isPending} onClick={() => proteinReceiptIssue.mutate()} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">Use verified target source</button>
                                         {(proteinAdaptersQuery.isError || proteinSourceSearch.isError || proteinReceiptIssue.isError) && <p role="alert" className="text-xs text-error">{projectManagerErrorMessage(proteinAdaptersQuery.error ?? proteinSourceSearch.error ?? proteinReceiptIssue.error)}</p>}
                                     </div>
 
@@ -828,13 +681,12 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
                                         {proteinTargets.map((target, targetIndex) => {
                                             const updateTarget = (patch: Partial<ProteinTargetDraft>) => setProteinTargets((current) => current.map((item, index) => index === targetIndex ? { ...item, ...patch } : item));
                                             return <div key={targetIndex} className="space-y-3 rounded-lg border border-border-primary bg-surface-secondary p-3">
-                                                <div className="flex items-center justify-between"><strong className="text-xs text-content">Target {targetIndex + 1}</strong>{proteinTargets.length > 1 && <button type="button" onClick={() => { setProteinTargets((current) => current.filter((_, index) => index !== targetIndex)); setActiveProteinTarget(0); }} className="text-xs text-error">Remove</button>}</div>
+                                                <div className="flex items-center justify-between"><strong className="text-xs text-content">Target {targetIndex + 1}</strong>{proteinTargets.length > 0 && <button type="button" onClick={() => { setProteinTargets((current) => current.filter((_, index) => index !== targetIndex)); setActiveProteinTarget(0); }} className="text-xs text-error">Remove</button>}</div>
                                                 <div className="grid gap-2 sm:grid-cols-3"><label className="text-xs font-semibold text-content-secondary">Target ID<input value={target.targetId} onChange={(event) => updateTarget({ targetId: event.target.value })} className="mt-1 w-full rounded border border-border-primary bg-surface px-2 py-1.5 text-sm" /></label><label className="text-xs font-semibold text-content-secondary">Label<input value={target.label} onChange={(event) => updateTarget({ label: event.target.value })} className="mt-1 w-full rounded border border-border-primary bg-surface px-2 py-1.5 text-sm" /></label><label className="text-xs font-semibold text-content-secondary">Role<select value={target.role} onChange={(event) => updateTarget({ role: event.target.value as ProteinTargetRole })} className="mt-1 w-full rounded border border-border-primary bg-surface px-2 py-1.5 text-sm">{['target', 'binder', 'partner', 'template', 'reference', 'control', 'motif', 'ligand_context', 'other'].map((role) => <option key={role} value={role}>{role.replace('_', ' ')}</option>)}</select></label></div>
-                                                <label className="block text-xs font-semibold text-content-secondary">Verified source receipt IDs<input aria-label={`Protein source receipt IDs ${targetIndex + 1}`} value={target.sourceReceiptIds.join(', ')} onChange={(event) => updateTarget({ sourceReceiptIds: event.target.value.split(',').map((value) => value.trim()).filter(Boolean) })} placeholder="comma-separated receipt IDs" className="mt-1 w-full rounded border border-border-primary bg-surface px-2 py-1.5 text-sm" /></label>
-                                                <div className="space-y-2"><div className="flex justify-between"><span className="text-xs font-semibold text-content-secondary">Dataset members</span><button type="button" onClick={() => updateTarget({ datasetMembers: [...target.datasetMembers, { datasetRevisionId: '', memberId: '' }] })} className="text-xs text-accent">Add dataset member</button></div>{target.datasetMembers.map((member, memberIndex) => <div key={memberIndex} className="grid grid-cols-[1fr_1fr_auto] gap-2"><input aria-label="Dataset revision ID" value={member.datasetRevisionId} onChange={(event) => updateTarget({ datasetMembers: target.datasetMembers.map((item, index) => index === memberIndex ? { ...item, datasetRevisionId: event.target.value } : item) })} placeholder="Dataset revision ID" className="rounded border border-border-primary bg-surface px-2 py-1.5 text-xs" /><input aria-label="Dataset member ID" value={member.memberId} onChange={(event) => updateTarget({ datasetMembers: target.datasetMembers.map((item, index) => index === memberIndex ? { ...item, memberId: event.target.value } : item) })} placeholder="Member ID" className="rounded border border-border-primary bg-surface px-2 py-1.5 text-xs" /><button type="button" onClick={() => updateTarget({ datasetMembers: target.datasetMembers.filter((_, index) => index !== memberIndex) })} className="text-xs text-error">Remove</button></div>)}</div>
-                                                <fieldset className="space-y-2 rounded border border-border-primary p-2"><legend className="px-1 text-xs font-semibold text-content-secondary">Entity-map reference</legend><div className="grid gap-2 sm:grid-cols-2"><label className="text-xs">Authority<select value={target.mapAuthorityKind} onChange={(event) => updateTarget({ mapAuthorityKind: event.target.value as ProteinTargetDraft['mapAuthorityKind'] })} className="mt-1 w-full rounded border border-border-primary bg-surface px-2 py-1.5"><option value="native_receipt">Native receipt</option><option value="governed_artifact_receipt">Governed artifact receipt</option></select></label><label className="text-xs">Receipt ID<input value={target.mapReceiptId} onChange={(event) => updateTarget({ mapReceiptId: event.target.value })} className="mt-1 w-full rounded border border-border-primary bg-surface px-2 py-1.5" /></label><label className="text-xs">Receipt SHA-256<input value={target.mapReceiptSha256} onChange={(event) => updateTarget({ mapReceiptSha256: event.target.value })} className="mt-1 w-full rounded border border-border-primary bg-surface px-2 py-1.5 font-mono text-[10px]" /></label><label className="text-xs">Map content SHA-256<input value={target.mapContentSha256} onChange={(event) => updateTarget({ mapContentSha256: event.target.value })} className="mt-1 w-full rounded border border-border-primary bg-surface px-2 py-1.5 font-mono text-[10px]" /></label><label className="text-xs">Canonical size (bytes)<input type="number" min="2" value={target.mapSizeBytes} onChange={(event) => updateTarget({ mapSizeBytes: event.target.value })} className="mt-1 w-full rounded border border-border-primary bg-surface px-2 py-1.5" /></label><label className="text-xs">Entity count<input type="number" min="1" value={target.mapEntityCount} onChange={(event) => updateTarget({ mapEntityCount: event.target.value })} className="mt-1 w-full rounded border border-border-primary bg-surface px-2 py-1.5" /></label><label className="text-xs">Residue mappings<input type="number" min="0" value={target.mapResidueCount} onChange={(event) => updateTarget({ mapResidueCount: event.target.value })} className="mt-1 w-full rounded border border-border-primary bg-surface px-2 py-1.5" /></label></div></fieldset>
-                                                <ProteinDisplayEntityEditor targetIndex={targetIndex} entities={target.mapDisplayEntities} valid={target.mapDisplayEntitiesValid} onChange={(mapDisplayEntities) => updateTarget({ mapDisplayEntities })} />
-                                                <label className="block text-xs font-semibold text-content-secondary">Expected source content SHA-256<input aria-label={`Protein expected content SHA-256 ${targetIndex + 1}`} value={target.expectedContentSha256} onChange={(event) => updateTarget({ expectedContentSha256: event.target.value })} className="mt-1 w-full rounded border border-border-primary bg-surface px-2 py-1.5 font-mono text-xs" /></label>
+                                                <details className="rounded border border-border-primary p-2"><summary className="cursor-pointer text-xs font-semibold text-content-secondary">Verified source details</summary>
+                                                    <dl className="mt-2 space-y-1 break-all text-xs text-content-muted"><dt>Source receipts</dt><dd>{target.sourceReceiptIds.join(', ') || 'Choose a verified target source above.'}</dd><dt>Dataset members</dt><dd>{target.datasetMembers.map(member => `${member.datasetRevisionId}:${member.memberId}`).join(', ') || 'None'}</dd><dt>Expected source SHA-256</dt><dd>{target.expectedContentSha256 || 'Unavailable'}</dd></dl>
+                                                    {target.entityMapReference && <details className="mt-2"><summary className="cursor-pointer text-xs">Historical entity-map metadata (read-only)</summary><pre className="overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(target.entityMapReference, null, 2)}</pre></details>}
+                                                </details>
                                             </div>;
                                         })}
                                     </div>

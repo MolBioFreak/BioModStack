@@ -56,10 +56,7 @@ from experiment_services import (
 )
 from services.global_experiments.adapters import AdapterError, registry
 from services.ngs_molbio_capabilities import NgsMolBioCapabilityError, contract_registry
-from services.ngs_molbio_runtime_status import (
-    NgsMolBioRuntimeAuthorityError,
-    runtime_implementation_record,
-)
+from services.ngs_molbio_source_authority import SourceBuildRevisionError, source_build_identity
 from services.payload_ownership_audit import (
     PayloadOwnershipError,
     validate_retained_payload_ownership_receipt,
@@ -83,25 +80,13 @@ ACTIVE_ADMISSION_STATES = frozenset({"admitted", "queued"})
 
 def _runtime_source_authority(requests: list[dict[str, Any]]) -> tuple[str, str]:
     try:
-        record = runtime_implementation_record()
-        source_revision = str(record["successor_source_commit"])
-        source_tree = str(record["successor_source_tree"])
-    except (KeyError, ImportError, OSError, NgsMolBioRuntimeAuthorityError) as exc:
+        return source_build_identity()
+    except SourceBuildRevisionError as exc:
         raise ResourceAdmissionDenied(
             "resource_source_revision_unavailable",
-            "package-local successor runtime source authority is required for resource evidence",
+            str(exc),
             requests,
         ) from exc
-    if (
-        not re.fullmatch(r"[0-9a-f]{40}", source_revision)
-        or not re.fullmatch(r"[0-9a-f]{40}", source_tree)
-    ):
-        raise ResourceAdmissionDenied(
-            "resource_source_revision_unavailable",
-            "package-local successor runtime commit/tree authority is invalid",
-            requests,
-        )
-    return source_revision, source_tree
 
 
 # This operational registry is intentionally NGS/MolBio-only. Protein kinds remain absent and disabled.

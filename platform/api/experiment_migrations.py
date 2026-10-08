@@ -55,7 +55,9 @@ MIGRATION_V20_VERSION = 20
 MIGRATION_V20_NAME = "domain_parent_global_revision_authority"
 MIGRATION_V21_VERSION = 21
 MIGRATION_V21_NAME = "project_workflow_setup_context_authority"
-LATEST_MIGRATION_VERSION = MIGRATION_V21_VERSION
+MIGRATION_V22_VERSION = 22
+MIGRATION_V22_NAME = "indexed_source_reverification_projection"
+LATEST_MIGRATION_VERSION = MIGRATION_V22_VERSION
 MIGRATION_V2_CHECKSUM = "db24d1ef056e560f10eb2fe9f8ef4dac0d4e4dbe90fd0a49efed88f0d111935c"
 MIGRATION_V3_CHECKSUM = "46f1a1d28a02334e87d628070e2bd9c6d78e158caa23d583951fdc582e7b11d2"
 MIGRATION_V4_CHECKSUM = "ec2966efee9129f8890019bee0d569de2cdf8d2a9fc4bb2e05138839880f375b"
@@ -2256,6 +2258,17 @@ END;
 '''.strip()
 MIGRATION_V21_CHECKSUM = hashlib.sha256(MIGRATION_V21_SQL.encode("utf-8")).hexdigest()
 
+MIGRATION_V22_SQL = r'''
+CREATE INDEX IF NOT EXISTS ix_experiment_domain_adapter_receipts_source_latest
+    ON domain_adapter_receipts(
+        workspace_id, operation_kind,
+        CASE WHEN json_valid(receipt_json)
+             THEN json_extract(receipt_json, '$.source_receipt_id') END,
+        created_at DESC, resource_id DESC
+    );
+'''
+MIGRATION_V22_CHECKSUM = hashlib.sha256(MIGRATION_V22_SQL.encode("utf-8")).hexdigest()
+
 _MIGRATION_TRIGGER_NAMES = (
     "trg_experiment_resource_owner_same_workspace_insert",
     "trg_experiment_resource_owner_same_workspace_update",
@@ -2388,6 +2401,10 @@ def _migration_v21_checksum() -> str:
     return MIGRATION_V21_CHECKSUM
 
 
+def _migration_v22_checksum() -> str:
+    return MIGRATION_V22_CHECKSUM
+
+
 def _migration_v9_checksum() -> str:
     return MIGRATION_V9_CHECKSUM
 
@@ -2484,6 +2501,7 @@ _REQUIRED_INDEXES = {
     "ux_experiment_run_events_idempotency",
     "ix_experiment_research_records_subject_created",
     "ix_experiment_domain_adapter_receipts_domain_created",
+    "ix_experiment_domain_adapter_receipts_source_latest",
     "ix_experiment_launch_contexts_state_expiry",
     "ix_experiment_launch_contexts_domain_issued",
     "ix_experiment_aggregate_heads_dataset_kind",
@@ -2526,10 +2544,11 @@ def _accepted_migration_ledgers() -> tuple[list[tuple[int, str, str]], ...]:
     v19 = (MIGRATION_V19_VERSION, MIGRATION_V19_NAME, _migration_v19_checksum())
     v20 = (MIGRATION_V20_VERSION, MIGRATION_V20_NAME, _migration_v20_checksum())
     v21 = (MIGRATION_V21_VERSION, MIGRATION_V21_NAME, _migration_v21_checksum())
+    v22 = (MIGRATION_V22_VERSION, MIGRATION_V22_NAME, _migration_v22_checksum())
     v1 = (LEGACY_MIGRATION_VERSION, LEGACY_MIGRATION_NAME, LEGACY_MIGRATION_CHECKSUM)
     return (
-        [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21],
-        [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21],
+        [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22],
+        [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22],
     )
 
 
@@ -2703,6 +2722,11 @@ def _expected_schema_definition_manifest(*, legacy_lineage: bool = False) -> dic
             expected, MIGRATION_V21_VERSION, MIGRATION_V21_NAME,
             _migration_v21_checksum(), "Project-owned editable workflow setup context authority",
             MIGRATION_V21_SQL,
+        )
+        _apply_additive_migration(
+            expected, MIGRATION_V22_VERSION, MIGRATION_V22_NAME,
+            _migration_v22_checksum(), "Indexed latest source re-verification projection",
+            MIGRATION_V22_SQL,
         )
         manifest = _schema_definition_manifest(expected)
         if legacy_lineage:
@@ -3935,6 +3959,18 @@ def run_all(db_path: str | Path) -> None:
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
+        if rows in (
+            [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21],
+            [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21],
+        ):
+            _apply_additive_migration(
+                connection, MIGRATION_V22_VERSION, MIGRATION_V22_NAME,
+                _migration_v22_checksum(), "Indexed latest source re-verification projection",
+                MIGRATION_V22_SQL,
+            )
+            rows = connection.execute(
+                "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
+            ).fetchall()
         if rows not in _accepted_migration_ledgers():
             raise RuntimeError(f"experiment migration ledger mismatch: {rows!r}")
         connection.execute(
@@ -4014,6 +4050,10 @@ __all__ = [
     "MIGRATION_V21_NAME",
     "MIGRATION_V21_SQL",
     "MIGRATION_V21_CHECKSUM",
+    "MIGRATION_V22_VERSION",
+    "MIGRATION_V22_NAME",
+    "MIGRATION_V22_SQL",
+    "MIGRATION_V22_CHECKSUM",
     "LATEST_MIGRATION_VERSION",
     "MIGRATION_V4_VERSION",
     "MIGRATION_V4_NAME",

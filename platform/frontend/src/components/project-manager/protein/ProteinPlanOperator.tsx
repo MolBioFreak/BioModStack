@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
     createDomainWorkflowPlan,
+    cloneDomainRunIntent,
+    getDomainRunGroup,
+    resubmitDomainRunGroup,
     getDomainWorkflowPlan,
     issuePreparedLaunchContext,
     launchDomainRunGroup,
@@ -11,7 +14,6 @@ import {
     listDomainWorkflowPlans,
     prepareDomainWorkflowPlanRevision,
     projectManagerErrorMessage,
-    proteinWorkspaceHref,
     publishDomainWorkflowPlanRevision,
     replaceDomainWorkflowPlanDraft,
     type DomainWorkflowPlanHead,
@@ -130,6 +132,14 @@ function SettingControl({ field, value, onChange }: { field: SchemaField; value:
 export function ProteinPlanOperator({ projectId, globalExperimentId, domainExperimentId, domainRevisionId, inputDatasetRevisionIds }: ProteinPlanOperatorProps) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
+    const [searchParams] = useSearchParams();
+    const groupId = searchParams.get('run_group_id') ?? '';
+    const groupAction = searchParams.get('run_group_action');
+    const sourceRunId = searchParams.get('source_run_id') ?? '';
+    const sourceAttemptId = searchParams.get('source_attempt_id') ?? '';
+    const group = useQuery({ queryKey: ['protein-project', projectId, globalExperimentId, domainExperimentId, 'run-group', groupId], queryFn: ({ signal }) => getDomainRunGroup(projectId, globalExperimentId, domainExperimentId, groupId, signal), enabled: Boolean(groupId), retry: false });
+    const sourceAttempt = group.data?.runs.find((run) => run.run_id === sourceRunId)?.attempts.find((attempt) => attempt.attempt_id === sourceAttemptId);
+    const groupActionError = groupAction && (!['clone', 'resubmit'].includes(groupAction) || !groupId || (!group.isLoading && (!group.data || group.data.run_group_id !== groupId || !sourceAttempt))) ? 'The requested operation has no verified exact source run and attempt in this Domain.' : null;
     const scopeKey = [projectId, globalExperimentId, domainExperimentId];
     const [selectedPlanId, setSelectedPlanId] = useState('');
     const [selectedRevisionId, setSelectedRevisionId] = useState('');
@@ -207,16 +217,31 @@ export function ProteinPlanOperator({ projectId, globalExperimentId, domainExper
         mutationFn: () => prepareDomainWorkflowPlanRevision(projectId, globalExperimentId, domainExperimentId, selectedPlanId, selectedRevisionId, inputDatasetRevisionIds),
         onSuccess: setPreparation,
     });
+    const clone = useMutation({
+        mutationFn: async () => {
+            if (!group.data || !sourceAttempt || groupActionError || !domainRevisionId) throw new Error(groupActionError ?? 'Exact source authority is unavailable.');
+            return cloneDomainRunIntent(projectId, globalExperimentId, domainExperimentId, groupId, { expected_run_group_generation: group.data.generation, source_run_id: sourceRunId, source_attempt_id: sourceAttemptId, new_workflow_name: planName.trim(), change_summary: changeSummary.trim(), expected_domain_revision_id: domainRevisionId });
+        },
+        onSuccess: async (receipt) => {
+            if (receipt.project_id !== projectId || receipt.global_experiment_id !== globalExperimentId || receipt.domain_experiment_id !== domainExperimentId || receipt.source_run_group_id !== groupId || receipt.source_run_id !== sourceRunId || receipt.source_attempt_id !== sourceAttemptId) throw new Error('Clone receipt does not match the selected source.');
+            setSelectedPlanId(receipt.new_workflow_plan_id);
+            await queryClient.invalidateQueries({ queryKey: ['protein-project', ...scopeKey, 'plans'] });
+        },
+    });
     const openNativeSetup = useMutation({
         mutationFn: async () => {
             if (!preparation || !plan.data) throw new Error('Prepare an immutable Plan revision first.');
             const pinned = plan.data.capability_contract.capability;
             if (pinned.launch_mode !== 'typed_launcher_handoff') throw new Error('This capability does not advertise a typed native handoff.');
             if (!pinned.canonical_source_destination.startsWith('/') || pinned.canonical_source_destination.startsWith('//')) throw new Error('The pinned native destination is not a safe local route.');
-            const returnUri = proteinWorkspaceHref(projectId, globalExperimentId, domainExperimentId, 'runs');
+            const returnUri = `/projects/${encodeURIComponent(projectId)}?${new URLSearchParams({ focus: globalExperimentId, selected: `virtual_folder:${domainExperimentId}:runs` })}`;
             const context = await issuePreparedLaunchContext(projectId, globalExperimentId, domainExperimentId, preparation.preparation_id, returnUri);
             if (context.project_id !== projectId || context.global_experiment_id !== globalExperimentId || context.domain_experiment_id !== domainExperimentId || context.workflow_id !== selectedPlanId || context.workflow_revision_id !== selectedRevisionId || context.preparation_id !== preparation.preparation_id || context.normalized_request_sha256 !== preparation.normalized_request_sha256) throw new Error('The prepared launch context does not match the selected Protein Plan authority.');
-            const runGroup = await launchDomainRunGroup(projectId, globalExperimentId, domainExperimentId, [{ preparation_id: preparation.preparation_id, launch_context_id: context.launch_context_id }]);
+            const launches = [{ preparation_id: preparation.preparation_id, launch_context_id: context.launch_context_id }];
+            if (groupAction === 'resubmit' && (!group.data || !sourceAttempt || groupActionError)) throw new Error(groupActionError ?? 'Exact source group is unavailable.');
+            const runGroup = groupAction === 'resubmit' && group.data
+                ? await resubmitDomainRunGroup(projectId, globalExperimentId, domainExperimentId, groupId, group.data.generation, launches)
+                : await launchDomainRunGroup(projectId, globalExperimentId, domainExperimentId, launches);
             const attempt = runGroup.runs.find((run) => run.preparation_id === preparation.preparation_id)?.attempts.at(-1);
             if (!attempt || attempt.launch_context?.launch_context_id !== context.launch_context_id || attempt.state !== 'pending') {
                 throw new Error('The Project Run Group did not reserve the exact prepared native handoff.');
@@ -228,9 +253,10 @@ export function ProteinPlanOperator({ projectId, globalExperimentId, domainExper
         onSuccess: (destination) => navigate(destination),
     });
 
-    const error = createPlan.error ?? saveDraft.error ?? publish.error ?? prepare.error ?? openNativeSetup.error ?? plan.error ?? revisions.error ?? plans.error;
+    const error = (groupActionError ? new Error(groupActionError) : null) ?? group.error ?? clone.error ?? createPlan.error ?? saveDraft.error ?? publish.error ?? prepare.error ?? openNativeSetup.error ?? plan.error ?? revisions.error ?? plans.error;
     return <div className="space-y-4">
         {error && <p role="alert" className="rounded-lg border border-error/50 bg-error/10 p-3 text-xs text-error">{projectManagerErrorMessage(error)}</p>}
+        {groupAction && <section aria-label="Requested run operation" className="rounded-xl border border-border-primary p-4"><h2 className="font-semibold">{groupAction === 'clone' ? 'Clone exact run intent' : 'Resubmit run group'}</h2><p className="mt-2 text-xs">Source group: {groupId} · run: {sourceRunId} · attempt: {sourceAttemptId}</p>{groupAction === 'clone' ? <><label className="block text-xs">New Plan name<input className={INPUT} value={planName} onChange={(event) => setPlanName(event.target.value)}/></label><label className="block text-xs">Clone summary<input className={INPUT} value={changeSummary} onChange={(event) => setChangeSummary(event.target.value)}/></label><button className={BUTTON} disabled={!sourceAttempt || Boolean(groupActionError) || !planName.trim() || !changeSummary.trim() || clone.isPending} onClick={() => clone.mutate()}>Clone to editable Plan</button>{clone.isSuccess && <p role="status">Source settings copied to the selected editable Plan. Review, publish and prepare explicitly; no run was launched.</p>}</> : <p className="mt-2 text-sm">Select and prepare an immutable replacement Plan revision below. Opening native setup explicitly resubmits this group; no run is created by navigation.</p>}</section>}
         {mutationBlocker && <p className="rounded-lg border border-warning/50 bg-warning/10 p-3 text-xs text-warning">{mutationBlocker}</p>}
         <section className="rounded-xl border border-border-primary bg-surface-secondary p-4">
             <h2 className="text-sm font-semibold text-content">Create a Protein Workflow Plan</h2>
@@ -257,7 +283,7 @@ export function ProteinPlanOperator({ projectId, globalExperimentId, domainExper
             <h2 className="text-sm font-semibold text-content">Prepare an immutable revision</h2>
             <div className="mt-3 grid gap-3 md:grid-cols-[1fr_auto]"><select className={INPUT} value={selectedRevisionId} onChange={(event) => { setSelectedRevisionId(event.target.value); setPreparation(null); }}><option value="">Select an immutable revision</option>{(revisions.data?.items ?? []).map((revision) => <option key={revision.revision_id} value={revision.revision_id}>Revision {revision.revision_number} · {revision.revision_id}</option>)}</select><button className={BUTTON} type="button" disabled={!selectedRevisionId || prepare.isPending} onClick={() => prepare.mutate()}>Prepare selected revision</button></div>
             <p className="mt-2 text-xs text-content-muted">Exact Dataset revision inputs: {inputDatasetRevisionIds.length ? inputDatasetRevisionIds.join(', ') : 'none selected'}</p>
-            {preparation && <div className="mt-4 rounded-lg border border-success/40 bg-success/10 p-3 text-xs text-content-secondary"><p className="font-semibold text-success">Preparation {preparation.status}</p><dl className="mt-2 grid gap-2 md:grid-cols-3"><div><dt>Preparation ID</dt><dd className="break-all font-mono">{preparation.preparation_id}</dd></div><div><dt>Request digest</dt><dd className="break-all font-mono">{preparation.normalized_request_sha256}</dd></div><div><dt>Validation receipt</dt><dd className="break-all font-mono">{preparation.validation_receipt_id}</dd></div><div><dt>Expected outputs</dt><dd>{preparation.expected_cardinality}</dd></div></dl><button className={`${BUTTON} mt-3`} type="button" disabled={preparation.status !== 'valid' || openNativeSetup.isPending} onClick={() => openNativeSetup.mutate()}>Open native Protein setup</button>{preparation.status !== 'valid' && <p className="mt-2 text-warning">Native setup is disabled because the preparation status is not valid.</p>}</div>}
+            {preparation && <div className="mt-4 rounded-lg border border-success/40 bg-success/10 p-3 text-xs text-content-secondary"><p className="font-semibold text-success">Preparation {preparation.status}</p><dl className="mt-2 grid gap-2 md:grid-cols-3"><div><dt>Preparation ID</dt><dd className="break-all font-mono">{preparation.preparation_id}</dd></div><div><dt>Request digest</dt><dd className="break-all font-mono">{preparation.normalized_request_sha256}</dd></div><div><dt>Validation receipt</dt><dd className="break-all font-mono">{preparation.validation_receipt_id}</dd></div><div><dt>Expected outputs</dt><dd>{preparation.expected_cardinality}</dd></div></dl><button className={`${BUTTON} mt-3`} type="button" disabled={preparation.status !== 'valid' || openNativeSetup.isPending || Boolean(groupActionError) || Boolean(groupAction === 'resubmit' && !sourceAttempt)} onClick={() => openNativeSetup.mutate()}>{groupAction === 'resubmit' ? 'Resubmit group and open native Protein setup' : 'Open native Protein setup'}</button>{preparation.status !== 'valid' && <p className="mt-2 text-warning">Native setup is disabled because the preparation status is not valid.</p>}</div>}
         </section>}
     </div>;
 }

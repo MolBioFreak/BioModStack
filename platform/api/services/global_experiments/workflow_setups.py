@@ -178,42 +178,40 @@ def _capability_contract(capability_id: str) -> tuple[dict[str, Any], str, str]:
     return contract, adapter_id, destination
 
 
-def _global_payload(name: str, objective: str) -> dict[str, Any]:
+def _global_payload(name: str, objective: str, actor_id: str) -> dict[str, Any]:
     return {
-        "schema": "bms.global-experiment.v1",
-        "name": name,
-        "objective": objective,
-        "scientific_question": objective,
-        "description": objective,
-        "status": "active",
-        "priority": "normal",
-        "success_criteria": ["Complete the configured primary Protein workflow"],
+        "schema": "bms.global-experiment.v2",
+        "name": name, "objective": objective, "scientific_question": objective,
+        "description": objective, "status": "active", "priority": "normal",
+        "success_criteria": [], "hypothesis": None, "tags": [],
+        "shared_source_receipt_ids": [], "shared_dataset_ids": [],
+        "comparison_plan": None, "review_summary": None, "conclusion": None,
+        "created_by": actor_id, "change_summary": "Created from workflow setup",
     }
 
 
 def _domain_payload(
-    name: str, objective: str, capability_id: str, experiment_mode: str
+    name: str, objective: str, experiment_mode: str, actor_id: str
 ) -> dict[str, Any]:
-    return {
-        "schema": "bms.domain-experiment.v1",
-        "domain_kind": "protein_in_silico",
-        "domain_contract_version": "1",
-        "name": name,
-        "objective": objective,
-        "status": "active",
-        "source_receipt_ids": [],
-        "dataset_ids": [],
+    import rfc8785
+
+    payload = {
+        "schema": "bms.domain-experiment.v4",
+        "domain_kind": "protein_in_silico", "domain_contract_version": "3",
+        "name": name, "objective": objective, "status": "active",
+        "tags": [], "source_receipt_ids": [], "dataset_revision_ids": [],
+        "created_by": actor_id, "change_summary": "Created from workflow setup",
         "domain_payload": {
-            "schema": "bms.protein-in-silico-experiment.v1",
-            "experiment_mode": experiment_mode,
-            "targets": [],
-            "scientific_objective": objective,
-            "design_constraints": [],
-            "planned_capabilities": [capability_id],
-            "comparison_groups": [],
-            "validation_strategy": [],
+            "schema": "bms.protein-in-silico-experiment.v3",
+            "experiment_mode": experiment_mode, "targets": [],
+            "scientific_objective": objective, "design_constraints": [],
+            "planned_capability_ids": [], "comparison_groups": [],
+            "validation_capability_ids": [], "acceptance_criteria": [], "evidence_plan": [],
         },
     }
+    payload["domain_payload_canonical_size_bytes"] = len(rfc8785.dumps(payload["domain_payload"]))
+    payload["canonical_size_bytes"] = len(rfc8785.dumps(payload))
+    return payload
 
 
 def _materialize_draft(schema: dict[str, Any], supplied: dict[str, Any]) -> tuple[dict[str, Any], str]:
@@ -261,6 +259,7 @@ async def create_workflow_setup(
     experiment_objective: str | None,
     domain_kind: str,
     capability_id: str,
+    actor_id: str,
     idempotency_key: str,
 ) -> dict[str, Any]:
     request = {
@@ -290,7 +289,7 @@ async def create_workflow_setup(
         if not str(experiment_name or "").strip() or not str(experiment_objective or "").strip():
             raise ValidationFailure("primary workflow setup requires experiment name and objective")
         global_head = await create_global_experiment(
-            session, project_id, _global_payload(str(experiment_name).strip(), str(experiment_objective).strip())
+            session, project_id, _global_payload(str(experiment_name).strip(), str(experiment_objective).strip(), actor_id)
         )
     else:
         if experiment_name is not None or experiment_objective is not None:
@@ -320,8 +319,8 @@ async def create_workflow_setup(
         _domain_payload(
             f"{global_head.display_name} — {capability_id}",
             objective,
-            capability_id,
             experiment_mode,
+            actor_id,
         ),
     )
     workflow = await create_workflow(
