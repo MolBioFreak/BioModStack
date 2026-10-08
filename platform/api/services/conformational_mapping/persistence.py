@@ -145,7 +145,12 @@ async def register_prepared_request(
         result_contract_id=result_contract_id, request_json=dict(request),
         coordinate_plan_json=dict(coordinate_plan), progress_json=progress,
     )
+    # The request owns a non-deferrable SQLite FK to jobs.  The two models do
+    # not have an ORM relationship, so SQLAlchemy's unit of work cannot infer
+    # their dependency order; flush the parent before making the request
+    # insert visible to the database.
     session.add(job)
+    await session.flush()
     session.add(record)
     await session.flush()
     return record
