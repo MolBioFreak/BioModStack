@@ -15,7 +15,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from molbio_models import IMMUTABLE_TABLES, MolBioBase, MolecularImportBatch
+from molbio_models import IMMUTABLE_TABLES, MolBioBase, MolecularImportBatch, ProjectPlasmidMetadata
 from paths import get_data_root
 from services.ngs_molbio_quiescence import NgsMolBioQuiescedSession
 
@@ -541,6 +541,17 @@ async def _migration_authoritative_import_batches(connection: AsyncConnection) -
     await _migration_append_only_guards(connection)
 
 
+async def _migration_project_plasmid_metadata(connection: AsyncConnection) -> None:
+    """Add project-local metadata used by the governed project-hub changeover."""
+
+    await connection.run_sync(
+        lambda sync_connection: ProjectPlasmidMetadata.__table__.create(
+            sync_connection,
+            checkfirst=True,
+        )
+    )
+
+
 MOLBIO_MIGRATIONS: tuple[Migration, ...] = (
     ("0001_initial", "create Mol Bio owned schema", _migration_initial),
     ("0002_append_only_guards", "enforce append-only scientific history", _migration_append_only_guards),
@@ -558,6 +569,11 @@ MOLBIO_MIGRATIONS: tuple[Migration, ...] = (
         "0005_authoritative_import_batches",
         "persist immutable authoritative sequence-import results and idempotency bindings",
         _migration_authoritative_import_batches,
+    ),
+    (
+        "0006_project_plasmid_metadata",
+        "persist project-local plasmid tags and notes behind exact state activation",
+        _migration_project_plasmid_metadata,
     ),
 )
 
