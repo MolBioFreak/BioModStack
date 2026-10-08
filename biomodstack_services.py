@@ -1530,24 +1530,21 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     tailnet_global_installer = root / "scripts" / "install_tailnet_global_routes.py"
     dev_api_host_port = runtime_api_port(DEV_RUNTIME_MODE, project_root=root)
     dev_web_host_port = runtime_frontend_port(DEV_RUNTIME_MODE, project_root=root)
-    dev_data_root = str(resolved.get("dev_data_root", Path.home() / ".biomodstack-dev"))
-    dev_inputs_dir = str(resolved.get("dev_inputs_dir", Path(dev_data_root) / "inputs"))
-    dev_db_path = str(resolved.get("dev_db_path", Path(dev_data_root) / "biomodstack.db"))
-    dev_work_dir = str(resolved.get("dev_work_dir", Path(dev_data_root) / "work"))
-    dev_analysis_cache_dir = str(Path(dev_data_root) / "analysis_cache")
-    dev_results_root = str(resolved.get("dev_results_dir", Path(dev_data_root) / "bms_results"))
-    # Model weights are immutable shared runtime assets, not lane-owned job
-    # state.  Native Development keeps its DB/work/results isolated while
-    # reusing the profile's canonical weights root (as container mode does).
-    dev_weights_root = str(resolved.get("weights_root", Path("/mnt/BioModStack") / "weights"))
-    # ColabFold's reference database is an immutable shared model asset.  Keep
-    # mutable MSA cache state lane-local, but do not require a duplicate DB.
-    dev_colabfold_db = str(resolved.get("colabfold_db", Path("/mnt/BioModStack") / "colabfold_db"))
-    dev_msa_cache_dir = str(resolved.get("dev_msa_cache_dir", Path(dev_data_root) / "msa_cache"))
-    dev_sabdab_cache_dir = str(resolved.get("dev_sabdab_cache_dir", Path(dev_data_root) / "sabdab_cache"))
-    dev_container_dir = str(
-        resolved.get("container_dir", shared_data_root / "apptainer")
-    )
+    # One pure lane-selection authority for managed services and bootstrap.
+    from biomodstack_runtime_profile import managed_runtime_storage_paths
+    dev_storage = managed_runtime_storage_paths(resolved, DEV_RUNTIME_MODE)
+    dev_data_root = dev_storage["dev_data_root"]
+    dev_inputs_dir = dev_storage["dev_inputs_dir"]
+    dev_db_path = dev_storage["dev_db_path"]
+    dev_work_dir = dev_storage["dev_work_dir"]
+    dev_analysis_cache_dir = dev_storage["dev_analysis_cache_dir"]
+    dev_results_root = dev_storage["dev_results_dir"]
+    # Immutable weights/reference databases/images are shared, not lane state.
+    dev_weights_root = dev_storage["weights_root"]
+    dev_colabfold_db = dev_storage["colabfold_db"]
+    dev_msa_cache_dir = dev_storage["dev_msa_cache_dir"]
+    dev_sabdab_cache_dir = dev_storage["dev_sabdab_cache_dir"]
+    dev_container_dir = dev_storage["container_dir"]
     dev_confornets_container = str(
         os.environ.get("BMS_DEV_CM_CONFORNETS_CONTAINER_PATH")
         or resolved.get(

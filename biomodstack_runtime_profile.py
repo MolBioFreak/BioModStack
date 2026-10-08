@@ -302,6 +302,86 @@ def _sqlite_path_from_url(db_url: str) -> Path | None:
     return None
 
 
+def validate_install_profile_raw(raw: object) -> None:
+    """Opt-in strict diagnostic boundary; legacy normalization stays permissive.
+
+    Reuse this module's field/feature authority before any coercion or path
+    resolution. Legacy string booleans and decimal string ports are supported;
+    lossy numeric coercion, unknown nested features and empty fields are not.
+    """
+    if not isinstance(raw, Mapping):
+        raise ValueError("Install profile must be an object")
+    known = set(_PATH_FIELDS + _CONFIG_FIELDS + _INT_FIELDS) | {
+        "features", "cors_origins", "core_runtime_mode", "local_cpu_threads", "local_memory_gib"}
+    unknown = set(raw) - known
+    if unknown:
+        raise ValueError(f"Unsupported install profile fields: {sorted(unknown)}")
+    for key, value in raw.items():
+        if key in _PATH_FIELDS + _CONFIG_FIELDS:
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{key} must be a nonempty string")
+        elif key in _INT_FIELDS:
+            if not (type(value) is int or
+                    isinstance(value, str) and value.strip().isascii() and value.strip().isdecimal()):
+                raise ValueError(f"{key} must be an integer port or decimal string (not boolean/float)")
+            if not 1 <= int(value) <= 65535:
+                raise ValueError(f"{key} must be in 1..65535")
+        elif key == "features":
+            if not isinstance(value, Mapping) or not value:
+                raise ValueError("features must be a nonempty mapping")
+            seen = set()
+            for name, enabled in value.items():
+                normalized = _normalize_feature_key(name)
+                if normalized not in _FEATURE_DEFAULTS or normalized in seen:
+                    raise ValueError(f"Unknown or duplicate feature: {name}")
+                seen.add(normalized)
+                _validate_raw_bool(enabled, f"features.{name}")
+        elif key == "core_runtime_mode":
+            _validate_raw_bool(value, key)
+        elif key == "cors_origins":
+            if not (isinstance(value, str) and value.strip() or
+                    isinstance(value, list) and value and
+                    all(isinstance(item, str) and item.strip() for item in value)):
+                raise ValueError("cors_origins must be a nonempty string or list of nonempty strings")
+    # Includes finite/range checks; OverflowError from enormous integers is a
+    # configuration error at this opt-in boundary, not a change to legacy APIs.
+    from biomodstack_local_resources import configured_local_policy
+    configured_local_policy(raw)
+
+
+def _validate_raw_bool(value: object, field: str) -> None:
+    if not (isinstance(value, bool) or type(value) is int and value in (0, 1) or
+            isinstance(value, str) and value.strip().lower() in
+            {"1", "true", "yes", "on", "0", "false", "no", "off"}):
+        raise ValueError(f"{field} must be a boolean or supported legacy boolean spelling")
+
+
+def managed_runtime_storage_paths(resolved: Mapping[str, object], runtime: str) -> dict[str, str]:
+    """Host destinations used by managed lanes, without IO or service rendering.
+
+    Images, weights and immutable reference databases are shared; mutable
+    Development state is lane-owned. Database entries denote files, not dirs.
+    """
+    if runtime not in {"dev", "container"}:
+        raise ValueError("runtime must be dev or container")
+    shared = ("container_dir", "weights_root", "colabfold_db")
+    mutable = ("data_root", "inputs_dir", "results_dir", "db_path", "work_dir",
+               "analysis_cache_dir", "msa_cache_dir", "sabdab_cache_dir")
+    shared_root = Path(str(resolved.get("data_root", "/mnt/BioModStack")))
+    paths = {key: str(resolved.get(key, shared_root / leaf)) for key, leaf in
+             zip(shared, ("apptainer", "weights", "colabfold_db"))}
+    base_key = "dev_data_root" if runtime == "dev" else "data_root"
+    base = Path(str(resolved.get(base_key, Path.home() / ".biomodstack-dev"
+                                if runtime == "dev" else shared_root)))
+    leaves = ("", "inputs", "bms_results", "biomodstack.db", "work",
+              "analysis_cache", "msa_cache", "sabdab_cache")
+    for key, leaf in zip(mutable, leaves):
+        source = f"dev_{key}" if runtime == "dev" else key
+        paths[source] = (str(base / leaf) if source == "dev_analysis_cache_dir"
+                         else str(resolved.get(source, base / leaf)))
+    return paths
+
+
 def normalize_install_profile(raw: Mapping[str, object] | None) -> dict[str, object]:
     raw = raw or {}
     normalized: dict[str, object] = {}

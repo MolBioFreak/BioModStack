@@ -16,6 +16,7 @@ import sys
 from biomodstack_local_resources import configured_local_policy, detect_local_capacity
 from biomodstack_runtime_profile import (
     get_install_profile_path, normalize_install_profile, resolve_runtime_paths,
+    validate_install_profile_raw, managed_runtime_storage_paths,
 )
 
 SCHEMA_VERSION = "bms.bootstrap.v1"
@@ -46,6 +47,8 @@ def bootstrap_report(action: str, *, project_root: Path, runtime: str | None = N
               "status": "blocked", "ready": False, "read_only": True,
               "runtime_mode": mode, "selected_models": sorted(set(models)),
               "observations": {}, "dependencies": [], "blockers": [],
+              "effects_scope": "bootstrap application operations; excludes interpreter startup and user site hooks",
+              "interpreter_startup": {"bytecode_disabled": bool(sys.flags.dont_write_bytecode)},
               "effects": {"writes": False, "downloads": False,
                           "service_changes": False, "registration": False}}
     blockers = report["blockers"]
@@ -57,49 +60,47 @@ def bootstrap_report(action: str, *, project_root: Path, runtime: str | None = N
     observations["host"] = {"system": platform.system(), "machine": platform.machine()}
     if platform.system() != "Linux":
         block("host_unsupported", "Managed bootstrap currently targets Linux")
-    profile_path = get_install_profile_path()
-    observations["profile"] = {"path": str(profile_path), "exists": profile_path.exists()}
     profile = {}
     profile_valid = True
     try:
+        profile_path = get_install_profile_path()
+        observations["profile"] = {"path": str(profile_path), "exists": profile_path.exists()}
         if profile_path.exists():
             raw = json.loads(profile_path.read_text(encoding="utf-8"))
-            if not isinstance(raw, dict):
-                raise ValueError("Install profile must be an object")
+            validate_install_profile_raw(raw)
             profile = normalize_install_profile(raw)
-            # Discovery must not silently present ignored settings as configured.
-            if set(raw) - set(profile):
-                raise ValueError("Install profile contains unsupported or empty fields")
-    except (OSError, ValueError, TypeError) as exc:
+
+    except (OSError, ValueError, TypeError, RuntimeError, OverflowError) as exc:
         profile_valid = False
+        profile = {}
         block("profile_invalid", str(exc))
     try:
         observations["capacity"] = asdict(detect_local_capacity())
         observations["local_budget"] = asdict(configured_local_policy(profile))
-    except ValueError as exc:
+    except (ValueError, OverflowError) as exc:
         block("local_resources_invalid", str(exc))
     paths = {}
     if profile_valid:
         try:
             paths = resolve_runtime_paths(project_root=project_root, profile=profile)
-            storage_keys = ("data_root", "inputs_dir", "results_dir", "work_dir",
-                            "analysis_cache_dir", "container_dir", "weights_root",
-                            "dev_data_root")
+            storage = managed_runtime_storage_paths(paths, mode)
             observations["storage"] = []
-            for key in storage_keys:
-                path = Path(str(paths[key]))
+            for key, destination in storage.items():
+                path = Path(destination)
                 try:
-                    disk = _disk(path)
+                    disk = _disk(path.parent if key.endswith("db_path") else path)
+                    disk["path"] = str(path)
+                    disk["kind"] = "file" if key.endswith("db_path") else "directory"
                     observations["storage"].append({"role": key, **disk})
                     if disk["free_bytes"] == 0:
                         block("disk_full", f"No free space for {key}")
                     if not disk["writable_hint"]:
                         block("storage_not_writable", f"No write/search access hint for {key}")
-                except (OSError, ValueError) as exc:
+                except (OSError, ValueError, RuntimeError) as exc:
                     block("storage_unavailable", f"{key}: {exc}")
                 if path.is_relative_to(project_root.resolve()):
                     block("storage_in_source", f"{key} resolves inside checkout; configure external storage before installation")
-        except (OSError, ValueError, TypeError) as exc:
+        except (OSError, ValueError, TypeError, RuntimeError, OverflowError) as exc:
             block("profile_resolution_failed", str(exc))
     tools = {"python3", "git", "systemctl"}
     tools.update({"uv", "node", "npm"} if mode == "dev" else {"docker"})
@@ -133,7 +134,10 @@ def bootstrap_report(action: str, *, project_root: Path, runtime: str | None = N
         except (ImportError, OSError, ValueError) as exc:
             block("dependency_authority_unavailable", str(exc))
         block("scientific_qualification_not_run", "Existing scientific validators/admission remain authoritative; no runtime was qualified or registered")
-        block("licensed_weights_unresolved", "No license acceptance or separate pinned weight acquisition is implemented by bootstrap")
+        observations["weight_licensing"] = {
+            "applicability": "unknown", "acceptance": "not_checked",
+            "reason": "Dependency references do not establish license requirements; no reviewed license applicability authority is wired into bootstrap"}
+        block("license_applicability_unknown", "Selected-model license applicability has not been established; this does not assert that every selection needs licensed weights")
     block("acquisition_unavailable", "No approved pinned acquisition executor is wired into bootstrap; existing files are not acquisition or qualification evidence")
     block("disk_requirement_unknown", "Authoritative acquisition/staging/expansion sizes are unavailable; free space is not a sufficient-disk verdict")
     block("prerequisite_qualification_not_run", "Tool versions, GPU compatibility, service privileges and locked dependencies have not been qualified")
@@ -141,7 +145,7 @@ def bootstrap_report(action: str, *, project_root: Path, runtime: str | None = N
     if action == "plan":
         report["plan"] = {"executable": False, "steps": [
             {"action": step, "state": "blocked"} for step in
-            ("configure", "acquire_pinned_runtime", "acquire_licensed_weights",
+            ("configure", "acquire_pinned_runtime", "resolve_applicable_weight_licenses",
              "verify_register", "verify_readiness")], "restart_impact": "none: no execution"}
     return report
 
