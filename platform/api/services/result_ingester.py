@@ -449,6 +449,11 @@ async def ingest_loose_files(
                 complex_ipde = metrics.get('complex_ipde')
                 chains_ptm = metrics.get('chains_ptm')  # dict: {"0": 0.76, "1": 0.51}
                 pair_chains_iptm = metrics.get('pair_chains_iptm')  # NxN matrix
+                has_clash_raw = metrics.get('full_has_clash')
+                if has_clash_raw is None:
+                    has_clash_raw = metrics.get('has_clash')
+                disorder = metrics.get('disorder') or metrics.get('full_disorder_prob_mean')
+                num_recycles = metrics.get('num_recycles')
                 
                 # Boltz2 uses 'complex_pde' not PAE - convert PDE to estimated PAE
                 pae = metrics.get('complex_pae') or metrics.get('pae')
@@ -522,6 +527,10 @@ async def ingest_loose_files(
                     complex_ipde=safe_float(complex_ipde),
                     chains_ptm=chains_ptm,
                     pair_chains_iptm=pair_chains_iptm,
+                    disorder=safe_float(disorder),
+                    num_recycles=safe_int(num_recycles),
+                    has_clash=(bool(has_clash_raw) if has_clash_raw is not None else None),
+                    confidence_metrics=metrics,
                     
                     # Defaults for others
                     is_favorite=False,
@@ -617,6 +626,7 @@ async def ingest_loose_files(
                     iptm=safe_float(iptm),  # NEW: Store RF3 iptm
                     conf_score=safe_float(conf_score),
                     residue_plddt=residue_plddt,
+                    confidence_metrics=metrics,
                     
                     # Defaults for others
                     is_favorite=False,
@@ -706,6 +716,10 @@ async def ingest_loose_files(
                 has_clash = metrics.get('full_has_clash')
                 if has_clash is None:
                     has_clash = metrics.get('has_clash')
+                disorder = metrics.get('disorder')
+                if disorder is None:
+                    disorder = metrics.get('full_disorder_prob_mean')
+                num_recycles = metrics.get('num_recycles')
 
                 pae = metrics.get('complex_pae') or metrics.get('pae') or metrics.get('gpde')
                 if pae is None:
@@ -737,6 +751,10 @@ async def ingest_loose_files(
                     chains_ptm=chains_ptm,
                     pair_chains_iptm=pair_chains_iptm,
                     residue_plddt=residue_plddt,
+                    disorder=safe_float(disorder),
+                    num_recycles=safe_int(num_recycles),
+                    has_clash=(bool(has_clash) if has_clash is not None else None),
+                    confidence_metrics=metrics,
 
                     is_favorite=False,
                     created_at=datetime.utcnow()
@@ -758,9 +776,22 @@ async def ingest_loose_files(
         print("[Ingester] No JSON metrics found. Scanning for raw structure files...")
 
         structure_paths = []
-        structure_paths.extend(list(output_path.rglob("*.pdb")))
-        structure_paths.extend(list(output_path.rglob("*.cif")))
-        structure_paths.extend(list(output_path.rglob("*.mmcif")))
+        
+        # For oligo_design jobs: prefer run/rebuilt/ (full-atom PDBs with nucleobase sidechains)
+        # over run/rfdpoly/ (backbone templates) and run/nampnn/ (backbone-only after NA-MPNN)
+        rebuilt_dir = output_path / "run" / "rebuilt"
+        if rebuilt_dir.exists():
+            structure_paths.extend(list(rebuilt_dir.glob("*.pdb")))
+            # Also check nested rebuilt/rebuilt/ (older publishDir layout)
+            nested = rebuilt_dir / "rebuilt"
+            if nested.exists():
+                structure_paths.extend(list(nested.glob("*.pdb")))
+            print(f"[Ingester] Found {len(structure_paths)} rebuilt PDBs in {rebuilt_dir}")
+        
+        if not structure_paths:
+            structure_paths.extend(list(output_path.rglob("*.pdb")))
+            structure_paths.extend(list(output_path.rglob("*.cif")))
+            structure_paths.extend(list(output_path.rglob("*.mmcif")))
 
         if not structure_paths:
             print(f"[Ingester] No raw structures found under {output_path}")
