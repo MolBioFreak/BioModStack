@@ -242,10 +242,18 @@ export interface BioXpCapabilities {
     linkage_url?: string | null;
     linkage_configured?: boolean;
     recommended_url?: string | null;
+    robot_hardware_assumption?: string;
+    truth_source?: string;
+    bms_role?: string;
     robot_local_expected_routes: Record<string, boolean>;
     bms_proxy_routes: Record<string, boolean>;
+    default_operator_routes?: Record<string, boolean>;
+    commissioning_only_routes?: Record<string, boolean>;
+    disabled_routes?: Record<string, boolean>;
     notes?: string[];
 }
+
+export type OemStatusPayload = Record<string, any>;
 
 export interface MotionReferenceStatus {
     ok?: boolean;
@@ -440,6 +448,114 @@ export const useBioXpCapabilities = (enabled = true) =>
         },
         enabled,
         refetchInterval: enabled ? 15000 : false,
+        retry: false,
+    });
+
+export const useOemStartupLatest = (enabled = true, refetchIntervalMs: number | false = 5000) =>
+    useQuery<OemStatusPayload, Error>({
+        queryKey: ['bioxp', 'oem', 'startup', 'latest'],
+        queryFn: async () => {
+            const res = await api.get('/api/bioxp/oem/startup/status/latest');
+            return res.data;
+        },
+        enabled,
+        refetchInterval: enabled ? refetchIntervalMs : false,
+        retry: false,
+    });
+
+export const useOemRuntimeStatus = (enabled = true, refetchIntervalMs: number | false = 5000) =>
+    useQuery<OemStatusPayload, Error>({
+        queryKey: ['bioxp', 'oem', 'runtime', 'status'],
+        queryFn: async () => {
+            const res = await api.get('/api/bioxp/oem/runtime/status');
+            return res.data;
+        },
+        enabled,
+        refetchInterval: enabled ? refetchIntervalMs : false,
+        retry: false,
+    });
+
+export const useOemRuntimeState = (enabled = true, refetchIntervalMs: number | false = 5000) =>
+    useQuery<OemStatusPayload, Error>({
+        queryKey: ['bioxp', 'oem', 'runtime', 'state'],
+        queryFn: async () => {
+            const res = await api.get('/api/bioxp/oem/runtime/state');
+            return res.data;
+        },
+        enabled,
+        refetchInterval: enabled ? refetchIntervalMs : false,
+        retry: false,
+    });
+
+export const useOemStartupRequest = () => {
+    const queryClient = useQueryClient();
+    return useMutation<OemStatusPayload, Error, BioXpPayload | void>({
+        mutationKey: bioxpHardwareMutationKey('oem', 'startup', 'request'),
+        mutationFn: async (payload = {}) => {
+            const res = await api.post('/api/bioxp/oem/startup/request', payload);
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient),
+    });
+};
+
+export const useOemStartupDoorEvent = () => {
+    const queryClient = useQueryClient();
+    return useMutation<OemStatusPayload, Error, BioXpPayload>({
+        mutationKey: bioxpHardwareMutationKey('oem', 'startup', 'door-event'),
+        mutationFn: async (payload) => {
+            const res = await api.post('/api/bioxp/oem/startup/door_event', payload);
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient),
+    });
+};
+
+export const useOemRuntimeRecover = () => {
+    const queryClient = useQueryClient();
+    return useMutation<OemStatusPayload, Error, BioXpPayload | void>({
+        mutationKey: bioxpHardwareMutationKey('oem', 'runtime', 'recover'),
+        mutationFn: async (payload = {}) => {
+            const res = await api.post('/api/bioxp/oem/runtime/recover', payload);
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient),
+    });
+};
+
+export const useOemRuntimeEmergencyStop = () => {
+    const queryClient = useQueryClient();
+    return useMutation<OemStatusPayload, Error, BioXpPayload | void>({
+        mutationKey: bioxpHardwareMutationKey('oem', 'runtime', 'emergency-stop'),
+        mutationFn: async (payload = {}) => {
+            const res = await api.post('/api/bioxp/oem/runtime/emergency_stop', payload);
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient),
+    });
+};
+
+export const useOemRuntimeCommand = (commandName: 'initializeSystem' | 'PrepareToRunJob' | 'validateJob' | 'enqueue' | 'abortjob' | 'unlockProcess' | 'wakefrompause') => {
+    const queryClient = useQueryClient();
+    return useMutation<OemStatusPayload, Error, BioXpPayload | void>({
+        mutationKey: bioxpHardwareMutationKey('oem', 'runtime', 'command', commandName),
+        mutationFn: async (payload = {}) => {
+            const res = await api.post(`/api/bioxp/oem/runtime/commands/${commandName}`, payload);
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient),
+    });
+};
+
+export const useMotionRangeStatus = (enabled = true, refetchIntervalMs: number | false = 5000) =>
+    useQuery<OemStatusPayload, Error>({
+        queryKey: ['bioxp', 'motion', 'range', 'status'],
+        queryFn: async () => {
+            const res = await api.get('/api/bioxp/motion/range/status');
+            return res.data;
+        },
+        enabled,
+        refetchInterval: enabled ? refetchIntervalMs : false,
         retry: false,
     });
 

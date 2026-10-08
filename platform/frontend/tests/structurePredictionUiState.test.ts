@@ -5,6 +5,7 @@ import test from 'node:test';
 import {
     BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
     BOLTZ_CP_SHARD_PLAN_DEFINITIONS,
+    DEFAULT_BOLTZ_CP_CONTEXT_QUERY_TILE_TOKENS,
     BOLTZ_MAX_PARALLEL_SAMPLES_HELP_TEXT,
     BOLTZ_NUM_SAMPLES_HELP_TEXT,
     buildBoltzCpSubmitParams,
@@ -158,7 +159,9 @@ test('boltz cp runtime bridge summary makes the logical plan primary and bridge 
     );
 });
 
-test('boltz cp submit params expose only the workflow-specific knobs on top of shared structure inputs', () => {
+test('boltz cp submit params expose reference triangle query tiling default and override', () => {
+    assert.equal(DEFAULT_BOLTZ_CP_CONTEXT_QUERY_TILE_TOKENS, 512);
+
     assert.deepEqual(
         buildBoltzCpSubmitParams({
             shardPlanId: '4x4',
@@ -166,6 +169,7 @@ test('boltz cp submit params expose only the workflow-specific knobs on top of s
             writeFullPae: true,
             seed: '17',
             gpuIds: '0,1,2,3',
+            contextQueryTileTokens: 256,
         }),
         {
             structure_launch_variant: 'boltz_cp_experimental',
@@ -174,6 +178,7 @@ test('boltz cp submit params expose only the workflow-specific knobs on top of s
             bcp_shard_plan_id: '4x4',
             bcp_output_format: 'pdb',
             bcp_write_full_pae: true,
+            bcp_context_query_tile_tokens: 256,
             bcp_gpu_ids: '0,1,2,3',
             bcp_seed: 17,
         },
@@ -194,8 +199,17 @@ test('boltz cp submit params expose only the workflow-specific knobs on top of s
             bcp_shard_plan_id: '1x1',
             bcp_output_format: 'mmcif',
             bcp_write_full_pae: false,
+            bcp_context_query_tile_tokens: 512,
         },
     );
+});
+
+test('boltz cp template component exposes query tiling as live UI control', () => {
+    const componentText = readFileSync('src/components/StructurePredictionTemplate.tsx', 'utf8');
+
+    assert.match(componentText, /Triangle attention query tile/);
+    assert.match(componentText, /setBcpContextQueryTileTokens/);
+    assert.match(componentText, /contextQueryTileTokens: bcpContextQueryTileTokens/);
 });
 
 test('structure MSA submit params carry adaptive target-DB sharding controls for local high-quality runs', () => {

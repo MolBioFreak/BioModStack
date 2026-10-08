@@ -46,6 +46,7 @@ def test_compose_core_runtime_contract() -> None:
     assert api["environment"]["BMS_COLABFOLD_DB"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/colabfold_db"
     assert api["environment"]["BMS_MSA_CACHE"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/msa_cache"
     assert api["environment"]["BMS_SABDAB_CACHE"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/sabdab_cache"
+    assert api["environment"]["BMS_WORK"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/work"
     assert "BIOXP_SERVER_URL" in api["environment"]
 
     analytical_db = compose["services"]["bms-analytical-postgres"]
@@ -125,6 +126,7 @@ def test_core_runtime_env_example_documents_transition_knobs() -> None:
     for required in [
         "BMS_STATE_DIR=",
         "BMS_CONTAINER_STATE_PATH=",
+        "BMS_WORK=/var/lib/biomodstack/work",
         "BMS_WEB_HOST_PORT=18080",
         "CORS_ORIGINS=http://127.0.0.1,http://127.0.0.1:5173,http://127.0.0.1:18080,http://localhost,https://localhost,http://localhost:5173,http://localhost:18080,https://localhost:5173,https://127.0.0.1",
         "BMS_CORE_RUNTIME_MODE=1",
@@ -188,3 +190,14 @@ def test_workflow_adapter_script_runs_host_native_adapter_without_recursive_rout
     assert "export BMS_CORE_RUNTIME_MODE=0" in adapter_script
     assert 'BMS_WORKFLOW_ADAPTER_BIND_HOST="${BMS_WORKFLOW_ADAPTER_BIND_HOST:-127.0.0.1}"' in adapter_script
     assert 'uv run uvicorn workflow_adapter_app:app --port 8001 --host "$BMS_WORKFLOW_ADAPTER_BIND_HOST"' in adapter_script
+
+
+def test_workflow_adapter_script_loads_install_profile_runtime_paths_after_legacy_env() -> None:
+    adapter_script = (REPO_ROOT / "scripts" / "run_biomodstack_workflow_adapter.sh").read_text(encoding="utf-8")
+
+    assert "load_env_file_overrides" in adapter_script
+    assert 'PROFILE_CORE_RUNTIME_ENV_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/biomodstack/core-runtime.env"' in adapter_script
+    assert 'load_env_file_overrides "$CORE_RUNTIME_ENV_FILE"' in adapter_script
+    legacy_source_index = adapter_script.index('source "$HOME/.biomodstack/env.sh"')
+    profile_source_index = adapter_script.index('load_env_file_overrides "$CORE_RUNTIME_ENV_FILE"')
+    assert legacy_source_index < profile_source_index

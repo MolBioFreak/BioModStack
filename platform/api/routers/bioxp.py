@@ -192,6 +192,38 @@ def _maintenance_disabled_detail() -> str:
 
 ROBOT_LOCAL_EXPECTED_ROUTES: Dict[str, bool] = {
     "/status": True,
+    "/oem-compat/capabilities/test-prep": True,
+    "/oem-compat/protocols/import/dry-run": True,
+    "/oem-compat/scripts/translate/dry-run": True,
+    "/oem-compat/startup/dry-run": True,
+    "/oem/initial_check": True,
+    "/oem/startup/request": True,
+    "/oem/startup/status/latest": True,
+    "/oem/startup/status/{session_id}": True,
+    "/oem/startup/door_event": True,
+    "/oem/runtime/status": True,
+    "/oem/runtime/state": True,
+    "/oem/runtime/worker/status": True,
+    "/oem/runtime/recover": True,
+    "/oem/runtime/emergency_stop": True,
+    "/oem/runtime/events/latest": True,
+    "/oem/runtime/events/door": True,
+    "/oem/runtime/events/pause": True,
+    "/oem/runtime/events/resume": True,
+    "/oem/runtime/commands/initializeSystem": True,
+    "/oem/runtime/commands/PrepareToRunJob": True,
+    "/oem/runtime/commands/validateJob": True,
+    "/oem/runtime/commands/enqueue": True,
+    "/oem/runtime/commands/abortjob": True,
+    "/oem/runtime/commands/unlockProcess": True,
+    "/oem/runtime/commands/wakefrompause": True,
+    "/oem/runtime/commands/history": True,
+    "/oem/motion_worker/status": True,
+    "/oem/motion_worker/run_next": True,
+    "/oem/motion_worker/abort": True,
+    "/oem/switch_audit": True,
+    "/motion/oem/startup_step": True,
+    "/motion/range/status": True,
     "/motion/reference/status": True,
     "/motion/reference/mark_referenced": True,
     "/motion/reference/mark_desynced": True,
@@ -207,7 +239,31 @@ ROBOT_LOCAL_EXPECTED_ROUTES: Dict[str, bool] = {
     "/vision/barcode/read": True,
 }
 
-BMS_PROXIED_ROUTES: Dict[str, bool] = dict(ROBOT_LOCAL_EXPECTED_ROUTES)
+MANUAL_MOTION_ROUTES: Dict[str, bool] = {
+    "/motion/axis/relative": True,
+    "/motion/axis/absolute": True,
+    "/motion/axis/home": True,
+}
+DIRECT_LIQUID_COMMAND_ROUTES: Dict[str, bool] = {
+    "/liquid/init": True,
+    "/liquid/tip": True,
+    "/liquid/aspirate": True,
+    "/liquid/dispense": True,
+    "/liquid/mix": True,
+}
+BMS_PROXIED_ROUTES: Dict[str, bool] = {
+    **ROBOT_LOCAL_EXPECTED_ROUTES,
+    **MANUAL_MOTION_ROUTES,
+}
+COMMISSIONING_ONLY_ROUTES: Dict[str, bool] = {
+    "/motion/interlock/prepare": True,
+    **MANUAL_MOTION_ROUTES,
+    **DIRECT_LIQUID_COMMAND_ROUTES,
+}
+DISABLED_ROUTES: Dict[str, bool] = {
+    "/daemon/start": True,
+    "/daemon/stop": True,
+}
 
 
 def _runtime_status_payload(
@@ -484,13 +540,164 @@ async def bioxp_capabilities():
         "linkage_url": _GLOBAL_LINKAGE_URL,
         "linkage_configured": bool(_GLOBAL_LINKAGE_URL),
         "recommended_url": _recommended_linkage_url(),
+        "robot_hardware_assumption": "functional_under_oem",
+        "truth_source": "robot_local_oem_compat_layer",
+        "bms_role": "thin_operator_surface",
         "robot_local_expected_routes": dict(sorted(ROBOT_LOCAL_EXPECTED_ROUTES.items())),
         "bms_proxy_routes": dict(sorted(BMS_PROXIED_ROUTES.items())),
+        "default_operator_routes": dict(sorted({
+            path: enabled
+            for path, enabled in BMS_PROXIED_ROUTES.items()
+            if not path.startswith("/motion/interlock/")
+            and path not in MANUAL_MOTION_ROUTES
+            and path not in DIRECT_LIQUID_COMMAND_ROUTES
+        }.items())),
+        "manual_motion_routes": dict(sorted(MANUAL_MOTION_ROUTES.items())),
+        "commissioning_only_routes": dict(sorted(COMMISSIONING_ONLY_ROUTES.items())),
+        "disabled_routes": dict(sorted(DISABLED_ROUTES.items())),
         "notes": [
             "BMS links to the robot-local BioXP runtime and exposes only the routes listed as proxied.",
+            "Default operator UI is OEM-first: startup/runtime, protocol, liquid readback, range/switch readback, thermal, chiller, camera, and vision. Raw axis movement and direct pipette commands are commissioning-only.",
+            "Daemon lifecycle routes are disabled by design because BMS must not own the robot-local service process.",
             "Route parity is a control-plane capability statement; hardware readiness still comes from runtime status/preflight responses.",
+            "The robot is treated as functional under OEM control; BMS should not present unresolved Linux parity work as a bad-component verdict.",
         ],
     }
+
+
+@router.get("/capabilities/oem-test-prep")
+async def bioxp_oem_test_prep_capabilities():
+    return await proxy_request("GET", "/oem-compat/capabilities/test-prep", timeout=20.0)
+
+
+
+
+@router.post("/oem-compat/startup/dry-run")
+async def oem_compat_startup_dry_run(request: Request):
+    return await proxy_request("POST", "/oem-compat/startup/dry-run", await request.json(), timeout=45.0)
+
+
+@router.post("/oem-compat/protocols/import/dry-run")
+async def oem_compat_protocol_import_dry_run(request: Request):
+    return await proxy_request("POST", "/oem-compat/protocols/import/dry-run", await request.json(), timeout=45.0)
+
+
+@router.post("/oem-compat/scripts/translate/dry-run")
+async def oem_compat_script_translate_dry_run(request: Request):
+    return await proxy_request("POST", "/oem-compat/scripts/translate/dry-run", await request.json(), timeout=45.0)
+
+
+@router.post("/oem/initial_check")
+async def oem_initial_check(request: Request):
+    return await proxy_request("POST", "/oem/initial_check", await request.json(), timeout=90.0)
+
+
+@router.post("/oem/startup/request")
+async def oem_startup_request(request: Request):
+    return await proxy_request("POST", "/oem/startup/request", await request.json(), timeout=190.0)
+
+
+@router.get("/oem/startup/status/latest")
+async def oem_startup_status_latest():
+    return await proxy_request("GET", "/oem/startup/status/latest", timeout=30.0)
+
+
+@router.get("/oem/startup/status/{session_id}")
+async def oem_startup_status(session_id: str):
+    return await proxy_request("GET", f"/oem/startup/status/{session_id}", timeout=30.0)
+
+
+@router.post("/oem/startup/door_event")
+async def oem_startup_door_event(request: Request):
+    return await proxy_request("POST", "/oem/startup/door_event", await request.json(), timeout=45.0)
+
+
+@router.get("/oem/runtime/status")
+async def oem_runtime_status():
+    return await proxy_request("GET", "/oem/runtime/status", timeout=30.0)
+
+
+@router.get("/oem/runtime/state")
+async def oem_runtime_state():
+    return await proxy_request("GET", "/oem/runtime/state", timeout=30.0)
+
+
+@router.get("/oem/runtime/worker/status")
+async def oem_runtime_worker_status():
+    return await proxy_request("GET", "/oem/runtime/worker/status", timeout=30.0)
+
+
+@router.post("/oem/runtime/recover")
+async def oem_runtime_recover(request: Request):
+    return await proxy_request("POST", "/oem/runtime/recover", await request.json(), timeout=90.0)
+
+
+@router.post("/oem/runtime/emergency_stop")
+async def oem_runtime_emergency_stop(request: Request):
+    return await proxy_request("POST", "/oem/runtime/emergency_stop", await request.json(), timeout=30.0)
+
+
+@router.get("/oem/runtime/events/latest")
+async def oem_runtime_events_latest():
+    return await proxy_request("GET", "/oem/runtime/events/latest", timeout=30.0)
+
+
+@router.post("/oem/runtime/events/door")
+async def oem_runtime_event_door(request: Request):
+    return await proxy_request("POST", "/oem/runtime/events/door", await request.json(), timeout=45.0)
+
+
+@router.post("/oem/runtime/events/pause")
+async def oem_runtime_event_pause(request: Request):
+    return await proxy_request("POST", "/oem/runtime/events/pause", await request.json(), timeout=45.0)
+
+
+@router.post("/oem/runtime/events/resume")
+async def oem_runtime_event_resume(request: Request):
+    return await proxy_request("POST", "/oem/runtime/events/resume", await request.json(), timeout=45.0)
+
+
+@router.post("/oem/runtime/commands/{command_name}")
+async def oem_runtime_command(command_name: str, request: Request):
+    allowed = {"initializeSystem", "PrepareToRunJob", "validateJob", "enqueue", "abortjob", "unlockProcess", "wakefrompause"}
+    if command_name not in allowed:
+        raise HTTPException(status_code=404, detail=f"Unsupported OEM runtime command: {command_name}")
+    return await proxy_request("POST", f"/oem/runtime/commands/{command_name}", await request.json(), timeout=90.0)
+
+
+@router.get("/oem/runtime/commands/history")
+async def oem_runtime_command_history(limit: int = 20):
+    return await proxy_request("GET", "/oem/runtime/commands/history", params={"limit": limit}, timeout=30.0)
+
+
+@router.get("/oem/motion_worker/status")
+async def oem_motion_worker_status():
+    return await proxy_request("GET", "/oem/motion_worker/status", timeout=30.0)
+
+
+@router.post("/oem/motion_worker/run_next")
+async def oem_motion_worker_run_next(request: Request):
+    return await proxy_request("POST", "/oem/motion_worker/run_next", await request.json(), timeout=90.0)
+
+
+@router.post("/oem/motion_worker/abort")
+async def oem_motion_worker_abort(request: Request):
+    return await proxy_request("POST", "/oem/motion_worker/abort", await request.json(), timeout=45.0)
+
+
+@router.post("/oem/switch_audit")
+async def oem_switch_audit(request: Request):
+    return await proxy_request("POST", "/oem/switch_audit", await request.json(), timeout=45.0)
+
+
+@router.post("/motion/oem/startup_step")
+async def motion_oem_startup_step(request: Request):
+    return await proxy_request("POST", "/motion/oem/startup_step", await request.json(), timeout=90.0)
+
+
+@router.get("/motion/range/status")
+async def motion_range_status():
+    return await proxy_request("GET", "/motion/range/status", timeout=30.0)
 
 
 @router.get("/motion/reference/status")

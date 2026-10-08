@@ -19,7 +19,7 @@ if [ -f "$HOME/.biomodstack/env.sh" ]; then
     source "$HOME/.biomodstack/env.sh"
 fi
 
-load_env_file_defaults() {
+load_env_file_overrides() {
     local env_file="$1"
     [ -f "$env_file" ] || return 0
 
@@ -34,9 +34,6 @@ load_env_file_defaults() {
         if [ -z "$key" ] || [ "$key" = "$line" ]; then
             continue
         fi
-        if [ -n "${!key:-}" ]; then
-            continue
-        fi
         export "$key=$value"
     done < "$env_file"
 }
@@ -46,10 +43,10 @@ LEGACY_CORE_RUNTIME_ENV_FILE="$PROJECT_DIR/.env.core-runtime.local"
 CORE_RUNTIME_ENV_FILE="${BMS_CORE_RUNTIME_ENV_FILE:-$PROFILE_CORE_RUNTIME_ENV_FILE}"
 compose_extra_args=()
 if [ -f "$CORE_RUNTIME_ENV_FILE" ]; then
-    load_env_file_defaults "$CORE_RUNTIME_ENV_FILE"
+    load_env_file_overrides "$CORE_RUNTIME_ENV_FILE"
     compose_extra_args=(--env-file "$CORE_RUNTIME_ENV_FILE")
 elif [ -f "$LEGACY_CORE_RUNTIME_ENV_FILE" ]; then
-    load_env_file_defaults "$LEGACY_CORE_RUNTIME_ENV_FILE"
+    load_env_file_overrides "$LEGACY_CORE_RUNTIME_ENV_FILE"
     compose_extra_args=(--env-file "$LEGACY_CORE_RUNTIME_ENV_FILE")
 fi
 
@@ -82,7 +79,10 @@ run_compose() {
 
 case "$ACTION" in
     up)
-        exec "${compose_cmd[@]}" "${compose_extra_args[@]}" -f "$COMPOSE_FILE" up --build --remove-orphans "$@"
+        exec "${compose_cmd[@]}" "${compose_extra_args[@]}" -f "$COMPOSE_FILE" up -d --remove-orphans "$@"
+        ;;
+    rebuild|build)
+        exec "${compose_cmd[@]}" "${compose_extra_args[@]}" -f "$COMPOSE_FILE" up -d --build --remove-orphans "$@"
         ;;
     down)
         run_compose down --remove-orphans "$@"
@@ -103,7 +103,7 @@ case "$ACTION" in
         run_compose pull "$@"
         ;;
     *)
-        echo "Usage: $0 {up|down|restart|logs|ps|config|pull} [compose-args...]" >&2
+        echo "Usage: $0 {up|rebuild|build|down|restart|logs|ps|config|pull} [compose-args...]" >&2
         exit 1
         ;;
 esac

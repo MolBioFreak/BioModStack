@@ -30,7 +30,7 @@ function App() {
           <Route path="/assay" element={<AssayAnalytics />} />
           {/* Infra Monitor - native workstation telemetry surface */}
           <Route path="/infra" element={<InfraMonitorPage />} />
-          {/* BioXP Control Surface - Hardware proxy node component */}
+          {/* BioXP Handler Controls - OEM/liquid-handler-first robot-local runtime proxy */}
           <Route path="/bioxp" element={<BioXpCockpit />} />
         </Routes>
       </Layout>

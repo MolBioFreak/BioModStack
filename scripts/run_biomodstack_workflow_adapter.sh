@@ -12,6 +12,34 @@ if [ -f "$HOME/.biomodstack/env.sh" ]; then
     source "$HOME/.biomodstack/env.sh"
 fi
 
+load_env_file_overrides() {
+    local env_file="$1"
+    [ -f "$env_file" ] || return 0
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            ''|'#'*)
+                continue
+                ;;
+        esac
+        local key="${line%%=*}"
+        local value="${line#*=}"
+        if [ -z "$key" ] || [ "$key" = "$line" ]; then
+            continue
+        fi
+        export "$key=$value"
+    done < "$env_file"
+}
+
+PROFILE_CORE_RUNTIME_ENV_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/biomodstack/core-runtime.env"
+LEGACY_CORE_RUNTIME_ENV_FILE="$PROJECT_DIR/.env.core-runtime.local"
+CORE_RUNTIME_ENV_FILE="${BMS_CORE_RUNTIME_ENV_FILE:-$PROFILE_CORE_RUNTIME_ENV_FILE}"
+if [ -f "$CORE_RUNTIME_ENV_FILE" ]; then
+    load_env_file_overrides "$CORE_RUNTIME_ENV_FILE"
+elif [ -f "$LEGACY_CORE_RUNTIME_ENV_FILE" ]; then
+    load_env_file_overrides "$LEGACY_CORE_RUNTIME_ENV_FILE"
+fi
+
 if ! command -v uv >/dev/null 2>&1; then
     echo "BioModStack workflow adapter launcher requires uv on PATH" >&2
     exit 1

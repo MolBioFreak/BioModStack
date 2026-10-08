@@ -229,6 +229,34 @@ def test_workflow_adapter_app_exposes_gpu_routes() -> None:
     assert "/api/gpu/scheduler-config" in routes
 
 
+def test_nextflow_command_uses_authoritative_data_root_for_fresh_work_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    project_root = tmp_path / "repo-on-os-drive"
+    nvme_root = tmp_path / "BMS-4TB-NVME"
+    output_dir = nvme_root / "bms_results" / "job-123"
+    project_root.mkdir()
+    output_dir.mkdir(parents=True)
+    monkeypatch.setattr(nextflow, "PROJECT_ROOT", project_root)
+    monkeypatch.setenv("BMS_DATA", str(nvme_root))
+    monkeypatch.setenv("BMS_WEIGHTS", str(nvme_root / "weights"))
+    monkeypatch.setenv("BMS_COLABFOLD_DB", str(nvme_root / "colabfold_db"))
+    monkeypatch.setenv("BMS_MSA_CACHE", str(nvme_root / "msa_cache"))
+    monkeypatch.delenv("BMS_CONTAINER_DIR", raising=False)
+
+    cmd = nextflow.build_nextflow_command(
+        model_id="boltz_cp_experimental",
+        mode="predict",
+        params={},
+        output_dir=str(output_dir),
+        job_id="job-123",
+    )
+
+    assert "-w" in cmd
+    work_dir = Path(cmd[cmd.index("-w") + 1])
+    assert work_dir == nvme_root / "work"
+    assert not str(work_dir).startswith(str(project_root))
+    assert cmd[cmd.index("--out_dir") + 1] == str(output_dir)
+
+
 @pytest.mark.asyncio
 async def test_gpu_status_routes_to_adapter_in_core_runtime_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BMS_CORE_RUNTIME_MODE", "1")
