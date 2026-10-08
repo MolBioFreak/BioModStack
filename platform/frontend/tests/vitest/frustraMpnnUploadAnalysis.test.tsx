@@ -335,7 +335,7 @@ describe('uploaded FrustraMPNN operator analysis', () => {
             await act(async () => launch.click());
             await settle();
 
-            expect(container.textContent).toContain('Child queued: child-job-1');
+            expect(container.textContent).toContain('Analysis queued: child-job-1');
             expect(container.textContent).toContain('Parent candidate: parent-candidate-1');
             expect(container.textContent).toContain('Producer: producer-1');
             expect(container.textContent).toContain('Guidance: guidance-1');

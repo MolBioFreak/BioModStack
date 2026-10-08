@@ -119,6 +119,11 @@ describe('typed FrustraMPNN settings controls', () => {
         await act(async () => root.render(<PanelHarness />));
 
         expect(container.textContent).toContain('FrustraMPNN analysis');
+        const settingsPanel = container.querySelector<HTMLElement>('[data-frustrampnn-settings-panel]')!;
+        expect(settingsPanel.classList.contains('bg-surface-secondary')).toBe(true);
+        expect(settingsPanel.classList.contains('bg-white')).toBe(false);
+        expect(settingsPanel.className).toContain('[&_select]:bg-surface');
+        expect(settingsPanel.className).toContain('[&_.text-slate-800]:text-content');
         expect(container.textContent).toContain('Scope: All mapped protein residues');
         expect(container.textContent).toContain('Classification: Canonical');
         expect(container.textContent).toContain('Model execution scope');

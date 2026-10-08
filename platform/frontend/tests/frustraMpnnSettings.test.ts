@@ -690,13 +690,18 @@ test('generic JobSubmission composes one governed FrustraMPNN control for suppor
     assert.match(submissionSource, /workflowId=\{resolvedFrustrampnnWorkflowId\}/);
     assert.match(submissionSource, /hydrateFrustraMpnnSettings\(params\.frustrampnn_settings\)/);
     assert.match(submissionSource, /setClonedValues\(data\.params\);/);
-    assert.match(submissionSource, /const nextParams = \{ \.\.\.defaults, \.\.\.\(clonedValues \|\| \{\}\) \};\s*setParams\(nextParams\);/);
-    assert.match(submissionSource, /\}, \[selectedModel, selectedModelId, clonedValues\]\);/);
+    // Both initialization owners preserve complete saved settings; refreshes
+    // fill absent defaults without replacing the operator's current draft.
+    assert.match(submissionSource, /const prior = initializedModelParams\.current;\s*const sameDraft = prior\?\.id === selectedModelId && prior\?\.clone === clonedValues;\s*setParams\(previous => \(\{ \.\.\.defaults, \.\.\.\(sameDraft \? previous : clonedValues \|\| \{\}\) \}\)\);/);
+    assert.match(submissionSource, /\}, \[wizardMode, selectedModel, selectedModelId, clonedValues\]\);/);
+    assert.match(submissionSource, /const nextParams = \{ \.\.\.defaults, \.\.\.\(clonedValues \|\| \{\}\) \};\s*const prior = initializedTemplateParams\.current;\s*const sameDraft = prior\?\.id === selectedTemplateId && prior\?\.clone === clonedValues;\s*setParams\(previous => sameDraft \? \{ \.\.\.defaults, \.\.\.previous \} : nextParams\);/);
+    assert.match(submissionSource, /\}, \[wizardMode, templateDetail, selectedTemplateId, clonedValues\]\);/);
+    assert.match(submissionSource, /setFrustrampnnSettings\(hydrateFrustraMpnnSettings\(params\.frustrampnn_settings\)\);\s*\}, \[params\.run_frustrampnn, params\.frustrampnn_settings\]\);/);
     assert.match(submissionSource, /mergeFrustraMpnnLaunchParams\(mergedParams, runFrustrampnn, frustrampnnSettings\)/);
     assert.match(submissionSource, /mergeFrustraMpnnLaunchParams\(filteredParams, runFrustrampnn, frustrampnnSettings\)/);
     assert.match(submissionSource, /const templateManagerParams[\s\S]*mergeFrustraMpnnLaunchParams\(/);
     assert.match(submissionSource, /const frustrampnnConfigurationReady = !resolvedFrustrampnnWorkflowId \|\| \(\s*!frustrampnnIntegrationQuery\.isFetching\s*&& !frustrampnnIntegrationQuery\.isError\s*&& configuredFrustrampnnWorkflow !== undefined\s*\);/);
-    assert.match(submissionSource, /const isReady = frustrampnnConfigurationReady && Boolean\(/);
+    assert.match(submissionSource, /const isReady = !fampnnError && frustrampnnConfigurationReady && Boolean\(/);
     assert.match(submissionSource, /FrustraMPNN integration configuration is unavailable\. Launch is blocked\./);
     assert.match(submissionSource, /const governedMergedParams = resolvedFrustrampnnWorkflowId\s*\? mergeFrustraMpnnLaunchParams/);
     assert.match(submissionSource, /const governedFilteredParams = resolvedFrustrampnnWorkflowId\s*\? mergeFrustraMpnnLaunchParams/);
