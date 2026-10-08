@@ -7,10 +7,13 @@ own live device handles.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
+from services.host_agent_client import get_ont_status, host_agent_enabled
 from services.ont_ngs_contract import ANALYSIS_OWNER, DEVICE_CONTROL_OWNER, get_ont_workflow_spec
+from services.ont_minknow_client import discover_minknow_devices
 
 DEVICE_CONTROL_STATUS_NOT_CONFIGURED = "not_configured"
 
@@ -37,7 +40,32 @@ ONT_DEVICE_CONTROL_CAPABILITIES: dict[str, Any] = {
 
 
 def get_device_control_status() -> dict[str, Any]:
-    """Return current ONT device-control status without inventing devices."""
+    """Return current ONT device-control status without inventing devices.
+
+    By default BMS reports the live-control boundary as not configured. When
+    ``BMS_ONT_MINKNOW_ENABLED=1`` is set, this delegates discovery to the
+    MinKNOW API adapter and returns normalized real device positions.
+    """
+    if os.getenv("BMS_ONT_MINKNOW_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
+        if host_agent_enabled():
+            try:
+                discovered = get_ont_status()
+            except Exception as exc:  # noqa: BLE001 - host-agent/network failures must degrade truthfully
+                discovered = {
+                    "implementation_status": "host_agent_unavailable",
+                    "live_devices": [],
+                    "fake_or_demo_devices": False,
+                    "message": f"BMS host-agent ONT status unavailable: {exc}",
+                }
+        else:
+            discovered = discover_minknow_devices()
+        return {
+            "owner": DEVICE_CONTROL_OWNER,
+            "analysis_owner": ANALYSIS_OWNER,
+            "supported_device_types": list(SUPPORTED_DEVICE_TYPES),
+            **discovered,
+        }
+
     return {
         "owner": DEVICE_CONTROL_OWNER,
         "analysis_owner": ANALYSIS_OWNER,

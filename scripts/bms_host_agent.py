@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
+from lib.ont_minknow_host import discover_status as discover_ont_status
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PROJECT = "biomodstack-core-runtime"
 DEFAULT_COMPOSE_FILE = REPO_ROOT / "compose.core-runtime.yml"
@@ -319,6 +321,30 @@ def run_action(service_id: str, action: str, *, tail: int = 120, advanced: bool 
     return redact_value(payload)
 
 
+def ont_route_payload(path: str) -> dict[str, Any] | None:
+    """Return host-agent ONT route payloads or None for unknown/not-found routes."""
+    route_path = urlparse(path).path.rstrip("/") or "/"
+    if route_path not in {"/ont/status", "/ont/positions"} and not route_path.startswith("/ont/positions/"):
+        return None
+
+    status = discover_ont_status()
+    devices = list(status.get("live_devices") or []) if isinstance(status, dict) else []
+    base = {
+        "implementation_status": status.get("implementation_status") if isinstance(status, dict) else "unknown",
+        "fake_or_demo_devices": bool(status.get("fake_or_demo_devices", False)) if isinstance(status, dict) else False,
+    }
+    if route_path == "/ont/status":
+        return status
+    if route_path == "/ont/positions":
+        return {**base, "positions": devices}
+
+    requested = unquote(route_path.removeprefix("/ont/positions/")).strip()
+    for device in devices:
+        if str(device.get("position") or "") == requested:
+            return {**base, "position": device}
+    return None
+
+
 class HostAgentHandler(BaseHTTPRequestHandler):
     server_version = "BMSHostAgent/0.1"
 
@@ -358,6 +384,10 @@ class HostAgentHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        ont_payload = ont_route_payload(parsed.path)
+        if ont_payload is not None:
+            self._send_json(200, ont_payload)
+            return
         if parsed.path.rstrip("/") in {"/health", "/api/host-agent/health"}:
             self._send_json(200, {"status": "healthy", "service": "bms-host-agent"})
             return
