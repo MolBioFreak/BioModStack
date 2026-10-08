@@ -325,6 +325,7 @@ def heavy_model_per_device_range_mb() -> Optional[Dict[str, Any]]:
     return {"minimum_mb": floors[minimum], "minimum_model": minimum,
             "maximum_mb": floors[maximum], "maximum_model": maximum}
 
+
 # Scheduler-side packing should follow observed live VRAM plus a modest surge
 # allowance, not reserve worst-case peak estimates for every running job.
 #
