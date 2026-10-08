@@ -112,6 +112,17 @@ def main():
                         help="Final number of designs to keep (with diversity selection)")
     parser.add_argument("--alpha", type=float, default=0.01,
                         help="Quality/diversity tradeoff: 0.0=quality only, 1.0=diversity only")
+    parser.add_argument("--filter-biased", type=str, default="true",
+                        help="Remove amino acid composition outliers (true/false)")
+    
+    # Advanced filtering (passed to upstream BoltzGen - logged for reference)
+    parser.add_argument("--metrics-override", type=str, default=None,
+                        help="Per-metric weights (e.g., 'plip_hbonds_refolded=4 delta_sasa_refolded=2')")
+    parser.add_argument("--additional-filters", type=str, default=None,
+                        help="Extra hard filters (e.g., 'design_ALA>0.3 design_GLY<0.2')")
+    parser.add_argument("--size-buckets", type=str, default=None,
+                        help="Size constraints (e.g., '10-20:5 20-30:10 30-40:5')")
+
     
     args = parser.parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
