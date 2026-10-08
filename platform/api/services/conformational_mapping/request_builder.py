@@ -32,6 +32,7 @@ _TOP_LEVEL_FIELDS = frozenset(
         "feature_policy",
         "runtime_policy",
         "analysis_policy",
+        "state_landscape_comparison",
         "confornets",
         "protenix_snapshot_id",
         "import_receipt_id",
@@ -460,6 +461,8 @@ def validate_request_params(params: Mapping[str, Any]) -> ValidatedRequest:
         "runtime_policy": values["runtime_policy"],
         "analysis_policy": values["analysis_policy"],
     }
+    if "state_landscape_comparison" in values:
+        request_fields["state_landscape_comparison"] = values["state_landscape_comparison"]
     analysis_policy = values["analysis_policy"]
     if (
         not isinstance(analysis_policy, Mapping)

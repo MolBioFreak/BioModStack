@@ -411,13 +411,27 @@
     "source_landscape_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "source_structure_map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "comparison_mode": "pairwise",
+    "comparison_target_id": "target-a",
+    "comparison_scope": "all_within_target",
+    "reference_backend_coordinates": null,
     "reference_candidate_id": null,
-    "comparison_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "resolved_pairs": [{
+      "pair_id": "state-a__state-b",
+      "candidate_a_id": "state-a",
+      "candidate_b_id": "state-b"
+    }],
+    "comparison_sha256": "dacb8f22b5c4d6fbac0059d3c3f3fa4761cdcccb0993524b9f80867ee62983cd",
     "formula_version": "cm_state_landscape_analysis_v1",
     "formula_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
     "policy_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
     "rows": [],
-    "support_ledger": [],
+    "support_ledger": [{
+      "pair_id": "state-a__state-b",
+      "candidate_a_id": "state-a",
+      "candidate_b_id": "state-b",
+      "eligible_row_count": 0,
+      "excluded_row_count": 0
+    }],
     "exclusion_ledger": []
   },
   "cm_mutagenesis_handoff_v1": {

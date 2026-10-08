@@ -849,10 +849,55 @@ def validate_ensemble(instance: Mapping[str, Any]) -> None:
 def validate_state_landscape_analysis(instance: Mapping[str, Any]) -> None:
     """Fail closed on state-comparison missingness and stable row identities."""
 
+    comparison = {
+        "mode": instance["comparison_mode"],
+        "comparison_target_id": instance["comparison_target_id"],
+        "comparison_scope": instance["comparison_scope"],
+        "reference_backend_coordinates": instance["reference_backend_coordinates"],
+        "reference_candidate_id": instance["reference_candidate_id"],
+        "resolved_pairs": instance["resolved_pairs"],
+    }
+    if instance["comparison_sha256"] != canonical_sha256(comparison):
+        raise ContractValidationError("state landscape comparison hash does not bind authority and resolved pairs")
     if instance["comparison_mode"] == "reference" and not instance["reference_candidate_id"]:
         raise ContractValidationError("reference state comparison requires an explicit reference candidate")
     if instance["comparison_mode"] == "pairwise" and instance["reference_candidate_id"] is not None:
         raise ContractValidationError("pairwise state comparison cannot claim a reference candidate")
+    resolved_pairs = instance["resolved_pairs"]
+    if resolved_pairs != sorted(resolved_pairs, key=lambda pair: pair["pair_id"]):
+        raise ContractValidationError("state landscape resolved pairs must have stable pair-id order")
+    pair_identities = [
+        (pair["pair_id"], pair["candidate_a_id"], pair["candidate_b_id"])
+        for pair in resolved_pairs
+    ]
+    if len({pair[0] for pair in pair_identities}) != len(pair_identities):
+        raise ContractValidationError("state landscape resolved pair IDs must be unique")
+    if any(pair[1] == pair[2] for pair in pair_identities):
+        raise ContractValidationError("state landscape resolved pair candidates must differ")
+    if instance["comparison_mode"] == "reference":
+        selector = instance["reference_backend_coordinates"]
+        try:
+            parsed = parse_backend_coordinates(selector)
+        except ValidationError as exc:
+            raise ContractValidationError("reference state comparison coordinates are invalid") from exc
+        if parsed.target_id != instance["comparison_target_id"]:
+            raise ContractValidationError("reference state comparison target does not match comparison target")
+        if any(pair[1] != instance["reference_candidate_id"] for pair in pair_identities):
+            raise ContractValidationError("reference state comparison pairs must begin with the reference candidate")
+        if len({pair[2] for pair in pair_identities}) != len(pair_identities) or any(
+            pair[2] == instance["reference_candidate_id"] for pair in pair_identities
+        ):
+            raise ContractValidationError("reference state comparison candidates must be unique and exclude reference")
+    resolved_pair_set = set(pair_identities)
+    support_pairs = {
+        (entry["pair_id"], entry["candidate_a_id"], entry["candidate_b_id"])
+        for entry in instance["support_ledger"]
+    }
+    if support_pairs != resolved_pair_set or len(instance["support_ledger"]) != len(resolved_pair_set):
+        raise ContractValidationError("state landscape support ledger must cover exactly the resolved pair ledger")
+    for row in [*instance["rows"], *instance["exclusion_ledger"]]:
+        if (row["pair_id"], row["candidate_a_id"], row["candidate_b_id"]) not in resolved_pair_set:
+            raise ContractValidationError("state landscape rows and exclusions must belong to resolved pairs")
     row_keys: set[tuple[Any, ...]] = set()
     for row in instance["rows"]:
         identity = row["identity"]

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from fastapi import BackgroundTasks, HTTPException
+from pydantic import ValidationError
 
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +33,7 @@ from services.conformational_mapping.request_builder import (  # noqa: E402
     materialize_trusted_internal_request,
     validate_request_params,
 )
+from routers.conformational_mapping import SubmitRequest  # noqa: E402
 from template_registry import TemplateRegistry  # noqa: E402
 
 
@@ -506,6 +508,98 @@ def test_cm3_004d_future_backend_controls_are_hash_bound(tmp_path: Path) -> None
         assert request[field] == value
         assert request["request_sha256"] == canonical_sha256(
             {key: item for key, item in request.items() if key != "request_sha256"}
+        )
+
+
+def test_cm3_004da_state_comparison_authority_is_admitted_and_hash_bound(tmp_path: Path) -> None:
+    absent = materialize_trusted_internal_request(
+        _request_params("protenix_v2_ensemble"),
+        output_dir=tmp_path / "absent",
+        request_id="00000000-0000-4000-8000-000000000018",
+    )
+    absent_request = json.loads(absent.request_path.read_text(encoding="utf-8"))
+    assert "state_landscape_comparison" not in absent_request
+
+    authority = {
+        "mode": "pairwise",
+        "target_id": "target-a",
+        "scope": "all_within_target",
+    }
+    params = _request_params("protenix_v2_ensemble")
+    params["state_landscape_comparison"] = authority
+
+    validated = validate_request_params(params)
+    assert validated.request_fields["state_landscape_comparison"] == authority
+    materialized = materialize_trusted_internal_request(
+        params,
+        output_dir=tmp_path,
+        request_id="00000000-0000-4000-8000-000000000019",
+    )
+    request = json.loads(materialized.request_path.read_text(encoding="utf-8"))
+    assert request["state_landscape_comparison"] == authority
+    assert request["request_sha256"] == canonical_sha256(
+        {key: item for key, item in request.items() if key != "request_sha256"}
+    )
+
+    invalid_target = _request_params("protenix_v2_ensemble")
+    invalid_target["state_landscape_comparison"] = {**authority, "target_id": "not-a-request-target"}
+    with pytest.raises(ConformationalMappingRequestError, match="state landscape comparison target"):
+        validate_request_params(invalid_target)
+
+    unknown_authority_field = _request_params("protenix_v2_ensemble")
+    unknown_authority_field["state_landscape_comparison"] = {**authority, "silently_drop_me": True}
+    with pytest.raises(ConformationalMappingRequestError, match="state_landscape_comparison"):
+        validate_request_params(unknown_authority_field)
+
+    invalid_scope = _request_params("protenix_v2_ensemble")
+    invalid_scope["state_landscape_comparison"] = {**authority, "scope": "all_other_within_target"}
+    with pytest.raises(ConformationalMappingRequestError, match="state_landscape_comparison"):
+        validate_request_params(invalid_scope)
+
+    incomplete_reference = _request_params("protenix_v2_ensemble")
+    incomplete_reference["state_landscape_comparison"] = {
+        "mode": "reference",
+        "target_id": "target-a",
+        "scope": "all_other_within_target",
+        "reference_backend_coordinates": {
+            "backend": "protenix_v2_ensemble",
+            "target_id": "target-a",
+            "ordered_seed": 101,
+        },
+    }
+    with pytest.raises(ConformationalMappingRequestError, match="state_landscape_comparison"):
+        validate_request_params(incomplete_reference)
+
+
+def test_cm3_004db_typed_submit_request_accepts_only_declared_state_comparison_authority() -> None:
+    authority = {
+        "mode": "pairwise",
+        "target_id": "target-a",
+        "scope": "all_within_target",
+    }
+    body = SubmitRequest(
+        name="state authority",
+        backend="protenix_v2_ensemble",
+        ordered_seeds=[101],
+        samples_per_seed=1,
+        feature_policy={"mode": "regenerate_mutated_protein_v1"},
+        runtime_policy={"use_default_params": True},
+        analysis_policy={},
+        state_landscape_comparison=authority,
+    )
+    assert body.state_landscape_comparison == authority
+
+    with pytest.raises(ValidationError, match="unexpected"):
+        SubmitRequest(
+            name="state authority",
+            backend="protenix_v2_ensemble",
+            ordered_seeds=[101],
+            samples_per_seed=1,
+            feature_policy={"mode": "regenerate_mutated_protein_v1"},
+            runtime_policy={"use_default_params": True},
+            analysis_policy={},
+            state_landscape_comparison=authority,
+            unexpected=True,
         )
 
 

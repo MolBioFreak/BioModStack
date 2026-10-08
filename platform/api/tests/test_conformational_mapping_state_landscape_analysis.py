@@ -127,7 +127,13 @@ def _sources() -> tuple[dict, list[dict], list[dict]]:
 def _pairwise() -> dict:
     return {
         "mode": "pairwise",
-        "pairs": [{"pair_id": "state-a__state-b", "candidate_a_id": "state-a", "candidate_b_id": "state-b"}],
+        "comparison_target_id": "target-a",
+        "comparison_scope": "all_within_target",
+        "reference_backend_coordinates": None,
+        "reference_candidate_id": None,
+        "resolved_pairs": [
+            {"pair_id": "state-a__state-b", "candidate_a_id": "state-a", "candidate_b_id": "state-b"},
+        ],
     }
 
 
@@ -140,7 +146,11 @@ def test_cm_state_000_explicit_pairwise_authority_ignores_resampling_shaped_cros
         "mode": "pairwise", "target_id": "target-a", "scope": "all_within_target",
     }) == {
         "mode": "pairwise",
-        "pairs": [{
+        "comparison_target_id": "target-a",
+        "comparison_scope": "all_within_target",
+        "reference_backend_coordinates": None,
+        "reference_candidate_id": None,
+        "resolved_pairs": [{
             "pair_id": "state-a__state-b", "candidate_a_id": "state-a", "candidate_b_id": "state-b",
         }],
     }
@@ -162,7 +172,17 @@ def test_cm_state_000b_explicit_reference_authority_uses_full_coordinate_selecto
             "backend": "protenix_v2_ensemble", "target_id": "target-a", "ordered_seed": 101, "sample_index": 0,
         },
     }) == {
-        "mode": "reference", "reference_candidate_id": "state-a", "candidate_ids": ["state-b", "state-c"],
+        "mode": "reference",
+        "comparison_target_id": "target-a",
+        "comparison_scope": "all_other_within_target",
+        "reference_backend_coordinates": {
+            "backend": "protenix_v2_ensemble", "target_id": "target-a", "ordered_seed": 101, "sample_index": 0,
+        },
+        "reference_candidate_id": "state-a",
+        "resolved_pairs": [
+            {"pair_id": "state-a__state-b", "candidate_a_id": "state-a", "candidate_b_id": "state-b"},
+            {"pair_id": "state-a__state-c", "candidate_a_id": "state-a", "candidate_b_id": "state-c"},
+        ],
     }
 
 
@@ -219,6 +239,77 @@ def test_cm_state_001_explicit_pair_derives_deterministic_metrics() -> None:
     )
 
 
+def test_cm_state_001a_pairwise_artifact_retains_authority_and_resolved_pair_ledger_with_no_rows() -> None:
+    ensemble, maps, landscapes = _sources()
+
+    artifact = derive_state_landscape_analysis(
+        ensemble, [landscapes[0]], maps, comparison=_pairwise(),
+    )
+
+    assert artifact["comparison_target_id"] == "target-a"
+    assert artifact["comparison_scope"] == "all_within_target"
+    assert artifact["reference_backend_coordinates"] is None
+    assert artifact["resolved_pairs"] == _pairwise()["resolved_pairs"]
+    assert artifact["rows"] == []
+    assert artifact["support_ledger"][0]["pair_id"] == artifact["resolved_pairs"][0]["pair_id"]
+
+
+def test_cm_state_001b_reference_artifact_retains_full_selector_and_resolved_pair_ledger() -> None:
+    ensemble, maps, landscapes = _sources()
+    selector = {
+        "backend": "protenix_v2_ensemble",
+        "target_id": "target-a",
+        "ordered_seed": 101,
+        "sample_index": 0,
+    }
+    comparison = {
+        "mode": "reference",
+        "comparison_target_id": "target-a",
+        "comparison_scope": "all_other_within_target",
+        "reference_backend_coordinates": selector,
+        "reference_candidate_id": "state-a",
+        "resolved_pairs": [
+            {"pair_id": "state-a__state-b", "candidate_a_id": "state-a", "candidate_b_id": "state-b"},
+        ],
+    }
+
+    artifact = derive_state_landscape_analysis(ensemble, landscapes, maps, comparison=comparison)
+
+    assert artifact["comparison_mode"] == "reference"
+    assert artifact["comparison_target_id"] == "target-a"
+    assert artifact["comparison_scope"] == "all_other_within_target"
+    assert artifact["reference_backend_coordinates"] == selector
+    assert artifact["resolved_pairs"] == comparison["resolved_pairs"]
+    assert artifact["analysis_id"] != derive_state_landscape_analysis(
+        ensemble,
+        landscapes,
+        maps,
+        comparison=_pairwise(),
+    )["analysis_id"]
+
+
+def test_cm_state_001c_request_gate_requires_dedicated_authority_and_ignores_resampling_shape() -> None:
+    ensemble, maps, landscapes = _sources()
+    gate = getattr(state_landscape_analysis, "derive_state_landscape_analysis_for_request", None)
+
+    assert callable(gate), "request gate must be a pure state-analysis boundary"
+    assert gate({"resampling_settings": {"ordered_seeds": [101]}}, ensemble, landscapes, maps) is None
+    artifact = gate(
+        {
+            "state_landscape_comparison": {
+                "mode": "pairwise",
+                "target_id": "target-a",
+                "scope": "all_within_target",
+            }
+        },
+        ensemble,
+        landscapes,
+        maps,
+    )
+    assert artifact is not None
+    assert artifact["resolved_pairs"] == _pairwise()["resolved_pairs"]
+
+
 @pytest.mark.parametrize("mutation", ["wt", "provenance"])
 def test_cm_state_002_mismatch_records_exclusion_without_fabricated_delta(mutation: str) -> None:
     ensemble, maps, landscapes = _sources()
@@ -254,7 +345,7 @@ def test_cm_state_003_missing_candidate_analysis_is_explicit_and_not_a_reference
         "identity": None, "reason": "candidate_analysis_unavailable",
         "detail": "candidate has no canonical landscape",
     }]
-    with pytest.raises(StateLandscapeAnalysisError, match="reference_candidate_id"):
+    with pytest.raises(StateLandscapeAnalysisError, match="comparison target"):
         derive_state_landscape_analysis(
             ensemble, landscapes, maps, comparison={"mode": "reference", "candidate_ids": ["state-a", "state-b"]},
         )

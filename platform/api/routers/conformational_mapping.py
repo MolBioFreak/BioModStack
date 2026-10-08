@@ -94,6 +94,7 @@ class SubmitRequest(BaseModel):
     registered_config_id: str | None = None
     registered_transfer_id: str | None = None
     confornets: dict[str, Any] | None = None
+    state_landscape_comparison: dict[str, Any] | None = None
 
 
 class HandoffRequest(BaseModel):
@@ -632,6 +633,8 @@ async def submit_request(
         "runtime_policy": body.runtime_policy,
         "analysis_policy": body.analysis_policy,
     }
+    if body.state_landscape_comparison is not None:
+        params["state_landscape_comparison"] = body.state_landscape_comparison
     import_sources: list[ConformationalMappingSource] = []
     confor_sources: list[ConformationalMappingSource] = []
     snapshot_source: ConformationalMappingSource | None = None
