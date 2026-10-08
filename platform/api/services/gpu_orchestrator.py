@@ -2712,6 +2712,7 @@ class GPUOrchestrator:
                         active
                         for active in active_remote_jobs
                         if active.execution_target_id == job.execution_target_id
+                        and active.remote_state != "returning"
                     ]
                     if target_active:
                         job.remote_state = "waiting_remote_worker"

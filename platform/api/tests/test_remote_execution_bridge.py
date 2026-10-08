@@ -343,7 +343,11 @@ def test_bundle_preserves_committed_source_and_relocates_managed_paths(
         assert bundle.remote_output_alias == bundle.envelope.output_directory
         assert bundle.remote_output_alias.startswith("/opt/biomodstack/attempts/")
         assert str(data_root) not in " ".join(bundle.envelope.command)
-        assert bundle.envelope.environment["API_BASE_URL"] == "https://bms.example.invalid"
+        assert "API_BASE_URL" not in bundle.envelope.environment
+        assert bundle.envelope.environment["BMS_REMOTE_EXECUTION"] == "1"
+        assert bundle.envelope.environment["BMS_REMOTE_JOB_ID"] == job.id
+        assert bundle.envelope.environment["BMS_REMOTE_ATTEMPT_ID"] == bundle.envelope.attempt_id
+        assert bundle.envelope.environment["BMS_REMOTE_OUTPUT_ROOT"] == bundle.envelope.output_directory
         assert all("token" not in key.lower() for key in bundle.envelope.environment)
         envelope_path = bundle.local_attempt_dir / "execution-envelope.json"
         assert bundle.envelope_sha256 == hashlib.sha256(envelope_path.read_bytes()).hexdigest()

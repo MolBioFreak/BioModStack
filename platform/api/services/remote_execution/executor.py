@@ -298,6 +298,11 @@ def _remote_receipt(
         "state": state,
         "attempt_id": bundle.attempt_id,
         "execution_target_id": str(target.id),
+        "provider": str(target.provider),
+        "provider_instance_id": str(target.provider_instance_id),
+        "ssh_host": str(target.host),
+        "ssh_port": target.port,
+        "ssh_username": str(target.username),
         "remote_root": str(target.remote_root),
         "remote_attempt_dir": bundle.remote_attempt_dir,
         "source_revision": bundle.envelope.source_revision,
@@ -327,13 +332,15 @@ def _remote_receipt(
 
 
 async def _publish_remote_transition(
-    session: AsyncSession, job: Job, values: dict[str, Any], *, release_lease: bool = False,
+    session: AsyncSession, job: Job, values: dict[str, Any], *, release_lease: bool = False, require_lease: bool = True,
 ) -> bool:
     """CAS the complete attempt/claim snapshot; never autoflush a stale owner."""
     lease_authority = [select(ExecutionTarget.id).where(
         ExecutionTarget.id == job.execution_target_id,
         ExecutionTarget.leased_job_id == str(job.id),
     ).exists()]
+    if not require_lease:
+        lease_authority = []
     with session.no_autoflush:
         result = await session.execute(
             update(Job).where(
@@ -347,6 +354,10 @@ async def _publish_remote_transition(
                 Job.remote_state == job.remote_state,
                 Job.provenance == job.provenance,
                 Job.params == job.params,
+                Job.execution_source_revision == job.execution_source_revision,
+                Job.execution_source_tree == job.execution_source_tree,
+                Job.execution_bundle_sha256 == job.execution_bundle_sha256,
+                Job.awaiting_payload == job.awaiting_payload,
             ).values(**values).execution_options(synchronize_session=False)
         )
     if result.rowcount != 1:
@@ -473,7 +484,7 @@ async def _launch_remote_job_owned(
             raise RemoteExecutionError("Remote preparing claim was superseded")
         await asyncio.to_thread(_archive_envelope, bundle)
         await _stage_bundle(connection, bundle)
-        await _stage_secret_environment(connection, bundle, secret_environment)
+        # File-based remote stage receipts need no workstation callback credential.
         await run_remote(connection, _worker_argv(connection, "prepare", bundle.remote_attempt_dir), timeout=300)
         if not await _publish_remote_transition(session, job, {"remote_state": "launch_requested"}):
             fenced = True
@@ -765,8 +776,7 @@ async def collect_remote_results(
         raise RemoteExecutionError("Remote result destination traverses a symlink")
     local_output = local_output.resolve()
     incoming = local_output.parent / f".{local_output.name}.remote-incoming" / str(job.remote_attempt_id)
-    if incoming.exists():
-        shutil.rmtree(incoming)
+    incoming = incoming.with_name(incoming.name + "-" + uuid.uuid4().hex)
     incoming.parent.mkdir(parents=True, exist_ok=True)
     remote_results_dir = f"{attempt_dir}/results"
     try:
@@ -787,9 +797,6 @@ async def collect_remote_results(
             )
         manifest = await asyncio.to_thread(_verify_result_package, incoming, job, status)
     except (RemoteTransportError, RemoteExecutionError, OSError, ValueError) as exc:
-        job.remote_state = "remote_finished_results_waiting"
-        job.error_message = f"Remote results are waiting for verified return: {str(exc)[:1500]}"
-        await session.commit()
         raise RemoteCollectionPending(str(exc)) from exc
     return manifest, incoming
 
@@ -797,7 +804,6 @@ async def collect_remote_results(
 def _publish_result_generation(job: Job, incoming: Path) -> tuple[Path, Path | None]:
     """Atomically make one verified attempt the only visible result generation."""
     manifest_path = incoming / "result-manifest.json"
-    manifest_path.unlink(missing_ok=False)
     local_output = Path(str(job.child_output_dir or job.output_dir)).expanduser().resolve()
     local_output.parent.mkdir(parents=True, exist_ok=True)
     if incoming.stat().st_dev != local_output.parent.stat().st_dev:
@@ -809,10 +815,8 @@ def _publish_result_generation(job: Job, incoming: Path) -> tuple[Path, Path | N
             / ".bms-remote-quarantine"
             / str(job.id)
             / str(job.remote_attempt_id)
-            / "previous"
+            / ("previous-" + uuid.uuid4().hex)
         )
-        if backup.exists():
-            shutil.rmtree(backup)
         backup.parent.mkdir(parents=True, exist_ok=True)
         os.replace(local_output, backup)
     try:
@@ -857,6 +861,12 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
     """Reconcile one running remote Job. Return true when local state changed."""
     job_id = str(job.id)
     if job.status in {"completed", "failed", "cancelled"}:
+        return False
+    if job.remote_state == "returning":
+        if (job.status, job.queue_status) != ("running", "running"):
+            return False
+        return await _pull_failure(session, job, "Result pull interrupted; choose Retry pull")
+    if job.awaiting_stage == "remote_results":
         return False
     expected_run_id = str(job.nextflow_run_id or "")
     expected_attempt_id = str(job.remote_attempt_id or "")
@@ -964,9 +974,166 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
         await _release_remote_target_lease(session, job)
         await session.commit()
         return True
-    if not await _acquire_remote_terminal_fence(session, job):
-        return False
-    manifest, incoming = await collect_remote_results(session, job, status)
+    if status.state != "succeeded" or status.exit_code != 0:
+        return await _publish_remote_transition(session, job, {
+            "status": "failed", "queue_status": "failed", "remote_state": "failed",
+            "error_message": status.error or f"Remote workflow exited with code {status.exit_code}",
+            "assigned_gpu": None, "params": release_scheduler_gpu_assignment(job.params),
+            "completed_at": datetime.utcnow(),
+        }, release_lease=True)
+    provenance = dict(job.provenance or {})
+    receipt = dict(provenance.get("remote_execution_receipt") or {})
+    receipt.update(state=status.state, exit_code=status.exit_code,
+        completed_at=status.completed_at.isoformat() if status.completed_at else None,
+        result_manifest_sha256=status.result_manifest_sha256)
+    provenance["remote_execution_receipt"] = receipt
+    return await _publish_remote_transition(session, job, {
+        "status": "awaiting_input", "queue_status": "completed",
+        "awaiting_input": True, "awaiting_stage": "remote_results",
+        "awaiting_payload": _pull_identity(job), "remote_state": "results_available",
+        "provenance": provenance, "assigned_gpu": None,
+        "params": release_scheduler_gpu_assignment(job.params), "error_message": None,
+    }, release_lease=True)
+
+
+def _pull_identity(job):
+    return {
+        "schema": "bms.remote-result-pull.v1",
+        "attempt_id": str(job.remote_attempt_id),
+        "execution_target_id": str(job.execution_target_id),
+        "source_revision": str(job.execution_source_revision),
+        "source_tree": str(job.execution_source_tree),
+        "execution_envelope_sha256": str(job.execution_bundle_sha256),
+    }
+
+
+async def _pull_failure(session, job, message):
+    return await _publish_remote_transition(session, job, {
+        "status": "awaiting_input", "queue_status": "completed",
+        "awaiting_input": True, "awaiting_stage": "remote_results",
+        "awaiting_payload": _pull_identity(job), "remote_state": "result_pull_failed",
+        "error_message": str(message)[:1500],
+    }, require_lease=False)
+
+
+async def request_remote_result_pull(session, job, background_tasks):
+    """Reserve transfer before responding; keep the process lock through completion."""
+    if (not job.execution_target_id or not job.remote_attempt_id
+            or job.nextflow_run_id != f"remote:{job.remote_attempt_id}"):
+        raise RemoteExecutionError("Job has no current remote result attempt")
+    guard = _controller_attempt_guard(str(job.id))
+    owned = guard.__enter__()
+    if not owned:
+        guard.__exit__(None, None, None)
+        if job.remote_state == "returning":
+            return
+        raise RemoteExecutionError("Remote attempt controller is busy")
+    scheduled = False
+    try:
+        if (job.status not in {"awaiting_input", "running"}
+                or job.remote_state not in {"results_available", "result_pull_failed", "returning"}
+                or job.awaiting_stage != "remote_results"
+                or not job.awaiting_input or job.awaiting_payload != _pull_identity(job)):
+            raise RemoteExecutionError("Job is not awaiting an explicit result pull")
+        if not await _publish_remote_transition(session, job, {
+            "status": "running", "queue_status": "running", "remote_state": "returning",
+            "error_message": None,
+        }, require_lease=False):
+            raise RemoteExecutionError("Remote result attempt changed; refresh the Job")
+        background_tasks.add_task(_run_requested_pull, str(job.id), _pull_identity(job), guard)
+        scheduled = True
+    finally:
+        if not scheduled:
+            guard.__exit__(None, None, None)
+
+
+async def _prove_pull_endpoint(session, job):
+    from .vast import get_owned_instance
+    from .targets import RUNNING_PROVIDER_STATES
+
+    target = await session.get(ExecutionTarget, str(job.execution_target_id), populate_existing=True)
+    if target is None or target.provider != "vast":
+        raise RemoteExecutionError("Result source target is unavailable")
+    identity = _pull_identity(job)
+    receipt_snapshot = dict((job.provenance or {}).get("remote_execution_receipt") or {})
+    endpoint = (target.host, target.port, target.username, target.provider_instance_id)
+    instance = await get_owned_instance(str(target.provider_instance_id))
+    await session.refresh(job)
+    await session.refresh(target)
+    if (_pull_identity(job) != identity or job.remote_state != "returning"
+            or (job.status, job.queue_status) != ("running", "running")
+            or dict((job.provenance or {}).get("remote_execution_receipt") or {}) != receipt_snapshot
+            or (target.host, target.port, target.username, target.provider_instance_id) != endpoint):
+        raise RemoteExecutionError("Result source changed during provider verification")
+    if (instance.provider_state not in RUNNING_PROVIDER_STATES
+            or (instance.host, instance.port) != (target.host, target.port)):
+        raise RemoteExecutionError("Current provider endpoint does not match the result source")
+    receipt = dict((job.provenance or {}).get("remote_execution_receipt") or {})
+    if (receipt.get("attempt_id") != str(job.remote_attempt_id)
+            or receipt.get("execution_target_id") != str(target.id)
+            or (receipt.get("provider"), receipt.get("provider_instance_id"),
+                receipt.get("ssh_host"), receipt.get("ssh_port"), receipt.get("ssh_username")) != (
+                str(target.provider), str(target.provider_instance_id),
+                str(target.host), target.port, str(target.username))
+            or receipt.get("source_revision") != job.execution_source_revision
+            or receipt.get("source_tree") != job.execution_source_tree
+            or receipt.get("execution_envelope_sha256") != job.execution_bundle_sha256):
+        raise RemoteExecutionError("Persisted result source identity is inconsistent")
+    connection, _ = _connection_for_attempt(target, job)
+    await _verify_remote_runner(connection, target)
+
+
+async def _run_requested_pull(job_id, identity, guard):
+    try:
+        async with async_session() as session:
+            try:
+                job = await session.get(Job, job_id)
+                if job is None or _pull_identity(job) != identity or job.remote_state != "returning":
+                    return
+                await _prove_pull_endpoint(session, job)
+                status = await remote_status(session, job)
+                receipt = dict((job.provenance or {}).get("remote_execution_receipt") or {})
+                if (status.state != "succeeded" or status.exit_code != 0
+                        or not status.result_manifest_sha256
+                        or status.result_manifest_sha256 != receipt.get("result_manifest_sha256")):
+                    raise RemoteExecutionError("Remote terminal result identity changed")
+                manifest, incoming = await collect_remote_results(session, job, status)
+                await session.rollback()
+                job = await session.get(Job, job_id, populate_existing=True)
+                if (job is None or _pull_identity(job) != identity or job.remote_state != "returning"
+                        or job.status != "running" or job.queue_status != "running"):
+                    return
+                fence = await session.execute(update(Job).where(
+                    Job.id == job_id, Job.status == "running", Job.queue_status == "running",
+                    Job.remote_state == "returning", Job.remote_attempt_id == identity["attempt_id"],
+                    Job.execution_target_id == identity["execution_target_id"],
+                    Job.execution_source_revision == identity["source_revision"],
+                    Job.execution_source_tree == identity["source_tree"],
+                    Job.execution_bundle_sha256 == identity["execution_envelope_sha256"],
+                    Job.provenance == job.provenance, Job.params == job.params,
+                ).values(awaiting_input=False, awaiting_stage=None, awaiting_payload={}))
+                if fence.rowcount != 1:
+                    await session.rollback()
+                    return
+                # Hold the write fence across publication and receipt application.
+                await session.refresh(job)
+                await _finalize_pulled_results(session, job, status, manifest, incoming)
+            except Exception as exc:
+                await session.rollback()
+                job = await session.get(Job, job_id, populate_existing=True)
+                if (job is not None and _pull_identity(job) == identity
+                        and job.remote_state == "returning"
+                        and (job.status, job.queue_status) == ("running", "running")):
+                    await _pull_failure(session, job, f"Result pull failed: {exc}")
+    finally:
+        guard.__exit__(None, None, None)
+
+
+async def _finalize_pulled_results(session, job, status, manifest, incoming):
+    job_id = str(job.id)
+    expected_attempt_id = str(job.remote_attempt_id)
+    expected_run_id = str(job.nextflow_run_id)
+    expected_target_id = str(job.execution_target_id)
     provenance = dict(job.provenance or {})
     receipt = dict(provenance.get("remote_execution_receipt") or {})
     receipt.update(
@@ -990,16 +1157,7 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
             json.dumps(current_contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
         if expected_contract_sha256 != current_contract_sha256:
-            job.status = JobStatus.FAILED.value
-            job.queue_status = "failed"
-            job.completed_at = datetime.utcnow()
-            job.remote_state = "returned_contract_drift"
-            job.error_message = "REMOTE_RESULT_CONTRACT_IDENTITY_MISMATCH"
-            job.assigned_gpu = None
-            job.params = release_scheduler_gpu_assignment(job.params)
-            await _release_remote_target_lease(session, job)
-            await session.commit()
-            return True
+            raise RemoteExecutionError("REMOTE_RESULT_CONTRACT_IDENTITY_MISMATCH")
         try:
             local_output, previous_generation = await asyncio.to_thread(
                 _publish_result_generation,
@@ -1007,9 +1165,6 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
                 incoming,
             )
         except (OSError, RemoteExecutionError) as exc:
-            job.remote_state = "remote_finished_results_waiting"
-            job.error_message = f"Verified remote results could not be published: {str(exc)[:1500]}"
-            await session.commit()
             raise RemoteCollectionPending(str(exc)) from exc
         receipt["published_output_dir"] = str(local_output)
         receipt["previous_generation_quarantine"] = (
@@ -1017,19 +1172,17 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
         )
         provenance["remote_execution_receipt"] = receipt
         job.provenance = provenance
+        from services.remote_stage_receipts import apply_remote_stage_receipts
+
+        await apply_remote_stage_receipts(
+            session=session, job=job, attempt_id=expected_attempt_id,
+            output_root=local_output, manifest=manifest,
+        )
+        await session.flush()
         if job.model_id == "msa_batch":
             msa_manifest = local_output / "msa_manifest.json"
             if msa_manifest.is_symlink() or not msa_manifest.is_file():
-                job.status = JobStatus.FAILED.value
-                job.queue_status = "failed"
-                job.remote_state = "returned_ingestion_failed"
-                job.error_message = "Remote MSA batch returned no msa_manifest.json"
-                job.assigned_gpu = None
-                job.params = release_scheduler_gpu_assignment(job.params)
-                job.completed_at = job.completed_at or datetime.utcnow()
-                await _release_remote_target_lease(session, job)
-                await session.commit()
-                return True
+                raise RemoteExecutionError("Remote MSA batch returned no msa_manifest.json")
             from services.nextflow import apply_msa_manifest_to_child_jobs
 
             await apply_msa_manifest_to_child_jobs(

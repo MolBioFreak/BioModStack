@@ -356,13 +356,24 @@ async def test_remote_reconciler_never_writes_after_finalizer_loses_authority(st
     monkeypatch.setattr(integrity, "finalize_successful_job", finalize)
     async with store() as s:
         await ex.reconcile_remote_job(s, await s.get(Job, "job"))
+        assert (await s.get(Job, "job")).remote_state == "results_available"
+    from fastapi import BackgroundTasks
+    from services import remote_stage_receipts
+    async def proof(*_, **__):
+        pass
+    monkeypatch.setattr(ex, "_prove_pull_endpoint", proof)
+    monkeypatch.setattr(remote_stage_receipts, "apply_remote_stage_receipts", proof)
+    background = BackgroundTasks()
+    async with store() as s:
+        await ex.request_remote_result_pull(s, await s.get(Job, "job"), background)
+    await background()
     async with store() as s:
         job = await s.get(Job, "job")
         assert job.remote_state == "operator_authority"
         assert job.params == {"operator_receipt": "preserved"}
         assert job.error_message == "operator reason"
         if competing == "retry":
-            assert (await s.get(ExecutionTarget, "target")).leased_job_id == "job"
+            assert (await s.get(ExecutionTarget, "target")).leased_job_id is None
 
 
 @pytest.mark.asyncio

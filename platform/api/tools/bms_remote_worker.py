@@ -316,6 +316,16 @@ def supervise(attempt_dir: Path) -> int:
                     raise RuntimeError("attempt secret environment is invalid")
                 environment[key] = value
             secret_path.unlink()
+        # Remote workflow metadata is envelope-owned, never worker-shell or
+        # legacy secret-file authority. No BMS callback connectivity is needed.
+        environment.update({
+            "BMS_REMOTE_EXECUTION": "1",
+            "BMS_REMOTE_ATTEMPT_ID": str(envelope["attempt_id"]),
+            "BMS_REMOTE_JOB_ID": str(envelope["job_id"]),
+            "BMS_REMOTE_OUTPUT_ROOT": str(envelope["output_directory"]),
+        })
+        for key in ("API_BASE_URL", "BMS_REMOTE_API_BASE_URL", "BMS_STAGE_REPORT_TOKEN"):
+            environment.pop(key, None)
         if (attempt_dir / CANCEL_REQUEST_FILE).exists():
             exit_code = -15
         else:

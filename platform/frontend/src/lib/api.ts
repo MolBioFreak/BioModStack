@@ -2556,7 +2556,12 @@ export interface QueuedJob {
     name: string;
     model_id: string;
     mode: string;
-    queue_status: 'queued' | 'preparing' | 'running' | 'cancelling' | 'paused' | 'pending_msa';
+    queue_status: 'queued' | 'preparing' | 'running' | 'cancelling' | 'paused' | 'pending_msa' | 'awaiting_input';
+    status?: Job['status'];
+    awaiting_input?: boolean | null;
+    awaiting_stage?: string | null;
+    awaiting_payload?: Record<string, UntypedApiValue> | null;
+    error_message?: string | null;
     paused: boolean;
     pinned_gpu: number | null;
     assigned_gpu: number | null;
@@ -2588,6 +2593,11 @@ export interface QueueStats {
     paused: number;
     total: number;
 }
+
+// The server binds this explicit request to the persisted worker attempt.
+// Refresh authoritative queries rather than assuming the POST completed ingestion.
+export const pullRemoteJobResults = (jobId: string) =>
+    api.post<Job>(`/api/jobs/${encodeURIComponent(jobId)}/remote-results/pull`);
 
 export const fetchQueue = (status?: string) =>
     api.get<QueuedJob[]>('/api/queue', { params: { status } });

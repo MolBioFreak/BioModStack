@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import hashlib
-import ipaddress
+
 import json
 import os
 import re
@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import tarfile
 import uuid
-from urllib.parse import urlsplit
+
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -608,6 +608,9 @@ def prepare_remote_bundle(
         "BMS_API_PYTHON": f"{remote_runtime}/support-python/venv/bin/python",
         "BMS_MSA_CACHE": f"{remote_attempt}/msa-cache",
         "BMS_REMOTE_EXECUTION": "1",
+        "BMS_REMOTE_ATTEMPT_ID": attempt_id,
+        "BMS_REMOTE_JOB_ID": str(job.id),
+        "BMS_REMOTE_OUTPUT_ROOT": remote_results,
         "BMS_WORK": f"{remote_attempt}/work",
         "NXF_CACHE_DIR": f"{remote_attempt}/.nextflow",
         "NXF_HOME": f"{remote_root}/cache/nextflow",
@@ -615,29 +618,7 @@ def prepare_remote_bundle(
         "NXF_ANSI_LOG": "false",
         "CUDA_VISIBLE_DEVICES": ",".join(str(value) for value in assigned_gpu_indices),
     }
-    api_url = os.getenv("BMS_REMOTE_API_BASE_URL", "").strip()
-    parsed_api_url = urlsplit(api_url)
-    if (
-        parsed_api_url.scheme not in {"http", "https"}
-        or not parsed_api_url.hostname
-        or parsed_api_url.username
-        or parsed_api_url.password
-        or parsed_api_url.query
-        or parsed_api_url.fragment
-    ):
-        raise RemoteBundleError("BMS_REMOTE_API_BASE_URL is not configured as a credential-free HTTP(S) URL")
-    api_host = parsed_api_url.hostname.lower()
-    if api_host == "localhost" or api_host.endswith(".localhost"):
-        raise RemoteBundleError("BMS_REMOTE_API_BASE_URL must be reachable from the remote worker")
-    try:
-        api_address = ipaddress.ip_address(api_host)
-    except ValueError:
-        api_address = None
-    if api_address is not None and (
-        api_address.is_loopback or api_address.is_link_local or api_address.is_unspecified
-    ):
-        raise RemoteBundleError("BMS_REMOTE_API_BASE_URL must be reachable from the remote worker")
-    effective_environment["API_BASE_URL"] = api_url.rstrip("/")
+
     for key, value in dict(environment or {}).items():
         if key in {
             "PYTORCH_CUDA_ALLOC_CONF",

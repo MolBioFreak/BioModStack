@@ -51,6 +51,7 @@ def test_existing_generation_publication_and_rollback_on_results_filesystem(tmp_
             published, backup = executor._publish_result_generation(job, incoming)
             assert published == output
             assert (output/'new.txt').read_text() == 'verified-new-generation'
+            assert (output/'result-manifest.json').read_text() == '{}'
             assert not (output/'old.txt').exists()
             assert backup is not None and backup.stat().st_dev == output.stat().st_dev
             assert (backup/'old.txt').read_text() == 'retained-original'

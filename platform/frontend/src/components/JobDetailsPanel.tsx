@@ -8,6 +8,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import type { Job } from '../lib/api';
+import { RemoteResultsPrompt } from './RemoteResultsPrompt';
 
 interface DockingResult {
     name: string;
@@ -88,6 +89,7 @@ export function JobDetailsPanel({ job, onClose }: JobDetailsPanelProps) {
                     </div>
 
                     {/* Job Info Row */}
+                    <RemoteResultsPrompt job={job} />
                     <div className="flex items-center gap-6 text-xs text-slate-400 mb-3">
                         <span>Mode: <span className="text-slate-300">{job.mode}</span></span>
                         {typeof job.requested_design_count === 'number' && job.requested_design_count !== job.design_count ? (
