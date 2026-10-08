@@ -5333,10 +5333,6 @@ export const fetchMolecularRevisionSummaries = (sequenceId: string, limit = 50, 
         `/api/molbio/sequences/${encodeURIComponent(sequenceId)}/revisions`, { params: { limit, offset }, signal },
     ));
 
-export const fetchMolecularRevisions = (sequenceId: string, limit = 100, offset = 0, signal?: AbortSignal) =>
-    apiData(api.get<MolecularRevision[]>(
-        `/api/sequences/${encodeURIComponent(sequenceId)}/revisions`, { params: { limit, offset }, signal },
-    ));
 export const fetchMolecularRevision = (sequenceId: string, revisionId: string) =>
     apiData(api.get<MolecularRevision>(
         `/api/sequences/${encodeURIComponent(sequenceId)}/revisions/${encodeURIComponent(revisionId)}`,
