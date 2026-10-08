@@ -71,6 +71,417 @@ def _client_with_fake_create(monkeypatch, captured: dict[str, Any]) -> TestClien
     return TestClient(app)
 
 
+@pytest.mark.parametrize("qc_params", [{"run_fastq_qc": False}, {"run_fastq_qc": True}, {}])
+def test_named_fastq_qc_rejects_disabled_qc_before_receipt_consumption(monkeypatch, qc_params) -> None:
+    captured: dict[str, Any] = {}
+    client = _client_with_fake_create(monkeypatch, captured)
+    receipt = SimpleNamespace(
+        id="receipt-qc", sequence_id="seq", revision_id="rev",
+        revision_sha256="a" * 64, reference_snapshot_sha256="b" * 64,
+        reference_snapshot_path="/data/reference.fa", consumed_at=None, consumed_job_id=None,
+    )
+    consumed = []
+
+    async def validate(_session, *, receipt_id):
+        assert qc_params.get("run_fastq_qc") is not False, "disabled QC reached receipt validation"
+        return receipt
+
+    async def consume(_session, *, receipt_id):
+        consumed.append(receipt_id)
+        return receipt
+
+    monkeypatch.setattr(ont_runs, "validate_molbio_ngs_receipt", validate)
+    monkeypatch.setattr(ont_runs, "consume_molbio_ngs_receipt", consume)
+    response = client.post("/api/ont/ngs/ont_fastq_qc/submit", json={
+        "name": "disabled-named-qc",
+        "params": {"fastq_path": "/data/reads.fastq", "molbio_ngs_receipt_id": "receipt-qc", **qc_params},
+    })
+    if qc_params.get("run_fastq_qc") is False:
+        assert response.status_code == 422, response.text
+        assert "requires run_fastq_qc=true" in response.text
+        assert consumed == []
+        assert captured == {}
+    else:
+        assert response.status_code == 201, response.text
+        assert consumed == ["receipt-qc"]
+        assert captured["job_data"].params["run_fastq_qc"] is True
+        assert captured["job_data"].params["reference_fasta"] == "/data/reference.fa"
+        assert captured["job_data"].params["molbio_revision_binding"]["receipt_id"] == "receipt-qc"
+
+
+@pytest.mark.parametrize("authority", ["receipt", "managed"])
+@pytest.mark.parametrize("workflow_id,params,error", [
+    ("ont_basecall_dna", {"pod5_dir": "/data/pod5", "basecalling_mode": ""}, "dorado_basecall_mode"),
+    ("ont_basecall_dna", {"pod5_dir": "/data/pod5", "basecalling_mode": "invalid"}, "dorado_basecall_mode"),
+    ("ont_basecall_dna", {"pod5_dir": "/data/pod5", "basecalling_mode": "duplex", "dorado_basecall_mode": "simplex"}, "one exact choice"),
+    ("ont_plasmid_qc", {"pod5_dir": "/data/pod5", "barcode_kit": "SQK-RBK114-96"}, "only supported by ont_basecall_dna"),
+    ("ont_basecall_rna", {"pod5_dir": "/data/pod5", "barcode_kit": "SQK-RBK114-96"}, "only supported by ont_basecall_dna"),
+    ("ont_construct_screening", {"pod5_dir": "/data/pod5", "barcode_kit": "SQK-RBK114-96"}, "only supported by ont_basecall_dna"),
+    ("ont_methylation_analysis", {"pod5_dir": "/data/pod5", "barcode_kit": "SQK-RBK114-96"}, "only supported by ont_basecall_dna"),
+    ("wf_clone_validation", {"pod5_dir": "/data/pod5", "barcode_kit": "SQK-RBK114-96"}, "only supported by ont_basecall_dna"),
+    ("ont_plasmid_qc", {"pod5_dir": "/data/pod5", "sample_sheet": "/data/samples.csv"}, "sample_sheet requires barcode_kit"),
+    ("ont_basecall_dna", {"pod5_dir": "/data/pod5", "sample_sheet": "/data/samples.csv"}, "sample_sheet requires barcode_kit"),
+    ("ont_basecall_dna", {"pod5_dir": "/data/pod5", "ont_molecule_type": "rna"}, "requires ont_molecule_type=dna"),
+    ("ont_basecall_rna", {"pod5_dir": "/data/pod5", "dorado_basecall_mode": "duplex", "duplex_pairs": "/data/pairs.txt"}, "RNA duplex is unsupported"),
+    ("ont_basecall_rna", {"pod5_dir": "/data/pod5", "trim_adapters": False}, "RNA always trims adapters"),
+    ("ont_basecall_dna", {"pod5_dir": "/data/pod5", "dorado_basecall_mode": "duplex", "duplex_pairs": "/data/pairs.txt", "trim_adapters": False}, "duplex lacks an adapter-trim control"),
+    ("ont_basecall_dna", {"pod5_dir": "/data/pod5", "dorado_basecall_mode": "duplex", "duplex_pairs": "/data/pairs.txt", "barcode_kit": "SQK-RBK114-96"}, "barcode classification is incompatible with duplex"),
+    ("ont_basecall_dna", {"pod5_dir": "/data/pod5", "dorado_basecall_mode": "duplex"}, "duplex mode requires duplex_pairs"),
+    ("ont_basecall_dna", {"pod5_dir": "/data/pod5", "duplex_pairs": "/data/pairs.txt"}, "duplex_pairs is only valid in duplex mode"),
+    ("ont_basecall_dna", {"pod5_dir": "/data/pod5", "dorado_quality_mode": "fast", "modified_bases": "6mA"}, "modified-base selection requires DNA HAC simplex"),
+    ("ont_basecall_dna", {"pod5_dir": "/data/pod5", "dorado_quality_mode": "hac", "modified_bases": "6mA", "barcode_kit": "SQK-RBK114-96"}, "mutually exclusive"),
+    ("ont_basecall_dna", {"pod5_dir": "/data/pod5", "dorado_basecall_mode": "duplex", "duplex_pairs": "/data/pairs.txt", "emit_moves": True}, "emit_moves is unavailable for duplex"),
+    ("ont_basecall_dna", {"pod5_dir": "/data/pod5", "dorado_model": "fast", "dorado_quality_mode": "hac"}, "one exact quality choice"),
+    ("wf_clone_validation", {"pod5_dir": "/data/pod5", "wf_clone_insert_reference": "/data/insert.fa"}, "wf_clone_insert_reference requires wf_clone_primers"),
+    ("ont_construct_screening", {"pod5_dir": "/data/pod5", "run_assembly": True, "wf_clone_regions_bedfile": "/data/regions.bed"}, "wf_clone_regions_bedfile requires wf_clone_host_reference"),
+    ("ont_methylation_analysis", {"fastq_path": "/data/reads.fastq"}, "does not accept"),
+    ("ont_fastq_qc", {"fastq_path": "/data/reads.fastq", "run_fastq_qc": False}, "requires run_fastq_qc=true"),
+])
+def test_reference_independent_contract_rejected_before_authority(monkeypatch, authority, workflow_id, params, error):
+    captured = {}
+    client = _client_with_fake_create(monkeypatch, captured)
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail("invalid operator input reached reference authority or queue")
+
+    for name in (
+        "resolve_state_analysis_launch_policy", "resolve_managed_reference_for_launch",
+        "validate_molbio_ngs_receipt", "consume_molbio_ngs_receipt", "_create_pipeline_job",
+    ):
+        monkeypatch.setattr(ont_runs, name, forbidden)
+    payload = {"params": dict(params)}
+    if authority == "receipt":
+        payload["params"]["molbio_ngs_receipt_id"] = "receipt-invalid"
+    else:
+        payload["managed_reference"] = {
+            "global_domain_experiment_id": "experiment", "molbio_ngs_state_revision_id": "state",
+            "ngs_reference_revision_id": "reference",
+        }
+    response = client.post(f"/api/ont/ngs/{workflow_id}/submit", json=payload)
+    assert response.status_code == 422, response.text
+    assert error in response.text
+    assert captured == {}
+
+
+@pytest.mark.parametrize("workflow_id,barcoding", [
+    ("ont_basecall_dna", {"barcode_kit": "SQK-RBK114-96", "sample_sheet": "/data/samples.csv"}),
+    ("ont_plasmid_qc", {"sample_sheet": "", "duplex_pairs": "", "modified_bases": "none"}),
+    ("ont_plasmid_qc", {"sample_sheet": "  ", "duplex_pairs": "  "}),
+])
+def test_reference_independent_contract_preserves_valid_barcoding_and_placeholders(monkeypatch, workflow_id, barcoding):
+    captured = {}
+    client = _client_with_fake_create(monkeypatch, captured)
+    receipt = SimpleNamespace(
+        id="receipt-barcode", sequence_id="seq", revision_id="rev",
+        revision_sha256="a" * 64, reference_snapshot_sha256="b" * 64,
+        reference_snapshot_path="/data/reference.fa", consumed_at=None, consumed_job_id=None,
+    )
+    calls = []
+
+    async def validate(_session, *, receipt_id):
+        calls.append(("validate", receipt_id))
+        return receipt
+
+    async def consume(_session, *, receipt_id):
+        calls.append(("consume", receipt_id))
+        return receipt
+
+    monkeypatch.setattr(ont_runs, "validate_molbio_ngs_receipt", validate)
+    monkeypatch.setattr(ont_runs, "consume_molbio_ngs_receipt", consume)
+    response = client.post(f"/api/ont/ngs/{workflow_id}/submit", json={
+        "params": {"pod5_dir": "/data/pod5", "molbio_ngs_receipt_id": receipt.id, **barcoding},
+    })
+    assert response.status_code == 201, response.text
+    assert calls == [("validate", receipt.id), ("consume", receipt.id)]
+    effective = captured["job_data"].params
+    assert effective["dorado_basecall_mode"] == "simplex"
+    assert effective["modified_bases"] == "none"
+    if workflow_id == "ont_basecall_dna":
+        assert effective["barcode_kit"] == barcoding["barcode_kit"]
+        assert effective["sample_sheet"] == barcoding["sample_sheet"]
+    else:
+        assert "barcode_kit" not in effective
+        assert "sample_sheet" not in effective
+        assert "duplex_pairs" not in effective
+
+
+@pytest.mark.parametrize("bad_params", [
+    {"unknown_scientific_setting": 1},
+    {"_global_resource_admission": {"approved": True}},
+    {"bam_min_mapq": "20"},
+    {"bam_min_mapq": True},
+    {"bam_min_mapq": 10**400},
+    {"bam_min_mapq": None},
+    {"bam_min_mapq": 20.5},
+    {"bam_force_realign": "false"},
+    {"bam_path": ["/data/reads.bam"]},
+    {"dorado_batch_size": 32},  # inactive for BAM
+    {"wf_clone_approx_size": 7000},  # inactive workflow
+])
+def test_operator_settings_rejected_before_receipt_or_queue(monkeypatch, bad_params):
+    captured = {}
+    client = _client_with_fake_create(monkeypatch, captured)
+    consumed = []
+    receipt = SimpleNamespace(
+        id="receipt-typed", sequence_id="seq", revision_id="rev",
+        revision_sha256="a" * 64, reference_snapshot_sha256="b" * 64,
+        reference_snapshot_path="/data/reference.fa", consumed_at=None, consumed_job_id=None,
+    )
+
+    async def validate(_session, *, receipt_id):
+        return receipt
+
+    async def consume(_session, *, receipt_id):
+        consumed.append(receipt_id)
+        return receipt
+
+    monkeypatch.setattr(ont_runs, "validate_molbio_ngs_receipt", validate)
+    monkeypatch.setattr(ont_runs, "consume_molbio_ngs_receipt", consume)
+    response = client.post("/api/ont/ngs/ont_plasmid_qc/submit", json={
+        "params": {"bam_path": "/data/reads.bam", "molbio_ngs_receipt_id": "receipt-typed", **bad_params},
+    })
+    assert response.status_code == 422, response.text
+    assert next(iter(bad_params)) in response.text
+    assert consumed == []
+    assert captured == {}
+
+
+@pytest.mark.parametrize("workflow_id,input_mode", [
+    (workflow_id, input_mode)
+    for workflow_id, input_modes in {
+        "ont_basecall_dna": ("pod5",), "ont_basecall_rna": ("pod5",),
+        "ont_plasmid_qc": ("pod5", "bam", "fastq"),
+        "ont_construct_screening": ("pod5", "bam", "fastq"),
+        "ont_methylation_analysis": ("pod5", "bam"),
+        "wf_clone_validation": ("pod5", "bam", "fastq"),
+        "ont_fastq_qc": ("fastq",),
+    }.items() for input_mode in input_modes
+])
+def test_ui_shaped_operator_payloads_preserve_effective_values(monkeypatch, workflow_id, input_mode):
+    # Mirror NanoporeTemplate's serialized branches (undefined fields are omitted).
+    captured = {}
+    client = _client_with_fake_create(monkeypatch, captured)
+    receipt = SimpleNamespace(
+        id="receipt-ui", sequence_id="seq", revision_id="rev",
+        revision_sha256="a" * 64, reference_snapshot_sha256="b" * 64,
+        reference_snapshot_path="/data/reference.fa", consumed_at=None, consumed_job_id=None,
+    )
+    consumed = []
+
+    async def validate(_session, *, receipt_id):
+        return receipt
+
+    async def consume(_session, *, receipt_id):
+        consumed.append(receipt_id)
+        return receipt
+
+    monkeypatch.setattr(ont_runs, "validate_molbio_ngs_receipt", validate)
+    monkeypatch.setattr(ont_runs, "consume_molbio_ngs_receipt", consume)
+    params: dict[str, Any] = {"run_modkit": False}
+    if input_mode == "pod5":
+        params.update(pod5_dir="/data/pod5", dorado_quality_mode="hac",
+                      dorado_basecall_mode="simplex", ont_molecule_type="rna" if workflow_id == "ont_basecall_rna" else "dna",
+                      modified_bases="none", min_qscore=12, trim_adapters=True,
+                      emit_summary=False, emit_moves=True, dorado_batch_size=32)
+    elif input_mode == "bam":
+        params.update(bam_path="/data/reads.bam", bam_force_realign=True, bam_min_mapq=17)
+    else:
+        params.update(fastq_path="/data/reads.fastq", expected_plasmid_size=8000,
+                      min_fastq_read_length=25, fastq_minimap2_preset="map-ont",
+                      fastq_minimap2_allow_secondary=False, igv_track_window_bp=150,
+                      igv_report_max_sites=12, igv_report_flanking_bp=300, run_fastq_qc=True)
+    if workflow_id in {"ont_construct_screening", "wf_clone_validation"}:
+        params.update(run_assembly=True, wf_clone_approx_size=8100,
+                      wf_clone_expected_identity=98.5, wf_clone_primers="/data/primers.fa",
+                      wf_clone_insert_reference="/data/insert.fa",
+                      wf_clone_host_reference="/data/host.fa", wf_clone_regions_bedfile="/data/regions.bed")
+        from services.ont_ngs_contract import WF_CLONE_DEFAULTS
+        params["wf_clone_basecaller_model"] = WF_CLONE_DEFAULTS["wf_clone_basecaller_model"]
+    if workflow_id in ont_runs.ONT_REFERENCE_REQUIRED_WORKFLOWS:
+        params["molbio_ngs_receipt_id"] = receipt.id
+    response = client.post(f"/api/ont/ngs/{workflow_id}/submit", json={"params": params})
+    assert response.status_code == 201, response.text
+    effective = captured["job_data"].params
+    for key, value in params.items():
+        if key != "molbio_ngs_receipt_id":
+            assert effective[key] == value, key
+    assert effective["ont_workflow_id"] == workflow_id
+    assert effective["ont_input_mode"] == input_mode
+    assert consumed == ([receipt.id] if workflow_id in ont_runs.ONT_REFERENCE_REQUIRED_WORKFLOWS else [])
+
+
+@pytest.mark.parametrize("workflow_id,params", [
+    ("ont_basecall_dna", {"pod5_dir": "/data/pod5", "run_fastq_qc": True}),
+    ("ont_basecall_rna", {"pod5_dir": "/data/pod5", "run_fastq_qc": True}),
+])
+def test_basecall_profile_rejects_inactive_qc_stage(monkeypatch, workflow_id, params):
+    captured = {}
+    client = _client_with_fake_create(monkeypatch, captured)
+    response = client.post(f"/api/ont/ngs/{workflow_id}/submit", json={"params": params})
+    assert response.status_code == 422, response.text
+    assert "run_fastq_qc" in response.text
+    assert captured == {}
+
+
+@pytest.mark.parametrize("override", [{}, {"min_mapq": "20"}, {"min_mapq": True}, {"unknown": 1}, {"_global_resource_admission": {}}])
+def test_pooled_profile_keeps_its_closed_typed_public_contract(monkeypatch, override):
+    captured = {}
+    client = _client_with_fake_create(monkeypatch, captured)
+    reached = []
+
+    async def submit(**kwargs):
+        reached.append(kwargs["request"].model_dump())
+        return {"job_id": "pooled-fake"}
+
+    monkeypatch.setattr(ont_runs, "submit_pooled_reference_assignment", submit)
+    payload = {
+        "idempotency_key": "typed-pooled", "fastq_path": "/data/pooled.fastq",
+        "targets": [
+            {"target_id": "a", "label": "A", "molbio_ngs_receipt_id": "receipt-a"},
+            {"target_id": "b", "label": "B", "molbio_ngs_receipt_id": "receipt-b"},
+        ], "min_mapq": 17, "min_alignment_score_margin": 12, **override,
+    }
+    response = client.post("/api/ont/ngs/pooled-reference-assignment/submit", json=payload)
+    if override:
+        assert response.status_code == 422, response.text
+        assert reached == []
+    else:
+        assert response.status_code == 201, response.text
+        assert reached[0]["min_mapq"] == 17
+        assert reached[0]["min_alignment_score_margin"] == 12
+        assert [target["molbio_ngs_receipt_id"] for target in reached[0]["targets"]] == ["receipt-a", "receipt-b"]
+    assert captured == {}
+
+
+@pytest.mark.parametrize("workflow_id,params,expected", [
+    ("ont_basecall_dna", {"pod5_dir": "/data/pod5", "min_qscore": "12"}, "min_qscore"),
+    ("ont_basecall_dna", {"pod5_dir": "/data/pod5", "trim_adapters": 1}, "trim_adapters"),
+    ("ont_basecall_dna", {"pod5_dir": "/data/pod5", "dorado_batch_size": "32"}, "dorado_batch_size"),
+    ("ont_basecall_dna", {"pod5_dir": "/data/pod5", "emit_summary": None}, "emit_summary"),
+    ("ont_basecall_dna", {"pod5_dir": "/data/pod5", "dorado_quality_mode": ["hac"]}, "dorado_quality_mode"),
+    ("ont_basecall_dna", {"pod5_dir": "/data/pod5", "run_modkit": True}, "run_modkit"),
+    ("ont_methylation_analysis", {"bam_path": "/data/reads.bam", "run_modkit": True, "modkit_filter_threshold": "0.5"}, "modkit_filter_threshold"),
+    ("ont_methylation_analysis", {"bam_path": "/data/reads.bam", "run_modkit": True, "modkit_filter_threshold": True}, "modkit_filter_threshold"),
+    ("wf_clone_validation", {"fastq_path": "/data/reads.fastq", "run_assembly": False}, "run_assembly"),
+    ("ont_construct_screening", {"fastq_path": "/data/reads.fastq", "run_assembly": False, "wf_clone_sample": "inactive"}, "wf_clone_sample"),
+    ("ont_fastq_qc", {"fastq_path": "/data/reads.fastq", "min_qscore": 12}, "min_qscore"),
+])
+def test_cross_workflow_scalar_and_inactive_settings_fail_before_authority(monkeypatch, workflow_id, params, expected):
+    captured = {}
+    client = _client_with_fake_create(monkeypatch, captured)
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail("invalid operator settings must fail before receipt authority")
+
+    monkeypatch.setattr(ont_runs, "validate_molbio_ngs_receipt", forbidden)
+    monkeypatch.setattr(ont_runs, "consume_molbio_ngs_receipt", forbidden)
+    if workflow_id in ont_runs.ONT_REFERENCE_REQUIRED_WORKFLOWS:
+        params = {**params, "molbio_ngs_receipt_id": "unconsumed"}
+    response = client.post(f"/api/ont/ngs/{workflow_id}/submit", json={"params": params})
+    assert response.status_code == 422, response.text
+    assert expected in response.text
+    assert captured == {}
+
+
+def test_basecalling_keeps_optional_reference_and_registry_keeps_server_enrichment(monkeypatch):
+    captured = {}
+    client = _client_with_fake_create(monkeypatch, captured)
+    response = client.post("/api/ont/ngs/ont_basecall_dna/submit", json={"params": {
+        "pod5_dir": "/data/pod5", "reference_fasta": "/data/optional.fa", "run_fastq_qc": False,
+    }})
+    assert response.status_code == 201, response.text
+    effective = captured["job_data"].params
+    assert effective["reference_fasta"] == "/data/optional.fa"
+    assert ModelRegistry().validate_job_params("nanopore", "basecall_dna", {
+        **effective, "_global_resource_admission": {"server": True}, "server_future_enrichment": {},
+    }) == []
+
+
+@pytest.mark.parametrize("extra", [{}, {"params": {"bam_min_mapq": 30}}, {"_global_resource_admission": {}}])
+def test_external_bam_lane_remains_closed_and_server_owned(monkeypatch, tmp_path, extra):
+    import routers.ont_runs as canonical_ont_runs
+    import routers.ont_signal_workbench as signal_router
+
+    captured = {}
+    client = _client_with_fake_create(monkeypatch, captured)
+    assert isinstance(client.app, FastAPI)
+    client.app.include_router(signal_router.router, prefix="/api/ont/signal-workbench")
+    reference = tmp_path / "reference.fa"
+    reference.write_text(">ref\nACGT\n")
+    reached = []
+
+    async def authority(*args, **kwargs):
+        reached.append(kwargs)
+        return {
+            "bam_path": "/data/server.bam", "reference_fasta": str(reference), "dataset_id": "dataset-test",
+            "params": {"source_instrument_run_id": "run-test", "source_instrument_observed_generation": 1},
+        }
+
+    monkeypatch.setattr(signal_router, "_comparison_principal", lambda request: "test-operator")
+    monkeypatch.setattr(signal_router.service, "resolve_external_alignment_launch_authority", authority)
+    monkeypatch.setattr(canonical_ont_runs, "_confine_submitted_path", lambda value, _label, **kwargs: str(value))
+    monkeypatch.setattr(signal_router, "_create_pipeline_job", ont_runs._create_pipeline_job)
+    response = client.post("/api/ont/signal-workbench/external-alignment-jobs", json={
+        "move_source_id": "move-test", "reference_revision_id": "reference-test",
+        "global_domain_experiment_id": "experiment-test", "molbio_ngs_state_revision_id": "state-test",
+        "name": "external-test", **extra,
+    })
+    if extra:
+        assert response.status_code == 422, response.text
+        assert reached == []
+        assert captured == {}
+    else:
+        assert response.status_code == 201, response.text
+        effective = captured["job_data"].params
+        assert effective["bam_force_realign"] is True
+        assert effective["run_fastq_qc"] is False
+        assert effective["source_instrument_run_id"] == "run-test"
+        assert effective["reference_fasta"] == str(reference)
+
+
+@pytest.mark.parametrize("params,accepted", [
+    ({"basecalling_mode": "simplex"}, True),
+    ({"basecalling_mode": "duplex", "duplex_pairs": "/inputs/pairs.tsv"}, True),
+    ({"basecalling_mode": "duplex", "dorado_basecall_mode": "duplex", "duplex_pairs": "/inputs/pairs.tsv"}, True),
+    ({"basecalling_mode": "duplex", "dorado_basecall_mode": "simplex", "duplex_pairs": "/data/pairs.txt"}, False),
+])
+def test_existing_basecalling_alias_remains_typed_without_conflicting_choices(monkeypatch, params, accepted):
+    captured = {}
+    client = _client_with_fake_create(monkeypatch, captured)
+    response = client.post("/api/ont/ngs/ont_basecall_dna/submit", json={"params": {
+        "pod5_dir": "/data/pod5", **params,
+    }})
+    if accepted:
+        assert response.status_code == 201, response.text
+        assert captured["job_data"].params["dorado_basecall_mode"] == params["basecalling_mode"]
+    else:
+        assert response.status_code == 422, response.text
+        assert "basecalling_mode" in response.text
+        assert captured == {}
+
+
+def test_named_fastq_qc_rejects_missing_reference(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+    client = _client_with_fake_create(monkeypatch, captured)
+    response = client.post("/api/ont/ngs/ont_fastq_qc/submit", json={
+        "name": "qc-without-reference", "params": {"fastq_path": "/data/reads.fastq"},
+    })
+    assert response.status_code == 422
+    assert "requires a server-issued" in response.text
+    assert captured == {}
+
+
+def test_named_fastq_qc_catalog_describes_required_reference_and_qc() -> None:
+    import yaml
+    from services.ont_ngs_contract import get_ont_workflow_spec
+
+    model = yaml.safe_load((API_ROOT / "config/models/nanopore.yaml").read_text())
+    mode = next(mode for mode in model["modes"] if mode["id"] == "fastq_qc")
+    for description in (mode["description"], get_ont_workflow_spec("ont_fastq_qc").description):
+        assert "reference-required" in description
+        assert "always-on" in description.lower()
+
+
 def test_reference_required_alias_rejects_caller_path_before_job_creation(monkeypatch) -> None:
     captured: dict[str, Any] = {}
     client = _client_with_fake_create(monkeypatch, captured)

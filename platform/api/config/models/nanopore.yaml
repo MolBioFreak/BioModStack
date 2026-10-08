@@ -178,7 +178,7 @@ modes:
 
   - id: fastq_qc
     name: ONT FASTQ QC
-    description: FASTQ read QC plus reference-backed alignment/plasmid evidence when a reference is supplied.
+    description: Always-on FASTQ read QC with reference-required alignment and plasmid evidence.
     params:
       - fastq_path
       - reference_fasta
@@ -390,6 +390,11 @@ params:
     required: false
     default: true
 
+  - name: emit_moves
+    type: boolean
+    description: Emit Dorado move tags; availability and default follow the locked basecalling mode
+    required: false
+
   - name: emit_summary
     type: boolean
     description: Emit sequencing summary TSV from Dorado
@@ -486,6 +491,31 @@ params:
     description: Run EPI2ME wf-clone-validation assembly and construct QC
     required: false
     default: false
+
+  - name: wf_clone_primers
+    type: file
+    description: Optional primer FASTA for the active wf-clone assembly workflow
+    required: false
+
+  - name: wf_clone_insert_reference
+    type: file
+    description: Optional insert reference FASTA; requires wf_clone_primers
+    required: false
+
+  - name: wf_clone_host_reference
+    type: file
+    description: Optional host reference FASTA for the active wf-clone assembly workflow
+    required: false
+
+  - name: wf_clone_regions_bedfile
+    type: file
+    description: Optional host regions BED; requires wf_clone_host_reference
+    required: false
+
+  - name: wf_clone_basecaller_model
+    type: string
+    description: Profile-fixed exact basecaller identity validated by the shared wf-clone contract
+    required: false
 
   - name: wf_clone_sample
     type: string

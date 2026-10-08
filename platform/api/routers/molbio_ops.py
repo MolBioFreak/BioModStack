@@ -387,11 +387,13 @@ async def get_sequence_ngs_workup(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """Return only validated NGS evidence explicitly receipt-bound to this revision."""
-    sequence = await molbio_session.get(NucleotideSequence, sequence_id)
-    revision = await current_molecular_revision(molbio_session, sequence_id) if sequence else None
-    if sequence is None or revision is None:
-        raise HTTPException(status_code=404, detail="Saved molecular sequence or immutable revision not found")
-    candidates = (await session.execute(select(Job).where(Job.model_id == "nanopore"))).scalars().all()
+    # The mutable sequence is not authority for immutable receipt-bound history.
+    document = await molbio_session.get(MolecularDocument, sequence_id)
+    revision = await molbio_session.get(MolecularRevision, document.current_revision_id) if document is not None and document.current_revision_id else None
+    candidates = (await session.execute(
+        select(Job).join(MolBioNgsReceipt, MolBioNgsReceipt.consumed_job_id == Job.id)
+        .where(MolBioNgsReceipt.sequence_id == sequence_id)
+    )).scalars().unique().all()
     workups: list[dict[str, Any]] = []
     for job in candidates:
         params = job.params or {}
@@ -401,7 +403,7 @@ async def get_sequence_ngs_workup(
         receipt_id = binding.get("receipt_id")
         receipt = await session.get(MolBioNgsReceipt, receipt_id) if isinstance(receipt_id, str) else None
         if (
-            receipt is None or receipt.consumed_job_id != job.id
+            receipt is None or receipt.consumed_at is None or receipt.consumed_job_id != job.id
             or receipt.sequence_id != binding.get("sequence_id")
             or receipt.revision_id != binding.get("revision_id")
             or receipt.revision_sha256 != binding.get("revision_sha256")
@@ -466,8 +468,8 @@ async def get_sequence_ngs_workup(
     return {
         "schema": "bms.molbio.ngs-workup-list.v1",
         "sequence_id": sequence_id,
-        "current_revision_id": revision.id,
-        "current_revision_sha256": revision.content_sha256,
+        "current_revision_id": revision.id if revision is not None else None,
+        "current_revision_sha256": revision.content_sha256 if revision is not None else None,
         "workups": workups,
         "read_only": True,
     }

@@ -41,6 +41,7 @@ from services.molbio_ngs_member_receipts import (
     persist_member_receipt,
     resolve_approved_comparison_panel_receipt,
     resolve_molecular_revision_receipt,
+    is_ngs_job_identity,
     resolve_ngs_job_receipt,
     resolve_ngs_result_manifest_receipt,
     resolve_ont_instrument_run_receipt,
@@ -248,7 +249,7 @@ async def attach_job_evidence(
     if not global_domain_experiment_id.strip() or not job_id.strip() or not idempotency_key.strip():
         raise StateValidationError("domain, job, and idempotency identities are required")
     job = await core_session.get(Job, job_id)
-    if job is None or job.model_id != "nanopore":
+    if job is None or not is_ngs_job_identity(job):
         raise DomainStateNotFound("core NGS job was not found")
     params = job.params if isinstance(job.params, dict) else {}
     if params.get("global_domain_experiment_id") != global_domain_experiment_id:
@@ -610,7 +611,7 @@ async def create_evidence_assessment(
     )
 
     job = await core_session.get(Job, job_authority["entity_id"])
-    if job is None or job.model_id != "nanopore":
+    if job is None or not is_ngs_job_identity(job):
         raise DomainStateNotFound("receipt-bound core NGS job was not found")
     resolved_job = await resolve_ngs_job_receipt(core_session, job_id=job.id)
     _require_same_receipt_authority(job_authority, resolved_job, label="NGS job")
@@ -618,7 +619,8 @@ async def create_evidence_assessment(
     expected_manifest_entity = f"{job.id}:sequence-qc-manifest"
     if manifest_authority["entity_id"] != expected_manifest_entity:
         raise StateIntegrityError("result-manifest receipt is not owned by the receipt-bound job")
-    resolved_manifest = await resolve_ngs_result_manifest_receipt(core_session, job_id=job.id)
+    # Scientific QC assessment requires real QC authority, not a native basecall receipt.
+    resolved_manifest = await resolve_ngs_result_manifest_receipt(core_session, job_id=job.id, manifest_identity="sequence-qc-manifest")
     _require_same_receipt_authority(
         manifest_authority, resolved_manifest, label="NGS result manifest"
     )

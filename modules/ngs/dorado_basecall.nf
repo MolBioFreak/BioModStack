@@ -38,6 +38,8 @@ process DoradoPreflight {
     if (params.sample_sheet) optional += "--sample-sheet ${doradoShellQuote(params.sample_sheet)}"
     """
     set -euo pipefail
+    source "${params.code_root ?: projectDir}/scripts/ngs_producer_identity.sh"
+    bms_producer_begin "${params.code_root ?: projectDir}" modules/ngs/dorado_basecall.nf scripts/dorado_p4_preflight.py -- python=${python} apptainer || exit 1
     lock_source=${lockPath}
     [[ -f "\${lock_source}" && ! -L "\${lock_source}" ]] || { echo 'Dorado lock must be a regular non-symlink file' >&2; exit 1; }
     cp --reflink=auto "\${lock_source}" dorado_lock.json
@@ -60,6 +62,8 @@ process DoradoPreflight {
       --output dorado_preflight.json
     [[ "\$(sha256sum dorado_lock.json | cut -d' ' -f1)" == "\${lock_snapshot_sha256}" ]] || { echo 'Dorado lock snapshot changed during preflight' >&2; exit 1; }
     test -s dorado_preflight.json
+    bms_producer_finish > .bms-producer.receipt || exit 1
+    ${python} -c 'import json,pathlib; p=pathlib.Path("dorado_preflight.json"); d=json.loads(p.read_text()); d["producer_receipt"]=pathlib.Path(".bms-producer.receipt").read_text(); p.write_text(json.dumps(d,sort_keys=True)+"\\n")'
     """
 }
 
@@ -90,6 +94,8 @@ process DoradoBasecall {
     }
     """
     set -euo pipefail
+    source "${params.code_root ?: projectDir}/scripts/ngs_producer_identity.sh"
+    bms_producer_begin "${params.code_root ?: projectDir}" modules/ngs/dorado_basecall.nf scripts/dorado_supports_option.sh -- dorado samtools || exit 1
     test -s ${doradoShellQuote(preflight_json)}
     [[ "\$(jq -r '.schema' dorado_preflight.json)" == 'biomodstack.dorado_preflight.v1' ]]
     [[ "\$(jq -r '.runtime.assets.verified' dorado_preflight.json)" == 'true' ]]
@@ -221,7 +227,22 @@ process DoradoBasecall {
       bash ${doradoShellQuote(params.code_root + '/scripts/dorado_supports_option.sh')} dorado basecaller --no-trim || { echo 'locked Dorado runtime lacks --no-trim' >&2; exit 1; }
       command+=(--no-trim)
     fi
-    if [[ '${summaryRequested}' == 'true' && "\${mode}" == simplex ]] && bash ${doradoShellQuote("${params.code_root}/scripts/dorado_supports_option.sh")} dorado basecaller --emit-summary; then command+=(--emit-summary); fi
+    if [[ -e sequencing_summary.txt || -L sequencing_summary.txt || -e sequencing_summary.tsv || -L sequencing_summary.tsv ]]; then
+      echo 'stale sequencing summary in task directory' >&2; exit 1
+    fi
+    summary_requested='${summaryRequested}'
+    summary_executed=false
+    summary_capability=null
+    if [[ "\${summary_requested}" == true && "\${mode}" == simplex ]]; then
+      if bash ${doradoShellQuote("${params.code_root}/scripts/dorado_supports_option.sh")} dorado basecaller --emit-summary summary_capability.json; then
+        command+=(--emit-summary)
+        summary_executed=true
+      else
+        probe_rc=\$?
+        [[ "\${probe_rc}" == 1 ]] || { echo 'Dorado summary capability probe failed' >&2; exit 1; }
+      fi
+      summary_capability="\$(cat summary_capability.json)"
+    fi
     emit_moves='${movesRequested}'
     if [[ "\${emit_moves}" == true ]]; then
       [[ "\${mode}" == simplex ]] || { echo 'move-tag emission is not qualified for duplex' >&2; exit 1; }
@@ -232,7 +253,17 @@ process DoradoBasecall {
     : > basecall.log
     "\${command[@]}" > calls.bam 2>> basecall.log
     samtools quickcheck -u -v calls.bam
-    if [[ -f sequencing_summary.txt ]]; then mv sequencing_summary.txt sequencing_summary.tsv; fi
+    summary_output=null
+    if [[ "\${summary_executed}" == true ]]; then
+      [[ -s sequencing_summary.txt && ! -L sequencing_summary.txt ]] || { echo 'requested Dorado summary is missing' >&2; exit 1; }
+      mv sequencing_summary.txt sequencing_summary.tsv
+      summary_sha="\$(sha256sum sequencing_summary.tsv | cut -d' ' -f1)"
+      summary_bytes="\$(stat -c %s sequencing_summary.tsv)"
+      summary_output="\$(jq -n --arg sha256 "\${summary_sha}" --argjson size_bytes "\${summary_bytes}" '{path:"basecall/sequencing_summary.tsv",sha256:\$sha256,size_bytes:\$size_bytes}')"
+    elif [[ -e sequencing_summary.txt || -L sequencing_summary.txt || -e sequencing_summary.tsv || -L sequencing_summary.tsv ]]; then
+      echo 'unrequested Dorado summary output' >&2; exit 1
+    fi
+    summary_evidence="\$(jq -n --argjson requested "\${summary_requested}" --argjson executed "\${summary_executed}" --argjson capability "\${summary_capability}" --argjson output "\${summary_output}" '{requested:\$requested,executed:\$executed,capability:\$capability,output:\$output}')"
     calls_sha="\$(sha256sum calls.bam | cut -d' ' -f1)"
     preflight_sha="\$(sha256sum dorado_preflight.json | cut -d' ' -f1)"
     read_count="\$(samtools view -c calls.bam)"
@@ -246,9 +277,18 @@ process DoradoBasecall {
     duplex_dx1=0
     if [[ "\${mode}" == duplex ]]; then
       duplex_dx1="\$(samtools view calls.bam | awk 'BEGIN{n=0} {for(i=12;i<=NF;i++) if(\$i=="dx:i:1") {n++; break}} END{print n}')"
-      (( read_count > 0 && duplex_dx1 == read_count )) || { echo "Dorado duplex output lacks authoritative dx:i:1 calls" >&2; exit 1; }
+      # Pinned duplex forwards simplex (0), duplex parents (-1), and duplex (1).
+      # A successful native output need not contain any surviving duplex reads.
+      duplex_dx0="\$(samtools view calls.bam | awk 'BEGIN{n=0} {for(i=12;i<=NF;i++) if(\$i=="dx:i:0") {n++; break}} END{print n}')"
+      duplex_parent="\$(samtools view calls.bam | awk 'BEGIN{n=0} {for(i=12;i<=NF;i++) if(\$i=="dx:i:-1") {n++; break}} END{print n}')"
+      (( read_count > 0 && duplex_dx0 + duplex_parent + duplex_dx1 == read_count )) || { echo 'Dorado duplex output lacks native dx classifications' >&2; exit 1; }
     fi
-    jq -n --arg schema 'biomodstack.dorado_runtime_provenance.v1' --arg mode "\${mode}" --arg model_id "\${model_id}" --arg calls_sha256 "\${calls_sha}" --arg preflight_sha256 "\${preflight_sha}" --arg runtime_sha256 "\${runtime_observed}" --arg read_inventory_sha256 "\${read_inventory_sha256}" --argjson emit_moves "\${emit_moves}" --argjson read_count "\${read_count}" --argjson mv_tag_count "\${mv_tag_count}" --argjson ts_tag_count "\${ts_tag_count}" --argjson ns_tag_count "\${ns_tag_count}" --argjson duplex_dx1 "\${duplex_dx1}" '{schema:\$schema,mode:\$mode,model_id:\$model_id,preflight_sha256:\$preflight_sha256,runtime_sha256:\$runtime_sha256,emit_moves:\$emit_moves,calls_bam:{sha256:\$calls_sha256,read_count:\$read_count,read_inventory_sha256:\$read_inventory_sha256,move_tags:{mv:\$mv_tag_count,ts:\$ts_tag_count,ns:\$ns_tag_count},duplex_dx1:\$duplex_dx1},network:"denied_by_namespace",model_download:"denied_by_namespace_and_sealed_models"}' > dorado_runtime_provenance.json
+    duplex_read_counts=null
+    if [[ "\${mode}" == duplex ]]; then
+      duplex_read_counts="\$(jq -n --argjson simplex "\${duplex_dx0}" --argjson duplex_parent "\${duplex_parent}" --argjson duplex "\${duplex_dx1}" '{simplex:\$simplex,duplex_parent:\$duplex_parent,duplex:\$duplex}')"
+    fi
+    jq -n --arg modified_bases_model_id "\${mod_model_id}" --argjson duplex_read_counts "\${duplex_read_counts}" --arg schema 'biomodstack.dorado_runtime_provenance.v1' --arg mode "\${mode}" --arg model_id "\${model_id}" --arg calls_sha256 "\${calls_sha}" --arg preflight_sha256 "\${preflight_sha}" --arg runtime_sha256 "\${runtime_observed}" --arg read_inventory_sha256 "\${read_inventory_sha256}" --argjson emit_moves "\${emit_moves}" --argjson read_count "\${read_count}" --argjson mv_tag_count "\${mv_tag_count}" --argjson ts_tag_count "\${ts_tag_count}" --argjson ns_tag_count "\${ns_tag_count}" --argjson duplex_dx1 "\${duplex_dx1}" --argjson summary "\${summary_evidence}" '{summary:\$summary,schema:\$schema,mode:\$mode,model_id:\$model_id,preflight_sha256:\$preflight_sha256,runtime_sha256:\$runtime_sha256,emit_moves:\$emit_moves,calls_bam:({sha256:\$calls_sha256,read_count:\$read_count,read_inventory_sha256:\$read_inventory_sha256,move_tags:{mv:\$mv_tag_count,ts:\$ts_tag_count,ns:\$ns_tag_count},duplex_dx1:\$duplex_dx1} + (if \$mode == "duplex" then {duplex_read_counts:\$duplex_read_counts} else {} end)),network:"denied_by_namespace",model_download:"denied_by_namespace_and_sealed_models"} + (if \$modified_bases_model_id != "" then {modified_bases_model_id:\$modified_bases_model_id} else {} end)' > dorado_runtime_provenance.json
+    bms_producer_finish >> basecall.log || exit 1
     """
 }
 
@@ -270,6 +310,8 @@ process DoradoDemux {
     script:
     """
     set -euo pipefail
+    source "${params.code_root ?: projectDir}/scripts/ngs_producer_identity.sh"
+    bms_producer_begin "${params.code_root ?: projectDir}" modules/ngs/dorado_basecall.nf -- dorado samtools || exit 1
     [[ "\$(jq -r '.schema' ${doradoShellQuote(preflight_json)})" == 'biomodstack.dorado_preflight.v1' ]]
     [[ "\$(jq -r '.selection.mode' ${doradoShellQuote(preflight_json)})" == 'simplex' ]]
     [[ -n "\$(jq -r '.barcoding.kit // empty' ${doradoShellQuote(preflight_json)})" ]]
@@ -289,9 +331,19 @@ process DoradoDemux {
       [[ "\${value}" == 'unclassified' || "\${value}" =~ ^barcode(0[1-9]|[1-8][0-9]|9[0-6])\$ ]]
     }
     canonical_label() {
-      local candidate="\$1" filename stem mapped
+      local candidate="\$1" filename stem mapped parent status_dir
       filename="\${candidate##*/}"
       stem="\${filename%.bam}"
+      parent="\${candidate%/*}"
+      status_dir="\${parent%/*}"
+      status_dir="\${status_dir##*/}"
+      parent="\${parent##*/}"
+      # Dorado 1.3.1 Structure.cpp emits bam_pass/alias/descriptive-name.bam.
+      if [[ "\${status_dir}" == 'bam_pass' || "\${status_dir}" == 'bam_fail' ]]; then
+        if is_canonical_label "\${parent}"; then printf '%s\n' "\${parent}"; return 0; fi
+        mapped="\${alias_to_barcode[\${parent}]:-}"
+        if is_canonical_label "\${mapped}"; then printf '%s\n' "\${mapped}"; return 0; fi
+      fi
       for segment in "\${filename}" "\${stem}"; do
         if is_canonical_label "\${segment}"; then printf '%s\n' "\${segment}"; return 0; fi
         if is_canonical_label "\${stem}"; then printf '%s\n' "\${stem}"; return 0; fi
@@ -342,5 +394,8 @@ process DoradoDemux {
     (( total == source_read_count )) || { echo "demux read-count parity failed: source=\${source_read_count} units=\${total}" >&2; exit 1; }
     jq -n --arg schema 'biomodstack.dorado_demux.v1' --arg source 'dorado_basecaller_inline' --arg preflight_sha256 "\${preflight_sha}" --arg source_calls_sha256 "\${source_calls_sha}" --argjson source_read_count "\${source_read_count}" --argjson total_reads "\${total}" --argjson units "\${units}" '{schema:\$schema,barcode_classification_source:\$source,preflight_sha256:\$preflight_sha256,source_calls:{sha256:\$source_calls_sha256,read_count:\$source_read_count},total_reads:\$total_reads,units:\$units}' > demux_manifest.json
     jq -n --arg schema 'biomodstack.dorado_barcode_units.v1' --argjson units "\${units}" '{schema:\$schema,units:\$units}' > per_barcode_units.json
+    bms_producer_finish > .bms-producer.receipt || exit 1
+    jq --rawfile receipt .bms-producer.receipt '. + {producer_receipt: \$receipt}' demux_manifest.json > .demux-manifest.json
+    mv .demux-manifest.json demux_manifest.json
     """
 }

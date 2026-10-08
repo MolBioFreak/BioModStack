@@ -138,6 +138,26 @@ workflow ONT_PLASMID_QC {
                     Pod5DimerCanonicalOutputs.out.breakpoint_call,
                     Pod5DimerCanonicalOutputs.out.secondary_summary,
                 )
+                Pod5DimerCanonicalOutputs.out.breakpoint_call.subscribe { _ignored ->
+                    reportStage(params, "dimer_qc", [
+                        "${params.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
+                        "${params.out_dir}/multimer_qc/dimer_evidence_by_position.tsv",
+                        "${params.out_dir}/multimer_qc/dimer_read_events.tsv",
+                        "${params.out_dir}/multimer_qc/dimer_breakpoint_sequences.tsv",
+                        "${params.out_dir}/multimer_qc/dimer_secondary_anomalies.tsv",
+                        "${params.out_dir}/multimer_qc/dimer_secondary_summary.tsv",
+                    ])
+                }
+                Pod5ConstructVerify.out.manifest.subscribe { _ignored ->
+                    reportStage(params, "construct_verification", [
+                        "${params.out_dir}/verification/qc_manifest.json",
+                        "${params.out_dir}/verification/verification_summary.tsv",
+                        "${params.out_dir}/verification/variants.vcf",
+                        "${params.out_dir}/verification/per_base_metrics.tsv",
+                        "${params.out_dir}/verification/evidence.html",
+                        "${params.out_dir}/verification/topology_evidence.json",
+                    ])
+                }
                 Pod5PlasmidQC.out.summary.subscribe { _ignored ->
                     reportStage(params, "fastq_qc", [
                         "${params.out_dir}/fastq_qc/reads_for_qc.fastq",
@@ -181,6 +201,17 @@ workflow ONT_PLASMID_QC {
         def analysis_bam = null
         if (has_reference && forceBamRealign) {
             DoradoAlign(Channel.of(bam_input), Channel.of(reference_file))
+            if (!(params.run_fastq_qc == false && params.source_external_move_registration_receipt_id)) {
+                DoradoAlign.out.aligned.subscribe { bam, bai ->
+                    reportStage(params, "dorado_align", [
+                        "${params.out_dir}/align/aligned.bam",
+                        "${params.out_dir}/align/aligned.bam.bai",
+                        "${params.out_dir}/align/reference.fasta",
+                        "${params.out_dir}/align/reference.fasta.fai",
+                        "${params.out_dir}/align/align.log",
+                    ])
+                }
+            }
             analysis_bam = DoradoAlign.out.aligned
         } else {
             PrepareBamForAnalysis(Channel.of(bam_input))
@@ -196,7 +227,7 @@ workflow ONT_PLASMID_QC {
             analysis_bam = PrepareBamForAnalysis.out.aligned
         }
 
-        if (has_reference) {
+        if (has_reference && !forceBamRealign) {
             PrepareReferenceForIGV(Channel.of(reference_file))
             PrepareReferenceForIGV.out.log.subscribe { _ignored -> }
         }
@@ -222,6 +253,26 @@ workflow ONT_PLASMID_QC {
                 BamDimerCanonicalOutputs.out.breakpoint_call,
                 BamDimerCanonicalOutputs.out.secondary_summary,
             )
+            BamDimerCanonicalOutputs.out.breakpoint_call.subscribe { _ignored ->
+                reportStage(params, "dimer_qc", [
+                    "${params.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
+                    "${params.out_dir}/multimer_qc/dimer_evidence_by_position.tsv",
+                    "${params.out_dir}/multimer_qc/dimer_read_events.tsv",
+                    "${params.out_dir}/multimer_qc/dimer_breakpoint_sequences.tsv",
+                    "${params.out_dir}/multimer_qc/dimer_secondary_anomalies.tsv",
+                    "${params.out_dir}/multimer_qc/dimer_secondary_summary.tsv",
+                ])
+            }
+            BamConstructVerify.out.manifest.subscribe { _ignored ->
+                reportStage(params, "construct_verification", [
+                    "${params.out_dir}/verification/qc_manifest.json",
+                    "${params.out_dir}/verification/verification_summary.tsv",
+                    "${params.out_dir}/verification/variants.vcf",
+                    "${params.out_dir}/verification/per_base_metrics.tsv",
+                    "${params.out_dir}/verification/evidence.html",
+                    "${params.out_dir}/verification/topology_evidence.json",
+                ])
+            }
             BamPlasmidQC.out.summary.subscribe { _ignored ->
                 reportStage(params, "fastq_qc", [
                     "${params.out_dir}/fastq_qc/reads_for_qc.fastq",
@@ -283,6 +334,26 @@ workflow ONT_PLASMID_QC {
                 InputFastqDimerCanonicalOutputs.out.breakpoint_call,
                 InputFastqDimerCanonicalOutputs.out.secondary_summary,
             )
+            InputFastqDimerCanonicalOutputs.out.breakpoint_call.subscribe { _ignored ->
+                reportStage(params, "dimer_qc", [
+                    "${params.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
+                    "${params.out_dir}/multimer_qc/dimer_evidence_by_position.tsv",
+                    "${params.out_dir}/multimer_qc/dimer_read_events.tsv",
+                    "${params.out_dir}/multimer_qc/dimer_breakpoint_sequences.tsv",
+                    "${params.out_dir}/multimer_qc/dimer_secondary_anomalies.tsv",
+                    "${params.out_dir}/multimer_qc/dimer_secondary_summary.tsv",
+                ])
+            }
+            InputFastqConstructVerify.out.manifest.subscribe { _ignored ->
+                reportStage(params, "construct_verification", [
+                    "${params.out_dir}/verification/qc_manifest.json",
+                    "${params.out_dir}/verification/verification_summary.tsv",
+                    "${params.out_dir}/verification/variants.vcf",
+                    "${params.out_dir}/verification/per_base_metrics.tsv",
+                    "${params.out_dir}/verification/evidence.html",
+                    "${params.out_dir}/verification/topology_evidence.json",
+                ])
+            }
             InputFastqPlasmidQC.out.summary.subscribe { _ignored ->
                 reportStage(params, "fastq_qc", [
                     "${params.out_dir}/fastq_qc/read_lengths.tsv",

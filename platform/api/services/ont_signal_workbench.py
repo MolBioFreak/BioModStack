@@ -2612,7 +2612,18 @@ async def _resolve_primary_alignment_session_async(
     alignment_session_id: str,
     authority: Mapping[str, str],
     job_output_dir: str | None,
+    *, job: Job | None = None,
 ) -> dict[str, Any]:
+    from services import ngs_native_alignment_sources as native
+    if job is not None and native.is_native(job):
+        def resolve_native():
+            with native.result_root(job) as root:
+                matches = [item for item in native.alignment_sessions(job, root)
+                           if item["session_id"] == alignment_session_id]
+            if len(matches) != 1:
+                raise OntSignalError("saved native alignment authority is unavailable")
+            return _require_primary_alignment_session(matches[0])
+        return await asyncio.to_thread(resolve_native)
     alignment = await asyncio.to_thread(
         ngs_alignment_sessions.resolve_alignment_session,
         alignment_job_id,
@@ -2742,6 +2753,7 @@ async def create_mapping_job(
             str(alignment_session_id),
             authority,
             getattr(alignment_job, "child_output_dir", None) or alignment_job.output_dir,
+            job=alignment_job,
         )
         parent = (
             await session.execute(
@@ -3420,13 +3432,67 @@ async def workbench_capabilities(
     }
 
 
+def _native_viewer_source(job, session_id):
+    from services import ngs_native_alignment_sources as native
+    from services import ngs_alignment_sessions as storage
+    if job is None or job.status != "completed" or job.queue_status != "completed" or job.awaiting_input:
+        raise OntSignalError("completed native alignment authority is unavailable")
+    try:
+        with native.result_root(job) as root:
+            matches = [(source, inputs) for source, inputs in native.sources(job, root) if source["session_id"] == session_id]
+            if len(matches) != 1:
+                raise OntSignalError("exact native alignment source is unavailable")
+            source, inputs = matches[0]
+            for path_key, sha_key, size_key in (
+                ("alignment_path", "alignment_sha256", "alignment_size_bytes"),
+                ("index_path", "alignment_index_sha256", "alignment_index_size_bytes"),
+            ):
+                with storage.open_verified_artifact_snapshot(inputs[path_key], expected_sha256=source[sha_key], expected_size=source[size_key]):
+                    pass
+            return source
+    except (storage.AlignmentSessionError, ValueError, KeyError, TypeError, OSError) as exc:
+        raise OntSignalError("native viewer source authority could not be verified") from exc
+
+
+async def _validate_native_viewer(session, row, *, contig, locus_start, locus_end, selected_read_id, signal_state):
+    from database import NgsAlignmentDerivedProduct
+    from services.ngs_alignment_derived_products import catalog_request_id
+    from services import ngs_alignment_catalog_reader as catalog_reader
+    from services.job_result_roots import resolve_persisted_job_result_root
+    if any(value is not None for value in (row.dataset_id, row.run_id, row.observed_generation,
+            row.raw_representation_id, row.move_source_id, row.mapping_profile_id)):
+        raise OntSignalError("native alignment view cannot claim managed signal authority")
+    if signal_state:
+        raise OntSignalError("alignment-only saved views cannot persist signal operations")
+    job = await session.get(Job, row.alignment_job_id)
+    source = await asyncio.to_thread(_native_viewer_source, job, row.alignment_session_id)
+    params = job.params if isinstance(job.params, dict) else {}
+    if source != row.alignment_source_identity or row.reference_revision_id != params.get("ngs_reference_revision_id"):
+        raise OntSignalError("saved native source or reference authority changed")
+    reference = source["reference"]
+    if contig is not None and (contig != reference["contig"] or locus_start is None or locus_start < 1
+            or locus_end is None or locus_end < locus_start or locus_end > reference["length_bp"]):
+        raise OntSignalError("saved native locus is outside its immutable reference")
+    if selected_read_id is not None:
+        catalog = await session.get(NgsAlignmentDerivedProduct, catalog_request_id(source))
+        if catalog is None or catalog.state != "ready" or catalog.source_identity != source:
+            raise OntSignalError("complete catalog is unavailable for the saved exact selection")
+        try:
+            await asyncio.to_thread(catalog_reader.exact_read, job, catalog,
+                Path(resolve_persisted_job_result_root(job)) / ".alignment-products",
+                read_id=selected_read_id, include_sequence=False, population_id=None)
+        except (catalog_reader.CatalogReadError, catalog_reader.storage.AlignmentSessionError, ValueError, OSError, KeyError) as exc:
+            raise OntSignalError("saved exact read is unavailable in its native catalog") from exc
+
+
 async def create_viewer_session(
     session: AsyncSession,
-    *, dataset_id: str, run_id: str, observed_generation: int,
+    *, dataset_id: str | None, run_id: str | None, observed_generation: int | None,
     alignment_job_id: str | None, alignment_session_id: str | None,
     reference_revision_id: str | None, contig: str | None,
     locus_start: int | None, locus_end: int | None, selected_read_id: str | None,
     igv_state: Mapping[str, Any], signal_state: Mapping[str, Any],
+    authority_kind: str = "managed_signal", alignment_source_authority_sha256: str | None = None,
 ) -> dict[str, Any]:
     _validate_viewer_selection_authority(
         contig=contig,
@@ -3434,6 +3500,28 @@ async def create_viewer_session(
         locus_end=locus_end,
         selected_read_id=selected_read_id,
     )
+    if authority_kind == "native_alignment":
+        from services.ngs_alignment_derived_products import identity_sha256
+        if any(value is not None for value in (dataset_id, run_id, observed_generation)) or not alignment_job_id or not alignment_session_id:
+            raise OntSignalError("native view requires exact alignment identity without managed run authority")
+        job = await session.get(Job, alignment_job_id)
+        source = await asyncio.to_thread(_native_viewer_source, job, alignment_session_id)
+        if alignment_source_authority_sha256 != identity_sha256(source):
+            raise OntSignalError("native source assertion changed")
+        viewer = OntSignalViewerSession(id=_id("ont-viewer"), dataset_id=None, run_id=None, observed_generation=None,
+            alignment_job_id=alignment_job_id, alignment_session_id=alignment_session_id,
+            reference_revision_id=reference_revision_id, alignment_source_identity=source,
+            raw_representation_id=None, move_source_id=None, mapping_profile_id=None,
+            contig=contig, locus_start=locus_start, locus_end=locus_end, selected_read_id=selected_read_id,
+            igv_state=dict(igv_state), signal_state=dict(signal_state), revision=1, created_at=_now(), updated_at=_now())
+        await _validate_viewer_state_authority(session, viewer, contig=contig, locus_start=locus_start,
+            locus_end=locus_end, selected_read_id=selected_read_id, igv_state=igv_state, signal_state=signal_state)
+        session.add(viewer)
+        await session.flush()
+        return _viewer_public(viewer)
+    if (authority_kind != "managed_signal" or alignment_source_authority_sha256 is not None
+            or not dataset_id or not run_id or type(observed_generation) is not int or observed_generation < 1):
+        raise OntSignalError("managed viewer dataset and run generation authority is incomplete")
     if not alignment_job_id:
         raise OntSignalError(
             "dataset and run viewer authority requires a completed job authority"
@@ -3469,6 +3557,7 @@ async def create_viewer_session(
             str(alignment_session_id),
             _alignment_authority(alignment_job),
             alignment_job.child_output_dir or alignment_job.output_dir,
+            job=alignment_job,
         )
         if alignment.get("ready") is not True:
             raise OntSignalError("alignment session authority is not ready")
@@ -3539,7 +3628,12 @@ async def create_viewer_session(
 
 
 def _viewer_public(row: OntSignalViewerSession) -> dict[str, Any]:
+    from services.ngs_alignment_derived_products import identity_sha256
+    native = row.alignment_source_identity
     return {
+        "authority_kind": "native_alignment" if native is not None else "managed_signal",
+        "alignment_source_authority_sha256": identity_sha256(native) if native is not None else None,
+        "alignment_reference": native["reference"] if native is not None else None,
         "viewer_session_id": row.id, "dataset_id": row.dataset_id, "run_id": row.run_id,
         "observed_generation": row.observed_generation, "alignment_job_id": row.alignment_job_id,
         "alignment_session_id": row.alignment_session_id, "reference_revision_id": row.reference_revision_id,
@@ -3557,6 +3651,27 @@ async def get_viewer_session(session: AsyncSession, viewer_session_id: str) -> d
     row = await session.get(OntSignalViewerSession, viewer_session_id)
     if row is None:
         raise KeyError("viewer session not found")
+    if row.alignment_source_identity is not None:
+        await _validate_viewer_state_authority(session, row, contig=row.contig, locus_start=row.locus_start,
+            locus_end=row.locus_end, selected_read_id=row.selected_read_id, igv_state=row.igv_state, signal_state=row.signal_state)
+        return _viewer_public(row)
+    if row.alignment_session_id is not None:
+        job = await session.get(Job, row.alignment_job_id)
+        if job is None or job.status != "completed":
+            raise OntSignalError("saved alignment job is unavailable")
+        params = job.params if isinstance(job.params, dict) else {}
+        if (params.get("dataset_id") != row.dataset_id
+                or params.get("source_instrument_run_id") != row.run_id
+                or params.get("source_instrument_observed_generation") != row.observed_generation
+                or params.get("ngs_reference_revision_id") != row.reference_revision_id):
+            raise OntSignalError("saved viewer immutable source binding changed")
+        alignment = await _resolve_primary_alignment_session_async(job.id, row.alignment_session_id,
+            _alignment_authority(job), job.child_output_dir or job.output_dir, job=job)
+        reference = alignment["reference"]
+        if row.contig is not None and (row.contig != reference["contig"]
+                or row.locus_start is None or row.locus_start < 1 or row.locus_end is None
+                or row.locus_end < row.locus_start or row.locus_end > reference["length_bp"]):
+            raise OntSignalError("saved viewer locus is outside its immutable reference")
     return _viewer_public(row)
 
 
@@ -3580,8 +3695,12 @@ def _validate_viewer_selection_authority(
         or locus_end < locus_start
     ):
         raise OntSignalError("viewer locus authority is invalid")
-    if selected_read_id is not None and not OPAQUE_ID.fullmatch(selected_read_id):
-        raise OntSignalError("viewer selected read authority is invalid")
+    if selected_read_id is not None:
+        from services.ngs_alignment_presentation_v5 import _validate_read_id
+        try:
+            _validate_read_id(selected_read_id)
+        except (ValueError, UnicodeError) as exc:
+            raise OntSignalError("viewer selected read authority is invalid") from exc
 
 
 def _require_comparison_settings_authority(
@@ -3628,6 +3747,11 @@ async def _validate_viewer_state_authority(
             raise OntSignalError("IGV state diverges from viewer alignment authority")
     if "selected_read_id" in signal_state and signal_state["selected_read_id"] != selected_read_id:
         raise OntSignalError("signal state selected read diverges from viewer authority")
+
+    if row.alignment_source_identity is not None:
+        await _validate_native_viewer(session, row, contig=contig, locus_start=locus_start, locus_end=locus_end,
+            selected_read_id=selected_read_id, signal_state=signal_state)
+        return
 
     async def require_mapping(mapping_id: Any, *, reference: bool) -> OntSignalMappingJob | None:
         if mapping_id is None:

@@ -24,7 +24,7 @@ process ONTPooledReferenceAssignment {
     path "combined_intended_reference.fasta.fai"
     path "pooled_assignment.bam"
     path "pooled_assignment.bam.bai"
-    path "pooled_assignment.minimap2.log"
+    path "pooled_reference_assignment.minimap2.log"
     path "target_*.read_ids.txt"
     path "target_*.fastq"
     path "ambiguous.read_ids.txt"
@@ -43,6 +43,8 @@ process ONTPooledReferenceAssignment {
     }
     """
     set -euo pipefail
+    source "${params.code_root ?: projectDir}/scripts/ngs_producer_identity.sh"
+    bms_producer_begin "${params.code_root ?: projectDir}" workflows/ngs/ont_pooled_reference_assignment.nf scripts/pooled_ont_reference_assignment.py -- python3 minimap2 samtools || exit 1
 
     command -v python3 >/dev/null 2>&1 || { echo "python3 is required; no fallback is available" >&2; exit 127; }
     command -v minimap2 >/dev/null 2>&1 || { echo "minimap2 is required; no fallback is available" >&2; exit 127; }
@@ -67,6 +69,8 @@ process ONTPooledReferenceAssignment {
     samtools index -@ ${task.cpus} pooled_assignment.bam
     test -s pooled_assignment.bam.bai
 
+    bms_producer_finish >> pooled_reference_assignment.minimap2.log || exit 1
+
     python3 "${assignmentScript}" classify \\
         --manifest "${snapshot_root}/${manifest_name}" \\
         --snapshot-root "${snapshot_root}" \\
@@ -79,6 +83,7 @@ process ONTPooledReferenceAssignment {
         --out-dir . \\
         --min-mapq ${minMapq} \\
         --min-alignment-score-margin ${scoreMargin}
+    bms_producer_finish >/dev/null || exit 1
     """
 }
 

@@ -3,16 +3,17 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import stat
 from pathlib import Path
 from typing import Any, Mapping
 
 import rfc8785
 from starlette.concurrency import run_in_threadpool
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Job
 from services import ngs_alignment_sessions
+from services import ngs_alignment_derived_products as derived_products
 from services.job_result_roots import resolve_persisted_job_result_root
 from services.resource_usage_evidence import (
     ResourceUsageEvidenceError,
@@ -70,6 +71,141 @@ class OntNgsCompletionError(RuntimeError):
     """Raised when an ONT NGS result package cannot pass its terminal barrier."""
 
 
+def ont_completion_lane(job: Job) -> str | None:
+    """Select only implemented native barriers; never reinterpret conflicting IDs.
+
+    None preserves the existing finalizer for lanes not yet migrated to native
+    completion. It is deliberately not a claim of full P1 coverage.
+    """
+    if str(job.model_id or "").strip().lower() != "nanopore":
+        return None
+    params = job.params if isinstance(job.params, dict) else {}
+    identities = {
+        str(params[key]).strip()
+        for key in ("ont_workflow_id", "ont_request_workflow_id", "workflow_id")
+        if params.get(key) is not None and str(params[key]).strip()
+    }
+    inputs = {
+        str(params[key]).strip()
+        for key in ("ont_input_mode", "input_mode")
+        if params.get(key) is not None and str(params[key]).strip()
+    }
+    if len(identities) > 1 or len(inputs) > 1:
+        raise OntNgsCompletionError("canonical ONT workflow/input identities conflict")
+    if (identities == {"ont_methylation_analysis"} and inputs == {"bam"}
+            and params.get("bam_path") and not params.get("pod5_dir")
+            and type(params.get("run_modkit", True)) is bool):
+        return "native_methylation"
+    if (identities == {"ont_methylation_analysis"} and inputs == {"pod5"}
+            and params.get("dorado_basecall_mode") == "duplex" and params.get("modified_bases") == "none"
+            and params.get("run_modkit") is False and params.get("reference_fasta")
+            and not params.get("barcode_kit") and not params.get("sample_sheet")):
+        return "native_methylation"
+    if (identities == {"ont_methylation_analysis"} and inputs == {"pod5"}
+            and params.get("dorado_basecall_mode") == "simplex"
+            and (params.get("modified_bases") == "none" and params.get("run_modkit") is False
+                 or params.get("dorado_quality_mode") == "hac"
+                 and params.get("modified_bases") in {"5mC_5hmC", "6mA"})
+            and not params.get("barcode_kit") and not params.get("sample_sheet")
+            and params.get("reference_fasta") and type(params.get("run_modkit", True)) is bool):
+        return "native_methylation"
+    if is_ont_fastq_qc_job(job) and not params.get("comparison_panel_snapshot"):
+        return "fastq_qc"
+    if is_ont_signal_alignment_job(job):
+        return "external_signal_alignment"
+    # Native plasmid/construct/clone branches share the source-owned Dorado
+    # simplex/duplex/modified validators; inline barcoding is upstream-only.
+    if (
+        identities in ({"ont_plasmid_qc"}, {"ont_construct_screening"}, {"wf_clone_validation"}, {"ont_fastq_qc"})
+        and inputs in ({"pod5"}, {"bam"}, {"fastq"})
+        and params.get("reference_fasta")
+        and type(params.get("run_assembly", False)) is bool
+        and type(params.get("run_fastq_qc", True)) is bool
+        and (identities != {"ont_fastq_qc"} or inputs == {"fastq"})
+        and (inputs == {"fastq"}
+             or inputs == {"bam"} and type(params.get("bam_force_realign", False)) is bool
+             or inputs == {"pod5"}
+             and (params.get("dorado_basecall_mode") in {"simplex", "duplex"}
+                  and params.get("modified_bases") == "none"
+                  or params.get("dorado_basecall_mode") == "simplex"
+                  and params.get("dorado_quality_mode") == "hac"
+                  and params.get("modified_bases") in {"5mC_5hmC", "6mA"})
+             and not params.get("barcode_kit") and not params.get("sample_sheet"))
+    ):
+        return "native_plasmid"
+    # Source-owned alignment-only POD5 branches. Construct screening runs QC
+    # only for FASTQ, even when run_fastq_qc is true. Other modes and optional
+    # assembly/QC packages retain their separate, not-yet-migrated finalizer.
+    if (
+        inputs == {"pod5"} and params.get("pod5_dir")
+        and not params.get("bam_path") and not params.get("fastq_path")
+        and params.get("reference_fasta")
+        and params.get("dorado_basecall_mode") == "simplex"
+        and params.get("modified_bases") == "none"
+        and not params.get("barcode_kit") and not params.get("sample_sheet")
+        and (identities == {"ont_plasmid_qc"} and params.get("run_fastq_qc") is False
+             or identities == {"ont_construct_screening"}
+             and params.get("run_assembly", False) is False
+             and type(params.get("run_fastq_qc", True)) is bool)
+    ):
+        return "native_pod5_alignment_only"
+    if (
+        identities in ({"ont_basecall_dna"}, {"ont_basecall_rna"})
+        and inputs == {"pod5"}
+        and (not params.get("barcode_kit") or identities == {"ont_basecall_dna"})
+        and (params.get("dorado_basecall_mode") == "simplex"
+             or (identities == {"ont_basecall_dna"} and params.get("dorado_basecall_mode") == "duplex"
+                 and not params.get("barcode_kit") and not params.get("sample_sheet")))
+        and (params.get("modified_bases") == "none"
+             or (identities == {"ont_basecall_dna"} and params.get("dorado_basecall_mode") == "simplex"
+                 and params.get("dorado_quality_mode") == "hac"
+                 and params.get("modified_bases") in {"5mC_5hmC", "6mA"}
+                 and not params.get("barcode_kit") and not params.get("sample_sheet")))
+    ):
+        return "native_basecall"
+    return None
+
+
+async def validate_and_prepare_ont_native_basecall_completion(job: Job, *, session: AsyncSession | None = None) -> dict[str, Any]:
+    """Prepare native scientific authority; the caller owns guarded publication."""
+    from services.ont_ngs_native_completion import validate_native_basecall
+
+    lane = ont_completion_lane(job)
+    if lane not in {"native_basecall", "native_methylation", "native_pod5_alignment_only", "native_plasmid"}:
+        raise OntNgsCompletionError("job is outside the bounded native completion lanes")
+    if lane == "native_plasmid":
+        from services.ont_ngs_native_plasmid import validate_native_plasmid
+        result = await run_in_threadpool(validate_native_plasmid, job)
+    elif lane == "native_pod5_alignment_only":
+        from services.ont_ngs_native_completion import validate_native_pod5_alignment_only
+        result = await run_in_threadpool(validate_native_pod5_alignment_only, job)
+    elif lane == "native_methylation":
+        from services.ont_ngs_native_methylation import validate_native_methylation
+        result = await run_in_threadpool(validate_native_methylation, job)
+    else:
+        result = await run_in_threadpool(validate_native_basecall, job)
+    # No durable derived writes or construction occur here. Pending source
+    # intents and this ORM mutation belong to the terminal snapshot/CAS owner.
+    job.provenance = {**(job.provenance or {}), "result_integrity": result}
+    if session is not None:
+        from services.ngs_native_alignment_sources import prepare_intents
+        try:
+            result["alignment_presentations"] = await prepare_intents(job, session)
+        except Exception:
+            # Derived discovery cannot revoke accepted native science.
+            session.info.get("ngs_derived_catalog_intents", {}).pop(str(job.id), None)
+            job.provenance = {**job.provenance, "ngs_derived_source_discovery": {
+                "state": "unavailable", "reason": "unsupported_source"}}
+        job.provenance = {**job.provenance, "result_integrity": result}
+    job.status = "completed"
+    job.queue_status = "completed"
+    job.paused = False
+    job.current_stage = "Complete"
+    job.stage_progress = None
+    job.error_message = None
+    return result
+
+
 def is_ont_fastq_qc_job(job: Job) -> bool:
     params = job.params if isinstance(job.params, dict) else {}
     workflow_values = {
@@ -122,6 +258,7 @@ def is_ont_signal_alignment_job(job: Job) -> bool:
 async def validate_and_prepare_ont_signal_alignment_completion(
     job: Any,
     *,
+    session: AsyncSession | None = None,
     resource_usage_receipt: Mapping[str, Any] | None = None,
     pinned_result_root: Path | None = None,
 ) -> dict[str, Any]:
@@ -131,6 +268,7 @@ async def validate_and_prepare_ont_signal_alignment_completion(
     if pinned_result_root is not None:
         return await _validate_signal_alignment_from_pinned_root(
             job,
+            session=session,
             resource_usage_receipt=resource_usage_receipt,
             pinned_result_root=pinned_result_root,
             persisted_result_root=persisted_result_root,
@@ -151,6 +289,7 @@ async def validate_and_prepare_ont_signal_alignment_completion(
             raise OntNgsCompletionError("persisted signal-alignment result root is not a directory")
         return await _validate_signal_alignment_from_pinned_root(
             job,
+            session=session,
             resource_usage_receipt=resource_usage_receipt,
             pinned_result_root=Path(f"/proc/self/fd/{descriptor}"),
             persisted_result_root=persisted_result_root,
@@ -159,8 +298,9 @@ async def validate_and_prepare_ont_signal_alignment_completion(
         os.close(descriptor)
 
 
-async def _materialize_ready_alignment_presentations(
+async def _request_ready_alignment_presentations(
     *,
+    session: AsyncSession,
     job: Job,
     pinned_result_root: Path,
     source_reference_sha256: str,
@@ -178,71 +318,45 @@ async def _materialize_ready_alignment_presentations(
         job_output_dir=pinned_result_root,
         pinned_root_descriptor=True,
     )
-    primary_sessions = [item for item in sessions if item.get("mode") == "primary" and item.get("ready") is True]
+    primary_sessions = [
+        item for item in sessions
+        if item.get("mode") == "primary" and item.get("ready") is True
+    ]
     if len(primary_sessions) != 1:
         raise OntNgsCompletionError("exactly one ready primary alignment session is required")
-    provenance = job.provenance if isinstance(job.provenance, dict) else {}
-    prior_integrity = provenance.get("result_integrity") if isinstance(provenance, dict) else None
-    prior_presentations = (
-        prior_integrity.get("alignment_presentations")
-        if isinstance(prior_integrity, dict) else None
-    )
-    expected_by_session = {
-        item["session_id"]: item
-        for item in prior_presentations or []
-        if (
-            isinstance(item, dict)
-            and isinstance(item.get("session_id"), str)
-            and re.fullmatch(r"[0-9a-f]{64}", str(item.get("manifest_sha256"))) is not None
-        )
-    }
     receipts: list[dict[str, str]] = []
-    try:
-        for ready_session in (item for item in sessions if item.get("ready") is True):
-            alignment_path, alignment_metadata, index_path, index_metadata = await run_in_threadpool(
-                ngs_alignment_sessions.resolve_session_alignment_bundle,
-                str(job.id),
-                ready_session["session_id"],
-                source_reference_sha256=source_reference_sha256,
-                workflow_id=workflow_id,
-                input_mode=input_mode,
-                job_output_dir=pinned_result_root,
-                pinned_root_descriptor=True,
-            )
-            package = await run_in_threadpool(
-                ngs_alignment_sessions.build_alignment_presentation,
-                alignment_path,
-                bam_sha256=alignment_metadata["sha256"],
-                bam_size_bytes=alignment_metadata["size_bytes"],
-                index=index_path,
-                index_sha256=index_metadata["sha256"],
-                index_size_bytes=index_metadata["size_bytes"],
-                source_manifest_sha256=alignment_metadata["source_manifest_sha256"],
-                source_alignment_relative_path=alignment_metadata.get("relative_path"),
-                source_index_relative_path=index_metadata.get("relative_path"),
-                job_id=str(job.id),
-                session_id=ready_session["session_id"],
-                mode=ready_session["mode"],
-                cache_root=pinned_result_root / ".alignment-presentations",
-                artifact_set_sha256=ready_session["artifact_set_sha256"],
-                alignment_pair_sha256=ready_session["alignment_pair_sha256"],
-                expected_manifest_sha256=(
-                    expected_by_session.get(ready_session["session_id"], {}).get("manifest_sha256")
-                ),
-            )
-            receipts.append({
-                "session_id": ready_session["session_id"],
-                "authority_sha256": package["manifest"]["authority_sha256"],
-                "manifest_sha256": package["manifest_metadata"]["sha256"],
-            })
-    except ngs_alignment_sessions.AlignmentSessionError as exc:
-        raise OntNgsCompletionError(f"alignment presentation materialization failed: {exc}") from exc
+    for ready_session in (item for item in sessions if item.get("ready") is True):
+        _alignment_path, alignment_metadata, _index_path, index_metadata = await run_in_threadpool(
+            ngs_alignment_sessions.resolve_session_alignment_bundle,
+            str(job.id),
+            ready_session["session_id"],
+            source_reference_sha256=source_reference_sha256,
+            workflow_id=workflow_id,
+            input_mode=input_mode,
+            job_output_dir=pinned_result_root,
+            pinned_root_descriptor=True,
+        )
+        source_manifest_sha256 = alignment_metadata.get("source_manifest_sha256")
+        if source_manifest_sha256 != index_metadata.get("source_manifest_sha256"):
+            raise OntNgsCompletionError("alignment source manifests disagree")
+        source = derived_products.source_from_bundle(
+            job.id, ready_session, alignment_metadata, index_metadata, package_artifact_set_sha256)
+        # Prepare identity only. The terminal CAS winner admits the durable
+        # catalog intent; validation and losing publication create no request.
+        pending = session.info.setdefault("ngs_derived_catalog_intents", {})
+        pending.setdefault(str(job.id), {})[source["session_id"]] = source
+        receipts.append({
+            "request_id": derived_products.catalog_request_id(source),
+            "session_id": source["session_id"],
+            "source_authority_sha256": derived_products.identity_sha256(source),
+        })
     return sorted(receipts, key=lambda item: item["session_id"])
 
 
 async def _validate_signal_alignment_from_pinned_root(
     job: Any,
     *,
+    session: AsyncSession | None,
     resource_usage_receipt: Mapping[str, Any] | None,
     pinned_result_root: Path,
     persisted_result_root: Path,
@@ -320,6 +434,11 @@ async def _validate_signal_alignment_from_pinned_root(
 
     from starlette.concurrency import run_in_threadpool
 
+    from services.ont_ngs_native_plasmid import _producer_log
+    producer_log = await run_in_threadpool(
+        _producer_log, pinned_result_root, "align/align.log",
+        ("modules/ngs/dorado_align.nf", "scripts/build_primary_alignment_session_manifest.sh"),
+        ("dorado", "samtools"))
     descriptors = await run_in_threadpool(
         ngs_alignment_sessions.build_ngs_package_artifacts,
         str(job.id),
@@ -337,7 +456,10 @@ async def _validate_signal_alignment_from_pinned_root(
         or package_authority["unavailable_artifact_count"] != 0
     ):
         raise OntNgsCompletionError("signal-alignment package artifact denominator is not canonical")
-    presentation_receipts = await _materialize_ready_alignment_presentations(
+    if session is None:
+        raise OntNgsCompletionError("scientific completion requires durable presentation state")
+    presentation_receipts = await _request_ready_alignment_presentations(
+        session=session,
         job=job,
         pinned_result_root=pinned_result_root,
         source_reference_sha256=reference_sha256,
@@ -355,6 +477,7 @@ async def _validate_signal_alignment_from_pinned_root(
         "reference_sequence_sha256": reference_sha256,
         "source_bam_sha256": source_bam_sha256,
         "sequence_qc_manifest_sha256": manifest_sha256,
+        "producer_execution_log": producer_log,
         "alignment_presentations": presentation_receipts,
         **package_authority,
     }
@@ -529,6 +652,7 @@ def canonical_ngs_package_authority(descriptors: list[dict[str, Any]]) -> dict[s
 async def validate_and_prepare_ont_fastq_qc_completion(
     job: Any,
     *,
+    session: AsyncSession | None = None,
     resource_usage_receipt: Mapping[str, Any] | None = None,
     historical_reconciliation: bool = False,
     pinned_result_root: Path | None = None,
@@ -539,6 +663,7 @@ async def validate_and_prepare_ont_fastq_qc_completion(
     if pinned_result_root is not None:
         return await _validate_and_prepare_from_pinned_root(
             job,
+            session=session,
             resource_usage_receipt=resource_usage_receipt,
             historical_reconciliation=historical_reconciliation,
             pinned_result_root=pinned_result_root,
@@ -560,6 +685,7 @@ async def validate_and_prepare_ont_fastq_qc_completion(
             raise OntNgsCompletionError("persisted result root is not a directory")
         return await _validate_and_prepare_from_pinned_root(
             job,
+            session=session,
             resource_usage_receipt=resource_usage_receipt,
             historical_reconciliation=historical_reconciliation,
             pinned_result_root=Path(f"/proc/self/fd/{descriptor}"),
@@ -572,6 +698,7 @@ async def validate_and_prepare_ont_fastq_qc_completion(
 async def _validate_and_prepare_from_pinned_root(
     job: Any,
     *,
+    session: AsyncSession | None,
     resource_usage_receipt: Mapping[str, Any] | None = None,
     historical_reconciliation: bool = False,
     pinned_result_root: Path,
@@ -648,6 +775,19 @@ async def _validate_and_prepare_from_pinned_root(
 
     from starlette.concurrency import run_in_threadpool
 
+    # Current executions must pass the same native scientific barrier as the
+    # other FASTQ/QC consumers. Historical reconciliation retains its explicit
+    # legacy contract and cannot invent a newly required producer receipt.
+    native_evidence = None
+    if not historical_reconciliation:
+        from services.ont_ngs_native_plasmid import validate_fastq_alignment, validate_qc
+        native_evidence, _ = await run_in_threadpool(
+            validate_fastq_alignment, result_root, persisted_result_root, job)
+        qc_evidence = await run_in_threadpool(
+            validate_qc, result_root, persisted_result_root, job, native_evidence)
+        native_evidence["artifacts"].extend(qc_evidence.pop("artifacts"))
+        native_evidence["qc"] = qc_evidence
+
     package_artifacts = await run_in_threadpool(
         ngs_alignment_sessions.build_ngs_package_artifacts,
         str(job.id),
@@ -665,14 +805,20 @@ async def _validate_and_prepare_from_pinned_root(
         or package_authority["unavailable_artifact_count"] != 2
     ):
         raise OntNgsCompletionError("NGS package artifact denominator is not canonical")
-    presentation_receipts = await _materialize_ready_alignment_presentations(
-        job=job,
-        pinned_result_root=pinned_result_root,
-        source_reference_sha256=str(fastq_reference["expected_sha256"]),
-        workflow_id=_FASTQ_QC_WORKFLOW,
-        input_mode="fastq",
-        package_artifact_set_sha256=package_authority["artifact_set_sha256"],
-    )
+    if session is None:
+        if not historical_reconciliation:
+            raise OntNgsCompletionError("scientific completion requires durable presentation state")
+        presentation_receipts: list[dict[str, str]] = []
+    else:
+        presentation_receipts = await _request_ready_alignment_presentations(
+            session=session,
+            job=job,
+            pinned_result_root=pinned_result_root,
+            source_reference_sha256=str(fastq_reference["expected_sha256"]),
+            workflow_id=_FASTQ_QC_WORKFLOW,
+            input_mode="fastq",
+            package_artifact_set_sha256=package_authority["artifact_set_sha256"],
+        )
 
     completed_stages, stage_outputs = _validate_terminal_stages(job, result_root, persisted_result_root)
 
@@ -686,6 +832,7 @@ async def _validate_and_prepare_from_pinned_root(
         "reference_sequence_sha256": fastq_reference["expected_sha256"],
         "source_fastq_sha256": source_fastq_sha256,
         "sequence_qc_manifest_sha256": fastq_digest,
+        "native_evidence": native_evidence,
         "construct_verification_manifest_sha256": verification_digest,
         "construct_verification_verdict": verification_manifest.get("verdict"),
         "alignment_presentations": presentation_receipts,

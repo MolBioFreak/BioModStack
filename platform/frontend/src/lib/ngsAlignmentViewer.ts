@@ -225,6 +225,8 @@ export interface BrowserAlignmentTrackInput {
     alignmentIndexUrl: string;
     alignmentSizeBytes: number | null | undefined;
     presentation?: AlignmentPresentation | null;
+    splitProducts?: boolean;
+    readyPreview?: import("./ngsDerivedProducts").ReadyPreview | null;
     locusSlice?: AlignmentLocusSlice | null;
 }
 
@@ -248,6 +250,13 @@ export function resolveBrowserAlignmentTrackSource(input: BrowserAlignmentTrackI
             && input.alignmentSizeBytes > 0
             ? input.alignmentSizeBytes : null,
     };
+    if (input.splitProducts) {
+        const preview = input.readyPreview;
+        if (!preview || preview.job_id !== input.jobId || preview.session_id !== input.sessionId) return null;
+        return { kind: "preview", name: "Read preview", bamUrl: preview.bam.url, baiUrl: preview.index.url,
+            byteSize: preview.bam.size_bytes, selectedReadCount: preview.selected_read_count,
+            availableReadCount: null, policyVersion: 6, capped: false, fullSourceDownload };
+    }
     if (input.locusSlice) {
         return {
             kind: 'locus', name: 'Locus reads', bamUrl: input.locusSlice.bam.url,
@@ -282,6 +291,7 @@ export function buildAlignmentTrackConfig(
     options: { displayMode?: string; colorBy?: string; groupBy?: string } = {},
 ): Record<string, unknown> {
     return {
+        id: source.kind === 'preview' ? 'ngs-alignment-preview' : 'ngs-alignment-main',
         name: source.name, type: 'alignment', format: 'bam', url: source.bamUrl, indexURL: source.baiUrl,
         showSoftClips: true, showCoverage: source.kind === 'full', showMismatches: true, showAllBases: true,
         showInsertionText: true, autoHeight: false, height, displayMode: options.displayMode || 'EXPANDED',
@@ -417,7 +427,7 @@ export async function replaceAlignmentTrackTransactionally(
     config: Record<string, unknown>,
     isCurrent: () => boolean,
 ): Promise<Record<string, unknown> | null> {
-    const previousTracks = browser.findTracks((track) => track.type === 'alignment') || [];
+    const previousTracks = browser.findTracks((track) => track.type === 'alignment' && track.id !== 'ngs-selected-read-overlay') || [];
     const loadedTrack = await browser.loadTrack(config);
     if (!loadedTrack) throw new Error('IGV did not return the loaded alignment track.');
     if (!isCurrent()) {
@@ -478,4 +488,15 @@ export async function publishCurrentIgvReadSelection<T>(
     if (!isCurrent()) return false;
     publishSession(session);
     return true;
+}
+
+
+/** Never enumerate/remove other alignment tracks for a selected-read overlay. */
+export async function loadOwnedReadOverlay(browser: MutableIgvTrackBrowser,
+    config: Record<string, unknown>, isCurrent: () => boolean): Promise<Record<string, unknown> | null> {
+    if (!isCurrent()) return null;
+    const track = await browser.loadTrack({ ...config, id: 'ngs-selected-read-overlay' });
+    if (!track) throw new Error('IGV did not return the selected-read track.');
+    if (!isCurrent()) { browser.removeTrack(track); return null; }
+    return track;
 }

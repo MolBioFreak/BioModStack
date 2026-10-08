@@ -35,6 +35,7 @@ from services.boltz_api_jobs import BoltzApiJobWorker
 from services.external_imports.worker import ExternalImportWorker
 from services.gpu_orchestrator import GPUOrchestrator
 from services.md.reconcile import MdReconcilerWorker
+from services.ngs_alignment_presentation_worker import NgsAlignmentPresentationWorker
 from services.ont_raw_signal_worker import OntRawSignalWorker
 from services.ont_signal_worker import OntSignalWorker
 from services.frustrampnn.statistics_jobs import FrustraMPNNStatisticsWorker
@@ -61,6 +62,7 @@ _global_experiment_worker: GlobalExperimentWorker | None = None
 _ont_raw_signal_worker: OntRawSignalWorker | None = None
 _ont_signal_worker: OntSignalWorker | None = None
 _frustrampnn_statistics_worker: FrustraMPNNStatisticsWorker | None = None
+_ngs_alignment_presentation_worker: NgsAlignmentPresentationWorker | None = None
 
 
 async def _orchestrator_launch_job(job_id, model_id, mode, params, output_dir):
@@ -114,6 +116,7 @@ async def lifespan(app: FastAPI):
     global _ont_raw_signal_worker
     global _ont_signal_worker
     global _frustrampnn_statistics_worker
+    global _ngs_alignment_presentation_worker
     bioxp_runtime = None
     
     # Required checked-in scientific authority must be complete before workers start.
@@ -124,6 +127,9 @@ async def lifespan(app: FastAPI):
     await init_experiment_db()
     await init_molbio_db()
     await init_molbio_ngs_db()
+    _ngs_alignment_presentation_worker = NgsAlignmentPresentationWorker(async_session)
+    await _ngs_alignment_presentation_worker.start()
+    logger.info("[STARTUP] NGS alignment-presentation worker started")
     _frustrampnn_statistics_worker = FrustraMPNNStatisticsWorker(async_session)
     await _frustrampnn_statistics_worker.start()
     logger.info("[STARTUP] FrustraMPNN statistics worker started")
@@ -262,6 +268,9 @@ async def lifespan(app: FastAPI):
     if _ont_signal_worker:
         await _ont_signal_worker.stop()
         logger.info("[SHUTDOWN] ONT signal-workbench worker stopped")
+    if _ngs_alignment_presentation_worker:
+        await _ngs_alignment_presentation_worker.stop()
+        logger.info("[SHUTDOWN] NGS alignment-presentation worker stopped")
 
 
 app = FastAPI(

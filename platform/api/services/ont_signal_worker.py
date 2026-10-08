@@ -895,7 +895,11 @@ class OntSignalWorker:
         alignment_session_id: str,
         authority: dict[str, str],
         job_output_dir: str | None,
+        *, native_job: Job | None = None,
     ) -> tuple[Path, dict[str, Any], Path, dict[str, Any]]:
+        from services import ngs_native_alignment_sources as native
+        if native_job is not None and native.is_native(native_job):
+            return await asyncio.to_thread(native.alignment_bundle, native_job, alignment_session_id)
         return await asyncio.to_thread(
             ngs_alignment_sessions.resolve_session_alignment_bundle,
             alignment_job_id,
@@ -2113,6 +2117,7 @@ class OntSignalWorker:
                     str(job.alignment_session_id),
                     self._alignment_authority(alignment_job),
                     getattr(alignment_job, "child_output_dir", None) or alignment_job.output_dir,
+                    native_job=alignment_job,
                 )
                 parent_reform = Path(parent_artifact.managed_relative_path)
                 retained_reform = await self._pin_parent_async(

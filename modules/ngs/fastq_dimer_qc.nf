@@ -197,6 +197,8 @@ process FastqDimerAnalysis {
     def inputModeArg = shellQuote(inputMode)
     """
     set -euo pipefail
+    source "${params.code_root ?: projectDir}/scripts/ngs_producer_identity.sh"
+    bms_producer_begin "${params.code_root ?: projectDir}" modules/ngs/fastq_dimer_qc.nf scripts/init_fastq_dimer_outputs.sh scripts/dimer_single_ref_split_events.awk scripts/dominant_dimer_consensus.sh scripts/build_alignment_session_manifest.sh -- samtools minimap2 awk || exit 1
 
     MM2_ARGS=(-a -x "${minimapPreset}" -t ${task.cpus})
     if [[ "${minimapAllowSecondary}" != "true" ]]; then
@@ -1399,6 +1401,7 @@ process FastqDimerAnalysis {
         ${referenceSequenceSha256Arg} \
         ${workflowIdArg} \
         ${inputModeArg}
+    bms_producer_finish >> dimer_analysis.log || exit 1
         """
     }
 process BuildDimerCanonicalOutputs {
@@ -1415,6 +1418,7 @@ process BuildDimerCanonicalOutputs {
     path reference_fasta
 
     output:
+    path "dimer_producer.log", emit: producer_log
     path "dimer_breakpoint_call.tsv", emit: breakpoint_call
     path "dimer_evidence_by_position.tsv", emit: evidence_by_position
     path "dimer_read_events.tsv", emit: read_events
@@ -1430,6 +1434,8 @@ process BuildDimerCanonicalOutputs {
     def emitLegacyOutputs = params.dimer_emit_legacy_outputs == true ? 'true' : 'false'
     """
     set -euo pipefail
+    source "${params.code_root ?: projectDir}/scripts/ngs_producer_identity.sh"
+    bms_producer_begin "${params.code_root ?: projectDir}" modules/ngs/fastq_dimer_qc.nf scripts/build_dimer_canonical_outputs.py -- python3 || exit 1
 
     if [[ ! -f "${codeRoot}/scripts/build_dimer_canonical_outputs.py" ]]; then
         echo "Missing parser script: ${codeRoot}/scripts/build_dimer_canonical_outputs.py" >&2
@@ -1454,5 +1460,6 @@ process BuildDimerCanonicalOutputs {
     if [[ "${dimerOutputMode}" == "core" && "${emitLegacyOutputs}" != "true" ]]; then
         tar -czf dimer_diagnostics.tar.gz ${events} ${single_ref_events} ${single_ref_profile} ${breakpoint_screen} 2>/dev/null || true
     fi
+    bms_producer_finish > dimer_producer.log || exit 1
     """
 }

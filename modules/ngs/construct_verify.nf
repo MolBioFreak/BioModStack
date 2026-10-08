@@ -60,6 +60,11 @@ process ConstructVerify {
         exit 127
     fi
 
+    source "${codeRoot}/scripts/ngs_producer_identity.sh"
+    bms_producer_begin "${codeRoot}" modules/ngs/construct_verify.nf scripts/build_construct_topology_evidence.py scripts/verify_construct.py config/ngs/construct_verify_profiles.json -- "\${PYTHON_CMD[0]}" "\${SAMTOOLS_ARGS[1]}" || exit 1
+    if [[ "\${SAMTOOLS_ARGS[1]}" == apptainer ]]; then
+        fallback_image_sha256="\$(sha256sum ${doradoImage} | cut -d ' ' -f1)"
+    fi
     mkdir -p verification
 
     "\${PYTHON_CMD[@]}" ${topologyScript} \\
@@ -86,5 +91,11 @@ process ConstructVerify {
         --profile-config ${profileConfig} \\
         --profile ${profileId} \\
         --out-dir verification
+    bms_producer_finish > .bms-producer.receipt || exit 1
+    if [[ "\${SAMTOOLS_ARGS[1]}" == apptainer ]]; then
+        [[ "\${fallback_image_sha256}" == "\$(sha256sum ${doradoImage} | cut -d ' ' -f1)" ]] || exit 1
+        printf 'bms_producer_fallback_image=%s\\n' "\${fallback_image_sha256}" >> .bms-producer.receipt
+    fi
+    "\${PYTHON_CMD[@]}" -c 'import json,pathlib; p=pathlib.Path("verification/qc_manifest.json"); d=json.loads(p.read_text()); d["execution"]["producer_receipt"]=pathlib.Path(".bms-producer.receipt").read_text(); p.write_text(json.dumps(d,sort_keys=True)+"\\n")'
     """
 }

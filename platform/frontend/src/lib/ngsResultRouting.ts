@@ -5,6 +5,15 @@ export interface NgsJobRouteIdentity {
     params?: Record<string, unknown> | null;
 }
 
+export function isNgsDomainSection(section: string | null): boolean {
+    return ["datasets", "workflow-plans", "evidence", "history"].includes((section || "").trim().toLowerCase());
+}
+
+export function hasNgsDomainSection(search: string): boolean {
+    const params = new URLSearchParams(search);
+    return Boolean(params.get("domain_experiment_id")?.trim()) && isNgsDomainSection(params.get("section"));
+}
+
 export type NgsToolkitView = 'launch' | 'instrument' | 'runs';
 
 const NGS_MODEL_IDS = new Set([

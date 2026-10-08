@@ -14,20 +14,28 @@ from typing import Any, BinaryIO, Iterator, Literal
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.concurrency import contextmanager_in_threadpool
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 import rfc8785
 
-from database import Job, OntRawSignalRepresentation, get_session
+from database import Job, NgsAlignmentPresentationJob, NgsAlignmentDerivedProduct, OntRawSignalRepresentation, async_session, get_session
 from experiment_database import get_experiment_session
 from molbio_ngs_database import get_molbio_ngs_session
-from routers.experiment_workspaces import _authenticated_principal, _require_mutation_owner
+from routers.experiment_workspaces import (
+    _authenticated_principal,
+    _mutation_principal,
+    _require_mutation_owner,
+)
 from ont_ngs_result_response import OntFastqQcResultResponse
 from services import alignment_access
 from services import ngs_alignment_sessions as service
+from services import ngs_alignment_presentation as presentation_lifecycle
+from services import ngs_alignment_derived_products as derived_products
 from services.ont_read_metrics import (
     OntReadMetricError,
     RAW_READ_METRICS_CONTRACT,
@@ -78,12 +86,20 @@ class OntNgsErrorV1(BaseModel):
         "NGS_CAPABILITY_DENIED", "NGS_HIERARCHY_DENIED", "NGS_PRINCIPAL_DENIED",
         "NGS_ROTATION_ORIGIN_DENIED", "NGS_RESOURCE_NOT_FOUND", "NGS_AUTHORITY_CONFLICT",
         "NGS_PACKAGE_INTEGRITY_CONFLICT", "NGS_CAPABILITY_ROTATION_CONFLICT",
+        "NGS_PRESENTATION_ALREADY_READY", "NGS_PRESENTATION_SOURCE_STALE",
         "NGS_ROTATION_INELIGIBLE", "NGS_ARTIFACT_INTEGRITY_CONFLICT",
         "NGS_READ_SCAN_TRUNCATED", "NGS_RANGE_INVALID", "NGS_RANGE_UNSATISFIABLE",
+        "NGS_READ_POPULATION_INVALID", "NGS_READ_POPULATION_STALE",
+        "NGS_READ_CURSOR_INVALID", "NGS_READ_CURSOR_STALE",
+        "NGS_RECORD_CURSOR_INVALID", "NGS_RECORD_CURSOR_STALE", "NGS_CATALOG_NOT_READY",
+        "NGS_READ_ID_INVALID", "NGS_READ_QUERY_INVALID", "NGS_READ_CAPACITY_UNAVAILABLE",
+        "NGS_READ_ALREADY_IN_PREVIEW", "NGS_READ_NOT_OVERLAY_ELIGIBLE", "NGS_READ_OVERLAY_TIMEOUT",
     ]
     message: str = Field(min_length=1, max_length=512)
     job_id: str = Field(json_schema_extra={"format": "uuid"})
-    resource: Literal["result", "manifest", "session", "artifact", "range", "rotation", "read"]
+    resource: Literal[
+        "result", "manifest", "session", "artifact", "range", "rotation", "read", "presentation"
+    ]
     retryable: bool
 
     @model_validator(mode="after")
@@ -172,6 +188,37 @@ class OntUnavailableAlignmentSessionV1(BaseModel):
     reference: None
     artifacts: OntEmptyAlignmentArtifactsV1
     alignment_pair_sha256: None
+
+
+class OntNativeAlignmentSessionV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    schema_version: Literal["bms.ngs.native-alignment-session.v2"] = Field(alias="schema")
+    session_id: str
+    job_id: str
+    mode: Literal["primary"]
+    ready: Literal[True]
+    unavailable_reason: None
+    reads_url: str
+    source_manifest_sha256: str
+    source_authority_sha256: str
+    artifact_set_sha256: str
+    reference: OntAlignmentReferenceV1
+    artifacts: OntAlignmentArtifactsV1
+    alignment_pair_sha256: str
+
+
+class OntNativeAlignmentSessionListV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    schema_version: Literal["bms.ngs.native-alignment-session-list.v2"] = Field(alias="schema")
+    job_id: str
+    sessions: list[OntNativeAlignmentSessionV2] = Field(max_length=1)
+
+
+class OntNativeAlignmentSessionDetailV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    schema_version: Literal["bms.ngs.native-alignment-session-detail.v2"] = Field(alias="schema")
+    job_id: str
+    session: OntNativeAlignmentSessionV2
 
 
 class OntAlignmentSessionV1(RootModel[OntReadyAlignmentSessionV1 | OntUnavailableAlignmentSessionV1]):
@@ -306,6 +353,162 @@ class OntAlignmentPresentationV1(BaseModel):
     preview: OntPresentationPreviewV1
     coverage: OntPresentationCoverageV1
     manifest: OntDerivedArtifactV1
+
+
+class OntDerivedUnavailableV3(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    state: Literal["unavailable"]
+    reason: Literal["request_missing", "unsupported_source"]
+
+
+class OntDerivedRequestedV3(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    state: Literal["requested"]
+    request_id: str
+    request_sha256: str | None
+    attempt_count: int = Field(ge=0)
+    manual_retry_count: int = Field(ge=0)
+    blocked_on: Literal["catalog"] | None = None
+
+
+class OntDerivedRunningV3(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    state: Literal["running"]
+    request_id: str
+    request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    attempt_count: int = Field(ge=1)
+    manual_retry_count: int = Field(ge=0)
+
+
+class OntDerivedReadyV3(OntDerivedRunningV3):
+    state: Literal["ready"]
+    authority_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class OntDerivedFailedV3(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    state: Literal["failed"]
+    request_id: str
+    request_sha256: str | None
+    attempt_count: int = Field(ge=0)
+    manual_retry_count: int = Field(ge=0)
+    code: Literal["source_invalid", "resource_limit", "cancelled", "infrastructure_failed", "publication_failed", "integrity_mismatch"]
+    retryable: bool
+
+
+OntDerivedStateV3 = OntDerivedUnavailableV3 | OntDerivedRequestedV3 | OntDerivedRunningV3 | OntDerivedReadyV3 | OntDerivedFailedV3
+
+
+class OntAlignmentPresentationV3(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    schema_version: Literal["bms.ngs.alignment-presentation.v3"] = Field(alias="schema")
+    job_id: str
+    session_id: str
+    catalog: OntDerivedStateV3 = Field(discriminator="state")
+    preview: OntDerivedStateV3 = Field(discriminator="state")
+
+
+class OntDerivedRetryV3(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: str = Field(min_length=1, max_length=96)
+
+
+class OntPresentationStateBaseV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    schema_version: Literal["bms.ngs.alignment-presentation.v2"] = Field(alias="schema")
+    job_id: str
+    session_id: str
+    mode: Literal["primary", "dimer_candidates"]
+
+
+class OntPresentationPreparingV2(OntPresentationStateBaseV2):
+    state: Literal["preparing"]
+
+
+class OntPresentationFailedV2(OntPresentationStateBaseV2):
+    state: Literal["failed"]
+    code: Literal[
+        "source_invalid", "resource_limit", "build_timeout", "infrastructure_failed",
+        "publication_failed", "integrity_mismatch",
+    ]
+    message: Literal["Reads unavailable. Retry from Diagnostics."]
+
+
+class OntPresentationSourceV2(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    package_manifest_sha256: str
+    artifact_set_sha256: str
+    alignment_sha256: str
+    alignment_size_bytes: int
+    alignment_index_sha256: str
+    alignment_index_size_bytes: int
+    logical_read_count: int
+    alignment_record_count: int
+
+
+class OntPresentationPolicyV2(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: Literal["primary-read-presentation-v4"]
+    version: Literal[4]
+    target_reads: int
+    max_preview_records: int
+    max_preview_bytes: int
+    max_build_seconds: float
+
+
+class OntPresentationPreviewV2(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    selected_read_count: int
+    selected_record_count: int
+    selected_read_set_sha256: str
+    preview_complete_to_target: bool
+    bam: OntDerivedArtifactV1
+    index: OntDerivedArtifactV1
+
+
+class OntPresentationCatalogV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    schema_version: Literal["bms.ngs.read-catalog.v1"] = Field(alias="schema")
+    logical_read_count: int
+    mapped_primary_read_count: int
+    unmapped_read_count: int
+    ambiguous_primary_read_count: int
+    no_primary_read_count: int
+    content_sha256: str
+    size_bytes: int
+
+
+class OntPresentationLocatorsV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    schema_version: Literal["bms.ngs.read-record-locators.v1"] = Field(alias="schema")
+    record_count: int
+    content_sha256: str
+    size_bytes: int
+
+
+class OntPresentationCoverageV2(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["full_source_primary_coverage"]
+    primary_read_count: int
+    descriptor: OntDerivedArtifactV1
+
+
+class OntPresentationReadyV2(OntPresentationStateBaseV2):
+    state: Literal["ready"]
+    presentation_id: str
+    source: OntPresentationSourceV2
+    policy: OntPresentationPolicyV2
+    preview: OntPresentationPreviewV2
+    catalog: OntPresentationCatalogV1
+    locators: OntPresentationLocatorsV1
+    coverage: OntPresentationCoverageV2
+    manifest: OntDerivedArtifactV1
+
+
+OntAlignmentPresentationV2 = (
+    OntPresentationPreparingV2 | OntPresentationReadyV2 | OntPresentationFailedV2
+)
 
 
 class OntAlignmentLocusSliceRequestV1(BaseModel):
@@ -469,6 +672,7 @@ _GOVERNED_OPENAPI_SUFFIXES = (
     "/preview/{kind}",
     "/presentation",
     "/presentation/{kind}",
+    "/read-overlays",
     "/locus-slices",
     "/locus-slices/{slice_id}/{artifact_sha256}/{kind}",
     "/reads",
@@ -837,6 +1041,15 @@ def _job_package_authority(job: Job) -> dict[str, str]:
 
 
 async def _validate_rotation_package_authority(job: Job) -> None:
+    from services import ngs_native_alignment_sources as native
+    if native.is_native(job):
+        def verify():
+            with native.result_root(job) as root:
+                for artifact in native.artifact_descriptors(job):
+                    service.verify_current_artifact_bytes(root / artifact["relative_path"],
+                        expected_sha256=artifact["sha256"], expected_size=artifact["size_bytes"])
+        await run_in_threadpool(verify)
+        return
     if is_ont_signal_alignment_job(job):
         async with _validated_pinned_result_root(job):
             return
@@ -909,7 +1122,26 @@ async def rotate_alignment_access(
             status_code=404, code="NGS_RESOURCE_NOT_FOUND", message="The governed NGS Job was not found.",
             job_id=job_id, resource="rotation",
         )
-    if job.model_id != "nanopore" or job.status != "completed":
+    from services import ont_pooled_reference_assignment as pooled
+    from routers.experiment_workspaces import _operator_principal
+
+    pooled_job = job.model_id == "nanopore" and getattr(job, "mode", None) == pooled.ASSIGNMENT_MODE
+    if pooled_job:
+        # Pooled jobs predate workspace hierarchy binding. Do not invent an owner
+        # from a manifest path: use the existing application operator/admin lane.
+        try:
+            _operator_principal(request)
+        except HTTPException as exc:
+            raise OntNgsRouteError(
+                status_code=403, code="NGS_PRINCIPAL_DENIED",
+                message="Application operator authority is required to recover this pooled Job.",
+                job_id=job_id, resource="rotation",
+            ) from exc
+    pooled_review = pooled_job and job.status in {"completed", "awaiting_input"} and (
+        (job.params or {}).get("scientific_status") == "REVIEW"
+        and (job.params or {}).get("release_state") == "awaiting_operator_release"
+    )
+    if job.model_id != "nanopore" or (pooled_job and not pooled_review) or (not pooled_job and job.status != "completed"):
         raise OntNgsRouteError(
             status_code=409, code="NGS_ROTATION_INELIGIBLE",
             message="Capability rotation requires a completed Nanopore Job.",
@@ -947,8 +1179,11 @@ async def rotate_alignment_access(
             job_id,
         )
     try:
-        await _validate_rotation_package_authority(job)
-    except (JobResultRootError, SequenceQcManifestError, OntNgsResultError, service.AlignmentSessionError) as exc:
+        if pooled_job:
+            await pooled.validate_pooled_reference_set_for_job(session, job)
+        else:
+            await _validate_rotation_package_authority(job)
+    except (JobResultRootError, SequenceQcManifestError, OntNgsResultError, service.AlignmentSessionError, pooled.PooledAssignmentError) as exc:
         raise OntNgsRouteError(
             status_code=409, code="NGS_PACKAGE_INTEGRITY_CONFLICT",
             message="The persisted NGS package authority is unavailable.",
@@ -990,6 +1225,7 @@ async def rotate_alignment_access(
         job_id=job_id,
         previous=previous,
         updated=updated,
+        **({"pooled_review_params": dict(job.params)} if pooled_job else {}),
     )
     if not changed:
         await session.rollback()
@@ -1061,7 +1297,7 @@ async def revoke_alignment_access(
             headers={"Set-Cookie": alignment_access.alignment_access_cookie_expiration_header(job_id, request)},
         )
     try:
-        await build_ont_fastq_qc_result(job)
+        await _validate_rotation_package_authority(job)
     except (JobResultRootError, SequenceQcManifestError, OntNgsResultError, service.AlignmentSessionError) as exc:
         alignment_access.expire_alignment_access_cookie(job_id, response, request)
         raise OntNgsRouteError(
@@ -1148,11 +1384,35 @@ def _iter_range(
         while remaining:
             chunk = snapshot.read(min(chunk_size, remaining))
             if not chunk:
-                break
+                # Abort an already-started response rather than silently deliver
+                # a truncated object under an accepted digest/Content-Length.
+                raise service.AlignmentSessionError("snapshot integrity: premature end of stream")
             remaining -= len(chunk)
             yield chunk
     finally:
         snapshot.close()
+
+
+def _require_cache_retry_principal(request: Request, job_id: str) -> None:
+    try:
+        _mutation_principal(request)
+    except HTTPException as exc:
+        raise OntNgsRouteError(status_code=403, code="NGS_PRINCIPAL_DENIED",
+            message="Job mutation authority is required.", job_id=job_id, resource="artifact") from exc
+
+
+async def _retry_artifact_delivery(path: Path, metadata: dict, request: Request, job_id: str):
+    _require_cache_retry_principal(request, job_id)
+    try:
+        await run_in_threadpool(service.retry_verified_artifact_cache, path,
+            expected_size=int(metadata["size_bytes"]), expected_sha256=str(metadata["sha256"]))
+    except service.AlignmentSessionError as exc:
+        if "capacity" in str(exc).lower():
+            return _ngs_error_response(status_code=503, code="NGS_READ_CAPACITY_UNAVAILABLE",
+                message="Delivery cache is busy or capacity is unavailable. Retry explicitly.",
+                job_id=job_id, resource="artifact")
+        raise _http_error(exc, job_id=job_id, resource="artifact") from exc
+    return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
 
 async def _serve_artifact(
@@ -1162,6 +1422,8 @@ async def _serve_artifact(
     *,
     job_id: str,
 ) -> Response:
+    if request.method == "POST":
+        return await _retry_artifact_delivery(path, metadata, request, job_id)
     size = int(metadata["size_bytes"])
     digest = str(metadata["sha256"])
     etag = f'"sha256:{digest}"'
@@ -1175,27 +1437,15 @@ async def _serve_artifact(
     }
     if metadata.get("mime_type") == "text/html":
         base_headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
-    if request.headers.get("if-none-match") == etag:
-        try:
-            await run_in_threadpool(
-                service.verify_current_artifact_bytes,
-                path,
-                expected_size=size,
-                expected_sha256=digest,
-            )
-        except service.AlignmentSessionError:
-            return _ngs_error_response(
-                status_code=409,
-                code="NGS_ARTIFACT_INTEGRITY_CONFLICT",
-                message="The governed artifact changed before delivery.",
-                job_id=job_id,
-                resource="artifact",
-            )
-        return Response(status_code=304, headers=base_headers)
+    # A conditional response uses the same accepted delivery object as GET and
+    # HEAD. Rehashing the mutable original here both defeats warm reuse and
+    # assigns a different identity policy to 304 than to Range/full delivery.
+    validators = [item.strip() for item in request.headers.get("if-none-match", "").split(",")]
+    not_modified = any(item == "*" or item.removeprefix("W/") == etag for item in validators)
 
     start, end = 0, max(0, size - 1)
     status_code = 200
-    range_header = request.headers.get("range") if request.method != "HEAD" else None
+    range_header = request.headers.get("range") if request.method != "HEAD" and not not_modified else None
     parsed_range: tuple[int, int] | None = None
     if range_header is not None:
         try:
@@ -1240,19 +1490,23 @@ async def _serve_artifact(
             expected_size=size,
             expected_sha256=digest,
         )
-    except service.AlignmentSessionError:
+    except service.AlignmentSessionError as exc:
+        capacity = any(term in str(exc).lower() for term in ("capacity", "snapshot limit"))
         return _ngs_error_response(
-            status_code=409,
-            code="NGS_ARTIFACT_INTEGRITY_CONFLICT",
-            message="The governed artifact changed before delivery.",
-            job_id=job_id,
-            resource="artifact",
+            status_code=503 if capacity else 409,
+            code="NGS_READ_CAPACITY_UNAVAILABLE" if capacity else "NGS_ARTIFACT_INTEGRITY_CONFLICT",
+            message="Verified artifact delivery capacity is unavailable." if capacity else "The governed artifact changed before delivery.",
+            job_id=job_id, resource="artifact",
         )
+    if not_modified:
+        snapshot.close()
+        return Response(status_code=304, headers=base_headers)
     if request.method == "HEAD":
         snapshot.close()
         return Response(status_code=200, headers=headers)
     return StreamingResponse(
-        _iter_range(snapshot, start, end),
+        _iter_range(snapshot, start, end) if size else _iter_range(snapshot, 0, -1),
+        background=BackgroundTask(snapshot.close),
         status_code=status_code,
         headers=headers,
         media_type=str(metadata["mime_type"]),
@@ -1261,13 +1515,23 @@ async def _serve_artifact(
 
 @router.get(
     "/jobs/{job_id}/alignment-sessions",
-    response_model=OntAlignmentSessionListV1,
+    response_model=OntAlignmentSessionListV1 | OntNativeAlignmentSessionListV2,
     responses=_STANDARD_GOVERNED_ERRORS,
 )
 async def list_alignment_sessions(
     job_id: str,
     authorized_job: Job = Depends(require_alignment_job),
 ):
+    from services import ngs_native_alignment_sources as native
+    if native.is_native(authorized_job):
+        try:
+            def resolve():
+                with native.result_root(authorized_job) as root:
+                    return native.alignment_sessions(authorized_job, root)
+            return {"schema": "bms.ngs.native-alignment-session-list.v2", "job_id": job_id,
+                    "sessions": await run_in_threadpool(resolve)}
+        except service.AlignmentSessionError as exc:
+            raise _http_error(exc, job_id=job_id, resource="artifact") from exc
     try:
         async with _validated_pinned_result_root(authorized_job) as pinned_root:
             sessions = await run_in_threadpool(
@@ -1347,7 +1611,7 @@ async def get_job_scoped_ngs_result(
 
 @router.get(
     "/jobs/{job_id}/alignment-sessions/{session_id}",
-    response_model=OntAlignmentSessionDetailV1,
+    response_model=OntAlignmentSessionDetailV1 | OntNativeAlignmentSessionDetailV2,
     responses=_STANDARD_GOVERNED_ERRORS,
 )
 async def get_alignment_session(
@@ -1355,6 +1619,14 @@ async def get_alignment_session(
     session_id: str,
     authorized_job: Job = Depends(require_alignment_job),
 ):
+    from services import ngs_native_alignment_sources as native
+    if native.is_native(authorized_job):
+        result = await list_alignment_sessions(job_id, authorized_job)
+        current = next((item for item in result["sessions"] if item["session_id"] == session_id), None)
+        if current is None:
+            raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND",
+                message="Native alignment session was not found.", job_id=job_id, resource="artifact")
+        return {"schema": "bms.ngs.native-alignment-session-detail.v2", "job_id": job_id, "session": current}
     try:
         async with _validated_pinned_result_root(authorized_job) as pinned_root:
             session = await run_in_threadpool(
@@ -1379,6 +1651,14 @@ async def list_ngs_package_artifacts(
     job_id: str,
     authorized_job: Job = Depends(require_alignment_job),
 ):
+    from services import ngs_native_alignment_sources as native
+    if native.is_native(authorized_job):
+        try:
+            artifacts = await run_in_threadpool(native.artifact_descriptors, authorized_job)
+            return {"job_id": job_id, "artifacts": [{**{key: value for key, value in item.items() if key != "relative_path"},
+                "url": f"/api/jobs/{job_id}/ngs-artifacts/{item['artifact_id']}"} for item in artifacts]}
+        except service.AlignmentSessionError as exc:
+            raise _http_error(exc, job_id=job_id, resource="artifact") from exc
     try:
         async with _validated_pinned_result_root(authorized_job) as pinned_root:
             artifacts = await run_in_threadpool(
@@ -1399,6 +1679,7 @@ async def list_ngs_package_artifacts(
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc
 
 
+@router.post("/jobs/{job_id}/ngs-artifacts/{artifact_id}/cache/retry", status_code=204, responses=_STANDARD_GOVERNED_ERRORS)
 @router.get("/jobs/{job_id}/ngs-artifacts/{artifact_id}", responses=_BINARY_RESPONSES)
 @router.head("/jobs/{job_id}/ngs-artifacts/{artifact_id}", responses=_BINARY_RESPONSES)
 async def get_ngs_package_artifact(
@@ -1407,6 +1688,17 @@ async def get_ngs_package_artifact(
     request: Request,
     authorized_job: Job = Depends(require_alignment_job),
 ):
+    from services import ngs_native_alignment_sources as native
+    if native.is_native(authorized_job):
+        try:
+            artifacts = await run_in_threadpool(native.artifact_descriptors, authorized_job)
+            metadata = next((item for item in artifacts if item["artifact_id"] == artifact_id), None)
+            if metadata is None:
+                raise service.AlignmentSessionError("native artifact not found")
+            with native.result_root(authorized_job) as root:
+                return await _serve_artifact(root / metadata["relative_path"], metadata, request, job_id=job_id)
+        except service.AlignmentSessionError as exc:
+            raise _http_error(exc, job_id=job_id, resource="artifact") from exc
     try:
         async with _validated_pinned_result_root(authorized_job) as pinned_root:
             path, metadata = await run_in_threadpool(
@@ -1422,6 +1714,7 @@ async def get_ngs_package_artifact(
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc
 
 
+@router.post("/jobs/{job_id}/alignment-artifacts/{artifact_id}/cache/retry", status_code=204, responses=_STANDARD_GOVERNED_ERRORS)
 @router.get("/jobs/{job_id}/alignment-artifacts/{artifact_id}", responses=_BINARY_RESPONSES)
 @router.head("/jobs/{job_id}/alignment-artifacts/{artifact_id}", responses=_BINARY_RESPONSES)
 async def get_alignment_artifact(
@@ -1445,6 +1738,7 @@ async def get_alignment_artifact(
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc
 
 
+@router.post("/jobs/{job_id}/alignment-session-artifacts/{mode}/{role}/{sha256}/cache/retry", status_code=204, responses=_STANDARD_GOVERNED_ERRORS)
 @router.get("/jobs/{job_id}/alignment-session-artifacts/{mode}/{role}/{sha256}", responses=_BINARY_RESPONSES)
 @router.head("/jobs/{job_id}/alignment-session-artifacts/{mode}/{role}/{sha256}", responses=_BINARY_RESPONSES)
 async def get_alignment_session_artifact(
@@ -1484,20 +1778,12 @@ def _derived_descriptor(metadata: dict[str, Any], url: str) -> dict[str, Any]:
             "size_bytes": metadata["size_bytes"], "mime_type": metadata["mime_type"], "range_capable": True}
 
 
-def _presentation_authority(job: Job, session_id: str) -> tuple[str, str]:
-    provenance = job.provenance if isinstance(job.provenance, dict) else {}
-    integrity = provenance.get("result_integrity") if isinstance(provenance, dict) else None
-    presentations = integrity.get("alignment_presentations") if isinstance(integrity, dict) else None
-    matches = [
-        item for item in presentations or []
-        if isinstance(item, dict) and item.get("session_id") == session_id
-    ]
-    if len(matches) != 1:
-        raise service.AlignmentSessionError("alignment presentation authority is unavailable")
-    authority_sha256 = matches[0].get("authority_sha256")
-    manifest_sha256 = matches[0].get("manifest_sha256")
+def _presentation_authority(row: NgsAlignmentPresentationJob) -> tuple[str, str]:
+    authority_sha256 = row.authority_sha256
+    manifest_sha256 = row.manifest_sha256
     if (
-        not isinstance(authority_sha256, str)
+        row.state != "ready"
+        or not isinstance(authority_sha256, str)
         or re.fullmatch(r"[0-9a-f]{64}", authority_sha256) is None
         or not isinstance(manifest_sha256, str)
         or re.fullmatch(r"[0-9a-f]{64}", manifest_sha256) is None
@@ -1506,9 +1792,32 @@ def _presentation_authority(job: Job, session_id: str) -> tuple[str, str]:
     return authority_sha256, manifest_sha256
 
 
+async def _presentation_row(
+    session: AsyncSession, job_id: str, session_id: str,
+) -> NgsAlignmentPresentationJob:
+    row = await presentation_lifecycle.get_session_presentation(
+        session, job_id=job_id, session_id=session_id,
+    )
+    if row is None:
+        raise OntNgsRouteError(
+            status_code=404, code="NGS_RESOURCE_NOT_FOUND",
+            message="The governed NGS presentation was not found.",
+            job_id=job_id, resource="presentation",
+        )
+    return row
+
+
 @asynccontextmanager
-async def _prepared_presentation(job_id: str, session_id: str, job: Job):
-    authority_sha256, manifest_sha256 = _presentation_authority(job, session_id)
+async def _prepared_presentation(
+    job_id: str,
+    session_id: str,
+    job: Job,
+    presentation_row: NgsAlignmentPresentationJob | None = None,
+):
+    if presentation_row is None:
+        async with async_session() as db:
+            presentation_row = await _presentation_row(db, job_id, session_id)
+    authority_sha256, manifest_sha256 = _presentation_authority(presentation_row)
     async with _validated_pinned_result_root(job) as pinned_result_root:
         package = await run_in_threadpool(
             service.resolve_cached_alignment_presentation,
@@ -1521,38 +1830,86 @@ async def _prepared_presentation(job_id: str, session_id: str, job: Job):
         yield package, pinned_result_root
 
 
-async def _prepare_presentation(job_id: str, session_id: str, job: Job) -> dict[str, Any]:
-    async with _prepared_presentation(job_id, session_id, job) as (package, _pinned_result_root):
+async def _prepare_presentation(
+    job_id: str, session_id: str, job: Job,
+    presentation_row: NgsAlignmentPresentationJob | None = None,
+) -> dict[str, Any]:
+    async with _prepared_presentation(
+        job_id, session_id, job, presentation_row,
+    ) as (package, _pinned_result_root):
         return package
 
 
-def _presentation_response(job_id: str, session_id: str, package: dict[str, Any]) -> dict[str, Any]:
+def _presentation_response(
+    job_id: str,
+    session_id: str,
+    row: NgsAlignmentPresentationJob,
+    package: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    base_response = {
+        "schema": "bms.ngs.alignment-presentation.v2",
+        "job_id": job_id,
+        "session_id": session_id,
+        "mode": row.mode,
+    }
+    if row.state in {"requested", "running"}:
+        return {**base_response, "state": "preparing"}
+    if row.state == "failed":
+        return {
+            **base_response,
+            "state": "failed",
+            "code": row.error_code,
+            "message": "Reads unavailable. Retry from Diagnostics.",
+        }
+    if package is None:
+        raise service.AlignmentSessionError("ready presentation package is unavailable")
     manifest = package["manifest"]
     base = (
         f"/api/jobs/{job_id}/alignment-sessions/{session_id}/presentation/"
         f"{manifest['authority_sha256']}"
     )
     return {
-        "schema": "bms.ngs.alignment-presentation.v1", "job_id": job_id, "session_id": session_id,
-        "mode": manifest["mode"], "state": "ready",
-        "source": {"package_manifest_sha256": manifest["package_manifest_sha256"],
-                   "alignment_sha256": manifest["source_alignment_sha256"],
-                   "alignment_size_bytes": manifest["source_alignment_size_bytes"],
-                   "alignment_index_sha256": manifest["source_index_sha256"],
-                   "alignment_index_size_bytes": manifest["source_index_size_bytes"],
-                   "primary_read_count": manifest["source_primary_mapped_read_count"],
-                   "alignment_record_count": manifest["source_alignment_record_count"]},
-        "policy": manifest["policy"],
-        "preview": {"kind": "primary_read_preview", "selected_read_count": manifest["selected_read_count"],
-                    "selected_record_count": manifest["selected_alignment_record_count"],
-                    "selected_read_set_sha256": manifest["selected_read_set_sha256"],
-                    "forward_count": manifest["selected_strand_counts"]["forward"],
-                    "reverse_count": manifest["selected_strand_counts"]["reverse"],
-                    "bam": _derived_descriptor(package["bam_metadata"], f"{base}/bam"),
-                    "index": _derived_descriptor(package["index_metadata"], f"{base}/bai")},
-        "coverage": {"kind": "full_source_primary_coverage", "bin_width_bp": manifest["coverage_bin_width"],
-                     "primary_read_count": manifest["source_primary_mapped_read_count"],
-                     "artifact": _derived_descriptor(package["coverage_metadata"], f"{base}/coverage")},
+        **base_response,
+        "state": "ready",
+        "presentation_id": row.id,
+        "source": {
+            "package_manifest_sha256": manifest["package_manifest_sha256"],
+            "artifact_set_sha256": manifest["artifact_set_sha256"],
+            "alignment_sha256": manifest["source_alignment_sha256"],
+            "alignment_size_bytes": manifest["source_alignment_size_bytes"],
+            "alignment_index_sha256": manifest["source_index_sha256"],
+            "alignment_index_size_bytes": manifest["source_index_size_bytes"],
+            "logical_read_count": manifest["source_logical_read_count"],
+            "alignment_record_count": manifest["source_alignment_record_count"],
+        },
+        "policy": {
+            "id": manifest["policy"]["id"],
+            "version": manifest["policy"]["version"],
+            "target_reads": manifest["policy"]["target_reads"],
+            "max_preview_records": manifest["policy"]["max_preview_records"],
+            "max_preview_bytes": manifest["policy"]["max_preview_bytes"],
+            "max_build_seconds": manifest["policy"]["max_build_seconds"],
+        },
+        "preview": {
+            "selected_read_count": manifest["selected_read_count"],
+            "selected_record_count": manifest["selected_alignment_record_count"],
+            "selected_read_set_sha256": manifest["selected_read_set_sha256"],
+            "preview_complete_to_target": manifest["preview_complete_to_target"],
+            "bam": _derived_descriptor(package["bam_metadata"], f"{base}/bam"),
+            "index": _derived_descriptor(package["index_metadata"], f"{base}/bai"),
+        },
+        "catalog": manifest["catalog"],
+        "locators": {
+            "schema": manifest["locators"]["schema"],
+            "record_count": manifest["locators"]["record_count"],
+            "content_sha256": manifest["locators"]["content_sha256"],
+            "size_bytes": manifest["locators"]["size_bytes"],
+        },
+        "coverage": {
+            "kind": "full_source_primary_coverage",
+            "primary_read_count": manifest["coverage_primary_read_count"],
+            "descriptor": _derived_descriptor(package["coverage_metadata"], f"{base}/coverage"),
+        },
         "manifest": _derived_descriptor(package["manifest_metadata"], f"{base}/manifest"),
     }
 
@@ -1577,14 +1934,277 @@ def _require_current_locus_authority(receipt: dict[str, Any], presentation: dict
         raise service.AlignmentSessionError("alignment locus slice presentation authority is stale")
 
 
-@router.get("/jobs/{job_id}/alignment-sessions/{session_id}/presentation",
-            response_model=OntAlignmentPresentationV1, responses=_STANDARD_GOVERNED_ERRORS)
-async def get_alignment_presentation(job_id: str, session_id: str, authorized_job: Job = Depends(require_alignment_job)):
+async def _resolve_current_presentation_source(
+    job: Job,
+    row: NgsAlignmentPresentationJob,
+) -> str:
+    authority = _job_session_authority(job)
+    async with _validated_pinned_result_root(job) as pinned_root:
+        available = await run_in_threadpool(
+            service.build_alignment_sessions,
+            str(job.id),
+            **authority,
+            job_output_dir=pinned_root,
+            pinned_root_descriptor=True,
+        )
+        matches = [
+            item for item in available
+            if item.get("ready") is True
+            and item.get("session_id") == row.session_id
+            and item.get("mode") == row.mode
+            and item.get("artifact_set_sha256") == row.source_artifact_set_sha256
+        ]
+        if len(matches) != 1:
+            return ""
+        _bam, bam_meta, _index, index_meta = await run_in_threadpool(
+            service.resolve_session_alignment_bundle,
+            str(job.id),
+            row.session_id,
+            source_reference_sha256=authority["source_reference_sha256"],
+            workflow_id=authority["workflow_id"],
+            input_mode=authority["input_mode"],
+            job_output_dir=pinned_root,
+            pinned_root_descriptor=True,
+        )
+    source_manifest_sha256 = bam_meta.get("source_manifest_sha256")
+    if source_manifest_sha256 != index_meta.get("source_manifest_sha256"):
+        return ""
+    current = {
+        "schema": "bms.ngs.alignment-presentation-source.v1",
+        "job_id": str(job.id),
+        "session_id": row.session_id,
+        "mode": row.mode,
+        "source_reference_sha256": authority["source_reference_sha256"],
+        "source_manifest_sha256": source_manifest_sha256,
+        "source_artifact_set_sha256": matches[0]["artifact_set_sha256"],
+        "package_artifact_set_sha256": authority["package_artifact_set_sha256"],
+        "alignment_pair_sha256": matches[0]["alignment_pair_sha256"],
+        "alignment_sha256": bam_meta.get("sha256"),
+        "alignment_size_bytes": bam_meta.get("size_bytes"),
+        "alignment_index_sha256": index_meta.get("sha256"),
+        "alignment_index_size_bytes": index_meta.get("size_bytes"),
+        "policy_version": row.policy_version,
+    }
+    return hashlib.sha256(rfc8785.dumps(current)).hexdigest()
+
+
+@router.get(
+    "/jobs/{job_id}/alignment-sessions/{session_id}/presentation",
+    response_model=OntAlignmentPresentationV2,
+    responses=_STANDARD_GOVERNED_ERRORS,
+)
+async def get_alignment_presentation(
+    job_id: str,
+    session_id: str,
+    authorized_job: Job = Depends(require_alignment_job),
+    db: AsyncSession = Depends(get_session),
+):
+    row = await _presentation_row(db, job_id, session_id)
+    if row.state != "ready":
+        return _presentation_response(job_id, session_id, row)
     try:
-        async with _prepared_presentation(job_id, session_id, authorized_job) as (package, _pinned_result_root):
-            return _presentation_response(job_id, session_id, package)
+        async with _prepared_presentation(
+            job_id, session_id, authorized_job, row,
+        ) as (package, _pinned_result_root):
+            return _presentation_response(job_id, session_id, row, package)
     except service.AlignmentSessionError as exc:
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc
+
+
+@router.post(
+    "/jobs/{job_id}/alignment-sessions/{session_id}/presentation/retry",
+    response_model=OntAlignmentPresentationV2,
+    responses=_STANDARD_GOVERNED_ERRORS,
+)
+async def retry_alignment_presentation(
+    job_id: str,
+    session_id: str,
+    request: Request,
+    authorized_job: Job = Depends(require_alignment_job),
+    db: AsyncSession = Depends(get_session),
+):
+    try:
+        _mutation_principal(request)
+    except HTTPException as exc:
+        raise OntNgsRouteError(
+            status_code=403,
+            code="NGS_PRINCIPAL_DENIED",
+            message="Job mutation authority is required.",
+            job_id=job_id,
+            resource="presentation",
+        ) from exc
+    row = await _presentation_row(db, job_id, session_id)
+    try:
+        if row.state == "ready":
+            raise presentation_lifecycle.PresentationAlreadyReady()
+        if row.state in {"requested", "running"}:
+            return _presentation_response(job_id, session_id, row)
+        current_source = await _resolve_current_presentation_source(authorized_job, row)
+        retried = await presentation_lifecycle.retry_failed_presentation(
+            db,
+            row.id,
+            current_source_authority_sha256=current_source,
+        )
+    except presentation_lifecycle.PresentationAlreadyReady as exc:
+        raise OntNgsRouteError(
+            status_code=409, code="NGS_PRESENTATION_ALREADY_READY",
+            message="The presentation is already ready.",
+            job_id=job_id, resource="presentation",
+        ) from exc
+    except presentation_lifecycle.PresentationSourceStale as exc:
+        raise OntNgsRouteError(
+            status_code=409, code="NGS_PRESENTATION_SOURCE_STALE",
+            message="The presentation source is no longer current.",
+            job_id=job_id, resource="presentation",
+        ) from exc
+    except presentation_lifecycle.PresentationClaimLost as exc:
+        raise OntNgsRouteError(
+            status_code=409, code="NGS_AUTHORITY_CONFLICT",
+            message="The presentation retry conflicted with a concurrent transition.",
+            job_id=job_id, resource="presentation",
+        ) from exc
+    return _presentation_response(job_id, session_id, retried)
+
+
+async def _current_derived_products(
+    db: AsyncSession, job: Job, session_id: str, preview_request_id: str | None = None,
+    *, include_preview: bool = True,
+) -> tuple[NgsAlignmentDerivedProduct | None, NgsAlignmentDerivedProduct | None]:
+    # Scientific completion receipts, not row timestamps, select the current
+    # catalog generation. Old combined receipts are never relabelled as v2.
+    provenance = job.provenance if isinstance(job.provenance, dict) else {}
+    integrity = provenance.get("result_integrity")
+    receipts = integrity.get("alignment_presentations", []) if isinstance(integrity, dict) else []
+    matches = [item for item in receipts if isinstance(item, dict)
+               and item.get("session_id") == session_id
+               and str(item.get("request_id", "")).startswith("ngs-catalog-")]
+    if len(matches) != 1:
+        return None, None
+    receipt = matches[0]
+    catalog = await db.get(NgsAlignmentDerivedProduct, receipt["request_id"])
+    if catalog is None:
+        return None, None
+    if (catalog.job_id != str(job.id) or catalog.session_id != session_id
+            or catalog.product != "catalog"
+            or catalog.source_authority_sha256 != receipt.get("source_authority_sha256")
+            or catalog.source_authority_sha256 != derived_products.identity_sha256(catalog.source_identity)
+            or derived_products.catalog_request_id(catalog.source_identity) != catalog.id):
+        raise OntNgsRouteError(status_code=409, code="NGS_AUTHORITY_CONFLICT",
+            message="Catalog receipt does not match its scientific source.",
+            job_id=str(job.id), resource="presentation")
+    if not include_preview:
+        return catalog, None
+    preview = None
+    if preview_request_id is None:
+        preview_request_id = derived_products.default_preview_request_id(catalog)
+        preview = await db.get(NgsAlignmentDerivedProduct, preview_request_id)
+        if preview is None:
+            return catalog, None
+    if preview_request_id is not None:
+        preview = await db.get(NgsAlignmentDerivedProduct, preview_request_id)
+        if (preview is None or preview.product != "preview" or preview.catalog_request_id != catalog.id
+                or preview.job_id != str(job.id) or preview.session_id != session_id
+                or preview.source_authority_sha256 != catalog.source_authority_sha256
+                or preview.id != "ngs-preview-" + derived_products.identity_sha256(preview.request_contract)
+                or preview.request_contract.get("catalog_request_id") != catalog.id):
+            raise OntNgsRouteError(status_code=409, code="NGS_AUTHORITY_CONFLICT",
+                message="Preview request does not belong to the current catalog.",
+                job_id=str(job.id), resource="presentation")
+    return catalog, preview
+
+
+def _derived_response(job_id: str, session_id: str, catalog, preview):
+    return {"schema": "bms.ngs.alignment-presentation.v3", "job_id": job_id,
+            "session_id": session_id, "catalog": derived_products.product_status(catalog),
+            "preview": derived_products.product_status(preview, catalog=catalog)}
+
+
+@router.get("/jobs/{job_id}/alignment-sessions/{session_id}/presentation/status",
+            response_model=OntAlignmentPresentationV3,
+            responses=_STANDARD_GOVERNED_ERRORS)
+async def get_alignment_derived_status(
+    job_id: str, session_id: str, preview_request_id: str | None = Query(default=None, max_length=96),
+    authorized_job: Job = Depends(require_alignment_job), db: AsyncSession = Depends(get_session),
+):
+    catalog, preview = await _current_derived_products(db, authorized_job, session_id, preview_request_id)
+    return _derived_response(job_id, session_id, catalog, preview)
+
+
+async def _current_derived_source(job: Job, row: NgsAlignmentDerivedProduct) -> str:
+    current, _inputs = await run_in_threadpool(derived_products.resolve_product_source, job, row)
+    return derived_products.identity_sha256(current)
+
+
+@router.post("/jobs/{job_id}/alignment-sessions/{session_id}/presentation/products/{product}/retry",
+             response_model=OntAlignmentPresentationV3,
+             responses=_STANDARD_GOVERNED_ERRORS)
+async def retry_alignment_derived_product(
+    job_id: str, session_id: str, product: Literal["catalog", "preview"],
+    payload: OntDerivedRetryV3, request: Request,
+    authorized_job: Job = Depends(require_alignment_job), db: AsyncSession = Depends(get_session),
+):
+    try:
+        _mutation_principal(request)
+    except HTTPException as exc:
+        raise OntNgsRouteError(status_code=403, code="NGS_PRINCIPAL_DENIED",
+            message="Job mutation authority is required.", job_id=job_id, resource="presentation") from exc
+    catalog, preview = await _current_derived_products(
+        db, authorized_job, session_id, payload.request_id if product == "preview" else None)
+    row = catalog if product == "catalog" else preview
+    if row is None or row.id != payload.request_id:
+        raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND",
+            message="The current derived request was not found.", job_id=job_id, resource="presentation")
+    try:
+        current_source = await _current_derived_source(authorized_job, row)
+        await derived_products.retry_product(db, row, current_source_authority_sha256=current_source)
+    except presentation_lifecycle.PresentationAlreadyReady as exc:
+        raise OntNgsRouteError(status_code=409, code="NGS_PRESENTATION_ALREADY_READY",
+            message="This product is already ready.", job_id=job_id, resource="presentation") from exc
+    except (presentation_lifecycle.PresentationSourceStale, service.AlignmentSessionError, ValueError) as exc:
+        raise OntNgsRouteError(status_code=409, code="NGS_PRESENTATION_SOURCE_STALE",
+            message="The source is no longer valid for this request. Reopen the accepted native result.",
+            job_id=job_id, resource="presentation") from exc
+    except presentation_lifecycle.PresentationClaimLost as exc:
+        raise OntNgsRouteError(status_code=409, code="NGS_AUTHORITY_CONFLICT",
+            message="Retry conflicted with another transition. Refresh the product state.",
+            job_id=job_id, resource="presentation") from exc
+    return _derived_response(job_id, session_id, catalog, preview)
+
+
+@router.post("/jobs/{job_id}/alignment-sessions/{session_id}/presentation/products/{product}/cache/retry",
+             response_model=OntAlignmentPresentationV3, responses=_STANDARD_GOVERNED_ERRORS)
+async def retry_alignment_product_delivery_cache(
+    job_id: str, session_id: str, product: Literal["catalog", "preview"],
+    payload: OntDerivedRetryV3, request: Request,
+    authorized_job: Job = Depends(require_alignment_job), db: AsyncSession = Depends(get_session),
+):
+    try:
+        _mutation_principal(request)
+    except HTTPException as exc:
+        raise OntNgsRouteError(status_code=403, code="NGS_PRINCIPAL_DENIED",
+            message="Job mutation authority is required.", job_id=job_id, resource="presentation") from exc
+    catalog, preview = await _current_derived_products(
+        db, authorized_job, session_id, payload.request_id if product == "preview" else None)
+    row = catalog if product == "catalog" else preview
+    if row is None or row.id != payload.request_id or row.state != "ready":
+        raise OntNgsRouteError(status_code=409, code="NGS_AUTHORITY_CONFLICT",
+            message="The exact ready product is required for delivery-cache retry.",
+            job_id=job_id, resource="presentation")
+    from services.ngs_alignment_catalog_reader import retry_delivery_cache
+    try:
+        await run_in_threadpool(retry_delivery_cache, authorized_job, row,
+            Path(resolve_persisted_job_result_root(authorized_job)) / ".alignment-products")
+    except presentation_lifecycle.PresentationSourceStale as exc:
+        raise OntNgsRouteError(status_code=409, code="NGS_PRESENTATION_SOURCE_STALE",
+            message="The accepted source changed. Reopen the native result.",
+            job_id=job_id, resource="presentation") from exc
+    except service.AlignmentSessionError as exc:
+        if "capacity" in str(exc).lower():
+            return _ngs_error_response(status_code=503, code="NGS_READ_CAPACITY_UNAVAILABLE",
+                message="Delivery-cache capacity is unavailable or readers are still active. Close readers and retry explicitly.",
+                job_id=job_id, resource="artifact")
+        raise _http_error(exc, job_id=job_id, resource="artifact") from exc
+    return _derived_response(job_id, session_id, catalog, preview)
 
 
 @router.get("/jobs/{job_id}/alignment-sessions/{session_id}/presentation/{kind}", responses=_BINARY_RESPONSES)
@@ -1593,13 +2213,15 @@ async def get_alignment_presentation(job_id: str, session_id: str, authorized_jo
 @router.head("/jobs/{job_id}/alignment-sessions/{session_id}/presentation/{presentation_id}/{kind}", responses=_BINARY_RESPONSES)
 async def get_alignment_presentation_artifact(job_id: str, session_id: str, kind: str, request: Request,
                                                authorized_job: Job = Depends(require_alignment_job),
-                                               presentation_id: str | None = None):
+                                               presentation_id: str | None = None,
+                                               db: AsyncSession = Depends(get_session)):
     if kind not in {"bam", "bai", "coverage", "manifest"}:
         raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND",
                                message="The governed presentation artifact was not found.",
                                job_id=job_id, resource="artifact")
     try:
-        async with _prepared_presentation(job_id, session_id, authorized_job) as (package, _pinned_result_root):
+        row = await _presentation_row(db, job_id, session_id)
+        async with _prepared_presentation(job_id, session_id, authorized_job, row) as (package, _pinned_result_root):
             if presentation_id is not None and presentation_id != package["manifest"].get("authority_sha256"):
                 raise service.AlignmentSessionError("alignment presentation identity does not match")
             path_key, metadata_key = {"bam": ("bam_path", "bam_metadata"), "bai": ("index_path", "index_metadata"),
@@ -1987,3 +2609,633 @@ async def get_alignment_read(
         status_code=404, code="NGS_RESOURCE_NOT_FOUND", message="The governed read was not found.",
         job_id=job_id, resource="read",
     )
+
+
+from services.ngs_alignment_catalog_query import SORT_FIELDS as CATALOG_SORT_FIELDS, unavailable_signal
+
+
+class OntCatalogReadV2(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    read_id: str
+    source_record_count: int
+    mapped_primary_count: int
+    supplementary_count: int
+    mapped_supplementary_count: int
+    secondary_count: int
+    unmapped_count: int
+    alignment_state: Literal["mapped_primary", "ambiguous_primary", "unmapped", "no_primary"]
+    length: int | None
+    mean_quality: float | None
+    contig: str | None
+    start_1based: int | None
+    alignment_end_1based: int | None
+    strand: str | None
+    mapq: int | None
+    cigar: str | None
+    flags: int | None
+    unmapped: bool
+    aligned_query_bases: int | None
+    aligned_reference_bases: int | None
+    inserted_bases: int | None
+    deleted_bases: int | None
+    skipped_reference_bases: int | None
+    clipped_bases: int | None
+    edit_distance: int | None
+    reference_substitution_count: int | None
+    reference_substitution_rate: float | None
+    aligned_fraction: float | None
+    clipped_fraction: float | None
+    reference_disagreement_rate: float | None
+    in_preview: bool | None
+    overlay_eligible: bool
+    overlay_unavailable_reason: Literal["already_in_preview", "unmapped", "ambiguous_primary", "no_primary", "record_limit", "writer_unsupported", "byte_limit"] | None
+    signal_available: bool
+    sample_count: int | None = None
+    duration_seconds: float | None = None
+    sampling_rate_hz: int | None = None
+    current_mean_pa: float | None = None
+    current_median_pa: float | None = None
+    current_stddev_pa: float | None = None
+    current_mad_pa: float | None = None
+    current_min_pa: float | None = None
+    current_max_pa: float | None = None
+    channel_number: int | None = None
+    start_mux: int | None = None
+    acquisition_start_seconds: float | None = None
+    time_since_mux_change_seconds: float | None = None
+    median_before_pa: float | None = None
+    open_pore_level_pa: float | None = None
+    minknow_event_rate_per_second: float | None = None
+    dorado_emission_rate_bases_per_second: float | None = None
+    mapped_signal_span_samples: int | None = None
+    samples_per_aligned_reference_base: float | None = None
+
+
+class OntCatalogRecordV2(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    read_id: str
+    source_record_ordinal: int
+    record_class: Literal["primary", "supplementary", "secondary", "unmapped"]
+    length: int | None
+    mean_quality: float | None
+    contig: str | None
+    start_1based: int | None
+    alignment_end_1based: int | None
+    strand: Literal["+", "-"]
+    mapq: int | None
+    cigar: str | None
+    flags: int
+    unmapped: bool
+    sequence: str | None = None
+    quality: str | None = None
+
+
+class OntCatalogEnvelopeV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    job_id: str
+    session_id: str
+    population_id: str
+    catalog_authority_sha256: str
+    preview_authority: str | None
+    signal_snapshot_id: str | None
+    signal_metrics_state: Literal["ready", "unavailable", "invalid"] = "unavailable"
+    signal_metrics_artifact_sha256: str | None = None
+    signal_cache_retry_sha256: str | None = None
+    raw_run_id: str | None = None
+    raw_observed_generation: int | None = None
+    raw_representation_id: str | None = None
+    raw_representation_manifest_sha256: str | None = None
+
+
+class OntCatalogPageV3(OntCatalogEnvelopeV2):
+    schema_version: Literal["bms.ngs.read-page.v3"] = Field(alias="schema")
+    source_read_count: int
+    source_record_count: int
+    filtered_read_count: int
+    reads: list[OntCatalogReadV2]
+    next_cursor: str | None
+    limit: int
+    sort_by: str
+    sort_direction: Literal["asc", "desc"]
+    locus: dict[str, str | int] | None
+    null_order: Literal["last"]
+    tie_breaker: list[Literal["read_id"]]
+
+
+class OntCatalogLookupResponseV2(OntCatalogEnvelopeV2):
+    schema_version: Literal["bms.ngs.read-lookup.v2"] = Field(alias="schema")
+    read: OntCatalogReadV2
+    sequence_available: bool
+    record: OntCatalogRecordV2 | None
+
+
+class OntCatalogRecordPageV2(OntCatalogEnvelopeV2):
+    schema_version: Literal["bms.ngs.alignment-record-page.v2"] = Field(alias="schema")
+    read_id: str
+    total_record_count: int
+    records: list[OntCatalogRecordV2]
+    next_cursor: str | None
+    limit: int
+
+
+class OntCatalogLookupV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True, strict=True)
+    schema_version: Literal["bms.ngs.read-lookup-request.v2"] = Field(alias="schema")
+    raw_run_id: str | None = None
+    raw_observed_generation: int | None = Field(default=None, ge=1)
+    raw_representation_id: str | None = None
+    read_id: str = Field(min_length=1, max_length=254)
+    include_sequence: bool = False
+    population_id: str | None = None
+
+
+class OntCatalogRecordQueryV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True, strict=True)
+    schema_version: Literal["bms.ngs.alignment-record-query.v2"] = Field(alias="schema")
+    raw_run_id: str | None = None
+    raw_observed_generation: int | None = Field(default=None, ge=1)
+    raw_representation_id: str | None = None
+    read_id: str = Field(min_length=1, max_length=254)
+    include_sequence: bool = False
+    population_id: str | None = None
+    cursor: str | None = Field(default=None, max_length=4096)
+    limit: int = Field(default=50, ge=1, le=200)
+
+    @model_validator(mode="after")
+    def sequence_page_limit(self):
+        if self.include_sequence and self.limit > 10:
+            raise ValueError("Sequence record pages allow at most 10 records.")
+        return self
+
+
+async def _catalog_signal(job, db, raw_run_id=None, raw_observed_generation=None, raw_representation_id=None):
+    from services.ont_read_metrics import find_read_metric_receipt, _receipt_reference, RAW_READ_METRICS_OWNER_KIND, RAW_READ_METRICS_ROLE
+    from database import ScientificArtifactReceipt
+    state = unavailable_signal(raw_run_id=raw_run_id, raw_observed_generation=raw_observed_generation,
+                               raw_representation_id=raw_representation_id)
+    if all(value is None for value in (raw_run_id, raw_observed_generation, raw_representation_id)):
+        return state
+    params = job.params if isinstance(job.params, dict) else {}
+    if (not raw_run_id or type(raw_observed_generation) is not int or raw_observed_generation < 1
+            or not raw_representation_id or params.get("source_instrument_run_id") != raw_run_id
+            or params.get("source_instrument_observed_generation") != raw_observed_generation):
+        raise OntNgsRouteError(status_code=400, code="NGS_READ_QUERY_INVALID",
+            message="Raw selectors must match the persisted scientific input.", job_id=str(job.id), resource="read")
+    representation = await db.get(OntRawSignalRepresentation, raw_representation_id)
+    if representation is None or representation.state != "ready":
+        return state
+    if (representation.run_id != raw_run_id or representation.observed_generation != raw_observed_generation
+            or representation.format != "blow5"):
+        raise OntNgsRouteError(status_code=400, code="NGS_READ_QUERY_INVALID",
+            message="Raw representation is not bound to this scientific input.", job_id=str(job.id), resource="read")
+    if not representation.manifest_sha256 or re.fullmatch(r"[0-9a-f]{64}", representation.manifest_sha256) is None:
+        state["signal_metrics_state"] = "invalid"
+        return state
+    try:
+        receipt = await find_read_metric_receipt(db, representation)
+    except OntReadMetricError:
+        state["raw_representation_manifest_sha256"] = representation.manifest_sha256
+        state["signal_metrics_state"] = "invalid"
+        return state
+    if receipt is not None:
+        state["raw_representation_manifest_sha256"] = representation.manifest_sha256
+        state["artifact"] = _receipt_reference(receipt)
+    else:
+        purported = await db.scalar(select(ScientificArtifactReceipt.artifact_id).where(
+            ScientificArtifactReceipt.owner_kind == RAW_READ_METRICS_OWNER_KIND,
+            ScientificArtifactReceipt.owner_id == representation.id,
+            ScientificArtifactReceipt.role == RAW_READ_METRICS_ROLE,
+            ScientificArtifactReceipt.availability == "available",
+        ).limit(1))
+        if purported is not None:
+            state["raw_representation_manifest_sha256"] = representation.manifest_sha256
+            state["signal_metrics_state"] = "invalid"
+    return state
+
+
+async def _catalog_query(job, session_id, db, operation, **kwargs):
+    from services import ngs_alignment_catalog_reader as reader
+    if "read_id" in kwargs:
+        try:
+            reader.records._validate_read_id(kwargs["read_id"])
+        except (ValueError, UnicodeError) as exc:
+            raise OntNgsRouteError(status_code=400, code="NGS_READ_ID_INVALID",
+                message="The literal BAM read identity is invalid.", job_id=str(job.id), resource="read") from exc
+    catalog, _preview = await _current_derived_products(db, job, session_id, include_preview=False)
+    if catalog is None or catalog.state != "ready":
+        raise OntNgsRouteError(status_code=409, code="NGS_CATALOG_NOT_READY",
+            message="The complete catalog is not ready.", job_id=str(job.id), resource="read")
+    try:
+        # The accepted receipt selects the catalog. Preview readiness never
+        # participates in read authority and a GET never creates an intent.
+        root = Path(resolve_persisted_job_result_root(job)) / ".alignment-products"
+        args = (job, catalog, root)
+        preview = await db.get(NgsAlignmentDerivedProduct, derived_products.default_preview_request_id(catalog))
+        result = await run_in_threadpool(getattr(reader, operation), *args, **kwargs)
+        return await run_in_threadpool(reader.decorate_preview, catalog, preview, root, result)
+    except reader.CatalogReadError as exc:
+        raise OntNgsRouteError(status_code=exc.status, code=exc.code, message=str(exc),
+            job_id=str(job.id), resource="read") from exc
+    except presentation_lifecycle.PresentationSourceStale as exc:
+        raise OntNgsRouteError(status_code=409, code="NGS_PRESENTATION_SOURCE_STALE",
+            message="The accepted catalog source changed.", job_id=str(job.id), resource="read") from exc
+    except service.AlignmentSessionError as exc:
+        if any(word in str(exc).lower() for word in ("capacity", "snapshot limit")):
+            raise OntNgsRouteError(status_code=503, code="NGS_READ_CAPACITY_UNAVAILABLE",
+                message="Verified read delivery capacity is unavailable.", job_id=str(job.id), resource="read") from exc
+        raise _http_error(exc, job_id=str(job.id), resource="read") from exc
+    except (ValueError, UnicodeError, KeyError, TypeError, OSError) as exc:
+        raise OntNgsRouteError(status_code=409, code="NGS_ARTIFACT_INTEGRITY_CONFLICT",
+            message="The catalog artifact authority is unavailable or invalid.", job_id=str(job.id), resource="read") from exc
+
+
+@router.get("/jobs/{job_id}/alignment-sessions/{session_id}/reads", response_model=OntCatalogPageV3, responses=_typed_errors(400, 403, 404, 409, 503))
+async def list_catalog_reads(
+    job_id: str, session_id: str, request: Request,
+    search: str = Query(default="", max_length=254), q: str | None = Query(default=None, max_length=254),
+    alignment_state: Literal["mapped_primary", "ambiguous_primary", "unmapped", "no_primary"] | None = None,
+    sort_by: str = "read_id", sort_direction: Literal["asc", "desc"] = "asc",
+    contig: str | None = None, start_1based: int | None = None, end_1based: int | None = None,
+    metric_min: float | None = None, metric_max: float | None = None,
+    raw_run_id: str | None = None, raw_observed_generation: int | None = None, raw_representation_id: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200), cursor: str | None = Query(default=None, max_length=4096),
+    population_id: str | None = None,
+    authorized_job: Job = Depends(require_alignment_job), db: AsyncSession = Depends(get_session),
+):
+    allowed = {"search", "q", "alignment_state", "limit", "cursor", "population_id", "sort_by", "sort_direction",
+        "contig", "start_1based", "end_1based", "metric_min", "metric_max", "raw_run_id", "raw_observed_generation", "raw_representation_id"}
+    if (any(key not in allowed or len(request.query_params.getlist(key)) != 1 for key in request.query_params)
+            or (q is not None and "search" in request.query_params) or sort_by not in CATALOG_SORT_FIELDS):
+        raise OntNgsRouteError(status_code=400, code="NGS_READ_QUERY_INVALID",
+            message="Unsupported, ambiguous or duplicate catalog query fields.", job_id=job_id, resource="read")
+    signal = await _catalog_signal(authorized_job, db, raw_run_id, raw_observed_generation, raw_representation_id)
+    return await _catalog_query(authorized_job, session_id, db, "read_page", search=q if q is not None else search,
+        alignment_state=alignment_state, limit=limit, cursor=cursor, population_id=population_id,
+        sort_by=sort_by, sort_direction=sort_direction, contig=contig, start_1based=start_1based,
+        end_1based=end_1based, metric_min=metric_min, metric_max=metric_max, signal=signal)
+
+
+@router.post("/jobs/{job_id}/alignment-sessions/{session_id}/reads/lookup", response_model=OntCatalogLookupResponseV2, responses=_typed_errors(400, 403, 404, 409, 503))
+async def lookup_catalog_read(job_id: str, session_id: str, body: OntCatalogLookupV2,
+    authorized_job: Job = Depends(require_alignment_job), db: AsyncSession = Depends(get_session),
+):
+    signal = await _catalog_signal(authorized_job, db, body.raw_run_id, body.raw_observed_generation, body.raw_representation_id)
+    return await _catalog_query(authorized_job, session_id, db, "exact_read", read_id=body.read_id,
+        include_sequence=body.include_sequence, population_id=body.population_id, signal=signal)
+
+
+@router.post("/jobs/{job_id}/alignment-sessions/{session_id}/reads/records/query", response_model=OntCatalogRecordPageV2, responses=_typed_errors(400, 403, 404, 409, 503))
+async def query_catalog_records(job_id: str, session_id: str, body: OntCatalogRecordQueryV2,
+    authorized_job: Job = Depends(require_alignment_job), db: AsyncSession = Depends(get_session),
+):
+    signal = await _catalog_signal(authorized_job, db, body.raw_run_id, body.raw_observed_generation, body.raw_representation_id)
+    return await _catalog_query(authorized_job, session_id, db, "record_page", read_id=body.read_id,
+        include_sequence=body.include_sequence, population_id=body.population_id,
+        cursor=body.cursor, limit=body.limit, signal=signal)
+
+
+class OntNativeCatalogSessionV2(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    session_id: str
+    mode: Literal["primary"]
+    source_authority_sha256: str
+    reference: OntAlignmentReferenceV1
+
+
+class OntNativeCatalogDiscoveryV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    schema_version: Literal["bms.ngs.native-catalog-sessions.v2"] = Field(alias="schema")
+    job_id: str
+    native: bool
+    sessions: list[OntNativeCatalogSessionV2]
+    unavailable_reason: Literal["unsupported_source", "source_invalid"] | None = None
+
+
+@router.get("/jobs/{job_id}/catalog-sessions", response_model=OntNativeCatalogDiscoveryV2,
+            responses=_STANDARD_GOVERNED_ERRORS)
+async def discover_native_catalog_sessions(job_id: str, authorized_job: Job = Depends(require_alignment_job)):
+    from services import ngs_native_alignment_sources as native
+    response = {"schema": "bms.ngs.native-catalog-sessions.v2", "job_id": job_id,
+                "native": native.is_native(authorized_job), "sessions": [], "unavailable_reason": None}
+    if not response["native"]:
+        return response
+    if (authorized_job.status != "completed" or authorized_job.queue_status != "completed"
+            or authorized_job.awaiting_input):
+        response["unavailable_reason"] = "source_invalid"
+        return response
+    def discover():
+        with native.result_root(authorized_job) as root:
+            return [{"session_id": source["session_id"], "mode": source["mode"],
+                     "source_authority_sha256": derived_products.identity_sha256(source),
+                     "reference": source["reference"]}
+                    for source, _inputs in native.sources(authorized_job, root)]
+    try:
+        response["sessions"] = await run_in_threadpool(discover)
+        if not response["sessions"]:
+            response["unavailable_reason"] = "unsupported_source"
+    except (service.AlignmentSessionError, OSError, ValueError, TypeError, KeyError):
+        response["unavailable_reason"] = "source_invalid"
+    return response
+
+
+class OntPreviewSourceV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    schema_version: Literal["bms.ngs.alignment-presentation-source.v2"] = Field(alias="schema")
+    job_id: str
+    session_id: str
+    mode: Literal["primary", "dimer_candidates"]
+    reference: OntAlignmentReferenceV1
+    source_manifest_sha256: str
+    source_artifact_set_sha256: str
+    package_artifact_set_sha256: str
+    alignment_pair_sha256: str
+    alignment_sha256: str
+    alignment_size_bytes: int = Field(gt=0)
+    alignment_index_sha256: str
+    alignment_index_size_bytes: int = Field(gt=0)
+
+
+class OntPreviewWriterV6(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    pysam: str
+    htslib: str
+    mode: Literal["wb6"]
+    threads: Literal[1]
+    record_order: Literal["reference_start_source_ordinal"]
+    selection: Literal["stratified_largest_remainder_sha256_v1"]
+
+
+class OntPreviewPolicyV6(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    schema_version: Literal["bms.ngs.alignment-preview-policy.v6"] = Field(alias="schema")
+    target_reads: Literal[5000]
+    max_records: Literal[20000]
+    max_bytes: Literal[67108864]
+    projection: Literal["alignment_core_projection_v1"]
+    header_policy: Literal["sq_coordinate_v1"]
+    bgzf_admission_version: Literal[2]
+    writer_contract: OntPreviewWriterV6
+
+
+class OntPreviewArtifactV6(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    url: str
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size_bytes: int = Field(gt=0)
+    mime_type: Literal["application/octet-stream"]
+    range_capable: Literal[True]
+
+
+class OntReadyPreviewV6(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    schema_version: Literal["bms.ngs.alignment-preview.v6"] = Field(alias="schema")
+    job_id: str
+    session_id: str
+    source: OntPreviewSourceV2
+    catalog_authority_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    preview_request_id: str
+    preview_authority_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    policy: OntPreviewPolicyV6
+    selected_read_count: int = Field(ge=0, le=5000)
+    selected_record_count: int = Field(ge=0, le=20000)
+    bam: OntPreviewArtifactV6
+    index: OntPreviewArtifactV6
+
+
+@router.get("/jobs/{job_id}/alignment-sessions/{session_id}/preview-product", response_model=OntReadyPreviewV6, responses=_STANDARD_GOVERNED_ERRORS)
+async def get_alignment_preview_product(job_id: str, session_id: str,
+        preview_request_id: str = Query(max_length=96),
+        authorized_job: Job = Depends(require_alignment_job), db: AsyncSession = Depends(get_session)):
+    from services import ngs_alignment_product_reader as reader
+    catalog, preview = await _current_derived_products(db, authorized_job, session_id, preview_request_id)
+    try:
+        root = Path(resolve_persisted_job_result_root(authorized_job)) / ".alignment-products"
+        return await run_in_threadpool(reader.preview_response, authorized_job, catalog, preview, root)
+    except reader.CatalogReadError as exc:
+        raise OntNgsRouteError(status_code=exc.status, code=exc.code, message=str(exc), job_id=job_id, resource="presentation") from exc
+    except (service.AlignmentSessionError, presentation_lifecycle.PresentationSourceStale, ValueError, OSError, KeyError, TypeError) as exc:
+        raise _http_error(service.AlignmentSessionError(str(exc)), job_id=job_id, resource="presentation") from exc
+
+
+@router.get("/jobs/{job_id}/alignment-sessions/{session_id}/presentation/products/preview/{preview_request_id}/{authority}/{kind}", responses=_BINARY_RESPONSES)
+@router.head("/jobs/{job_id}/alignment-sessions/{session_id}/presentation/products/preview/{preview_request_id}/{authority}/{kind}", responses=_BINARY_RESPONSES)
+async def get_alignment_preview_product_artifact(job_id: str, session_id: str, preview_request_id: str,
+        authority: str, kind: Literal["bam", "index"], request: Request,
+        authorized_job: Job = Depends(require_alignment_job), db: AsyncSession = Depends(get_session)):
+    from services import ngs_alignment_product_reader as reader
+    catalog, preview = await _current_derived_products(db, authorized_job, session_id, preview_request_id)
+    try:
+        if preview is None or preview.authority_sha256 != authority:
+            raise service.AlignmentSessionError("preview artifact identity changed")
+        root = Path(resolve_persisted_job_result_root(authorized_job)) / ".alignment-products"
+        async with contextmanager_in_threadpool(reader.preview_snapshot(authorized_job, catalog, preview, root)) as (directory, manifest):
+            metadata = manifest["authority"]["artifacts"][kind]
+            return await _serve_artifact(directory / metadata["filename"],
+                {**metadata, "mime_type": "application/octet-stream"}, request, job_id=job_id)
+    except reader.CatalogReadError as exc:
+        raise OntNgsRouteError(status_code=exc.status, code=exc.code, message=str(exc), job_id=job_id, resource="artifact") from exc
+    except (service.AlignmentSessionError, presentation_lifecycle.PresentationSourceStale, ValueError, OSError, KeyError, TypeError) as exc:
+        raise _http_error(service.AlignmentSessionError(str(exc)), job_id=job_id, resource="artifact") from exc
+
+
+class OntReadOverlayRequestV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True, strict=True)
+    schema_version: Literal["bms.ngs.read-overlay-request.v2"] = Field(alias="schema")
+    read_id: str = Field(min_length=1, max_length=254)
+    population_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class OntOverlayHeaderV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    raw_bytes: int = Field(ge=12)
+
+
+class OntOverlayCatalogArtifactV2(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    filename: Literal["read-catalog.parquet", "read-record-locators.parquet"]
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size_bytes: int = Field(gt=0)
+
+
+class OntOverlayCatalogArtifactsV2(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    catalog: OntOverlayCatalogArtifactV2
+    locators: OntOverlayCatalogArtifactV2
+
+
+class OntOverlayWriterV2(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    pysam: str = Field(min_length=1)
+    htslib: str = Field(min_length=1)
+    mode: Literal["wb6"]
+    threads: Literal[1]
+    order: Literal["reference_start_source_ordinal"]
+
+
+class OntOverlayPolicyV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    schema_version: Literal["bms.ngs.read-overlay-policy.v2"] = Field(alias="schema")
+    max_records: Literal[256]
+    max_bam_bytes: Literal[16777216]
+    max_index_bytes: Literal[1048576]
+    max_seconds: Literal[10]
+    tags: Literal["all_exact_source_tags_v1"]
+    header: Literal["exact_source_header_v1"]
+    bgzf_admission_version: Literal[2]
+    writer: OntOverlayWriterV2
+
+
+class OntOverlayIdentityV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    schema_version: Literal["bms.ngs.read-overlay-identity.v2"] = Field(alias="schema")
+    source: OntPreviewSourceV2
+    catalog_authority_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    catalog_artifacts: OntOverlayCatalogArtifactsV2
+    source_header: OntOverlayHeaderV1
+    read_id: str
+    policy: OntOverlayPolicyV2
+
+
+class OntReadOverlayErrorV2(OntNgsErrorV1):
+    reason: Literal["already_in_preview", "unmapped", "ambiguous_primary", "no_primary", "record_limit", "writer_unsupported", "byte_limit"] | None = None
+
+
+class OntReadOverlayV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    schema_version: Literal["bms.ngs.read-overlay.v2"] = Field(alias="schema")
+    job_id: str
+    session_id: str
+    read_id: str
+    overlay_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    catalog_authority_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    identity: OntOverlayIdentityV2
+    state: Literal["ready"]
+    primary_record_count: Literal[1]
+    mapped_supplementary_record_count: int = Field(ge=0, le=255)
+    bam: OntPreviewArtifactV6
+    index: OntPreviewArtifactV6
+    manifest: OntPreviewArtifactV6
+
+
+def _overlay_error(exc, job_id):
+    from services.ngs_read_overlays import OverlayError
+    if isinstance(exc, OverlayError):
+        payload = {"schema": "bms.ngs.error.v1", "code": exc.code, "message": str(exc),
+            "job_id": job_id, "resource": "read", "retryable": False}
+        if exc.reason is not None:
+            payload["reason"] = exc.reason
+        return JSONResponse(status_code=exc.status, content=payload)
+    if isinstance(exc, service._AlignmentDerivativeTimeout):
+        return _ngs_error_response(status_code=503, code="NGS_READ_OVERLAY_TIMEOUT",
+            message="Selected-read preparation timed out. Retry explicitly.", job_id=job_id, resource="read")
+    from services.ngs_alignment_catalog_reader import CatalogReadError
+    if isinstance(exc, CatalogReadError):
+        return _ngs_error_response(status_code=exc.status, code=exc.code, message=str(exc), job_id=job_id, resource="read")
+    if isinstance(exc, OSError) and exc.errno in {28, 122} or any(word in str(exc).lower() for word in ("capacity", "snapshot limit")):
+        return _ngs_error_response(status_code=503, code="NGS_READ_CAPACITY_UNAVAILABLE",
+            message="Selected-read capacity is unavailable.", job_id=job_id, resource="read")
+    return _ngs_error_response(status_code=409, code="NGS_ARTIFACT_INTEGRITY_CONFLICT",
+        message="The exact selected-read authority could not be verified.", job_id=job_id, resource="read")
+
+
+@router.post("/jobs/{job_id}/alignment-sessions/{session_id}/read-overlays/cache/retry",
+             status_code=204, responses=_STANDARD_GOVERNED_ERRORS)
+async def retry_selected_read_delivery_cache(job_id: str, session_id: str, body: OntReadOverlayRequestV2,
+        request: Request, authorized_job: Job = Depends(require_alignment_job),
+        db: AsyncSession = Depends(get_session)):
+    _require_cache_retry_principal(request, job_id)
+    from services import ngs_read_overlays as overlays
+    catalog, _ = await _current_derived_products(db, authorized_job, session_id, include_preview=False)
+    if catalog is None or catalog.state != "ready":
+        return _ngs_error_response(status_code=409, code="NGS_CATALOG_NOT_READY",
+            message="The complete catalog is not ready.", job_id=job_id, resource="read")
+    try:
+        root = Path(resolve_persisted_job_result_root(authorized_job)) / ".alignment-products"
+        await run_in_threadpool(overlays.retry_selected_cache, authorized_job, catalog, root,
+            read_id=body.read_id, population_id=body.population_id)
+        return Response(status_code=204, headers={"Cache-Control": "no-store"})
+    except (overlays.reader.CatalogReadError, service.AlignmentSessionError,
+            presentation_lifecycle.PresentationSourceStale, OSError, ValueError, KeyError, TypeError) as exc:
+        return _overlay_error(exc, job_id)
+
+
+@router.post("/jobs/{job_id}/alignment-sessions/{session_id}/read-overlays", response_model=OntReadOverlayV2,
+             responses={**_typed_errors(400, 403, 404, 409, 503), 409: {"model": OntReadOverlayErrorV2}})
+async def create_read_overlay(job_id: str, session_id: str, body: OntReadOverlayRequestV2,
+        authorized_job: Job = Depends(require_alignment_job), db: AsyncSession = Depends(get_session)):
+    import time
+    from services import ngs_read_overlays as overlays
+    deadline = time.monotonic() + overlays.bounds.MAX_SECONDS
+    try:
+        overlays.reader.records._validate_read_id(body.read_id)
+    except (ValueError, UnicodeError):
+        return _ngs_error_response(status_code=400, code="NGS_READ_ID_INVALID",
+            message="The literal BAM read identity is invalid.", job_id=job_id, resource="read")
+    catalog, _ = await _current_derived_products(db, authorized_job, session_id, include_preview=False)
+    if catalog is None or catalog.state != "ready":
+        return _ngs_error_response(status_code=409, code="NGS_CATALOG_NOT_READY",
+            message="The complete catalog is not ready.", job_id=job_id, resource="read")
+    preview = await db.get(NgsAlignmentDerivedProduct, derived_products.default_preview_request_id(catalog))
+    try:
+        root = Path(resolve_persisted_job_result_root(authorized_job)) / ".alignment-products"
+        return await run_in_threadpool(overlays.create_bounded, authorized_job, catalog, preview, root,
+            read_id=body.read_id, population_id=body.population_id, deadline=deadline)
+    except (overlays.reader.CatalogReadError, service.AlignmentSessionError,
+            presentation_lifecycle.PresentationSourceStale, OSError, ValueError, KeyError, TypeError) as exc:
+        return _overlay_error(exc, job_id)
+
+
+@router.post("/jobs/{job_id}/alignment-sessions/{session_id}/read-overlays/{overlay_id}/{artifact_sha256}/{kind}/cache/retry", status_code=204, responses=_STANDARD_GOVERNED_ERRORS)
+@router.get("/jobs/{job_id}/alignment-sessions/{session_id}/read-overlays/{overlay_id}/{artifact_sha256}/{kind}", responses=_BINARY_RESPONSES)
+@router.head("/jobs/{job_id}/alignment-sessions/{session_id}/read-overlays/{overlay_id}/{artifact_sha256}/{kind}", responses=_BINARY_RESPONSES)
+async def get_read_overlay_artifact(job_id: str, session_id: str, overlay_id: str, artifact_sha256: str,
+        kind: Literal["bam", "bai", "manifest"], request: Request,
+        authorized_job: Job = Depends(require_alignment_job), db: AsyncSession = Depends(get_session)):
+    from services import ngs_read_overlays as overlays
+    if request.method == "POST":
+        _require_cache_retry_principal(request, job_id)
+    catalog, _ = await _current_derived_products(db, authorized_job, session_id, include_preview=False)
+    if catalog is None or catalog.state != "ready":
+        return _ngs_error_response(status_code=409, code="NGS_CATALOG_NOT_READY",
+            message="The complete catalog is not ready.", job_id=job_id, resource="read")
+    try:
+        root = Path(resolve_persisted_job_result_root(authorized_job)) / ".alignment-products"
+        async with contextmanager_in_threadpool(overlays.artifact(authorized_job, catalog, root, overlay_id, artifact_sha256, kind, retry_cache=request.method == "POST")) as (path, metadata):
+            if request.method == "POST":
+                return Response(status_code=204, headers={"Cache-Control": "no-store"})
+            return await _serve_artifact(path, metadata, request, job_id=job_id)
+    except (overlays.reader.CatalogReadError, service.AlignmentSessionError,
+            presentation_lifecycle.PresentationSourceStale, OSError, ValueError, KeyError, TypeError) as exc:
+        return _overlay_error(exc, job_id)
+
+
+class OntSignalCacheRetry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    raw_run_id: str = Field(min_length=1)
+    raw_observed_generation: int = Field(ge=1)
+    raw_representation_id: str = Field(min_length=1)
+    artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+@router.post("/jobs/{job_id}/alignment-sessions/{session_id}/reads/signal/cache/retry",
+             status_code=204, responses=_STANDARD_GOVERNED_ERRORS)
+async def retry_read_signal_cache(job_id: str, session_id: str, body: OntSignalCacheRetry,
+        request: Request, authorized_job: Job = Depends(require_alignment_job),
+        db: AsyncSession = Depends(get_session)):
+    _require_cache_retry_principal(request, job_id)
+    await _current_derived_products(db, authorized_job, session_id, include_preview=False)
+    state = await _catalog_signal(authorized_job, db, body.raw_run_id,
+        body.raw_observed_generation, body.raw_representation_id)
+    artifact = state.get("artifact")
+    if artifact is None or artifact["content_sha256"] != body.artifact_sha256:
+        raise OntNgsRouteError(status_code=409, code="NGS_AUTHORITY_CONFLICT",
+            message="The exact source-bound signal receipt is required.", job_id=job_id, resource="read")
+    from services.scientific_artifacts.writer import artifact_root, _artifact_receipt_identity
+    relative, digest, size = _artifact_receipt_identity(artifact)
+    if not relative or Path(relative).is_absolute() or any(part in {"", ".", ".."} for part in relative.split("/")):
+        raise OntNgsRouteError(status_code=409, code="NGS_AUTHORITY_CONFLICT",
+            message="The signal receipt path is invalid.", job_id=job_id, resource="read")
+    async with contextmanager_in_threadpool(service.open_presentation_authority_root(artifact_root(), create=False)) as root:
+        return await _retry_artifact_delivery(root / relative,
+            {"sha256": digest, "size_bytes": size}, request, job_id)

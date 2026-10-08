@@ -579,6 +579,14 @@ async def reserve_run_group(
         request.update(attempt=attempt, preparation=preparation, plan=plan)
         requests.append(request)
     totals = (await session.execute(select(func.coalesce(func.sum(ExperimentResourceAdmission.cpu_threads), 0), func.coalesce(func.sum(ExperimentResourceAdmission.dram_bytes), 0)).where(ExperimentResourceAdmission.state.in_(ACTIVE_ADMISSION_STATES)))).one()
+    # The global policy write fence above serializes both admission paths.
+    # Derived work cannot be invisible when a scientific run group is admitted.
+    from sqlalchemy import text
+    derived_totals = (await session.execute(text(
+        "SELECT COALESCE(SUM(cpu_threads),0), COALESCE(SUM(dram_bytes),0) "
+        "FROM derived_resource_reservations WHERE policy_id='managed-workflows' AND state!='released'"
+    ))).one()
+    totals = (int(totals[0]) + int(derived_totals[0]), int(totals[1]) + int(derived_totals[1]))
     requested_cpu = sum(item["cpu_threads"] for item in requests)
     requested_dram = sum(item["dram_bytes"] for item in requests)
     if int(totals[0]) + requested_cpu > CPU_THREAD_LIMIT or int(totals[1]) + requested_dram > DRAM_BYTE_LIMIT:

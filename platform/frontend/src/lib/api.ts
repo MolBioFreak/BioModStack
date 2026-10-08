@@ -1117,6 +1117,20 @@ export interface PooledReferenceAssignmentSubmitResponse {
     release_state: 'awaiting_operator_release';
 }
 
+export interface RestoredPooledReferenceSet {
+    reference_set_id: string;
+    assignment_job_id: string;
+    manifest_sha256: string;
+    targets: Array<{
+        target_id: string; label: string; indistinguishable_group: string | null;
+        sequence_id: string; revision_id: string; revision_sha256: string;
+    }>;
+}
+
+export const restorePooledReferenceSet = (referenceSetManifest: string) => api.post<RestoredPooledReferenceSet>(
+    '/api/ont/ngs/pooled-reference-assignment/restore', { reference_set_manifest: referenceSetManifest },
+);
+
 export const submitPooledReferenceAssignment = (
     request: PooledReferenceAssignmentSubmitRequest,
 ) => {
@@ -5549,10 +5563,13 @@ export interface OntSignalViewerSignalState extends Partial<OntSignalViewerSigna
 }
 
 export interface OntSignalViewerSession {
+    authority_kind: 'managed_signal' | 'native_alignment';
+    alignment_source_authority_sha256: string | null;
     viewer_session_id: string;
-    dataset_id: string;
-    run_id: string;
-    observed_generation: number;
+    alignment_reference: import('./ngsAlignmentSession').AlignmentSession['reference'] | null;
+    dataset_id: string | null;
+    run_id: string | null;
+    observed_generation: number | null;
     alignment_job_id: string | null;
     alignment_session_id: string | null;
     reference_revision_id: string | null;
@@ -5572,9 +5589,11 @@ export interface OntSignalViewerSession {
 }
 
 export interface OntSignalViewerSessionCreate {
-    dataset_id: string;
-    run_id: string;
-    observed_generation: number;
+    authority_kind?: 'managed_signal' | 'native_alignment';
+    alignment_source_authority_sha256?: string | null;
+    dataset_id: string | null;
+    run_id: string | null;
+    observed_generation: number | null;
     alignment_job_id: string | null;
     alignment_session_id: string | null;
     reference_revision_id: string | null;
@@ -5583,7 +5602,7 @@ export interface OntSignalViewerSessionCreate {
     locus_end: number | null;
     selected_read_id: string | null;
     igv_state: OntSignalViewerIgvUpdateState;
-    signal_state: OntSignalViewerSignalUpdateState;
+    signal_state: OntSignalViewerSignalUpdateState | Record<string, never>;
 }
 
 export interface OntSignalViewerSessionUpdate {
@@ -5593,7 +5612,7 @@ export interface OntSignalViewerSessionUpdate {
     locus_end: number | null;
     selected_read_id: string | null;
     igv_state: OntSignalViewerIgvUpdateState;
-    signal_state: OntSignalViewerSignalUpdateState;
+    signal_state: OntSignalViewerSignalUpdateState | Record<string, never>;
 }
 
 const signalWorkbenchRoot = '/api/ont/signal-workbench';

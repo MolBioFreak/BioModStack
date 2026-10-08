@@ -213,6 +213,167 @@ class Job(Base):
     designs = relationship("Design", back_populates="job", cascade="all, delete-orphan")
 
 
+class NgsAlignmentPresentationJob(Base):
+    """Durable leased request for one content-bound NGS presentation."""
+
+    __tablename__ = "ngs_alignment_presentation_jobs"
+    __table_args__ = (
+        UniqueConstraint(
+            "job_id",
+            "session_id",
+            "source_authority_sha256",
+            "policy_version",
+            name="uq_ngs_alignment_presentation_source",
+        ),
+        CheckConstraint(
+            "mode IN ('primary','dimer_candidates')",
+            name="ck_ngs_alignment_presentation_mode",
+        ),
+        CheckConstraint(
+            "state IN ('requested','running','ready','failed')",
+            name="ck_ngs_alignment_presentation_state",
+        ),
+        CheckConstraint(
+            "attempt_count >= 0 AND manual_retry_count >= 0",
+            name="ck_ngs_alignment_presentation_attempts",
+        ),
+        CheckConstraint(
+            "length(source_authority_sha256)=64 AND "
+            "source_authority_sha256 NOT GLOB '*[^0-9a-f]*' AND "
+            "length(source_manifest_sha256)=64 AND "
+            "source_manifest_sha256 NOT GLOB '*[^0-9a-f]*' AND "
+            "length(source_artifact_set_sha256)=64 AND "
+            "source_artifact_set_sha256 NOT GLOB '*[^0-9a-f]*'",
+            name="ck_ngs_alignment_presentation_source_hashes",
+        ),
+        CheckConstraint(
+            "(state='running' AND claim_token IS NOT NULL AND lease_expires_at IS NOT NULL) "
+            "OR (state<>'running' AND claim_token IS NULL AND lease_expires_at IS NULL)",
+            name="ck_ngs_alignment_presentation_claim",
+        ),
+
+        CheckConstraint(
+            "(state='ready' AND authority_sha256 IS NOT NULL AND manifest_sha256 IS NOT NULL "
+            "AND length(authority_sha256)=64 AND authority_sha256 NOT GLOB '*[^0-9a-f]*' "
+            "AND length(manifest_sha256)=64 AND manifest_sha256 NOT GLOB '*[^0-9a-f]*') "
+            "OR (state<>'ready' AND authority_sha256 IS NULL AND manifest_sha256 IS NULL)",
+            name="ck_ngs_alignment_presentation_ready",
+        ),
+        CheckConstraint(
+            "error_code IS NULL OR error_code IN ("
+            "'source_invalid','resource_limit','cancelled','infrastructure_failed',"
+            "'publication_failed','integrity_mismatch')",
+            name="ck_ngs_alignment_presentation_error",
+        ),
+        Index(
+            "ix_ngs_alignment_presentation_claimable",
+            "state",
+            "created_at",
+            "id",
+        ),
+        Index(
+            "ix_ngs_alignment_presentation_lease",
+            "state",
+            "lease_expires_at",
+        ),
+    )
+
+    id = Column(String(96), primary_key=True)
+    job_id = Column(String(36), ForeignKey("jobs.id", ondelete="RESTRICT"), nullable=False)
+    session_id = Column(String(64), nullable=False)
+    mode = Column(String(32), nullable=False)
+    source_authority_sha256 = Column(String(64), nullable=False)
+    source_manifest_sha256 = Column(String(64), nullable=False)
+    source_artifact_set_sha256 = Column(String(64), nullable=False)
+    policy_version = Column(Integer, nullable=False)
+    state = Column(String(16), nullable=False, default="requested")
+    attempt_count = Column(Integer, nullable=False, default=0)
+    manual_retry_count = Column(Integer, nullable=False, default=0)
+    claim_token = Column(String(96), nullable=True, unique=True)
+    lease_expires_at = Column(LenientSQLiteDateTime, nullable=True)
+
+    authority_sha256 = Column(String(64), nullable=True)
+    manifest_sha256 = Column(String(64), nullable=True)
+    error_code = Column(String(32), nullable=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(
+        LenientSQLiteDateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+
+class NgsAlignmentDerivedProduct(Base):
+    """Independent catalog/preview intent; legacy presentation rows stay intact."""
+
+    __tablename__ = "ngs_alignment_derived_products"
+    __table_args__ = (
+        UniqueConstraint("job_id", "session_id", "product", "intent_sha256",
+                         name="uq_ngs_derived_intent"),
+        CheckConstraint("product IN ('catalog','preview')", name="ck_ngs_derived_product"),
+        CheckConstraint("mode IN ('primary','dimer_candidates')", name="ck_ngs_derived_mode"),
+        CheckConstraint("state IN ('requested','running','ready','failed')", name="ck_ngs_derived_state"),
+        CheckConstraint("attempt_count >= 0 AND manual_retry_count >= 0", name="ck_ngs_derived_attempts"),
+        CheckConstraint(
+            "(product='catalog' AND catalog_request_id IS NULL AND catalog_authority_sha256 IS NULL "
+            "AND request_sha256 IS NOT NULL) OR (product='preview' AND catalog_request_id IS NOT NULL)",
+            name="ck_ngs_derived_dependency"),
+        CheckConstraint(
+            "product<>'preview' OR state NOT IN ('running','ready') OR "
+            "(catalog_authority_sha256 IS NOT NULL AND request_sha256 IS NOT NULL)",
+            name="ck_ngs_derived_bound_preview"),
+        CheckConstraint(
+            "(state='running' AND claim_token IS NOT NULL AND lease_expires_at IS NOT NULL) OR "
+            "(state<>'running' AND claim_token IS NULL AND lease_expires_at IS NULL)",
+            name="ck_ngs_derived_claim"),
+        CheckConstraint(
+            "(state='ready' AND authority_sha256 IS NOT NULL AND manifest_sha256 IS NOT NULL) OR "
+            "(state<>'ready' AND authority_sha256 IS NULL AND manifest_sha256 IS NULL)",
+            name="ck_ngs_derived_ready"),
+        CheckConstraint(
+            "(state='failed' AND error_code IS NOT NULL) OR (state<>'failed' AND error_code IS NULL)",
+            name="ck_ngs_derived_error_state"),
+        CheckConstraint(
+            "error_code IS NULL OR error_code IN ('source_invalid','resource_limit','cancelled',"
+            "'infrastructure_failed','publication_failed','integrity_mismatch')",
+            name="ck_ngs_derived_error"),
+        *(
+            CheckConstraint(
+                f"{field} IS NULL OR (length({field})=64 AND {field} NOT GLOB '*[^0-9a-f]*')",
+                name=f"ck_ngs_derived_{field}",
+            )
+            for field in ("source_authority_sha256", "intent_sha256", "request_sha256",
+                          "catalog_authority_sha256", "authority_sha256", "manifest_sha256")
+        ),
+        Index("ix_ngs_derived_claimable", "state", "product", "created_at", "id"),
+        Index("ix_ngs_derived_lease", "state", "lease_expires_at"),
+    )
+
+    id = Column(String(96), primary_key=True)
+    job_id = Column(String(36), ForeignKey("jobs.id", ondelete="RESTRICT"), nullable=False)
+    session_id = Column(String(64), nullable=False)
+    mode = Column(String(32), nullable=False)
+    product = Column(String(16), nullable=False)
+    source_authority_sha256 = Column(String(64), nullable=False)
+    source_identity = Column(JSON, nullable=False)
+    intent_sha256 = Column(String(64), nullable=False)
+    request_contract = Column(JSON, nullable=False)
+    request_sha256 = Column(String(64), nullable=True)
+    catalog_request_id = Column(String(96), ForeignKey("ngs_alignment_derived_products.id", ondelete="RESTRICT"), nullable=True)
+    catalog_authority_sha256 = Column(String(64), nullable=True)
+    state = Column(String(16), nullable=False, default="requested")
+    attempt_count = Column(Integer, nullable=False, default=0)
+    manual_retry_count = Column(Integer, nullable=False, default=0)
+    claim_token = Column(String(96), nullable=True, unique=True)
+    lease_expires_at = Column(LenientSQLiteDateTime, nullable=True)
+    authority_sha256 = Column(String(64), nullable=True)
+    manifest_sha256 = Column(String(64), nullable=True)
+    error_code = Column(String(32), nullable=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
 class ExecutionTarget(Base):
     """One operator-activated execution-only worker target."""
 
@@ -702,9 +863,9 @@ class OntSignalViewerSession(Base):
     __tablename__ = "ont_signal_viewer_sessions"
 
     id = Column(String(96), primary_key=True)
-    dataset_id = Column(String(128), nullable=False)
-    run_id = Column(String(80), ForeignKey("ont_instrument_runs.id", ondelete="RESTRICT"), nullable=False, index=True)
-    observed_generation = Column(Integer, nullable=False)
+    dataset_id = Column(String(128), nullable=True)
+    run_id = Column(String(80), ForeignKey("ont_instrument_runs.id", ondelete="RESTRICT"), nullable=True, index=True)
+    observed_generation = Column(Integer, nullable=True)
     alignment_job_id = Column(String(36), ForeignKey("jobs.id", ondelete="RESTRICT"), nullable=True)
     alignment_session_id = Column(String(96), nullable=True)
     reference_revision_id = Column(String(128), nullable=True)
@@ -714,7 +875,10 @@ class OntSignalViewerSession(Base):
     contig = Column(String(255), nullable=True)
     locus_start = Column(Integer, nullable=True)
     locus_end = Column(Integer, nullable=True)
-    selected_read_id = Column(String(128), nullable=True)
+    selected_read_id = Column(String(254), nullable=True)
+    # Native alignment-only views bind accepted source/reference receipts, not an
+    # invented acquisition run. Activation requires a separately approved migration.
+    alignment_source_identity = Column(JSON, nullable=True)
     igv_state = Column(JSON, nullable=False, default=dict)
     signal_state = Column(JSON, nullable=False, default=dict)
     revision = Column(Integer, nullable=False, default=1)

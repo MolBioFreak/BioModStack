@@ -12,7 +12,7 @@ nextflow.enable.dsl = 2
 
 include { DoradoPreflight; DoradoBasecall } from '../../modules/ngs/dorado_basecall.nf'
 include { DoradoAlign } from '../../modules/ngs/dorado_align.nf'
-include { PrepareBamForAnalysis; ValidateMappedBam } from '../../modules/ngs/bam_prepare.nf'
+include { PrepareBamForAnalysis; ValidateMappedBam; PrepareReferenceForIGV } from '../../modules/ngs/bam_prepare.nf'
 include { FastqAlign } from '../../modules/ngs/fastq_align.nf'
 include { FastqPlasmidQC } from '../../modules/ngs/fastq_plasmid_qc.nf'
 include { FastqDimerAnalysis; BuildDimerCanonicalOutputs } from '../../modules/ngs/fastq_dimer_qc.nf'
@@ -148,12 +148,15 @@ workflow ONT_CONSTRUCT_SCREENING {
                 reportStage(params, "dorado_align", [
                     "${params.out_dir}/align/aligned.bam",
                     "${params.out_dir}/align/aligned.bam.bai",
+                    "${params.out_dir}/align/reference.fasta",
+                    "${params.out_dir}/align/reference.fasta.fai",
                     "${params.out_dir}/align/align.log",
                 ])
             }
             analysis_bam = DoradoAlign.out.aligned
         } else {
             PrepareBamForAnalysis(Channel.of(bam_input))
+            PrepareReferenceForIGV(Channel.of(reference_file))
             PrepareBamForAnalysis.out.aligned.subscribe { bam, bai ->
                 reportStage(params, "bam_prepare", [
                     "${params.out_dir}/align/aligned.bam",
@@ -166,7 +169,7 @@ workflow ONT_CONSTRUCT_SCREENING {
             analysis_bam = PrepareBamForAnalysis.out.aligned
 
             // Validate mapped reads before clone validation
-            ValidateMappedBam(analysis_bam, Channel.of(reference_file))
+            ValidateMappedBam(analysis_bam, Channel.of(reference_file), PrepareBamForAnalysis.out.log)
             analysis_bam = ValidateMappedBam.out.aligned
         }
     }
@@ -204,6 +207,8 @@ workflow ONT_CONSTRUCT_SCREENING {
             reportStage(params, "wf_clone_validation", [
                 "${params.out_dir}/assembly/wf_clone_out",
                 "${params.out_dir}/assembly/wf_clone.log",
+                "${params.out_dir}/assembly/execution_receipt.json",
+                "${params.out_dir}/assembly/runtime_provenance.json",
                 "${params.out_dir}/assembly/wf_clone_out/wf-clone-validation-report.html",
                 "${params.out_dir}/assembly/wf_clone_out/sample_status.txt",
             ])
@@ -231,6 +236,26 @@ workflow ONT_CONSTRUCT_SCREENING {
             BuildDimerCanonicalOutputs.out.breakpoint_call,
             BuildDimerCanonicalOutputs.out.secondary_summary,
         )
+        BuildDimerCanonicalOutputs.out.breakpoint_call.subscribe { _ignored ->
+            reportStage(params, "dimer_qc", [
+                "${params.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
+                "${params.out_dir}/multimer_qc/dimer_evidence_by_position.tsv",
+                "${params.out_dir}/multimer_qc/dimer_read_events.tsv",
+                "${params.out_dir}/multimer_qc/dimer_breakpoint_sequences.tsv",
+                "${params.out_dir}/multimer_qc/dimer_secondary_anomalies.tsv",
+                "${params.out_dir}/multimer_qc/dimer_secondary_summary.tsv",
+            ])
+        }
+        ConstructVerify.out.manifest.subscribe { _ignored ->
+            reportStage(params, "construct_verification", [
+                "${params.out_dir}/verification/qc_manifest.json",
+                "${params.out_dir}/verification/verification_summary.tsv",
+                "${params.out_dir}/verification/variants.vcf",
+                "${params.out_dir}/verification/per_base_metrics.tsv",
+                "${params.out_dir}/verification/evidence.html",
+                "${params.out_dir}/verification/topology_evidence.json",
+            ])
+        }
         FastqPlasmidQC.out.summary.subscribe { _ignored ->
             reportStage(params, "fastq_qc", [
                 "${params.out_dir}/fastq_qc/read_lengths.tsv",

@@ -142,6 +142,15 @@ def authoritative_input(path: Path, kind: str) -> dict[str, Any]:
     }
 
 
+
+def producer_sources() -> dict[str, dict[str, Any]]:
+    code = Path(__file__).resolve().parents[1]
+    names = ("scripts/adapt_wf_clone_validation.py", "scripts/build_construct_verification_input.py",
+             "scripts/build_fastq_support_tables.py", "modules/ngs/clone_validation.nf")
+    return {name: {"sha256": sha256_file(code / name), "size_bytes": (code / name).stat().st_size}
+            for name in names}
+
+
 def normalize(args: argparse.Namespace) -> dict[str, Any]:
     root = args.result_root.absolute()
     if not root.is_dir() or root.is_symlink():
@@ -190,7 +199,17 @@ def normalize(args: argparse.Namespace) -> dict[str, Any]:
     except ValueError:
         fail("MALFORMED_TABULAR_OUTPUT", "sample status Length must be an integer")
     status_text = status_row[status_key]
-    completed = status_text == "Completed successfully"
+    # Pinned report_utils.tidyup_status_file retains a completed assembly
+    # without annotations; flye/canu also publish an unreconciled assembly.
+    # Neither status is a construct PASS, nor a failed nested execution.
+    completed = status_text in {
+        "Completed successfully",
+        "Completed but no annotations found in the database",
+        "Completed but failed to reconcile",
+        # main.nf inserts emits this negative scientific outcome while the
+        # polished assembly and reference-alignment products remain available.
+        "Insert found but does not align with provided reference",
+    }
     if status_row["Sample"] != sample or status_length != len(sequence) or completed != (args.execution_exit_code == 0):
         fail("STATUS_EVIDENCE_CONTRADICTION", "sample status identity, length, or completion contradicts execution/final FASTA")
     report = exactly_one(root, "wf-clone-validation-report.html", "upstream report")
@@ -275,6 +294,7 @@ def normalize(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "schema": ADAPTER_SCHEMA,
         "adapter_version": "1.0.0",
+        "executed_sources": producer_sources(),
         "execution": {
             "status": "SUCCEEDED" if args.execution_exit_code == 0 else "FAILED",
             "exit_code": args.execution_exit_code,
@@ -306,6 +326,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    if len(sys.argv) == 3 and sys.argv[1] == "--verify-sources":
+        manifest = json.loads(Path(sys.argv[2]).read_text())
+        if manifest["executed_sources"] != producer_sources():
+            fail("EXECUTED_SOURCE_CHANGED", "clone adapter/builders changed during execution")
+        return 0
     args = parse_args()
     try:
         manifest = normalize(args)

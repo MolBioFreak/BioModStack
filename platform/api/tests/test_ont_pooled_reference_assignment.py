@@ -201,6 +201,185 @@ async def _submit(context: SimpleNamespace, request: pooled.PooledReferenceAssig
     return result
 
 
+@pytest.mark.asyncio
+async def test_restore_frozen_manifest_requires_owned_record_and_revalidates_bytes(pooled_context):
+    from httpx import ASGITransport, AsyncClient
+    from fastapi import FastAPI
+    from database import get_session
+    from services import alignment_access
+
+    context = pooled_context
+    result = await _submit(context, _submit_request(context))
+    job = await context.session.get(Job, result['assignment_job_id'])
+    token, digest = alignment_access.issue_alignment_access_token()
+    job.provenance = {alignment_access.PROVENANCE_DIGEST_KEY: digest}
+    await context.session.commit()
+    app = FastAPI()
+    app.include_router(ont_runs.router, prefix='/api/ont')
+    async def session_override():
+        yield context.session
+    app.dependency_overrides[get_session] = session_override
+    row = await context.session.get(NgsReferenceSetManifest, result['reference_set_id'])
+    payload = {'reference_set_manifest': row.manifest_path}
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='https://test') as client:
+        url = '/api/ont/ngs/pooled-reference-assignment/restore'
+        denied = await client.post(url, json=payload)
+        assert denied.status_code == 403
+        headers = {'Cookie': f'{alignment_access.cookie_name(job.id, secure=True)}={token}'}
+        restored = await client.post(url, json=payload, headers=headers)
+        assert restored.status_code == 200, restored.text
+        body = restored.json()
+        assert body['reference_set_id'] == row.id
+        assert body['manifest_sha256'] == row.manifest_sha256
+        assert [(t['sequence_id'], t['revision_id'], t['revision_sha256']) for t in body['targets']] == [
+            (e['molbio_sequence_id'], e['molbio_revision_id'], e['revision_sha256']) for e in result['manifest']['entries']
+        ]
+        assert all('receipt_id' not in t for t in body['targets'])
+        unknown = await client.post(url, json={'reference_set_manifest': str(context.inputs_root / 'unowned.json')}, headers=headers)
+        assert unknown.status_code == 404
+        Path(row.manifest_path).write_text('{}')
+        corrupt = await client.post(url, json=payload, headers=headers)
+        assert corrupt.status_code == 409
+        assert len(context.calls) == 1  # restoration never submits work
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('cookie_state', ['missing', 'expired'])
+@pytest.mark.parametrize('review_status', ['awaiting_input', 'completed'])
+async def test_owned_pooled_recovery_restores_review_without_old_cookie(pooled_context, monkeypatch, cookie_state, review_status):
+    from httpx import ASGITransport, AsyncClient
+    from fastapi import FastAPI
+    from database import get_session
+    from routers import ngs_alignment_sessions as access_router
+    from services import alignment_access
+    from http.cookiejar import Cookie
+    import time
+
+    context = pooled_context
+    result = await _submit(context, _submit_request(context))
+    job = await context.session.get(Job, result['assignment_job_id'])
+    token, digest = alignment_access.issue_alignment_access_token()
+    job.provenance = {alignment_access.PROVENANCE_DIGEST_KEY: digest, alignment_access.PROVENANCE_SCHEME_KEY: alignment_access.SCHEME}
+    job.status = review_status
+    await context.session.commit()
+    row = await context.session.get(NgsReferenceSetManifest, result['reference_set_id'])
+    app = FastAPI()
+    app.include_router(ont_runs.router, prefix='/api/ont')
+    app.include_router(access_router.router, prefix='/api')
+    app.include_router(jobs.router, prefix='/api/jobs')
+    app.add_exception_handler(access_router.OntNgsRouteError, access_router.ont_ngs_route_error_handler)
+    # The middleware represents the existing authenticated application boundary;
+    # the production principal resolver, role check, and CAS are not mocked.
+    principal = {'id': 'owner-operator', 'roles': ['operator']}
+    @app.middleware('http')
+    async def authenticated_boundary(request, call_next):
+        if principal:
+            request.state.authenticated_principal = dict(principal)
+        return await call_next(request)
+    async def session_override():
+        yield context.session
+    app.dependency_overrides[get_session] = session_override
+    app.dependency_overrides[access_router.get_molbio_ngs_session] = lambda: None
+    app.dependency_overrides[access_router.get_experiment_session] = lambda: None
+    monkeypatch.setenv('BMS_FRONTEND_HEALTH_URL', 'https://test/')
+    monkeypatch.delenv('BMS_CM_TRUSTED_PROXY_SECRET', raising=False)
+    headers = {'Origin': 'https://test', 'Sec-Fetch-Site': 'same-origin'}
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='https://test') as client:
+        if cookie_state == 'expired':
+            client.cookies.jar.set_cookie(Cookie(0, alignment_access.cookie_name(job.id, secure=True), token,
+                None, False, 'test.local', False, False, '/', True, True, int(time.time()) - 60, False, None, None, {}))
+        restore_url = '/api/ont/ngs/pooled-reference-assignment/restore'
+        rotate_url = f'/api/jobs/{job.id}/alignment-access/rotate'
+        payload = {'reference_set_manifest': row.manifest_path}
+        assert (await client.post(restore_url, json=payload)).status_code == 403
+        for denied_principal in ({}, {'id': 'unrelated-scientist', 'roles': ['scientist']}):
+            principal.clear(); principal.update(denied_principal)
+            denied = await client.post(rotate_url, headers=headers)
+            assert denied.status_code == 403, denied.text
+            assert 'set-cookie' not in denied.headers
+        principal.update({'id': 'owner-operator', 'roles': ['operator']})
+        if cookie_state == 'expired':
+            # Real shipped Vite/reverse-proxy application authentication contract.
+            principal.clear()
+            monkeypatch.setenv('BMS_CM_TRUSTED_PROXY_SECRET', 'isolated-test-proxy-secret')
+            headers['X-BMS-CM-Proxy-Secret'] = 'isolated-test-proxy-secret'
+        discovered = await client.get('/api/jobs', params={
+            'model_id': 'nanopore', 'mode': 'pooled_reference_assignment', 'summary': 'true', 'q': 'Pooled review', 'limit': 100,
+        })
+        assert discovered.status_code == 200, discovered.text
+        assert discovered.json()['jobs'][0]['id'] == job.id
+        assert discovered.json()['jobs'][0]['status'] == review_status
+        assert (await client.post(rotate_url)).status_code == 403
+        recovered = await client.post(rotate_url, headers=headers)
+        assert recovered.status_code == 200, recovered.text
+        assert 'httponly' in recovered.headers['set-cookie'].lower()
+        await context.session.refresh(job)
+        assert job.status == review_status
+        assert job.provenance[alignment_access.PROVENANCE_DIGEST_KEY] != digest
+        restored = await client.post(restore_url, json=payload)
+        assert restored.status_code == 200, restored.text
+        assert restored.json()['reference_set_id'] == row.id
+        assert restored.json()['targets'][0]['revision_sha256'] == result['manifest']['entries'][0]['revision_sha256']
+        assert len(context.calls) == 1
+        fresh_targets = []
+        for target, sequence in zip(restored.json()['targets'], ('ACGTACGT', 'TGCATGCA', 'GGGGAAAA'), strict=True):
+            receipt = await molbio_ngs_receipts.issue_molbio_ngs_receipt(context.session,
+                sequence_id=target['sequence_id'], revision=SimpleNamespace(id=target['revision_id'],
+                    content_sha256=target['revision_sha256'], snapshot={'sequence': sequence, 'sequence_type': 'dna'}))
+            assert receipt.id not in context.receipt_ids
+            assert receipt.revision_sha256 == target['revision_sha256']
+            fresh_targets.append({'target_id': target['target_id'], 'label': target['label'], 'molbio_ngs_receipt_id': receipt.id})
+        await context.session.commit()
+        submitted = await client.post('/api/ont/ngs/pooled-reference-assignment/submit', json={
+            'idempotency_key': 'recovered-new-submission', 'fastq_path': str(context.fastq), 'targets': fresh_targets,
+        })
+        assert submitted.status_code == 201, submitted.text
+        await context.session.refresh(job)
+        await context.session.refresh(row)
+        assert submitted.json()['assignment_job_id'] != job.id
+        assert len(context.calls) == 2
+        new_targets = (await context.session.execute(select(NgsPooledReferenceTarget).where(
+            NgsPooledReferenceTarget.reference_set_id == submitted.json()['reference_set_id'])
+        )).scalars().all()
+        assert {target.revision_sha256 for target in new_targets} == {target['revision_sha256'] for target in restored.json()['targets']}
+        # A cookie is not authority to mutate a different job or repair corrupt evidence.
+        old = await client.post(restore_url, json=payload, headers={'Cookie': f'{alignment_access.cookie_name(job.id, secure=True)}={token}'})
+        assert old.status_code == 403
+        Path(row.manifest_path).write_text('{}')
+        corrupt = await client.post(rotate_url, headers=headers)
+        assert corrupt.status_code == 409, corrupt.text
+        assert 'set-cookie' not in corrupt.headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['cancelled', 'released', 'different-mode', 'unrelated-awaiting'])
+async def test_pooled_recovery_cas_rejects_changed_authority(pooled_context, change):
+    from services import alignment_access
+    context = pooled_context
+    result = await _submit(context, _submit_request(context))
+    job = await context.session.get(Job, result['assignment_job_id'])
+    job.status = 'awaiting_input'
+    previous = {alignment_access.PROVENANCE_DIGEST_KEY: 'a' * 64}
+    job.provenance = dict(previous)
+    await context.session.commit()
+    frozen_params = dict(job.params)
+    if change == 'cancelled':
+        job.status = 'cancelled'
+    elif change == 'released':
+        job.params = {**job.params, 'release_state': 'released'}
+    else:
+        job.mode = 'fastq_qc'
+    await context.session.commit()
+    changed = await alignment_access.rotate_alignment_authority_cas(
+        context.session, job_id=job.id, previous=previous,
+        updated={alignment_access.PROVENANCE_DIGEST_KEY: 'b' * 64},
+        **({'pooled_review_params': frozen_params} if change != 'unrelated-awaiting' else {}),
+    )
+    assert changed is False
+    await context.session.refresh(job)
+    assert job.provenance == previous
+
+
 def _write_assignment_summary(
     context: SimpleNamespace,
     submit_result: dict[str, Any],

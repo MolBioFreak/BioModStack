@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { isNgsDomainSection } from "../../lib/ngsResultRouting";
+import { Link, useLocation } from 'react-router-dom';
 import {
     fetchFullJob,
     fetchMolecularRevision,
@@ -170,6 +171,9 @@ function MemberAuthority({ member }: { member: DomainStateMember }) {
 export default function DomainExperimentWorkspace() {
     const queryClient = useQueryClient();
     const context = useGlobalExperimentContext();
+    const location = useLocation();
+    const requestedSection = new URLSearchParams(location.search).get("section")?.trim().toLowerCase() ?? null;
+    const isDomainSection = isNgsDomainSection(requestedSection);
     const {
         workspaceId,
         globalExperimentId,
@@ -187,7 +191,7 @@ export default function DomainExperimentWorkspace() {
 
     useEffect(() => {
         setSelectedDatasetRevisionIds(selectedDatasetRevisionIdsFromQuery());
-    }, [workspaceId, globalExperimentId, domainExperimentId]);
+    }, [workspaceId, globalExperimentId, domainExperimentId, location.search]);
 
     const updateSelectedDatasetRevisionIds = useCallback((revisionIds: string[]) => {
         const exactRevisionIds = [...new Set(revisionIds.map((value) => value.trim()).filter(Boolean))].slice(0, 100);
@@ -196,7 +200,7 @@ export default function DomainExperimentWorkspace() {
     }, [updateQueryParams]);
 
     const exactDomainId = selectedDomainExperiment?.domain_experiment_id ?? null;
-    const hasProjectHubContext = Boolean(workspaceId && globalExperimentId && exactDomainId);
+    const hasProjectHubContext = Boolean(workspaceId && globalExperimentId && exactDomainId) && !isDomainSection;
     const projectAuthorityQuery = useQuery({
         queryKey: ['ngs-molbio-project-authority', workspaceId],
         enabled: Boolean(workspaceId) && !hasProjectHubContext,
@@ -206,7 +210,6 @@ export default function DomainExperimentWorkspace() {
         },
         retry: false,
     });
-    const requestedSection = new URLSearchParams(window.location.search).get('section');
     const isLocalProject = projectAuthorityQuery.data?.payload?.project_scope === 'ngs_molbio_local';
     const activeSection: SectionKey = SECTIONS.some(([key]) => key === requestedSection)
         ? requestedSection as SectionKey

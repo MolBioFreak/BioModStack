@@ -267,7 +267,7 @@ CANONICAL_ONT_WORKFLOWS: dict[str, OntWorkflowSpec] = {
     "ont_fastq_qc": OntWorkflowSpec(
         workflow_id="ont_fastq_qc",
         display_name="ONT FASTQ QC",
-        description="Read-length/Q-score/yield and alignment-optional QC from existing FASTQ inputs.",
+        description="Read-length/Q-score/yield and always-on, reference-required alignment/plasmid QC from existing FASTQ inputs.",
         input_modes=("fastq",),
         artifact_kinds=(
             "basecall_reads",
@@ -485,6 +485,155 @@ def _normalize_wf_clone_controls(normalized: dict[str, Any]) -> None:
             normalized.pop(key, None)
 
 
+ONT_PRIMARY_INPUT_KEYS: dict[str, str] = {
+    "pod5": "pod5_dir",
+    "bam": "bam_path",
+    "fastq": "fastq_path",
+}
+
+
+def validate_ont_primary_input(workflow_id: str, params: Mapping[str, Any]) -> tuple[str, str]:
+    """Validate input applicability without resolving reference authority."""
+    canonical_id = resolve_ont_workflow_alias(workflow_id)
+    spec = get_ont_workflow_spec(canonical_id)
+    selected = [
+        (input_mode, key, str(params[key]).strip())
+        for input_mode, key in ONT_PRIMARY_INPUT_KEYS.items()
+        if params.get(key) is not None and str(params[key]).strip()
+    ]
+    if len(selected) != 1:
+        keys = ", ".join(ONT_PRIMARY_INPUT_KEYS.values())
+        raise ValueError(f"exactly one primary ONT input is required ({keys}); found {len(selected)}")
+
+    input_mode, input_key, input_path = selected[0]
+    if input_mode not in spec.input_modes:
+        raise ValueError(
+            f"workflow {canonical_id!r} does not accept {input_mode!r} input via {input_key!r}; "
+            f"accepted modes: {', '.join(spec.input_modes)}"
+        )
+
+    if input_mode == "fastq" and bool(params.get("run_modkit")):
+        raise ValueError("modkit requires a BAM with meaningful MM/ML tags or POD5 basecalled with modified bases")
+
+    return input_mode, input_path
+
+
+def validate_ont_operator_params(
+    workflow_id: str, model_mode: str, params: Mapping[str, Any]
+) -> None:
+    """Validate only caller settings, before server enrichment or normalization.
+
+    Types and bounds belong to the model registry; workflow modes and the
+    existing workflow defaults select applicability, not a second tuning catalog.
+    Generic registry validation intentionally remains open to server enrichment.
+    """
+    from math import isfinite
+    from model_registry import get_registry
+
+    canonical_id = resolve_ont_workflow_alias(workflow_id)
+    get_ont_workflow_spec(canonical_id)
+    if "run_multimer_qc" in params:
+        raise ValueError(
+            "run_multimer_qc is read-only legacy compatibility and cannot be submitted for a fresh ONT job"
+        )
+    registry = get_registry()
+    model = registry.get_model("nanopore")
+    if model is None:
+        raise ValueError("nanopore operator parameter registry is unavailable")
+    mode = next((mode for mode in model.modes if mode.id == model_mode), None)
+    if mode is None:
+        raise ValueError(f"unknown nanopore mode: {model_mode}")
+    definitions = {param.name: param for param in model.params}
+    # Retain the existing normalizer alias without duplicating its type/choices.
+    definitions["basecalling_mode"] = definitions["dorado_basecall_mode"]
+    if (
+        "basecalling_mode" in params and "dorado_basecall_mode" in params
+        and params["basecalling_mode"] != params["dorado_basecall_mode"]
+    ):
+        raise ValueError("basecalling_mode and dorado_basecall_mode must preserve one exact choice")
+    allowed = set(mode.params) | set(WORKFLOW_DEFAULTS.get(canonical_id, {}))
+    # The UI always serializes the disabled modkit stage explicitly.
+    allowed.add("run_modkit")
+    pod5 = bool(params.get("pod5_dir"))
+    bam = bool(params.get("bam_path"))
+    fastq = bool(params.get("fastq_path"))
+    basecall_keys = {
+        key for key in definitions
+        if key.startswith("dorado_") or key in {
+            "min_qscore", "trim_adapters", "emit_summary", "emit_moves", "basecalling_mode",
+            "ont_molecule_type", "modified_bases", "duplex_pairs", "barcode_kit", "sample_sheet",
+        }
+    }
+    if pod5:
+        allowed.update(basecall_keys)
+    else:
+        allowed.difference_update(basecall_keys)
+    if not bam:
+        allowed.difference_update(key for key in definitions if key.startswith("bam_"))
+    else:
+        allowed.update({"bam_force_realign", "bam_min_mapq"})
+    if fastq:
+        fastq_mode = next(mode for mode in model.modes if mode.id == "fastq_qc")
+        allowed.update(fastq_mode.params)
+        allowed.add("expected_plasmid_size")
+    else:
+        allowed.difference_update({"min_fastq_read_length", "expected_plasmid_size", "fastq_minimap2_preset", "fastq_minimap2_allow_secondary"})
+    if canonical_id in {"ont_plasmid_qc", "ont_construct_screening", "ont_fastq_qc", "wf_clone_validation"}:
+        allowed.update(key for key in definitions if key.startswith(("igv_", "single_ref_split_")) or key in {"enable_rotating_reference_frames", "rotation_scan_step_bp"})
+    clone_active = canonical_id == "wf_clone_validation" or (
+        canonical_id == "ont_construct_screening" and params.get("run_assembly") is True
+    )
+    clone_keys = {key for key in definitions if key.startswith("wf_clone_")}
+    if clone_active:
+        allowed.update(clone_keys)
+        allowed.add("run_assembly")
+    else:
+        allowed.difference_update(clone_keys)
+    if params.get("run_modkit") is not True:
+        allowed.discard("modkit_filter_threshold")
+
+    for key, value in params.items():
+        if key not in allowed or key not in definitions:
+            raise ValueError(f"unknown or inactive ONT operator parameter: {key}")
+        parameter = definitions[key]
+        valid_type = {
+            "boolean": type(value) is bool,
+            "integer": type(value) is int,
+            "number": type(value) is int or (type(value) is float and isfinite(value)),
+            "string": isinstance(value, str),
+            "text": isinstance(value, str),
+            "file": isinstance(value, str),
+            "directory": isinstance(value, str),
+        }.get(parameter.type, False)
+        if not valid_type:
+            raise ValueError(f"{key} must be {parameter.type}")
+    registry_params = dict(params)
+    if "basecalling_mode" in registry_params:
+        registry_params["dorado_basecall_mode"] = registry_params.pop("basecalling_mode")
+    errors = registry.validate_job_params("nanopore", model_mode, registry_params)
+    if errors:
+        raise ValueError("; ".join(errors))
+    validate_ont_primary_input(canonical_id, params)
+    validate_ont_fixed_stages(canonical_id, params)
+    # This normalizer only uses caller settings, workflow defaults and the local
+    # Dorado lock, never reference authority. Reuse all its cross-field rules
+    # before enrichment; discard the copy so trusted execution normalization
+    # still owns effective parameters and resolved runtime identities later.
+    normalize_ont_launch_params(canonical_id, params)
+
+
+def validate_ont_fixed_stages(canonical_id: str, params: Mapping[str, Any]) -> None:
+    """Enforce profile-fixed stages before any reference-dependent work."""
+    if canonical_id == "ont_fastq_qc" and params.get("run_fastq_qc", True) is not True:
+        raise ValueError("ont_fastq_qc requires run_fastq_qc=true")
+    if canonical_id in {"ont_basecall_dna", "ont_basecall_rna"} and params.get("run_fastq_qc", False) is not False:
+        raise ValueError(f"{canonical_id} requires run_fastq_qc=false")
+    if canonical_id != "ont_methylation_analysis" and params.get("run_modkit", False) is not False:
+        raise ValueError(f"{canonical_id} requires run_modkit=false")
+    if canonical_id == "wf_clone_validation" and params.get("run_assembly", True) is not True:
+        raise ValueError("wf_clone_validation requires run_assembly=true")
+
+
 def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | None) -> dict[str, Any]:
     """Apply canonical ONT product/quality defaults without mutating caller params."""
     canonical_id = resolve_ont_workflow_alias(workflow_id)
@@ -493,6 +642,8 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     normalized.update(dict(params or {}))
 
     if canonical_id == "ont_fastq_qc":
+        validate_ont_fixed_stages(canonical_id, normalized)
+
         def fastq_bool(name: str, default: bool) -> bool:
             value = normalized.get(name, default)
             if not isinstance(value, bool):
@@ -505,6 +656,7 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
                 raise ValueError(f"{name} must be an integer from {minimum} through {maximum}")
             return value
 
+        normalized["run_fastq_qc"] = True
         normalized["ont_workflow_id"] = spec.workflow_id
         normalized["enable_rotating_reference_frames"] = fastq_bool("enable_rotating_reference_frames", True)
         normalized["rotation_scan_step_bp"] = fastq_int("rotation_scan_step_bp", 1, 1, 10_000)

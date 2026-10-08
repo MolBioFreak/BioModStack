@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
+import { buildNanoporeOperatorStageParams } from '../src/lib/nanoporeLaunchPayload';
 
 function readSource(relativePath: string): string {
     return readFileSync(join(process.cwd(), relativePath), 'utf8');
@@ -13,7 +14,10 @@ test('Nanopore settings state is the authority for the submitted launch payload'
     const payload = readSource('src/lib/nanoporeLaunchPayload.ts');
 
     assert.match(template, /\.\.\.buildNanoporeOperatorStageParams\(\{/u);
-    assert.match(payload, /params\.run_fastq_qc = runFastqQc/u);
+    for (const runFastqQc of [false, true]) {
+        assert.equal(buildNanoporeOperatorStageParams({ selectedWorkflow: 'constructScreening', inputSource: 'fastq', runFastqQc, runAssembly: false }).run_fastq_qc, runFastqQc);
+        assert.equal(buildNanoporeOperatorStageParams({ selectedWorkflow: 'fastqQc', inputSource: 'fastq', runFastqQc, runAssembly: false }).run_fastq_qc, true);
+    }
     assert.match(payload, /if \(selectedWorkflow === 'clone'\) params\.run_assembly = true/u);
     assert.match(payload, /if \(selectedWorkflow === 'constructScreening'\) params\.run_assembly = runAssembly/u);
     assert.match(template, /onChange=\{\(e\) => setRunFastqQc\(e\.target\.checked\)\}/u);

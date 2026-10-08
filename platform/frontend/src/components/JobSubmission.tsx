@@ -5,6 +5,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { completeCurrentLaunchContext, fetchModels, fetchFiles, submitJob, uploadFile, fetchTemplates, fetchTemplateById, fetchInputPresets, type Job } from '../lib/api';
 import { getLaunchContext, type JsonObject } from '../lib/projectManager';
+import { buildNanoporeHandoff } from '../lib/nanoporeHandoff';
 import { SequenceManagerModal } from './SequenceManagerModal';
 import { SequenceManager } from './SequenceManager';
 import { TemplateManagerModal } from './TemplateManagerModal';
@@ -755,6 +756,7 @@ export function JobSubmission() {
     const [selectedModeId, setSelectedModeId] = useState<string | null>(null);
     const [jobName, setJobName] = useState('');
     const [params, setParams] = useState<Record<string, UntypedApiValue>>({});
+    const [defaultOnlyParams, setDefaultOnlyParams] = useState<string[]>([]);
     const frustrampnnIntegrationQuery = useModelIntegrationConfig('frustrampnn');
     const [explicitRunFrustrampnn, setExplicitRunFrustrampnn] = useState<boolean | undefined>(undefined);
     const [frustrampnnSettings, setFrustrampnnSettings] = useState<FrustraMpnnRequestedSettings>(() => (
@@ -794,7 +796,7 @@ export function JobSubmission() {
             !context?.launch_context_id
             || hydratedLaunchContextRef.current === context.launch_context_id
             || !scheduler
-            || !['esmfold2', 'boltz2', 'protenix', 'molecular_dynamics'].includes(String(scheduler.model_id))
+            || !['esmfold2', 'boltz2', 'protenix', 'molecular_dynamics', 'nanopore'].includes(String(scheduler.model_id))
             || !schedulerParams
             || typeof schedulerParams !== 'object'
             || Array.isArray(schedulerParams)
@@ -829,6 +831,10 @@ export function JobSubmission() {
             setSelectedModelId(null);
             setSelectedModeId(null);
         } else {
+            if (scheduler.model_id === 'nanopore') {
+                setWizardMode('manual');
+                setSelectedTemplateId(null);
+            }
             setSelectedModelId(String(scheduler.model_id));
             setSelectedModeId(typeof scheduler.mode === 'string' ? scheduler.mode : null);
         }
@@ -1185,7 +1191,7 @@ export function JobSubmission() {
 
         setWizardMode('manual');
         setSelectedTemplateId(null);
-        setClonedValues(undefined);
+        setClonedValues(template.model_id === 'nanopore' ? (template.params || {}) : undefined);
         setParams(template.params || {});
         if (template.model_id) setSelectedModelId(template.model_id);
         if (template.mode) setSelectedModeId(template.mode);
@@ -1275,6 +1281,7 @@ export function JobSubmission() {
                 if (p.default !== undefined) defaults[p.name] = p.default;
             });
             const nextParams = { ...defaults, ...(clonedValues || {}) };
+            setDefaultOnlyParams(Object.keys(defaults).filter((key) => !(key in (clonedValues || {}))));
             setParams(nextParams);
         }
     }, [selectedModel, selectedModelId, clonedValues]);
@@ -1287,6 +1294,7 @@ export function JobSubmission() {
                 if (p.default !== undefined) defaults[p.name] = p.default;
             });
             const nextParams = { ...defaults, ...(clonedValues || {}) };
+            setDefaultOnlyParams(Object.keys(defaults).filter((key) => !(key in (clonedValues || {}))));
             setParams(nextParams);
             const defaultTemplateName = nextParams.job_name || nextParams.name || nextParams.sequence_name || templateDetail.name || selectedTemplateId || '';
             if (defaultTemplateName) {
@@ -1307,6 +1315,7 @@ export function JobSubmission() {
 
     // Handle param change
     const updateParam = (key: string, value: UntypedApiValue) => {
+        setDefaultOnlyParams(previous => previous.filter(name => name !== key));
         setParams(prev => ({ ...prev, [key]: value }));
     };
 
@@ -1541,7 +1550,19 @@ export function JobSubmission() {
             : 'Select a workflow and complete required fields')
         : '';
 
+    const genericNgsModel = selectedModelId || templateDetail?.preset_params?.template_model_id;
+    const isGenericNgs = genericNgsModel === 'nanopore';
     const handleSubmit = () => {
+        if (isGenericNgs) {
+            const handoff = buildNanoporeHandoff({
+                name: jobName, mode: selectedModeId || templateDetail?.preset_params?.template_mode_id || '',
+                pinned_gpu: launchContextQuery.data?.pinned_gpu,
+                defaultOnlyParams: defaultOnlyParams.filter(key => !(isTemplateMode && key in (templateDetail?.preset_params || {}))),
+                params: { ...(isTemplateMode ? templateDetail?.preset_params : {}), ...params },
+            }, `?${searchParams.toString()}`);
+            navigate(handoff.to, { state: { ngsHandoff: handoff.values } });
+            return;
+        }
         if (!isReady) return;
 
         // Get template data - handle both axios response wrapper and direct data
@@ -2341,14 +2362,14 @@ export function JobSubmission() {
                         )}
                         <button
                             onClick={handleSubmit}
-                            disabled={!isReady || submitMutation.isPending}
+                            disabled={(!isReady && !isGenericNgs) || submitMutation.isPending}
                             title={!isReady ? launchBlockedReason : undefined}
                             className={`inline-flex min-w-[12rem] items-center justify-center rounded-xl border px-6 py-3.5 text-sm font-semibold transition-all ${isReady
                                 ? 'border-blue-500/40 bg-blue-500/15 text-blue-200 hover:bg-blue-500/20'
                                 : 'border-slate-700 bg-slate-900/60 text-slate-500 cursor-not-allowed'
                                 }`}
                         >
-                            {submitMutation.isPending ? 'Launching Job...' : 'Launch Experiment'}
+                            {isGenericNgs ? 'Continue in NGS' : submitMutation.isPending ? 'Launching Job...' : 'Launch Experiment'}
                         </button>
                         {!isReady && launchBlockedReason && selectedTemplateId && (
                             <div className="self-center text-xs text-slate-500">{launchBlockedReason}</div>

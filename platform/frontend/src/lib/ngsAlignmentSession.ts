@@ -68,10 +68,19 @@ export interface UnavailableAlignmentSession extends AlignmentSessionBase {
     alignment_pair_sha256: null;
 }
 
-export type AlignmentSession = ReadyAlignmentSession | UnavailableAlignmentSession;
+export interface NativeAlignmentSession extends Omit<ReadyAlignmentSession,
+    "schema" | "sequence_qc_manifest_sha256" | "verification_manifest_sha256"> {
+    schema: "bms.ngs.native-alignment-session.v2";
+    mode: "primary";
+    source_manifest_sha256: string;
+    source_authority_sha256: string;
+    sequence_qc_manifest_sha256?: never;
+    verification_manifest_sha256?: never;
+}
+export type AlignmentSession = ReadyAlignmentSession | NativeAlignmentSession | UnavailableAlignmentSession;
 
 export interface AlignmentSessionResponse {
-    schema: 'bms.ngs.alignment-session-list.v1';
+    schema: 'bms.ngs.alignment-session-list.v1' | 'bms.ngs.native-alignment-session-list.v2';
     job_id: string;
     sessions: AlignmentSession[];
 }
@@ -248,17 +257,23 @@ export interface AlignmentRead {
     contig: string | null;
     start_1based: number | null;
     alignment_end_1based?: number | null;
-    strand: '+' | '-';
+    strand: '+' | '-' | null;
     mapq: number | null;
     cigar: string | null;
-    flags: number;
-    unmapped: boolean;
-    aligned_query_bases?: number;
-    aligned_reference_bases?: number;
-    inserted_bases?: number;
-    deleted_bases?: number;
-    skipped_reference_bases?: number;
-    clipped_bases?: number;
+    flags: number | null;
+    unmapped: boolean | null;
+    population_id?: string;
+    catalog_authority_sha256?: string;
+    alignment_state?: string;
+    in_preview?: boolean | null;
+    overlay_eligible?: boolean;
+    overlay_unavailable_reason?: 'already_in_preview' | 'unmapped' | 'ambiguous_primary' | 'no_primary' | 'record_limit' | 'writer_unsupported' | 'byte_limit' | null;
+    aligned_query_bases?: number | null;
+    aligned_reference_bases?: number | null;
+    inserted_bases?: number | null;
+    deleted_bases?: number | null;
+    skipped_reference_bases?: number | null;
+    clipped_bases?: number | null;
     edit_distance?: number | null;
     reference_substitution_count?: number | null;
     reference_substitution_rate?: number | null;
@@ -515,7 +530,7 @@ export function normalizeSortableAlignmentReadPage(
         if (
             typeof read.read_id !== 'string' || !read.read_id || read.read_id.length > 255
             || !isNonNegativeInteger(read.flags) || typeof read.unmapped !== 'boolean'
-            || !['+', '-'].includes(read.strand)
+            || read.strand === null || !['+', '-'].includes(read.strand)
             || (read.contig !== null && typeof read.contig !== 'string')
             || (read.cigar !== null && typeof read.cigar !== 'string')
             || sortableReadWireFields.some((field) => {
@@ -714,7 +729,48 @@ export function normalizeAlignmentLocusSlice(
     return slice;
 }
 
+async function normalizeNativeSessions(payload: AlignmentSessionResponse, jobId: string): Promise<NativeAlignmentSession[]> {
+    requireClosedKeys(payload, ["schema", "job_id", "sessions"], "native session list");
+    if (payload.job_id !== jobId || !Array.isArray(payload.sessions) || payload.sessions.length > 1) throw new Error("Invalid native session list.");
+    return Promise.all(payload.sessions.map(async (value) => {
+        requireClosedKeys(value, ["schema", "job_id", "session_id", "mode", "ready", "unavailable_reason", "reads_url",
+            "source_manifest_sha256", "source_authority_sha256", "artifact_set_sha256", "reference", "artifacts", "alignment_pair_sha256"], "native session");
+        const row = value as unknown as NativeAlignmentSession;
+        if (row.schema !== "bms.ngs.native-alignment-session.v2" || row.job_id !== jobId || row.mode !== "primary"
+            || row.ready !== true || row.unavailable_reason !== null || !/^[0-9a-f]{24}$/.test(row.session_id)
+            || !isSha256(row.source_manifest_sha256) || !isSha256(row.source_authority_sha256)
+            || !isSha256(row.artifact_set_sha256) || !isSha256(row.alignment_pair_sha256)
+            || row.reads_url !== `/api/jobs/${encodeURIComponent(jobId)}/alignment-sessions/${row.session_id}/reads`) throw new Error("Invalid native session authority.");
+        requireClosedKeys(row.reference, ["contig", "length_bp", "topology", "normalized_sequence_sha256", "fasta_sha256", "fai_sha256"], "native reference");
+        if (typeof row.reference.contig !== "string" || !row.reference.contig || !isPositiveInteger(row.reference.length_bp)
+            || !["linear", "circular"].includes(row.reference.topology) || !isSha256(row.reference.normalized_sequence_sha256)
+            || !isSha256(row.reference.fasta_sha256) || !isSha256(row.reference.fai_sha256)) throw new Error("Invalid native reference authority.");
+        // Optional legacy tracks can be null in the shared response model, but
+        // native scientific tracks may not be synthesized from QC conventions.
+        requireExactKeys(row.artifacts, artifactRoles, "native artifacts");
+        for (const role of ["alignment", "alignment_index", "reference", "reference_index"] as const) {
+            const artifact = row.artifacts[role];
+            requireClosedKeys(artifact, ["artifact_id", "url", "sha256", "size_bytes", "mime_type", "range_capable", "source_manifest_sha256"], "native artifact");
+            if (!isSha256(artifact.artifact_id) || !isSha256(artifact.sha256) || !isPositiveInteger(artifact.size_bytes)
+                || artifact.source_manifest_sha256 !== row.source_manifest_sha256 || artifact.range_capable !== true
+                || typeof artifact.mime_type !== "string" || !artifact.mime_type
+                || artifact.url !== `/api/jobs/${encodeURIComponent(jobId)}/ngs-artifacts/${artifact.artifact_id}`) throw new Error("Invalid native artifact binding.");
+        }
+        for (const role of artifactRoles.filter((role) => !["alignment", "alignment_index", "reference", "reference_index"].includes(role))) {
+            if (row.artifacts[role] != null) throw new Error("Unsupported native auxiliary authority.");
+        }
+        if (row.artifacts.reference!.sha256 !== row.reference.fasta_sha256
+            || row.artifacts.reference_index!.sha256 !== row.reference.fai_sha256) throw new Error("Native reference artifacts changed.");
+        const sha = async (text: string) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+        const pair = await sha(`bms.ngs.alignment-pair.v1\0${JSON.stringify({ alignment_index_sha256: row.artifacts.alignment_index!.sha256, alignment_sha256: row.artifacts.alignment!.sha256 })}`);
+        const session = await sha(JSON.stringify({ job_id: jobId, mode: "primary", receipt_sha256: row.source_manifest_sha256, schema: "bms.ngs.native-alignment-session.v2" }));
+        if (pair !== row.alignment_pair_sha256 || session.slice(0, 24) !== row.session_id) throw new Error("Native session identity changed.");
+        return row;
+    }));
+}
+
 export async function normalizeAlignmentSessions(payload: AlignmentSessionResponse, expectedJobId: string): Promise<AlignmentSession[]> {
+    if (payload?.schema === "bms.ngs.native-alignment-session-list.v2") return normalizeNativeSessions(payload, expectedJobId);
     requireExactKeys(payload, ['schema', 'job_id', 'sessions'], 'alignment session envelope');
     if (!payload || payload.schema !== 'bms.ngs.alignment-session-list.v1'
         || payload.job_id !== expectedJobId || !Array.isArray(payload.sessions)) {
@@ -828,7 +884,7 @@ export async function normalizeAlignmentSessions(payload: AlignmentSessionRespon
     }));
     const primary = sessions[0];
     for (const session of sessions.filter((candidate) => candidate.ready)) {
-        if (!primary.ready || !session.reference || !primary.reference
+        if (!primary.ready || primary.schema !== 'bms.ngs.alignment-session.v1' || session.schema !== 'bms.ngs.alignment-session.v1' || !session.reference || !primary.reference
             || session.sequence_qc_manifest_sha256 !== primary.sequence_qc_manifest_sha256
             || session.verification_manifest_sha256 !== primary.verification_manifest_sha256
             || session.artifact_set_sha256 !== primary.artifact_set_sha256) {
@@ -866,7 +922,7 @@ export function bindAlignmentSessionsToResultAuthority(
         }
     }
     for (const session of sessions.filter((candidate) => candidate.ready)) {
-        if (!session.reference
+        if (session.schema !== 'bms.ngs.alignment-session.v1' || !session.reference
             || session.sequence_qc_manifest_sha256 !== authority.sequence_qc_manifest_sha256
             || session.verification_manifest_sha256 !== authority.construct_verification_manifest_sha256
             || session.artifact_set_sha256 !== authority.artifact_set_sha256
@@ -1002,16 +1058,49 @@ export async function createAlignmentLocusSlice(
     return normalizeAlignmentLocusSlice(response.data, jobId, sessionId, request);
 }
 
+function catalogEnvelope(value: unknown, jobId: string, sessionId: string, schema: string) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid catalog response.");
+    const row = value as Record<string, unknown>;
+    if (row.schema !== schema || row.job_id !== jobId || row.session_id !== sessionId
+        || !isSha256(row.population_id) || !isSha256(row.catalog_authority_sha256)) throw new Error("Catalog source binding changed.");
+    return row;
+}
+export function catalogAlignmentRead(value: unknown, populationId: string, authority: string): AlignmentRead {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid catalog read.");
+    const row = value as Record<string, unknown>;
+    if (typeof row.read_id !== "string" || !row.read_id || !["mapped_primary", "ambiguous_primary", "unmapped", "no_primary"].includes(String(row.alignment_state))
+        || !isPositiveInteger(row.source_record_count) || !isSha256(populationId) || !isSha256(authority)) throw new Error("Invalid logical read identity.");
+    for (const key of ["length", "start_1based", "alignment_end_1based", "mapq", "flags"]) {
+        if (row[key] !== null && !isNonNegativeInteger(row[key])) throw new Error("Invalid catalog alignment value.");
+    }
+    for (const key of ["contig", "cigar"]) if (row[key] !== null && typeof row[key] !== "string") throw new Error("Invalid catalog alignment string.");
+    if (![null, "+", "-"].includes(row.strand as string | null) || row.unmapped !== null && typeof row.unmapped !== "boolean"
+        || row.in_preview !== null && typeof row.in_preview !== "boolean") throw new Error("Invalid catalog alignment state.");
+    const overlayReasons = ['already_in_preview', 'unmapped', 'ambiguous_primary', 'no_primary', 'record_limit', 'writer_unsupported', 'byte_limit'];
+    if (typeof row.overlay_eligible !== 'boolean'
+        || (row.overlay_eligible ? row.overlay_unavailable_reason !== null : !overlayReasons.includes(String(row.overlay_unavailable_reason)))
+        || (row.in_preview === true) !== (row.overlay_unavailable_reason === 'already_in_preview')) throw new Error('Invalid selected-read eligibility.');
+    for (const [key, value] of Object.entries(row)) {
+        if (typeof value === "number" && !Number.isFinite(value)) throw new Error(`Invalid ${key}.`);
+    }
+    return { ...row, population_id: populationId, catalog_authority_sha256: authority } as unknown as AlignmentRead;
+}
+
 export async function fetchAlignmentReads(
     jobId: string,
     sessionId: string,
     options: AlignmentReadRequestOptions = {},
 ): Promise<AlignmentReadPage> {
-    const response = await api.get<AlignmentReadPage>(`/api/jobs/${encodeURIComponent(jobId)}/reads`, {
-        params: buildAlignmentReadRequestParams({ ...options, sessionId }),
-        signal: options.signal,
-    });
-    return normalizeAlignmentReadPage(response.data);
+    const response = await withAlignmentAccessRecovery(jobId, () => api.get<unknown>(
+        `/api/jobs/${encodeURIComponent(jobId)}/alignment-sessions/${encodeURIComponent(sessionId)}/reads`, {
+            params: { search: options.q ?? "", cursor: options.cursor, limit: options.limit ?? 50,
+                contig: options.contig, start_1based: options.start, end_1based: options.end }, signal: options.signal,
+        }));
+    const row = catalogEnvelope(response.data, jobId, sessionId, "bms.ngs.read-page.v3");
+    if (!Array.isArray(row.reads) || row.reads.length > (options.limit ?? 50)
+        || row.next_cursor !== null && typeof row.next_cursor !== "string") throw new Error("Invalid catalog page.");
+    return { reads: row.reads.map((read) => catalogAlignmentRead(read, String(row.population_id), String(row.catalog_authority_sha256))),
+        next_cursor: row.next_cursor as string | null, limit: options.limit ?? 50, sequence_included: false, scan_truncated: false };
 }
 
 export async function fetchSortableAlignmentReads(
@@ -1051,25 +1140,19 @@ export async function fetchAlignmentRead(
     readId: string,
     options: Pick<AlignmentReadRequestOptions, 'contig' | 'start' | 'end' | 'signal'> = {},
 ): Promise<AlignmentRead> {
-    try {
-        const response = await api.get<AlignmentRead>(
-            `/api/jobs/${encodeURIComponent(jobId)}/reads/${encodeURIComponent(readId)}`,
-            {
-                params: {
-                    session_id: sessionId,
-                    contig: options.contig?.trim() || undefined,
-                    start: options.start,
-                    end: options.end,
-                },
-                signal: options.signal,
-            },
-        );
-        return response.data;
-    } catch (reason) {
-        if (isExactNgsError(reason, 409, 'NGS_READ_SCAN_TRUNCATED', jobId, 'read', false)) {
-            const data = (reason as { response: { data: { message: string } } }).response.data;
-            throw new AlignmentReadScanTruncatedError(data.message);
-        }
-        throw reason;
+    const response = await withAlignmentAccessRecovery(jobId, () => api.post<unknown>(
+        `/api/jobs/${encodeURIComponent(jobId)}/alignment-sessions/${encodeURIComponent(sessionId)}/reads/lookup`,
+        { schema: "bms.ngs.read-lookup-request.v2", read_id: readId, include_sequence: true }, { signal: options.signal }));
+    const row = catalogEnvelope(response.data, jobId, sessionId, "bms.ngs.read-lookup.v2");
+    const read = catalogAlignmentRead(row.read, String(row.population_id), String(row.catalog_authority_sha256));
+    if (read.read_id !== readId || typeof row.sequence_available !== "boolean") throw new Error("Exact read selection changed.");
+    if (row.record === null) {
+        if (row.sequence_available) throw new Error("Missing canonical read record.");
+        return read;
     }
+    const record = row.record as Record<string, unknown>;
+    if (typeof record !== "object" || record.read_id !== readId || !isNonNegativeInteger(record.source_record_ordinal)
+        || (record.sequence !== null && typeof record.sequence !== "string")
+        || (record.quality !== null && typeof record.quality !== "string")) throw new Error("Invalid exact record authority.");
+    return { ...read, sequence: record.sequence as string | null, quality: record.quality as string | null };
 }

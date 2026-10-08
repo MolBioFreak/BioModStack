@@ -27,6 +27,8 @@ process FastqAlign {
     }
     """
     set -euo pipefail
+    source "${params.code_root ?: projectDir}/scripts/ngs_producer_identity.sh"
+    bms_producer_begin "${params.code_root ?: projectDir}" modules/ngs/fastq_align.nf -- minimap2 samtools || exit 1
 
     # Snapshot and authenticate the reference before alignment.
     cp --reflink=auto -- "${reference}" reference.snapshot.fasta
@@ -53,6 +55,10 @@ process FastqAlign {
         exit 95
     fi
 
+    # Consume one immutable source snapshot; retain byte/settings authority.
+    cp --reflink=auto -- "${fastq}" source.snapshot.fastq
+    chmod 0444 source.snapshot.fastq
+    source_sha256_before="\$(sha256sum source.snapshot.fastq | cut -d ' ' -f1)"
     # Align FASTQ reads to the authenticated reference with minimap2.
     MM2_ARGS=(-a -x "${minimapPreset}" -t ${task.cpus})
     if [[ "${allowSecondary}" != "true" ]]; then
@@ -60,7 +66,7 @@ process FastqAlign {
     fi
 
     minimap2 "\${MM2_ARGS[@]}" \\
-        reference.snapshot.fasta "${fastq}" 2>fastq_align.log \\
+        reference.snapshot.fasta source.snapshot.fastq 2>fastq_align.log \\
         | samtools sort -@ ${task.cpus} -o aligned.bam
 
     samtools quickcheck -v aligned.bam 2>>fastq_align.log
@@ -74,5 +80,19 @@ process FastqAlign {
     rm -f -- "${reference}"
     cp --reflink=auto -- reference.snapshot.fasta reference.fasta
     samtools faidx reference.fasta
+    source_sha256_after="\$(sha256sum source.snapshot.fastq | cut -d ' ' -f1)"
+    [[ "\${source_sha256_before}" == "\${source_sha256_after}" ]] || exit 97
+    {
+        echo "source_sha256_before=\${source_sha256_before}"
+        echo "source_sha256_after=\${source_sha256_after}"
+        echo "source_immutable=true"
+        echo "reference_raw_sha256_before=\${reference_raw_sha256_before}"
+        echo "reference_raw_sha256_after=\${reference_raw_sha256_after}"
+        echo "reference_sequence_sha256=\${reference_sequence_sha256}"
+        echo "reference_immutable=true"
+        echo "fastq_minimap2_preset=${minimapPreset}"
+        echo "fastq_minimap2_allow_secondary=${allowSecondary}"
+    } >> fastq_align.log
+    bms_producer_finish >> fastq_align.log || exit 1
     """
 }

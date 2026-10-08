@@ -57,6 +57,8 @@ from services.ont_barcode_batches import (
 )
 from services.ont_barcode_units import load_barcode_unit, load_barcode_units
 from services.ont_pooled_reference_assignment import (
+    PooledReferenceRestoreRequest,
+    restore_pooled_reference_set,
     ASSIGNMENT_WORKFLOW_ID,
     PooledAssignmentError,
     PooledAssignmentReleaseRequest,
@@ -71,6 +73,8 @@ from services.ont_ngs_contract import (
     normalize_ont_launch_params,
     normalized_fasta_sequence_sha256,
     resolve_ont_workflow_alias,
+    validate_ont_operator_params,
+    validate_ont_primary_input,
 )
 
 router = APIRouter()
@@ -87,12 +91,6 @@ ONT_WORKFLOW_MODEL_MODES: dict[str, str] = {
     "ont_fastq_qc": "fastq_qc",
     "ont_pooled_reference_assignment": "pooled_reference_assignment",
     "wf_clone_validation": "clone_validation",
-}
-
-ONT_PRIMARY_INPUT_KEYS: dict[str, str] = {
-    "pod5": "pod5_dir",
-    "bam": "bam_path",
-    "fastq": "fastq_path",
 }
 
 ONT_SERVER_CONTROLLED_PROVENANCE_PARAMS = ont_submission_trust.ONT_SERVER_CONTROLLED_PROVENANCE_PARAMS
@@ -438,28 +436,10 @@ def _mode_for_ont_workflow(workflow_id: str) -> str:
 
 def _validate_ont_input_contract(canonical_id: str, params: dict[str, Any]) -> tuple[str, str]:
     """Validate one truthful primary input and return its mode/path."""
-    spec = get_ont_workflow_spec(canonical_id)
-    selected = [
-        (input_mode, key, str(params[key]).strip())
-        for input_mode, key in ONT_PRIMARY_INPUT_KEYS.items()
-        if params.get(key) is not None and str(params[key]).strip()
-    ]
-    if len(selected) != 1:
-        keys = ", ".join(ONT_PRIMARY_INPUT_KEYS.values())
-        raise ValueError(f"exactly one primary ONT input is required ({keys}); found {len(selected)}")
-
-    input_mode, input_key, input_path = selected[0]
-    if input_mode not in spec.input_modes:
-        raise ValueError(
-            f"workflow {canonical_id!r} does not accept {input_mode!r} input via {input_key!r}; "
-            f"accepted modes: {', '.join(spec.input_modes)}"
-        )
+    input_mode, input_path = validate_ont_primary_input(canonical_id, params)
 
     if canonical_id in ONT_REFERENCE_REQUIRED_WORKFLOWS and not str(params.get("reference_fasta") or "").strip():
         raise ValueError(f"workflow {canonical_id!r} requires reference_fasta for construct verification")
-
-    if input_mode == "fastq" and bool(params.get("run_modkit")):
-        raise ValueError("modkit requires a BAM with meaningful MM/ML tags or POD5 basecalled with modified bases")
 
     return input_mode, input_path
 
@@ -980,6 +960,20 @@ async def ont_handoff_plasmid_qc(run_id: str, payload: dict[str, Any]) -> dict[s
     )
 
 
+@router.post("/ngs/pooled-reference-assignment/restore")
+async def ont_restore_pooled_reference_set(
+    request: PooledReferenceRestoreRequest,
+    http_request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    try:
+        return await restore_pooled_reference_set(
+            session, reference_set_manifest=request.reference_set_manifest, http_request=http_request,
+        )
+    except PooledAssignmentError as exc:
+        raise HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": str(exc)}) from exc
+
+
 @router.post("/ngs/pooled-reference-assignment/submit", status_code=201)
 async def ont_submit_pooled_reference_assignment(
     request: PooledReferenceAssignmentRequest,
@@ -1049,6 +1043,15 @@ async def ont_submit_ngs_workflow(
                     f"workflow {canonical_id!r} requires a server-issued molbio_ngs_receipt_id or exact managed-reference authority"
                 )
         _validate_comparison_panel_launch(canonical_id, receipt_id, panel_receipt_id)
+        validate_ont_operator_params(canonical_id, _mode_for_ont_workflow(canonical_id), submitted)
+        if panel_receipt_id:
+            if submitted.get("run_fastq_qc", True) is not True:
+                raise ValueError("comparison attribution requires the existing QC stage to be enabled")
+            if canonical_id == "ont_construct_screening" and not submitted.get("fastq_path"):
+                raise ValueError("construct-screening comparison attribution is supported only for FASTQ input")
+        if canonical_id == "ont_methylation_analysis" and submitted.get("bam_force_realign") is True:
+            raise ValueError("methylation BAM input prepares existing alignments; forced realignment is not implemented by this workflow")
+
         if request.managed_reference is not None:
             expected_result_manifest_schema = await resolve_state_analysis_launch_policy(
                 molbio_ngs_session,

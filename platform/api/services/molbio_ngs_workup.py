@@ -333,9 +333,13 @@ def _validate_comparison_summary(
             raise ValueError("unclassified comparison row has attribution")
         if category == "ambiguous_multimapping" and (len(accepted) < 2 or role != "ambiguous"):
             raise ValueError("ambiguous comparison row is not competitive")
-        if category == "expected_plasmid_unique" and (accepted != [EXPECTED_REFERENCE_ID] or role != "intended"):
+        # Producer retains lower-scoring competitors even for a unique winner.
+        # Unique means the score margin excludes close competitors, not that
+        # exactly one reference received an alignment. Native completion checks
+        # that score decision against the decoded BAM with the producer parser.
+        if category == "expected_plasmid_unique" and (not accepted or accepted[0] != EXPECTED_REFERENCE_ID or role != "intended"):
             raise ValueError("expected comparison row is not uniquely intended")
-        if category == "panel_reference_unique" and (len(accepted) != 1 or accepted[0] == EXPECTED_REFERENCE_ID or role != reference_roles[accepted[0]]):
+        if category == "panel_reference_unique" and (not accepted or accepted[0] == EXPECTED_REFERENCE_ID or role != reference_roles[accepted[0]]):
             raise ValueError("panel comparison row is not uniquely role-resolved")
         recomputed_categories[category] += 1
         recomputed_roles[role] += 1

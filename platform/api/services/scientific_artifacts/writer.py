@@ -281,7 +281,7 @@ def guarded_delete_new_artifact(artifact: InstalledArtifact) -> bool:
 
 
 def verify_artifact(artifact: InstalledArtifact | Mapping[str, Any], *, root: Path | str | None = None) -> Path:
-    with verified_artifact_snapshot(artifact, root=root):
+    with verified_artifact_snapshot(artifact, root=root, file_like=True):
         pass
     relative_path, _expected_sha, _expected_size = _artifact_receipt_identity(artifact)
     return artifact_root(root) / relative_path
@@ -310,8 +310,9 @@ def verified_artifact_snapshot(
     artifact: InstalledArtifact | Mapping[str, Any],
     *,
     root: Path | str | None = None,
+    file_like: bool = False,
 ):
-    """Yield a receipt-verified descriptor path without following any component."""
+    """Yield a verified lease for callback readers, or the safe native fallback."""
     relative_path, expected_sha, expected_size = _artifact_receipt_identity(artifact)
     base = artifact_root(root)
     relative = Path(relative_path)
@@ -346,17 +347,16 @@ def verified_artifact_snapshot(
             raise ScientificArtifactError("artifact is missing or is not a regular verified file")
         if metadata.st_size != expected_size:
             raise ScientificArtifactError("artifact bytes do not match its receipt")
-        digest = hashlib.sha256()
-        os.lseek(leaf, 0, os.SEEK_SET)
-        while True:
-            block = os.read(leaf, 1024 * 1024)
-            if not block:
-                break
-            digest.update(block)
-        os.lseek(leaf, 0, os.SEEK_SET)
-        if digest.hexdigest() != expected_sha:
-            raise ScientificArtifactError("artifact bytes do not match its receipt")
-        yield Path(f"/proc/self/fd/{leaf}")
+        # Reuse the existing serving owner. Native engines must not read the
+        # mutable receipt-checked source descriptor after verification.
+        from services import ngs_alignment_sessions as storage
+        try:
+            with storage.open_verified_artifact_snapshot(
+                    base / relative, expected_size=expected_size,
+                    expected_sha256=expected_sha) as snapshot:
+                yield snapshot if file_like else Path(storage._descriptor_path(snapshot.fileno()))
+        except storage.AlignmentSessionError as exc:
+            raise ScientificArtifactError(str(exc)) from exc
     except OSError as exc:
         raise ScientificArtifactError("artifact path contains a symlink or unsafe component") from exc
     finally:
@@ -365,8 +365,11 @@ def verified_artifact_snapshot(
 
 
 def read_rows(artifact: InstalledArtifact | Mapping[str, Any], *, root: Path | str | None = None, max_rows: int = 1_000_000) -> list[dict[str, Any]]:
-    with verified_artifact_snapshot(artifact, root=root) as path:
-        table = pq.read_table(path)
+    with verified_artifact_snapshot(artifact, root=root, file_like=True) as handle:
+        parquet = pq.ParquetFile(handle)
+        if parquet.metadata.num_rows > max_rows:
+            raise ScientificArtifactError("artifact read exceeds configured row limit")
+        table = parquet.read()
         if table.num_rows > max_rows:
             raise ScientificArtifactError("artifact read exceeds configured row limit")
         return [dict(row) for row in table.to_pylist()]
