@@ -144,7 +144,7 @@ def postprocess_canonical_bundles(
         )
         if (
             scheduler_terminal.get("schema_name")
-            != "bms.frustrampnn.parent-fanout-terminal.v1"
+            not in {"bms.frustrampnn.parent-fanout-terminal.v1", "bms.frustrampnn.native-parent-terminal.v1"}
             or scheduler_terminal.get("parent_job_id") != preparation["parent_job_id"]
             or scheduler_terminal.get("parent_workflow_id") != "conformational_mapping"
             or scheduler_terminal.get("status") != "complete"
@@ -165,7 +165,16 @@ def postprocess_canonical_bundles(
                     "requested_settings_sha256": candidate.get("requested_settings_sha256"),
                     "effective_settings_sha256": candidate.get("effective_settings_sha256"),
                 }
-        if set(scheduler_by_id) != set(prepared_by_id):
+        if scheduler_terminal.get('schema_name') == 'bms.frustrampnn.native-parent-terminal.v1':
+            from component_runtime import digest
+            receipt_body = {k: v for k, v in scheduler_terminal.items() if k != 'receipt_sha256'}
+            ids = scheduler_terminal.get('candidate_ids', [])
+            if (scheduler_terminal.get('receipt_sha256') != digest(receipt_body)
+                    or len(ids) != len(set(ids)) or set(ids) != set(prepared_by_id)):
+                raise CMFrustraMPNNPostprocessError('native terminal candidate authority is invalid')
+            # Original prepared request bytes remain authoritative; no child Job
+            # identity or re-normalized structure replaces the CM source binding.
+        elif set(scheduler_by_id) != set(prepared_by_id):
             raise CMFrustraMPNNPostprocessError("scheduler terminal candidate set is incomplete")
 
     loaded: dict[str, dict[str, Any]] = {}

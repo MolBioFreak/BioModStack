@@ -10,15 +10,17 @@ process RunBoltzCPExperimental {
     label 'gpu'
 
     publishDir "${params.out_dir}/run/boltz_cp_experimental", mode: 'copy', pattern: '*.log'
-    publishDir "${params.out_dir}/inputs/boltz_cp", mode: 'copy', pattern: 'staged_input/**', saveAs: { filename -> filename.replace('staged_input/', '') }
-    publishDir "${params.out_dir}/processed/boltz_cp", mode: 'copy', pattern: 'cp_results/processed/**', saveAs: { filename -> filename.replace('cp_results/processed/', '') }
+    publishDir "${params.out_dir}/run/boltz_cp_experimental/native", mode: 'copy', pattern: 'cp_results'
+    publishDir "${params.out_dir}/inputs", mode: 'copy', pattern: 'staged_input', saveAs: { 'boltz_cp' }
+    publishDir "${params.out_dir}/processed", mode: 'copy', pattern: 'processed_evidence', saveAs: { 'boltz_cp' }
 
     input:
     path input_config
 
     output:
     path 'cp_results', emit: results_dir, optional: true
-    path 'cp_results/processed', emit: processed_dir, optional: true
+    path 'processed_evidence', emit: processed_dir, optional: true
+    path 'staged_input', emit: inputs
     path '*.log'
 
     script:
@@ -170,6 +172,9 @@ PY
         exit 1
     fi
     mv "\$result_dir" "\$TASK_ROOT/cp_results"
+    if [ -d "\$TASK_ROOT/cp_results/processed" ]; then
+        cp -R "\$TASK_ROOT/cp_results/processed" "\$TASK_ROOT/processed_evidence"
+    fi
     """
 
     stub:
@@ -221,7 +226,12 @@ import shutil
 published = Path('published')
 published.mkdir(exist_ok=True)
 for pattern in ('*.pdb', '*.cif', '*.json', '*.npz'):
-    for src in Path('${results_dir}').rglob(pattern):
+    for src in sorted(Path('${results_dir}').rglob(pattern)):
+        # Processed inputs have their own publication; they are not predictions.
+        if Path('${results_dir}') / 'processed' in src.parents:
+            continue
+        if (published / src.name).exists():
+            raise RuntimeError('Fold-CP native outputs have ambiguous duplicate basename: ' + src.name)
         shutil.copy2(src, published / src.name)
 PY
     """

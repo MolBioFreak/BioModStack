@@ -6,7 +6,7 @@ include { CONFORMATIONAL_MAPPING_CONFORNETS } from '../modules/conformational_ma
 include { CONFORMATIONAL_MAPPING_PROTENIX } from '../modules/conformational_mapping_protenix.nf'
 include { CONFORMATIONAL_MAPPING_IMPORT } from '../modules/conformational_mapping_import.nf'
 include { PrepareConformationalMappingFrustraMPNNV2; CanonicalConformationalAnalysisPlaneV2 } from '../modules/conformational_mapping_frustrampnn.nf'
-include { SchedulerFrustraMPNNParentFanout } from '../modules/frustrampnn_parent_fanout.nf'
+include { NativePreparedFrustraMPNNParent } from '../modules/frustrampnn_native_parent.nf'
 
 params.cm_request_path = null
 
@@ -77,49 +77,27 @@ workflow {
 
     PrepareConformationalMappingFrustraMPNNV2(canonicalInputs)
 
-    schedulerCandidates = PrepareConformationalMappingFrustraMPNNV2.out.prepared.flatMap {
+    // Consume the original canonical preparation directly: do not normalize a
+    // second time or replace source/entity authority with a scheduler child ID.
+    preparedCandidates = PrepareConformationalMappingFrustraMPNNV2.out.prepared.flatMap {
         request_id, backend_dir, prepared_dir, preparation_manifest ->
         def preparation = new groovy.json.JsonSlurper().parse(preparation_manifest)
-        if (preparation.requiredness != 'required') {
-            error 'CM FrustraMPNN preparation must be required'
+        if (preparation.requiredness != 'required' || preparation.expected_cardinality != preparation.candidates.size()) {
+            error 'CM required FrustraMPNN preparation is incomplete'
         }
-        if (preparation.expected_cardinality != preparation.candidates.size()) {
-            error 'CM FrustraMPNN preparation cardinality is incomplete'
-        }
-        preparation.candidates.collect { candidate ->
-            def candidateDir = prepared_dir.resolve(candidate.candidate_id.toString())
-            def componentRequest = new groovy.json.JsonSlurper().parse(
-                candidateDir.resolve('workflow_component_request_v3.json')
-            )
-            tuple([
-                candidate_id: componentRequest.candidate_id,
-                parent_job_id: params.job_id.toString(),
-                parent_workflow_id: 'conformational_mapping',
-                producer_stage: componentRequest.source_artifact.producer_stage,
-                producer_candidate_key: "conformational_mapping/${componentRequest.candidate_id}.pdb",
-                requiredness: 'required',
-            ], candidateDir.resolve('canonical_source.pdb'))
-        }
+        preparation.candidates.collect { candidate -> prepared_dir.resolve(candidate.candidate_id.toString()) }
     }
-    def schedulerSettings = new LinkedHashMap(request.frustrampnn_settings as Map)
-    def schedulerSettingsOrigin = schedulerSettings.remove('settings_value_origin').toString()
-    SchedulerFrustraMPNNParentFanout(
-        schedulerCandidates,
-        Channel.value(params.job_id.toString()),
-        Channel.value('conformational_mapping'),
-        Channel.value(groovy.json.JsonOutput.toJson(schedulerSettings)),
-        Channel.value(schedulerSettingsOrigin),
-    )
+    NativePreparedFrustraMPNNParent(preparedCandidates)
 
     preparationManifest = PrepareConformationalMappingFrustraMPNNV2.out.prepared.map {
         request_id, backend_dir, prepared_dir, preparation_manifest -> preparation_manifest
     }
-    requiredResultBundles = SchedulerFrustraMPNNParentFanout.out.result_bundles.collect()
+    requiredResultBundles = NativePreparedFrustraMPNNParent.out.result_bundles.collect()
 
     CanonicalConformationalAnalysisPlaneV2(
         canonicalInputs,
         preparationManifest,
         requiredResultBundles,
-        SchedulerFrustraMPNNParentFanout.out.receipt,
+        NativePreparedFrustraMPNNParent.out.receipt,
     )
 }

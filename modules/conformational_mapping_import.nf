@@ -21,6 +21,8 @@ process CanonicalConformationalImport {
       --snapshot ${request_root}/cm_complex_snapshots_v1.json \
       --staged-root ${request_root}/registered_import \
       --out canonical_import
+    # The validated generated snapshot is a required downstream scientific input.
+    cp '${request_root}/cm_complex_snapshots_v1.json' canonical_import/cm_complex_snapshots_v1.json
     """
 }
 

@@ -47,7 +47,7 @@ process CanonicalConformationalAnalysisPlaneV2 {
     tuple val(request_id), path('canonical_result'), emit: canonical
 
     script:
-    def bundleArgs = result_bundles.collect { bundle -> "--bundle '${bundle}'" }.join(' \\\n      ')
+    def bundleArgs = (result_bundles instanceof List ? result_bundles : [result_bundles]).collect { bundle -> "--bundle '${bundle}'" }.join(' \\\n      ')
     """
     set -euo pipefail
     '${params.api_python}' '${params.code_root}/scripts/postprocess_conformational_mapping_frustrampnn_v2.py' \

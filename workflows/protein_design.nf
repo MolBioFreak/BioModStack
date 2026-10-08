@@ -140,7 +140,8 @@ include { AlignAF2 ; FilterAF2 ; RunAF2 } from '../modules/af2.nf'
 include { AnalyseBestDesigns } from '../modules/analysis.nf'
 include { PublishResults } from '../modules/publish.nf'
 include { AlignBoltz ; FilterBoltz ; PrepBoltz ; RunBoltz } from '../modules/boltz.nf'
-include { PrepBoltzGenInput ; RunBoltzGen ; FilterBoltzGen ; SpawnBoltzGenJobs ; WaitForBoltzGenChildren ; CollectBoltzGenOutputs ; AggregateBoltzGenResults } from '../modules/boltzgen.nf'
+include { PrepBoltzGenInput ; RunBoltzGen ; FilterBoltzGen } from '../modules/boltzgen.nf'
+include { NativeBoltzGenCampaign } from '../modules/boltzgen_native_campaign.nf'
 include { CombineMetadata } from '../modules/combine_metadata.nf'
 include { Compress as CompressRFD } from '../modules/compress'
 include { Compress as CompressMPNN } from '../modules/compress'
@@ -151,7 +152,7 @@ include { MergeUncroppedTarget } from '../modules/merge_uncropped_target.nf'
 include { BoltzFromSequence } from '../modules/structure_prediction.nf'
 include { structure_prediction_wf } from '../modules/structure_prediction.nf'
 include { OpenMMRelaxation ; OpenMMScore } from '../modules/openmm.nf'
-include { SchedulerFrustraMPNNParentFanout } from '../modules/frustrampnn_parent_fanout.nf'
+include { NativeFrustraMPNNParentFanout as SchedulerFrustraMPNNParentFanout } from '../modules/frustrampnn_native_parent.nf'
 
 def proteinDesignSha256(rawPath) {
     def digest = java.security.MessageDigest.getInstance('SHA-256')
@@ -796,10 +797,15 @@ workflow PROTEIN_DESIGN {
             params.boltzgen_cdr_h1_length ?: '5-8',
             params.boltzgen_cdr_h2_length ?: '6-10',
             params.boltzgen_cdr_h3_length ?: '12-18',
-            params.boltzgen_input_pdb ? file(params.boltzgen_input_pdb) : file("${params.code_root}/lib/NO_INPUT_PDB"),
-            params.boltzgen_ligand_pdb ? file(params.boltzgen_ligand_pdb) : file("${params.code_root}/lib/NO_LIGAND_PDB"),
-            params.boltzgen_dna_structure ? file(params.boltzgen_dna_structure) : file("${params.code_root}/lib/NO_DNA_STRUCT"),
-            params.boltzgen_target_pdb_path ? file(params.boltzgen_target_pdb_path) : file("${params.code_root}/lib/NO_TARGET_PDB"),
+            params.boltzgen_input_pdb ? file(params.boltzgen_input_pdb) : [],
+            params.boltzgen_ligand_pdb ? file(params.boltzgen_ligand_pdb) : [],
+            params.boltzgen_dna_structure ? file(params.boltzgen_dna_structure) : [],
+            params.boltzgen_target_pdb_path ? file(params.boltzgen_target_pdb_path) : [],
+            params.get('boltzgen_nanobody_scaffold_specs')
+                ? new groovy.json.JsonSlurper().parseText(params.boltzgen_nanobody_scaffold_specs.toString()).collect { spec ->
+                    if (!(spec.spec instanceof Map) || !(spec.spec.path instanceof String)) error('BoltzGen scaffold requires native spec.path')
+                    file(spec.spec.path, checkIfExists: true)
+                } : [],
         )
 
         def parallel_mode_set = params.containsKey('parallel_mode')
@@ -809,42 +815,27 @@ workflow PROTEIN_DESIGN {
         if (use_orchestrator) {
             println("BoltzGen PARALLEL MODE: Spawning ${Math.ceil(boltzgenNumDesigns / boltzgenDesignsPerJob)} child jobs")
 
-            def target_pdb = params.boltzgen_target_pdb_path ? file(params.boltzgen_target_pdb_path) : file("${params.code_root}/lib/NO_TARGET_PDB")
-
-            SpawnBoltzGenJobs(
-                params.job_id ?: 'unknown',
-                boltzgenNumDesigns,
-                boltzgenDesignsPerJob,
-                PrepBoltzGenInput.out.yaml,
-                target_pdb,
-                params.boltzgen_mode ?: 'nanobody_binder',
-                params.name ?: 'boltzgen_campaign',
+            NativeBoltzGenCampaign(
+                PrepBoltzGenInput.out.bundle,
+                Channel.value(boltzgenNumDesigns),
+                Channel.value(boltzgenDesignsPerJob),
+                Channel.value(params.job_id.toString()),
             )
-
-            WaitForBoltzGenChildren(
-                params.job_id ?: 'unknown',
-                SpawnBoltzGenJobs.out.result,
-                params.name ?: 'boltzgen_campaign',
-            )
-
-            CollectBoltzGenOutputs(WaitForBoltzGenChildren.out.result)
-
-            AggregateBoltzGenResults(
-                params.job_id ?: 'unknown',
-                CollectBoltzGenOutputs.out.pdbs.collect(),
-                CollectBoltzGenOutputs.out.jsons.collect(),
-                CollectBoltzGenOutputs.out.manifest,
-            )
-
             rfd_tuples = Channel.empty()
             filt_rfd_pdbs_jsons = Channel.empty()
             filt_seq_pdbs = Channel.empty()
-            analysis_input_pdbs = CollectBoltzGenOutputs.out.pdbs.flatten()
+            seq_tuple = Channel.empty()
+            analysis_input_pdbs = NativeBoltzGenCampaign.out.pdbs
         }
         else {
-            RunBoltzGen(PrepBoltzGenInput.out.yaml)
-
-            FilterBoltzGen(RunBoltzGen.out.pdbs, RunBoltzGen.out.jsons)
+            RunBoltzGen(PrepBoltzGenInput.out.bundle.map { bundle ->
+                tuple([index: null, designs: boltzgenNumDesigns, settings: [:]], bundle)
+            })
+            FilterBoltzGen(RunBoltzGen.out.native_outputs.map { meta, root ->
+                def nativeFiles = root.toFile().listFiles().sort { a, b -> a.name <=> b.name }
+                tuple(meta, nativeFiles.findAll { it.name.endsWith('.pdb') }.collect { file(it.toPath()) },
+                    nativeFiles.findAll { it.name != 'component_execution.json' && it.name ==~ /.*\.(json|npz|csv)/ }.collect { file(it.toPath()) })
+            })
 
             FilterBoltzGen.out.pdbs
                 .flatten()
@@ -1211,12 +1202,12 @@ workflow PROTEIN_DESIGN {
 
     channel.topic('metadata_ch_fold')
         .flatten()
-        .collectFile(name: "metadata_fold.jsonl", newLine: true)
+        .collectFile(name: "metadata_fold.jsonl", newLine: true, sort: false)
         .ifEmpty { file("${params.code_root}/lib/empty-meta-fold.jsonl") }
         .set { metadata_fold }
     channel.topic('metadata_ch_fold_seq')
         .flatten()
-        .collectFile(name: "metadata_fold_seq.jsonl", newLine: true)
+        .collectFile(name: "metadata_fold_seq.jsonl", newLine: true, sort: false)
         .ifEmpty { file("${params.code_root}/lib/empty-meta-seq.jsonl") }
         .set { metadata_fold_seq }
 

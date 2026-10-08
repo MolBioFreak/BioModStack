@@ -60,6 +60,11 @@ class CandidateIdentity:
         # Prepared native requests preserve the producer key as source_artifact's
         # logical relative path. Never sort by the staging directory or hash ID.
         key = record.get("producer_candidate_key")
+        if key is None and record.get('parent_workflow_id') == 'conformational_mapping':
+            # CM's existing parent adapter orders by this logical producer key,
+            # not the backend's physical structure path. Preserve that authority
+            # when consuming original CM prepared requests without re-uploading.
+            key = f"conformational_mapping/{record.get('candidate_id')}.pdb"
         if key is None:
             key = (record.get("source_artifact") or {}).get("relative_path")
         candidate = record.get("candidate_id")
@@ -140,6 +145,20 @@ def plan_frustrampnn(records: Sequence[Mapping[str, Any]], settings: Mapping[str
                                structures_per_job=settings["structures_per_job"])
     return GroupingPlan(first["parent_job_id"], first["parent_workflow_id"], digest(settings),
                         digest(ordered), tuple(tuple(CandidateIdentity.from_record(r) for r in g) for g in groups))
+
+
+def plan_boltzgen(total_designs: int, designs_per_job: int, settings: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
+    """Stable campaign ordinals and remainder sizes; no scheduler/placement inputs.
+
+    The entire effective settings map is bound, not reconstructed from argv.
+    A design count override must be compiled before expansion, never after it.
+    """
+    if type(total_designs) is not int or type(designs_per_job) is not int or min(total_designs, designs_per_job) < 1:
+        raise ValueError('BoltzGen campaign sizes must be positive integers')
+    return tuple({'index': ordinal, 'designs': min(designs_per_job, total_designs-start),
+                  'design_start': start, 'requiredness': 'attempt_required_result_optional', 'settings': dict(settings),
+                  'settings_sha256': digest(settings)}
+                 for ordinal, start in enumerate(range(0, total_designs, designs_per_job)))
 
 
 @dataclass(frozen=True)

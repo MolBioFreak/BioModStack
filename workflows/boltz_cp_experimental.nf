@@ -2,7 +2,7 @@
 nextflow.enable.dsl = 2
 
 include { RunBoltzCPExperimental ; FinalizeBoltzCPExperimental } from '../modules/boltz_cp_experimental.nf'
-include { SchedulerFrustraMPNNParentFanout } from '../modules/frustrampnn_parent_fanout.nf'
+include { NativeFrustraMPNNParentFanout as SchedulerFrustraMPNNParentFanout } from '../modules/frustrampnn_native_parent.nf'
 
 workflow BOLTZ_CP_EXPERIMENTAL {
     main:

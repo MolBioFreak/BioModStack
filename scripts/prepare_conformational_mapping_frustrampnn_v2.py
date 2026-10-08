@@ -117,6 +117,7 @@ def prepare_ensemble_candidates(
             )
             candidate_root = staging / candidate_id
             candidate_root.mkdir()
+            shutil.copyfile(source, candidate_root / ('original_source' + source.suffix.lower()))
             request_file = candidate_root / "workflow_component_request_v3.json"
             normalized_file = candidate_root / "canonical_source.pdb"
             structure_map_file = candidate_root / "frustrampnn_structure_map_v1.json"
