@@ -33,6 +33,9 @@ SCHEMA_FILENAMES = {
     "cm_state_landscape_analysis_v1": "cm_state_landscape_analysis_v1.schema.json",
     "cm_analysis_v1": "cm_analysis_v1.schema.json",
     "cm_mutagenesis_handoff_v1": "cm_mutagenesis_handoff_v1.schema.json",
+    "cm_runtime_image_receipt_v1": "cm_runtime_image_receipt_v1.schema.json",
+    "cm_protenix_execution_snapshot_v1": "cm_protenix_execution_snapshot_v1.schema.json",
+    "cm_protenix_runtime_attestation_v1": "cm_protenix_runtime_attestation_v1.schema.json",
 }
 _SCHEMA_ROOT = Path(__file__).resolve().parents[4] / "schemas" / "conformational_mapping"
 _ALLOWED_ENTITY_TYPES = {"protein", "dna", "rna", "ligand_ccd", "ligand_smiles", "ion"}
@@ -90,7 +93,8 @@ _GLOBAL_ROLES = {
     "protenix_v2_ensemble": {
         "runtime_input", "feature_policy", "log", "runtime_config", "composition_audit",
         "coordinate_ledger", "coordinate_context", "preprocessing_record", "msa_record",
-        "template_record", "preprocess", "optional_analytics", "native_state",
+        "template_record", "runtime_attestation", "runtime_image_receipt",
+        "execution_snapshot_receipt", "preprocess", "optional_analytics", "native_state",
     },
     "confornets": {
         "request", "preprocess", "native_state", "loss", "optional_analytics",
@@ -102,7 +106,8 @@ _REQUIRED_GLOBAL_ROLES = {
     "protenix_v2_ensemble": {
         "runtime_input", "feature_policy", "log", "runtime_config", "composition_audit",
         "coordinate_ledger", "coordinate_context", "preprocessing_record", "msa_record",
-        "template_record",
+        "template_record", "runtime_attestation", "runtime_image_receipt",
+        "execution_snapshot_receipt",
     },
     "confornets": {
         "request", "preprocess", "command_log", "runtime_provenance",
@@ -799,7 +804,10 @@ def validate_native_artifacts(instance: Mapping[str, Any]) -> None:
     required_global = {("<global>", role) for role in _REQUIRED_GLOBAL_ROLES[backend]}
     actual_global = {key for key in scoped_roles if key[0] == "<global>"}
     if not required_global.issubset(actual_global):
-        raise ContractValidationError("native manifest required global roles are incomplete")
+        missing_roles = sorted(role.replace("_", " ") for _scope, role in required_global - actual_global)
+        raise ContractValidationError(
+            f"native manifest required global roles are incomplete: missing={missing_roles}"
+        )
     required_candidate = {
         (candidate, role)
         for candidate in candidate_ids
@@ -1108,6 +1116,15 @@ def validate_contract_bundle(bundle: Mapping[str, Any], *, resume_descriptor: Ma
         ]
         if Counter(candidate_native_paths) != Counter(required_native_paths):
             raise ContractValidationError("native candidate artifacts are missing, extra, or duplicated")
+        if ensemble["backend"] == "protenix_v2_ensemble":
+            attestation_records = [
+                record for record in native["files"]
+                if record["candidate_id"] is None and record["semantic_role"] == "runtime_attestation"
+            ]
+            if len(attestation_records) != 1:
+                raise ContractValidationError("Protenix native manifest must contain one runtime attestation")
+            if ensemble.get("runtime_attestation_sha256") != attestation_records[0]["sha256"]:
+                raise ContractValidationError("ensemble runtime attestation hash mismatch")
     if snapshot and structure_map:
         validate_structure_map_snapshot_binding(structure_map, snapshot)
     if structure_map and landscape:

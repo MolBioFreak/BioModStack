@@ -6,6 +6,7 @@ import hashlib
 import json
 import mimetypes
 import os
+import stat
 import shutil
 import tempfile
 from datetime import datetime, timezone
@@ -15,6 +16,7 @@ from typing import Any, Mapping, Sequence
 from .contracts import (
     ContractValidationError,
     ResumeDescriptor,
+    SHA256_RE,
     candidate_id,
     canonical_json_bytes,
     canonical_sha256,
@@ -35,14 +37,134 @@ _ENTITY_KEYS = {
     "ligand_smiles": "ligand",
     "ion": "ion",
 }
+_PROTENIX_RUNTIME_GLOBAL_ROLES = {
+    "runtime_input", "feature_policy", "log", "runtime_config", "composition_audit",
+    "coordinate_ledger", "coordinate_context", "preprocessing_record", "msa_record",
+    "template_record", "runtime_attestation", "runtime_image_receipt",
+    "execution_snapshot_receipt",
+}
+
+
+def _open_pinned_file(path: Path) -> tuple[int, int, str, os.stat_result, os.stat_result]:
+    """Open one native file without following a swapped directory component."""
+
+    absolute = Path(os.path.abspath(path))
+    parts = absolute.parts
+    if len(parts) < 2 or parts[0] != os.sep:
+        raise ProtenixMappingError(f"native artifact path is not absolute: {path}")
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    parent_fd = os.open(os.sep, directory_flags)
+    file_fd: int | None = None
+    try:
+        for component in parts[1:-1]:
+            next_fd = os.open(component, directory_flags, dir_fd=parent_fd)
+            os.close(parent_fd)
+            parent_fd = next_fd
+        leaf = parts[-1]
+        file_fd = os.open(
+            leaf,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_fd,
+        )
+        opened = os.fstat(file_fd)
+        path_before = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+        return file_fd, parent_fd, leaf, opened, path_before
+    except Exception:
+        if file_fd is not None:
+            os.close(file_fd)
+        os.close(parent_fd)
+        raise
+
+
+def _same_file_identity(left: os.stat_result, right: os.stat_result) -> bool:
+    return all(
+        getattr(left, field) == getattr(right, field)
+        for field in ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns", "st_ctime_ns")
+    )
+
+
+def _stable_file_measurement(path: Path) -> tuple[str, int]:
+    try:
+        file_fd, parent_fd, leaf, before, path_before = _open_pinned_file(path)
+    except OSError as exc:
+        raise ProtenixMappingError(f"native artifact is unavailable: {path}") from exc
+    try:
+        if not stat.S_ISREG(before.st_mode):
+            raise ProtenixMappingError(f"native artifact is not a regular file: {path}")
+        digest = hashlib.sha256()
+        size = 0
+        while True:
+            chunk = os.read(file_fd, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+            size += len(chunk)
+        after = os.fstat(file_fd)
+        path_after = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+        visible_after = os.lstat(path)
+        if not _same_file_identity(before, after) or not _same_file_identity(path_before, path_after) or not _same_file_identity(before, visible_after):
+            raise ProtenixMappingError(f"native artifact path or bytes changed during measurement: {path}")
+        if size != before.st_size:
+            raise ProtenixMappingError(f"native artifact size changed during measurement: {path}")
+        return digest.hexdigest(), size
+    finally:
+        os.close(file_fd)
+        os.close(parent_fd)
 
 
 def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return _stable_file_measurement(path)[0]
+
+
+def _stable_file_bytes(path: Path) -> bytes:
+    try:
+        file_fd, parent_fd, leaf, before, path_before = _open_pinned_file(path)
+    except OSError as exc:
+        raise ProtenixMappingError(f"native artifact is unavailable: {path}") from exc
+    try:
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(file_fd, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        after = os.fstat(file_fd)
+        path_after = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+        visible_after = os.lstat(path)
+        if not _same_file_identity(before, after) or not _same_file_identity(path_before, path_after) or not _same_file_identity(before, visible_after):
+            raise ProtenixMappingError(f"native artifact path changed while reading: {path}")
+        payload = b"".join(chunks)
+        if len(payload) != before.st_size:
+            raise ProtenixMappingError(f"native artifact size changed while reading: {path}")
+        return payload
+    finally:
+        os.close(file_fd)
+        os.close(parent_fd)
+
+
+def _native_file(root: Path, relative_path: str) -> Path:
+    candidate = root / Path(*PurePosixPath(relative_path).parts)
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise ProtenixMappingError("native artifact escapes the native root") from exc
+    return candidate
+
+
+def _observed_native_files(root: Path) -> set[str]:
+    observed: set[str] = set()
+    for directory, directories, filenames in os.walk(root, followlinks=False):
+        directory_path = Path(directory)
+        for name in directories:
+            path = directory_path / name
+            if path.is_symlink():
+                raise ProtenixMappingError("native Protenix tree contains a symlinked directory")
+        for name in filenames:
+            path = directory_path / name
+            if path.is_symlink() or not stat.S_ISREG(os.lstat(path).st_mode):
+                raise ProtenixMappingError("native Protenix tree contains an unsafe file")
+            observed.add(path.relative_to(root).as_posix())
+    return observed
 
 
 def _relative(value: object) -> str:
@@ -185,17 +307,20 @@ def build_protenix_runtime_bundle(
 
 def _read_ledger(path: Path) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, start=1):
-            if not line.strip():
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise ProtenixMappingError(f"invalid coordinate ledger line {line_number}") from exc
-            if not isinstance(record, dict):
-                raise ProtenixMappingError("coordinate ledger rows must be objects")
-            records.append(record)
+    try:
+        payload = _stable_file_bytes(path).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ProtenixMappingError("coordinate ledger is not UTF-8") from exc
+    for line_number, line in enumerate(payload.splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ProtenixMappingError(f"invalid coordinate ledger line {line_number}") from exc
+        if not isinstance(record, dict):
+            raise ProtenixMappingError("coordinate ledger rows must be objects")
+        records.append(record)
     return records
 
 
@@ -224,8 +349,11 @@ def _audit_output_composition(path: Path, snapshot: Mapping[str, Any]) -> dict[s
 
     try:
         from Bio.PDB.MMCIF2Dict import MMCIF2Dict
-
-        cif = MMCIF2Dict(str(path))
+        payload = _stable_file_bytes(path)
+        with tempfile.NamedTemporaryFile(mode="wb", suffix=".cif") as temporary:
+            temporary.write(payload)
+            temporary.flush()
+            cif = MMCIF2Dict(temporary.name)
     except Exception as exc:
         raise ProtenixMappingError(f"cannot parse authoritative Protenix mmCIF: {exc}") from exc
     auth_chains = _as_list(cif.get("_atom_site.auth_asym_id"))
@@ -290,7 +418,7 @@ def _audit_output_composition(path: Path, snapshot: Mapping[str, Any]) -> dict[s
         if not present:
             raise ProtenixMappingError("Protenix output omitted an admitted covalent bond")
     return {
-        "candidate_structure_sha256": _sha256_file(path),
+        "candidate_structure_sha256": hashlib.sha256(payload).hexdigest(),
         "expected_instances": expected_instances,
         "observed_instances": observed_instances,
         "instance_label_mapping": [
@@ -304,6 +432,159 @@ def _audit_output_composition(path: Path, snapshot: Mapping[str, Any]) -> dict[s
     }
 
 
+def _validate_runtime_attestation(runtime: Mapping[str, Any]) -> None:
+    """Reject expected/registry identity copied into runtime output as observation."""
+
+    required = {
+        "schema_name",
+        "schema_version",
+        "status",
+        "runtime_image",
+        "execution_snapshot",
+        "checkpoint",
+        "backend_source",
+        "executed_wrapper",
+        "backend_version",
+        "backend_commit",
+        "runtime_identity",
+        "container_digest",
+        "checkpoint_sha256",
+        "model_id",
+        "started_at",
+        "completed_at",
+        "command",
+        "global_artifacts",
+        "attestation_sha256",
+    }
+    if set(runtime) != required:
+        raise ProtenixMappingError(
+            "Protenix runtime output has no complete observed runtime attestation"
+        )
+    if (
+        runtime.get("schema_name") != "cm_protenix_runtime_attestation"
+        or runtime.get("schema_version") != 1
+        or runtime.get("status") != "observed_and_verified"
+    ):
+        raise ProtenixMappingError("Protenix observed runtime attestation is not verified")
+    attested = {key: runtime[key] for key in required if key != "attestation_sha256"}
+    if canonical_sha256(attested) != runtime.get("attestation_sha256"):
+        raise ProtenixMappingError("Protenix observed runtime attestation digest mismatch")
+    if not isinstance(runtime.get("attestation_sha256"), str) or not SHA256_RE.fullmatch(runtime["attestation_sha256"]):
+        raise ProtenixMappingError("Protenix observed runtime attestation digest is malformed")
+    try:
+        validate_schema("cm_protenix_runtime_attestation_v1", runtime)
+    except (ContractValidationError, KeyError, TypeError) as exc:
+        raise ProtenixMappingError("Protenix observed runtime attestation schema is invalid") from exc
+    image = runtime.get("runtime_image")
+    execution_snapshot = runtime.get("execution_snapshot")
+    checkpoint = runtime.get("checkpoint")
+    source = runtime.get("backend_source")
+    wrapper = runtime.get("executed_wrapper")
+    if not isinstance(image, Mapping):
+        raise ProtenixMappingError("Protenix observed runtime image identity is malformed")
+    if not isinstance(execution_snapshot, Mapping):
+        raise ProtenixMappingError("Protenix execution snapshot identity is malformed")
+    if not isinstance(checkpoint, Mapping):
+        raise ProtenixMappingError("Protenix observed checkpoint identity is malformed")
+    if not isinstance(source, Mapping):
+        raise ProtenixMappingError("Protenix observed backend source identity is malformed")
+    if not isinstance(wrapper, Mapping):
+        raise ProtenixMappingError("Protenix observed wrapper identity is malformed")
+    image_sha = image.get("sha256")
+    checkpoint_sha = checkpoint.get("sha256")
+    source_sha = source.get("manifest_sha256")
+    wrapper_sha = wrapper.get("sha256")
+    if not all(
+        isinstance(value, str) and SHA256_RE.fullmatch(value)
+        for value in (image_sha, checkpoint_sha, source_sha, wrapper_sha)
+    ):
+        raise ProtenixMappingError("Protenix observed runtime digests are malformed")
+    for label, identity in (("runtime image", image), ("checkpoint", checkpoint), ("wrapper", wrapper)):
+        value = identity.get("bytes")
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ProtenixMappingError(f"Protenix observed {label} byte count is malformed")
+    receipt = image.get("receipt")
+    host_observed = image.get("host_observed_source")
+    verified_snapshot = image.get("host_verified_snapshot")
+    if (
+        not isinstance(receipt, Mapping)
+        or receipt.get("schema_name") != "cm_runtime_image_receipt"
+        or receipt.get("schema_version") != 1
+        or receipt.get("status") != "verified_immutable_snapshot"
+        or not isinstance(receipt.get("sha256"), str)
+        or not SHA256_RE.fullmatch(receipt["sha256"])
+        or isinstance(receipt.get("bytes"), bool)
+        or not isinstance(receipt.get("bytes"), int)
+        or not isinstance(host_observed, Mapping)
+        or host_observed.get("sha256") != image_sha
+        or not isinstance(verified_snapshot, Mapping)
+        or verified_snapshot.get("sha256") != image_sha
+        or verified_snapshot.get("bytes") != image.get("bytes")
+    ):
+        raise ProtenixMappingError("Protenix runtime image has no verified host receipt")
+    execution_receipt = execution_snapshot.get("receipt")
+    if (
+        not isinstance(execution_receipt, Mapping)
+        or execution_receipt.get("schema_name") != "cm_protenix_execution_snapshot"
+        or execution_receipt.get("schema_version") != 1
+        or execution_receipt.get("status") != "verified_before_execution"
+        or not isinstance(execution_snapshot.get("sha256"), str)
+        or not SHA256_RE.fullmatch(execution_snapshot["sha256"])
+        or isinstance(execution_snapshot.get("bytes"), bool)
+        or not isinstance(execution_snapshot.get("bytes"), int)
+    ):
+        raise ProtenixMappingError("Protenix runtime has no verified execution snapshot receipt")
+    if not isinstance(checkpoint.get("relative_path"), str) or not checkpoint["relative_path"]:
+        raise ProtenixMappingError("Protenix observed checkpoint path is missing")
+    _relative(checkpoint["relative_path"])
+    files = source.get("files")
+    if not isinstance(files, list) or not files:
+        raise ProtenixMappingError("Protenix backend source manifest is empty")
+    if canonical_sha256(files) != source_sha:
+        raise ProtenixMappingError("Protenix backend source manifest digest mismatch")
+    for record in files:
+        if (
+            not isinstance(record, Mapping)
+            or not isinstance(record.get("relative_path"), str)
+            or not isinstance(record.get("sha256"), str)
+            or not SHA256_RE.fullmatch(record["sha256"])
+            or isinstance(record.get("bytes"), bool)
+            or not isinstance(record.get("bytes"), int)
+        ):
+            raise ProtenixMappingError("Protenix backend source file measurement is malformed")
+        _relative(record["relative_path"])
+    global_artifacts = runtime.get("global_artifacts")
+    if (
+        not isinstance(global_artifacts, list)
+        or {item.get("semantic_role") for item in global_artifacts if isinstance(item, Mapping)} != _PROTENIX_RUNTIME_GLOBAL_ROLES
+        or len(global_artifacts) != len(_PROTENIX_RUNTIME_GLOBAL_ROLES)
+    ):
+        raise ProtenixMappingError("Protenix global artifact roles are incomplete")
+    global_paths: set[str] = set()
+    for item in global_artifacts:
+        if not isinstance(item, Mapping) or not isinstance(item.get("relative_path"), str):
+            raise ProtenixMappingError("Protenix global artifact record is malformed")
+        _relative(item["relative_path"])
+        if item["relative_path"] in global_paths:
+            raise ProtenixMappingError("Protenix global artifact paths are duplicated")
+        global_paths.add(item["relative_path"])
+    if (
+        runtime.get("container_digest") != f"sha256:{image_sha}"
+        or runtime.get("checkpoint_sha256") != checkpoint_sha
+        or runtime.get("backend_commit") != source.get("commit")
+        or runtime.get("backend_version") != source.get("distribution_version")
+        or runtime.get("runtime_identity") != (
+            f"apptainer-sif-sha256:{image_sha}"
+            f"+checkpoint-sha256:{checkpoint_sha}"
+            f"+protenix-source-sha256:{source_sha}"
+            f"+wrapper-sha256:{wrapper_sha}"
+        )
+    ):
+        raise ProtenixMappingError(
+            "Protenix flat runtime identity differs from observed component identities"
+        )
+
+
 def finalize_protenix(
     request: Mapping[str, Any],
     snapshots: Sequence[Mapping[str, Any]],
@@ -313,7 +594,15 @@ def finalize_protenix(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Validate the runtime ledger and publish native/ensemble authorities."""
 
-    root = Path(native_root).resolve(strict=True)
+    _validate_runtime_attestation(runtime)
+    root_input = Path(native_root)
+    try:
+        root_info = os.lstat(root_input)
+    except OSError as exc:
+        raise ProtenixMappingError("native Protenix root is unavailable") from exc
+    if stat.S_ISLNK(root_info.st_mode) or not stat.S_ISDIR(root_info.st_mode):
+        raise ProtenixMappingError("native Protenix root is not a real directory")
+    root = root_input.resolve(strict=True)
     output = Path(output_root)
     if output.exists():
         raise ProtenixMappingError("canonical output already exists")
@@ -352,13 +641,16 @@ def finalize_protenix(
         )
         if not isinstance(structure, Mapping):
             raise ProtenixMappingError("coordinate has no authoritative structure for composition audit")
-        structure_path = (root / _relative(structure.get("relative_path"))).resolve(strict=True)
+        structure_path = _native_file(root, _relative(structure.get("relative_path")))
         output_composition_audits.append({
             "coordinates": coordinates,
             **_audit_output_composition(structure_path, snapshot_by_target[coordinates["target_id"]]),
         })
     composition_path = root / "runtime" / "composition-audit.json"
-    input_composition = json.loads(composition_path.read_text(encoding="utf-8"))
+    try:
+        input_composition = json.loads(_stable_file_bytes(composition_path).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ProtenixMappingError("Protenix composition audit is not stable JSON") from exc
     _atomic_json(composition_path, {
         "schema_name": "cm_protenix_composition_audit", "schema_version": 1,
         "input_audits": (
@@ -385,15 +677,12 @@ def finalize_protenix(
         paths_by_role: dict[str, str] = {}
         for item in artifacts:
             relative_path = _relative(item.get("relative_path"))
-            artifact = (root / relative_path).resolve(strict=True)
-            artifact.relative_to(root)
-            if not artifact.is_file() or artifact.is_symlink():
-                raise ProtenixMappingError("ledger artifact is not a safe regular file")
+            artifact = _native_file(root, relative_path)
             if relative_path in referenced:
                 raise ProtenixMappingError("one native artifact is shared by multiple coordinates")
             referenced.add(relative_path)
-            digest = _sha256_file(artifact)
-            if digest != item.get("sha256") or artifact.stat().st_size != item.get("bytes"):
+            digest, artifact_bytes = _stable_file_measurement(artifact)
+            if digest != item.get("sha256") or artifact_bytes != item.get("bytes"):
                 raise ProtenixMappingError("ledger artifact byte identity mismatch")
             role = item["semantic_role"]
             paths_by_role[role] = relative_path
@@ -401,7 +690,7 @@ def finalize_protenix(
                 {
                     "relative_path": relative_path,
                     "sha256": digest,
-                    "bytes": artifact.stat().st_size,
+                    "bytes": artifact_bytes,
                     "media_type": "chemical/x-mmcif" if artifact.suffix.lower() in {".cif", ".mmcif"} else "application/json",
                     "semantic_role": role,
                     "candidate_id": stable_id,
@@ -425,25 +714,21 @@ def finalize_protenix(
         )
 
     mandatory_globals = runtime.get("global_artifacts")
-    required_global_roles = {
-        "runtime_input", "feature_policy", "log", "runtime_config", "composition_audit",
-        "coordinate_ledger", "coordinate_context", "preprocessing_record", "msa_record",
-        "template_record",
-    }
+    required_global_roles = set(_PROTENIX_RUNTIME_GLOBAL_ROLES)
     if not isinstance(mandatory_globals, list) or {item.get("semantic_role") for item in mandatory_globals} != required_global_roles:
         raise ProtenixMappingError("Protenix global artifact roles are incomplete")
     for item in mandatory_globals:
         relative_path = _relative(item.get("relative_path"))
-        artifact = (root / relative_path).resolve(strict=True)
-        artifact.relative_to(root)
-        if relative_path in referenced or not artifact.is_file() or artifact.is_symlink():
+        artifact = _native_file(root, relative_path)
+        if relative_path in referenced:
             raise ProtenixMappingError("invalid or duplicate global artifact")
         referenced.add(relative_path)
+        digest, artifact_bytes = _stable_file_measurement(artifact)
         files.append(
             {
                 "relative_path": relative_path,
-                "sha256": _sha256_file(artifact),
-                "bytes": artifact.stat().st_size,
+                "sha256": digest,
+                "bytes": artifact_bytes,
                 "media_type": mimetypes.guess_type(artifact.name)[0] or "application/octet-stream",
                 "semantic_role": item["semantic_role"],
                 "candidate_id": None,
@@ -453,26 +738,20 @@ def finalize_protenix(
             }
         )
 
-    observed_native = {
-        path.relative_to(root).as_posix()
-        for path in root.rglob("*")
-        if path.is_file()
-    }
+    observed_native = _observed_native_files(root)
     if referenced - observed_native:
         raise ProtenixMappingError(
             f"native Protenix tree is missing declared files: {sorted(referenced - observed_native)}"
         )
     for relative_path in sorted(observed_native - referenced):
-        artifact = (root / relative_path).resolve(strict=True)
-        artifact.relative_to(root)
-        if not artifact.is_file() or artifact.is_symlink():
-            raise ProtenixMappingError("native Protenix auxiliary artifact is unsafe")
+        artifact = _native_file(root, relative_path)
         referenced.add(relative_path)
+        digest, artifact_bytes = _stable_file_measurement(artifact)
         files.append(
             {
                 "relative_path": relative_path,
-                "sha256": _sha256_file(artifact),
-                "bytes": artifact.stat().st_size,
+                "sha256": digest,
+                "bytes": artifact_bytes,
                 "media_type": mimetypes.guess_type(artifact.name)[0] or "application/octet-stream",
                 "semantic_role": (
                     "native_state" if artifact.suffix.lower() in {".pt", ".pth", ".ckpt"}
@@ -489,6 +768,12 @@ def finalize_protenix(
     for item in files:
         item["relative_path"] = f"native/{item['relative_path']}"
         item["related_paths"] = [f"native/{path}" for path in item["related_paths"]]
+    runtime_attestation_files = [
+        item for item in files if item["semantic_role"] == "runtime_attestation"
+    ]
+    if len(runtime_attestation_files) != 1:
+        raise ProtenixMappingError("Protenix runtime attestation artifact is not unique")
+    runtime_attestation_sha256 = runtime_attestation_files[0]["sha256"]
     for candidate in candidates:
         candidate["authoritative_structure_path"] = f"native/{candidate['authoritative_structure_path']}"
         candidate["sidecar_paths"] = [f"native/{path}" for path in candidate["sidecar_paths"]]
@@ -539,6 +824,7 @@ def finalize_protenix(
         "runtime_identity": runtime["runtime_identity"],
         "container_digest": runtime["container_digest"],
         "checkpoint_sha256": runtime["checkpoint_sha256"],
+        "runtime_attestation_sha256": runtime_attestation_sha256,
         "feature_policy_sha256": feature_sha256,
         "expected_cardinality": len(expected),
         "expected_coordinates": expected,

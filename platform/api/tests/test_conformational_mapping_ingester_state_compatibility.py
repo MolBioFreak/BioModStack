@@ -53,6 +53,11 @@ def _no_authority_bundle(root: Path) -> tuple[dict, dict]:
         path.write_bytes(payload)
         item["sha256"] = hashlib.sha256(payload).hexdigest()
         item["bytes"] = len(payload)
+    ensemble["runtime_attestation_sha256"] = next(
+        item["sha256"]
+        for item in native["files"]
+        if item.get("semantic_role") == "runtime_attestation"
+    )
     authoritative_path = ensemble["candidates"][0]["authoritative_structure_path"]
     ensemble["candidates"][0]["authoritative_structure_sha256"] = next(
         item["sha256"] for item in native["files"] if item["relative_path"] == authoritative_path
