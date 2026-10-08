@@ -5,7 +5,7 @@ import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,8 +41,8 @@ from experiment_services import (
     RevisionConflict,
     ValidationFailure,
     create_dataset,
-    create_experiment,
-    create_experiment_workspace,
+    create_global_experiment,
+    create_project,
     create_run_group,
     create_workflow,
     dispatch_pending_outbox,
@@ -77,13 +77,23 @@ class ExperimentCreateRequest(StrictRequestModel):
 class WorkflowCreateRequest(StrictRequestModel):
     name: str = Field(min_length=1, max_length=255)
     workflow_family: str = Field(min_length=1, max_length=128)
-    experiment_id: str | None = None
+    domain_experiment_id: str = Field(
+        min_length=1,
+        max_length=128,
+        validation_alias=AliasChoices("domain_experiment_id", "experiment_id"),
+        serialization_alias="domain_experiment_id",
+    )
 
 
 class DatasetCreateRequest(StrictRequestModel):
     name: str = Field(min_length=1, max_length=255)
     dataset_kind: str = Field(min_length=1, max_length=128)
-    experiment_id: str | None = None
+    domain_experiment_id: str = Field(
+        min_length=1,
+        max_length=128,
+        validation_alias=AliasChoices("domain_experiment_id", "experiment_id"),
+        serialization_alias="domain_experiment_id",
+    )
 
 
 class DraftSaveRequest(StrictRequestModel):
@@ -166,6 +176,11 @@ def _head_json(head: ExperimentAggregateHead) -> dict[str, Any]:
         "description": head.description,
         "created_at": head.created_at,
         "updated_at": head.updated_at,
+        "deprecation": {
+            "deprecated": True,
+            "replacement": "/api/projects",
+            "storage_authority": "shared experiment services",
+        },
     }
 
 
@@ -226,7 +241,24 @@ async def create_workspace(
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     try:
-        head = await create_experiment_workspace(session, payload.name, payload.description)
+        head = await create_project(
+            session,
+            {
+                "schema": "bms.project.v1",
+                "name": payload.name,
+                "description": payload.description,
+                "research_objective": "",
+                "owner": None,
+                "contributors": [],
+                "tags": [],
+                "status": "draft",
+                "start_date": None,
+                "target_end_date": None,
+                "external_references": [],
+                "created_by": None,
+                "change_summary": "created through deprecated workspace route",
+            },
+        )
         await session.commit()
         return _head_json(head)
     except ExperimentServiceError as exc:
@@ -315,7 +347,29 @@ async def create_workspace_experiment(
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     try:
-        head = await create_experiment(session, workspace_id, payload.name, payload.question)
+        head = await create_global_experiment(
+            session,
+            workspace_id,
+            {
+                "schema": "bms.global-experiment.v1",
+                "name": payload.name,
+                "objective": "",
+                "scientific_question": payload.question,
+                "hypothesis": None,
+                "description": payload.question,
+                "status": "draft",
+                "priority": "normal",
+                "tags": [],
+                "shared_source_receipt_ids": [],
+                "shared_dataset_ids": [],
+                "comparison_plan": None,
+                "success_criteria": [],
+                "review_summary": None,
+                "conclusion": None,
+                "created_by": None,
+                "change_summary": "created through deprecated experiment route",
+            },
+        )
         await session.commit()
         return _head_json(head)
     except ExperimentServiceError as exc:
@@ -335,7 +389,7 @@ async def create_workspace_workflow(
             workspace_id,
             payload.name,
             payload.workflow_family,
-            experiment_id=payload.experiment_id,
+            experiment_id=payload.domain_experiment_id,
         )
         await session.commit()
         return _head_json(head)
@@ -467,7 +521,7 @@ async def create_workspace_dataset(
             workspace_id,
             payload.name,
             payload.dataset_kind,
-            experiment_id=payload.experiment_id,
+            experiment_id=payload.domain_experiment_id,
         )
         await session.commit()
         return _head_json(head)

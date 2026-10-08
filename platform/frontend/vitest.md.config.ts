@@ -18,6 +18,9 @@ export default defineConfig({
             './tests/vitest/ontInstrumentPanel.test.tsx',
             './tests/vitest/pooledAssignmentReviewPanel.test.tsx',
             './tests/vitest/conformationalMappingViewerBehavior.test.tsx',
+            './tests/vitest/projectManagerApi.test.ts',
+            './tests/vitest/projectManagerPage.test.tsx',
+            './tests/vitest/projectReturnBanner.test.tsx',
         ],
     },
 });

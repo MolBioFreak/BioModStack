@@ -16,10 +16,13 @@ from experiment_models import (
     ExperimentAuditEvent,
     ExperimentDatasetRevisionMember,
     ExperimentDispatchOutbox,
+    ExperimentExternalEntityReceipt,
     ExperimentIdempotencyClaim,
     ExperimentLineageEdge,
     ExperimentResource,
+    ExperimentResearchRecord,
     ExperimentRevision,
+    ExperimentRevisionEdge,
     ExperimentRunAttempt,
     ExperimentWorkflowRevisionEdge,
     ExperimentWorkflowRevisionNode,
@@ -55,6 +58,38 @@ class IdempotencyConflict(ExperimentServiceError):
 
 class DispatchFailure(ExperimentServiceError):
     pass
+
+
+PROJECT_STATUSES = {"draft", "active", "on_hold", "completed", "archived"}
+EXPERIMENT_STATUSES = {
+    "draft",
+    "planned",
+    "active",
+    "analysis",
+    "review",
+    "completed",
+    "blocked",
+    "archived",
+}
+PROJECT_LIFECYCLE_TRANSITIONS = {
+    "draft": {"draft", "active", "on_hold"},
+    "active": {"active", "on_hold", "completed"},
+    "on_hold": {"on_hold", "active", "completed"},
+    "completed": {"completed"},
+    "archived": {"archived"},
+}
+EXPERIMENT_LIFECYCLE_TRANSITIONS = {
+    "draft": {"draft", "planned", "active", "blocked"},
+    "planned": {"planned", "active", "blocked"},
+    "active": {"active", "analysis", "blocked"},
+    "analysis": {"analysis", "review", "blocked"},
+    "review": {"review", "completed", "blocked"},
+    "blocked": {"blocked", "planned", "active", "analysis", "review"},
+    "completed": {"completed"},
+    "archived": {"archived"},
+}
+DOMAIN_KINDS = {"protein_in_silico", "ngs_molbio"}
+RESEARCH_RECORD_KINDS = {"note", "observation", "decision", "conclusion"}
 
 
 def canonical_json(value: Any) -> str:
@@ -246,15 +281,38 @@ async def _create_aggregate(
     await _workspace(session, workspace_id)
     if parent_id is not None:
         parent = await session.get(ExperimentResource, parent_id)
-        if parent is None or (parent.kind not in {"workspace", "experiment"}):
-            raise ValidationFailure("aggregate parent must be a workspace or experiment")
+        allowed_parent_kinds = {"workspace", "experiment"}
+        if kind == "domain_experiment":
+            allowed_parent_kinds = {"experiment"}
+        elif kind in {"workflow", "dataset"}:
+            allowed_parent_kinds = {"domain_experiment"}
+        if parent is None or parent.kind not in allowed_parent_kinds:
+            expected = (
+                "an experiment"
+                if kind == "domain_experiment"
+                else "a Domain Experiment"
+                if kind in {"workflow", "dataset"}
+                else "a workspace or experiment"
+            )
+            raise ValidationFailure(f"aggregate parent must be {expected}")
         if parent.kind != "workspace" and parent.workspace_id != workspace_id:
             raise ValidationFailure("aggregate parent belongs to another workspace")
+        if parent.kind == "workspace" and parent.id != workspace_id:
+            raise ValidationFailure("aggregate parent belongs to another workspace")
+        parent_head = await session.get(ExperimentAggregateHead, parent_id)
+        if parent_head is None:
+            raise NotFound(f"aggregate parent not found: {parent_id}")
+        if parent_head.lifecycle_state == "archived":
+            raise ValidationFailure("aggregate parent is archived")
     resource = await _resource(
         session,
         kind=kind,
         workspace_id=workspace_id,
-        lifecycle_owner_id=workspace_id,
+        lifecycle_owner_id=(
+            parent_id
+            if kind in {"domain_experiment", "workflow", "dataset"} and parent_id
+            else workspace_id
+        ),
     )
     head = ExperimentAggregateHead(
         aggregate_id=resource.id,
@@ -330,8 +388,10 @@ async def create_experiment(
     workspace_id: str,
     name: str,
     question: str = "",
+    *,
+    payload: dict[str, Any] | None = None,
 ) -> ExperimentAggregateHead:
-    return await _create_aggregate(
+    head = await _create_aggregate(
         session,
         workspace_id=workspace_id,
         kind="experiment",
@@ -339,6 +399,80 @@ async def create_experiment(
         description=question,
         parent_id=workspace_id,
     )
+    if payload is not None:
+        await _save_revision(
+            session,
+            aggregate_id=head.aggregate_id,
+            aggregate_kind="experiment",
+            payload=payload,
+            expected_head_generation=0,
+        )
+        await session.refresh(head)
+    return head
+
+
+async def create_project(
+    session: AsyncSession,
+    payload: dict[str, Any],
+) -> ExperimentAggregateHead:
+    payload = {**payload, "needs_metadata_review": False}
+    _validate_hierarchy_payload("workspace", payload)
+    head = await create_experiment_workspace(
+        session,
+        str(payload["name"]),
+        str(payload.get("description") or ""),
+    )
+    await _save_revision(
+        session,
+        aggregate_id=head.aggregate_id,
+        aggregate_kind="workspace",
+        payload=payload,
+        expected_head_generation=0,
+    )
+    await session.refresh(head)
+    return head
+
+
+async def create_global_experiment(
+    session: AsyncSession,
+    project_id: str,
+    payload: dict[str, Any],
+) -> ExperimentAggregateHead:
+    payload = {**payload, "needs_metadata_review": False}
+    _validate_hierarchy_payload("experiment", payload)
+    return await create_experiment(
+        session,
+        project_id,
+        str(payload["name"]),
+        str(payload.get("scientific_question") or payload.get("description") or ""),
+        payload=payload,
+    )
+
+
+async def create_domain_experiment(
+    session: AsyncSession,
+    project_id: str,
+    global_experiment_id: str,
+    payload: dict[str, Any],
+) -> ExperimentAggregateHead:
+    _validate_hierarchy_payload("domain_experiment", payload)
+    head = await _create_aggregate(
+        session,
+        workspace_id=project_id,
+        kind="domain_experiment",
+        display_name=str(payload["name"]),
+        description=str(payload.get("objective") or ""),
+        parent_id=global_experiment_id,
+    )
+    await _save_revision(
+        session,
+        aggregate_id=head.aggregate_id,
+        aggregate_kind="domain_experiment",
+        payload=payload,
+        expected_head_generation=0,
+    )
+    await session.refresh(head)
+    return head
 
 
 async def create_workflow(
@@ -402,6 +536,267 @@ async def save_workflow_draft(
     return draft
 
 
+def _validate_hierarchy_payload(aggregate_kind: str, payload: dict[str, Any]) -> None:
+    if not isinstance(payload, dict):
+        raise ValidationFailure("aggregate payload must be an object")
+    expected_schema = {
+        "workspace": "bms.project.v1",
+        "experiment": "bms.global-experiment.v1",
+        "domain_experiment": "bms.domain-experiment.v1",
+    }[aggregate_kind]
+    if payload.get("schema") != expected_schema:
+        raise ValidationFailure(f"{aggregate_kind} payload schema must be {expected_schema}")
+    required = {
+        "workspace": {"name", "description", "research_objective", "status", "needs_metadata_review"},
+        "experiment": {"name", "objective", "scientific_question", "description", "status", "priority", "success_criteria", "needs_metadata_review"},
+        "domain_experiment": {"domain_kind", "domain_contract_version", "name", "objective", "status", "domain_payload"},
+    }[aggregate_kind]
+    missing = sorted(field for field in required if field not in payload)
+    if missing:
+        raise ValidationFailure(f"{aggregate_kind} payload missing required fields: {', '.join(missing)}")
+    statuses = PROJECT_STATUSES if aggregate_kind == "workspace" else EXPERIMENT_STATUSES
+    if payload.get("status") not in statuses:
+        raise ValidationFailure(f"invalid {aggregate_kind} lifecycle status")
+    if aggregate_kind == "experiment":
+        if payload.get("status") == "active":
+            criteria = payload.get("success_criteria")
+            if not isinstance(criteria, list) or not criteria:
+                raise ValidationFailure("active global experiments require success criteria")
+        if payload.get("status") == "completed":
+            if not str(payload.get("review_summary") or "").strip() or not str(payload.get("conclusion") or "").strip():
+                raise ValidationFailure("completed global experiments require review_summary and conclusion")
+    if aggregate_kind == "domain_experiment":
+        domain_kind = payload.get("domain_kind")
+        if domain_kind not in DOMAIN_KINDS:
+            raise ValidationFailure("domain_kind must be protein_in_silico or ngs_molbio")
+        if payload.get("domain_contract_version") != "1":
+            raise ValidationFailure("unsupported domain_contract_version")
+        domain_payload = payload.get("domain_payload")
+        if not isinstance(domain_payload, dict):
+            raise ValidationFailure("domain_payload must be an object")
+        if domain_kind == "ngs_molbio":
+            if domain_payload != {"schema": "bms.ngs-molbio-experiment.v1"}:
+                raise ValidationFailure("ngs_molbio domain_payload has unsupported or unknown fields")
+            return
+        expected_keys = {
+            "schema",
+            "experiment_mode",
+            "targets",
+            "scientific_objective",
+            "design_constraints",
+            "planned_capabilities",
+            "comparison_groups",
+            "validation_strategy",
+        }
+        if set(domain_payload) != expected_keys:
+            raise ValidationFailure("protein_in_silico domain_payload fields do not match the frozen contract")
+        if domain_payload.get("schema") != "bms.protein-in-silico-experiment.v1":
+            raise ValidationFailure("protein_in_silico domain_payload schema is invalid")
+        if domain_payload.get("experiment_mode") not in {
+            "exploration", "design", "redesign", "prediction", "validation", "comparison", "simulation", "analysis"
+        }:
+            raise ValidationFailure("protein_in_silico experiment_mode is invalid")
+        targets = domain_payload.get("targets")
+        if not isinstance(targets, list):
+            raise ValidationFailure("protein_in_silico targets must be an array")
+        target_keys = {"target_id", "label", "entity_receipt_ids", "role"}
+        target_roles = {"target", "binder", "partner", "template", "reference", "control", "other"}
+        for target in targets:
+            if not isinstance(target, dict) or set(target) != target_keys:
+                raise ValidationFailure("protein_in_silico target fields do not match the frozen contract")
+            if not str(target.get("target_id") or "").strip() or target.get("role") not in target_roles:
+                raise ValidationFailure("protein_in_silico target identity or role is invalid")
+            receipt_ids = target.get("entity_receipt_ids")
+            if not isinstance(receipt_ids, list) or any(not isinstance(value, str) or not value for value in receipt_ids):
+                raise ValidationFailure("protein_in_silico target receipt IDs are invalid")
+        if not isinstance(domain_payload.get("scientific_objective"), str):
+            raise ValidationFailure("protein_in_silico scientific_objective must be a string")
+        for field in ("design_constraints", "comparison_groups"):
+            values = domain_payload.get(field)
+            if not isinstance(values, list) or any(not isinstance(value, dict) for value in values):
+                raise ValidationFailure(f"protein_in_silico {field} must contain objects")
+        for field in ("planned_capabilities", "validation_strategy"):
+            values = domain_payload.get(field)
+            if not isinstance(values, list) or any(not isinstance(value, str) or not value for value in values):
+                raise ValidationFailure(f"protein_in_silico {field} must contain non-empty capability IDs")
+
+
+def _hierarchy_reference_ids(payload: dict[str, Any]) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    receipt_references: list[tuple[str, str]] = []
+    dataset_references: list[tuple[str, str]] = []
+
+    def collect(field: str, *, role: str, target: list[tuple[str, str]], source: dict[str, Any]) -> None:
+        values = source.get(field, [])
+        if not isinstance(values, list) or any(not isinstance(value, str) or not value for value in values):
+            raise ValidationFailure(f"{field} must contain non-empty resource IDs")
+        target.extend((role, value) for value in values)
+
+    schema = payload.get("schema")
+    if schema == "bms.global-experiment.v1":
+        collect(
+            "shared_source_receipt_ids",
+            role="shared_source_receipt",
+            target=receipt_references,
+            source=payload,
+        )
+        collect("shared_dataset_ids", role="shared_dataset", target=dataset_references, source=payload)
+    elif schema == "bms.domain-experiment.v1":
+        collect("source_receipt_ids", role="source_receipt", target=receipt_references, source=payload)
+        collect("dataset_ids", role="dataset", target=dataset_references, source=payload)
+        domain_payload = payload.get("domain_payload")
+        if isinstance(domain_payload, dict):
+            targets = domain_payload.get("targets", [])
+            if isinstance(targets, list):
+                for target_index, target_payload in enumerate(targets):
+                    if isinstance(target_payload, dict):
+                        collect(
+                            "entity_receipt_ids",
+                            role=f"target_entity_receipt:{target_index}",
+                            target=receipt_references,
+                            source=target_payload,
+                        )
+    return receipt_references, dataset_references
+
+
+async def _resolve_hierarchy_references(
+    session: AsyncSession,
+    *,
+    workspace_id: str,
+    payload: dict[str, Any],
+) -> list[dict[str, str | int]]:
+    receipt_references, dataset_references = _hierarchy_reference_ids(payload)
+    bindings: list[dict[str, str | int]] = []
+
+    receipt_ids = {receipt_id for _role, receipt_id in receipt_references}
+    receipts = (
+        (
+            await session.execute(
+                select(ExperimentExternalEntityReceipt).where(
+                    ExperimentExternalEntityReceipt.id.in_(receipt_ids)
+                )
+            )
+        ).scalars().all()
+        if receipt_ids
+        else []
+    )
+    receipts_by_id = {receipt.id: receipt for receipt in receipts}
+    if set(receipts_by_id) != receipt_ids:
+        raise ValidationFailure("one or more hierarchy receipt references are unknown")
+    receipt_ordinals: dict[str, int] = {}
+    for role, receipt_id in receipt_references:
+        receipt = receipts_by_id[receipt_id]
+        receipt_resource = await session.get(ExperimentResource, receipt.resource_id)
+        if (
+            receipt_resource is None
+            or receipt_resource.kind != "external_entity_receipt"
+            or receipt_resource.workspace_id != workspace_id
+            or receipt_resource.archived_at is not None
+        ):
+            raise ValidationFailure("hierarchy receipt resource is unavailable or belongs to another project")
+        if receipt.workspace_id != workspace_id:
+            raise ValidationFailure("hierarchy receipt reference belongs to another project")
+        if receipt.availability != "available":
+            raise ValidationFailure("hierarchy receipt reference is not verified as available")
+        authority = str(receipt.verification_authority or "").strip()
+        if (
+            not authority
+            or authority in {"legacy_unverified", "caller_unverified"}
+            or authority.startswith("unverified:")
+        ):
+            raise ValidationFailure("hierarchy receipt reference has no durable server verification authority")
+        try:
+            acknowledgement = json.loads(receipt.acknowledgement_json or "{}")
+        except json.JSONDecodeError as exc:
+            raise ValidationFailure("hierarchy receipt acknowledgement is malformed") from exc
+        expected_acknowledgement = {
+            "schema": "bms.global.external-entity-receipt.v1",
+            "store_id": receipt.store_id,
+            "entity_kind": receipt.entity_kind,
+            "entity_id": receipt.entity_id,
+            "entity_revision_id": receipt.generation_or_revision,
+            "content_digest": receipt.content_digest,
+            "availability": receipt.availability,
+            "verifier_id": authority,
+        }
+        if not isinstance(acknowledgement, dict) or any(
+            str(acknowledgement.get(field) or "") != str(value)
+            for field, value in expected_acknowledgement.items()
+        ):
+            raise ValidationFailure("hierarchy receipt acknowledgement does not match persisted authority")
+        if len(receipt.content_digest) != 64 or any(
+            character not in "0123456789abcdef" for character in receipt.content_digest
+        ):
+            raise ValidationFailure("hierarchy receipt has no immutable digest")
+        ordinal = receipt_ordinals.get(role, 0)
+        receipt_ordinals[role] = ordinal + 1
+        bindings.append(
+            {
+                "role": role,
+                "ordinal": ordinal,
+                "target_resource_id": receipt.id,
+                "expected_sha256": receipt.content_digest,
+            }
+        )
+
+    dataset_ordinals: dict[str, int] = {}
+    for role, dataset_id in dataset_references:
+        resource = await session.get(ExperimentResource, dataset_id)
+        head = await session.get(ExperimentAggregateHead, dataset_id)
+        if resource is None or head is None or resource.kind != "dataset" or head.aggregate_kind != "dataset":
+            raise ValidationFailure("one or more hierarchy dataset references are unknown")
+        if resource.workspace_id != workspace_id or head.workspace_id != workspace_id:
+            raise ValidationFailure("hierarchy dataset reference belongs to another project")
+        if resource.archived_at is not None or head.lifecycle_state == "archived" or head.current_revision_id is None:
+            raise ValidationFailure("hierarchy dataset reference is not available")
+        revision = await session.get(ExperimentRevision, head.current_revision_id)
+        if revision is None or revision.subject_id != dataset_id:
+            raise ValidationFailure("hierarchy dataset reference has no durable server revision authority")
+        if revision.payload_sha256 != sha256_text(revision.canonical_payload):
+            raise ValidationFailure("hierarchy dataset revision immutable digest does not match")
+        ordinal = dataset_ordinals.get(role, 0)
+        dataset_ordinals[role] = ordinal + 1
+        bindings.append(
+            {
+                "role": role,
+                "ordinal": ordinal,
+                "target_resource_id": dataset_id,
+                "expected_sha256": revision.payload_sha256,
+            }
+        )
+    return bindings
+
+
+def _validate_lifecycle_transition(
+    aggregate_kind: str,
+    current_status: str,
+    requested_status: str,
+    lifecycle_operation: str | None,
+) -> None:
+    if lifecycle_operation == "archive":
+        if current_status == "archived" or requested_status != "archived":
+            raise ValidationFailure(
+                f"invalid lifecycle transition for {aggregate_kind}: {current_status} -> {requested_status}"
+            )
+        return
+    if lifecycle_operation == "restore":
+        if current_status != "archived" or requested_status == "archived":
+            raise ValidationFailure(
+                f"invalid lifecycle transition for {aggregate_kind}: {current_status} -> {requested_status}"
+            )
+        return
+    if lifecycle_operation is not None:
+        raise ValidationFailure(f"unsupported lifecycle operation: {lifecycle_operation}")
+    transitions = (
+        PROJECT_LIFECYCLE_TRANSITIONS
+        if aggregate_kind == "workspace"
+        else EXPERIMENT_LIFECYCLE_TRANSITIONS
+    )
+    if requested_status not in transitions.get(current_status, set()):
+        raise ValidationFailure(
+            f"invalid lifecycle transition for {aggregate_kind}: {current_status} -> {requested_status}"
+        )
+
+
 async def _save_revision(
     session: AsyncSession,
     *,
@@ -409,76 +804,143 @@ async def _save_revision(
     aggregate_kind: str,
     payload: dict[str, Any],
     expected_head_generation: int,
+    lifecycle_operation: str | None = None,
 ) -> ExperimentRevision:
     head = await _head(session, aggregate_id, aggregate_kind)
-    if aggregate_kind == "workflow":
-        _validate_workflow_payload(payload)
     if head.head_generation != expected_head_generation:
         raise RevisionConflict(
             f"{aggregate_kind} head generation conflict: expected {expected_head_generation}, current {head.head_generation}"
         )
     workspace_id = await _resource_workspace(session, aggregate_id)
-    payload_json = canonical_json(payload)
-    graph_json = canonical_json({"nodes": payload.get("nodes", []), "edges": payload.get("edges", [])})
-    revision_resource = await _resource(
-        session,
-        kind="revision",
-        workspace_id=workspace_id,
-        lifecycle_owner_id=aggregate_id,
-    )
-    revision = ExperimentRevision(
-        resource_id=revision_resource.id,
-        subject_id=aggregate_id,
-        revision_number=head.head_generation + 1,
-        parent_revision_id=head.current_revision_id,
-        schema_name=str(payload.get("schema") or f"bms.workflow.{aggregate_kind}.v1"),
-        schema_version=str(payload.get("contract_version") or "1"),
-        canonical_payload=payload_json,
-        payload_sha256=sha256_text(payload_json),
-        dependency_graph_sha256=sha256_text(graph_json),
-        provenance_json=canonical_json(payload.get("provenance", {})),
-        created_at=now(),
-    )
-    session.add(revision)
-    await session.flush()
+    hierarchy_bindings: list[dict[str, str | int]] = []
+    previous_status: str | None = None
     if aggregate_kind == "workflow":
-        for ordinal, node in enumerate(payload["nodes"]):
-            session.add(
-                ExperimentWorkflowRevisionNode(
-                    revision_id=revision.resource_id,
-                    ordinal=ordinal,
-                    node_id=str(node["id"]),
-                    node_kind=str(node["kind"]),
-                    node_json=canonical_json(node),
-                )
+        _validate_workflow_payload(payload)
+    elif aggregate_kind in {"workspace", "experiment", "domain_experiment"}:
+        _validate_hierarchy_payload(aggregate_kind, payload)
+        current_payload: dict[str, Any] | None = None
+        if head.current_revision_id:
+            current_revision = await session.get(ExperimentRevision, head.current_revision_id)
+            if current_revision is None or current_revision.subject_id != aggregate_id:
+                raise ValidationFailure("aggregate current revision is unavailable or belongs to another aggregate")
+            current_payload = json.loads(current_revision.canonical_payload)
+            if not isinstance(current_payload, dict):
+                raise ValidationFailure("aggregate current revision payload is invalid")
+            previous_status = str(current_payload.get("status") or "")
+            if previous_status != head.lifecycle_state:
+                raise ValidationFailure("aggregate lifecycle projection is inconsistent with current revision")
+            _validate_lifecycle_transition(
+                aggregate_kind,
+                previous_status,
+                str(payload["status"]),
+                lifecycle_operation,
             )
-        for ordinal, edge in enumerate(payload["edges"]):
-            session.add(
-                ExperimentWorkflowRevisionEdge(
-                    revision_id=revision.resource_id,
-                    ordinal=ordinal,
-                    source_node_id=str(edge.get("source", edge.get("from"))),
-                    target_node_id=str(edge.get("target", edge.get("to"))),
-                    edge_json=canonical_json(edge),
-                )
-            )
-        await session.flush()
-    changed = await session.execute(
-        update(ExperimentAggregateHead)
-        .where(
-            ExperimentAggregateHead.aggregate_id == aggregate_id,
-            ExperimentAggregateHead.head_generation == expected_head_generation,
+        if aggregate_kind == "domain_experiment" and current_payload is not None:
+            if current_payload.get("domain_kind") != payload.get("domain_kind"):
+                raise ValidationFailure("domain_kind is immutable; create a new Domain Experiment")
+        if payload.get("status") == "archived" and lifecycle_operation != "archive":
+            raise ValidationFailure("archival is a lifecycle operation; use the archive route")
+        if head.lifecycle_state == "archived" and lifecycle_operation != "restore":
+            raise ValidationFailure("archived aggregates must be restored before revision")
+        hierarchy_bindings = await _resolve_hierarchy_references(
+            session,
+            workspace_id=workspace_id,
+            payload=payload,
         )
-        .values(
-            current_revision_id=revision.resource_id,
-            head_generation=expected_head_generation + 1,
-            lifecycle_state="validated",
-            updated_at=now(),
-        )
+    payload_json = canonical_json(payload)
+    graph_json = canonical_json(
+        {
+            "nodes": payload.get("nodes", []),
+            "edges": payload.get("edges", []),
+            "references": hierarchy_bindings,
+        }
     )
-    if changed.rowcount != 1:
-        await session.rollback()
-        raise RevisionConflict("aggregate head changed while saving revision")
+    parent_revision_id = head.current_revision_id
+    next_generation = expected_head_generation + 1
+    revision: ExperimentRevision
+    try:
+        async with session.begin_nested():
+            revision_resource = await _resource(
+                session,
+                kind="revision",
+                workspace_id=workspace_id,
+                lifecycle_owner_id=aggregate_id,
+            )
+            revision = ExperimentRevision(
+                resource_id=revision_resource.id,
+                subject_id=aggregate_id,
+                revision_number=next_generation,
+                parent_revision_id=parent_revision_id,
+                schema_name=str(payload.get("schema") or f"bms.workflow.{aggregate_kind}.v1"),
+                schema_version=str(payload.get("contract_version") or "1"),
+                canonical_payload=payload_json,
+                payload_sha256=sha256_text(payload_json),
+                dependency_graph_sha256=sha256_text(graph_json),
+                provenance_json=canonical_json(payload.get("provenance", {})),
+                created_at=now(),
+            )
+            session.add(revision)
+            await session.flush()
+            for binding in hierarchy_bindings:
+                session.add(
+                    ExperimentRevisionEdge(
+                        revision_id=revision.resource_id,
+                        target_resource_id=str(binding["target_resource_id"]),
+                        role=str(binding["role"]),
+                        ordinal=int(binding["ordinal"]),
+                        expected_sha256=str(binding["expected_sha256"]),
+                        metadata_json=canonical_json({"authority": "server_resolved"}),
+                    )
+                )
+            if aggregate_kind == "workflow":
+                for ordinal, node in enumerate(payload["nodes"]):
+                    session.add(
+                        ExperimentWorkflowRevisionNode(
+                            revision_id=revision.resource_id,
+                            ordinal=ordinal,
+                            node_id=str(node["id"]),
+                            node_kind=str(node["kind"]),
+                            node_json=canonical_json(node),
+                        )
+                    )
+                for ordinal, edge in enumerate(payload["edges"]):
+                    session.add(
+                        ExperimentWorkflowRevisionEdge(
+                            revision_id=revision.resource_id,
+                            ordinal=ordinal,
+                            source_node_id=str(edge.get("source", edge.get("from"))),
+                            target_node_id=str(edge.get("target", edge.get("to"))),
+                            edge_json=canonical_json(edge),
+                        )
+                    )
+            await session.flush()
+            changed = await session.execute(
+                update(ExperimentAggregateHead)
+                .where(
+                    ExperimentAggregateHead.aggregate_id == aggregate_id,
+                    ExperimentAggregateHead.aggregate_kind == aggregate_kind,
+                    ExperimentAggregateHead.head_generation == expected_head_generation,
+                    ExperimentAggregateHead.current_revision_id == parent_revision_id,
+                )
+                .values(
+                    current_revision_id=revision.resource_id,
+                    head_generation=next_generation,
+                    lifecycle_state=(
+                        str(payload["status"])
+                        if aggregate_kind in {"workspace", "experiment", "domain_experiment"}
+                        else "validated"
+                    ),
+                    updated_at=now(),
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if changed.rowcount != 1:
+                raise RevisionConflict("aggregate head changed while saving revision")
+    except (RevisionConflict, IntegrityError) as exc:
+        await session.refresh(head)
+        raise RevisionConflict(
+            f"{aggregate_kind} head generation conflict: expected {expected_head_generation}, current {head.head_generation}"
+        ) from exc
     add_audit_event(
         session,
         workspace_id=workspace_id,
@@ -487,6 +949,17 @@ async def _save_revision(
         generation=revision.revision_number,
         payload={"subject_id": aggregate_id, "payload_sha256": revision.payload_sha256},
     )
+    requested_status = str(payload.get("status") or "")
+    if previous_status is not None and previous_status != requested_status:
+        add_audit_event(
+            session,
+            workspace_id=workspace_id,
+            resource_id=aggregate_id,
+            event_type="aggregate_lifecycle_transitioned",
+            generation=revision.revision_number,
+            payload={"from": previous_status, "to": requested_status},
+        )
+    await session.refresh(head)
     return revision
 
 
@@ -536,6 +1009,7 @@ async def clone_workflow(
         workspace_id,
         name or f"{source.display_name} (clone)",
         json.loads(revision.canonical_payload).get("workflow_family", source.description),
+        experiment_id=source.parent_id,
     )
     draft = (
         await session.execute(
@@ -577,14 +1051,36 @@ async def archive_aggregate(
     expected_head_generation: int | None = None,
 ) -> ExperimentAggregateHead:
     head = await _head(session, aggregate_id)
-    if expected_head_generation is not None and head.head_generation != expected_head_generation:
+    expected_generation = head.head_generation if expected_head_generation is None else expected_head_generation
+    if head.head_generation != expected_generation:
         raise RevisionConflict("aggregate head changed before archive")
     resource = await session.get(ExperimentResource, aggregate_id)
     if resource is None:
         raise NotFound(f"aggregate not found: {aggregate_id}")
+    if head.lifecycle_state == "archived" or resource.archived_at is not None:
+        raise ValidationFailure("aggregate is already archived")
+    if head.aggregate_kind in {"workspace", "experiment", "domain_experiment"}:
+        if head.current_revision_id is None:
+            raise ValidationFailure("hierarchy aggregate has no immutable revision")
+        current_revision = await session.get(ExperimentRevision, head.current_revision_id)
+        if current_revision is None:
+            raise ValidationFailure("hierarchy aggregate current revision is unavailable")
+        payload = json.loads(current_revision.canonical_payload)
+        payload["status"] = "archived"
+        payload["change_summary"] = "archived"
+        await _save_revision(
+            session,
+            aggregate_id=aggregate_id,
+            aggregate_kind=head.aggregate_kind,
+            payload=payload,
+            expected_head_generation=expected_generation,
+            lifecycle_operation="archive",
+        )
+        await session.refresh(head)
+    else:
+        head.lifecycle_state = "archived"
+        head.updated_at = now()
     resource.archived_at = now()
-    head.lifecycle_state = "archived"
-    head.updated_at = now()
     workspace_id = await _resource_workspace(session, aggregate_id)
     add_audit_event(
         session,
@@ -596,6 +1092,190 @@ async def archive_aggregate(
     )
     await session.flush()
     return head
+
+
+async def restore_aggregate(
+    session: AsyncSession,
+    aggregate_id: str,
+    *,
+    expected_head_generation: int | None = None,
+) -> ExperimentAggregateHead:
+    head = await _head(session, aggregate_id)
+    expected_generation = head.head_generation if expected_head_generation is None else expected_head_generation
+    if head.head_generation != expected_generation:
+        raise RevisionConflict("aggregate head changed before restore")
+    resource = await session.get(ExperimentResource, aggregate_id)
+    if resource is None:
+        raise NotFound(f"aggregate not found: {aggregate_id}")
+    if head.lifecycle_state != "archived" and resource.archived_at is None:
+        raise ValidationFailure("aggregate is not archived")
+    lifecycle_state = "draft"
+    if head.aggregate_kind in {"workspace", "experiment", "domain_experiment"}:
+        if head.current_revision_id is None:
+            raise ValidationFailure("hierarchy aggregate has no immutable revision")
+        archived_revision = await session.get(ExperimentRevision, head.current_revision_id)
+        if archived_revision is None:
+            raise ValidationFailure("hierarchy aggregate current revision is unavailable")
+        archived_payload = json.loads(archived_revision.canonical_payload)
+        prior_revision = (
+            await session.get(ExperimentRevision, archived_revision.parent_revision_id)
+            if archived_revision.parent_revision_id
+            else None
+        )
+        prior_payload = json.loads(prior_revision.canonical_payload) if prior_revision is not None else {}
+        lifecycle_state = str(prior_payload.get("status") or "draft")
+        if lifecycle_state == "archived":
+            lifecycle_state = "draft"
+        archived_payload["status"] = lifecycle_state
+        archived_payload["change_summary"] = "restored"
+        await _save_revision(
+            session,
+            aggregate_id=aggregate_id,
+            aggregate_kind=head.aggregate_kind,
+            payload=archived_payload,
+            expected_head_generation=expected_generation,
+            lifecycle_operation="restore",
+        )
+        await session.refresh(head)
+    else:
+        head.lifecycle_state = "draft"
+        head.updated_at = now()
+    resource.archived_at = None
+    workspace_id = await _resource_workspace(session, aggregate_id)
+    add_audit_event(
+        session,
+        workspace_id=workspace_id,
+        resource_id=aggregate_id,
+        event_type="aggregate_restored",
+        generation=head.head_generation,
+        payload={"lifecycle_state": lifecycle_state},
+    )
+    await session.flush()
+    return head
+
+
+async def save_hierarchy_revision(
+    session: AsyncSession,
+    aggregate_id: str,
+    aggregate_kind: str,
+    payload: dict[str, Any],
+    *,
+    expected_head_generation: int,
+) -> ExperimentRevision:
+    if aggregate_kind not in {"workspace", "experiment", "domain_experiment"}:
+        raise ValidationFailure("unsupported hierarchy aggregate kind")
+    return await _save_revision(
+        session,
+        aggregate_id=aggregate_id,
+        aggregate_kind=aggregate_kind,
+        payload=payload,
+        expected_head_generation=expected_head_generation,
+    )
+
+
+async def append_research_record(
+    session: AsyncSession,
+    *,
+    workspace_id: str,
+    subject_resource_id: str,
+    record_kind: str,
+    body: str,
+    author: str | None = None,
+    source_receipt_ids: list[str] | None = None,
+    supersedes_record_id: str | None = None,
+) -> ExperimentResearchRecord:
+    await _workspace(session, workspace_id)
+    if record_kind not in RESEARCH_RECORD_KINDS:
+        raise ValidationFailure("record_kind must be note, observation, decision, or conclusion")
+    if not isinstance(body, str) or not body.strip():
+        raise ValidationFailure("research record body must not be empty")
+    subject = await session.get(ExperimentResource, subject_resource_id)
+    if subject is None:
+        raise NotFound(f"research record subject not found: {subject_resource_id}")
+    subject_workspace = subject.id if subject.kind == "workspace" else subject.workspace_id
+    if subject_workspace != workspace_id or subject.kind not in {"workspace", "experiment", "domain_experiment"}:
+        raise ValidationFailure("research record subject belongs to another project or is not a hierarchy aggregate")
+    if supersedes_record_id is not None:
+        prior = await session.get(ExperimentResearchRecord, supersedes_record_id)
+        if prior is None:
+            raise NotFound(f"research record not found: {supersedes_record_id}")
+        if prior.subject_resource_id != subject_resource_id or prior.workspace_id != workspace_id:
+            raise ValidationFailure("replacement record must keep the same project scope")
+    receipt_ids = source_receipt_ids or []
+    if any(not isinstance(receipt_id, str) or not receipt_id for receipt_id in receipt_ids):
+        raise ValidationFailure("source_receipt_ids must contain non-empty strings")
+    if receipt_ids:
+        receipts = (
+            await session.execute(
+                select(ExperimentExternalEntityReceipt).where(
+                    ExperimentExternalEntityReceipt.id.in_(receipt_ids)
+                )
+            )
+        ).scalars().all()
+        by_id = {receipt.id: receipt for receipt in receipts}
+        if set(by_id) != set(receipt_ids):
+            raise ValidationFailure("one or more source receipts are unknown")
+        if any(receipt.workspace_id != workspace_id for receipt in receipts):
+            raise ValidationFailure("source receipt belongs to another project")
+        if any(receipt.availability != "available" for receipt in receipts):
+            raise ValidationFailure("source receipt is not currently verified as available")
+        if any(
+            receipt.verification_authority in {"legacy_unverified", "caller_unverified"}
+            for receipt in receipts
+        ):
+            raise ValidationFailure("source receipt has no persisted server verification authority")
+        for receipt in receipts:
+            try:
+                acknowledgement = json.loads(receipt.acknowledgement_json or "{}")
+            except json.JSONDecodeError as exc:
+                raise ValidationFailure("source receipt acknowledgement is invalid") from exc
+            if (
+                acknowledgement.get("schema") != "bms.global.external-entity-receipt.v1"
+                or acknowledgement.get("verifier_id") != receipt.verification_authority
+                or acknowledgement.get("store_id") != receipt.store_id
+                or acknowledgement.get("entity_kind") != receipt.entity_kind
+                or acknowledgement.get("entity_id") != receipt.entity_id
+                or str(acknowledgement.get("entity_revision_id")) != receipt.generation_or_revision
+                or acknowledgement.get("content_digest") != receipt.content_digest
+                or not acknowledgement.get("verifier_id")
+                or not acknowledgement.get("source_build_revision")
+                or not acknowledgement.get("verified_at")
+                or not acknowledgement.get("reopen_uri")
+            ):
+                raise ValidationFailure("source receipt is not server verified")
+    resource = await _resource(
+        session,
+        kind="research_record",
+        workspace_id=workspace_id,
+        lifecycle_owner_id=subject_resource_id,
+    )
+    record = ExperimentResearchRecord(
+        resource_id=resource.id,
+        workspace_id=workspace_id,
+        subject_resource_id=subject_resource_id,
+        record_kind=record_kind,
+        body=body,
+        author=author,
+        source_receipt_ids_json=canonical_json(receipt_ids),
+        supersedes_record_id=supersedes_record_id,
+        created_at=now(),
+    )
+    session.add(record)
+    await session.flush()
+    subject_head = await session.get(ExperimentAggregateHead, subject_resource_id)
+    add_audit_event(
+        session,
+        workspace_id=workspace_id,
+        resource_id=record.resource_id,
+        event_type="research_record_appended",
+        generation=subject_head.head_generation if subject_head is not None else 0,
+        payload={
+            "subject_resource_id": subject_resource_id,
+            "record_kind": record_kind,
+            "supersedes_record_id": supersedes_record_id,
+        },
+    )
+    return record
 
 
 async def save_dataset_revision(
@@ -902,6 +1582,59 @@ async def create_run_group(
 
 
 TERMINAL_CORE_JOB_STATES = {"completed", "succeeded", "failed", "cancelled", "canceled"}
+LIVE_CORE_JOB_STATE_MAP = {
+    "pending": "dispatched",
+    "queued": "dispatched",
+    "dispatching": "dispatched",
+    "processing": "running",
+    "running": "running",
+}
+
+
+def _core_job_progress(stage_progress: Any) -> dict[str, float | str | None]:
+    raw = str(stage_progress or "").strip()
+    if raw.endswith("%"):
+        try:
+            percentage = float(raw[:-1].strip())
+        except ValueError:
+            percentage = -1.0
+        if 0.0 <= percentage <= 100.0:
+            return {"kind": "fraction", "value": percentage / 100.0}
+    if "/" in raw:
+        numerator_text, denominator_text = raw.split("/", 1)
+        try:
+            numerator = float(numerator_text.strip())
+            denominator = float(denominator_text.strip())
+        except ValueError:
+            numerator = -1.0
+            denominator = 0.0
+        if denominator > 0.0 and 0.0 <= numerator <= denominator:
+            return {"kind": "fraction", "value": numerator / denominator}
+    return {"kind": "indeterminate", "value": None}
+
+
+def _core_job_elapsed_seconds(started_at: Any) -> int:
+    if not isinstance(started_at, datetime):
+        return 0
+    current = datetime.now(started_at.tzinfo) if started_at.tzinfo is not None else datetime.utcnow()
+    return max(0, int((current - started_at).total_seconds()))
+
+
+def _core_job_live_receipt(job: Any, status: str) -> dict[str, Any]:
+    return {
+        "schema": "bms.experiment.runtime-receipt.v1",
+        "job_id": str(job.id),
+        "status": status,
+        "canonical_state": status,
+        "queue_status": str(job.queue_status) if job.queue_status is not None else None,
+        "stage": str(job.current_stage) if job.current_stage is not None else None,
+        "stage_progress": str(job.stage_progress) if job.stage_progress is not None else None,
+        "progress": _core_job_progress(job.stage_progress),
+        "started_at": str(job.started_at) if job.started_at is not None else None,
+        "elapsed_seconds": _core_job_elapsed_seconds(job.started_at),
+        "assigned_gpu": job.assigned_gpu,
+        "provenance": job.provenance,
+    }
 
 
 async def reconcile_run_group(
@@ -910,7 +1643,7 @@ async def reconcile_run_group(
     workspace_id: str,
     run_group_id: str,
 ) -> ExperimentRunGroup:
-    """Project authoritative core terminal state into global attempts exactly once."""
+    """Project authoritative core live and terminal state into global attempts."""
     from database import Job
 
     group = await session.get(ExperimentRunGroup, run_group_id)
@@ -936,25 +1669,51 @@ async def reconcile_run_group(
         if attempt.state in {"completed", "failed", "cancelled"}:
             continue
         job = await core_session.get(Job, attempt.scheduler_job_id)
-        if job is None or str(job.status).lower() not in TERMINAL_CORE_JOB_STATES:
+        if job is None:
             continue
         status = str(job.status).lower()
-        terminal_state = "completed" if status in {"completed", "succeeded"} else "cancelled" if status in {"cancelled", "canceled"} else "failed"
-        receipt = {
-            "schema": "bms.experiment.terminal-receipt.v1",
-            "job_id": attempt.scheduler_job_id,
-            "status": status,
-            "terminal_state": terminal_state,
-            "completed_at": str(job.completed_at) if job.completed_at else None,
-            "error_message": job.error_message,
-            "output_dir": job.output_dir,
-            "provenance": job.provenance,
-        }
+        if status in TERMINAL_CORE_JOB_STATES:
+            projected_state = (
+                "completed"
+                if status in {"completed", "succeeded"}
+                else "cancelled"
+                if status in {"cancelled", "canceled"}
+                else "failed"
+            )
+            receipt = {
+                "schema": "bms.experiment.terminal-receipt.v1",
+                "job_id": attempt.scheduler_job_id,
+                "status": status,
+                "terminal_state": projected_state,
+                "completed_at": str(job.completed_at) if job.completed_at else None,
+                "error_message": job.error_message,
+                "output_dir": job.output_dir,
+                "provenance": job.provenance,
+            }
+            attempt.terminal_receipt_json = canonical_json(receipt)
+            attempt.runtime_identity_json = canonical_json(job.provenance or {})
+            event_type = "core_terminal_projected"
+            idempotency_key = f"core-terminal:{attempt.scheduler_job_id}:{status}"
+        elif status in LIVE_CORE_JOB_STATE_MAP:
+            projected_state = LIVE_CORE_JOB_STATE_MAP[status]
+            receipt = _core_job_live_receipt(job, status)
+            receipt_json = canonical_json(receipt)
+            if (
+                attempt.state == projected_state
+                and run.state == projected_state
+                and attempt.runtime_identity_json == receipt_json
+            ):
+                continue
+            attempt.runtime_identity_json = receipt_json
+            event_type = "core_live_projected"
+            idempotency_key = (
+                f"core-live:{attempt.scheduler_job_id}:{sha256_text(receipt_json)}"
+            )
+        else:
+            continue
         expected_generation = int(run.generation)
-        attempt.state = terminal_state
-        attempt.terminal_receipt_json = canonical_json(receipt)
-        attempt.runtime_identity_json = canonical_json(job.provenance or {})
-        run.state = terminal_state
+        attempt.state = projected_state
+        run.state = projected_state
         run.generation = expected_generation + 1
         sequence = int(
             (
@@ -973,8 +1732,8 @@ async def reconcile_run_group(
                 sequence_number=sequence,
                 expected_generation=expected_generation,
                 resulting_generation=run.generation,
-                idempotency_key=f"core-terminal:{attempt.scheduler_job_id}:{status}",
-                event_type="core_terminal_projected",
+                idempotency_key=idempotency_key,
+                event_type=event_type,
                 payload_json=canonical_json(receipt),
                 created_at=now(),
             )
@@ -1370,15 +2129,21 @@ __all__ = [
     "NotFound",
     "RevisionConflict",
     "ValidationFailure",
+    "append_research_record",
     "canonical_json",
     "create_dataset",
+    "create_domain_experiment",
     "create_experiment",
+    "create_global_experiment",
     "create_experiment_workspace",
+    "create_project",
     "create_run_group",
     "create_workflow",
     "dispatch_pending_outbox",
     "now",
     "prepare_workflow",
+    "restore_aggregate",
+    "save_hierarchy_revision",
     "save_dataset_revision",
     "save_workflow_draft",
     "save_workflow_revision",

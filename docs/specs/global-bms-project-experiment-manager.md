@@ -633,7 +633,7 @@ GET    /api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id
 PATCH  /api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}
 POST   /api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}/archive
 POST   /api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}/restore
-GET    /api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}/activities
+GET    /api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}/activity
 GET    /api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}/records?kind=&cursor=&limit=
 POST   /api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}/records
 POST   /api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}/attach
@@ -873,7 +873,7 @@ GET /api/projects/{project_id}/summary
 GET /api/projects/{project_id}/map?focus_id=&cursor=&limit=
 GET /api/projects/{project_id}/experiments/{experiment_id}/summary
 GET /api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}/summary
-GET /api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}/activities?cursor=&limit=
+GET /api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}/activity?cursor=&limit=
 GET /api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}/results?cursor=&limit=
 GET /api/projects/{project_id}/experiments/{experiment_id}/lineage?cursor=&limit=
 ```
