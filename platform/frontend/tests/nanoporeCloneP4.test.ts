@@ -51,3 +51,22 @@ test('P4 clone derives quality from exact retained model identities and disables
     assert.equal(restored?.doradoModel, 'fast');
     assert.equal(restored?.runAssembly, false);
 });
+
+test('Clone validation reopens every bounded vendor tuning selection', () => {
+    const restored = normalizeNanoporeCloneState({
+        id: 'clone-source', name: 'Clone source', model_id: 'nanopore', mode: 'clone_validation', status: 'completed',
+        params: {
+            fastq_path: '/data/clone.fastq', run_assembly: true,
+            wf_clone_analyse_unclassified: true, wf_clone_flye_quality: 'nano-raw',
+            wf_clone_non_uniform_coverage: true, wf_clone_canu_fast: false,
+            wf_clone_cutsite_mismatch: 3, wf_clone_expected_coverage: 92, wf_clone_expected_identity: 98,
+        },
+    } as never);
+    assert.equal(restored?.wfCloneAnalyseUnclassified, true);
+    assert.equal(restored?.wfCloneFlyeQuality, 'nano-raw');
+    assert.equal(restored?.wfCloneNonUniformCoverage, true);
+    assert.equal(restored?.wfCloneCanuFast, false);
+    assert.equal(restored?.wfCloneCutsiteMismatch, 3);
+    assert.equal(restored?.wfCloneExpectedCoverage, 92);
+    assert.equal(restored?.wfCloneExpectedIdentity, 98);
+});
