@@ -67,6 +67,9 @@ process RFANTIBODY {
     cd /opt/RFantibody
     export PYTHONPATH="/opt/RFantibody/src:/opt/RFantibody/include:\$PYTHONPATH"
     
+    # Install missing dependencies if not present
+    pip install --quiet icecream hydra-core omegaconf 2>/dev/null || true
+    
     python3 scripts/rfdiffusion_inference.py \\
         --config-name antibody \\
         antibody.target_pdb=${target_pdb} \\
