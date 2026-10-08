@@ -958,11 +958,234 @@ sequence_type: str = "dna"  # Can be "dna" or "rna"
 | Save sequences / plasmid library | Existing | ✅ Already works |
 | RNA view | Phase 6.1-6.2 | ✅ Planned |
 | RNA secondary structure | Phase 7+ | Deferred |
+| **Auto-annotation (FASTA)** | **Phase 7** | ✅ Planned |
 
 If seqviz doesn't work out:
 1. Keep bio-parsers, sequence-utils (they're standalone)
 2. Build minimal SVG-based viewer using sequence-utils for coordinate math
 3. Alternative libs: [benchling-sequence-viewer](https://github.com/nickyvan/benchling-sequence-viewer), custom D3
+
+---
+
+## Phase 7: Automatic Feature Annotation (pLannotate)
+
+**Goal**: Auto-detect common plasmid features (promoters, ori, resistance genes) from raw FASTA sequences using pLannotate.
+
+### Background
+
+FASTA files contain only sequence data with no annotations. SnapGene and similar tools solve this by maintaining a curated database of common features and using BLAST to detect them in imported sequences.
+
+**Recommended Tool**: [pLannotate](https://github.com/barricklab/pLannotate) (Barrick Lab, UT Austin)
+- Open source, actively maintained
+- BLAST-based feature detection
+- Supports custom databases via YAML
+- CLI batch mode + Python API
+- Outputs annotated GenBank files
+
+### Step 7.1: Backend Integration
+
+**File**: `platform/api/routers/molbio.py`
+
+**Endpoint**: `POST /api/molbio/auto-annotate`
+
+```python
+from plannotate.annotate import annotate
+from plannotate.resources import get_seq_record
+from Bio import SeqIO
+import tempfile
+
+@router.post("/auto-annotate")
+async def auto_annotate(request: AutoAnnotateRequest) -> AutoAnnotateResponse:
+    """
+    Auto-detect plasmid features using pLannotate.
+    
+    Args:
+        sequence: Raw DNA sequence string
+        is_linear: Whether the sequence is linear (default: circular)
+        detailed: Use detailed search mode (more hits, more false positives)
+    
+    Returns:
+        features: List of detected features with start, end, name, type, %identity
+    """
+    # Run pLannotate annotation
+    hits = annotate(
+        request.sequence, 
+        is_detailed=request.detailed, 
+        linear=request.is_linear
+    )
+    
+    # Convert to our Feature format
+    features = []
+    for _, row in hits.iterrows():
+        features.append({
+            "name": row['Feature'],
+            "type": row['Type'],
+            "start": int(row['Start']),
+            "end": int(row['End']),
+            "strand": 1 if row['Strand'] == '+' else -1,
+            "identity_pct": float(row['percent_identity']),
+            "description": row.get('Description', '')
+        })
+    
+    return AutoAnnotateResponse(features=features)
+```
+
+**Request/Response Schemas**:
+```python
+class AutoAnnotateRequest(BaseModel):
+    sequence: str
+    is_linear: bool = False
+    detailed: bool = False
+
+class DetectedFeature(BaseModel):
+    name: str
+    type: str  # "CDS", "promoter", "origin", "gene", etc.
+    start: int
+    end: int
+    strand: int  # 1 or -1
+    identity_pct: float
+    description: str
+
+class AutoAnnotateResponse(BaseModel):
+    features: list[DetectedFeature]
+```
+
+### Step 7.2: Backend Installation
+
+**Conda Environment** (recommended - pLannotate has BLAST+ dependency):
+
+```bash
+# In platform environment setup
+conda create -n plannotate -c conda-forge -c bioconda plannotate
+conda activate plannotate
+plannotate setupdb  # Downloads feature databases
+```
+
+**Alternative: Subprocess Call** (if using Docker/non-conda):
+```python
+import subprocess
+import json
+
+result = subprocess.run([
+    'plannotate', 'batch',
+    '-i', temp_fasta_path,
+    '-o', output_dir,
+    '--csv'  # Output feature table
+], capture_output=True)
+
+# Parse CSV output
+features = pd.read_csv(f"{output_dir}/input_pLann.csv")
+```
+
+### Step 7.3: Frontend Integration
+
+**File**: `platform/frontend/src/components/MolBioToolkit/MolBioToolkitV2.tsx`
+
+**Auto-Annotate Button** (in toolbar):
+```tsx
+const [isAnnotating, setIsAnnotating] = useState(false);
+
+const handleAutoAnnotate = async () => {
+    if (!sequenceData.sequence || sequenceData.features.length > 0) {
+        // Skip if no sequence or already has features
+        if (sequenceData.features.length > 0) {
+            if (!confirm('Sequence already has features. Add detected features?')) return;
+        }
+    }
+    
+    setIsAnnotating(true);
+    try {
+        const response = await fetch('/api/molbio/auto-annotate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                sequence: sequenceData.sequence,
+                is_linear: !sequenceData.circular,
+                detailed: false
+            })
+        });
+        
+        const { features } = await response.json();
+        
+        if (features.length === 0) {
+            alert('No common features detected.');
+            return;
+        }
+        
+        // Merge with existing features
+        const newFeatures = features.map((f: DetectedFeature, i: number) => ({
+            id: `auto_${i}`,
+            name: f.name,
+            type: f.type,
+            start: f.start,
+            end: f.end,
+            strand: f.strand,
+            color: getFeatureColor(f.type),
+            notes: `Detected by pLannotate (${f.identity_pct.toFixed(1)}% identity)`
+        }));
+        
+        setSequenceData({
+            ...sequenceData,
+            features: [...sequenceData.features, ...newFeatures]
+        });
+        
+        alert(`Detected ${features.length} features!`);
+    } catch (error) {
+        console.error('Auto-annotation failed:', error);
+        alert('Auto-annotation failed. See console for details.');
+    } finally {
+        setIsAnnotating(false);
+    }
+};
+```
+
+**Toolbar Button**:
+```tsx
+<button
+    onClick={handleAutoAnnotate}
+    disabled={isAnnotating || !sequenceData.sequence}
+    className="toolbar-btn"
+    title="Auto-detect common plasmid features (promoters, ori, resistance genes)"
+>
+    {isAnnotating ? (
+        <Spinner size="sm" />
+    ) : (
+        <MagicWand /> // or similar icon
+    )}
+    Auto-Annotate
+</button>
+```
+
+### Step 7.4: Alternative Tools Evaluated
+
+| Tool | Type | Pros | Cons |
+|------|------|------|------|
+| **pLannotate** | CLI + Python | Open source, good DB, batch mode | Requires BLAST+ |
+| **PlasAnn** | CLI | Also BLAST-based, open source | Less mature |
+| **PlasMapper 3.0** | Web API | Easy integration | Rate limits, external dependency |
+| **ApE** | Desktop | Free, good library | Not scriptable |
+| **SnapGene** | Desktop | Best-in-class | Commercial, $995/year |
+
+**Recommendation**: pLannotate for backend, with option to call PlasMapper API as fallback.
+
+### Step 7.5: Custom Feature Database (Future)
+
+pLannotate supports custom YAML databases:
+
+```yaml
+# custom_features.yaml
+databases:
+  - name: lab_plasmids
+    path: /data/lab_features.fa
+    feature_type: misc_feature
+    description: Internal lab construct features
+```
+
+```bash
+plannotate batch -i sequence.fa --yaml_file custom_features.yaml
+```
+
+**Future enhancement**: Allow users to save frequently-used features to a custom DB for their lab.
 
 ---
 
