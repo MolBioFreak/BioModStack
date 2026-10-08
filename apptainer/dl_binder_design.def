@@ -17,10 +17,11 @@ From: mambaorg/micromamba:1.5.8
     echo "creating micromamba environments with RTX 5090 support"
     micromamba create -n mpnn -f proteinmpnn_fastrelax.yml -y
 
-    # Upgrade PyTorch to version with RTX 5090 support (compute capability 12.0)
+    # Upgrade PyTorch nightly with RTX 5090 support (compute capability 12.0 / sm_120)
+    # PyTorch 2.4.1 stable does NOT support sm_120 - requires nightly builds
     eval "$(micromamba shell hook --shell bash)"
     micromamba activate mpnn
-    pip install --upgrade torch==2.4.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+    pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu121
     micromamba deactivate
 
     cd ../mpnn_fr

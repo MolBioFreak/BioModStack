@@ -20,8 +20,9 @@ From: mambaorg/micromamba:1.5.8
     pip install pyrosetta-installer
     python -c 'import pyrosetta_installer; pyrosetta_installer.install_pyrosetta()'
 
-    # Install PyTorch with RTX 5090 support (compute capability 12.0)
-    pip install torch==2.4.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+    # Install PyTorch nightly with RTX 5090 support (compute capability 12.0 / sm_120)
+    # PyTorch 2.4.1 stable does NOT support sm_120 - requires nightly builds
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu121
 
     pip install biopython pandas matplotlib
 
