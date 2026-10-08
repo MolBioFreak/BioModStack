@@ -109,14 +109,14 @@ process FastqPlasmidQC {
             len = length(\$0)
             if (len >= minlen) print read_id "\\t" len
         }
+        END {
+            print (NR == 0 || NR % 4 != 0 ? "invalid" : NR / 4) > "fastq.accounting.tmp"
+        }
     ' >> read_lengths.tsv
 
-    source_total_reads=\$(\${reader} "${fastq}" | awk '
-        END {
-            if (NR == 0 || NR % 4 != 0) exit 86
-            print NR / 4
-        }
-    ') || { echo "CRITICAL_FAILURE: FASTQ_RECORD_ACCOUNTING_INVALID" >&2; exit 86; }
+    read -r source_total_reads < fastq.accounting.tmp
+    rm -f fastq.accounting.tmp
+    [[ "\${source_total_reads}" != invalid ]] || { echo "CRITICAL_FAILURE: FASTQ_RECORD_ACCOUNTING_INVALID" >&2; exit 86; }
     reads_passing_length_filter=\$(awk 'NR > 1 {c++} END {print c + 0}' read_lengths.tsv)
     total_reads="\${source_total_reads}"
     total_bases=\$(awk 'NR > 1 {s += \$2} END {print s + 0}' read_lengths.tsv)
