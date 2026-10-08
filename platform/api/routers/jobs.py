@@ -1513,6 +1513,9 @@ def _derive_job_stage_tags(model_id: str, mode: str, params: Dict[str, Any], chi
     model_normalized = (model_id or "").strip().lower()
     if mode_normalized == "maturation_child":
         return "ppiflow", "maturation"
+    if model_normalized == "boltzgen":
+        boltzgen_mode = str(params.get("boltzgen_mode") or mode_normalized or "").strip().lower()
+        return "boltzgen", boltzgen_mode or "generation"
     if "fampnn" in model_normalized:
         return "fampnn", mode_normalized or "sequence_design"
     if model_normalized in {"protenix", "boltz2", "rf3"} and mode_normalized in {"predict", "complex"}:
@@ -1666,13 +1669,23 @@ def _looks_like_antibody_job(job: Optional[Job]) -> bool:
     mode = (job.mode or "").strip().lower()
     params = job.params if isinstance(job.params, dict) else {}
     rfd_mode = str(params.get("rfd_mode") or "").strip().lower()
+    boltzgen_mode = str(params.get("boltzgen_mode") or mode or "").strip().lower()
+    framework_type = str(params.get("framework_type") or "").strip().lower()
     has_antibody_params = any(_is_meaningful_param_value(params.get(key)) for key in ("framework_type", "antibody_chains", "epitope_residues"))
+    is_boltzgen_nanobody = (
+        model_id == "boltzgen"
+        and (
+            boltzgen_mode in {"nanobody_binder", "antibody_binder"}
+            or framework_type == "nanobody"
+        )
+    )
     return (
         model_id in {"template_antibody_denovo", "antibody_denovo", "antibody_child"}
         or "antibody" in model_id
         or "antibody" in mode
         or is_antibody_pipeline_mode(rfd_mode)
         or has_antibody_params
+        or is_boltzgen_nanobody
     )
 
 
@@ -1711,7 +1724,7 @@ async def _resolve_antibody_root_job(session: AsyncSession, source_job_id: str) 
     if not _looks_like_antibody_job(root_job):
         raise HTTPException(
             status_code=422,
-            detail="Selected job is not part of an antibody workflow lineage.",
+            detail="Selected job is not part of an antibody or nanobody refinement-compatible lineage.",
         )
     return source_job, root_job
 
@@ -1730,15 +1743,41 @@ def _normalize_design_ids(values: List[str]) -> List[str]:
     return normalized
 
 
-def _iter_saved_review_filter_sets(job: Optional[Job]) -> List[SavedReviewFilterSet]:
-    if job is None or not isinstance(job.awaiting_payload, dict):
-        return []
-    raw_sets = job.awaiting_payload.get("review_filter_sets")
-    if not isinstance(raw_sets, list):
+def _saved_review_filter_entries(job: Optional[Job]) -> List[Dict[str, Any]]:
+    if job is None:
         return []
 
+    saved_entries = getattr(job, "saved_selection_sets", None)
+    if isinstance(saved_entries, list):
+        return list(saved_entries)
+
+    if isinstance(job.awaiting_payload, dict):
+        raw_sets = job.awaiting_payload.get("review_filter_sets")
+        if isinstance(raw_sets, list):
+            return list(raw_sets)
+
+    return []
+
+
+def _persist_saved_review_filter_entries(job: Job, entries: List[Dict[str, Any]]) -> None:
+    pruned_entries = list(entries[:50])
+    job.saved_selection_sets = pruned_entries
+
+    if isinstance(job.awaiting_payload, dict):
+        payload = dict(job.awaiting_payload or {})
+        payload["review_filter_sets"] = pruned_entries
+        job.awaiting_payload = refresh_gate_payload(payload, job.output_dir)
+        _write_gate_snapshot(job)
+
+
+def _serialized_saved_review_filter_sets(job: Optional[Job]) -> Optional[List[Dict[str, Any]]]:
+    entries = _saved_review_filter_entries(job)
+    return entries or None
+
+
+def _iter_saved_review_filter_sets(job: Optional[Job]) -> List[SavedReviewFilterSet]:
     saved_sets: List[SavedReviewFilterSet] = []
-    for entry in raw_sets:
+    for entry in _saved_review_filter_entries(job):
         try:
             saved_sets.append(SavedReviewFilterSet.model_validate(entry))
         except Exception:
@@ -5500,16 +5539,14 @@ async def save_review_filter_set(
     request: SaveReviewFilterSetRequest,
     session: AsyncSession = Depends(get_session),
 ):
-    """Persist a named frozen review dataset for paused review workflows."""
+    """Persist a named frozen review dataset for review or completed generator workflows."""
     result = await session.execute(select(Job).where(Job.id == job_id))
     job = result.scalar_one_or_none()
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    payload = dict(job.awaiting_payload or {})
-    existing_sets = payload.get("review_filter_sets")
-    filter_sets = list(existing_sets) if isinstance(existing_sets, list) else []
+    filter_sets = _saved_review_filter_entries(job)
 
     filter_name = str(request.name or "").strip() or f"Saved dataset {len(filter_sets) + 1}"
     saved_entry = {
@@ -5522,12 +5559,10 @@ async def save_review_filter_set(
         "filter_state": dict(request.filter_state or {}),
     }
     filter_sets.insert(0, saved_entry)
-    payload["review_filter_sets"] = filter_sets[:50]
-    job.awaiting_payload = refresh_gate_payload(payload, job.output_dir)
-    _write_gate_snapshot(job)
+    _persist_saved_review_filter_entries(job, filter_sets)
     await session.commit()
 
-    saved_models = [SavedReviewFilterSet.model_validate(entry) for entry in payload["review_filter_sets"]]
+    saved_models = _iter_saved_review_filter_sets(job)
     return SaveReviewFilterSetResponse(
         message=f"Saved review dataset '{filter_name}'.",
         filter_set=SavedReviewFilterSet.model_validate(saved_entry),
@@ -5541,28 +5576,24 @@ async def delete_review_filter_set(
     filter_set_id: str,
     session: AsyncSession = Depends(get_session),
 ):
-    """Remove a saved review dataset from a paused parent job."""
+    """Remove a saved review dataset from a review or completed generator job."""
     result = await session.execute(select(Job).where(Job.id == job_id))
     job = result.scalar_one_or_none()
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    payload = dict(job.awaiting_payload or {})
-    existing_sets = payload.get("review_filter_sets")
-    filter_sets = list(existing_sets) if isinstance(existing_sets, list) else []
+    filter_sets = _saved_review_filter_entries(job)
     next_sets = [entry for entry in filter_sets if str(entry.get("id") or "") != filter_set_id]
     if len(next_sets) == len(filter_sets):
         raise HTTPException(status_code=404, detail="Saved review dataset not found")
 
-    payload["review_filter_sets"] = next_sets
-    job.awaiting_payload = refresh_gate_payload(payload, job.output_dir)
-    _write_gate_snapshot(job)
+    _persist_saved_review_filter_entries(job, next_sets)
     await session.commit()
 
     return DeleteReviewFilterSetResponse(
         message="Deleted saved review dataset.",
-        filter_sets=[SavedReviewFilterSet.model_validate(entry) for entry in next_sets],
+        filter_sets=_iter_saved_review_filter_sets(job),
     )
 
 

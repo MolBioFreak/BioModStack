@@ -65,6 +65,7 @@ class Job(Base):
     selection_dataset_name = Column(String(255), nullable=True)
     selected_loop_scope = Column(JSON, nullable=True)  # Selected loops / stage scope for re-orchestration
     provenance = Column(JSON, nullable=True)  # Optional lineage/provenance snapshot for the job
+    saved_selection_sets = Column(JSON, default=list)
     queue_status = Column(String(20), nullable=False, default="queued")  # queued|running|completed|failed|paused
     paused = Column(Boolean, default=False)  # User manually paused this job
     pinned_gpu = Column(Integer, nullable=True)  # User override: force job to specific GPU (0-3)
@@ -455,11 +456,15 @@ class Primer(Base):
     id = Column(String(36), primary_key=True)
     name = Column(String(255), nullable=False)
     sequence = Column(String(500), nullable=False)  # 5' to 3' sequence
+    sequence_type = Column(String(10), nullable=False, default="dna")  # dna, rna
     
     # Calculated properties (cached for filtering)
     length = Column(Integer, nullable=False)
     tm = Column(Float, nullable=True)  # Melting temperature (°C)
     gc_percent = Column(Float, nullable=True)  # GC content percentage
+    tm_algorithm = Column(String(100), nullable=True)
+    tm_salt_correction = Column(String(100), nullable=True)
+    tm_settings = Column(JSON, nullable=True)
     
     # Primer type and usage
     primer_type = Column(String(50), default="general")  # general, forward, reverse, sequencing, qpcr
@@ -504,6 +509,8 @@ async def _ensure_schema(conn):
     await _ensure_table_columns(conn, "jobs", Job.__table__.columns)
     await _ensure_table_columns(conn, "designs", Design.__table__.columns)
     await _ensure_table_columns(conn, "analysis_runs", AnalysisRun.__table__.columns)
+    await _ensure_table_columns(conn, "nucleotide_sequences", NucleotideSequence.__table__.columns)
+    await _ensure_table_columns(conn, "primers", Primer.__table__.columns)
 
 
 async def _ensure_table_columns(conn, table_name: str, columns):

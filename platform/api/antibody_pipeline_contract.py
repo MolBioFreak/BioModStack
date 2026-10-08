@@ -66,6 +66,8 @@ def infer_antibody_artifact_class_from_stage(stage_family: Any, stage_mode: Any)
 
     if family == "rfantibody":
         return BACKBONE_COMPLEX
+    if family == "boltzgen" and mode in {"nanobody_binder", "antibody_binder"}:
+        return SEQUENCE_DESIGNED_COMPLEX
     if family in {"fampnn", "antifold", "proteinmpnn", "frustrampnn"}:
         return SEQUENCE_DESIGNED_COMPLEX
     if family == "validation":

@@ -50,14 +50,32 @@ type CheckpointMode = 'both' | 'diverse' | 'adherence';
 interface BoltzGenTemplateProps {
     onBack: () => void;
     initialValues?: Record<string, any>;
+    hideHeader?: boolean;
+    hideCancelButton?: boolean;
+    forcedMode?: DesignMode;
+    submitLabel?: string;
+    title?: string;
+    description?: string;
+    onSubmitted?: () => void;
 }
 
-export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProps) {
+export function BoltzGenTemplate({
+    onBack,
+    initialValues,
+    hideHeader = false,
+    hideCancelButton = false,
+    forcedMode,
+    submitLabel,
+    title,
+    description,
+    onSubmitted,
+}: BoltzGenTemplateProps) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
+    const allowModeSelection = !forcedMode;
 
     // Mode selection
-    const [mode, setMode] = useState<DesignMode>(initialValues?.mode || 'ligand_binder');
+    const [mode, setMode] = useState<DesignMode>((forcedMode || initialValues?.mode || 'ligand_binder') as DesignMode);
 
     // Job metadata
     const [jobName, setJobName] = useState(initialValues?.name || 'boltzgen_design');
@@ -307,6 +325,10 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
         mutationFn: submitJob,
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
+            if (onSubmitted) {
+                onSubmitted();
+                return;
+            }
             navigate('/');
         },
         onError: (error: any) => {
@@ -315,6 +337,12 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
             window.alert('Job submission failed:\n' + message);
         }
     });
+
+    useEffect(() => {
+        if (forcedMode && mode !== forcedMode) {
+            setMode(forcedMode);
+        }
+    }, [forcedMode, mode]);
 
     const handleSubmit = async () => {
         if (!isValid) return;
@@ -346,6 +374,12 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
             if (useFrameworkTemplate && nanobodyFramework.trim()) {
                 params.boltzgen_nanobody_framework = nanobodyFramework;
             }
+            params.framework_type = 'nanobody';
+            params.antibody_format = 'vhh';
+            params.antibody_chains = 'H';
+            params.binder_chains = 'H';
+            params.stage_family = 'boltzgen';
+            params.stage_mode = 'nanobody_binder';
             params.boltzgen_cdr_h1_length = cdrH1Length;
             params.boltzgen_cdr_h2_length = cdrH2Length;
             params.boltzgen_cdr_h3_length = cdrH3Length;
@@ -367,6 +401,10 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
             } else if (targetSource?.url) {
                 params.boltzgen_target_pdb_url = targetSource.url;
             }
+            if (selectedChain) {
+                params.antigen_chains = selectedChain;
+                params.target_chains = selectedChain;
+            }
             // Ligand SMILES as fallback if no PDB target
             if (!targetSource && ligandSmiles.trim()) {
                 params.boltzgen_ligand_smiles = ligandSmiles;
@@ -381,6 +419,10 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
         // Advanced options
         if (bindingSiteResidues.trim()) {
             params.boltzgen_binding_site_residues = bindingSiteResidues;
+            if (mode === 'nanobody_binder') {
+                params.epitope_residues = bindingSiteResidues;
+                params.selected_residues = bindingSiteResidues;
+            }
         }
 
         // Filtering parameters
@@ -483,26 +525,37 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
     return (
         <div className="space-y-6">
             {/* Header */}
-            <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                    <button
-                        onClick={onBack}
-                        className="p-2 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white transition-colors"
-                    >
-                        ← Back
-                    </button>
-                    <div>
-                        <h2 className="text-2xl font-bold text-white">Ligand-Aware Binder Design</h2>
-                        <p className="text-slate-400 text-sm">Design proteins that bind small molecules using BoltzGen</p>
+            {!hideHeader ? (
+                <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                        <button
+                            onClick={onBack}
+                            className="p-2 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white transition-colors"
+                        >
+                            ← Back
+                        </button>
+                        <div>
+                            <h2 className="text-2xl font-bold text-white">{title || 'Ligand-Aware Binder Design'}</h2>
+                            <p className="text-slate-400 text-sm">{description || 'Design proteins that bind small molecules using BoltzGen'}</p>
+                        </div>
                     </div>
+                    <button
+                        onClick={() => setShowTemplateManager(true)}
+                        className="px-3 py-2 text-sm bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300 transition-colors"
+                    >
+                        Templates
+                    </button>
                 </div>
-                <button
-                    onClick={() => setShowTemplateManager(true)}
-                    className="px-3 py-2 text-sm bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300 transition-colors"
-                >
-                    Templates
-                </button>
-            </div>
+            ) : (
+                <div className="flex justify-end">
+                    <button
+                        onClick={() => setShowTemplateManager(true)}
+                        className="px-3 py-2 text-sm bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300 transition-colors"
+                    >
+                        Templates
+                    </button>
+                </div>
+            )}
 
             {/* Job Name & GPU Pinning */}
             <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-6">
@@ -573,16 +626,20 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
 
             {/* Mode Selection */}
             <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-6">
-                <label className="block text-sm font-medium text-slate-300 mb-3">Design Mode</label>
-                <div className="grid grid-cols-3 gap-3">
-                    {[
+                <label className="block text-sm font-medium text-slate-300 mb-3">
+                    {allowModeSelection ? 'Design Mode' : 'Generation Engine'}
+                </label>
+                <div className={`grid gap-3 ${allowModeSelection ? 'grid-cols-3' : 'grid-cols-1'}`}>
+                    {(allowModeSelection ? [
                         { id: 'nanobody_binder', name: 'Nanobody Binder', desc: 'VHH single-domain antibody design' },
                         { id: 'ligand_binder', name: 'Ligand Binder', desc: 'Custom SMILES input' },
                         { id: 'ntp_binder', name: 'NTP Binder', desc: 'Nucleotide binding (DNA/RNA polymerases)' },
                         { id: 'peptide_binder', name: 'Peptide Binder', desc: 'Short peptide design' },
                         { id: 'scaffold_around_ligand', name: 'Scaffold Around', desc: 'Build around fixed ligand pose' },
                         { id: 'backbone_docking', name: 'Backbone Docking', desc: 'Dock to existing structure' },
-                    ].map(m => (
+                    ] : [
+                        { id: 'nanobody_binder', name: 'BoltzGen Nanobody', desc: 'All-atom nanobody generation with native BoltzGen setup, wired into Antibody Refinement downstream.' },
+                    ]).map(m => (
                         <button
                             key={m.id}
                             onClick={() => {
@@ -1982,18 +2039,20 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
 
             {/* Submit */}
             <div className="flex justify-end gap-3">
-                <button
-                    onClick={onBack}
-                    className="px-6 py-3 rounded-lg bg-slate-700 text-slate-300 hover:bg-slate-600 transition-colors"
-                >
-                    Cancel
-                </button>
+                {!hideCancelButton && (
+                    <button
+                        onClick={onBack}
+                        className="px-6 py-3 rounded-lg bg-slate-700 text-slate-300 hover:bg-slate-600 transition-colors"
+                    >
+                        Cancel
+                    </button>
+                )}
                 <button
                     onClick={handleSubmit}
                     disabled={!isValid || submitMutation.isPending}
                     className="px-8 py-3 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-white font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg shadow-amber-500/20"
                 >
-                    {submitMutation.isPending ? 'Submitting...' : 'Launch BoltzGen'}
+                    {submitMutation.isPending ? 'Submitting...' : (submitLabel || 'Launch BoltzGen')}
                 </button>
             </div>
 

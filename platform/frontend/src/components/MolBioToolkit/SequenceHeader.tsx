@@ -4,6 +4,7 @@
 
 import { ExportDropdown } from './ExportDropdown';
 import type { SequenceData } from './types';
+import { sequenceUnitLabel } from './utils/nucleotides';
 
 type ViewMode = 'linear' | 'circular' | 'both';
 
@@ -22,6 +23,7 @@ interface SequenceHeaderProps {
     onViewModeChange?: (mode: ViewMode) => void;
     showGCTrack?: boolean;
     onGCTrackToggle?: () => void;
+    onOpenLibrary?: () => void;
 }
 
 function calculateGC(sequence: string): number {
@@ -44,9 +46,11 @@ export function SequenceHeader({
     viewMode = 'both',
     onViewModeChange,
     showGCTrack = true,
-    onGCTrackToggle
+    onGCTrackToggle,
+    onOpenLibrary,
 }: SequenceHeaderProps) {
     const gcContent = calculateGC(sequenceData.sequence);
+    const unitLabel = sequenceUnitLabel(sequenceData.sequenceType === 'rna' ? 'rna' : 'dna');
 
     return (
         <div className="sequence-header flex items-center justify-between px-4 py-2 bg-slate-800 border-b border-slate-700">
@@ -68,7 +72,7 @@ export function SequenceHeader({
                 </div>
 
                 <div className="flex items-center gap-3 text-sm text-slate-400">
-                    <span>{sequenceData.sequence.length.toLocaleString()} bp</span>
+                    <span>{sequenceData.sequence.length.toLocaleString()} {unitLabel}</span>
                     <span>•</span>
                     <span>GC: {gcContent}%</span>
                     <span>•</span>
@@ -84,6 +88,19 @@ export function SequenceHeader({
 
             {/* Right: Actions */}
             <div className="flex items-center gap-2">
+                {onOpenLibrary && (
+                    <button
+                        onClick={onOpenLibrary}
+                        className="flex items-center gap-1 px-2 py-1.5 hover:bg-slate-700 rounded text-sm text-slate-300 transition-colors"
+                        title="Open molecular library, import, or build a construct"
+                    >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+                        </svg>
+                        Acquire
+                    </button>
+                )}
+
                 {/* Undo/Redo */}
                 <div className="flex items-center border-r border-slate-600 pr-2 mr-2">
                     <button
@@ -146,7 +163,7 @@ export function SequenceHeader({
                     </div>
                 )}
 
-                {/* GC Track Toggle */}
+                {/* Analytics Track Toggle */}
                 {onGCTrackToggle && (
                     <button
                         onClick={onGCTrackToggle}
@@ -154,12 +171,12 @@ export function SequenceHeader({
                                 ? 'text-emerald-400 hover:bg-slate-700'
                                 : 'text-slate-500 hover:bg-slate-700'
                             }`}
-                        title={showGCTrack ? 'Hide GC content track' : 'Show GC content track'}
+                        title={showGCTrack ? 'Hide analytics tracks' : 'Show analytics tracks'}
                     >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                         </svg>
-                        GC%
+                        Tracks
                     </button>
                 )}
 
@@ -167,9 +184,11 @@ export function SequenceHeader({
                 {onAutoAnnotate && (
                     <button
                         onClick={onAutoAnnotate}
-                        disabled={isAnnotating || !sequenceData.sequence}
+                        disabled={isAnnotating || !sequenceData.sequence || sequenceData.sequenceType === 'rna'}
                         className="flex items-center gap-1 px-2 py-1.5 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed rounded text-sm text-slate-300 transition-colors"
-                        title="Auto-detect common plasmid features (promoters, ori, resistance genes)"
+                        title={sequenceData.sequenceType === 'rna'
+                            ? 'Auto-annotation is currently DNA/plasmid-focused'
+                            : 'Auto-detect common plasmid features (promoters, ori, resistance genes)'}
                     >
                         {isAnnotating ? (
                             <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">

@@ -1387,6 +1387,8 @@ export interface NucleotideSequence {
     accession: string | null;
     source_file: string | null;
     gc_content: number | null;
+    entity_kind?: string;
+    topology?: 'circular' | 'linear';
     created_at: string;
     updated_at: string | null;
 }
@@ -1395,12 +1397,18 @@ export interface NucleotideSequenceListItem {
     id: string;
     name: string;
     description: string | null;
-    sequence_type: string;
+    sequence_type: 'dna' | 'rna';
     is_circular: boolean;
     length: number;
     gc_content: number | null;
     feature_count: number;
+    organism: string | null;
+    accession: string | null;
+    source_file: string | null;
+    entity_kind: string;
+    topology: 'circular' | 'linear';
     created_at: string;
+    updated_at: string | null;
 }
 
 export interface NucleotideSequenceCreate {
@@ -1416,8 +1424,18 @@ export interface NucleotideSequenceCreate {
     source_file?: string;
 }
 
-export const fetchNucleotideSequences = (limit: number = 100, offset: number = 0) =>
-    api.get<NucleotideSequenceListItem[]>('/api/sequences/', { params: { limit, offset } });
+export interface FetchNucleotideSequencesParams {
+    limit?: number;
+    offset?: number;
+    search?: string;
+    sequence_type?: 'dna' | 'rna';
+    topology?: 'all' | 'circular' | 'linear';
+    sort_by?: 'updated_at' | 'created_at' | 'name' | 'length' | 'gc_content' | 'feature_count';
+    sort_desc?: boolean;
+}
+
+export const fetchNucleotideSequences = (params: FetchNucleotideSequencesParams = {}) =>
+    api.get<NucleotideSequenceListItem[]>('/api/sequences/', { params });
 
 export const fetchNucleotideSequence = (id: string) =>
     api.get<NucleotideSequence>(`/api/sequences/${id}`);

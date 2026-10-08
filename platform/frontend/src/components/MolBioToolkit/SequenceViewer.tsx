@@ -86,7 +86,7 @@ export interface Feature {
     strand: 1 | -1;
     color?: string;
     description?: string;
-    notes?: Record<string, string>;
+    notes?: Record<string, unknown>;
 }
 
 export interface Primer {
@@ -109,6 +109,7 @@ export interface Translation {
 
 export interface SequenceData {
     name: string;
+    description?: string;
     sequence: string;
     circular: boolean;
     sequenceType: 'dna' | 'rna' | 'protein';
@@ -321,6 +322,7 @@ export function SequenceViewer({
 
 export const EMPTY_SEQUENCE: SequenceData = {
     name: "Untitled Sequence",
+    description: "",
     sequence: "",
     circular: false,
     sequenceType: "dna",

@@ -2,9 +2,13 @@
  * SearchPanel - Find sequences, motifs, ORFs, and patterns in the current sequence
  */
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import type { SequenceData, HighlightedRegion } from '../types';
 import type { Translation } from '../SequenceViewer';
+import {
+    findPatternPositions,
+    reverseComplementSequence,
+} from '../utils/nucleotides';
 
 interface SearchPanelProps {
     sequenceData: SequenceData;
@@ -105,26 +109,16 @@ const MOTIF_CATEGORIES = [
     },
 ];
 
-// Generate reverse complement
-function reverseComplement(seq: string): string {
-    const complement: Record<string, string> = {
-        'A': 'T', 'T': 'A', 'G': 'C', 'C': 'G',
-        'a': 't', 't': 'a', 'g': 'c', 'c': 'g',
-        'N': 'N', 'n': 'n',
-    };
-    return seq.split('').reverse().map(c => complement[c] || c).join('');
-}
-
 // Find Open Reading Frames
 function findORFs(sequence: string, minLength: number = 100): ORF[] {
     const orfs: ORF[] = [];
-    const seq = sequence.toUpperCase();
+    const seq = sequence.toUpperCase().replace(/U/g, 'T');
     const startCodon = 'ATG';
     const stopCodons = ['TAA', 'TAG', 'TGA'];
 
     // Search all 6 reading frames (3 forward, 3 reverse)
     for (let strand of [1, -1] as const) {
-        const workSeq = strand === 1 ? seq : reverseComplement(seq);
+        const workSeq = strand === 1 ? seq : reverseComplementSequence(seq, 'dna');
 
         for (let frame = 0; frame < 3; frame++) {
             let i = frame;
@@ -179,6 +173,40 @@ export function SearchPanel({
     const [minOrfLength, setMinOrfLength] = useState(100);
     const [orfs, setOrfs] = useState<ORF[]>([]);
     const [selectedOrf, setSelectedOrf] = useState<number | null>(null);
+    const sequenceType = sequenceData.sequenceType === 'rna' ? 'rna' : 'dna';
+
+    const buildSearchHighlights = useCallback((results: SearchResult[], selectedIndex: number | null): HighlightedRegion[] => {
+        const sequenceLength = sequenceData.sequence.length;
+        return results.flatMap((result, index) => {
+            const color = selectedIndex === index ? '#f59e0b' : (result.strand === 1 ? '#22c55e' : '#ef4444');
+            const displayEnd = result.end > sequenceLength && sequenceLength > 0
+                ? ((result.end - 1) % sequenceLength) + 1
+                : result.end;
+            const label = `${result.strand === 1 ? '→' : '←'} ${result.start + 1}-${displayEnd}${result.end > sequenceLength ? ' (wrap)' : ''}`;
+            if (result.end > sequenceLength && sequenceLength > 0) {
+                return [
+                    {
+                        start: result.start,
+                        end: sequenceLength,
+                        color,
+                        label,
+                    },
+                    {
+                        start: 0,
+                        end: result.end % sequenceLength,
+                        color,
+                        label,
+                    },
+                ];
+            }
+            return [{
+                start: result.start,
+                end: result.end,
+                color,
+                label,
+            }];
+        });
+    }, [sequenceData.sequence.length]);
 
     // Perform search
     const searchResults = useMemo((): SearchResult[] => {
@@ -206,31 +234,36 @@ export function SearchPanel({
                     if (match[0].length === 0) regex.lastIndex++;
                 }
             } else {
-                // Simple string search
-                let pos = sequence.indexOf(query);
-                while (pos !== -1) {
+                const seen = new Set<string>();
+                const forwardPositions = findPatternPositions(sequenceData.sequence, query, {
+                    circular: sequenceData.circular,
+                });
+                for (const pos of forwardPositions) {
                     results.push({
                         start: pos,
                         end: pos + query.length,
                         strand: 1,
                         sequence: sequenceData.sequence.substring(pos, pos + query.length)
                     });
-                    pos = sequence.indexOf(query, pos + 1);
+                    seen.add(`${pos}:1`);
                 }
-            }
 
-            // Search reverse strand if enabled
-            if (searchBothStrands && !useRegex) {
-                const revQuery = reverseComplement(query);
-                let pos = sequence.indexOf(revQuery);
-                while (pos !== -1) {
-                    results.push({
-                        start: pos,
-                        end: pos + revQuery.length,
-                        strand: -1,
-                        sequence: sequenceData.sequence.substring(pos, pos + revQuery.length)
+                if (searchBothStrands) {
+                    const revQuery = reverseComplementSequence(query, sequenceType);
+                    const reversePositions = findPatternPositions(sequenceData.sequence, revQuery, {
+                        circular: sequenceData.circular,
                     });
-                    pos = sequence.indexOf(revQuery, pos + 1);
+                    for (const pos of reversePositions) {
+                        const key = `${pos}:-1`;
+                        if (seen.has(key)) continue;
+                        results.push({
+                            start: pos,
+                            end: pos + revQuery.length,
+                            strand: -1,
+                            sequence: sequenceData.sequence.substring(pos, pos + revQuery.length)
+                        });
+                        seen.add(key);
+                    }
                 }
             }
         } catch (e) {
@@ -242,26 +275,30 @@ export function SearchPanel({
         return results.sort((a, b) => a.start - b.start);
     }, [searchQuery, sequenceData.sequence, searchBothStrands, caseSensitive, useRegex]);
 
-    // Update highlights when results change
-    const updateHighlights = useCallback(() => {
-        const regions: HighlightedRegion[] = searchResults.map((r, i) => ({
-            start: r.start,
-            end: r.end,
-            color: selectedResult === i ? '#f59e0b' : (r.strand === 1 ? '#22c55e' : '#ef4444'),
-            label: `${r.strand === 1 ? '→' : '←'} ${r.start + 1}-${r.end}`
-        }));
-        onHighlight(regions);
-    }, [searchResults, selectedResult, onHighlight]);
+    useEffect(() => {
+        if (activeTab !== 'search') return;
+        if (!searchQuery.trim() || searchResults.length === 0) {
+            onHighlight([]);
+            return;
+        }
+        onHighlight(buildSearchHighlights(searchResults, selectedResult));
+    }, [activeTab, searchQuery, searchResults, selectedResult, onHighlight, buildSearchHighlights]);
+
+    useEffect(() => {
+        if (selectedResult === null) return;
+        if (selectedResult >= searchResults.length) {
+            setSelectedResult(searchResults.length > 0 ? 0 : null);
+        }
+    }, [selectedResult, searchResults.length]);
 
     // Navigate to result
     const goToResult = useCallback((index: number) => {
         if (index < 0 || index >= searchResults.length) return;
         setSelectedResult(index);
-        updateHighlights();
         if (onJumpToPosition) {
             onJumpToPosition(searchResults[index].start);
         }
-    }, [searchResults, onJumpToPosition, updateHighlights]);
+    }, [searchResults, onJumpToPosition]);
 
     // Quick motif search
     const searchMotif = useCallback((pattern: string, isRegex?: boolean) => {
@@ -292,18 +329,19 @@ export function SearchPanel({
 
     // Find ORFs
     const runOrfFinder = useCallback(() => {
-        const foundOrfs = findORFs(sequenceData.sequence, minOrfLength);
-        setOrfs(foundOrfs);
+            const foundOrfs = findORFs(sequenceData.sequence, minOrfLength);
+            setOrfs(foundOrfs);
 
         // Notify parent to display ORFs
-        if (onOrfsFound) {
-            const translations = foundOrfs.map(orf => ({
-                start: orf.start,
-                end: orf.end,
-                strand: orf.strand
-            }));
-            onOrfsFound(translations);
-        }
+            if (onOrfsFound) {
+                const translations = foundOrfs.map(orf => ({
+                    start: orf.start,
+                    end: orf.end,
+                    strand: orf.strand,
+                    frame: orf.frame as 1 | 2 | 3,
+                }));
+                onOrfsFound(translations);
+            }
 
         // Highlight ORFs
         const regions: HighlightedRegion[] = foundOrfs.map((orf, i) => ({
@@ -378,7 +416,13 @@ export function SearchPanel({
                                 className="flex-1 px-2 py-1.5 bg-slate-800 border border-slate-600 rounded text-sm font-mono focus:outline-none focus:border-blue-500"
                             />
                             <button
-                                onClick={updateHighlights}
+                                onClick={() => {
+                                    if (searchResults.length > 0) {
+                                        setSelectedResult((current) => current ?? 0);
+                                    } else {
+                                        onHighlight([]);
+                                    }
+                                }}
                                 disabled={!searchQuery.trim()}
                                 className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-600 disabled:cursor-not-allowed rounded text-xs font-medium transition-colors"
                             >

@@ -2,13 +2,13 @@
 # Two-phase pipeline: Generation → Validation & Scoring
 
 id: antibody_denovo
-name: De Novo Antibody Design
+name: De Novo Nanobody Toolkit
 version: 1.0.0
 category: antibody_design
 description: >
-  End-to-end pipeline for designing novel antibodies targeting a specified epitope.
-  Phase 1 generates CDR backbones and sequences. Phase 2 validates structure,
-  scores immunogenicity, stability, and supports downstream modular refinement.
+  De novo nanobody design toolkit with multiple upstream generators.
+  Use RFantibody or BoltzGen nanobody generation, then reopen selected outputs
+  in Antibody Refinement for staged redesign, validation, and downstream review.
 
 workflow_type: pipeline
 container: apptainer/antibody_tools.sif
@@ -39,9 +39,11 @@ outputs:
 # Pipeline steps (for UI step-by-step configuration)
 steps:
   - id: backbone
-    name: CDR Backbone Generation
-    model: rfantibody
-    description: Generate antibody CDR loop backbones using fine-tuned RFdiffusion
+    name: De Novo Generation
+    models:
+      - rfantibody
+      - boltzgen
+    description: Generate nanobody candidates with RFantibody or BoltzGen, depending on the chosen de novo engine
     required: true
 
   - id: sequence

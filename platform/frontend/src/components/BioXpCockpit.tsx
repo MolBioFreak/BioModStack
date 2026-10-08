@@ -52,7 +52,8 @@ import {
     useThermalHardReset,
     useThermalSnapshot
 } from '../lib/bioxpClient';
-import type { AxisName, AxisStatus, CameraControlRow, ChillerBankName, MotionPowerStatus, ThermalBankName } from '../lib/bioxpClient';
+import type { AxisMotionResult, AxisName, AxisStatus, CameraControlRow, ChillerBankName, MotionPowerStatus, ThermalBankName } from '../lib/bioxpClient';
+import { BioXpProtocolRunner } from './BioXpProtocolRunner';
 
 const getErrorMessage = (error: unknown) => {
     if (error instanceof Error) {
@@ -275,9 +276,13 @@ const AxisControls = ({
     const homeAxis = useHomeAxis();
     const [steps, setSteps] = useState(100);
     const [absolutePosition, setAbsolutePosition] = useState(0);
-    const [lastMotionResult, setLastMotionResult] = useState<any>(null);
+    const [lastMotionResult, setLastMotionResult] = useState<AxisMotionResult | null>(null);
     const [commandStartPosition, setCommandStartPosition] = useState<number | null>(null);
     const [commandLabel, setCommandLabel] = useState<string | null>(null);
+    const [captureBundle, setCaptureBundle] = useState(true);
+    const [dryRunBundle, setDryRunBundle] = useState(false);
+    const [operatorNote, setOperatorNote] = useState('');
+    const [snapshotRefsText, setSnapshotRefsText] = useState('');
     const localMotionBusy = moveRelative.isPending || moveAbsolute.isPending || homeAxis.isPending;
     const { data, isLoading, isError, error, refetch } = useAxisStatus(
         axis,
@@ -311,13 +316,29 @@ const AxisControls = ({
         commandStartPosition != null && typeof reportedPosition === 'number'
             ? reportedPosition - commandStartPosition
             : null;
+    const prepPolicyNote = lastMotionResult?.prep_policy?.note;
+    const truthSummary = lastMotionResult?.motion_truth?.summary;
+    const truthEvidenceLevel = lastMotionResult?.motion_truth?.evidence_level?.replaceAll('_', ' ');
+    const artifactBundle = lastMotionResult?.artifact_bundle;
+    const artifactSnapshotCount = artifactBundle?.snapshot_refs?.length ?? 0;
+    const normalizedOperatorNote = operatorNote.trim();
+    const normalizedSnapshotRefs = snapshotRefsText
+        .split(/\n|,/)
+        .map((value) => value.trim())
+        .filter(Boolean);
+    const motionArtifactPayload = {
+        capture_bundle: captureBundle,
+        dry_run_bundle: captureBundle ? dryRunBundle : false,
+        operator_note: normalizedOperatorNote || undefined,
+        snapshot_refs: normalizedSnapshotRefs,
+    };
 
     const startCommand = (labelText: string) => {
         setCommandLabel(labelText);
         setCommandStartPosition(typeof reportedPosition === 'number' ? reportedPosition : null);
     };
 
-    const finishCommand = (payload: any) => {
+    const finishCommand = (payload: AxisMotionResult) => {
         setLastMotionResult(payload);
         setCommandLabel(null);
         if (typeof payload?.position_after?.position === 'number') {
@@ -372,7 +393,7 @@ const AxisControls = ({
                     onClick={() => {
                         startCommand(`REL ${-Math.abs(steps)}`);
                         moveRelative.mutate(
-                            { axis, steps: -Math.abs(steps) },
+                            { axis, steps: -Math.abs(steps), ...motionArtifactPayload },
                             {
                                 onSuccess: (payload) => finishCommand(payload),
                                 onError: () => setCommandLabel(null),
@@ -388,7 +409,7 @@ const AxisControls = ({
                     onClick={() => {
                         startCommand(`REL ${Math.abs(steps)}`);
                         moveRelative.mutate(
-                            { axis, steps: Math.abs(steps) },
+                            { axis, steps: Math.abs(steps), ...motionArtifactPayload },
                             {
                                 onSuccess: (payload) => finishCommand(payload),
                                 onError: () => setCommandLabel(null),
@@ -404,7 +425,7 @@ const AxisControls = ({
                     onClick={() => {
                         startCommand('HOME');
                         homeAxis.mutate(
-                            { axis },
+                            { axis, ...motionArtifactPayload },
                             {
                                 onSuccess: (payload) => finishCommand(payload),
                                 onError: () => setCommandLabel(null),
@@ -430,7 +451,7 @@ const AxisControls = ({
                     onClick={() => {
                         startCommand(`ABS ${absolutePosition}`);
                         moveAbsolute.mutate(
-                            { axis, position_steps: absolutePosition },
+                            { axis, position_steps: absolutePosition, ...motionArtifactPayload },
                             {
                                 onSuccess: (payload) => finishCommand(payload),
                                 onError: () => setCommandLabel(null),
@@ -444,14 +465,85 @@ const AxisControls = ({
                 </button>
             </div>
 
+            <div className="space-y-2 rounded border border-border-primary bg-surface/40 p-3">
+                <div className="flex flex-wrap items-center gap-3 text-[10px] text-content-muted">
+                    <label className="inline-flex items-center gap-2">
+                        <input
+                            type="checkbox"
+                            checked={captureBundle}
+                            onChange={(e) => {
+                                const checked = e.target.checked;
+                                setCaptureBundle(checked);
+                                if (!checked) {
+                                    setDryRunBundle(false);
+                                }
+                            }}
+                        />
+                        Capture validation bundle
+                    </label>
+                    <label className="inline-flex items-center gap-2">
+                        <input
+                            type="checkbox"
+                            checked={dryRunBundle}
+                            disabled={!captureBundle}
+                            onChange={(e) => setDryRunBundle(e.target.checked)}
+                        />
+                        Dry-run bundle only
+                    </label>
+                </div>
+                <textarea
+                    value={operatorNote}
+                    onChange={(e) => setOperatorNote(e.target.value)}
+                    rows={2}
+                    placeholder="Operator note for supervised validation"
+                    className="w-full rounded border border-border-primary bg-surface px-3 py-2 text-[11px] text-content"
+                />
+                <textarea
+                    value={snapshotRefsText}
+                    onChange={(e) => setSnapshotRefsText(e.target.value)}
+                    rows={2}
+                    placeholder="Snapshot refs or image paths (comma or newline separated)"
+                    className="w-full rounded border border-border-primary bg-surface px-3 py-2 text-[11px] text-content"
+                />
+            </div>
+
             {(commandLabel || lastMotionResult) && (
-                <div className="text-[10px] text-content-muted font-mono">
-                    {commandLabel ? `Command: ${commandLabel}` : null}
-                    {commandLabel && liveDelta != null ? ` | live delta ${liveDelta}` : null}
-                    {!commandLabel && lastMotionResult?.position_delta != null ? `Last move delta: ${lastMotionResult.position_delta}` : null}
-                    {!commandLabel && lastMotionResult?.wait?.elapsed_ms != null ? ` | settle ${lastMotionResult.wait.elapsed_ms} ms` : null}
-                    {!commandLabel && lastMotionResult?.home?.position_delta != null ? `Last home delta: ${lastMotionResult.home.position_delta}` : null}
-                    {!commandLabel && lastMotionResult?.home?.elapsed_ms != null ? ` | home ${lastMotionResult.home.elapsed_ms} ms` : null}
+                <div className="space-y-1">
+                    <div className="text-[10px] text-content-muted font-mono">
+                        {commandLabel ? `Command: ${commandLabel}` : null}
+                        {commandLabel && liveDelta != null ? ` | live delta ${liveDelta}` : null}
+                        {!commandLabel && lastMotionResult?.position_delta != null ? `Last move delta: ${lastMotionResult.position_delta}` : null}
+                        {!commandLabel && lastMotionResult?.wait?.elapsed_ms != null ? ` | settle ${lastMotionResult.wait.elapsed_ms} ms` : null}
+                        {!commandLabel && lastMotionResult?.home?.position_delta != null ? `Last home delta: ${lastMotionResult.home.position_delta}` : null}
+                        {!commandLabel && lastMotionResult?.home?.elapsed_ms != null ? ` | home ${lastMotionResult.home.elapsed_ms} ms` : null}
+                    </div>
+                    {!commandLabel && prepPolicyNote && (
+                        <div className="text-[10px] text-content-muted">
+                            Prep policy: {prepPolicyNote}
+                        </div>
+                    )}
+                    {!commandLabel && truthSummary && (
+                        <div className="text-[10px] text-warning">
+                            Truth: {truthEvidenceLevel ?? 'controller only'} — {truthSummary}
+                        </div>
+                    )}
+                    {!commandLabel && lastMotionResult?.message && (
+                        <div className="text-[10px] text-content-muted">
+                            Result: {lastMotionResult.message}
+                        </div>
+                    )}
+                    {!commandLabel && artifactBundle?.bundle_dir && (
+                        <div className="text-[10px] text-success break-all">
+                            Validation bundle: {artifactBundle.bundle_dir}
+                            {artifactBundle.dry_run ? ' (dry-run)' : ''}
+                            {artifactSnapshotCount ? ` | snapshots: ${artifactSnapshotCount}` : ''}
+                        </div>
+                    )}
+                    {!commandLabel && artifactBundle?.operator_note && (
+                        <div className="text-[10px] text-content-muted">
+                            Operator note: {artifactBundle.operator_note}
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -1201,7 +1293,7 @@ const ChillerControlCard = ({ bank, label, enabled }: { bank: ChillerBankName; l
 };
 
 export const BioXpCockpit = () => {
-    const [activeTab, setActiveTab] = useState<'connection' | 'controls' | 'camera'>('connection');
+    const [activeTab, setActiveTab] = useState<'connection' | 'operator' | 'controls' | 'camera'>('connection');
     const [linkageInput, setLinkageInput] = useState('');
     const [cameraDevice, setCameraDevice] = useState('/dev/video0');
     const [snapshot, setSnapshot] = useState<string | null>(null);
@@ -1966,14 +2058,19 @@ export const BioXpCockpit = () => {
                 </div>
             </div>
 
-            <div className="flex gap-1 border-b border-border-secondary">
-                {(['connection', 'controls', 'camera'] as const).map((tab) => (
+            <div className="flex gap-1 border-b border-border-secondary flex-wrap">
+                {([
+                    { key: 'connection', label: 'Linkage & Status' },
+                    { key: 'operator', label: 'Protocol Operator' },
+                    { key: 'controls', label: 'Motion, Latch & Thermals' },
+                    { key: 'camera', label: 'Camera Feed' },
+                ] as const).map((tab) => (
                     <button
-                        key={tab}
-                        onClick={() => setActiveTab(tab)}
-                        className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === tab ? 'border-accent text-accent' : 'border-transparent text-content-muted hover:text-content hover:border-border-primary'}`}
+                        key={tab.key}
+                        onClick={() => setActiveTab(tab.key)}
+                        className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === tab.key ? 'border-accent text-accent' : 'border-transparent text-content-muted hover:text-content hover:border-border-primary'}`}
                     >
-                        {tab === 'connection' ? 'Linkage & Status' : tab === 'controls' ? 'Motion, Latch & Thermals' : 'Camera Feed'}
+                        {tab.label}
                     </button>
                 ))}
             </div>
@@ -2203,6 +2300,14 @@ export const BioXpCockpit = () => {
                         </SectionCard>
                     </div>
                 </div>
+            )}
+
+            {activeTab === 'operator' && (
+                <BioXpProtocolRunner
+                    linkageConfigured={Boolean(linkage?.configured || linkage?.url)}
+                    daemonState={daemonState}
+                    daemonStatusHelp={daemonStatusHelp}
+                />
             )}
 
             {activeTab === 'controls' && (
