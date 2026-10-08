@@ -578,6 +578,14 @@ def _default_fampnn_metrics() -> Dict[str, Any]:
         "binder_sequence": None,
         "binder_length": None,
         "mpnn_score": None,
+        "seq_probs_available": False,
+        "mean_sampled_prob": None,
+        "min_sampled_prob": None,
+        "mean_sampled_log_prob": None,
+        "total_sampled_log_prob": None,
+        "mean_entropy": None,
+        "max_entropy": None,
+        "low_confidence_positions": None,
     }
 
 
@@ -694,6 +702,14 @@ def _extract_fampnn_metrics(
     binder_sequence: Optional[str] = None
     binder_length: Optional[int] = None
     mpnn_score: Optional[float] = None
+    seq_probs_available = False
+    mean_sampled_prob: Optional[float] = None
+    min_sampled_prob: Optional[float] = None
+    mean_sampled_log_prob: Optional[float] = None
+    total_sampled_log_prob: Optional[float] = None
+    mean_entropy: Optional[float] = None
+    max_entropy: Optional[float] = None
+    low_confidence_positions: Optional[List[Dict[str, Any]]] = None
 
     if isinstance(fam_payload, dict):
         chain_avg_raw = fam_payload.get("chain_avg_psce")
@@ -713,6 +729,16 @@ def _extract_fampnn_metrics(
         max_residue_psce = safe_float(fam_payload.get("fampnn_max_residue_psce"))
         min_residue_psce = safe_float(fam_payload.get("fampnn_min_residue_psce"))
         mpnn_score = safe_float(fam_payload.get("mpnn_score") or fam_payload.get("seq_mpnn_score"))
+        seq_probs_available = bool(fam_payload.get("fampnn_seq_probs_available"))
+        mean_sampled_prob = safe_float(fam_payload.get("fampnn_mean_sampled_prob"))
+        min_sampled_prob = safe_float(fam_payload.get("fampnn_min_sampled_prob"))
+        mean_sampled_log_prob = safe_float(fam_payload.get("fampnn_mean_sampled_log_prob"))
+        total_sampled_log_prob = safe_float(fam_payload.get("fampnn_total_sampled_log_prob"))
+        mean_entropy = safe_float(fam_payload.get("fampnn_mean_entropy"))
+        max_entropy = safe_float(fam_payload.get("fampnn_max_entropy"))
+        low_confidence_raw = fam_payload.get("fampnn_low_confidence_positions")
+        if isinstance(low_confidence_raw, list):
+            low_confidence_positions = [item for item in low_confidence_raw if isinstance(item, dict)] or None
 
         sequence_text = fam_payload.get("sequence")
         sequence = str(sequence_text).strip() if isinstance(sequence_text, str) and sequence_text.strip() else None
@@ -748,6 +774,14 @@ def _extract_fampnn_metrics(
         "binder_sequence": binder_sequence,
         "binder_length": binder_length,
         "mpnn_score": mpnn_score,
+        "seq_probs_available": seq_probs_available,
+        "mean_sampled_prob": mean_sampled_prob,
+        "min_sampled_prob": min_sampled_prob,
+        "mean_sampled_log_prob": mean_sampled_log_prob,
+        "total_sampled_log_prob": total_sampled_log_prob,
+        "mean_entropy": mean_entropy,
+        "max_entropy": max_entropy,
+        "low_confidence_positions": low_confidence_positions,
     })
     return metrics
 
