@@ -30,6 +30,8 @@ process RFANTIBODY {
 
     publishDir "${params.out_dir}/run/rfantibody", mode: 'copy', pattern: "*.log"
     publishDir "${params.out_dir}/run/rfantibody", mode: 'copy', pattern: "output/*.pdb"
+    publishDir "${params.out_dir}/run/rfantibody", mode: 'copy', pattern: "output/*.trb"
+    publishDir "${params.out_dir}/run/rfantibody/traj", mode: 'copy', pattern: "output/traj/*.pdb", saveAs: { fn -> fn.replace('output/traj/', '') }
 
     input:
     tuple val(meta), path(target_pdb), val(hotspot_residues), val(gpu_id), val(num_designs_for_this_gpu)
@@ -37,6 +39,8 @@ process RFANTIBODY {
 
     output:
     tuple val(meta), path("output/*.pdb"), emit: designs
+    path "output/*.trb", emit: metadata, optional: true
+    path "output/traj/*.pdb", emit: trajectories, optional: true
     path "rfantibody_${meta.id}.log", emit: log
 
     script:
@@ -279,6 +283,13 @@ PY
 
     # Reduce extremely verbose icecream debug output to keep logs bounded.
     export IC_DISABLE=1
+    export OMP_NUM_THREADS=${task.cpus}
+    export OPENBLAS_NUM_THREADS=${task.cpus}
+    export MKL_NUM_THREADS=${task.cpus}
+    export NUMEXPR_NUM_THREADS=${task.cpus}
+    export VECLIB_MAXIMUM_THREADS=${task.cpus}
+    export TORCH_NUM_THREADS=${task.cpus}
+    echo "CPU thread budget: ${task.cpus}" | tee -a "\${LOG_FILE}"
 
     python3 scripts/rfdiffusion_inference.py \\
         --config-path \$RFA_CONFIG_PATH \\

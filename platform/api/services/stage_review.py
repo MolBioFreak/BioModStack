@@ -8,6 +8,7 @@ parent-visible review rows for stages that pause before final ingestion.
 from __future__ import annotations
 
 import json
+import csv
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +26,8 @@ from services.result_ingester import (
     safe_float,
     safe_int,
 )
+from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_chains
+from services.rfantibody_metadata import load_rfantibody_trb_summary
 
 REVIEWABLE_STAGES = {"post_rfantibody", "post_fampnn"}
 STRUCTURE_PATTERNS = ("*.pdb", "*.cif")
@@ -74,6 +77,34 @@ def normalize_review_path(path_value: Path | str | None) -> Optional[str]:
         return str(resolved)
 
 
+def resolve_nextflow_run_dir(output_dir: Path | str | None) -> Optional[Path]:
+    if not output_dir:
+        return None
+    if isinstance(output_dir, Path):
+        output_path = output_dir.expanduser().resolve()
+    else:
+        output_path = resolve_output_dir(output_dir)
+    if output_path is None or not output_path.exists():
+        return None
+
+    direct_history = output_path / ".nextflow" / "history"
+    if direct_history.exists():
+        return output_path
+
+    nested_candidates: list[tuple[float, Path]] = []
+    for history_path in output_path.glob("*/.nextflow/history"):
+        try:
+            nested_candidates.append((history_path.stat().st_mtime, history_path.parent.parent))
+        except Exception:
+            continue
+
+    if not nested_candidates:
+        return output_path
+
+    nested_candidates.sort(key=lambda item: item[0], reverse=True)
+    return nested_candidates[0][1]
+
+
 def _iter_matching_files(directory: Path, patterns: Iterable[str]) -> list[Path]:
     files: set[Path] = set()
     if not directory.exists():
@@ -99,7 +130,11 @@ def summarize_backbones(directory: Path | None, patterns: Iterable[str], preview
     if not directory or not directory.exists():
         return None
 
-    unique_files = _iter_matching_files(directory, patterns)
+    return summarize_structure_files(_iter_matching_files(directory, patterns), preview_limit=preview_limit)
+
+
+def summarize_structure_files(paths: Iterable[Path], preview_limit: int = 3) -> dict:
+    unique_files = sorted({path.resolve() for path in paths})
     backbones: dict[int, dict] = {}
     unassigned_count = 0
     unassigned_preview: list[str] = []
@@ -142,12 +177,89 @@ def summarize_backbones(directory: Path | None, patterns: Iterable[str], preview
     }
 
 
+def screening_row_passed(row: Optional[dict]) -> bool:
+    if not isinstance(row, dict):
+        return False
+
+    passed = row.get("passed_screen")
+    if isinstance(passed, bool):
+        return passed
+    if passed not in (None, ""):
+        return str(passed).strip().lower() in {"1", "true", "yes", "passed"}
+
+    reason = str(row.get("screening_reason") or "").strip().lower()
+    return reason == "passed"
+
+
+def screening_row_for_structure(
+    structure_path: Path,
+    screening_by_name: dict[str, dict],
+    screening_by_backbone: dict[int, dict],
+) -> Optional[dict]:
+    row = screening_by_name.get(structure_path.stem)
+    if isinstance(row, dict):
+        return row
+
+    backbone_id = parse_backbone_id(structure_path.stem)
+    if backbone_id is None:
+        return None
+    fallback = screening_by_backbone.get(backbone_id)
+    return fallback if isinstance(fallback, dict) else None
+
+
+def resolve_rfantibody_filtered_files(
+    raw_dir: Path | None,
+    filtered_dir: Path | None,
+    screening_by_name: dict[str, dict],
+    screening_by_backbone: dict[int, dict],
+) -> list[Path]:
+    explicit_filtered_files = _iter_matching_files(filtered_dir, STRUCTURE_PATTERNS) if filtered_dir else []
+    if explicit_filtered_files:
+        return explicit_filtered_files
+
+    raw_files = _iter_matching_files(raw_dir, STRUCTURE_PATTERNS) if raw_dir else []
+    if not raw_files:
+        return []
+
+    derived_filtered_files: list[Path] = []
+    for structure_path in raw_files:
+        row = screening_row_for_structure(structure_path, screening_by_name, screening_by_backbone)
+        if screening_row_passed(row):
+            derived_filtered_files.append(structure_path)
+    return derived_filtered_files
+
+
 def refresh_gate_payload(payload: Optional[dict], output_dir: str | None = None) -> dict:
     current = dict(payload or {})
+    stage = str(current.get("stage") or "").strip().lower()
+    output_path = resolve_output_dir(output_dir)
     candidate_dir = resolve_review_path(current.get("candidate_dir"), output_dir)
     raw_dir = resolve_review_path(current.get("raw_dir"), output_dir)
     filtered_dir = resolve_review_path(current.get("filtered_dir"), output_dir)
-    stage = str(current.get("stage") or "").strip().lower()
+    screening_by_name: dict[str, dict] = {}
+    screening_by_backbone: dict[int, dict] = {}
+
+    if stage == "post_rfantibody" and output_path is not None:
+        inferred_raw_dir = output_path / "collected" / "rfantibody"
+        inferred_filtered_dir = output_path / "collected" / "rfantibody_filtered"
+        raw_count = count_files(raw_dir, STRUCTURE_PATTERNS) if raw_dir else 0
+        inferred_raw_count = count_files(inferred_raw_dir, STRUCTURE_PATTERNS) if inferred_raw_dir.exists() else 0
+        if inferred_raw_count > raw_count:
+            raw_dir = inferred_raw_dir
+
+        filtered_count = count_files(filtered_dir, STRUCTURE_PATTERNS) if filtered_dir else 0
+        inferred_filtered_count = count_files(inferred_filtered_dir, STRUCTURE_PATTERNS) if inferred_filtered_dir.exists() else 0
+        if inferred_filtered_count > filtered_count:
+            filtered_dir = inferred_filtered_dir
+
+        candidate_count = count_files(candidate_dir, STRUCTURE_PATTERNS) if candidate_dir else 0
+        if candidate_count == 0:
+            if count_files(filtered_dir, STRUCTURE_PATTERNS) > 0:
+                candidate_dir = filtered_dir
+            elif count_files(raw_dir, STRUCTURE_PATTERNS) > 0:
+                candidate_dir = raw_dir
+
+        screening_by_name, screening_by_backbone = _load_screening_rows(output_dir)
 
     current["candidate_dir"] = normalize_review_path(candidate_dir)
     current["candidate_count"] = count_files(candidate_dir, STRUCTURE_PATTERNS)
@@ -161,10 +273,35 @@ def refresh_gate_payload(payload: Optional[dict], output_dir: str | None = None)
     current["raw_backbone_summary"] = summarize_backbones(raw_dir, STRUCTURE_PATTERNS) if raw_dir else None
     current["raw_metric_count"] = count_files(raw_dir, METRIC_PATTERNS) if raw_dir else None
 
+    derived_filtered_files = (
+        resolve_rfantibody_filtered_files(raw_dir, filtered_dir, screening_by_name, screening_by_backbone)
+        if stage == "post_rfantibody"
+        else []
+    )
     current["filtered_dir"] = normalize_review_path(filtered_dir)
-    current["filtered_candidate_count"] = count_files(filtered_dir, STRUCTURE_PATTERNS) if filtered_dir else None
-    current["filtered_backbone_summary"] = summarize_backbones(filtered_dir, STRUCTURE_PATTERNS) if filtered_dir else None
+    current["filtered_candidate_count"] = len(derived_filtered_files) if stage == "post_rfantibody" else (count_files(filtered_dir, STRUCTURE_PATTERNS) if filtered_dir else None)
+    current["filtered_backbone_summary"] = (
+        summarize_structure_files(derived_filtered_files)
+        if stage == "post_rfantibody"
+        else (summarize_backbones(filtered_dir, STRUCTURE_PATTERNS) if filtered_dir else None)
+    )
     current["filtered_metric_count"] = count_files(filtered_dir, METRIC_PATTERNS) if filtered_dir else None
+
+    if (
+        stage == "post_rfantibody"
+        and current["candidate_count"] == 0
+        and isinstance(current.get("raw_candidate_count"), int)
+        and current["raw_candidate_count"] > 0
+        and raw_dir is not None
+    ):
+        candidate_dir = raw_dir
+        current["candidate_dir"] = normalize_review_path(candidate_dir)
+        current["candidate_count"] = count_files(candidate_dir, STRUCTURE_PATTERNS)
+        current["candidate_preview"] = list_preview_files(candidate_dir, STRUCTURE_PATTERNS)
+        current["candidate_backbone_summary"] = summarize_backbones(candidate_dir, STRUCTURE_PATTERNS)
+        current["metric_count"] = count_files(candidate_dir, METRIC_PATTERNS)
+        current["metric_preview"] = list_preview_files(candidate_dir, METRIC_PATTERNS)
+
     current["review_grouping"] = "backbone_id" if stage == "post_rfantibody" else current.get("review_grouping")
     return current
 
@@ -208,7 +345,7 @@ def gate_file_for_stage(job: Job) -> Optional[Path]:
 
 
 def nextflow_history_status(job: Job) -> str:
-    output_path = resolve_output_dir(job.output_dir)
+    output_path = resolve_nextflow_run_dir(job.output_dir)
     if output_path is None:
         return ""
     history_path = output_path / ".nextflow" / "history"
@@ -253,6 +390,23 @@ def _load_screening_rows(output_dir: str | None) -> Tuple[dict[str, dict], dict[
         except Exception:
             continue
 
+    if not rows:
+        csv_candidates = [
+            output_path / "collected" / "rfantibody_filtered" / "rfantibody_screening_summary.csv",
+            output_path / "run" / "rfantibody_screen" / "rfantibody_screening_summary.csv",
+            output_path / "rfantibody_screening_summary.csv",
+        ]
+        for candidate in csv_candidates:
+            if not candidate.exists():
+                continue
+            try:
+                with open(candidate, "r") as handle:
+                    reader = csv.DictReader(handle)
+                    rows = [dict(row) for row in reader]
+                    break
+            except Exception:
+                continue
+
     by_name: dict[str, dict] = {}
     by_backbone: dict[int, dict] = {}
     for row in rows:
@@ -275,6 +429,45 @@ def _read_json(path: Optional[Path]) -> dict[str, Any]:
         return {}
 
 
+def _coerce_json_value(value: Any) -> Any:
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        if stripped.startswith("{") or stripped.startswith("["):
+            try:
+                return json.loads(stripped)
+            except Exception:
+                return value
+    return value
+
+
+def _infer_binder_metrics(structure_path: Path) -> tuple[Optional[int], Optional[str]]:
+    try:
+        sequences = extract_sequence_from_pdb(str(structure_path))
+        if not sequences:
+            return None, None
+
+        binder_chains = identify_binder_chains(sequences, str(structure_path))
+        if binder_chains:
+            unique_chain_ids = [chain_id for chain_id in dict.fromkeys(binder_chains.values()) if chain_id in sequences]
+            binder_length = sum(len(sequences[chain_id]) for chain_id in unique_chain_ids)
+            antibody_type = 'vhh' if len(unique_chain_ids) == 1 else 'fab'
+            return binder_length or None, antibody_type
+
+        heavy_chain = sequences.get("H")
+        if heavy_chain:
+            return len(heavy_chain), 'vhh'
+
+        if len(sequences) == 1:
+            only_seq = next(iter(sequences.values()))
+            return len(only_seq), None
+    except Exception:
+        return None, None
+
+    return None, None
+
+
 async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool = False) -> int:
     stage = str(job.awaiting_stage or "").strip().lower()
     if stage not in REVIEWABLE_STAGES:
@@ -283,10 +476,21 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
     repaired_payload = refresh_gate_payload(job.awaiting_payload or {}, job.output_dir)
     job.awaiting_payload = repaired_payload
 
-    candidate_dir = resolve_review_path(repaired_payload.get("candidate_dir"), job.output_dir)
     raw_dir = resolve_review_path(repaired_payload.get("raw_dir"), job.output_dir)
-    candidate_files = _iter_matching_files(candidate_dir, STRUCTURE_PATTERNS) if candidate_dir else []
-    candidate_count = len(candidate_files)
+    filtered_dir = resolve_review_path(repaired_payload.get("filtered_dir"), job.output_dir)
+    screening_by_name, screening_by_backbone = _load_screening_rows(job.output_dir)
+
+    expected_files: list[tuple[str, Path]] = []
+    if stage == "post_rfantibody":
+        raw_files = _iter_matching_files(raw_dir, STRUCTURE_PATTERNS) if raw_dir else []
+        filtered_files = resolve_rfantibody_filtered_files(raw_dir, filtered_dir, screening_by_name, screening_by_backbone)
+        expected_files = [("raw", path) for path in raw_files]
+        expected_files.extend(("filtered", path) for path in filtered_files)
+    else:
+        candidate_dir = resolve_review_path(repaired_payload.get("candidate_dir"), job.output_dir)
+        expected_files = [("candidate", path) for path in (_iter_matching_files(candidate_dir, STRUCTURE_PATTERNS) if candidate_dir else [])]
+
+    candidate_count = len(expected_files)
 
     existing_count = (
         await session.execute(
@@ -298,7 +502,48 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
     ).scalar() or 0
 
     if existing_count == candidate_count and candidate_count > 0 and not force:
-        return existing_count
+        if stage == "post_rfantibody":
+            group_rows = (
+                await session.execute(
+                    select(Design.artifact_group, func.count(Design.id))
+                    .where(
+                        Design.job_id == job.id,
+                        Design.source_stage == stage,
+                    )
+                    .group_by(Design.artifact_group)
+                )
+            ).all()
+            group_counts = {str(group or ""): int(count or 0) for group, count in group_rows}
+            expected_raw_count = sum(1 for artifact_group, _ in expected_files if artifact_group == "raw")
+            expected_filtered_count = sum(1 for artifact_group, _ in expected_files if artifact_group == "filtered")
+            populated_rf_metadata = (
+                await session.execute(
+                    select(func.count(Design.id)).where(
+                        Design.job_id == job.id,
+                        Design.source_stage == stage,
+                        Design.rfa_plddt_final.is_not(None),
+                    )
+                )
+            ).scalar() or 0
+            has_legacy_candidate_rows = group_counts.get("candidate", 0) > 0
+            raw_count_matches = group_counts.get("raw", 0) == expected_raw_count
+            filtered_count_matches = group_counts.get("filtered", 0) == expected_filtered_count
+            rf_metadata_partially_populated = 0 < populated_rf_metadata < existing_count
+            if has_legacy_candidate_rows or not raw_count_matches or not filtered_count_matches or rf_metadata_partially_populated:
+                force = True
+
+    if existing_count == candidate_count and candidate_count > 0 and not force:
+        populated_binder_lengths = (
+            await session.execute(
+                select(func.count(Design.id)).where(
+                    Design.job_id == job.id,
+                    Design.source_stage == stage,
+                    Design.binder_length.is_not(None),
+                )
+            )
+        ).scalar() or 0
+        if populated_binder_lengths == existing_count:
+            return existing_count
 
     await session.execute(
         delete(Design).where(
@@ -307,21 +552,26 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
         )
     )
 
-    if not candidate_files:
+    if not expected_files:
         return 0
 
-    screening_by_name, screening_by_backbone = _load_screening_rows(job.output_dir)
     rows: list[Design] = []
 
-    for structure_path in candidate_files:
+    for artifact_group, structure_path in expected_files:
         design_name = structure_path.stem
         backbone_id = parse_backbone_id(design_name)
         structure_cdr_lengths = _parse_hlt_cdr_lengths(structure_path)
-        avg_plddt, residue_plddt = extract_plddt_from_pdb(structure_path)
-        avg_plddt = safe_float(avg_plddt)
-        if avg_plddt is not None and avg_plddt <= 0:
-            avg_plddt = None
-            residue_plddt = None
+        binder_length, antibody_type = _infer_binder_metrics(structure_path)
+        rfa_trb = load_rfantibody_trb_summary(structure_path) if stage == "post_rfantibody" else {}
+        if stage == "post_rfantibody":
+            avg_plddt = safe_float(rfa_trb.get("plddt_overall"))
+            residue_plddt = rfa_trb.get("residue_plddt")
+        else:
+            avg_plddt, residue_plddt = extract_plddt_from_pdb(structure_path)
+            avg_plddt = safe_float(avg_plddt)
+            if avg_plddt is not None and avg_plddt <= 0:
+                avg_plddt = None
+                residue_plddt = None
         screening = screening_by_name.get(design_name)
         if screening is None and backbone_id is not None:
             screening = screening_by_backbone.get(backbone_id)
@@ -352,6 +602,8 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
                 residue_plddt=residue_plddt,
                 mpnn_score=mpnn_score,
                 fampnn_psce=fampnn_psce,
+                binder_length=binder_length,
+                antibody_type=antibody_type,
                 backbone_id=backbone_id,
                 epitope_contact_count=safe_int((screening or {}).get("epitope_contact_count")),
                 epitope_min_distance=safe_float((screening or {}).get("epitope_min_distance")),
@@ -360,6 +612,8 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
                 epitope_nearest_target_residue=(screening or {}).get("epitope_nearest_target_residue"),
                 epitope_nearest_antibody_atom=(screening or {}).get("epitope_nearest_antibody_atom"),
                 epitope_nearest_target_atom=(screening or {}).get("epitope_nearest_target_atom"),
+                epitope_mapping_mode=(screening or {}).get("epitope_mapping_mode"),
+                epitope_centroid_distance=safe_float((screening or {}).get("epitope_centroid_distance")),
                 target_contact_count=safe_int((screening or {}).get("target_contact_count")),
                 target_min_distance=safe_float((screening or {}).get("target_min_distance")),
                 target_min_atom_distance=safe_float((screening or {}).get("target_min_atom_distance")),
@@ -367,7 +621,38 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
                 target_nearest_target_residue=(screening or {}).get("target_nearest_target_residue"),
                 target_nearest_antibody_atom=(screening or {}).get("target_nearest_antibody_atom"),
                 target_nearest_target_atom=(screening or {}).get("target_nearest_target_atom"),
+                target_centroid_distance=safe_float((screening or {}).get("target_centroid_distance")),
+                detected_antibody_chains=(screening or {}).get("detected_antibody_chains"),
+                detected_target_chain=(screening or {}).get("detected_target_chain"),
+                antibody_residue_count=safe_int((screening or {}).get("antibody_residue_count")),
+                target_residue_count=safe_int((screening or {}).get("target_residue_count")),
+                epitope_residue_count=safe_int((screening or {}).get("epitope_residue_count")),
+                passed_screen=(
+                    None
+                    if not screening or (
+                        (screening or {}).get("passed_screen") in (None, "")
+                        and not (screening or {}).get("screening_reason")
+                    )
+                    else screening_row_passed(screening)
+                ),
                 screening_reason=(screening or {}).get("screening_reason"),
+                rfa_loop_metrics=_coerce_json_value((screening or {}).get("rfa_loop_metrics")),
+                rfa_hotspot_metrics=_coerce_json_value((screening or {}).get("rfa_hotspot_metrics")),
+                rfa_hotspot_covered_count=safe_int((screening or {}).get("rfa_hotspot_covered_count")),
+                rfa_hotspot_min_distance=safe_float(rfa_trb.get("rfa_hotspot_min_distance")),
+                rfa_hotspot_avg_min_distance=safe_float(rfa_trb.get("rfa_hotspot_avg_min_distance")),
+                rfa_runtime_seconds=safe_float(rfa_trb.get("rfa_runtime_seconds")),
+                rfa_device=rfa_trb.get("rfa_device"),
+                rfa_diffusion_steps=safe_int(rfa_trb.get("rfa_diffusion_steps")),
+                rfa_noise_scale_ca=safe_float(rfa_trb.get("rfa_noise_scale_ca")),
+                rfa_noise_scale_frame=safe_float(rfa_trb.get("rfa_noise_scale_frame")),
+                rfa_guide_scale=safe_float(rfa_trb.get("rfa_guide_scale")),
+                rfa_plddt_initial=safe_float(rfa_trb.get("rfa_plddt_initial")),
+                rfa_plddt_final=safe_float(rfa_trb.get("rfa_plddt_final")),
+                rfa_plddt_delta=safe_float(rfa_trb.get("rfa_plddt_delta")),
+                rfa_design_loops=rfa_trb.get("rfa_design_loops"),
+                rfa_hotspots=rfa_trb.get("rfa_hotspots"),
+                confidence_metrics=(rfa_trb.get("rfa_metadata") if stage == "post_rfantibody" else None),
                 cdr_h1_length=structure_cdr_lengths.get("H1"),
                 cdr_h2_length=structure_cdr_lengths.get("H2"),
                 cdr_h3_length=structure_cdr_lengths.get("H3"),
@@ -375,7 +660,7 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
                 cdr_l2_length=structure_cdr_lengths.get("L2"),
                 cdr_l3_length=structure_cdr_lengths.get("L3"),
                 source_stage=stage,
-                artifact_group="candidate",
+                artifact_group=artifact_group,
                 created_at=datetime.utcnow(),
             )
         )

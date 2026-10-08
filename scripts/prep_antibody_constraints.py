@@ -301,14 +301,21 @@ def compute_fixed_residues(mode, chains_data, cdr_dict, tetrad_positions,
             continue
             
         all_residues = set(chains_data[chain])
+        detected_all_cdr_residues = set(cdr_by_chain.get(chain, set()))
+        detected_selected_cdr_residues = set(selected_cdr_by_chain.get(chain, set()))
         
-        # Get CDR residues for this chain (override if provided)
-        if chain in cdr_override_by_chain and cdr_override_by_chain[chain]:
+        # Prefer loop labels recovered from the actual structure. Chain-level
+        # overrides from the original custom loop request are only a fallback
+        # when the current PDB no longer exposes HLT/ANARCII loop labels.
+        if detected_all_cdr_residues:
+            all_cdr_residues = detected_all_cdr_residues
+            selected_cdr_residues = detected_selected_cdr_residues
+        elif chain in cdr_override_by_chain and cdr_override_by_chain[chain]:
             all_cdr_residues = set(cdr_override_by_chain[chain])
             selected_cdr_residues = set(all_cdr_residues)
         else:
-            all_cdr_residues = set(cdr_by_chain.get(chain, set()))
-            selected_cdr_residues = set(selected_cdr_by_chain.get(chain, set()))
+            all_cdr_residues = detected_all_cdr_residues
+            selected_cdr_residues = detected_selected_cdr_residues
 
         if mode == 'cdr_only':
             # Fix everything EXCEPT CDRs

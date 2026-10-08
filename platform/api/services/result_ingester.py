@@ -17,6 +17,7 @@ from sqlalchemy import delete, select
 
 from database import Design, Job
 from paths import get_data_root
+from services.rfantibody_metadata import load_rfantibody_trb_summary
 from .structure_utils import calculate_epitope_contacts
 
 
@@ -401,6 +402,25 @@ async def ingest_job_results(
                         
                         created_at=datetime.utcnow()
                     )
+
+                    rfa_trb = load_rfantibody_trb_summary(structure_path) if structure_path else {}
+                    if rfa_trb:
+                        design.plddt_overall = safe_float(rfa_trb.get("plddt_overall"))
+                        design.residue_plddt = rfa_trb.get("residue_plddt")
+                        design.rfa_hotspot_min_distance = safe_float(rfa_trb.get("rfa_hotspot_min_distance"))
+                        design.rfa_hotspot_avg_min_distance = safe_float(rfa_trb.get("rfa_hotspot_avg_min_distance"))
+                        design.rfa_runtime_seconds = safe_float(rfa_trb.get("rfa_runtime_seconds"))
+                        design.rfa_device = rfa_trb.get("rfa_device")
+                        design.rfa_diffusion_steps = safe_int(rfa_trb.get("rfa_diffusion_steps"))
+                        design.rfa_noise_scale_ca = safe_float(rfa_trb.get("rfa_noise_scale_ca"))
+                        design.rfa_noise_scale_frame = safe_float(rfa_trb.get("rfa_noise_scale_frame"))
+                        design.rfa_guide_scale = safe_float(rfa_trb.get("rfa_guide_scale"))
+                        design.rfa_plddt_initial = safe_float(rfa_trb.get("rfa_plddt_initial"))
+                        design.rfa_plddt_final = safe_float(rfa_trb.get("rfa_plddt_final"))
+                        design.rfa_plddt_delta = safe_float(rfa_trb.get("rfa_plddt_delta"))
+                        design.rfa_design_loops = rfa_trb.get("rfa_design_loops")
+                        design.rfa_hotspots = rfa_trb.get("rfa_hotspots")
+                        design.confidence_metrics = rfa_trb.get("rfa_metadata")
                     
                     session.add(design)
                     designs_created += 1
@@ -591,6 +611,13 @@ def _apply_screening_row(design: "Design", row: dict) -> bool:
     if row.get("epitope_nearest_target_atom") and getattr(design, "epitope_nearest_target_atom", None) is None:
         design.epitope_nearest_target_atom = str(row.get("epitope_nearest_target_atom"))
         changed = True
+    if row.get("epitope_mapping_mode") and getattr(design, "epitope_mapping_mode", None) is None:
+        design.epitope_mapping_mode = str(row.get("epitope_mapping_mode"))
+        changed = True
+    ecd = safe_float(row.get("epitope_centroid_distance"))
+    if ecd is not None and getattr(design, "epitope_centroid_distance", None) is None:
+        design.epitope_centroid_distance = ecd
+        changed = True
     if tcc is not None and design.target_contact_count is None:
         design.target_contact_count = tcc
         changed = True
@@ -612,6 +639,46 @@ def _apply_screening_row(design: "Design", row: dict) -> bool:
     if row.get("target_nearest_target_atom") and getattr(design, "target_nearest_target_atom", None) is None:
         design.target_nearest_target_atom = str(row.get("target_nearest_target_atom"))
         changed = True
+    tcd = safe_float(row.get("target_centroid_distance"))
+    if tcd is not None and getattr(design, "target_centroid_distance", None) is None:
+        design.target_centroid_distance = tcd
+        changed = True
+    if row.get("detected_antibody_chains") and getattr(design, "detected_antibody_chains", None) is None:
+        design.detected_antibody_chains = str(row.get("detected_antibody_chains"))
+        changed = True
+    if row.get("detected_target_chain") and getattr(design, "detected_target_chain", None) is None:
+        design.detected_target_chain = str(row.get("detected_target_chain"))
+        changed = True
+    arc = safe_int(row.get("antibody_residue_count"))
+    if arc is not None and getattr(design, "antibody_residue_count", None) is None:
+        design.antibody_residue_count = arc
+        changed = True
+    trc = safe_int(row.get("target_residue_count"))
+    if trc is not None and getattr(design, "target_residue_count", None) is None:
+        design.target_residue_count = trc
+        changed = True
+    erc = safe_int(row.get("epitope_residue_count"))
+    if erc is not None and getattr(design, "epitope_residue_count", None) is None:
+        design.epitope_residue_count = erc
+        changed = True
+    passed_screen = row.get("passed_screen")
+    if passed_screen not in (None, "") and getattr(design, "passed_screen", None) is None:
+        design.passed_screen = str(passed_screen).strip().lower() == "true"
+        changed = True
+    hotspot_covered = safe_int(row.get("rfa_hotspot_covered_count"))
+    if hotspot_covered is not None and getattr(design, "rfa_hotspot_covered_count", None) is None:
+        design.rfa_hotspot_covered_count = hotspot_covered
+        changed = True
+    for json_key in ("rfa_loop_metrics", "rfa_hotspot_metrics"):
+        value = row.get(json_key)
+        if value and getattr(design, json_key, None) is None:
+            if isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except Exception:
+                    pass
+            setattr(design, json_key, value)
+            changed = True
     if screening_reason and not design.screening_reason:
         design.screening_reason = str(screening_reason)
         changed = True
@@ -1533,8 +1600,14 @@ async def ingest_loose_files(
                 if design_name in ingested_names:
                     continue
                     
-                # Calculate pLDDT from structure (supports PDB/CIF)
-                plddt, residue_plddt = extract_plddt_from_pdb(structure_path)
+                # For raw RFantibody outputs, the meaningful confidence lives in the
+                # .trb sidecar rather than the output PDB B-factors.
+                rfa_trb = load_rfantibody_trb_summary(structure_path)
+                if rfa_trb:
+                    plddt = safe_float(rfa_trb.get("plddt_overall"))
+                    residue_plddt = rfa_trb.get("residue_plddt")
+                else:
+                    plddt, residue_plddt = extract_plddt_from_pdb(structure_path)
                 structure_cdr_lengths = _parse_hlt_cdr_lengths(Path(structure_path))
                 epitope_contact_count = None
                 epitope_min_distance = None
@@ -1559,6 +1632,20 @@ async def ingest_loose_files(
                     
                     plddt_overall=plddt,
                     residue_plddt=residue_plddt,
+                    rfa_hotspot_min_distance=safe_float(rfa_trb.get("rfa_hotspot_min_distance")),
+                    rfa_hotspot_avg_min_distance=safe_float(rfa_trb.get("rfa_hotspot_avg_min_distance")),
+                    rfa_runtime_seconds=safe_float(rfa_trb.get("rfa_runtime_seconds")),
+                    rfa_device=rfa_trb.get("rfa_device"),
+                    rfa_diffusion_steps=safe_int(rfa_trb.get("rfa_diffusion_steps")),
+                    rfa_noise_scale_ca=safe_float(rfa_trb.get("rfa_noise_scale_ca")),
+                    rfa_noise_scale_frame=safe_float(rfa_trb.get("rfa_noise_scale_frame")),
+                    rfa_guide_scale=safe_float(rfa_trb.get("rfa_guide_scale")),
+                    rfa_plddt_initial=safe_float(rfa_trb.get("rfa_plddt_initial")),
+                    rfa_plddt_final=safe_float(rfa_trb.get("rfa_plddt_final")),
+                    rfa_plddt_delta=safe_float(rfa_trb.get("rfa_plddt_delta")),
+                    rfa_design_loops=rfa_trb.get("rfa_design_loops"),
+                    rfa_hotspots=rfa_trb.get("rfa_hotspots"),
+                    confidence_metrics=rfa_trb.get("rfa_metadata"),
                     cdr_h1_length=structure_cdr_lengths.get("H1"),
                     cdr_h2_length=structure_cdr_lengths.get("H2"),
                     cdr_h3_length=structure_cdr_lengths.get("H3"),

@@ -176,6 +176,8 @@ class Design(Base):
     epitope_nearest_target_residue = Column(String(64), nullable=True)
     epitope_nearest_antibody_atom = Column(String(64), nullable=True)
     epitope_nearest_target_atom = Column(String(64), nullable=True)
+    epitope_mapping_mode = Column(String(64), nullable=True)
+    epitope_centroid_distance = Column(Float, nullable=True)
     target_contact_count = Column(Integer, nullable=True)     # Total target-contact count from RFA screening
     target_min_distance = Column(Float, nullable=True)        # Closest CDR-to-any-target-residue CA distance (Å)
     target_min_atom_distance = Column(Float, nullable=True)   # Closest atom-atom antibody-target distance (Å)
@@ -183,9 +185,32 @@ class Design(Base):
     target_nearest_target_residue = Column(String(64), nullable=True)
     target_nearest_antibody_atom = Column(String(64), nullable=True)
     target_nearest_target_atom = Column(String(64), nullable=True)
+    target_centroid_distance = Column(Float, nullable=True)
+    detected_antibody_chains = Column(String(64), nullable=True)
+    detected_target_chain = Column(String(16), nullable=True)
+    antibody_residue_count = Column(Integer, nullable=True)
+    target_residue_count = Column(Integer, nullable=True)
+    epitope_residue_count = Column(Integer, nullable=True)
+    passed_screen = Column(Boolean, nullable=True)
     screening_reason = Column(String(255), nullable=True)     # RFantibody screening pass/fail summary
     source_stage = Column(String(64), nullable=True, index=True)   # review-stage rows (e.g. post_rfantibody)
     artifact_group = Column(String(64), nullable=True)             # candidate/raw/filtered/final
+    rfa_loop_metrics = Column(JSON, nullable=True)
+    rfa_hotspot_metrics = Column(JSON, nullable=True)
+    rfa_hotspot_covered_count = Column(Integer, nullable=True)
+    rfa_hotspot_min_distance = Column(Float, nullable=True)
+    rfa_hotspot_avg_min_distance = Column(Float, nullable=True)
+    rfa_runtime_seconds = Column(Float, nullable=True)
+    rfa_device = Column(String(128), nullable=True)
+    rfa_diffusion_steps = Column(Integer, nullable=True)
+    rfa_noise_scale_ca = Column(Float, nullable=True)
+    rfa_noise_scale_frame = Column(Float, nullable=True)
+    rfa_guide_scale = Column(Float, nullable=True)
+    rfa_plddt_initial = Column(Float, nullable=True)
+    rfa_plddt_final = Column(Float, nullable=True)
+    rfa_plddt_delta = Column(Float, nullable=True)
+    rfa_design_loops = Column(JSON, nullable=True)
+    rfa_hotspots = Column(JSON, nullable=True)
 
     # ═══════════════════════════════════════════════════════════════════════════
     # ANTIBODY / DISCOVERY METRICS
