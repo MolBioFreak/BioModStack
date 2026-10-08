@@ -629,6 +629,8 @@ process SpawnFAMPNNJobs {
         fampnn_temperature: params.fampnn_temperature ?: 0.0001,
         fampnn_num_steps: params.fampnn_num_steps ?: 500,
         fampnn_psce_threshold: params.fampnn_psce_threshold ?: 0.15,
+        fampnn_mutation_top_n: params.fampnn_mutation_top_n,
+        fampnn_mutation_min_log_odds_delta: params.fampnn_mutation_min_log_odds_delta,
         fampnn_constraint_mode: params.fampnn_constraint_mode,
         rfantibody_design_loops_custom: params.get('rfantibody_design_loops_custom'),
         rfantibody_loop_length_ranges: params.get('rfantibody_loop_length_ranges'),

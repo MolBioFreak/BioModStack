@@ -212,6 +212,20 @@ params:
     maximum: 2.0
     step: 0.1
 
+  - name: fampnn_mutation_top_n
+    type: integer
+    description: Top FA-MPNN model-favored single-substitution log-odds deltas to keep per sampled design
+    default: 25
+    minimum: 0
+    maximum: 500
+
+  - name: fampnn_mutation_min_log_odds_delta
+    type: number
+    description: Minimum log(P_alt)-log(P_sampled) delta for reporting FA-MPNN model-favored single substitutions
+    default: 0.0
+    minimum: -20.0
+    maximum: 20.0
+
   - name: caliby_model_name
     type: string
     description: Caliby experimental checkpoint name

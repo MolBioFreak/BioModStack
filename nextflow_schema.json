@@ -467,6 +467,18 @@
                     "description": "Temperature for sequence sampling. Higher values increase sequence diversity.",
                     "hidden": true
                 },
+                "fampnn_mutation_top_n": {
+                    "type": "integer",
+                    "default": 25,
+                    "description": "Top FA-MPNN seq_probs-derived model-favored single-substitution log-odds deltas to report per sampled design.",
+                    "hidden": true
+                },
+                "fampnn_mutation_min_log_odds_delta": {
+                    "type": "number",
+                    "default": 0.0,
+                    "description": "Minimum log(P_alt)-log(P_sampled) delta for reporting FA-MPNN model-favored single substitutions.",
+                    "hidden": true
+                },
                 "fampnn_exclude_cys": {
                     "type": "boolean",
                     "default": true,
