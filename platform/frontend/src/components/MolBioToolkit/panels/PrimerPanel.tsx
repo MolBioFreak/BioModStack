@@ -9,9 +9,14 @@ import {
     createPrimer,
     deletePrimer as deletePrimerApi,
     togglePrimerFavorite,
+    calculatePrimerTm,
     type Primer as LibraryPrimer,
-    type PrimerCreate
+    type PrimerCreate,
+    type PrimerTmOptionsResponse,
+    type PrimerTmResult,
+    type PrimerTmSettings,
 } from '../../../lib/api';
+import { PrimerTmSettingsPanel } from '../PrimerTmSettingsPanel';
 import {
     calculateGcPercent,
     cleanNucleotideSequence,
@@ -28,21 +33,16 @@ interface PrimerPanelProps {
     onHighlight: (regions: HighlightedRegion[]) => void;
     onAddPrimer: (primer: Primer) => void;
     onRemovePrimer: (primerId: string) => void;
+    tmOptions: PrimerTmOptionsResponse | null;
+    tmSettings: PrimerTmSettings;
+    onTmSettingsChange: (settings: PrimerTmSettings) => void;
 }
 
-// Calculate Tm using Wallace rule / basic formula
-function calculateTm(primer: string): number {
-    if (!primer || primer.length === 0) return 0;
-    const upper = primer.toUpperCase();
-    const a = (upper.match(/A/g) || []).length;
-    const t = (upper.match(/[TU]/g) || []).length;
-    const g = (upper.match(/G/g) || []).length;
-    const c = (upper.match(/C/g) || []).length;
-
-    if (primer.length < 14) {
-        return 2 * (a + t) + 4 * (g + c);
+function formatTm(result: PrimerTmResult | null | undefined): string {
+    if (!result || result.tm === null || Number.isNaN(result.tm)) {
+        return 'n/a';
     }
-    return 64.9 + 41 * (g + c - 16.4) / primer.length;
+    return `${result.tm.toFixed(1)}°C`;
 }
 
 export function PrimerPanel({
@@ -50,7 +50,10 @@ export function PrimerPanel({
     selection,
     onHighlight,
     onAddPrimer,
-    onRemovePrimer
+    onRemovePrimer,
+    tmOptions,
+    tmSettings,
+    onTmSettingsChange,
 }: PrimerPanelProps) {
     const [newPrimerName, setNewPrimerName] = useState('');
     const [newPrimerSeq, setNewPrimerSeq] = useState('');
@@ -58,17 +61,18 @@ export function PrimerPanel({
     const [hoveredPrimerId, setHoveredPrimerId] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState<'sequence' | 'library'>('sequence');
 
-    // Library state
     const [libraryPrimers, setLibraryPrimers] = useState<LibraryPrimer[]>([]);
     const [libraryLoading, setLibraryLoading] = useState(false);
     const [librarySearch, setLibrarySearch] = useState('');
     const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
     const [saveToLibrary, setSaveToLibrary] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [draftTmResult, setDraftTmResult] = useState<PrimerTmResult | null>(null);
+    const [draftTmLoading, setDraftTmLoading] = useState(false);
+
     const sequenceType = sequenceData.sequenceType === 'rna' ? 'rna' : 'dna';
     const unitLabel = sequenceUnitLabel(sequenceType);
 
-    // Get selected sequence region
     const selectedRegion = useMemo(() => {
         if (!selection || selection.start === selection.end) return null;
         const start = Math.min(selection.start, selection.end);
@@ -77,19 +81,36 @@ export function PrimerPanel({
         return { start, end, sequence: seq, length: seq.length };
     }, [selection, sequenceData.sequence]);
 
-    // Load library primers
+    const cleanedDraftPrimer = useMemo(() => cleanNucleotideSequence(newPrimerSeq), [newPrimerSeq]);
+    const draftBindings = useMemo(() => resolvePrimerBindings(sequenceData.sequence, cleanedDraftPrimer, {
+        reverse: isReverse,
+        sequenceType,
+        circular: sequenceData.circular,
+    }), [cleanedDraftPrimer, isReverse, sequenceData.circular, sequenceData.sequence, sequenceType]);
+    const draftBinding = draftBindings[0] ?? null;
+    const draftTmSequence = useMemo(() => {
+        if (!cleanedDraftPrimer) {
+            return '';
+        }
+        if (!draftBinding) {
+            return cleanedDraftPrimer;
+        }
+        return cleanedDraftPrimer.slice(cleanedDraftPrimer.length - draftBinding.annealLength);
+    }, [cleanedDraftPrimer, draftBinding]);
+
     const loadLibrary = useCallback(async () => {
         setLibraryLoading(true);
         try {
             const response = await fetchPrimers({
                 search: librarySearch || undefined,
-                favorites_only: showFavoritesOnly
+                favorites_only: showFavoritesOnly,
             });
             setLibraryPrimers(response.data);
-        } catch (e) {
-            console.error('Failed to load primer library:', e);
+        } catch (loadError) {
+            console.error('Failed to load primer library:', loadError);
+        } finally {
+            setLibraryLoading(false);
         }
-        setLibraryLoading(false);
     }, [librarySearch, showFavoritesOnly]);
 
     useEffect(() => {
@@ -98,7 +119,52 @@ export function PrimerPanel({
         }
     }, [activeTab, loadLibrary]);
 
-    // Use selection as primer
+    const calculateTmForSequence = useCallback(async (
+        sequence: string,
+        explicitSequenceType?: 'dna' | 'rna',
+    ): Promise<PrimerTmResult | null> => {
+        const cleaned = cleanNucleotideSequence(sequence);
+        if (!cleaned) {
+            return null;
+        }
+        try {
+            const response = await calculatePrimerTm({
+                primers: [{
+                    sequence: cleaned,
+                    sequence_type: explicitSequenceType || inferSequenceTypeFromSequence(cleaned),
+                }],
+                settings: tmSettings,
+            });
+            return response.data[0] ?? null;
+        } catch (tmError) {
+            console.error('Failed to calculate primer Tm:', tmError);
+            return null;
+        }
+    }, [tmSettings]);
+
+    useEffect(() => {
+        if (!cleanedDraftPrimer || !isValidNucleotideSequence(cleanedDraftPrimer)) {
+            setDraftTmResult(null);
+            setDraftTmLoading(false);
+            return;
+        }
+
+        let cancelled = false;
+        setDraftTmLoading(true);
+        const timer = window.setTimeout(async () => {
+            const result = await calculateTmForSequence(draftTmSequence, inferSequenceTypeFromSequence(draftTmSequence));
+            if (!cancelled) {
+                setDraftTmResult(result);
+                setDraftTmLoading(false);
+            }
+        }, 250);
+
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timer);
+        };
+    }, [calculateTmForSequence, cleanedDraftPrimer, draftTmSequence]);
+
     const useSelectionAsPrimer = (reverse: boolean) => {
         if (!selectedRegion) return;
         setError(null);
@@ -110,7 +176,6 @@ export function PrimerPanel({
         setNewPrimerName(`Primer_${reverse ? 'Rev' : 'Fwd'}_${selectedRegion.start + 1}`);
     };
 
-    // Add new primer
     const addPrimer = async () => {
         const cleanedPrimer = cleanNucleotideSequence(newPrimerSeq);
         if (!cleanedPrimer || cleanedPrimer.length < 10) return;
@@ -120,75 +185,79 @@ export function PrimerPanel({
         }
         setError(null);
 
-        const bindings = resolvePrimerBindings(sequenceData.sequence, cleanedPrimer, {
-            reverse: isReverse,
-            sequenceType,
-            circular: sequenceData.circular,
-        });
-        const binding = bindings[0];
+        const binding = draftBinding;
         if (!binding) {
             setError('No primer annealing site was found on the current construct. Tailed primers are supported, but the 3′ annealing region must match.');
             return;
         }
 
+        const sequenceTypeForPrimer = inferSequenceTypeFromSequence(cleanedPrimer);
+        const effectiveTmResult = draftTmResult ?? await calculateTmForSequence(
+            cleanedPrimer.slice(cleanedPrimer.length - binding.annealLength),
+            inferSequenceTypeFromSequence(cleanedPrimer.slice(cleanedPrimer.length - binding.annealLength)),
+        );
+
         const primer: Primer = {
             id: `primer_${Date.now()}`,
             name: newPrimerName || `Primer_${(sequenceData.primers?.length || 0) + 1}`,
             sequence: cleanedPrimer,
+            sequenceType: sequenceTypeForPrimer,
             start: binding.start,
             end: binding.end,
             strand: isReverse ? -1 : 1,
-            tm: calculateTm(cleanedPrimer),
-            gc_percent: calculateGcPercent(cleanedPrimer)
+            tm: effectiveTmResult?.tm ?? undefined,
+            gc_percent: effectiveTmResult?.gc_percent ?? calculateGcPercent(cleanedPrimer),
+            tm_algorithm: effectiveTmResult?.algorithm,
+            tm_salt_correction: effectiveTmResult?.salt_correction,
+            tm_settings: tmSettings,
         };
 
         onAddPrimer(primer);
 
-        // Also save to library if enabled
         if (saveToLibrary) {
             try {
                 const libraryData: PrimerCreate = {
                     name: primer.name,
                     sequence: primer.sequence,
+                    sequence_type: sequenceTypeForPrimer,
                     primer_type: isReverse ? 'reverse' : 'forward',
                     binding_start: primer.start,
                     binding_end: primer.end,
-                    binding_strand: primer.strand
+                    binding_strand: primer.strand,
+                    tm_settings: tmSettings,
                 };
                 await createPrimer(libraryData);
-            } catch (e) {
-                console.error('Failed to save primer to library:', e);
+            } catch (createError) {
+                console.error('Failed to save primer to library:', createError);
             }
         }
 
         setNewPrimerName('');
         setNewPrimerSeq('');
         setIsReverse(false);
+        setDraftTmResult(null);
     };
 
-    // Highlight specific primer
     const highlightPrimer = (primer: Primer | null) => {
         if (!primer) {
-            // Show all primers
-            const regions: HighlightedRegion[] = (sequenceData.primers || []).map(p => ({
-                start: p.start,
-                end: p.end,
-                color: p.strand === 1 ? '#22c55e' : '#ef4444',
-                label: p.name
+            const regions: HighlightedRegion[] = (sequenceData.primers || []).map((existingPrimer) => ({
+                start: existingPrimer.start,
+                end: existingPrimer.end,
+                color: existingPrimer.strand === 1 ? '#22c55e' : '#ef4444',
+                label: existingPrimer.name,
             }));
             onHighlight(regions);
-        } else {
-            onHighlight([{
-                start: primer.start,
-                end: primer.end,
-                color: primer.strand === 1 ? '#22c55e' : '#ef4444',
-                label: primer.name
-            }]);
+            return;
         }
+        onHighlight([{
+            start: primer.start,
+            end: primer.end,
+            color: primer.strand === 1 ? '#22c55e' : '#ef4444',
+            label: primer.name,
+        }]);
     };
 
-    // Add library primer to sequence
-    const addLibraryPrimerToSequence = (libPrimer: LibraryPrimer) => {
+    const addLibraryPrimerToSequence = async (libPrimer: LibraryPrimer) => {
         const bindings = resolvePrimerBindings(sequenceData.sequence, libPrimer.sequence, {
             reverse: libPrimer.binding_strand === -1,
             sequenceType,
@@ -201,47 +270,56 @@ export function PrimerPanel({
         }
         setError(null);
 
+        const annealSequence = libPrimer.sequence.slice(libPrimer.sequence.length - binding.annealLength);
+        const liveTmResult = await calculateTmForSequence(
+            annealSequence,
+            inferSequenceTypeFromSequence(annealSequence),
+        );
+
         const primer: Primer = {
             id: `primer_${Date.now()}`,
             name: libPrimer.name,
             sequence: libPrimer.sequence,
+            sequenceType: libPrimer.sequence_type,
             start: binding.start,
             end: binding.end,
             strand: (libPrimer.binding_strand === -1 ? -1 : 1) as 1 | -1,
-            tm: libPrimer.tm ?? undefined,
-            gc_percent: libPrimer.gc_percent ?? undefined
+            tm: liveTmResult?.tm ?? libPrimer.tm ?? undefined,
+            gc_percent: liveTmResult?.gc_percent ?? libPrimer.gc_percent ?? undefined,
+            tm_algorithm: liveTmResult?.algorithm ?? libPrimer.tm_algorithm ?? undefined,
+            tm_salt_correction: liveTmResult?.salt_correction ?? libPrimer.tm_salt_correction ?? undefined,
+            tm_settings: tmSettings,
         };
 
         onAddPrimer(primer);
     };
 
-    // Toggle favorite
     const handleToggleFavorite = async (primerId: string) => {
         try {
             await togglePrimerFavorite(primerId);
             loadLibrary();
-        } catch (e) {
-            console.error('Failed to toggle favorite:', e);
+        } catch (toggleError) {
+            console.error('Failed to toggle favorite:', toggleError);
         }
     };
 
-    // Delete from library
     const handleDeleteFromLibrary = async (primerId: string) => {
         try {
             await deletePrimerApi(primerId);
             loadLibrary();
-        } catch (e) {
-            console.error('Failed to delete primer:', e);
+        } catch (deleteError) {
+            console.error('Failed to delete primer:', deleteError);
         }
     };
 
     const primers = sequenceData.primers || [];
+    const draftTmWarnings = draftTmResult?.warnings || [];
+    const draftTmLabel = draftBinding && draftBinding.overhangLength > 0 ? 'Annealing Tm' : 'Tm';
 
     return (
         <div className="primer-panel p-3 space-y-3">
             <h4 className="font-semibold text-slate-200">Primers</h4>
 
-            {/* Tab switcher */}
             <div className="flex gap-1 text-xs">
                 <button
                     onClick={() => setActiveTab('sequence')}
@@ -269,9 +347,15 @@ export function PrimerPanel({
                 </div>
             )}
 
+            <PrimerTmSettingsPanel
+                sequenceType={sequenceType}
+                options={tmOptions}
+                settings={tmSettings}
+                onChange={onTmSettingsChange}
+            />
+
             {activeTab === 'sequence' && (
                 <>
-                    {/* Selection helper */}
                     {selectedRegion && (
                         <div className="p-3 bg-slate-700/50 rounded space-y-2">
                             <div className="text-sm text-slate-300">
@@ -297,14 +381,13 @@ export function PrimerPanel({
                         </div>
                     )}
 
-                    {/* Add primer form */}
                     <div className="space-y-2 p-3 bg-slate-800 rounded border border-slate-700">
                         <div className="text-sm font-medium text-slate-300">Add Primer</div>
 
                         <input
                             type="text"
                             value={newPrimerName}
-                            onChange={(e) => setNewPrimerName(e.target.value)}
+                            onChange={(event) => setNewPrimerName(event.target.value)}
                             placeholder="Primer name"
                             className="w-full px-2 py-1 bg-slate-700 border border-slate-600 rounded text-sm focus:border-blue-500 focus:outline-none"
                         />
@@ -312,7 +395,7 @@ export function PrimerPanel({
                         <input
                             type="text"
                             value={newPrimerSeq}
-                            onChange={(e) => setNewPrimerSeq(e.target.value.toUpperCase())}
+                            onChange={(event) => setNewPrimerSeq(event.target.value.toUpperCase())}
                             placeholder="Sequence (5'→3')"
                             className="w-full px-2 py-1 bg-slate-700 border border-slate-600 rounded text-sm font-mono focus:border-blue-500 focus:outline-none"
                         />
@@ -322,7 +405,7 @@ export function PrimerPanel({
                                 <input
                                     type="checkbox"
                                     checked={isReverse}
-                                    onChange={(e) => setIsReverse(e.target.checked)}
+                                    onChange={(event) => setIsReverse(event.target.checked)}
                                     className="w-3 h-3"
                                 />
                                 Reverse
@@ -332,18 +415,39 @@ export function PrimerPanel({
                                 <input
                                     type="checkbox"
                                     checked={saveToLibrary}
-                                    onChange={(e) => setSaveToLibrary(e.target.checked)}
+                                    onChange={(event) => setSaveToLibrary(event.target.checked)}
                                     className="w-3 h-3"
                                 />
                                 Save to library
                             </label>
-
-                            {newPrimerSeq && (
-                                <div className="text-xs text-slate-400">
-                                    Tm: {calculateTm(newPrimerSeq).toFixed(1)}°C • GC: {calculateGcPercent(newPrimerSeq)}%
-                                </div>
-                            )}
                         </div>
+
+                        {newPrimerSeq && (
+                            <div className="rounded border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs text-slate-400 space-y-1">
+                                <div className="flex flex-wrap items-center gap-3">
+                                    <span>{cleanedDraftPrimer.length} {sequenceUnitLabel(inferSequenceTypeFromSequence(cleanedDraftPrimer || 'A'))}</span>
+                                    <span className="text-emerald-300">
+                                        {draftTmLabel}: {draftTmLoading ? 'Calculating...' : formatTm(draftTmResult)}
+                                    </span>
+                                    <span>GC: {calculateGcPercent(cleanedDraftPrimer)}%</span>
+                                </div>
+                                {draftBinding ? (
+                                    <div className="text-emerald-400">
+                                        Anneals @ {draftBinding.start + 1}
+                                        {draftBinding.overhangLength > 0 ? ` with ${draftBinding.overhangLength} ${unitLabel} 5′ overhang` : ''}
+                                    </div>
+                                ) : (
+                                    <div className="text-yellow-300">
+                                        No annealing site detected on the current construct.
+                                    </div>
+                                )}
+                                {draftTmWarnings.map((warning) => (
+                                    <div key={warning} className="text-yellow-300">
+                                        {warning}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
 
                         <button
                             onClick={addPrimer}
@@ -354,7 +458,6 @@ export function PrimerPanel({
                         </button>
                     </div>
 
-                    {/* Primer list */}
                     <div className="space-y-1">
                         <div className="flex items-center justify-between text-sm text-slate-400 mb-2">
                             <span>Sequence Primers ({primers.length})</span>
@@ -372,7 +475,7 @@ export function PrimerPanel({
                             </div>
                         ) : (
                             <div className="space-y-1 max-h-48 overflow-y-auto">
-                                {primers.map(primer => (
+                                {primers.map((primer) => (
                                     <div
                                         key={primer.id}
                                         className={`flex items-center justify-between p-2 rounded transition-colors ${hoveredPrimerId === primer.id ? 'bg-slate-600' : 'bg-slate-700/50'
@@ -392,7 +495,7 @@ export function PrimerPanel({
                                                 <span className="text-sm text-slate-200 truncate">{primer.name}</span>
                                             </div>
                                             <div className="text-xs text-slate-400 mt-0.5">
-                                                {primer.sequence.length} {unitLabel} • Tm: {primer.tm?.toFixed(1)}°C • GC: {primer.gc_percent}%
+                                                {primer.sequence.length} {sequenceUnitLabel(primer.sequenceType || inferSequenceTypeFromSequence(primer.sequence))} • Tm: {primer.tm?.toFixed(1) ?? 'n/a'}°C • GC: {primer.gc_percent ?? 'n/a'}%
                                             </div>
                                         </div>
                                         <button
@@ -414,12 +517,11 @@ export function PrimerPanel({
 
             {activeTab === 'library' && (
                 <div className="space-y-3">
-                    {/* Search and filters */}
                     <div className="flex gap-2">
                         <input
                             type="text"
                             value={librarySearch}
-                            onChange={(e) => setLibrarySearch(e.target.value)}
+                            onChange={(event) => setLibrarySearch(event.target.value)}
                             placeholder="Search primers..."
                             className="flex-1 px-2 py-1.5 bg-slate-700 border border-slate-600 rounded text-sm focus:border-blue-500 focus:outline-none"
                         />
@@ -435,7 +537,6 @@ export function PrimerPanel({
                         </button>
                     </div>
 
-                    {/* Library primers */}
                     {libraryLoading ? (
                         <div className="text-center text-slate-500 py-4">Loading...</div>
                     ) : libraryPrimers.length === 0 ? (
@@ -444,7 +545,7 @@ export function PrimerPanel({
                         </div>
                     ) : (
                         <div className="space-y-1 max-h-64 overflow-y-auto">
-                            {libraryPrimers.map(primer => (
+                            {libraryPrimers.map((primer) => (
                                 <div
                                     key={primer.id}
                                     className="flex items-center justify-between p-2 bg-slate-700/50 hover:bg-slate-700 rounded transition-colors"
@@ -460,12 +561,12 @@ export function PrimerPanel({
                                             {primer.sequence.slice(0, 30)}{primer.length > 30 ? '...' : ''}
                                         </div>
                                         <div className="text-xs text-slate-500 mt-0.5">
-                                            {primer.length} {sequenceUnitLabel(inferSequenceTypeFromSequence(primer.sequence))} • Tm: {primer.tm?.toFixed(1)}°C • GC: {primer.gc_percent?.toFixed(0)}%
+                                            {primer.length} {sequenceUnitLabel(primer.sequence_type || inferSequenceTypeFromSequence(primer.sequence))} • Tm: {primer.tm?.toFixed(1) ?? 'n/a'}°C • GC: {primer.gc_percent?.toFixed(0) ?? 'n/a'}%
                                         </div>
                                     </div>
                                     <div className="flex items-center gap-1 ml-2">
                                         <button
-                                            onClick={() => addLibraryPrimerToSequence(primer)}
+                                            onClick={() => void addLibraryPrimerToSequence(primer)}
                                             className="p-1 hover:bg-blue-600 rounded text-blue-400 hover:text-white"
                                             title="Add to sequence"
                                         >
@@ -474,7 +575,7 @@ export function PrimerPanel({
                                             </svg>
                                         </button>
                                         <button
-                                            onClick={() => handleToggleFavorite(primer.id)}
+                                            onClick={() => void handleToggleFavorite(primer.id)}
                                             className={`p-1 rounded transition-colors ${primer.is_favorite
                                                 ? 'text-amber-400 hover:text-amber-300'
                                                 : 'text-slate-500 hover:text-amber-400'
@@ -484,7 +585,7 @@ export function PrimerPanel({
                                             ★
                                         </button>
                                         <button
-                                            onClick={() => handleDeleteFromLibrary(primer.id)}
+                                            onClick={() => void handleDeleteFromLibrary(primer.id)}
                                             className="p-1 hover:bg-red-600 rounded text-slate-400 hover:text-white"
                                             title="Delete from library"
                                         >
@@ -499,7 +600,7 @@ export function PrimerPanel({
                     )}
 
                     <div className="text-xs text-slate-500 text-center">
-                        Click + to add library primer to current sequence
+                        Click + to add a library primer to the current construct using the active Tm model.
                     </div>
                 </div>
             )}

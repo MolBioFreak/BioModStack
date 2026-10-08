@@ -25,6 +25,7 @@ from routers.jobs import (
     _child_job_has_reusable_outputs,
     _derive_job_stage_tags,
     _derive_source_stage_payload,
+    _iter_saved_review_filter_sets,
     _looks_like_antibody_job,
     _merge_preserved_gate_payload,
     _normalize_antibody_job_params,
@@ -38,7 +39,9 @@ from services.result_ingester import (
     _coalesce_cdr_lengths,
     _discover_collected_ppiflow_structures,
     _extract_fampnn_metrics,
+    _infer_antibody_type_from_job_params,
     _inherit_source_design_metrics,
+    _job_has_explicit_binder_target_roles,
     _parse_ppiflow_sample_index,
     parse_backbone_id,
 )
@@ -167,6 +170,46 @@ def test_derive_job_stage_tags_marks_boltzgen_nanobody_runs_as_boltzgen() -> Non
 
     assert family == "boltzgen"
     assert mode == "nanobody_binder"
+
+
+def test_iter_saved_review_filter_sets_reads_persisted_selection_sets() -> None:
+    job = SimpleNamespace(
+        saved_selection_sets=[
+            {
+                "id": "saved-1",
+                "name": "Boltz shortlist",
+                "created_at": "2026-04-13T00:00:00Z",
+                "design_ids": ["d1", "d2"],
+                "filter_state": {"output_source_filter": "boltzgen"},
+            }
+        ],
+        awaiting_payload={},
+    )
+
+    saved_sets = _iter_saved_review_filter_sets(job)
+
+    assert [entry.name for entry in saved_sets] == ["Boltz shortlist"]
+    assert saved_sets[0].filter_state["output_source_filter"] == "boltzgen"
+
+
+def test_job_has_explicit_binder_target_roles_accepts_boltzgen_nanobody_jobs() -> None:
+    job = SimpleNamespace(
+        model_id="boltzgen",
+        mode="nanobody_binder",
+        params={
+            "boltzgen_mode": "nanobody_binder",
+            "framework_type": "nanobody",
+        },
+    )
+
+    assert _job_has_explicit_binder_target_roles(job) is True
+
+
+def test_infer_antibody_type_from_job_params_maps_boltzgen_nanobody_mode_to_vhh() -> None:
+    assert _infer_antibody_type_from_job_params({
+        "boltzgen_mode": "nanobody_binder",
+        "framework_type": "nanobody",
+    }) == "vhh"
 
 
 @pytest.mark.asyncio

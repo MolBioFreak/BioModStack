@@ -259,6 +259,8 @@ class DesignResponse(BaseModel):
     source_stage_mode: Optional[str] = None
     source_pdb_path: Optional[str] = None
     source_design_name: Optional[str] = None
+    artifact_class: Optional[str] = None
+    artifact_schema_version: Optional[int] = None
     selected_loop_scope: Optional[Dict[str, Any]] = None
     provenance: Optional[Dict[str, Any]] = None
     
@@ -376,6 +378,9 @@ class DesignQueryRequest(BaseModel):
     rfd_rog_max: Optional[float] = None
     favorites_only: Optional[bool] = False
     artifact_group: Optional[str] = None
+    artifact_class: Optional[str] = None
+    stage_family: Optional[str] = None
+    source_stage_family: Optional[str] = None
     sort_by: Optional[str] = None
     sort_desc: Optional[bool] = True
     limit: Optional[int] = 100
@@ -1326,6 +1331,9 @@ async def list_designs(
     rfd_rog_max: Optional[float] = Query(None, description="Maximum RFdiffusion radius of gyration"),
     favorites_only: bool = Query(False, description="Show only favorites"),
     artifact_group: Optional[str] = Query(None, description="Filter by review artifact group"),
+    artifact_class: Optional[str] = Query(None, description="Filter by canonical artifact class"),
+    stage_family: Optional[str] = Query(None, description="Filter by producing stage family"),
+    source_stage_family: Optional[str] = Query(None, description="Filter by source stage family"),
     sort_by: Optional[str] = Query(None, description="Sort field for table ordering"),
     sort_desc: bool = Query(True, description="Sort descending"),
     limit: int = Query(100, le=10000),
@@ -1503,6 +1511,12 @@ async def list_designs(
         conditions.append(Design.is_favorite == True)
     if artifact_group:
         conditions.append(Design.artifact_group == artifact_group)
+    if artifact_class:
+        conditions.append(Design.artifact_class == artifact_class)
+    if stage_family:
+        conditions.append(Design.stage_family == stage_family)
+    if source_stage_family:
+        conditions.append(Design.source_stage_family == source_stage_family)
     
     if conditions:
         query = query.where(and_(*conditions))
@@ -1558,6 +1572,9 @@ async def query_designs(
         rfd_rog_max=request.rfd_rog_max,
         favorites_only=bool(request.favorites_only),
         artifact_group=request.artifact_group,
+        artifact_class=request.artifact_class,
+        stage_family=request.stage_family,
+        source_stage_family=request.source_stage_family,
         sort_by=request.sort_by,
         sort_desc=True if request.sort_desc is None else request.sort_desc,
         limit=100 if request.limit is None else request.limit,

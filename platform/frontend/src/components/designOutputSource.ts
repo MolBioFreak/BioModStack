@@ -1,11 +1,13 @@
-export type OutputSourceFilter = 'all' | 'rfantibody' | 'fampnn' | 'ppiflow' | 'validation';
-export type AnalysisLens = 'validation' | 'rfantibody' | 'fampnn' | 'ppiflow' | 'frustrampnn' | 'protenix';
+export type OutputSourceFilter = 'all' | 'rfantibody' | 'boltzgen' | 'fampnn' | 'ppiflow' | 'validation';
+export type AnalysisLens = 'validation' | 'rfantibody' | 'boltzgen' | 'fampnn' | 'ppiflow' | 'frustrampnn' | 'protenix';
 
 type OutputSourceDesign = {
+    name?: string | null;
     pdb_path?: string | null;
     confidence_metrics?: Record<string, unknown> | null;
     source_stage?: string | null;
     artifact_group?: string | null;
+    artifact_class?: string | null;
     stage_family?: string | null;
     stage_mode?: string | null;
     source_stage_family?: string | null;
@@ -19,12 +21,14 @@ type AnalysisLensJob = {
     model_id?: string | null;
     mode?: string | null;
     params?: Record<string, unknown> | null;
+    stage_family?: string | null;
+    stage_mode?: string | null;
     current_stage?: string | null;
     awaiting_stage?: string | null;
     awaiting_payload?: Record<string, unknown> | null;
 };
 
-const ANALYSIS_LENS_PRIORITY: AnalysisLens[] = ['rfantibody', 'fampnn', 'ppiflow', 'frustrampnn', 'protenix', 'validation'];
+const ANALYSIS_LENS_PRIORITY: AnalysisLens[] = ['rfantibody', 'boltzgen', 'fampnn', 'ppiflow', 'frustrampnn', 'protenix', 'validation'];
 
 const containsAny = (value: string, needles: string[]): boolean => needles.some((needle) => value.includes(needle));
 
@@ -49,6 +53,29 @@ const hasValidationMetrics = (metrics: Record<string, unknown> | null | undefine
         'chain_pair_iptm' in metrics ||
         'protenix_target_rmsd' in metrics ||
         'rmsd_target' in metrics
+    );
+};
+
+const normalizeArtifactClass = (value: unknown): string => String(value || '').trim().toLowerCase();
+const isValidatedArtifactClass = (artifactClass: string): boolean => artifactClass === 'validated_complex';
+
+const isBoltzGenGeneratorDesign = (design: OutputSourceDesign): boolean => {
+    const name = String(design.name || '').toLowerCase();
+    const path = (design.pdb_path || '').toLowerCase();
+    const stageFamily = String(design.stage_family || '').toLowerCase();
+    const stageMode = String(design.stage_mode || '').toLowerCase();
+    const sourceStageFamily = String(design.source_stage_family || '').toLowerCase();
+    const artifactClass = normalizeArtifactClass(design.artifact_class);
+
+    if (isValidatedArtifactClass(artifactClass)) return false;
+
+    return (
+        stageFamily.includes('boltzgen') ||
+        containsAny(stageMode, ['nanobody_binder', 'antibody_binder']) ||
+        (sourceStageFamily.includes('boltzgen') && artifactClass === 'sequence_designed_complex') ||
+        name.startsWith('boltzgen_input_') ||
+        path.includes('/boltzgen/') ||
+        path.includes('/boltzgen_input_')
     );
 };
 
@@ -78,15 +105,29 @@ const isProteinLocalRedesignBackboneDesign = (design: OutputSourceDesign): boole
 };
 
 export const inferDesignOutputSource = (design: OutputSourceDesign): OutputSourceFilter => {
+    const name = String(design.name || '').toLowerCase();
     const path = (design.pdb_path || '').toLowerCase();
     const sourceStage = String(design.source_stage || '').toLowerCase();
     const stageFamily = String(design.stage_family || '').toLowerCase();
     const stageMode = String(design.stage_mode || '').toLowerCase();
     const artifactGroup = String(design.artifact_group || '').toLowerCase();
+    const artifactClass = normalizeArtifactClass(design.artifact_class);
     const metrics = design.confidence_metrics || {};
 
     if (isProteinLocalRedesignBackboneDesign(design)) {
         return 'all';
+    }
+
+    if (
+        isValidatedArtifactClass(artifactClass) ||
+        containsAny(stageFamily, ['validation', 'protenix', 'boltz2']) ||
+        containsAny(stageMode, ['validation', 'post_structure_validation'])
+    ) {
+        return 'validation';
+    }
+
+    if (isBoltzGenGeneratorDesign(design)) {
+        return 'boltzgen';
     }
 
     if (containsAny(stageFamily, ['rfantibody']) || containsAny(stageMode, ['rfantibody', 'post_rfantibody'])) {
@@ -101,10 +142,6 @@ export const inferDesignOutputSource = (design: OutputSourceDesign): OutputSourc
         return 'ppiflow';
     }
 
-    if (containsAny(stageFamily, ['validation', 'protenix', 'boltz']) || containsAny(stageMode, ['validation', 'post_structure_validation'])) {
-        return 'validation';
-    }
-
     if (sourceStage === 'post_rfantibody' || containsAny(artifactGroup, ['raw', 'filtered'])) {
         return 'rfantibody';
     }
@@ -117,9 +154,13 @@ export const inferDesignOutputSource = (design: OutputSourceDesign): OutputSourc
         path.includes('/validated_designs/') ||
         path.includes('/collected/structure_validation/') ||
         path.includes('/run/protenix/') ||
-        path.includes('/run/boltz/')
+        (path.includes('/run/boltz/') && !isBoltzGenGeneratorDesign(design))
     ) {
         return 'validation';
+    }
+
+    if (name.startsWith('boltzgen_input_') || path.includes('/boltzgen/')) {
+        return 'boltzgen';
     }
 
     if (
@@ -165,6 +206,13 @@ export const inferDesignOutputSource = (design: OutputSourceDesign): OutputSourc
         return 'ppiflow';
     }
 
+    if (
+        hasMetricKeys(design as AnalysisLensDesign, ['affinity_score', 'binder_probability'])
+        && !hasValidationMetrics(metrics)
+    ) {
+        return 'boltzgen';
+    }
+
     if (hasValidationMetrics(metrics)) return 'validation';
 
     return 'all';
@@ -196,6 +244,7 @@ export const inferDesignAnalysisLens = (design: AnalysisLensDesign): AnalysisLen
 
     const source = inferDesignOutputSource(design);
     if (source === 'rfantibody') return 'rfantibody';
+    if (source === 'boltzgen') return 'boltzgen';
     if (source === 'fampnn') return 'fampnn';
     if (source === 'ppiflow') return 'ppiflow';
     if (source === 'validation') return 'validation';
@@ -210,14 +259,36 @@ const inferJobAnalysisLens = (job: AnalysisLensJob | null | undefined): Analysis
     const name = String(job.name || '').toLowerCase();
     const modelId = String(job.model_id || '').toLowerCase();
     const mode = String(job.mode || '').toLowerCase();
+    const stageFamily = String(job.stage_family || '').toLowerCase();
+    const stageMode = String(job.stage_mode || '').toLowerCase();
     const candidateDir = String(job.awaiting_payload?.candidate_dir || '').toLowerCase();
     const params = job.params ?? {};
     const rfdMode = String(params.rfd_mode || '').toLowerCase();
     const validator = String(params.structure_validator || '').toLowerCase();
+    const boltzgenMode = String(params.boltzgen_mode || mode || '').toLowerCase();
     const isProteinLocalRedesign = modelId === 'protein_local_redesign' || mode === 'local_redesign' || rfdMode === 'protein_local_redesign';
 
     if (isProteinLocalRedesign && stage === 'post_rfantibody') {
         return null;
+    }
+
+    if (
+        stage === 'post_structure_validation' ||
+        containsAny(stage, ['validation']) ||
+        containsAny(stageFamily, ['validation', 'boltz2']) ||
+        containsAny(candidateDir, ['structure_validation', 'validated_designs']) ||
+        params.run_structure_validation === true ||
+        mode.includes('validation')
+    ) {
+        return 'validation';
+    }
+
+    if (
+        containsAny(stageFamily, ['boltzgen']) ||
+        containsAny(stageMode, ['nanobody_binder', 'antibody_binder']) ||
+        (modelId === 'boltzgen' && ['nanobody_binder', 'antibody_binder'].includes(boltzgenMode))
+    ) {
+        return 'boltzgen';
     }
 
     if (
@@ -271,17 +342,6 @@ const inferJobAnalysisLens = (job: AnalysisLensJob | null | undefined): Analysis
         return 'protenix';
     }
 
-    if (
-        stage === 'post_structure_validation' ||
-        containsAny(stage, ['validation', 'boltz']) ||
-        containsAny(candidateDir, ['structure_validation', 'validated_designs', 'boltz']) ||
-        params.run_structure_validation === true ||
-        modelId.includes('boltz') ||
-        mode.includes('validation')
-    ) {
-        return 'validation';
-    }
-
     return null;
 };
 
@@ -318,6 +378,7 @@ export const getOutputSourceLabel = (design: OutputSourceDesign): string => {
     if (source === 'validation') {
         return hasValidationMetrics(design.confidence_metrics || null) ? 'Protenix' : 'Validation';
     }
+    if (source === 'boltzgen') return 'BoltzGen';
     if (source === 'ppiflow') return 'PPIFlow';
     if (source === 'fampnn') return 'FAMPNN';
     if (source === 'rfantibody') return 'RFantibody';
@@ -326,6 +387,7 @@ export const getOutputSourceLabel = (design: OutputSourceDesign): string => {
 
 export const getOutputSourceBadgeClass = (source: OutputSourceFilter): string => {
     if (source === 'rfantibody') return 'border-violet-500/40 bg-violet-500/10 text-violet-200';
+    if (source === 'boltzgen') return 'border-amber-500/40 bg-amber-500/10 text-amber-200';
     if (source === 'fampnn') return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200';
     if (source === 'ppiflow') return 'border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-200';
     if (source === 'validation') return 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200';

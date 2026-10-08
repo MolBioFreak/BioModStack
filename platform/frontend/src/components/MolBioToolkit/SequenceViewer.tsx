@@ -6,6 +6,7 @@
 
 import { SeqViz } from "seqviz";
 import { useMemo } from "react";
+import type { PrimerTmSettings } from '../../lib/api';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // COLOR PALETTES
@@ -93,11 +94,15 @@ export interface Primer {
     id: string;
     name: string;
     sequence: string;
+    sequenceType?: 'dna' | 'rna';
     start: number;
     end: number;
     strand: 1 | -1;
     tm?: number;
     gc_percent?: number;
+    tm_algorithm?: string;
+    tm_salt_correction?: string;
+    tm_settings?: PrimerTmSettings;
 }
 
 export interface Translation {

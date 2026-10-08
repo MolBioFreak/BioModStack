@@ -16,6 +16,11 @@ import { AutoAnnotatePanel, type AutoAnnotateSettings } from './AutoAnnotatePane
 import { GCContentTrack } from './GCContentTrack';
 import { MolecularInputModal } from './MolecularInputModal';
 import { DEMO_PLASMIDS } from './demoConstructs';
+import {
+    fetchPrimerTmOptions,
+    type PrimerTmOptionsResponse,
+    type PrimerTmSettings,
+} from '../../lib/api';
 import type {
     SequenceData,
     VisibilityState,
@@ -168,6 +173,21 @@ const PANELS: { id: ActivePanel; label: string }[] = [
     { id: 'primers', label: 'Primers' },
     { id: 'features', label: 'Features' },
 ];
+
+const DEFAULT_DNA_TM_SETTINGS: PrimerTmSettings = {
+    algorithm: 'nn_santalucia_hicks_2004',
+    salt_correction: 'owczarzy_2008',
+    primer_concentration_nM: 250,
+    template_concentration_nM: 0,
+    na_mM: 50,
+    k_mM: 0,
+    tris_mM: 0,
+    mg_mM: 1.5,
+    dntps_mM: 0.6,
+    dmso_percent: 0,
+    formamide_percent: 0,
+    self_complementary: false,
+};
 
 function PanelTabs({ active, onChange }: PanelTabsProps) {
     return (
@@ -374,6 +394,7 @@ export function MolBioToolkitV2() {
                 })),
                 primers: (seq.primers || []).map((p: Primer) => ({
                     ...p,
+                    sequenceType: p.sequenceType ?? (p as Primer & { sequence_type?: 'dna' | 'rna' }).sequence_type ?? inferSequenceTypeFromSequence(p.sequence),
                     strand: p.strand === -1 ? -1 : 1,
                 })),
                 translations: []
@@ -483,11 +504,15 @@ export function MolBioToolkitV2() {
                     id: p.id || `p_${i}`,
                     name: p.name || `Primer ${i + 1}`,
                     sequence: (p.sequence || '').toUpperCase(),
+                    sequenceType: p.sequenceType || p.sequence_type || inferSequenceTypeFromSequence(p.sequence || ''),
                     start: p.start ?? 0,
                     end: p.end ?? 0,
                     strand: p.strand === -1 ? -1 : 1,
                     tm: p.tm,
-                    gc_percent: p.gc_percent
+                    gc_percent: p.gc_percent,
+                    tm_algorithm: p.tm_algorithm,
+                    tm_salt_correction: p.tm_salt_correction,
+                    tm_settings: p.tm_settings,
                 })),
                 translations: []
             };
@@ -516,7 +541,10 @@ export function MolBioToolkitV2() {
             is_circular: sequenceData.circular,
             sequence_type: normalizedType,
             features: sequenceData.features,
-            primers: sequenceData.primers
+            primers: sequenceData.primers?.map((primer) => ({
+                ...primer,
+                sequence_type: primer.sequenceType || inferSequenceTypeFromSequence(primer.sequence),
+            }))
         };
 
         let saved = false;
@@ -604,6 +632,53 @@ export function MolBioToolkitV2() {
 
     // GC track visibility state
     const [showGCTrack, setShowGCTrack] = useState(true);
+    const [primerTmOptions, setPrimerTmOptions] = useState<PrimerTmOptionsResponse | null>(null);
+    const [primerTmSettings, setPrimerTmSettings] = useState<PrimerTmSettings>(DEFAULT_DNA_TM_SETTINGS);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        const loadPrimerTmOptions = async () => {
+            try {
+                const response = await fetchPrimerTmOptions();
+                if (cancelled) {
+                    return;
+                }
+                setPrimerTmOptions(response.data);
+                const preferredSequenceType = sequenceData.sequenceType === 'rna' ? 'rna' : 'dna';
+                const supported = response.data.algorithms.some(
+                    (option) =>
+                        option.id === primerTmSettings.algorithm &&
+                        option.sequence_types.includes(preferredSequenceType),
+                );
+                if (!supported) {
+                    setPrimerTmSettings(response.data.defaults[preferredSequenceType]);
+                }
+            } catch (tmError) {
+                console.error('Failed to load primer Tm options:', tmError);
+            }
+        };
+
+        loadPrimerTmOptions();
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!primerTmOptions) {
+            return;
+        }
+        const preferredSequenceType = sequenceData.sequenceType === 'rna' ? 'rna' : 'dna';
+        const supported = primerTmOptions.algorithms.some(
+            (option) =>
+                option.id === primerTmSettings.algorithm &&
+                option.sequence_types.includes(preferredSequenceType),
+        );
+        if (!supported) {
+            setPrimerTmSettings(primerTmOptions.defaults[preferredSequenceType]);
+        }
+    }, [primerTmOptions, primerTmSettings.algorithm, sequenceData.sequenceType]);
 
     // Open auto-annotate settings panel
     const handleAutoAnnotate = useCallback(() => {
@@ -887,6 +962,9 @@ export function MolBioToolkitV2() {
                                 sequenceData={sequenceData}
                                 sequenceId={selectedSequenceId}
                                 onHighlight={setHighlightedRegions}
+                                tmOptions={primerTmOptions}
+                                tmSettings={primerTmSettings}
+                                onTmSettingsChange={setPrimerTmSettings}
                             />
                         )}
                         {activePanel === 'primers' && (
@@ -896,6 +974,9 @@ export function MolBioToolkitV2() {
                                 onHighlight={setHighlightedRegions}
                                 onAddPrimer={handleAddPrimer}
                                 onRemovePrimer={handleRemovePrimer}
+                                tmOptions={primerTmOptions}
+                                tmSettings={primerTmSettings}
+                                onTmSettingsChange={setPrimerTmSettings}
                             />
                         )}
                         {activePanel === 'features' && (

@@ -33,11 +33,14 @@ export interface Job {
     source_stage_mode?: string | null;
     source_selection_manifest_path?: string | null;
     source_selection_count?: number | null;
+    selected_input_artifact_class?: string | null;
+    selected_input_schema_version?: number | null;
     selection_source_type?: string | null;
     selection_source_job_id?: string | null;
     selection_dataset_name?: string | null;
     selected_loop_scope?: Record<string, unknown> | null;
     provenance?: Record<string, unknown> | null;
+    saved_selection_sets?: SavedReviewFilterSet[] | null;
     // GPU and timing info
     pinned_gpu?: number | null;  // User-specified GPU pin
     assigned_gpu?: number | null;
@@ -618,6 +621,8 @@ export interface Design {
     source_stage_mode?: string | null;
     source_pdb_path?: string | null;
     source_design_name?: string | null;
+    artifact_class?: string | null;
+    artifact_schema_version?: number | null;
     lineage_root_job_id?: string | null;
     parent_design_id?: string | null;
     origin_design_id?: string | null;
@@ -727,6 +732,9 @@ export interface DesignFilters {
     rfd_rog_max?: number;
     favorites_only?: boolean;
     artifact_group?: string;
+    artifact_class?: string;
+    stage_family?: string;
+    source_stage_family?: string;
     sort_by?: DesignSortField;
     sort_desc?: boolean;
     limit?: number;

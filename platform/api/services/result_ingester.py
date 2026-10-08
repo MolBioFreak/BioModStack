@@ -239,10 +239,13 @@ def _job_has_explicit_binder_target_roles(job: Optional[Job]) -> bool:
     model_id = str(job.model_id or "").strip().lower()
     mode = str(job.mode or "").strip().lower()
     rfd_mode = str(params.get("rfd_mode") or "").strip().lower()
+    boltzgen_mode = str(params.get("boltzgen_mode") or mode or "").strip().lower()
 
     if is_antibody_pipeline_mode(rfd_mode):
         return True
     if "antibody" in model_id or "antibody" in mode:
+        return True
+    if model_id == "boltzgen" and boltzgen_mode in {"nanobody_binder", "antibody_binder"}:
         return True
     if params.get("antibody_chains"):
         return True
@@ -258,6 +261,19 @@ def _job_has_explicit_binder_target_roles(job: Optional[Job]) -> bool:
         if len(protein_like) >= 2:
             return True
     return False
+
+
+def _infer_antibody_type_from_job_params(job_params: Dict[str, Any]) -> Optional[str]:
+    framework_type = str(job_params.get("framework_type") or "").strip().lower()
+    boltzgen_mode = str(job_params.get("boltzgen_mode") or job_params.get("mode") or "").strip().lower()
+
+    if framework_type in {"nanobody", "vhh"} or boltzgen_mode == "nanobody_binder":
+        return "vhh"
+    if framework_type in {"fab", "scfv", "antibody"}:
+        return framework_type
+    if boltzgen_mode == "antibody_binder":
+        return "fab"
+    return None
 
 
 def _job_has_reference_target_structure(job_params: Dict[str, Any]) -> bool:
@@ -3012,16 +3028,17 @@ async def ingest_loose_files(
                     detected_antibody_chains=detected_antibody_chains,
                     detected_target_chain=detected_target_chain,
                 )
-                geometry_fields = (
-                    _compute_validation_geometry_fields(
-                        structure_path=Path(structure_path),
-                        job_params=job_params,
-                        detected_antibody_chains=structure_role_fields.get("detected_antibody_chains"),
-                        detected_target_chain=structure_role_fields.get("detected_target_chain"),
-                        epitope_residues=epitope_residues,
+                geometry_fields = dict(structure_role_fields)
+                if allow_validation_interface_metrics:
+                    geometry_fields.update(
+                        _compute_validation_geometry_fields(
+                            structure_path=Path(structure_path),
+                            job_params=job_params,
+                            detected_antibody_chains=structure_role_fields.get("detected_antibody_chains"),
+                            detected_target_chain=structure_role_fields.get("detected_target_chain"),
+                            epitope_residues=epitope_residues,
+                        )
                     )
-                    if allow_validation_interface_metrics else {}
-                )
                 
                 # Create design
                 lineage = await _resolve_parent_design_lineage(
@@ -3034,10 +3051,19 @@ async def ingest_loose_files(
                 fam_payload = _load_json_payload(fam_json_path)
                 fam_metrics = _extract_fampnn_metrics(fam_payload, Path(structure_path))
                 fampnn_record = _build_fampnn_payload(fam_payload, fam_metrics)
+                boltzgen_mode = str(job_params.get("boltzgen_mode") or "").strip().lower()
                 fam_provenance: Dict[str, Any] = {
-                    "source": "fampnn" if fampnn_record and fampnn_record.get("fampnn_avg_psce") is not None else "loose_file",
+                    "source": (
+                        "fampnn"
+                        if fampnn_record and fampnn_record.get("fampnn_avg_psce") is not None
+                        else ("boltzgen" if job_context.get("stage_family") == "boltzgen" else "loose_file")
+                    ),
                     "structure_path": str(structure_path),
                 }
+                if job_context.get("stage_family") == "boltzgen":
+                    fam_provenance["generator_family"] = "boltzgen"
+                if boltzgen_mode:
+                    fam_provenance["generator_mode"] = boltzgen_mode
                 if lineage.get("source_design_name"):
                     fam_provenance["source_design_name"] = lineage["source_design_name"]
                 if lineage.get("source_pdb_path"):
@@ -3098,6 +3124,8 @@ async def ingest_loose_files(
                     disorder=safe_float(disorder),
                     num_recycles=safe_int(num_recycles),
                     has_clash=(bool(has_clash_raw) if has_clash_raw is not None else None),
+                    binder_length=fam_metrics.get("binder_length"),
+                    antibody_type=_infer_antibody_type_from_job_params(job_params),
                     cdr_h1_length=structure_cdr_lengths.get("H1"),
                     cdr_h2_length=structure_cdr_lengths.get("H2"),
                     cdr_h3_length=structure_cdr_lengths.get("H3"),

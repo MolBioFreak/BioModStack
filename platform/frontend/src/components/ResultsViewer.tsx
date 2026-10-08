@@ -363,9 +363,21 @@ const isNgsJob = (job: Pick<Job, 'model_id' | 'mode'>): boolean => {
 
 const inferPreferredOutputSource = (job: Job | null | undefined): OutputSourceFilter => {
     const stage = String(job?.awaiting_stage || job?.current_stage || '').toLowerCase();
+    const stageFamily = String(job?.stage_family || '').toLowerCase();
+    const stageMode = String(job?.stage_mode || '').toLowerCase();
+    const modelId = String(job?.model_id || '').toLowerCase();
+    const mode = String(job?.mode || '').toLowerCase();
     const candidateDir = String(job?.awaiting_payload?.candidate_dir || '').toLowerCase();
 
     if (stage === 'post_structure_validation' || candidateDir.includes('structure_validation')) return 'validation';
+    if (
+        stageFamily.includes('boltzgen') ||
+        stageMode.includes('nanobody_binder') ||
+        stageMode.includes('antibody_binder') ||
+        (modelId === 'boltzgen' && (mode === 'nanobody_binder' || mode === 'antibody_binder'))
+    ) {
+        return 'boltzgen';
+    }
     if (
         stage.includes('ppiflow') ||
         stage.includes('maturation') ||
@@ -476,6 +488,13 @@ const getFriendlyDesignName = (design: { name: string; pdb_path?: string | null;
             : `${getOutputSourceLabel(design)} Sample ${sampleIndex}`;
     }
     if (source === 'validation') return formatValidationDesignLabel(design as any);
+    if (source === 'boltzgen') {
+        const inputMatch = design.name.match(/boltzgen_input_(\d+)/i);
+        const variantMatch = design.name.match(/variant_(\d+)/i);
+        if (inputMatch) return `BoltzGen Candidate ${inputMatch[1]}`;
+        if (variantMatch) return `BoltzGen Variant ${variantMatch[1]}`;
+        return 'BoltzGen Candidate';
+    }
     if (source === 'fampnn') return seqMatch ? `FAMPNN Seq ${seqMatch[1]}` : 'FAMPNN Candidate';
     if (source === 'ppiflow') {
         const ppiflowRecord = (
@@ -500,6 +519,17 @@ const getDesignSelectorMetricLabel = (design: Design): string | null => {
     const source = inferDesignOutputSource(design);
     if (source === 'rfantibody' && typeof design.plddt_overall === 'number') {
         return `RF pLDDT ${design.plddt_overall.toFixed(0)}`;
+    }
+    if (source === 'boltzgen') {
+        if (typeof design.affinity_score === 'number') {
+            return `Affinity ${design.affinity_score.toFixed(2)}`;
+        }
+        if (typeof design.conf_score === 'number') {
+            return `Conf ${design.conf_score.toFixed(2)}`;
+        }
+        if (typeof design.plddt_overall === 'number') {
+            return `pLDDT ${design.plddt_overall.toFixed(0)}`;
+        }
     }
     if (source === 'validation' && typeof design.plddt_overall === 'number') {
         return `pLDDT ${design.plddt_overall.toFixed(0)}`;
@@ -840,6 +870,7 @@ const isPostRfantibodyStage = (job: Job | null | undefined): boolean =>
 const ANALYSIS_LENS_LABELS: Record<AnalysisLens, string> = {
     validation: 'Validation',
     rfantibody: 'RFantibody',
+    boltzgen: 'BoltzGen',
     fampnn: 'FA-MPNN',
     ppiflow: 'PPIFlow',
     frustrampnn: 'FrustraMPNN',
@@ -847,11 +878,12 @@ const ANALYSIS_LENS_LABELS: Record<AnalysisLens, string> = {
 };
 const LINEAGE_GROUP_ORDER: Record<string, number> = {
     rfantibody: 0,
-    fampnn: 1,
-    ppiflow: 2,
-    validation: 3,
-    frustrampnn: 4,
-    child: 5,
+    boltzgen: 1,
+    fampnn: 2,
+    ppiflow: 3,
+    validation: 4,
+    frustrampnn: 5,
+    child: 6,
 };
 const normalizeLoopScopeLabel = (value: unknown): string | null => {
     if (Array.isArray(value)) {
@@ -888,7 +920,8 @@ const normalizeLoopScopeLabel = (value: unknown): string | null => {
 const getLineageFamily = (job: Job): string => {
     const stageFamily = String(job.stage_family || '').trim().toLowerCase();
     if (stageFamily) {
-        if (stageFamily.includes('validation') || stageFamily.includes('protenix') || stageFamily.includes('boltz')) return 'validation';
+        if (stageFamily.includes('boltzgen')) return 'boltzgen';
+        if (stageFamily.includes('validation') || stageFamily.includes('protenix') || stageFamily.includes('boltz2')) return 'validation';
         if (stageFamily.includes('ppiflow') || stageFamily.includes('maturation')) return 'ppiflow';
         if (stageFamily.includes('fampnn')) return 'fampnn';
         if (stageFamily.includes('frustrampnn')) return 'frustrampnn';
@@ -909,6 +942,11 @@ const getLineageGroupLabel = (job: Job): string => {
 const getLineageOutputLabel = (job: Job): string => {
     const family = getLineageFamily(job);
     const stageMode = String(job.stage_mode || '').trim().toLowerCase();
+    if (family === 'boltzgen') {
+        if (stageMode === 'nanobody_binder') return 'Nanobody Generation';
+        if (stageMode === 'antibody_binder') return 'Antibody Generation';
+        return 'BoltzGen';
+    }
     if (family === 'ppiflow') {
         if (stageMode === 'backbone_refine' || stageMode === 'post_rfantibody') return 'Backbone Refinement';
         if (stageMode === 'post_ppiflow') return 'Backbone Reattempt';
@@ -1214,6 +1252,7 @@ const coerceSavedReviewFilterSets = (value: unknown): SavedReviewFilterSet[] => 
 const normalizeSavedReviewFilterState = (state: SavedReviewFilterState): SavedReviewFilterState => ({
     rf_review_set: state.rf_review_set === 'raw' ? 'raw' : state.rf_review_set === 'filtered' ? 'filtered' : undefined,
     output_source_filter: state.output_source_filter === 'rfantibody'
+        || state.output_source_filter === 'boltzgen'
         || state.output_source_filter === 'fampnn'
         || state.output_source_filter === 'ppiflow'
         || state.output_source_filter === 'validation'
@@ -1671,8 +1710,8 @@ export function ResultsViewer() {
     const rfRawCount = Number(activeJob?.awaiting_payload?.raw_candidate_count || 0);
     const rfFilteredCount = Number(activeJob?.awaiting_payload?.filtered_candidate_count || 0);
     const persistedSavedReviewFilterSets = useMemo(
-        () => coerceSavedReviewFilterSets(activeJob?.awaiting_payload?.review_filter_sets),
-        [activeJob?.awaiting_payload?.review_filter_sets],
+        () => coerceSavedReviewFilterSets(activeJob?.saved_selection_sets ?? activeJob?.awaiting_payload?.review_filter_sets),
+        [activeJob?.awaiting_payload?.review_filter_sets, activeJob?.saved_selection_sets],
     );
     const savedReviewFilterSets = useMemo(
         () => savedReviewFilterSetsOverride ?? persistedSavedReviewFilterSets,
@@ -1921,7 +1960,7 @@ export function ResultsViewer() {
         }
         return '';
     }, [appliedSavedReviewFilterSet?.id, isPostRFantibodyReview, rfReviewSet]);
-    const backboneFilterApplies = outputSourceFilter === 'all' || outputSourceFilter === 'rfantibody';
+    const backboneFilterApplies = outputSourceFilter === 'all' || outputSourceFilter === 'rfantibody' || outputSourceFilter === 'boltzgen';
     const useClientSourcePagination = outputSourceFilter !== 'all';
     const requiresClientOnlySort = useClientRenderedValueSort
         || (!SERVER_SORT_FIELDS.has(sortField as DesignSortField) && isTableColumnSortable(sortField));
@@ -2737,10 +2776,10 @@ export function ResultsViewer() {
         setColorMode('default');
     }, [hasCdrAnnotation, hasCdrOverlay, isOligoJob, selectedDesign?.frustration_residues?.length, selectedDesignLens, selectedJobId]);
     const antibodyDesignGroups = useMemo(() => {
-        const grouped: Record<OutputSourceFilter, typeof designs> = { all: [], rfantibody: [], fampnn: [], ppiflow: [], validation: [] };
+        const grouped: Record<OutputSourceFilter, typeof designs> = { all: [], rfantibody: [], boltzgen: [], fampnn: [], ppiflow: [], validation: [] };
         for (const design of orderedDesigns) {
             const source = inferDesignOutputSource(design);
-            if (source === 'rfantibody' || source === 'fampnn' || source === 'ppiflow' || source === 'validation') grouped[source].push(design);
+            if (source === 'rfantibody' || source === 'boltzgen' || source === 'fampnn' || source === 'ppiflow' || source === 'validation') grouped[source].push(design);
             else grouped.all.push(design);
         }
         grouped.ppiflow.sort((a, b) => {
@@ -3629,6 +3668,7 @@ export function ResultsViewer() {
         const nextSortDir = nextState.sort_dir === 'desc' ? 'desc' : 'asc';
         const nextRfReviewSet = nextState.rf_review_set === 'raw' ? 'raw' : 'filtered';
         const nextOutputSourceFilter = (nextState.output_source_filter === 'rfantibody'
+            || nextState.output_source_filter === 'boltzgen'
             || nextState.output_source_filter === 'fampnn'
             || nextState.output_source_filter === 'ppiflow'
             || nextState.output_source_filter === 'validation'
@@ -6103,7 +6143,7 @@ export function ResultsViewer() {
                                                                         onChange={(e) => setSelectedDesignId(e.target.value)}
                                                                         className="appearance-none rounded-lg border border-slate-600/50 bg-slate-700/60 px-3 py-2 pr-8 text-xs text-blue-300 transition-colors hover:bg-slate-600/60 min-w-[280px]"
                                                                     >
-                                                                        {(['rfantibody', 'fampnn', 'ppiflow', 'validation'] as OutputSourceFilter[])
+                                                                        {(['rfantibody', 'boltzgen', 'fampnn', 'ppiflow', 'validation'] as OutputSourceFilter[])
                                                                             .filter((source) => antibodyDesignGroups[source].length > 0 && (antibodySourceFilter === 'all' || antibodySourceFilter === source))
                                                                             .map((source) => (
                                                                                 <optgroup key={source} label={`${getOutputSourceLabel(antibodyDesignGroups[source][0])} (${antibodyDesignGroups[source].length})`}>
@@ -6119,7 +6159,7 @@ export function ResultsViewer() {
                                                                 </div>
                                                             </div>
                                                             <div className="flex flex-wrap gap-2">
-                                                                {(['all', 'rfantibody', 'fampnn', 'ppiflow', 'validation'] as OutputSourceFilter[]).map((source) => {
+                                                                {(['all', 'rfantibody', 'boltzgen', 'fampnn', 'ppiflow', 'validation'] as OutputSourceFilter[]).map((source) => {
                                                                     const count = source === 'all' ? designs.length : antibodyDesignGroups[source].length;
                                                                     if (source !== 'all' && count === 0) return null;
                                                                     const active = antibodySourceFilter === source;
@@ -7124,6 +7164,7 @@ export function ResultsViewer() {
                                                 {([
                                                     ['all', 'All'],
                                                     ['rfantibody', 'RFantibody'],
+                                                    ['boltzgen', 'BoltzGen'],
                                                     ['fampnn', 'FAMPNN'],
                                                     ['ppiflow', 'PPIFlow'],
                                                     ['validation', 'Validation'],
@@ -7312,6 +7353,8 @@ export function ResultsViewer() {
                                                                     <div className="flex items-center gap-2">
                                                                         <span className={`px-2 py-0.5 text-[10px] font-semibold rounded border ${inferDesignOutputSource(d as any) === 'validation'
                                                                             ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
+                                                                            : inferDesignOutputSource(d as any) === 'boltzgen'
+                                                                                ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
                                                                             : inferDesignOutputSource(d as any) === 'fampnn'
                                                                                 ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
                                                                                 : inferDesignOutputSource(d as any) === 'ppiflow'
