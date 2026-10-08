@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import copy
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,6 +18,26 @@ from scripts.bms_md.contract import write_atom_order_manifest
 from services.md.results import MDJobRecord, MDResultError, analysis_report, artifact_inventory, build_analysis_work_items, completion_barrier, resolve_artifact, summary
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_v2_replica_protocol_comparison_allows_only_hash_bound_input_relocation() -> None:
+    requested = {
+        "schema": "bms.md.job.v2",
+        "input": {"structure": "/parent/inputs/structure.pdb", "structure_sha256": "a" * 64, "structure_bytes": 42},
+        "stages": {"production": {"steps": 5000}},
+    }
+    relocated = copy.deepcopy(requested)
+    relocated["input"]["structure"] = "/worker/.worker_inputs/structure.pdb"
+
+    assert md_results_module._replica_protocol_matches(requested, relocated) is True
+
+    hash_drift = copy.deepcopy(relocated)
+    hash_drift["input"]["structure_sha256"] = "b" * 64
+    assert md_results_module._replica_protocol_matches(requested, hash_drift) is False
+
+    protocol_drift = copy.deepcopy(relocated)
+    protocol_drift["stages"]["production"]["steps"] = 5001
+    assert md_results_module._replica_protocol_matches(requested, protocol_drift) is False
 
 
 def _record(path: Path, root: Path, **extra: str) -> dict:

@@ -43,6 +43,40 @@ MAX_REPLICAS = 64
 MAX_ARTIFACTS = 1024
 MAX_ANALYSIS_POINTS = 10_000
 MAX_RESIDUE_METRICS = 10_000
+
+
+def _replica_protocol_matches(requested: Mapping[str, Any], observed: Any) -> bool:
+    if observed == requested:
+        return True
+    if requested.get("schema") != "bms.md.job.v2" or not isinstance(observed, Mapping):
+        return False
+    if observed.get("schema") != "bms.md.job.v2":
+        return False
+    requested_input = requested.get("input")
+    observed_input = observed.get("input")
+    if not isinstance(requested_input, Mapping) or not isinstance(observed_input, Mapping):
+        return False
+    requested_sha = requested_input.get("structure_sha256")
+    observed_sha = observed_input.get("structure_sha256")
+    requested_bytes = requested_input.get("structure_bytes")
+    observed_bytes = observed_input.get("structure_bytes")
+    if (
+        not isinstance(requested_sha, str)
+        or SHA256.fullmatch(requested_sha) is None
+        or observed_sha != requested_sha
+        or type(requested_bytes) is not int
+        or requested_bytes < 1
+        or observed_bytes != requested_bytes
+        or not isinstance(requested_input.get("structure"), str)
+        or not isinstance(observed_input.get("structure"), str)
+    ):
+        return False
+    normalized_observed = dict(observed)
+    normalized_observed["input"] = {
+        **observed_input,
+        "structure": requested_input["structure"],
+    }
+    return normalized_observed == requested
 MAX_TRAJECTORY_PLAYBACK_FRAMES = 10_000
 
 
@@ -518,7 +552,7 @@ def completion_barrier(job: MDJobRecord) -> dict[str, Any]:
         except ValidationError as exc:
             raise MDResultError("MD_COMPLETION_BLOCKED", f"MD replica {index} fails its run schema", 409) from exc
         seed = manifest.get("replica_seed")
-        if manifest.get("config") != job_spec:
+        if not _replica_protocol_matches(job_spec, manifest.get("config")):
             raise MDResultError("MD_COMPLETION_BLOCKED", "MD replica configuration does not match the requested scientific protocol", 409)
         engine = manifest.get("engine")
         if (
