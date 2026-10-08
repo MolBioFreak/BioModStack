@@ -14,6 +14,134 @@ from fastapi import FastAPI
 from sqlalchemy import select
 
 
+async def _managed_initialize(session, binding, *, idempotency_key, created_by=None):
+    """Create isolated hierarchy authority and apply its real connector command.
+
+    Only ID allocation is deterministic, so existing exact-lineage assertions
+    remain readable. Receipts, digests, binding revisions and acknowledgements
+    are produced by the managed services, never inserted by this fixture.
+    """
+    from unittest.mock import patch
+    import experiment_services as services
+    from experiment_database import create_experiment_engine, create_experiment_session_factory
+    from experiment_migrations import run_all
+    from experiment_models import ExperimentAggregateHead
+    from molbio_ngs_models import MolBioNGSDomainState
+    from services.ngs_molbio_connector import issue_binding_command, process_command_once
+
+    path = Path(session.bind.url.database).with_suffix('.global.db')
+    if not path.exists():
+        run_all(path)
+    engine = create_experiment_engine(f"sqlite+aiosqlite:///{path}")
+    factory = create_experiment_session_factory(engine)
+    original_id = services.new_id
+    ids = {
+        'workspace': binding.project_id,
+        'experiment': binding.global_experiment_id,
+        'domain_experiment': binding.global_domain_experiment_id,
+    }
+    revision_id = None
+
+    def allocate(kind):
+        if kind == 'revision' and revision_id:
+            return revision_id
+        return ids.get(kind) or original_id(kind)
+
+    # Flush caller receipts before connector commits its local transaction.
+    await session.commit()
+    try:
+        async with factory() as global_session:
+            from contextlib import nullcontext
+            existing = await global_session.get(ExperimentAggregateHead, binding.global_domain_experiment_id)
+            identity_scope = nullcontext() if existing is not None else patch.object(services, 'new_id', allocate)
+            with identity_scope:
+                project = await global_session.get(ExperimentAggregateHead, binding.project_id)
+                if project is None:
+                    project = await services.create_project(global_session, {
+                        'schema': 'bms.project.v1', 'name': 'Lineage project', 'description': '',
+                        'research_objective': 'Verify exact authority', 'owner': 'operator',
+                        'contributors': [], 'tags': [], 'status': 'active',
+                        'start_date': None, 'target_end_date': None, 'external_references': [],
+                        'created_by': 'operator', 'change_summary': 'created',
+                    })
+                experiment = await global_session.get(ExperimentAggregateHead, binding.global_experiment_id)
+                if experiment is None:
+                    experiment = await services.create_global_experiment(global_session, project.id, {
+                        'schema': 'bms.global-experiment.v1', 'name': 'Lineage experiment',
+                        'objective': 'Verify exact authority', 'scientific_question': 'Is lineage exact?',
+                        'hypothesis': None, 'description': '', 'status': 'active', 'priority': 'normal',
+                        'tags': [], 'shared_source_receipt_ids': [], 'shared_dataset_ids': [],
+                        'comparison_plan': None, 'success_criteria': ['Exact lineage'], 'review_summary': None,
+                        'conclusion': None, 'created_by': 'operator', 'change_summary': 'created',
+                    })
+                domain = await global_session.get(ExperimentAggregateHead, binding.global_domain_experiment_id)
+                if domain is None:
+                    revision_id = binding.global_domain_experiment_revision_id
+                    domain = await services.create_domain_experiment(global_session, project.id, experiment.id, {
+                        'schema': 'bms.domain-experiment.v2', 'domain_kind': 'ngs_molbio',
+                        'domain_contract_version': '2', 'name': 'Exact lineage', 'objective': '',
+                        'status': 'active', 'tags': [], 'source_receipt_ids': [], 'dataset_revision_ids': [],
+                        'created_by': 'operator', 'change_summary': 'created',
+                        'domain_payload': {'schema': 'bms.ngs-molbio-experiment.v2',
+                            'experiment_mode': 'sequencing', 'scientific_objective': '',
+                            'planned_capability_ids': ['ngs.ont.fastq_qc'], 'grouping_intent': [],
+                            'acceptance_criteria': [{
+                                'criterion_id': 'lineage-review',
+                                'schema_id': 'bms.scientific-criterion.manual-review.v1',
+                                'schema_sha256': hashlib.sha256((Path(__file__).resolve().parents[3] / 'schemas/ngs_molbio/scientific-criterion-manual-review-v1.schema.json').read_bytes()).hexdigest(),
+                                'subject_role': 'result',
+                                'payload': {'review_question': 'Is lineage exact?', 'required_outcome': 'record_only'},
+                            }],
+                            'evidence_plan': [{
+                                'requirement_id': 'lineage-observation',
+                                'schema_id': 'bms.evidence-requirement.operator-observation.v1',
+                                'schema_sha256': hashlib.sha256((Path(__file__).resolve().parents[3] / 'schemas/ngs_molbio/evidence-requirement-operator-observation-v1.schema.json').read_bytes()).hexdigest(),
+                                'subject_role': 'result', 'required': True,
+                                'payload': {'observation_kind': 'lineage', 'prompt': 'Record exact lineage evidence.'},
+                            }]},
+                    })
+            assert domain.current_revision_id == binding.global_domain_experiment_revision_id
+            command = await issue_binding_command(global_session, project_id=project.id,
+                global_experiment_id=experiment.id, domain_id=domain.id,
+                expected_domain_revision_id=domain.current_revision_id,
+                idempotency_key=idempotency_key, operation='initialize')
+            await global_session.commit()
+            if command.status not in {'applied', 'duplicate'}:
+                assert await process_command_once(global_session, session, worker_id='test-managed-connector') == 1
+                await global_session.refresh(command)
+            assert command.status in {'applied', 'duplicate'}, command.last_error
+            state = await session.get(MolBioNGSDomainState, domain.id)
+            assert state is not None and state.current_binding_revision_id == command.binding_revision_id
+            return state
+    finally:
+        await engine.dispose()
+
+
+async def _stored_binding(session, state):
+    from dataclasses import fields
+    from molbio_ngs_models import MolBioNGSGlobalBinding
+    from molbio_ngs_services import InternalVerifiedGlobalBinding
+    row = await session.get(MolBioNGSGlobalBinding, state.current_binding_revision_id)
+    values = {}
+    for field in fields(InternalVerifiedGlobalBinding):
+        value = getattr(row, 'last_verified_at' if field.name == 'verified_at' else field.name)
+        if field.name.endswith(('reopen_destination', 'acknowledgement')):
+            value = json.loads(value)
+        values[field.name] = value
+    return InternalVerifiedGlobalBinding(**values)
+
+
+async def _seed_managed_database(path, binding):
+    from molbio_ngs_database import create_molbio_ngs_engine, create_molbio_ngs_session_factory
+    engine = create_molbio_ngs_engine(f"sqlite+aiosqlite:///{path}")
+    try:
+        async with create_molbio_ngs_session_factory(engine)() as session:
+            state = await _managed_initialize(session, binding, idempotency_key='migration-fixture')
+            return state.current_binding_revision_id
+    finally:
+        await engine.dispose()
+
+
 def _sha(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -65,52 +193,11 @@ def test_domain_store_migration_installs_pragmas_digest_guards_and_immutability(
     assert report["synchronous"] == 2
     assert report["attestation"]["ok"] is True
 
+    binding_revision_id = asyncio.run(_seed_managed_database(db_path, _binding()))
     connection = sqlite3.connect(db_path)
     register_sqlite_sha256(connection)
     connection.execute("PRAGMA foreign_keys=ON")
     try:
-        connection.execute(
-            """
-            INSERT INTO molbio_ngs_domain_states(
-                global_domain_experiment_id, head_generation, created_at, updated_at
-            ) VALUES ('domain-1', 0, '2026-08-08T00:00:00Z', '2026-08-08T00:00:00Z')
-            """
-        )
-        connection.execute(
-            """
-            INSERT INTO molbio_ngs_global_bindings(
-                global_domain_experiment_id,
-                global_domain_experiment_revision_id,
-                global_domain_experiment_revision_digest,
-                project_id, project_generation, project_digest, project_receipt_id,
-                project_reopen_destination, project_acknowledgement,
-                global_experiment_id, global_experiment_generation,
-                global_experiment_digest, global_experiment_receipt_id,
-                global_experiment_reopen_destination, global_experiment_acknowledgement,
-                binding_state, created_at
-            ) VALUES (
-                'domain-1', 'global-domain-rev-1', ?,
-                'project-1', '3', ?, 'project-receipt-1', ?, '{}',
-                'global-experiment-1', '2', ?, 'experiment-receipt-1', ?, '{}',
-                'acknowledged', '2026-08-08T00:00:00Z'
-            )
-            """,
-            (
-                "a" * 64,
-                "b" * 64,
-                _canonical({"surface": "project", "params": {"project_id": "project-1"}}),
-                "c" * 64,
-                _canonical(
-                    {
-                        "surface": "global-experiment",
-                        "params": {
-                            "project_id": "project-1",
-                            "experiment_id": "global-experiment-1",
-                        },
-                    }
-                ),
-            ),
-        )
         payload = _canonical(
             {
                 "schema": "bms.molbio-ngs.domain-state-revision.v1",
@@ -122,31 +209,31 @@ def test_domain_store_migration_installs_pragmas_digest_guards_and_immutability(
                 """
                 INSERT INTO molbio_ngs_domain_state_revisions(
                     id, global_domain_experiment_id,
-                    global_domain_experiment_revision_id, revision_number,
+                    global_domain_experiment_revision_id, binding_revision_id, revision_number,
                     schema_name, schema_version, canonical_payload, payload_sha256,
                     membership_graph_sha256, created_at
                 ) VALUES (
-                    'state-rev-bad', 'domain-1', 'global-domain-rev-1', 1,
+                    'state-rev-bad', 'domain-1', 'global-domain-rev-1', ?, 1,
                     'bms.molbio-ngs.domain-state-revision', '1', ?, ?, ?,
                     '2026-08-08T00:00:00Z'
                 )
                 """,
-                (payload, "0" * 64, _sha("[]")),
+                (binding_revision_id, payload, "0" * 64, _sha("[]")),
             )
         connection.execute(
             """
             INSERT INTO molbio_ngs_domain_state_revisions(
                 id, global_domain_experiment_id,
-                global_domain_experiment_revision_id, revision_number,
+                global_domain_experiment_revision_id, binding_revision_id, revision_number,
                 schema_name, schema_version, canonical_payload, payload_sha256,
                 membership_graph_sha256, created_at
             ) VALUES (
-                'state-rev-1', 'domain-1', 'global-domain-rev-1', 1,
+                'state-rev-1', 'domain-1', 'global-domain-rev-1', ?, 1,
                 'bms.molbio-ngs.domain-state-revision', '1', ?, ?, ?,
                 '2026-08-08T00:00:00Z'
             )
             """,
-            (payload, _sha(payload), _sha("[]")),
+            (binding_revision_id, payload, _sha(payload), _sha("[]")),
         )
         connection.execute(
             """
@@ -164,6 +251,13 @@ def test_domain_store_migration_installs_pragmas_digest_guards_and_immutability(
         with pytest.raises(sqlite3.IntegrityError, match="state revision is immutable"):
             connection.execute("DELETE FROM molbio_ngs_domain_state_revisions WHERE id='state-rev-1'")
         authority_updates = {
+            "binding_revision_id": "binding-other",
+            "revision_number": 99,
+            "supersedes_binding_revision_id": "binding-other",
+            "global_binding_receipt_id": "receipt-other",
+            "global_binding_receipt_json": "{}",
+            "global_binding_receipt_sha256": "0" * 64,
+            "connector_command_id": "command-other",
             "global_domain_experiment_id": "domain-other",
             "global_domain_experiment_revision_id": "global-domain-rev-other",
             "global_domain_experiment_revision_digest": "1" * 64,
@@ -182,15 +276,20 @@ def test_domain_store_migration_installs_pragmas_digest_guards_and_immutability(
             "created_at": "2026-08-08T00:00:01Z",
         }
         for column, value in authority_updates.items():
-            with pytest.raises(sqlite3.IntegrityError, match="global binding authority is immutable"):
+            with pytest.raises(sqlite3.IntegrityError, match="binding revision authority is immutable"):
                 connection.execute(
-                    f"UPDATE molbio_ngs_global_bindings SET {column}=? WHERE global_domain_experiment_id='domain-1'",
+                    f"UPDATE molbio_ngs_global_binding_revisions SET {column}=? WHERE global_domain_experiment_id='domain-1'",
                     (value,),
                 )
+        with pytest.raises(sqlite3.IntegrityError, match="binding revisions are append-only"):
+            connection.execute(
+                "DELETE FROM molbio_ngs_global_binding_revisions WHERE binding_revision_id=?",
+                (binding_revision_id,),
+            )
         connection.execute(
             """
-            UPDATE molbio_ngs_global_bindings
-               SET binding_state='degraded', last_verified_at='2026-08-08T00:00:01Z',
+            UPDATE molbio_ngs_global_binding_revisions
+               SET binding_state='stale', last_verified_at='2026-08-08T00:00:01Z',
                    last_error='verification unavailable', updated_at='2026-08-08T00:00:01Z'
              WHERE global_domain_experiment_id='domain-1'
             """
@@ -421,17 +520,10 @@ def test_online_backup_atomic_restore_and_exact_attestation(tmp_path: Path, monk
             "created_at": "2026-08-08T00:00:00Z",
         }
     )
+    asyncio.run(_seed_managed_database(source, replace(_binding(), global_domain_experiment_id="backup-domain")))
     with sqlite3.connect(source) as connection:
         register_sqlite_sha256(connection)
         connection.execute("PRAGMA foreign_keys=ON")
-        connection.execute(
-            """
-            INSERT INTO molbio_ngs_domain_states(
-                global_domain_experiment_id, head_generation, created_at, updated_at
-            ) VALUES ('backup-domain', 0, ?, ?)
-            """,
-            ("2026-08-08T00:00:00Z", "2026-08-08T00:00:00Z"),
-        )
         reference_payload = _canonical(
             {
                 "schema": "bms.molbio-ngs.reference-revision.v1",
@@ -524,22 +616,12 @@ def test_online_backup_atomic_restore_and_exact_attestation(tmp_path: Path, monk
                 "2026-08-08T00:00:00Z",
             ),
         )
-        payload_json = _canonical({"schema": "bms.molbio-ngs.backup-proof.v1"})
-        connection.execute(
-            """
-            INSERT INTO molbio_ngs_outbox_events(
-                id, global_domain_experiment_id, state_revision_id, event_type,
-                payload_json, payload_sha256, status, retry_count, created_at, updated_at
-            ) VALUES ('backup-outbox-1', 'backup-domain', NULL, 'backup.proof',
-                      ?, ?, 'pending', 0, ?, ?)
-            """,
-            (
-                payload_json,
-                _sha(payload_json),
-                "2026-08-08T00:00:00Z",
-                "2026-08-08T00:00:00Z",
-            ),
-        )
+        outbox_before = connection.execute(
+            "SELECT id, binding_revision_id, event_stream, stream_generation, payload_sha256 "
+            "FROM molbio_ngs_outbox_events ORDER BY id"
+        ).fetchall()
+        assert len(outbox_before) == 3
+        assert all(row[1] and row[2] and row[3] >= 1 for row in outbox_before)
         connection.commit()
 
     manifest = backup_database(source, backup)
@@ -547,7 +629,7 @@ def test_online_backup_atomic_restore_and_exact_attestation(tmp_path: Path, monk
     assert manifest_path.read_text(encoding="utf-8") == _canonical(manifest) + "\n"
     assert manifest["backup_sha256"] == hashlib.sha256(backup.read_bytes()).hexdigest()
     assert manifest["backup_size_bytes"] == backup.stat().st_size
-    assert manifest["schema_version"] == 3
+    assert manifest["schema_version"] == 4
     assert manifest["migration_ledger"] == [
         {
             "version": 1,
@@ -564,12 +646,17 @@ def test_online_backup_atomic_restore_and_exact_attestation(tmp_path: Path, monk
             "name": "molbio_ngs_immutable_evidence_assessments_v3",
             "checksum": manifest["migration_ledger"][2]["checksum"],
         },
+        {
+            "version": 4,
+            "name": "molbio_ngs_versioned_bindings_ordered_outbox_v4",
+            "checksum": manifest["migration_ledger"][3]["checksum"],
+        },
     ]
     assert manifest["member_receipts"] == {
         "count": 1,
         "by_kind": {"molecular_revision": 1},
     }
-    assert manifest["outbox_events"] == {"count": 1, "by_status": {"pending": 1}}
+    assert manifest["outbox_events"] == {"count": 3, "by_status": {"pending": 3}}
     expected_artifact_inventory = [
         {
             "artifact_id": "backup-artifact",
@@ -637,7 +724,10 @@ def test_online_backup_atomic_restore_and_exact_attestation(tmp_path: Path, monk
     }
     with sqlite3.connect(target) as connection:
         assert connection.execute("SELECT count(*) FROM molbio_ngs_member_receipts").fetchone()[0] == 1
-        assert connection.execute("SELECT count(*) FROM molbio_ngs_outbox_events").fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT id, binding_revision_id, event_stream, stream_generation, payload_sha256 "
+            "FROM molbio_ngs_outbox_events ORDER BY id"
+        ).fetchall() == outbox_before
     Path(f"{target}-wal").unlink(missing_ok=True)
     Path(f"{target}-shm").unlink(missing_ok=True)
 
@@ -866,13 +956,12 @@ async def test_acknowledge_global_binding_rejects_every_authority_change(domain_
     from molbio_ngs_services import (
         GlobalBindingError,
         acknowledge_global_binding,
-        initialize_domain_state,
     )
 
     _db_path, _engine, factory = domain_store
     async with factory() as session:
         binding = _binding()
-        await initialize_domain_state(
+        state = await _managed_initialize(
             session,
             binding,
             idempotency_key="initialize-authority-immutability",
@@ -880,6 +969,7 @@ async def test_acknowledge_global_binding_rejects_every_authority_change(domain_
         )
         await session.commit()
 
+        binding = await _stored_binding(session, state)
         changed_values = {
             "global_domain_experiment_revision_id": "global-domain-rev-other",
             "global_domain_experiment_revision_digest": "1" * 64,
@@ -902,7 +992,18 @@ async def test_acknowledge_global_binding_rejects_every_authority_change(domain_
             },
             "global_experiment_acknowledgement": {"ack": "other"},
         }
+        metadata_fields = {
+            "project_receipt_id", "project_reopen_destination", "project_acknowledgement",
+            "global_experiment_receipt_id", "global_experiment_reopen_destination",
+            "global_experiment_acknowledgement",
+        }
+        before = await _stored_binding(session, state)
         for field_name, changed_value in changed_values.items():
+            if field_name in metadata_fields:
+                # This compatibility check cannot replace connector-owned receipts.
+                await acknowledge_global_binding(session, replace(binding, **{field_name: changed_value}))
+                assert await _stored_binding(session, state) == before
+                continue
             with pytest.raises(GlobalBindingError, match="global binding authority changed"):
                 await acknowledge_global_binding(
                     session,
@@ -914,9 +1015,10 @@ async def test_acknowledge_global_binding_rejects_every_authority_change(domain_
             replace(binding, verified_at="2026-08-08T00:00:01Z"),
         )
         await session.commit()
-        stored = await session.get(MolBioNGSGlobalBinding, "domain-1")
+        stored = await session.get(MolBioNGSGlobalBinding, state.current_binding_revision_id)
         assert stored is not None
-        assert stored.last_verified_at == "2026-08-08T00:00:01Z"
+        assert stored.last_verified_at == before.verified_at
+        assert await _stored_binding(session, state) == before
         assert stored.binding_state == "acknowledged"
         assert stored.last_error is None
 
@@ -933,7 +1035,6 @@ async def test_state_service_is_global_keyed_revisioned_idempotent_and_audited(d
         RevisionConflict,
         StateMember,
         get_domain_state,
-        initialize_domain_state,
         list_state_revisions,
         save_state_revision,
     )
@@ -944,7 +1045,7 @@ async def test_state_service_is_global_keyed_revisioned_idempotent_and_audited(d
 
     _db_path, _engine, factory = domain_store
     async with factory() as session:
-        initialized = await initialize_domain_state(
+        initialized = await _managed_initialize(
             session,
             _binding(),
             idempotency_key="initialize-domain-1",
@@ -953,6 +1054,13 @@ async def test_state_service_is_global_keyed_revisioned_idempotent_and_audited(d
         await session.commit()
         assert initialized.global_domain_experiment_id == "domain-1"
         assert initialized.head_generation == 0
+        bootstrap_outbox = (await session.execute(select(MolBioNGSOutboxEvent))).scalars().all()
+        bootstrap_ids = {event.id for event in bootstrap_outbox}
+        assert len(bootstrap_ids) == 3
+        assert {event.event_type for event in bootstrap_outbox} == {
+            "molbio_ngs.domain_state.initialized", "molbio_ngs.binding.acknowledged",
+            "molbio_ngs.binding.health_published",
+        }
 
         member_receipt = await persist_member_receipt(
             session,
@@ -1021,7 +1129,15 @@ async def test_state_service_is_global_keyed_revisioned_idempotent_and_audited(d
         assert len(stored_members) == 1
         assert stored_members[0].receipt_id == member_receipt.receipt_id
         assert len((await session.execute(select(MolBioNGSAuditEvent))).scalars().all()) == 2
-        assert len((await session.execute(select(MolBioNGSOutboxEvent))).scalars().all()) == 2
+        events = (await session.execute(select(MolBioNGSOutboxEvent))).scalars().all()
+        saved_events = [event for event in events if event.id not in bootstrap_ids]
+        assert len(saved_events) == 2
+        assert {event.event_type for event in saved_events} == {
+            "molbio_ngs.domain_state.revision_saved", "molbio_ngs.member_receipt.published",
+        }
+        assert all(event.state_revision_id == revision.id for event in saved_events)
+        assert all(event.binding_revision_id == initialized.current_binding_revision_id for event in saved_events)
+        assert len(events) == len(bootstrap_ids) + 2
 
         with pytest.raises(IdempotencyConflict):
             await save_state_revision(
@@ -1054,9 +1170,16 @@ async def test_state_service_is_global_keyed_revisioned_idempotent_and_audited(d
         global_domain_experiment_revision_id="global-domain-rev-concurrent",
     )
 
+    # Establish the hierarchy once; concurrent callers replay the same managed
+    # command rather than racing deterministic fixture identity allocation.
+    async with factory() as session:
+        await _managed_initialize(
+            session, concurrent_binding, idempotency_key="same-concurrent-request"
+        )
+
     async def initialize_concurrently() -> str:
         async with factory() as concurrent_session:
-            state = await initialize_domain_state(
+            state = await _managed_initialize(
                 concurrent_session,
                 concurrent_binding,
                 idempotency_key="same-concurrent-request",
@@ -1070,15 +1193,32 @@ async def test_state_service_is_global_keyed_revisioned_idempotent_and_audited(d
     )
     assert concurrent_results == ["domain-concurrent", "domain-concurrent"]
     async with factory() as verification_session:
-        assert len(
-            (
-                await verification_session.execute(
-                    select(MolBioNGSAuditEvent).where(
-                        MolBioNGSAuditEvent.global_domain_experiment_id == "domain-concurrent"
-                    )
-                )
-            ).scalars().all()
-        ) == 1
+        from molbio_ngs_models import MolBioNGSGlobalBinding, MolBioNGSConnectorAcknowledgement
+
+        bindings = (await verification_session.execute(
+            select(MolBioNGSGlobalBinding).where(
+                MolBioNGSGlobalBinding.global_domain_experiment_id == "domain-concurrent"
+            )
+        )).scalars().all()
+        assert len(bindings) == 1
+        acknowledgements = (await verification_session.execute(
+            select(MolBioNGSConnectorAcknowledgement).where(
+                MolBioNGSConnectorAcknowledgement.binding_revision_id == bindings[0].binding_revision_id
+            )
+        )).scalars().all()
+        assert len(acknowledgements) == 1
+        assert acknowledgements[0].disposition == "applied"
+        events = (await verification_session.execute(
+            select(MolBioNGSOutboxEvent).where(
+                MolBioNGSOutboxEvent.global_domain_experiment_id == "domain-concurrent"
+            )
+        )).scalars().all()
+        assert len(events) == 3
+        assert {event.event_type for event in events} == {
+            "molbio_ngs.domain_state.initialized", "molbio_ngs.binding.acknowledged",
+            "molbio_ngs.binding.health_published",
+        }
+        assert sorted(event.stream_generation for event in events) == [1, 2, 3]
 
 
 @pytest.mark.asyncio
@@ -1089,7 +1229,6 @@ async def test_state_save_rejects_cross_domain_reference_and_evidence_receipts(
     from molbio_ngs_services import (
         StateMember,
         StateValidationError,
-        initialize_domain_state,
         save_state_revision,
     )
     from services.molbio_ngs_evidence import resolve_evidence_assessment_receipt
@@ -1111,10 +1250,10 @@ async def test_state_save_rejects_cross_domain_reference_and_evidence_receipts(
             global_domain_experiment_id="domain-2",
             global_domain_experiment_revision_id="global-domain-rev-2",
         )
-        await initialize_domain_state(
+        await _managed_initialize(
             session, domain_1, idempotency_key="initialize-domain-1-ownership"
         )
-        await initialize_domain_state(
+        await _managed_initialize(
             session, domain_2, idempotency_key="initialize-domain-2-ownership"
         )
         external = await persist_member_receipt(
@@ -1282,14 +1421,19 @@ async def test_state_save_rejects_cross_domain_reference_and_evidence_receipts(
 
 
 @pytest.mark.asyncio
-async def test_typed_state_api_fails_closed_until_global_adapter_is_available(
+async def test_typed_state_api_fails_closed_without_global_hierarchy_authority(
     domain_store,
 ):
-    from experiment_database import get_experiment_session
+    from experiment_database import get_experiment_session, create_experiment_engine, create_experiment_session_factory
+    from experiment_migrations import run_all as migrate_global
     from molbio_ngs_database import get_molbio_ngs_session
     from routers.molbio_ngs_experiments import router
 
     _db_path, _domain_engine, domain_factory = domain_store
+    global_path = _db_path.with_suffix(".global.db")
+    migrate_global(global_path)
+    global_engine = create_experiment_engine(f"sqlite+aiosqlite:///{global_path}")
+    global_factory = create_experiment_session_factory(global_engine)
     app = FastAPI()
     app.include_router(router)
 
@@ -1298,7 +1442,7 @@ async def test_typed_state_api_fails_closed_until_global_adapter_is_available(
             yield session
 
     async def override_unavailable_global_session():
-        async with domain_factory() as session:
+        async with global_factory() as session:
             yield session
 
     app.dependency_overrides[get_molbio_ngs_session] = override_domain_session
@@ -1312,8 +1456,8 @@ async def test_typed_state_api_fails_closed_until_global_adapter_is_available(
                 "idempotency_key": "init-api",
             },
         )
-        assert initialized.status_code == 503, initialized.text
-        assert "global adapter unavailable" in initialized.json()["detail"].lower()
+        assert initialized.status_code == 409, initialized.text
+        assert "global domain experiment was not found" in initialized.json()["detail"].lower()
 
         saved = await client.post(
             "/api/molbio-ngs/experiments/domain-1/state/revisions",
@@ -1326,8 +1470,8 @@ async def test_typed_state_api_fails_closed_until_global_adapter_is_available(
                 "members": [],
             },
         )
-        assert saved.status_code == 503, saved.text
-        assert "global adapter unavailable" in saved.json()["detail"].lower()
+        assert saved.status_code == 409, saved.text
+        assert "global domain experiment was not found" in saved.json()["detail"].lower()
 
         rejected = await client.post(
             "/api/molbio-ngs/experiments/domain-1/state/revisions",
@@ -1342,3 +1486,4 @@ async def test_typed_state_api_fails_closed_until_global_adapter_is_available(
             },
         )
         assert rejected.status_code == 422
+    await global_engine.dispose()

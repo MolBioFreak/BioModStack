@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from test_molbio_ngs_experiment_management import _managed_initialize
+from ngs_resource_fixture import ngs_resources  # noqa: F401
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -78,7 +80,7 @@ def _canonical_bytes(payload: dict[str, object]) -> bytes:
 
 @pytest.mark.asyncio
 async def test_phase2b_sample_reference_state_survive_restart_and_reopen(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, ngs_resources
 ) -> None:
     from database import Base, Job
     from molbio_database import create_molbio_engine, make_molbio_session_factory
@@ -97,7 +99,6 @@ async def test_phase2b_sample_reference_state_survive_restart_and_reopen(
         get_sample,
         get_sample_revision,
         get_state_revision,
-        initialize_domain_state,
         save_state_revision,
         verify_state_revision_integrity,
     )
@@ -150,7 +151,7 @@ async def test_phase2b_sample_reference_state_survive_restart_and_reopen(
     result_root = results_root / evidence_spec["output_dir"]
     manifest_path = result_root / evidence_spec["manifest_relative_path"]
     reference_root = tmp_path / "managed-reference-root"
-    results_root.mkdir()
+    results_root.mkdir(exist_ok=True)
     manifest_path.parent.mkdir(parents=True)
     monkeypatch.setenv("BMS_MOLBIO_NGS_REFERENCE_ROOT", str(reference_root))
     import services.job_result_roots as job_result_roots
@@ -232,7 +233,7 @@ async def test_phase2b_sample_reference_state_survive_restart_and_reopen(
     )
 
     async with domain_factory() as domain_session, molbio_factory() as molbio_session:
-        await initialize_domain_state(
+        await _managed_initialize(
             domain_session,
             binding,
             idempotency_key="phase2b-initialize",
@@ -355,7 +356,12 @@ async def test_phase2b_sample_reference_state_survive_restart_and_reopen(
 
         monkeypatch.setattr(ont_runs, "_confine_submitted_path", confine_launch_path)
         monkeypatch.setattr(ont_runs, "_create_pipeline_job", create_managed_launch)
-        async with core_factory() as launch_core_session:
+        from experiment_database import create_experiment_engine, create_experiment_session_factory
+        launch_global_engine = create_experiment_engine(
+            f"sqlite+aiosqlite:///{domain_path.with_suffix('.global.db')}"
+        )
+        launch_global_factory = create_experiment_session_factory(launch_global_engine)
+        async with core_factory() as launch_core_session, launch_global_factory() as launch_global_session:
             launch_request = ont_runs.OntNgsSubmitRequest(
                     params={"fastq_path": str(reads_path)},
                     managed_reference=ont_runs.OntManagedReferenceRequest(
@@ -375,13 +381,14 @@ async def test_phase2b_sample_reference_state_survive_restart_and_reopen(
                 )
             preview = await ont_runs.ont_preview_ngs_workflow(
                 "ont_fastq_qc", launch_request, BackgroundTasks(), http_request, Response(),
-                launch_core_session, domain_session, domain_session,
+                launch_core_session, launch_global_session, domain_session,
             )
             assert captured_launch == {}  # Preview never inserts or stages a job.
             launch_response = await ont_runs.ont_submit_ngs_workflow(
                 "ont_fastq_qc", launch_request.model_copy(update={"preview_digest": preview["preview_digest"]}),
-                BackgroundTasks(), http_request, Response(), launch_core_session, domain_session, domain_session,
+                BackgroundTasks(), http_request, Response(), launch_core_session, launch_global_session, domain_session,
             )
+        await launch_global_engine.dispose()
         launched_job = cast(JobCreate, captured_launch["job"])
         assert captured_launch["commit"] is True
         launched_reference_path = Path(str(launched_job.params["reference_fasta"]))
@@ -763,6 +770,7 @@ async def test_phase2b_sample_reference_state_survive_restart_and_reopen(
             assert reopened_receipt.reopen_destination == {
                 "surface": "molbio-ngs-reference-revision",
                 "params": {
+                    "global_domain_experiment_id": domain_spec["id"],
                     "reference_id": durable_ids["reference_id"],
                     "revision_id": durable_ids["reference_revision_1_id"],
                 },

@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from test_molbio_ngs_experiment_management import _managed_initialize
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -75,9 +76,8 @@ def _state_payload() -> dict[str, object]:
 async def test_phase2_fixture_lineage_is_digest_bound(tmp_path: Path, monkeypatch) -> None:
     """One bounded lineage fixture proves server-issued cross-plane authority.
 
-    The global production migration does not yet admit ``domain_experiment``;
-    this fixture therefore exercises the already-approved local integration
-    contract without changing or pretending to qualify the global schema.
+    Global hierarchy and binding authority are created through the managed
+    connector in isolated, fully migrated databases.
     """
 
     from database import Base, Job
@@ -99,7 +99,6 @@ async def test_phase2_fixture_lineage_is_digest_bound(tmp_path: Path, monkeypatc
     from molbio_ngs_services import (
         InternalVerifiedGlobalBinding,
         StateMember,
-        initialize_domain_state,
         save_state_revision,
     )
     from routers.molbio_ngs_experiments import StateMemberInput
@@ -158,6 +157,7 @@ async def test_phase2_fixture_lineage_is_digest_bound(tmp_path: Path, monkeypatc
         "inputs": {},
         "artifacts": [],
     }
+    manifest_payload["job_id"] = job_spec["id"]
     manifest_bytes = (
         json.dumps(
             manifest_payload,
@@ -337,7 +337,7 @@ async def test_phase2_fixture_lineage_is_digest_bound(tmp_path: Path, monkeypatc
                 },
                 verified_at="2026-08-08T22:00:00+00:00",
             )
-            await initialize_domain_state(
+            await _managed_initialize(
                 domain_session,
                 binding_authority,
                 idempotency_key="phase2-init",
@@ -673,7 +673,6 @@ async def test_state_save_rejects_cross_domain_job_and_result_receipts(
     from molbio_ngs_services import (
         StateMember,
         StateValidationError,
-        initialize_domain_state,
         save_state_revision,
     )
     from services.molbio_ngs_member_receipts import (
@@ -692,6 +691,9 @@ async def test_state_save_rejects_cross_domain_job_and_result_receipts(
     manifest = {
         "artifact_schema_version": 1,
         "job_id": "job-domain-2",
+        "workflow_id": "ont_plasmid_qc",
+        "input_mode": "fastq",
+        "analysis_status": "completed",
         "workflow_status": "completed",
         "verification_status": "review",
         "artifacts": [],
@@ -735,12 +737,12 @@ async def test_state_save_rejects_cross_domain_job_and_result_receipts(
             )
 
             async with domain_factory() as domain_session:
-                await initialize_domain_state(
+                await _managed_initialize(
                     domain_session,
                     _domain_binding("domain-1", "global-domain-rev-1"),
                     idempotency_key="init-domain-1",
                 )
-                await initialize_domain_state(
+                await _managed_initialize(
                     domain_session,
                     _domain_binding("domain-2", "global-domain-rev-2"),
                     idempotency_key="init-domain-2",
@@ -802,7 +804,8 @@ async def test_state_save_rejects_cross_domain_job_and_result_receipts(
                 assert job is not None
                 job.params = {
                     **job.params,
-                    "molbio_ngs_state_revision_id": domain_2_state_id,
+                    # An ancestor is allowed; an unresolvable state is not.
+                    "molbio_ngs_state_revision_id": "missing-domain-2-state",
                 }
                 await core_session.commit()
                 wrong_state_job = await persist_member_receipt(
@@ -931,7 +934,6 @@ async def test_instrument_run_attachment_requires_exact_same_domain_state_bindin
         StateIntegrityError,
         StateMember,
         StateValidationError,
-        initialize_domain_state,
         save_state_revision,
     )
     from services.molbio_ngs_evidence import attach_instrument_run_evidence
@@ -980,12 +982,12 @@ async def test_instrument_run_attachment_requires_exact_same_domain_state_bindin
             await core_session.commit()
 
             async with domain_factory() as domain_session:
-                await initialize_domain_state(
+                await _managed_initialize(
                     domain_session,
                     _domain_binding("domain-1", "global-domain-rev-1"),
                     idempotency_key="init-domain-1-ont",
                 )
-                await initialize_domain_state(
+                await _managed_initialize(
                     domain_session,
                     _domain_binding("domain-2", "global-domain-rev-2"),
                     idempotency_key="init-domain-2-ont",
