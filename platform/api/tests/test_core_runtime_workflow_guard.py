@@ -40,7 +40,7 @@ def test_runtime_policy_imports_without_services_cycle(monkeypatch: pytest.Monke
         "services.nextflow",
         "services.workflow_adapter",
     ):
-        sys.modules.pop(module_name, None)
+        monkeypatch.delitem(sys.modules, module_name, raising=False)
 
     imported = importlib.import_module("runtime_policy")
 
