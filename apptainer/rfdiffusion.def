@@ -17,10 +17,11 @@ From: nvcr.io/nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
     git clone https://github.com/PapenfussLab/RFdiffusion /app/RFdiffusion
     cd /app/RFdiffusion && git checkout 0938f878388466d30d16f1f468c362afe9c8d345
 
-    # Install PyTorch nightly with CUDA 12.1 for RTX 5090 support (compute capability 12.0 / sm_120)
-    # PyTorch 2.4.1 stable does NOT support sm_120 - requires nightly builds
+    # Install PyTorch 2.4.1 with CUDA 12.1
+    # WARNING: RTX 5090 (sm_120) not officially supported but DOES work (tested)
+    # PyTorch nightly has pickle security issues with e3nn
     pip install -q --no-cache-dir \
-        torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu121
+        torch==2.4.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
     # Install DGL 1.1.3 from PyPI (older version without graphbolt, compatible with PyTorch 2.4.1)
     pip install -q --no-cache-dir dgl==1.1.3
