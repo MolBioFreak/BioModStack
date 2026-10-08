@@ -2058,8 +2058,11 @@ def test_exact_read_detail_scan_exhaustion_is_not_reported_as_404(monkeypatch: p
 def test_production_dimer_process_emits_discoverable_authoritative_manifest() -> None:
     module_path = API_ROOT.parents[1] / "modules" / "ngs" / "fastq_dimer_qc.nf"
     source = module_path.read_text(encoding="utf-8")
+    runtime_source = (
+        API_ROOT.parents[1] / "scripts" / "run_fastq_dimer_analysis.sh"
+    ).read_text(encoding="utf-8")
 
     assert 'path "qc_manifest.json", emit: qc_manifest' in source
-    assert 'scripts/build_alignment_session_manifest.sh' in source
+    assert 'scripts/build_alignment_session_manifest.sh' in runtime_source
     assert 'dimer_candidates.aligned.bam' in source
     assert 'dimer_reference.fasta' in source

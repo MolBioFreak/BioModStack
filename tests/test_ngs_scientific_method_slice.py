@@ -66,7 +66,7 @@ def test_fastq_qc_has_one_authoritative_fail_closed_method() -> None:
 
 
 def test_dimer_consensus_has_no_reference_or_majority_fallback() -> None:
-    dimer = (ROOT / "modules/ngs/fastq_dimer_qc.nf").read_text(encoding="utf-8")
+    dimer = (ROOT / "scripts/run_fastq_dimer_analysis.sh").read_text(encoding="utf-8")
     dominant = (ROOT / "scripts/dominant_dimer_consensus.sh").read_text(encoding="utf-8")
 
     for text in (dimer, dominant):
@@ -131,14 +131,15 @@ def test_fastq_qc_manifest_uses_persisted_workflow_and_input_authority() -> None
 
 def test_dimer_manifest_binds_exact_job_identity_and_canonical_schema() -> None:
     dimer = (ROOT / "modules/ngs/fastq_dimer_qc.nf").read_text(encoding="utf-8")
+    dimer_runtime = (ROOT / "scripts/run_fastq_dimer_analysis.sh").read_text(encoding="utf-8")
     manifest = (ROOT / "scripts/build_alignment_session_manifest.sh").read_text(encoding="utf-8")
     python_manifest = (ROOT / "scripts/build_alignment_session_manifest.py").read_text(encoding="utf-8")
 
     assert "manifestJobId" in dimer
-    assert 'build_alignment_session_manifest.sh" \\' in dimer
+    assert 'build_alignment_session_manifest.sh" \\' in dimer_runtime
     assert "${manifestJobIdArg}" in dimer
     assert "declaredReferenceSha256" in dimer
-    assert "REFERENCE_DIGEST_MISMATCH" in dimer
+    assert "REFERENCE_DIGEST_MISMATCH" in dimer_runtime
     assert "${referenceSequenceSha256Arg}" in dimer
     assert "${workflowIdArg}" in dimer
     assert 'job_id="${1:?exact job_id is required}"' in manifest

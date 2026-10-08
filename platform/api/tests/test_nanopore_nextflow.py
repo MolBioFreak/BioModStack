@@ -71,6 +71,18 @@ class TestModuleNamespace:
                 f"Module {module.name} doesn't use DSL2 syntax"
             )
 
+    def test_fastq_dimer_runtime_is_externalized_from_groovy_template(self, root):
+        """The dimer process must stay below Groovy's 65,535-unit string limit."""
+        module = (root / "modules/ngs/fastq_dimer_qc.nf").read_text(encoding="utf-8")
+        runner = root / "scripts/run_fastq_dimer_analysis.sh"
+        process_source = module.split("process FastqDimerAnalysis", 1)[1].split(
+            "process BuildDimerCanonicalOutputs", 1
+        )[0]
+
+        assert runner.exists()
+        assert "scripts/run_fastq_dimer_analysis.sh" in process_source
+        assert len(process_source) < 20_000
+
 
 class TestEntrypointRouting:
     """Validate that entrypoints are properly registered."""
