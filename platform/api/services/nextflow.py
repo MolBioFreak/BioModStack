@@ -943,6 +943,34 @@ async def launch_nextflow_job(
                                 stage = 'proteinmpnn'  # ProteinMPNN (vanilla)
                             elif 'protenix' in stage_clean:
                                 stage = 'protenix'  # Protenix structure prediction
+                            elif 'doradobasecall' in stage_clean:
+                                stage = 'dorado_basecall'
+                            elif 'doradoalign' in stage_clean:
+                                stage = 'dorado_align'
+                            elif (
+                                'bamprepare' in stage_clean
+                                or 'bam_prepare' in stage_clean
+                                or 'preparebamforanalysis' in stage_clean
+                                or 'bammappedcheck' in stage_clean
+                                or 'bam_mapped_check' in stage_clean
+                                or 'referenceprepareforigv' in stage_clean
+                                or 'reference_prepare' in stage_clean
+                            ):
+                                stage = 'bam_prepare'
+                            elif 'modkit' in stage_clean:
+                                stage = 'modkit'
+                            elif 'multimer' in stage_clean:
+                                stage = 'multimer_qc'
+                            elif 'fastqdimeranalysis' in stage_clean or 'dimeranalysis' in stage_clean:
+                                stage = 'dimer_analysis'
+                            elif (
+                                'runclonevalidation' in stage_clean
+                                or 'clonevalidation' in stage_clean
+                                or 'clone-validation' in stage_clean
+                                or 'wf_clone' in stage_clean
+                                or 'wf-clone' in stage_clean
+                            ):
+                                stage = 'wf_clone_validation'
                             elif 'af2' in stage_clean:
                                 stage = 'af2'
                             elif 'rfdiffusion' in stage_clean:
@@ -1210,6 +1238,8 @@ def build_nextflow_command(
         ('fampnn_child', 'sequence_design'): 'fampnn_predict',
         # Oligo Designer (RFDpoly multi-polymer design)
         ('oligo_design', 'oligo_design'): 'oligo_design',
+        # Nanopore basecalling + methylation analysis
+        ('nanopore', 'methylation_analysis'): 'nanopore_methylation',
         # Protenix structure prediction
         ('protenix', 'predict'): 'protenix',
         ('protenix', 'complex'): 'protenix',
