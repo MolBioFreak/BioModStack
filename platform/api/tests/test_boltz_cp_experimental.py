@@ -385,18 +385,12 @@ def test_boltz_cp_production_sources_do_not_embed_local_four_gpu_default() -> No
     assert "firstConfiguredGpuIds" in config_text
 
 
-def test_boltz_cp_module_materializes_msa_inputs_with_run_local_msa() -> None:
+def test_boltz_cp_module_consumes_controller_prepared_msa() -> None:
     module_text = (API_ROOT.parents[1] / "modules" / "boltz_cp_experimental.nf").read_text(encoding="utf-8")
-
-    assert "def shellQuote(value)" in module_text
-    assert "run_local_msa.py" in module_text
-    assert '"--msa-provider"' in module_text
-    assert 'os.environ.get("MSA_PROVIDER", "local")' in module_text
-    assert "materializing msa-enabled boltz-cp input bundles" in module_text.lower()
+    assert "from biomodstack_boltz_msa import resolve_boltz_config" in module_text
+    assert "bound = resolve_boltz_config(path, root=package_root)" in module_text
+    assert "run_local_msa.py" not in module_text
     assert "REPO_PATH=${repoPath}" in module_text
-    assert 'MSA_TAXON_LIST=${quotedMsaTaxonList}' in module_text
-    assert 'REPO_PATH="${params.bcp_repo_path ?: \'\'}"' not in module_text
-    assert 'MSA_TAXON_LIST="${params.msa_taxon_list ?: \'\'}"' not in module_text
 
 
 def test_build_nextflow_command_stages_boltz_cp_yaml_from_complex_components(tmp_path: Path) -> None:
