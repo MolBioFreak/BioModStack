@@ -398,23 +398,25 @@ export function JobQueuePanel() {
     const visibleQueue = showNgsJobs ? queue : queue.filter(j => !isNgsJob(j.model_id, j.mode));
     const cancelledJobs = showNgsJobs ? cancelledJobsRaw : cancelledJobsRaw.filter(j => !isNgsJob(j.model_id, j.mode));
 
-    // Separate running, queued, and pending_msa jobs
+    // Separate running, paused, queued, and pending_msa jobs
     const runningJobs = visibleQueue.filter(j => j.queue_status === 'running');
-    const queuedJobs = visibleQueue.filter(j => j.queue_status === 'queued' || j.queue_status === 'paused');
+    const pausedJobs = visibleQueue.filter(j => j.queue_status === 'paused' || j.paused);
+    const queuedJobs = visibleQueue.filter(j => j.queue_status === 'queued' && !j.paused);
     const pendingMsaJobs = visibleQueue.filter(j => j.queue_status === 'pending_msa');
     const hiddenQueuedCount = showNgsJobs
         ? 0
         : Math.max(
             0,
-            queue.filter(j => j.queue_status === 'queued' || j.queue_status === 'paused').length - queuedJobs.length
+            queue.filter(j => j.queue_status === 'queued' && !j.paused).length - queuedJobs.length
         );
+    const clearableJobs = visibleQueue.filter(j => j.queue_status === 'queued' || j.queue_status === 'paused' || j.paused);
 
     const handleCancelAll = () => {
-        if (queuedJobs.length === 0) return;
+        if (clearableJobs.length === 0) return;
         const hiddenNgsNote = hiddenQueuedCount > 0
             ? ` This will also clear ${hiddenQueuedCount} hidden NGS job(s).`
             : '';
-        if (confirm(`Clear ${queuedJobs.length} queued jobs from database?${hiddenNgsNote}`)) {
+        if (confirm(`Clear ${clearableJobs.length} queued/paused jobs from database?${hiddenNgsNote}`)) {
             cancelAllMutation.mutate();
         }
     };
@@ -461,12 +463,12 @@ export function JobQueuePanel() {
                         Kill Active
                     </button>
                     {/* Clear Queue - removes from database */}
-                    {queuedJobs.length > 0 && (
+                    {clearableJobs.length > 0 && (
                         <button
                             onClick={handleCancelAll}
                             disabled={isPending}
                             className="px-2 py-1 rounded bg-red-600/30 hover:bg-red-600/50 text-red-400 text-xs disabled:opacity-50"
-                            title="Clear all queued jobs from database"
+                            title="Clear all queued and paused jobs from database"
                         >
                             Clear Queue
                         </button>
@@ -585,11 +587,38 @@ export function JobQueuePanel() {
                                 </div>
                             )}
 
+                            {/* Paused Jobs */}
+                            {pausedJobs.length > 0 && (
+                                <div>
+                                    <h4 className="text-xs font-semibold text-yellow-400 mb-1 uppercase tracking-wide">
+                                        Paused ({pausedJobs.length})
+                                    </h4>
+                                    <div className="space-y-1 max-h-48 overflow-y-auto">
+                                        {pausedJobs.map((job) => (
+                                            <JobRow
+                                                key={job.id}
+                                                job={job}
+                                                onResume={() => resumeMutation.mutate(job.id)}
+                                                onCancel={() => {
+                                                    if (confirm(`Cancel "${getDisplayJobName(job)}"?`)) {
+                                                        cancelMutation.mutate(job.id);
+                                                    }
+                                                }}
+                                                onPin={(gpuId) => pinMutation.mutate({ jobId: job.id, gpuId })}
+                                                onForceLaunch={(gpuId) => forceLaunchMutation.mutate({ jobId: job.id, gpuId })}
+                                                isPending={isPending}
+                                                elapsedTick={elapsedTick}
+                                            />
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
                             {/* Queued Jobs */}
                             {queuedJobs.length > 0 && (
                                 <div>
                                     <h4 className="text-xs font-semibold text-slate-400 mb-1 uppercase tracking-wide">
-                                        Pending ({queuedJobs.length})
+                                        Queued ({queuedJobs.length})
                                     </h4>
                                     <div className="space-y-1 max-h-48 overflow-y-auto">
                                         {queuedJobs.map((job) => (

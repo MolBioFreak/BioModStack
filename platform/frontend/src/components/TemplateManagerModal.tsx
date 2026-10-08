@@ -166,18 +166,18 @@ export function TemplateManagerModal({
     };
 
     // Get icon display
-    const getIconEmoji = (icon: string) => {
+    const getIconBadge = (icon: string) => {
         const iconMap: Record<string, string> = {
-            bookmark: '🔖',
-            star: '⭐',
-            heart: '❤️',
-            bolt: '⚡',
-            beaker: '🧪',
-            cog: '⚙️',
-            cube: '🧊',
-            fire: '🔥',
+            bookmark: 'BM',
+            star: 'ST',
+            heart: 'HT',
+            bolt: 'BT',
+            beaker: 'BK',
+            cog: 'CG',
+            cube: 'CB',
+            fire: 'FR',
         };
-        return iconMap[icon] || '📋';
+        return iconMap[icon] || 'TM';
     };
 
     // Handle close
@@ -195,8 +195,8 @@ export function TemplateManagerModal({
                 {/* Header */}
                 <div className="p-5 border-b border-slate-700 flex justify-between items-center bg-slate-800/50 rounded-t-xl">
                     <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-lg bg-accent/20 flex items-center justify-center text-accent text-xl">
-                            📋
+                        <div className="w-10 h-10 rounded-lg bg-accent/20 flex items-center justify-center text-xs font-semibold tracking-[0.18em] text-accent">
+                            TM
                         </div>
                         <div>
                             <h3 className="font-semibold text-slate-200 text-lg">
@@ -246,7 +246,7 @@ export function TemplateManagerModal({
                                 </div>
                             ) : templates.length === 0 ? (
                                 <div className="text-center py-12 text-slate-500">
-                                    <div className="text-4xl mb-3">📭</div>
+                                <div className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Empty</div>
                                     <p>No saved templates yet</p>
                                     <p className="text-sm mt-1">Configure a job and save it as a template</p>
                                 </div>
@@ -262,7 +262,7 @@ export function TemplateManagerModal({
                                                     className="w-10 h-10 rounded-lg flex items-center justify-center text-lg shrink-0"
                                                     style={{ backgroundColor: `${template.color}20`, color: template.color }}
                                                 >
-                                                    {getIconEmoji(template.icon)}
+                                                    {getIconBadge(template.icon)}
                                                 </div>
                                                 <div className="flex-1 min-w-0">
                                                     <h4 className="font-medium text-slate-200 truncate">{template.name}</h4>
@@ -365,7 +365,7 @@ export function TemplateManagerModal({
                                                         : 'bg-slate-800 border border-slate-700 hover:border-slate-600'
                                                         }`}
                                                 >
-                                                    {getIconEmoji(icon)}
+                                                    {getIconBadge(icon)}
                                                 </button>
                                             ))}
                                         </div>
@@ -398,7 +398,7 @@ export function TemplateManagerModal({
                                             className="w-12 h-12 rounded-lg flex items-center justify-center text-xl"
                                             style={{ backgroundColor: `${formColor}20`, color: formColor }}
                                         >
-                                            {getIconEmoji(formIcon)}
+                                            {getIconBadge(formIcon)}
                                         </div>
                                         <div>
                                             <p className="font-medium text-slate-200">{formName || 'Template Name'}</p>

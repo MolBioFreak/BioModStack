@@ -2070,7 +2070,9 @@ class GPUOrchestrator:
                                 gate_present = has_stage_gate(job)
                                 if history_status == "OK" or gate_present or job.awaiting_input:
                                     job.status = "awaiting_input"
-                                    job.queue_status = "paused"
+                                    job.queue_status = "completed"
+                                    job.paused = False
+                                    job.assigned_gpu = None
                                     job.error_message = None
                                     if job.awaiting_stage:
                                         job.current_stage = job.awaiting_stage

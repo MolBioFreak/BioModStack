@@ -253,24 +253,37 @@ async def list_queue(
     # This catches cases where the job finished but queue_status wasn't updated
     sync_result = await session.execute(
         select(Job).where(
-            Job.queue_status.in_(['running', 'queued']),
-            Job.status.in_(['completed', 'failed', 'cancelled', 'awaiting_input'])
+            Job.queue_status.in_(['running', 'queued', 'paused']),
+            (
+                Job.status.in_(['completed', 'failed', 'cancelled', 'awaiting_input'])
+                | ((Job.queue_status == 'paused') & (Job.paused == False))
+            )
         )
     )
     stale_jobs = sync_result.scalars().all()
     for job in stale_jobs:
-        if job.status == 'completed':
+        if job.status == 'awaiting_input':
             job.queue_status = 'completed'
-        elif job.status == 'awaiting_input':
-            job.queue_status = 'paused'
+            job.paused = False
+            job.assigned_gpu = None
+        elif job.status == 'completed':
+            job.queue_status = 'completed'
+            job.paused = False
+            job.assigned_gpu = None
+        elif job.queue_status == 'paused':
+            job.paused = True
         else:
             job.queue_status = 'failed'
+            job.paused = False
+            if job.status in ['failed', 'cancelled']:
+                job.assigned_gpu = None
     if stale_jobs:
         await session.commit()
     
     # Only show jobs that went through the new orchestrator (have vram_estimate_mb set)
     query = select(Job).where(
         Job.queue_status.in_(['queued', 'running', 'paused']),
+        Job.awaiting_input == False,
         Job.vram_estimate_mb.isnot(None)
     ).order_by(
         Job.priority.desc(),
@@ -344,6 +357,7 @@ async def get_queue_stats(session: AsyncSession = Depends(get_session)):
     result = await session.execute(
         select(Job).where(
             Job.queue_status.in_(['queued', 'running', 'paused']),
+            Job.awaiting_input == False,
             Job.vram_estimate_mb.isnot(None)
         )
     )
@@ -421,10 +435,12 @@ async def cancel_job(job_id: str, session: AsyncSession = Depends(get_session)):
                 logger.warning(f"[CANCEL] Failed to kill process for {job.name}: {e}")
         
         job.queue_status = 'failed'
+        job.paused = False
         job.status = 'cancelled'
         job.error_message = 'Cancelled by user'
     elif job.queue_status in ['queued', 'paused']:
         job.queue_status = 'failed'
+        job.paused = False
         job.status = 'cancelled'
         job.error_message = 'Cancelled by user'
     else:
@@ -514,7 +530,7 @@ async def retry_job(job_id: str, session: AsyncSession = Depends(get_session)):
     }
 
 
-@router.delete("/cancel-all")
+@router.delete("/clear-all")
 async def cancel_all_queued(session: AsyncSession = Depends(get_session)):
     """Cancel ALL queued/paused jobs (not running jobs)."""
     result = await session.execute(
@@ -526,6 +542,7 @@ async def cancel_all_queued(session: AsyncSession = Depends(get_session)):
     cancelled_names = []
     for job in jobs:
         job.queue_status = 'failed'
+        job.paused = False
         job.status = 'cancelled'
         job.error_message = 'Bulk cancelled by user'
         cancelled_count += 1
