@@ -360,6 +360,16 @@ describe('Project Manager API contract', () => {
         expect(submissionSource).not.toContain("queryClient.invalidateQueries({ queryKey: ['jobs'] });\n                                            navigate('/');");
     });
 
+    it('uses one shared attachment interaction from Project Manager and CM', () => {
+        const projectPage = readFileSync(resolve(process.cwd(), 'src/pages/ProjectManager.tsx'), 'utf8');
+        const cmViewer = readFileSync(resolve(process.cwd(), 'src/components/conformationalMapping/ConformationalMappingViewer.tsx'), 'utf8');
+        for (const source of [projectPage, cmViewer]) {
+            expect(source).toContain('ProjectAttachmentDialog');
+            expect(source).not.toContain('AddExistingDialog');
+            expect(source).not.toContain('AddToProjectDialog');
+        }
+    });
+
     it('uses the canonical bounded project and adapter query parameters', async () => {
         const signal = new AbortController().signal;
         transport.get
