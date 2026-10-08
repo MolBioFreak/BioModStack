@@ -6,7 +6,7 @@ from datetime import datetime
 from sqlalchemy import func, update
 from database import ExecutionTarget, Job
 
-PRELOAD_ACTIVE_PHASES = ("checking", "transferring", "verifying")
+PRELOAD_ACTIVE_PHASES = ("checking", "transferring", "verifying", "cancelling", "recovery_blocked")
 
 
 def preload_idle_clause():

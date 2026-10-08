@@ -90,6 +90,8 @@ def build_result(
     candidate_root.mkdir(parents=True, exist_ok=True)
     aggregate_descriptor = None
     aggregate = None
+    if aggregate_path is None:
+        raise ValueError("Shape terminal publication requires the RFD3 aggregate")
     if aggregate_path is not None:
         aggregate = _read_json(aggregate_path, "RFD3 aggregate manifest")
         if aggregate.get("schema") != "bms_rfd3_aggregate_manifest_v1":
@@ -103,6 +105,8 @@ def build_result(
             json.dumps(unsigned_aggregate, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
         ).hexdigest() != claimed_aggregate_sha:
             raise ValueError("RFD3 aggregate manifest hash is invalid")
+        if aggregate.get("status") not in {"complete", "no_yield"}:
+            raise ValueError("incomplete RFD3 aggregate cannot be published as a terminal result")
         aggregate_destination = output_dir / "results" / "rfd3_aggregate_manifest.json"
         shutil.copyfile(aggregate_path, aggregate_destination)
         aggregate_descriptor = _artifact(aggregate_destination, output_dir)
@@ -121,14 +125,46 @@ def build_result(
         if not isinstance(candidate_id, str) or not SAFE_ID.fullmatch(candidate_id) or candidate_id in seen:
             raise ValueError("Shape candidate ID is invalid or duplicated")
         seen.add(candidate_id)
+        native_evidence = {}
+        if request.get("sequence_policy") != "skip":
+            suite_descriptor = metadata.get("validator_evidence")
+            if not isinstance(suite_descriptor, dict):
+                raise ValueError("sequence candidate lacks native validator suite")
+            suite = _closed_file(bundle, suite_descriptor, "validator suite")
+            suite_payload = _read_json(suite, "validator suite")
+            if suite_payload.get("sequence_name") != (metadata.get("provenance") or {}).get("sequence_name"):
+                raise ValueError("validator suite candidate binding mismatch")
+            records = suite_payload.get("records")
+            if (suite_payload.get("schema") != "bms_shape_validator_suite_v1"
+                    or suite_payload.get("validators") != request.get("validator_suite")
+                    or not isinstance(records, dict) or set(records) != set(request.get("validator_suite", []))):
+                raise ValueError("validator suite selection binding mismatch")
+            expected_artifacts = [(validator, item["filename"], item["sha256"], item["bytes"])
+                                  for validator, record in records.items() for item in record.get("artifacts", [])]
+            bound_artifacts = [(item["validator"], item["native_path"], item["sha256"], item["bytes"])
+                               for item in metadata.get("validator_artifacts", [])]
+            if (len(set(expected_artifacts)) != len(expected_artifacts)
+                    or len(set(bound_artifacts)) != len(bound_artifacts)
+                    or set(expected_artifacts) != set(bound_artifacts)):
+                raise ValueError("validator native artifact inventory mismatch")
+            destination = candidate_root / f"{candidate_id}.validators.json"
+            shutil.copyfile(suite, destination)
+            native_evidence["validator_evidence"] = _artifact(destination, output_dir, "json")
+            native_evidence["validator_artifacts"] = []
+            for index, descriptor in enumerate(metadata.get("validator_artifacts", [])):
+                source = _closed_file(bundle, descriptor, "validator artifact")
+                destination = candidate_root / f"{candidate_id}.validator_{index:04d}{source.suffix}"
+                shutil.copyfile(source, destination)
+                native_evidence["validator_artifacts"].append({
+                    **_artifact(destination, output_dir, source.suffix.lstrip(".")),
+                    "validator": descriptor["validator"], "native_path": descriptor["native_path"],
+                })
         status = metadata.get("status")
         if status == "rejected":
             reason = metadata.get("reason")
             if not isinstance(reason, dict) or not reason.get("code"):
                 raise ValueError(f"Rejected Shape candidate lacks a reason: {candidate_id}")
-            rejected.append({"candidate_id": candidate_id, "reason": reason, "provenance": metadata.get("provenance") or {}})
-            continue
-        if status != "accepted":
+        if status not in {"accepted", "rejected"}:
             raise ValueError(f"Shape candidate status is invalid: {candidate_id}")
         name = metadata.get("name")
         if not isinstance(name, str) or not SAFE_ID.fullmatch(name):
@@ -156,10 +192,12 @@ def build_result(
         shutil.copyfile(structure, destination_structure)
         shutil.copyfile(source_backbone, destination_source)
         shutil.copyfile(metrics, destination_metrics)
-        accepted.append(
+        (accepted if status == "accepted" else rejected).append(
             {
                 "candidate_id": candidate_id,
                 "name": name,
+                **({"reason": metadata["reason"]} if status == "rejected" else {}),
+                **native_evidence,
                 "structure": _artifact(destination_structure, output_dir, structure.suffix.lstrip(".")),
                 "source_backbone": _artifact(destination_source, output_dir, source_backbone.suffix.lstrip(".")),
                 "metrics": _artifact(destination_metrics, output_dir),

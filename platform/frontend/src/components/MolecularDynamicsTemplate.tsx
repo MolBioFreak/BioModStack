@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 
-import { api, assertLocalOnlySubmission, completeCurrentLaunchContext, submitJob } from '../lib/api';
+import { ExecutionTargetPicker } from './ExecutionTargetPicker';
+import { api, prepareExecutionPlacement, completeCurrentLaunchContext, submitJob, type MdLaunchPreviewRequest } from '../lib/api';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
 import { Gen2StartingStructure } from './Gen2StartingStructure';
 import { Gen2StructureSourceSelector, type Gen2StructureSourceTab } from './Gen2StructureSourceSelector';
@@ -275,6 +276,16 @@ export function MolecularDynamicsTemplate({
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [submitError, setSubmitError] = useState('');
     const [showAdvanced, setShowAdvanced] = useState(false);
+    const [placement, setPlacement] = useState(() => prepareExecutionPlacement({}));
+    useEffect(() => {
+        const changed = () => setPlacement(prepareExecutionPlacement({}));
+        window.addEventListener('bms:execution-target-change', changed);
+        window.addEventListener('bms:execution-policy-change', changed);
+        return () => {
+            window.removeEventListener('bms:execution-target-change', changed);
+            window.removeEventListener('bms:execution-policy-change', changed);
+        };
+    }, []);
 
     const chemistryProfiles = useMemo(
         () => chemistryCatalogQuery.data?.profiles ?? [],
@@ -284,6 +295,7 @@ export function MolecularDynamicsTemplate({
     const profileDigestIsStale = Boolean(selectedProfile && selectedProfile.profile_sha256 !== selectedProfileDigest);
     const constraints = selectedProfile?.launch_constraints;
     const currentPreviewAuthorityIdentity = useMemo(() => JSON.stringify({
+        placement,
         source_ref: inspection?.source_ref ?? null,
         expected_source_sha256: inspection?.identity.sha256 ?? null,
         admission: admissionAuthority,
@@ -299,6 +311,7 @@ export function MolecularDynamicsTemplate({
         requested_settings: molecularDynamicsRequestedSettings(form),
         launch_context_id: launchContextId,
     }), [
+        placement,
         admissionAuthority,
         chemistryCatalogQuery.data?.catalog_digest,
         form,
@@ -622,8 +635,17 @@ export function MolecularDynamicsTemplate({
             profile: selectedProfile,
             catalogDigest: chemistryCatalogQuery.data.catalog_digest,
             launchContextId,
+            ...placement,
         });
     };
+
+    const buildLaunchPreviewRequest = (): MdLaunchPreviewRequest => ({
+        schema_version: 'bms.md.launch-preview-request.v1', intent: intent(),
+    });
+    const nativeProvisionRequest = (() => {
+        if (form.inputMode === 'prepared' || !typedReady) return null;
+        try { return buildLaunchPreviewRequest(); } catch { return null; }
+    })();
 
     const previewLaunch = async () => {
         const requestAuthorityIdentity = currentPreviewAuthorityIdentity;
@@ -634,11 +656,9 @@ export function MolecularDynamicsTemplate({
         setSubmitError('');
         setIsPreviewing(true);
         try {
-            const launchIntent = intent();
-            const result = await api.post<unknown>('/api/molecular-dynamics/launch-preview', {
-                schema_version: 'bms.md.launch-preview-request.v1',
-                intent: launchIntent,
-            });
+            const request = buildLaunchPreviewRequest();
+            const launchIntent = request.intent;
+            const result = await api.post<unknown>('/api/molecular-dynamics/launch-preview', request);
             if (requestGeneration !== previewRequestGenerationRef.current
                 || requestAuthorityIdentity !== currentPreviewAuthorityIdentityRef.current) return;
             setPreview(parseMolecularDynamicsLaunchPreview(result.data, launchIntent));
@@ -664,7 +684,6 @@ export function MolecularDynamicsTemplate({
         setSubmitError('');
         setIsSubmitting(true);
         try {
-            assertLocalOnlySubmission('Molecular Dynamics');
             const result = await api.post('/api/molecular-dynamics/launch', {
                 schema_version: 'bms.md.launch-request.v1',
                 intent: intent(),
@@ -679,12 +698,16 @@ export function MolecularDynamicsTemplate({
         }
     };
 
+    const buildPreparedWorkflowRequest = () => ({
+        name: form.jobName.trim(), model_id: 'molecular_dynamics', mode: 'simulate',
+        params: { md_job_spec: buildMolecularDynamicsJobSpec(form) },
+    });
+
     const launchPreparedCompatibility = async () => {
         setSubmitError('');
         setIsSubmitting(true);
         try {
-            const spec = buildMolecularDynamicsJobSpec(form);
-            const result = await submitJob({ name: form.jobName.trim(), model_id: 'molecular_dynamics', mode: 'simulate', params: { md_job_spec: spec } });
+            const result = await submitJob(buildPreparedWorkflowRequest());
             await queryClient.invalidateQueries({ queryKey: ['jobs'] });
             navigate(await completeCurrentLaunchContext(result.data) ?? '/');
         } catch (error) {
@@ -721,6 +744,10 @@ export function MolecularDynamicsTemplate({
 
     return (
         <div className="mx-auto w-full space-y-5" data-bms-md-launcher="gen2">
+            <ExecutionTargetPicker workflowRequest={form.inputMode === 'prepared'
+                ? formErrors.length === 0 ? buildPreparedWorkflowRequest() : null
+                : nativeProvisionRequest ? { workflow_type: 'molecular_dynamics', request: nativeProvisionRequest } : null} />
+            {form.inputMode !== 'prepared' && <p className="text-xs text-slate-400">Dependency provisioning uses the exact typed starting-structure intent without server preparation. Scientific preview binds the selected execution target and return policy; final launch revalidates the same intent.</p>}
             <header className="flex flex-wrap items-start justify-between gap-4">
                 <div>
                     <button type="button" onClick={onBack} className="mb-3 rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">← Back to workflows</button>
@@ -834,7 +861,7 @@ export function MolecularDynamicsTemplate({
                     </section>
                     {form.inputMode === 'structure' && formErrors.length > 0 && <section className="rounded-xl border border-red-500/30 bg-red-500/8 p-4"><h2 className="text-xs font-semibold uppercase tracking-wider text-red-300">Resolve before preview</h2><ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-red-200/80">{formErrors.map((error) => <li key={error}>{error}</li>)}</ul></section>}
                     {submitError && <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/8 p-3 text-xs text-red-200">{submitError}</div>}
-                    {previewIsCurrent && preview && <section className="rounded-xl border border-cyan-500/30 bg-cyan-500/8 p-4 text-xs text-cyan-100"><div className="font-semibold">Effective request digest</div><div className="mt-2 break-all font-mono text-[10px]">{preview.preview_digest}</div>{preview.blockers.map((blocker) => <div key={blocker.code} className="mt-2 text-red-200">{blocker.message}</div>)}<details className="mt-3"><summary className="cursor-pointer text-cyan-200">Effective JSON</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-slate-950 p-2 text-[10px] text-slate-300">{JSON.stringify(preview.effective_request, null, 2)}</pre></details></section>}
+                    {previewIsCurrent && preview && <section className="rounded-xl border border-cyan-500/30 bg-cyan-500/8 p-4 text-xs text-cyan-100"><div className="font-semibold">Effective request digest</div><p className="mt-2">Execution target: {preview.execution_target_id ?? 'Local'} · Successful result return: {preview.execution_policy.remote_result_policy}</p><div className="mt-2 break-all font-mono text-[10px]">{preview.preview_digest}</div>{preview.blockers.map((blocker) => <div key={blocker.code} className="mt-2 text-red-200">{blocker.message}</div>)}<details className="mt-3"><summary className="cursor-pointer text-cyan-200">Effective JSON</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-slate-950 p-2 text-[10px] text-slate-300">{JSON.stringify(preview.effective_request, null, 2)}</pre></details></section>}
                     {form.inputMode === 'structure' && <><button type="button" disabled={!typedReady || previewRequestIsCurrent || isSubmitting} onClick={() => void previewLaunch()} className="w-full rounded-xl border border-cyan-500/50 px-4 py-3 text-sm font-bold text-cyan-200 disabled:cursor-not-allowed disabled:border-slate-700 disabled:text-slate-500">{previewRequestIsCurrent ? 'Compiling preview…' : 'Preview effective request'}</button><button type="button" disabled={!previewIsCurrent || (preview?.blockers.length ?? 0) > 0 || isSubmitting} onClick={() => void launchTyped()} className="w-full rounded-xl bg-cyan-500 px-4 py-3 text-sm font-bold text-slate-950 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-500">{isSubmitting ? 'Materializing MD job…' : 'Launch typed MD job'}</button></>}
                     <p className="text-center text-[11px] text-slate-600">Launch creates one canonical scheduler-visible Job. Server-owned runtime paths, GPU placement, and materialization never enter browser state.</p>
                 </aside>

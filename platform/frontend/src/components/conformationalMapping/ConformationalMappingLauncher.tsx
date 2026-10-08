@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { ExecutionTargetPicker } from '../ExecutionTargetPicker';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 
@@ -217,7 +218,7 @@ const hydrateState = (values?: Record<string, unknown>): LauncherState => {
         outputCount: Object.prototype.hasOwnProperty.call(confornets, 'output_count')
             ? finite(confornets.output_count, DEFAULT_OUTPUT_COUNT)
             : Object.prototype.hasOwnProperty.call(merged, 'outputCount')
-                ? finite(merged.outputCount, DEFAULT_OUTPUT_COUNT)
+                ? merged.outputCount === null ? null : finite(merged.outputCount, DEFAULT_OUTPUT_COUNT)
                 : backend === 'confornets' ? null : DEFAULT_STATE.outputCount,
         savedSteps: typeof savedSteps === 'string' ? savedSteps : DEFAULT_STATE.savedSteps,
         maxSteps: finite(confornets.max_steps ?? merged.maxSteps, DEFAULT_STATE.maxSteps),
@@ -1073,6 +1074,7 @@ export function ConformationalMappingLauncher({ onBack, initialValues, onDraftCh
 
     return (
         <div className="w-full space-y-5 text-slate-200" data-bms-cm-launcher="canonical">
+            <ExecutionTargetPicker workflowRequest={effectivePayload ? { workflow_type: 'conformational_mapping', request: effectivePayload } : null} />
             <header className="rounded-2xl border border-slate-700 bg-slate-900/80 p-4 sm:p-5">
                 <div className="flex flex-wrap items-start justify-between gap-4">
                     <div>

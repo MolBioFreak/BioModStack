@@ -6,28 +6,23 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
+import sys
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.native_diagnostics import redact_text
 
 DEFAULT_PROJECT = "biomodstack-core-runtime"
 COMPOSE_FILE = "compose.core-runtime.yml"
 API_SERVICE = "bms-api"
 API_TARGET = "api-runtime"
 
-_URL_CREDENTIAL_RE = re.compile(r"([a-zA-Z][a-zA-Z0-9+.-]*://[^\s:/@]+:)([^@\s]+)(@)")
-_SECRET_LINE_RE = re.compile(r"(?im)^(?P<prefix>\s*[A-Z0-9_]*PASSWORD[A-Z0-9_]*\s*=\s*).*$")
-
 
 def repo_root_from_script() -> Path:
     return Path(__file__).resolve().parents[1]
-
-
-def redact_text(text: str) -> str:
-    text = _URL_CREDENTIAL_RE.sub(r"\1***\3", text)
-    return _SECRET_LINE_RE.sub(r"\g<prefix>[REDACTED]", text)
 
 
 def _load_compose(repo_root: Path) -> dict[str, Any]:

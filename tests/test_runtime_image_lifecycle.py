@@ -35,6 +35,53 @@ def publish(setup):
     return shared.publish_image(source, store, digest)
 
 
+def test_exact_owner_lease_reuses_token_and_rejects_changed_set(setup):
+    source, store, digest, _ = setup
+    publish(setup)
+    token, identity = lifecycle.ensure_lease(store, [digest], owner='attempt:durable')
+    generation = lifecycle.load_state(store)['generation']
+    assert lifecycle.ensure_lease(store, [digest, digest], owner='attempt:durable') == (token, identity)
+    assert lifecycle.load_state(store)['generation'] == generation
+    with pytest.raises(lifecycle.Error, match='owner identity mismatch'):
+        lifecycle.ensure_lease(store, [digest, '0' * 64], owner='attempt:durable')
+    assert lifecycle.load_state(store)['leases'][token]['identities'] == identity
+
+
+def test_publish_and_pin_share_fence_and_publisher_verification(setup, monkeypatch):
+    source, store, digest, _ = setup
+    original = lifecycle._ensure_lease_locked
+    calls = []
+    def pin(root, state, digests, owner, *, identities=None):
+        assert identities[digest]['sha256'] == digest
+        assert lifecycle.object_path(root, digest).is_file()
+        calls.append(owner)
+        return original(root, state, digests, owner, identities=identities)
+    monkeypatch.setattr(lifecycle, '_ensure_lease_locked', pin)
+    def redundant_hash(*args, **kwargs):
+        raise AssertionError('pinning must reuse publisher verification under fence')
+    monkeypatch.setattr(lifecycle, 'verify_image', redundant_hash)
+    path, token, identities = lifecycle.publish_leased_image(source, store, digest, owner='cache-artifact:' + digest)
+    assert lifecycle.load_state(store)['leases'][token]['identities'] == identities
+    again = lifecycle.publish_leased_image(source, store, digest, owner='cache-artifact:' + digest)
+    assert again == (path, token, identities)
+    assert len(calls) == 2
+    assert path.stat().st_nlink == 1
+
+
+def test_exact_owner_lease_rejects_same_bytes_new_inode(setup):
+    source, store, digest, _ = setup
+    path = publish(setup)
+    lifecycle.ensure_lease(store, [digest], owner='attempt:durable')
+    path.parent.chmod(0o700)
+    replacement = path.parent / 'replacement'
+    replacement.write_bytes(source.read_bytes())
+    replacement.chmod(0o400)
+    replacement.replace(path)
+    path.parent.chmod(0o500)
+    with pytest.raises(lifecycle.Error, match='identity changed'):
+        lifecycle.ensure_lease(store, [digest], owner='attempt:durable')
+
+
 def test_legacy_lane_projection_is_retained_before_first_versioned_update(setup):
     source, store, digest, spec = setup
     image = publish(setup)

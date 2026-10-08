@@ -36,13 +36,13 @@ interface Selection {
 interface OverlayStructure {
     id: string;
     structureUrl: string;
-    format?: 'cif' | 'pdb';
+    format?: 'cif' | 'pdb' | 'sdf';
     label?: string;
 }
 
 export interface MolstarViewerProps {
     structureUrl?: string;
-    format?: 'cif' | 'pdb';
+    format?: 'cif' | 'pdb' | 'sdf';
     alphafoldView?: boolean;
     hideControls?: boolean;
     height?: number | string;
@@ -87,8 +87,8 @@ const toAbsoluteStructureUrl = (structureUrl?: string): string | null => {
     return structureUrl;
 };
 
-const toMolstarLoadFormat = (format: 'cif' | 'pdb' | undefined): 'mmcif' | 'pdb' => (
-    format === 'cif' || !format ? 'mmcif' : 'pdb'
+const toMolstarLoadFormat = (format: 'cif' | 'pdb' | 'sdf' | undefined): 'mmcif' | 'pdb' | 'sdf' => (
+    format === 'cif' || !format ? 'mmcif' : format
 );
 
 const normalizeBackgroundColor = (backgroundColor: string): string => (

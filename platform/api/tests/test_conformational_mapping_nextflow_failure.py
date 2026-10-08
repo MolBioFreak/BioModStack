@@ -166,8 +166,10 @@ def _configure_local_nextflow_launch(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("spawn_route", ["direct", "systemd"])
+@pytest.mark.parametrize("retry", [False, True])
 async def test_failed_cm_nextflow_run_terminalizes_linked_request_with_immutable_receipt(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, spawn_route: str, retry: bool,
 ) -> None:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'cm-nextflow-failure.db'}")
     async with engine.begin() as connection:
@@ -180,14 +182,57 @@ async def test_failed_cm_nextflow_run_terminalizes_linked_request_with_immutable
 
         _configure_local_nextflow_launch(monkeypatch, factory, tmp_path)
         monkeypatch.setattr(nextflow, "preflight_nextflow_java", lambda _env: (True, "test java"))
-        monkeypatch.setattr(nextflow, "build_nextflow_command", lambda *_args, **_kwargs: ("nextflow",))
+        from component_runtime import NativeInvocation
+        # Failure-publication/consumer test: compiler and image resolver are
+        # isolated; the actual launch loop and both spawn consumers run below.
+        monkeypatch.setattr(nextflow, "compile_job_nextflow_invocation", lambda *_args, **_kwargs:
+            NativeInvocation.capture(model_id="conformational_mapping", mode="map",
+                command=("nextflow",), requested={}, effective={}, native_parameters={},
+                entrypoint="workflows/conformational_mapping.nf"))
+        monkeypatch.setattr(nextflow, "transient_workflow_runner_mode", lambda: spawn_route == "direct")
+        monkeypatch.setenv("BMS_TRANSIENT_WORKFLOW_UNIT_NAME", "biomodstack-development-job-cm-job-failed-attempt-1.service")
+        monkeypatch.setenv("BMS_TRANSIENT_WORKFLOW_OWNER_NONCE", "test-owner")
+        monkeypatch.setenv("BMS_SELECTED_IMAGE_STALE", "must-not-reach-spawn")
+        image_environments = []
+        async def pin_images(_session, _job, invocation):
+            assert invocation.model_id == "conformational_mapping"
+            index = len(image_environments) + 1
+            selected = {"BMS_SELECTED_IMAGE_TEST": str(tmp_path / f"image-{index}.sif")}
+            if index == 1:
+                selected["BMS_SELECTED_IMAGE_FIRST_ONLY"] = "first-only"
+            image_environments.append(selected)
+            return selected
+        monkeypatch.setattr(nextflow, "_pin_local_invocation_images", pin_images)
+        spawned_environments = []
+        async def no_sleep(_seconds):
+            pass
+        monkeypatch.setattr(nextflow.asyncio, "sleep", no_sleep)
+        async with factory() as session:
+            job = await session.get(Job, job_id)
+            job.nextflow_run_id = "biomodstack-development-job-cm-job-failed-attempt-1.service"
+            await session.commit()
+
+        def record_spawn(env):
+            selected = {key: value for key, value in env.items() if key.startswith("BMS_SELECTED_IMAGE_")}
+            spawned_environments.append(selected)
+            assert selected == image_environments[-1]
+            if retry and len(spawned_environments) == 1:
+                with (tmp_path / "output" / "nextflow.log").open("a") as log:
+                    log.write("Unable to acquire lock on session with ID fixture\n")
 
         async def fake_create_subprocess_exec(*_args: object, **_kwargs: object) -> _FailedNextflowProcess:
+            assert spawn_route == "direct"
+            record_spawn(_kwargs["env"])
             return _FailedNextflowProcess()
 
         monkeypatch.setattr(nextflow.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
-        unit_name = "biomodstack-development-job-cm-job-failed-attempt-1.service"
-        monkeypatch.setattr(nextflow, "create_systemd_workflow_unit", lambda _command: unit_name)
+        def create_unit(command):
+            assert spawn_route == "systemd"
+            env = dict(arg.removeprefix("--setenv=").split("=", 1)
+                       for arg in command if arg.startswith("--setenv="))
+            record_spawn(env)
+            return f"biomodstack-development-job-cm-job-failed-attempt-{len(spawned_environments)}.service"
+        monkeypatch.setattr(nextflow, "create_systemd_workflow_unit", create_unit)
         monkeypatch.setattr(
             nextflow,
             "show_unit_properties",
@@ -205,15 +250,21 @@ async def test_failed_cm_nextflow_run_terminalizes_linked_request_with_immutable
             job_id=job_id,
             model_id="conformational_mapping",
             mode="map",
-            params={},
+            params={"allow_retries": retry, "resume_work_dir": str(tmp_path / "resume"),
+                    "resume_lock_retry_attempts": 1},
             output_dir=str(tmp_path / "output"),
         )
+        assert spawned_environments == image_environments
+        assert len(spawned_environments) == (2 if retry else 1)
+        if retry:
+            assert "BMS_SELECTED_IMAGE_FIRST_ONLY" not in spawned_environments[1]
 
         request = await _assert_terminalized_failure(
             factory,
             job_id=job_id,
             request_id=request_id,
-            message="Nextflow exited with code 1",
+            message=("Nextflow resume lock contention after retries: Unable to acquire lock on session with ID fixture"
+                     if retry else "Nextflow exited with code 1"),
         )
         async with factory() as session:
             cm_router = _load_cm_router_without_pydna(monkeypatch)
@@ -285,7 +336,7 @@ async def test_cm_nextflow_command_build_exception_terminalizes_linked_request(
         def fail_to_build_command(*_args: object, **_kwargs: object) -> tuple[str, ...]:
             raise RuntimeError("command construction exploded")
 
-        monkeypatch.setattr(nextflow, "build_nextflow_command", fail_to_build_command)
+        monkeypatch.setattr(nextflow, "compile_job_nextflow_invocation", fail_to_build_command)
 
         await nextflow.launch_nextflow_job(
             job_id=job_id,

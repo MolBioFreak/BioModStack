@@ -97,66 +97,102 @@ def test_bootstrap_failure_whitelist_rejects_untrusted_detail():
     assert _controlled_remote_failure('BMS_SETUP_ERROR:secret token') is None
 
 
+from test_managed_runtime_safety import critical_package, load
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize('version,busy,failed_command', [
-    ('25.10.1', False, None), ('25.10.2', False, None), ('25.10.1', True, None),
-    ('25.10.1', False, 'env'), ('25.10.1', False, 'apptainer'),
-])
-async def test_full_attach_bootstraps_transfers_and_verifies_before_ready(store, monkeypatch, tmp_path, version, busy, failed_command):
+@pytest.mark.parametrize('version', ['25.10.1', '25.10.2'])
+@pytest.mark.parametrize('damage', [None, 'jar', 'python', 'cuda', 'leased'])
+async def test_full_attach_bootstraps_transfers_and_verifies_before_ready(
+        store, monkeypatch, critical_package, damage, version):
+    from services.remote_execution import cache, managed_inventory as mi
     session, factory = store
+    _, _, requirements, worker = critical_package
     inventory(monkeypatch, ['49674511'])
-    launcher = tmp_path / 'nextflow'
-    launcher.write_text('fixture')
-    monkeypatch.setenv('BMS_NEXTFLOW_VERSION', version)
-    from services import nextflow
-    monkeypatch.setattr(nextflow, 'resolve_nextflow_executable', lambda: str(launcher))
-    calls = []
-    async def capture(*args): return ('fixture key', 'a' * 64)
+    m, c = load('bms_managed_runtime'), load('bms_artifact_cache')
+    monkeypatch.setattr(m, 'observed_compatibility', lambda: dict(requirements))
+    root = worker / 'managed-assets/v1'
     async def noop(*args, **kwargs): pass
+    async def capture(*args): return ('fixture key', 'a'*64)
     async def run(conn, argv, **kw):
-        calls.append((argv, kw))
-        if argv[0] == failed_command:
-            raise targets.RemoteTransportError('Untrusted remote stderr with a secret token')
-        async with factory() as other:
-            row = await targets.get_target(other, 'vast:49674511')
-            assert not row.active
-        if argv[0] == 'sha256sum': return SimpleNamespace(stdout='hash worker\nhash nextflow\n')
-        if 'apptainer' in argv:
-            if busy:
+        await session.refresh(await targets.get_target(session, 'vast:49674511'))
+        assert not (await targets.get_target(session, 'vast:49674511')).active
+        if argv[0] == 'apptainer':
+            if damage == 'leased':
                 async with factory() as other:
-                    leased = await targets.get_target(other, 'vast:49684651')
-                    leased.state, leased.active, leased.leased_job_id = 'ready', True, 'racing'
+                    row = await targets.get_target(other, 'vast:49674511')
+                    row.leased_job_id = 'racing'
                     await other.commit()
+            if damage == 'cuda':
+                raise targets.RemoteTransportError('fixture failure')
             return SimpleNamespace(stdout='BMS_CUDA_OK\n')
-        if argv[0] == 'env': assert f'NXF_VER={version}' in argv
-        return SimpleNamespace(stdout=f'nextflow version {version}\n')
-    async def transfer(*args, **kwargs):
-        assert kwargs['timeout'] >= 3600
+        return SimpleNamespace(stdout='')
+    async def helper(conn, request, fence):
+        await fence()
+        action = request['action']
+        if action == 'boot': result = {}
+        elif action == 'admit': result = m.admit(root, request['manifest'], request['boot_id'], c)
+        elif action == 'install': result = m.install(root, request['manifest'], request['boot_id'], c)
+        elif action == 'observe': result = {'releases': [m.observe(root, v, c) for v in request['manifests']]}
+        elif action == 'bounded_check':
+            releases = [m.observe(root, v, c) for v in request['manifests']]
+            for release in releases:
+                release['native_readiness'] = m.bounded_native_check(release)
+            result = {'releases': releases}
+        else: raise AssertionError(action)
+        await fence()
+        return result | {'boot_id': m.boot_id()}
+    async def push(*, connection, artifacts, operation_id, progress, check_fence):
+        storage = c.Cache(worker / 'cache/artifacts/v1')
+        for entry in artifacts:
+            await check_fence()
+            assert not (root / 'active/critical_runtime-worker.json').exists()
+            if ((damage == 'jar' and entry.remote_destination.endswith('.jar'))
+                    or (damage == 'python' and entry.remote_destination == 'support-python/venv/bin/python')):
+                continue
+            incoming = Path(storage.root) / 'incoming' / entry.sha256
+            incoming.write_bytes(entry.source.read_bytes())
+            storage.ingest(dict(sha256=entry.sha256, size_bytes=entry.size_bytes), incoming)
+    async def probe(*args): return {'gpus': ['fixture gpu']}
     monkeypatch.setattr(targets, 'capture_host_key', capture)
     monkeypatch.setattr(targets, 'persist_host_key', noop)
     monkeypatch.setattr(targets, 'run_remote', run)
-    monkeypatch.setattr(targets, 'rsync_to_remote', transfer)
-    monkeypatch.setattr(targets, '_sha256_file', lambda p: 'hash')
-    async def probe(*args): return {'gpus': ['gpu']}
     monkeypatch.setattr(targets, 'probe_readiness', probe)
-    if failed_command:
-        detail = 'Pinned Nextflow version verification failed' if failed_command == 'env' else 'CUDA container verification failed'
-        with pytest.raises(targets.ExecutionTargetError, match=detail):
-            await targets.activate_target(session, ExecutionTargetActivateRequest(provider_instance_id='49674511'))
-        row = await targets.get_target(session, 'vast:49674511')
-        assert row.last_error == row.provider_metadata['setup']['message'] == detail
-        assert row.state == 'unavailable' and not row.active
-        return
-    if busy:
-        with pytest.raises(targets.ExecutionTargetError, match='active'):
-            await targets.activate_target(session, ExecutionTargetActivateRequest(provider_instance_id='49674511'))
-        leased = await targets.get_target(session, 'vast:49684651')
-        assert leased.active and leased.state == 'ready' and leased.leased_job_id == 'racing'
-        return
-    result = await targets.activate_target(session, ExecutionTargetActivateRequest(provider_instance_id='49674511'))
-    assert result.setup.phase == 'ready'
-    assert any(kw.get('input_bytes', b'').startswith(b'#!/usr/bin/env bash') for _, kw in calls)
-    assert any('apptainer' in argv and any('@sha256:' in arg for arg in argv) for argv, _ in calls)
+    monkeypatch.setattr(mi, 'helper_call', helper)
+    monkeypatch.setattr(cache, '_cache_artifacts', push)
+    started = await targets.begin_activation(session, ExecutionTargetActivateRequest(
+        provider_instance_id='49674511', remote_root=str(worker)))
+    if damage:
+        with pytest.raises(targets.ExecutionTargetError):
+            await targets.finish_activation(session, started.id)
+        row = await targets.get_target(session, started.id)
+        assert not row.active
+        assert row.leased_job_id == 'racing' if damage == 'leased' else row.state == 'unavailable'
+        assert not (root / 'active/critical_runtime-worker.json').exists()
+    else:
+        result = await targets.finish_activation(session, started.id)
+        assert result.setup is not None and result.setup.phase == 'ready'
+        binding = result.capabilities['critical_runtime_binding']
+        assert binding['environment']['NXF_OFFLINE'] == 'true'
+        assert binding['environment']['NXF_VER'] == version
+        assert Path(binding['paths']['jar']).is_file()
+        assert result.capabilities['critical_runtime']['state'] == 'verified'
+
+
+@pytest.mark.asyncio
+async def test_attach_default_uses_existing_transport_without_version_profile(store, monkeypatch):
+    session, _ = store
+    inventory(monkeypatch, ['49674511'])
+    contacted = []
+    async def unavailable(*args, **kwargs):
+        contacted.append(args)
+        raise targets.RemoteTransportError('Remote transport timed out')
+    monkeypatch.setattr(targets, 'capture_host_key', unavailable)
+    with pytest.raises(targets.ExecutionTargetError, match='Remote transport timed out'):
+        await targets.activate_target(session, ExecutionTargetActivateRequest(provider_instance_id='49674511'))
+    target = await targets.get_target(session, 'vast:49674511')
+    assert len(contacted) == 1
+    assert target.state == 'unavailable' and not target.active
 
 
 @pytest.mark.asyncio

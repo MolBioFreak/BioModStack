@@ -160,7 +160,12 @@ def _target_response(target: ExecutionTarget) -> ExecutionTargetResponse:
         username=target.username,
         remote_root=str(target.remote_root),
         host_key_sha256=target.host_key_sha256,
-        capabilities=dict(target.capabilities or {}),
+        capabilities={**dict(target.capabilities or {}), "scheduling": {
+            "policy": "exclusive_target", "max_concurrent_root_attempts": 1,
+            "new_work_ready": target_eligible(target) and not target.leased_job_id,
+            "inventory_fresh": inventory_fresh(target),
+            "leased_job_id": target.leased_job_id,
+        }},
         pricing=dict(target.pricing or {}),
         last_error=target.last_error,
         last_seen_at=target.last_seen_at,
@@ -206,22 +211,57 @@ async def list_targets(session: AsyncSession) -> list[ExecutionTargetResponse]:
             )
         )
     ).scalars().all()
-    if any(not inventory_fresh(row) for row in rows) or (
+    if (
         not rows and (_empty_inventory_checked_at is None or
         (datetime.utcnow() - _empty_inventory_checked_at).total_seconds() > INVENTORY_MAX_AGE_SECONDS)
     ):
         raise ExecutionTargetError("Vast inventory is unknown or expired; placement is unavailable")
-    return [_target_response(row) for row in rows if row.provider_metadata["inventory"].get("present") is True]
+    # A stale/unreachable member cannot hide the rest of the fleet or retained
+    # ownership. Per-target admission remains fail-closed in get_ready_target.
+    return [_target_response(row) for row in rows if row.active or row.leased_job_id
+            or (row.provider_metadata or {}).get("inventory", {}).get("present") is True]
 
 
 async def get_target(session: AsyncSession, execution_target_id: str) -> ExecutionTarget:
+    """Identity lookup for observation/control; not new-work admission authority."""
     target = await session.get(ExecutionTarget, execution_target_id, populate_existing=True)
     if target is None:
         raise ExecutionTargetError("Execution target does not exist")
     return target
 
 
+async def submission_target_fields(
+    session: AsyncSession, execution_target_id: str | None, *, parent_job: Job | None = None,
+) -> dict[str, Any]:
+    """Shared typed-submission placement; no GPU index or scientific mutation.
+
+    Admission is separate from existing-attempt control. Computational follow-ons
+    retain their parent's target and immutable source, never fall back to Local.
+    """
+    target_id = execution_target_id
+    if target_id is not None and (not isinstance(target_id, str) or not target_id.strip() or len(target_id) > 160):
+        raise ExecutionTargetError("execution_target_id must be a nonempty target identity or null")
+    if parent_job is not None and target_id != parent_job.execution_target_id:
+        raise ExecutionTargetError("Child execution_target_id must match the parent Job")
+    fields = {"execution_target_id": target_id}
+    if target_id is None:
+        return fields
+    target = await session.get(ExecutionTarget, target_id, populate_existing=True)
+    if target is None or not target_eligible(target):
+        raise ExecutionTargetError("execution_target_id is not an active ready execution target")
+    if parent_job is not None:
+        revision, tree = parent_job.execution_source_revision, parent_job.execution_source_tree
+        if not revision or not tree:
+            raise ExecutionTargetError("Remote parent Job is missing its immutable source identity")
+    else:
+        from .bundle import current_source_identity
+        revision, tree = current_source_identity()
+    fields.update(execution_source_revision=revision, execution_source_tree=tree)
+    return fields
+
+
 async def get_ready_target(session: AsyncSession, execution_target_id: str) -> ExecutionTarget:
+    """New-work admission only; existing attempts use their persisted control binding."""
     target = await get_target(session, execution_target_id)
     if not target_eligible(target):
         raise ExecutionTargetError("Execution target is not active and ready")
@@ -519,56 +559,43 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
         await set_setup(session, target, "installing", "Installing missing worker tools (up to 30 minutes)", expected_started_at=started_at)
         await checked_io(run_remote, connection, ["bash", "-s", "--", "install", connection.remote_root], input_bytes=script, timeout=3600)
         probe = await checked_io(probe_readiness, connection)
-        await set_setup(session, target, "transferring", "Transferring verified runner and Nextflow; slow links may take up to one hour", expected_started_at=started_at)
-        runner = Path(__file__).resolve().parents[2] / "tools" / "bms_remote_worker.py"
-        from services.nextflow import resolve_nextflow_executable, resolve_nextflow_version
-
-        nextflow_launcher = Path(resolve_nextflow_executable())
-        runner_sha256 = _sha256_file(runner)
-        nextflow_sha256 = _sha256_file(nextflow_launcher)
-        # Never let a delayed/partial rsync receiver own a published pathname.
-        # Each invocation has its own staging directory on the final filesystem.
-        staging = f"{connection.remote_root}/runner/.attach-{uuid.uuid4().hex}"
-        await checked_io(run_remote, connection, ["mkdir", "-p", staging])
-        await checked_io(rsync_to_remote, connection, runner,
-                         f"{staging}/bms_remote_worker.py", timeout=3600)
-        await checked_io(rsync_to_remote, connection, nextflow_launcher,
-                         f"{staging}/nextflow", timeout=3600)
-        # Verify BOTH candidates before replacing either file; chmod the private
-        # inodes first. Each rename is atomic, not a pair-wide transaction.
-        publish = (
-            'set -eu; printf "%s  %s\\n%s  %s\\n" "$3" "$1" "$4" "$2" | sha256sum -c -; '
-            'chmod 0755 "$1" "$2"; mv -fT -- "$1" "$5"; mv -fT -- "$2" "$6"'
-        )
-        await checked_verification([
-            "bash", "-c", publish, "bms-publish-runner",
-            f"{staging}/bms_remote_worker.py", f"{staging}/nextflow",
-            runner_sha256, nextflow_sha256,
-            f"{connection.remote_root}/runner/bms_remote_worker.py",
-            f"{connection.remote_root}/runner/nextflow",
-        ], "Remote runner transfer failed integrity verification", timeout=120)
-        remote_hashes = await checked_io(run_remote,
-            connection,
-            [
-                "sha256sum",
-                f"{connection.remote_root}/runner/bms_remote_worker.py",
-                f"{connection.remote_root}/runner/nextflow",
-            ],
-        )
-        observed_hashes = [
-            line.split()[0]
-            for line in remote_hashes.stdout.splitlines()
-            if line.strip()
-        ]
-        if observed_hashes != [runner_sha256, nextflow_sha256]:
-            raise RemoteTransportError("Remote runner transfer failed integrity verification")
-        await set_setup(session, target, "verifying", "Verifying Nextflow and CUDA inside a pinned container", expected_started_at=started_at)
-        expected_version = resolve_nextflow_version()
-        version = await checked_verification(
-            ["env", "NXF_OFFLINE=true", f"NXF_VER={expected_version}", f"{connection.remote_root}/runner/nextflow", "-version"],
-            "Pinned Nextflow version verification failed", timeout=120)
-        if f"version {expected_version}" not in version.stdout:
-            raise RemoteTransportError("Pinned Nextflow version verification failed")
+        from . import critical_runtime, managed_inventory, cache
+        import tempfile
+        async def fence():
+            async def noop():
+                pass
+            await checked_io(noop)
+        async def progress(event):
+            await fence()
+            await set_setup(session, target, "transferring", event['message'], expected_started_at=started_at)
+        with tempfile.TemporaryDirectory(prefix='bms-critical-') as staging:
+            projection = asyncio.create_task(asyncio.to_thread(critical_runtime.project_runtime,
+                connection.remote_root, Path(staging)))
+            try:
+                manifest, artifacts = await asyncio.shield(projection)
+            except asyncio.CancelledError:
+                # Finish this local writer before TemporaryDirectory removes its
+                # files. Cancellation never leaves a thread writing into cleanup.
+                while not projection.done():
+                    try:
+                        await asyncio.shield(projection)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+                if not projection.cancelled():
+                    projection.exception()
+                raise
+            boot_response = await managed_inventory.helper_call(connection, dict(action='boot'), fence)
+            boot = boot_response['boot_id']
+            admission = await managed_inventory.helper_call(connection,
+                dict(action='admit', manifest=manifest, boot_id=boot), fence)
+            if admission['boot_id'] != boot:
+                raise RemoteTransportError("Critical runtime boot identity changed")
+            await cache._cache_artifacts(connection=connection, artifacts=artifacts,
+                operation_id=str(uuid.uuid4()), progress=progress, check_fence=fence)
+        binding = critical_runtime.runtime_binding(connection.remote_root, manifest)
+        await set_setup(session, target, "verifying", "Verifying critical runtime and CUDA", expected_started_at=started_at)
         cuda = await checked_verification([
             "apptainer", "exec", "--nv",
             "docker://python@sha256:97983fa8cc88343512862c62307159a82261c3528dc025f79e5a3f7af43e50b4",
@@ -576,7 +603,16 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
         ], "CUDA container verification failed", timeout=3600)
         if "BMS_CUDA_OK" not in cuda.stdout.splitlines():
             raise RemoteTransportError("CUDA container verification failed")
-    except (RemoteTransportError, OSError) as exc:
+        # Check the real container/driver boundary before replacing the active
+        # release; a failed CUDA probe must preserve the previous generation.
+        critical_release = await managed_inventory.activate_release(
+            connection, manifest, fence, progress, boot)
+        manifests = [m for m in managed_inventory.saved_manifests(target)
+                     if m["selection"] != manifest["selection"]] + [manifest]
+        readback = await managed_inventory.observe_releases(connection, manifests, fence)
+        if str(readback.boot_id) != boot or not readback.critical_runtime_ready:
+            raise RemoteTransportError("Critical runtime boot identity changed")
+    except (RemoteTransportError, OSError, ValueError) as exc:
         await session.refresh(target)
         phase = (target.provider_metadata or {}).get("setup", {}).get("phase", "checking")
         safe = BOOTSTRAP_ERRORS | {
@@ -585,6 +621,8 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
             "Remote SSH host key changed since the last activation", "Remote SSH host key changed",
             "Unable to read the remote SSH host key", "Remote readiness probe returned invalid output",
             "Remote readiness probe is incomplete",
+            "Pinned Nextflow framework JAR is unavailable",
+            "Critical runtime boot identity changed",
         }
         message = str(exc) if str(exc) in safe else f"Remote setup failed during {phase}; retry Attach"
         setup = {**(target.provider_metadata or {}).get("setup", {}), "phase": "failed",
@@ -624,12 +662,21 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
             ExecutionTarget.provider_metadata["inventory"]["checked_at"].as_string() <= now.isoformat(),
         ).values(
             state="ready", active=True, activated_at=now, updated_at=now, last_error=None,
-            provider_metadata={**dict(target.provider_metadata or {}), "setup": {
+            provider_metadata={**dict(target.provider_metadata or {}),
+                "managed_boot_id": boot,
+                "critical_runtime_manifest": manifest,
+                "managed_inventory": dict(manifests=manifests, observation=readback.model_dump(mode="json"),
+                    endpoint_sha256=hashlib.sha256(json.dumps((connection.host, connection.port,
+                        connection.username, connection.remote_root, fingerprint)).encode()).hexdigest()),
+                "critical_runtime_endpoint_sha256": hashlib.sha256(json.dumps((connection.host, connection.port,
+                    connection.username, connection.remote_root, fingerprint)).encode()).hexdigest(),
+                "setup": {
                 **(target.provider_metadata or {}).get("setup", {}), "phase": "ready",
                 "message": "Remote worker ready; analytics available", "updated_at": now.isoformat()}},
             host_key_sha256=fingerprint,
             capabilities={**dict(target.capabilities or {}), "readiness": probe,
-                          "runner_sha256": runner_sha256, "nextflow_launcher_sha256": nextflow_sha256},
+                          "critical_runtime": critical_release.model_dump(mode="json"),
+                          "critical_runtime_binding": binding},
         ).execution_options(synchronize_session=False)
     )
     if published.rowcount != 1:
@@ -670,6 +717,136 @@ async def remote_target_telemetry(target: ExecutionTarget) -> dict[str, Any]:
            for gpu in sample['gpus']):
         sample.update(available=False, error='Remote VRAM readings unavailable')
     return sample
+
+
+async def admit_target_resources(
+    target: ExecutionTarget, *, required_cpus: int, required_memory_bytes: int,
+    required_scratch_bytes: int, gpu_ids: list[int], minimum_gpu_memory_mb: int = 0,
+) -> dict[str, Any]:
+    """Bind compiled requirements to fresh target capacity, without changing science.
+
+    The launch/compiler owner supplies the aggregate plan and bundle budget;
+    Nextflow must enforce the returned CPU/RAM ceiling within this root lease.
+    Descendants subdivide this reservation, never reserve another target.
+    """
+    requirements = {"cpus": required_cpus, "memory_bytes": required_memory_bytes,
+                    "scratch_bytes": required_scratch_bytes}
+    if any(type(value) is not int or value < 0 for value in requirements.values()):
+        raise ExecutionTargetError("Compiled resource requirements must be nonnegative integers")
+    if not required_cpus or not required_memory_bytes:
+        raise ExecutionTargetError("Compiled CPU and memory requirements must be explicit")
+    sample = await remote_target_telemetry(target)
+    if not sample.get("available"):
+        raise ExecutionTargetError(sample.get("error") or "Fresh target capacity is unavailable")
+    cpu, ram, disk = (sample.get(key) or {} for key in ("cpu", "ram", "disk"))
+    observed = {"cpus": cpu.get("allocated_cores"),
+                "memory_bytes": (ram["limit_bytes"] - ram["used_bytes"]
+                                 if ram.get("limit_bytes") is not None and ram.get("used_bytes") is not None else None),
+                "scratch_bytes": disk.get("free_bytes")}
+    for key, required in requirements.items():
+        available = observed[key]
+        if not isinstance(available, (int, float)) or available < required:
+            raise ExecutionTargetError(f"Target {key} capacity {available} cannot satisfy {required}")
+    if disk.get("path") != target.remote_root:
+        raise ExecutionTargetError("Scratch observation does not belong to the target work root")
+    if type(minimum_gpu_memory_mb) is not int or minimum_gpu_memory_mb < 0:
+        raise ExecutionTargetError("Compiled GPU physical capacity floor must be a nonnegative integer")
+    devices = {row["index"]: row for row in sample.get("gpus", [])}
+    if len(set(gpu_ids)) != len(gpu_ids) or any(i not in devices or not devices[i].get("uuid") for i in gpu_ids):
+        raise ExecutionTargetError("Physical GPU identity is unavailable for the target assignment")
+    if minimum_gpu_memory_mb and (not gpu_ids or any(
+        devices[i].get("memory_total_mb", 0) < minimum_gpu_memory_mb for i in gpu_ids
+    )):
+        raise ExecutionTargetError(f"Assigned GPU physical capacity is below {minimum_gpu_memory_mb} MB")
+    return {"schema": "bms.target-resource-admission.v1", "execution_target_id": str(target.id),
+            "policy": "exclusive_target", "observed_at": sample.get("observed_at"),
+            "required": requirements, "available": observed,
+            "minimum_gpu_memory_mb": minimum_gpu_memory_mb,
+            "devices": [{"gpu_index": i, "gpu_uuid": devices[i]["uuid"]} for i in gpu_ids]}
+
+
+def selected_plan_target_resources(target, plan, *, gpu_ids, scratch_bytes) -> dict[str, Any]:
+    """Pure native requirement projection for synchronous bundle preparation.
+
+    The shared adapter serializes compute tasks across root and descendants with
+    one inherited slot. Native waiters retain CPU/RAM while children compute:
+    reserve their conservative sum (one fork per declared authority) in addition
+    to the compute maximum. No coordinator may consume GPU compute capacity.
+    """
+    import re
+    from biomodstack_local_resources import GIB
+
+    if isinstance(plan, dict):
+        # Retained authenticated contexts use the same resource projection as
+        # in-process compiler plans; do not recompile science to renew admission.
+        from types import SimpleNamespace
+        metadata = plan['metadata']
+        components = tuple(SimpleNamespace(**dict(row,
+            resources_json=json.dumps(row['resources_json'])))
+            for key in ('static_components', 'dynamic_templates') for row in metadata[key])
+    else:
+        components = (*plan.metadata.static_components, *plan.metadata.dynamic_templates)
+    if not components:
+        raise ExecutionTargetError("Selected plan has no native resource declarations")
+    cpus = memory = required_gpus = minimum_gpu_memory_mb = 0
+    coordinators = {}
+    declarations = []
+    for component in components:
+        try:
+            resource = json.loads(component.resources_json)
+            cpu = resource["cpus"]["value"]
+            raw_memory = resource["memory"]["value"]
+            # Nextflow MemoryUnit uses binary units even for its GB spelling.
+            match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)\s*(B|KB|MB|GB|TB)",
+                                 str(raw_memory).strip(), re.IGNORECASE)
+            if type(cpu) is not int or cpu <= 0 or match is None:
+                raise ValueError("unresolved CPU/memory value")
+            from decimal import Decimal
+            scale = {"B": 1, "KB": GIB // (1024 * 1024), "MB": GIB // 1024,
+                     "GB": GIB, "TB": GIB * 1024}[match[2].upper()]
+            size = Decimal(match[1]) * scale
+            if size <= 0 or size != int(size):
+                raise ValueError("invalid native memory quantity")
+            gpu = resource.get("gpu")
+            count = gpu["count"] if gpu is not None else 0
+            if type(count) is not int or count < 0:
+                raise ValueError("unresolved GPU count")
+            floor = gpu.get("minimum_gpu_memory_mb", 0) if gpu else 0
+            if type(floor) is not int or floor < 0:
+                raise ValueError("unresolved physical GPU capacity floor")
+            minimum_gpu_memory_mb = max(minimum_gpu_memory_mb, floor)
+            role = resource.get('execution_role', 'compute')
+            if role not in {'compute', 'coordinator'}:
+                raise ValueError('unknown native execution role')
+            if role == 'coordinator':
+                from native_components import NATIVE_COORDINATORS
+                if (component.authority not in NATIVE_COORDINATORS or count
+                        or resource.get('max_forks') != 1 or component.expansion_authority):
+                    raise ValueError('coordinator exemption requires a bounded native waiter')
+                previous = coordinators.get(component.authority, (0, 0))
+                coordinators[component.authority] = (max(previous[0], cpu), max(previous[1], int(size)))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ExecutionTargetError(
+                f"Native resource declaration unresolved: {component.component_key}: {exc}"
+            ) from exc
+        declarations.append({"component_key": component.component_key, "cpus": cpu,
+            "memory_bytes": int(size), "gpu_count": count, "native_policy": resource})
+        if role == 'compute':
+            cpus, memory, required_gpus = max(cpus, cpu), max(memory, int(size)), max(required_gpus, count)
+    coordinator_budget = {'cpus': sum(row[0] for row in coordinators.values()),
+                          'memory_bytes': sum(row[1] for row in coordinators.values())}
+    compute_budget = {'cpus': cpus, 'memory_bytes': memory}
+    cpus += coordinator_budget['cpus']
+    memory += coordinator_budget['memory_bytes']
+    if len(gpu_ids) < required_gpus:
+        raise ExecutionTargetError("Selected plan GPU requirement exceeds assigned target devices")
+    return {"schema": "bms.selected-plan-target-resources.v1",
+            "execution_target_id": str(target.id), "policy": "exclusive_target",
+            "required": {"cpus": cpus, "memory_bytes": memory, "scratch_bytes": scratch_bytes},
+            "gpu_ids": list(gpu_ids), "components": declarations,
+            "compute": compute_budget, "coordinator_overlap": coordinator_budget,
+            "minimum_gpu_memory_mb": minimum_gpu_memory_mb,
+            "admission_required": True}
 
 
 async def active_remote_telemetry(

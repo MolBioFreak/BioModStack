@@ -378,6 +378,9 @@ def _numeric_metrics(a: Mapping[str, Any], b: Mapping[str, Any]) -> dict[str, An
         native_metric = {"a": native_a, "b": native_b, "delta_b_minus_a": native_b - native_a, "status": "ok", "reason": None}
         class_a = _slot(a, str(a["wt"]))["class"]
         class_b = _slot(b, str(b["wt"]))["class"]
+        # CM presentation aliases the global class without reclassifying scores.
+        class_a = "minimally_frustrated" if class_a == "minimal" else class_a
+        class_b = "minimally_frustrated" if class_b == "minimal" else class_b
         class_metric = {
             "a": class_a, "b": class_b, "transition": f"{class_a}_to_{class_b}", "status": "ok", "reason": None,
         }

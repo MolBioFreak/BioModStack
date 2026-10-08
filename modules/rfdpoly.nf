@@ -20,18 +20,8 @@ process RFDPolyDesign {
     publishDir "${params.out_dir}/run/rfdpoly", mode: 'copy'
 
     input:
-    val design_id
-    val contigs
-    // e.g., "33 33 75" (space-separated lengths per chain)
-    val polymer_chains
-    // e.g., "dna,rna,protein"
-    val use_input_pdb
-    // Boolean: whether to use input_pdb
-    path input_pdb
-    // Optional motif scaffold
-    val use_target_pdb
-    // Boolean: whether to use target_pdb
-    path target_pdb
+    // Keep optional-file presence bound to the exact staged inputs.
+    tuple val(design_id), val(contigs), val(polymer_chains), val(use_input_pdb), path(input_pdb, stageAs: 'scaffold/*'), val(use_target_pdb), path(target_pdb, stageAs: 'target/*')
 
     output:
     path "*.pdb", emit: pdbs
@@ -73,7 +63,7 @@ process RFDPolyDesign {
     // Linear is the default behavior in RFDpoly
 
     // Advanced params: seed (temperature is NOT a valid RFDpoly key)
-    def seed_arg = params.rfdpoly_seed ? "inference.seed=${params.rfdpoly_seed}" : ""
+    def seed_arg = params.rfdpoly_seed != null ? "inference.seed=${params.rfdpoly_seed}" : ""
 
     // Container paths: /RFDpoly (repo), /models (weights)
     """
@@ -158,26 +148,18 @@ workflow OLIGO_DESIGN {
     target_pdb // Target protein PDB (optional, for protein-binding aptamer mode)
 
     main:
-    // Determine if scaffold input_pdb is provided
-    // Safely check if input_pdb is a valid file (not null and not placeholder)
-    // Use unique placeholder names to avoid Nextflow input file collision
-    def use_scaffold = input_pdb instanceof Path && !input_pdb.name.startsWith('NO_')
-    def scaffold_file = use_scaffold ? input_pdb : file("${params.code_root}/NO_SCAFFOLD")
-
-    // Determine if target_pdb is provided (for binding design)
-    def use_target = target_pdb instanceof Path && !target_pdb.name.startsWith('NO_')
-    def target_file = use_target ? target_pdb : file("${params.code_root}/NO_TARGET")
+    // Resolve emitted paths, not the channel objects. Distinct sentinels avoid
+    // staging collisions when both optional structures are absent.
+    design_inputs = input_pdb.combine(target_pdb).map { scaffold, target ->
+        def use_scaffold = !scaffold.name.startsWith('NO_')
+        def use_target = !target.name.startsWith('NO_')
+        tuple(design_id, contigs, polymer_chains,
+            use_scaffold, use_scaffold ? scaffold : file("${params.code_root}/NO_SCAFFOLD"),
+            use_target, use_target ? target : file("${params.code_root}/NO_TARGET"))
+    }
 
     // Stage 1: RFDpoly Backbone Generation
-    RFDPolyDesign(
-        design_id,
-        contigs,
-        polymer_chains,
-        use_scaffold,
-        scaffold_file,
-        use_target,
-        target_file,
-    )
+    RFDPolyDesign(design_inputs)
 
     // Stage 2: NA-MPNN Sequence Design
     // Per RFDpoly paper: "we design base sequences on the generated backbones using NA-MPNN"
@@ -264,13 +246,13 @@ process NAMPNNDesign {
                 --mode "design" \\
                 --pdb_path "\$pdb" \\
                 --out_folder "\${WORKDIR}/nampnn_out" \\
-                --temperature ${params.nampnn_temperature ?: 0.2} \\
+                --temperature ${params.nampnn_temperature != null ? params.nampnn_temperature : 0.2} \\
                 --number_of_batches ${params.nampnn_num_seqs ?: 1} \\
                 --save_stats 1 \\
                 ${params.nampnn_fixed_residues ? "--fixed_residues \"${params.nampnn_fixed_residues}\"" : ''} \\
                 ${params.nampnn_chains_to_design ? "--chains_to_design \"${params.nampnn_chains_to_design}\"" : ''} \\
                 ${params.nampnn_design_na_only ? '--design_na_only 1' : ''} \\
-                ${params.nampnn_seed ? "--seed ${params.nampnn_seed}" : ''}
+                ${params.nampnn_seed != null ? "--seed ${params.nampnn_seed}" : ''}
         fi
     done
     

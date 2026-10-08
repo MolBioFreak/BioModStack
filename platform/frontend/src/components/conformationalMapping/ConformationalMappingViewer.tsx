@@ -96,6 +96,35 @@ const analysisIdentity = (row: CmAnalysisResult): string => {
     return `${String(identity.target_id)} · ${String(identity.auth_asym_id)}:${String(identity.auth_seq_id)}${String(identity.insertion_code || '')} · ${String(identity.validated_wt)}→${String(identity.substitution)}`;
 };
 
+type NativeRecord = ReturnType<typeof recordsByType>[number];
+
+async function boundRecordPage(requestId: string, record: NativeRecord, collection: string, offset: number) {
+    const page = await getCmRecordPage(requestId, record.type, record.key, collection, offset, 100);
+    if (page.request_id !== requestId || page.record_type !== record.type || page.record_key !== record.key
+        || page.sha256 !== record.sha256 || page.collection !== collection || page.offset !== offset
+        || page.limit !== 100 || !Array.isArray(page.rows) || page.rows.length > 100
+        || page.total_count < offset + page.rows.length
+        || page.next_offset !== (offset + page.rows.length < page.total_count ? offset + page.rows.length : null)
+        || (page.next_offset !== null && page.next_offset <= offset)) {
+        throw new Error('Native record page identity or pagination does not match the requested artifact.');
+    }
+    return page;
+}
+
+function NativeEvidencePage({ requestId, record, collection }: { requestId: string; record: NativeRecord; collection: string }) {
+    const [offset, setOffset] = useState(0);
+    const page = useQuery({
+        queryKey: ['cm-evidence-page', requestId, record.type, record.key, record.sha256, collection, offset],
+        queryFn: () => boundRecordPage(requestId, record, collection, offset),
+        retry: false,
+    });
+    return <div className="space-y-2">
+        {page.isError && <p role="alert" className="text-red-300">{cmApiError(page.error, 'Native evidence page is unavailable.')} <button type="button" onClick={() => void page.refetch()}>Retry page</button></p>}
+        {page.isLoading ? <p>Loading native evidence…</p> : page.data && json({ rows: page.data.rows, offset, total_count: page.data.total_count })}
+        <div className="flex gap-3"><button type="button" disabled={offset === 0 || page.isFetching} onClick={() => setOffset(Math.max(0, offset - 100))}>Previous page</button><button type="button" disabled={page.isFetching || page.isError || page.data?.next_offset == null} onClick={() => setOffset(page.data!.next_offset!)}>Next page</button></div>
+    </div>;
+}
+
 interface LegacyCmFrustraMpnnViewProps {
     requestId: string;
     candidateId: string;
@@ -310,22 +339,19 @@ export function ConformationalMappingViewer({
         setAnalysisPageRequested(false);
     }, [analysisRecord, parsed.data]);
     const analysisPage = useQuery({
-        queryKey: ['cm-analysis-results-page', requestId, analysisRecord?.key, analysisNextOffset],
-        queryFn: () => getCmRecordPage(requestId, 'analysis', analysisRecord!.key, 'results', analysisNextOffset!, 100),
+        queryKey: ['cm-analysis-results-page', requestId, analysisRecord?.key, analysisRecord?.sha256, analysisNextOffset],
+        queryFn: async () => {
+            const page = await boundRecordPage(requestId, analysisRecord!, 'results', analysisNextOffset!);
+            return { ...page, rows: validateCanonicalAnalysisRows(page.rows) };
+        },
         enabled: detailTab === 'analysis' && analysisPageRequested && Boolean(analysisRecord && analysisNextOffset != null),
         retry: false,
     });
     useEffect(() => {
         if (!analysisPage.data) return;
-        try {
-            const rows = validateCanonicalAnalysisRows(analysisPage.data.rows);
-            setAnalysisRows((current) => [...current, ...rows]);
-            setAnalysisNextOffset(analysisPage.data.next_offset);
-            setAnalysisPageRequested(false);
-        } catch {
-            setAnalysisPageRequested(false);
-            setAnalysisNextOffset(null);
-        }
+        setAnalysisRows((current) => [...current, ...analysisPage.data.rows]);
+        setAnalysisNextOffset(analysisPage.data.next_offset);
+        setAnalysisPageRequested(false);
     }, [analysisPage.data]);
 
     const stateLandscapeAuthority = useMemo(() => {
@@ -376,15 +402,11 @@ export function ConformationalMappingViewer({
         setStructureMapNextOffset(selectedStructureMapRecord?.pages?.rows?.next_offset ?? null);
     }, [selected?.candidate_id, selectedStructureMapBase, selectedStructureMapRecord]);
     const structureMapPage = useQuery({
-        queryKey: ['cm-structure-map-page', requestId, selectedStructureMapRecord?.key, structureMapNextOffset],
-        queryFn: () => getCmRecordPage(
-            requestId,
-            'structure_map',
-            selectedStructureMapRecord!.key,
-            'rows',
-            structureMapNextOffset!,
-            100,
-        ),
+        queryKey: ['cm-structure-map-page', requestId, selectedStructureMapRecord?.key, selectedStructureMapRecord?.sha256, structureMapNextOffset],
+        queryFn: async () => {
+            const page = await boundRecordPage(requestId, selectedStructureMapRecord!, 'rows', structureMapNextOffset!);
+            return { ...page, rows: validateStructureMapRows(page.rows) };
+        },
         enabled: Boolean(
             selectedStructureMapRecord
             && structureMapNextOffset != null
@@ -394,17 +416,12 @@ export function ConformationalMappingViewer({
     });
     useEffect(() => {
         if (!structureMapPage.data) return;
-        try {
-            const rows = validateStructureMapRows(structureMapPage.data.rows);
-            setStructureMapRows((current) => [...current, ...rows]);
-            setStructureMapNextOffset(structureMapPage.data.next_offset);
-        } catch {
-            setStructureMapNextOffset(null);
-        }
+        setStructureMapRows((current) => [...current, ...structureMapPage.data.rows]);
+        setStructureMapNextOffset(structureMapPage.data.next_offset);
     }, [structureMapPage.data]);
-    const structureMap = selectedStructureMapBase
+    const structureMap = useMemo(() => selectedStructureMapBase
         ? { ...selectedStructureMapBase, rows: structureMapRows.length ? structureMapRows : selectedStructureMapBase.rows }
-        : null;
+        : null, [selectedStructureMapBase, structureMapRows]);
     const clearStateAnalysisResidueSelection = (candidateId: string) => {
         const reset = clearStateLandscapeResidueSelectionForCandidate(candidateId);
         setStateAnalysisResidueSelections(reset.residueSelections);
@@ -518,32 +535,6 @@ export function ConformationalMappingViewer({
     ];
     const supportRecords = parsed.data ? recordsByType(parsed.data.value, 'support') : [];
     const missingnessRecords = parsed.data ? recordsByType(parsed.data.value, 'missingness') : [];
-    const supportRecord = supportRecords[0] || null;
-    const missingnessRecord = missingnessRecords[0] || null;
-    const evidenceSupportPage = useQuery({
-        queryKey: ['cm-evidence-support-page', requestId, supportRecord?.key],
-        queryFn: () => getCmRecordPage(requestId, 'support', supportRecord!.key, 'records', 0, 100),
-        enabled: detailTab === 'evidence' && Boolean(supportRecord),
-        retry: false,
-    });
-    const evidenceAnalysisSupportPage = useQuery({
-        queryKey: ['cm-evidence-analysis-support-page', requestId, analysisRecord?.key],
-        queryFn: () => getCmRecordPage(requestId, 'analysis', analysisRecord!.key, 'support_records', 0, 100),
-        enabled: detailTab === 'evidence' && Boolean(analysisRecord),
-        retry: false,
-    });
-    const evidenceAnalysisClashPage = useQuery({
-        queryKey: ['cm-evidence-analysis-clash-page', requestId, analysisRecord?.key],
-        queryFn: () => getCmRecordPage(requestId, 'analysis', analysisRecord!.key, 'clash_records', 0, 100),
-        enabled: detailTab === 'evidence' && Boolean(analysisRecord),
-        retry: false,
-    });
-    const evidenceMissingnessPage = useQuery({
-        queryKey: ['cm-evidence-missingness-page', requestId, missingnessRecord?.key],
-        queryFn: () => getCmRecordPage(requestId, 'missingness', missingnessRecord!.key, 'result_records', 0, 100),
-        enabled: detailTab === 'evidence' && Boolean(missingnessRecord),
-        retry: false,
-    });
     const filteredMapRows = structureMap?.rows.filter((row) => mappingFilter === 'all' || (mappingFilter === 'mapped' ? row.status === 'mapped' : row.status !== 'mapped')) || [];
     const projectAdapterId = status.data?.backend === 'confornets'
         ? 'bms.cm.confornets.adapter.v1'
@@ -573,6 +564,7 @@ export function ConformationalMappingViewer({
                         <div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-300">Canonical ensemble lens</p><h1 className="mt-1 text-2xl font-semibold text-white">{title}</h1><p className="mt-1 break-all font-mono text-xs text-slate-500">{requestId}</p></div>
                         <div className="flex flex-wrap items-center gap-2"><button type="button" onClick={() => navigate('/designs')} className="rounded-lg border border-slate-700 px-3 py-2 text-xs hover:border-slate-500">All results</button><button type="button" onClick={() => setAddToProjectOpen(true)} className="rounded-lg border border-orange-500/40 px-3 py-2 text-xs text-orange-200 hover:border-orange-400">Add to Project / Experiment</button><button type="button" onClick={() => navigate('/submit')} className="rounded-lg border border-slate-700 px-3 py-2 text-xs hover:border-slate-500">New request</button><span className={`rounded-full border px-3 py-1.5 text-xs font-medium ${statusLabel === 'completed' ? 'border-emerald-500/40 text-emerald-200' : statusLabel === 'failed' ? 'border-red-500/40 text-red-200' : 'border-slate-700 text-slate-300'}`}>{statusLabel}</span>{['prepared', 'queued', 'running'].includes(statusLabel) && <button type="button" aria-label="Cancel request" disabled={lifecycle.isPending} onClick={() => { if (window.confirm('Cancel this conformational-mapping request?')) lifecycle.mutate('cancel'); }} className="rounded-lg border border-red-500/40 px-3 py-2 text-xs text-red-200 disabled:opacity-40">Cancel request</button>}{status.data?.retry_eligible && <button type="button" aria-label="Retry request" disabled={lifecycle.isPending} onClick={() => lifecycle.mutate('retry')} className="rounded-lg border border-blue-500/40 px-3 py-2 text-xs text-blue-200 disabled:opacity-40">Retry request</button>}</div>
                     </div>
+                    {status.data && <p className="mt-3 text-xs text-slate-300">Execution target: {status.data.execution_target_id === undefined ? 'not reported' : status.data.execution_target_id ?? 'Local'} · Successful result return: {status.data.execution_policy?.remote_result_policy ?? 'manual'}{status.data.retry_eligible ? ' · Retry preserves this target and policy.' : ''}</p>}
                     <p className="mt-4 rounded-lg border border-sky-500/20 bg-sky-500/5 p-3 text-xs leading-5 text-sky-100">{CM_SCIENTIFIC_LIMIT}</p>
                     {receipt && <div className="mt-3 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3"><div className="text-xs font-semibold text-emerald-200">Authenticated submission receipt</div><div className="mt-2 grid gap-2 text-[11px] sm:grid-cols-2 lg:grid-cols-4"><div>Backend: <span className="font-mono text-slate-300">{receipt.backend}</span></div><div>Cardinality: <span className="text-slate-300">{receipt.expected_cardinality}</span></div><div title={receipt.request_sha256}>Request: <span className="font-mono text-slate-300">{shortHash(receipt.request_sha256)}</span></div><div title={receipt.coordinate_plan_sha256}>Coordinate plan: <span className="font-mono text-slate-300">{shortHash(receipt.coordinate_plan_sha256)}</span></div></div></div>}
                     {(status.isError || actionError || statusContractError) && <div role="alert" className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">{actionError || statusContractError || cmApiError(status.error, 'Unable to open this authenticated typed request.')}</div>}
@@ -676,11 +668,13 @@ export function ConformationalMappingViewer({
 
                     {detailTab === 'mapping' && structureMap && <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 p-4"><div><h2 className="font-semibold text-white">Structure-map identity and residue mapping</h2><p className="mt-1 text-xs text-slate-500">{structureMap.source_format} · source model {structureMap.selected_source_model} · {structureMap.normalizer_version} · {structureMap.altloc_policy}</p></div><select value={mappingFilter} onChange={(event) => setMappingFilter(event.target.value as typeof mappingFilter)} className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs"><option value="all">All rows</option><option value="mapped">Mapped</option><option value="issues">Issues only</option></select></div><div className="grid gap-2 border-b border-slate-800 p-3 text-[11px] sm:grid-cols-3"><div>Original CIF: <span className="font-mono">{shortHash(structureMap.original_cif_sha256)}</span></div><div>Source: <span className="font-mono">{shortHash(structureMap.source_sha256)}</span></div><div>Normalized PDB: <span className="font-mono">{shortHash(structureMap.normalized_pdb_sha256)}</span></div></div><div className="max-h-[560px] overflow-auto"><table className="w-full text-left text-xs"><thead className="sticky top-0 bg-slate-900 text-slate-400"><tr><th className="p-2">Sequence</th><th className="p-2">Source identity</th><th className="p-2">Author identity</th><th className="p-2">Normalized PDB</th><th className="p-2">Backbone</th><th className="p-2">Status / reason</th></tr></thead><tbody>{filteredMapRows.map((row) => <tr key={`${row.entity_instance_id}:${row.sequence_index}`} className="border-t border-slate-800 align-top"><td className="p-2">{row.sequence_index} · {row.residue_name}</td><td className="p-2">{row.source_entity_id} · {row.label_asym_id}:{row.label_seq_id}</td><td className="p-2">{row.auth_asym_id}:{row.auth_seq_id}{row.insertion_code}</td><td className="p-2">{row.pdb_chain_id}:{row.pdb_residue_id}{row.pdb_insertion_code}</td><td className="p-2 font-mono text-[10px]">{Object.entries(row.backbone_atoms).map(([atom, value]) => `${atom}:${value || 'missing'}`).join(' ')}</td><td className="p-2"><span className={row.status === 'mapped' ? 'text-emerald-300' : 'text-amber-200'}>{row.status}</span>{row.reason && <div className="mt-1 text-slate-500">{row.reason}</div>}</td></tr>)}</tbody></table></div>{!filteredMapRows.length && <p className="p-4 text-sm text-slate-500">No mapping rows match this filter.</p>}</section>}
 
+                    {analysisPage.isError && <p role="alert" className="text-red-300">{cmApiError(analysisPage.error, 'Ranking page validation failed.')} <button type="button" onClick={() => void analysisPage.refetch()}>Retry ranking page</button></p>}
+                    {structureMapPage.isError && <p role="alert" className="text-red-300">{cmApiError(structureMapPage.error, 'Structure mapping page validation failed.')} <button type="button" onClick={() => void structureMapPage.refetch()}>Retry mapping page</button></p>}
                     {detailTab === 'analysis' && <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70"><div className="border-b border-slate-800 p-4"><h2 className="font-semibold text-white">Canonical analysis ranking</h2><p className="mt-1 text-xs text-slate-500">Server-persisted ranking order. Each row retains its reconstructable components, sort keys, support, and robustness status.</p></div><div className="grid gap-2 border-b border-slate-800 p-3 text-[11px] sm:grid-cols-3"><div>Analysis: <span className="font-mono">{parsed.data.analysis.analysis_id}</span></div><div>Formula: <span className="font-mono">{parsed.data.analysis.formula_version}</span></div><div>Expected strata: {parsed.data.analysis.expected_strata.length}</div></div><div className="max-h-[680px] overflow-auto"><table className="w-full min-w-[1100px] text-left text-xs"><thead className="sticky top-0 bg-slate-900 text-slate-400"><tr><th className="p-2">Rank / identity</th><th className="p-2">Robustness</th><th className="p-2">Valid support</th><th className="p-2">Outer</th><th className="p-2">Coordinate</th><th className="p-2">Hierarchical mean</th><th className="p-2">Hotspot</th><th className="p-2">Switch</th><th className="p-2">Components</th></tr></thead><tbody>{analysisRows.map((row, index) => <><tr key={row.source_row_key} className="border-t border-slate-800 align-top"><td className="p-2"><div className="font-medium text-white">{index + 1}. {analysisIdentity(row)}</div><div className="mt-1 max-w-64 truncate font-mono text-[10px] text-slate-600">{row.source_row_key}</div>{row.failure_reason && <div className="mt-1 text-red-300">{row.failure_reason}</div>}</td><td className={`p-2 ${row.status === 'robust' ? 'text-emerald-300' : row.status === 'conditional' ? 'text-amber-200' : 'text-red-200'}`}>{row.status}</td><td className="p-2">{row.valid_coordinate_count}/{row.expected_coordinate_count}</td><td className="p-2">{pct(row.outer_support_fraction)}</td><td className="p-2">{pct(row.coordinate_support_fraction)}</td><td className="p-2 font-mono">{scalar(row.hierarchical_mean)}</td><td className="p-2 font-mono">{scalar(row.hotspot_score)}</td><td className="p-2 font-mono">{scalar(row.switch_score)}</td><td className="p-2"><button type="button" onClick={() => setExpandedAnalysis((current) => current === row.source_row_key ? null : row.source_row_key)} className="rounded border border-slate-700 px-2 py-1 text-[10px]">{expandedAnalysis === row.source_row_key ? 'Hide' : 'Inspect'}</button></td></tr>{expandedAnalysis === row.source_row_key && <tr key={`${row.source_row_key}:detail`} className="border-t border-slate-800 bg-slate-950/40"><td colSpan={9} className="p-3"><div className="grid gap-3 lg:grid-cols-3"><div><div className="mb-1 text-[11px] text-slate-500">Persisted components</div>{json(row.components)}</div><div><div className="mb-1 text-[11px] text-slate-500">Persisted sort keys</div>{json(row.sort_keys)}</div><div><div className="mb-1 text-[11px] text-slate-500">Identity</div>{json(row.identity)}</div></div></td></tr>}</>)}</tbody></table></div><div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 p-3 text-xs text-slate-400"><span>Showing {analysisRows.length.toLocaleString()} of {(analysisRecord?.pages?.results?.total_count ?? analysisRows.length).toLocaleString()} ranking rows. Dense analysis data remains artifact-backed.</span>{analysisNextOffset != null && <button type="button" disabled={analysisPageRequested || analysisPage.isFetching} onClick={() => setAnalysisPageRequested(true)} className="rounded border border-slate-700 px-3 py-1.5 text-slate-200 disabled:opacity-40">{analysisPageRequested || analysisPage.isFetching ? 'Loading…' : 'Load next ranking page'}</button>}</div>{!analysisRows.length && <p className="p-4 text-sm text-slate-500">Canonical analysis is explicitly unavailable.</p>}<details className="border-t border-slate-800 p-4"><summary className="cursor-pointer text-sm font-medium text-slate-300">Ranking policy and exclusions</summary><div className="mt-3 grid gap-3 lg:grid-cols-2"><div>{json(parsed.data.analysis.ranking_policy)}</div><div>{json(parsed.data.analysis.exclusions)}</div></div></details></section>}
 
                     {detailTab === 'ensemble' && <section className="grid gap-3 lg:grid-cols-2"><details className="rounded-xl border border-slate-800 bg-slate-900/70 p-3"><summary className="cursor-pointer text-sm font-medium text-white">Selected candidate artifact provenance</summary><div className="mt-3">{json({ artifact_id: selectedArtifact.artifact_id, sha256: selectedArtifact.sha256, bytes: selectedArtifact.bytes, media_type: selectedArtifact.media_type, metadata: selectedArtifact.metadata })}</div></details><details className="rounded-xl border border-slate-800 bg-slate-900/70 p-3"><summary className="cursor-pointer text-sm font-medium text-white">Authoritative sidecar identities</summary><div className="mt-3">{json(selected.sidecar_paths)}</div></details></section>}
 
-                    {detailTab === 'evidence' && <section className="grid gap-4 xl:grid-cols-2"><div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><h2 className="font-semibold text-white">Support authorities</h2><p className="mt-1 text-xs text-slate-500">Persisted canonical records; no support is reconstructed from metric shape or provenance text.</p><div className="mt-3 space-y-3">{supportRecords.length ? supportRecords.map((item) => <details key={`${item.type}:${item.key}`} className="rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">{item.key} · <span className="font-mono text-slate-500">{shortHash(item.sha256)}</span></summary><div className="mt-2">{json({ artifact: item.artifact, payload: item.payload, page_rows: item.type === 'support' ? evidenceSupportPage.data?.rows || [] : evidenceMissingnessPage.data?.rows || [], total_count: item.type === 'support' ? evidenceSupportPage.data?.total_count ?? item.pages?.records?.total_count ?? 0 : evidenceMissingnessPage.data?.total_count ?? item.pages?.result_records?.total_count ?? 0 })}</div></details>) : <p className="text-sm text-slate-500">No separate support record was persisted. Analysis-row support fields remain authoritative.</p>}</div><details className="mt-4 rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">Analysis support records ({analysisRecord?.pages?.support_records?.total_count ?? parsed.data.analysis.support_records.length})</summary><div className="mt-2">{json({ rows: evidenceAnalysisSupportPage.data?.rows || [], total_count: evidenceAnalysisSupportPage.data?.total_count ?? parsed.data.analysis.support_records.length })}</div></details><details className="mt-3 rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">Pair ledger ({parsed.data.analysis.pair_ledger.length})</summary><div className="mt-2">{json(parsed.data.analysis.pair_ledger)}</div></details></div><div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><h2 className="font-semibold text-white">Missingness and clash evidence</h2><p className="mt-1 text-xs text-slate-500">Missing values remain explicit and are never imputed in the browser.</p><div className="mt-3 space-y-3">{missingnessRecords.length ? missingnessRecords.map((item) => <details key={`${item.type}:${item.key}`} className="rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">{item.key} · <span className="font-mono text-slate-500">{shortHash(item.sha256)}</span></summary><div className="mt-2">{json({ artifact: item.artifact, payload: item.payload, page_rows: item.type === 'support' ? evidenceSupportPage.data?.rows || [] : evidenceMissingnessPage.data?.rows || [], total_count: item.type === 'support' ? evidenceSupportPage.data?.total_count ?? item.pages?.records?.total_count ?? 0 : evidenceMissingnessPage.data?.total_count ?? item.pages?.result_records?.total_count ?? 0 })}</div></details>) : <p className="text-sm text-slate-500">No separate missingness record was persisted. Landscape slot statuses and mapping reasons remain explicit.</p>}</div><details className="mt-4 rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">Clash records ({analysisRecord?.pages?.clash_records?.total_count ?? parsed.data.analysis.clash_records.length})</summary><div className="mt-2">{json({ rows: evidenceAnalysisClashPage.data?.rows || [], total_count: evidenceAnalysisClashPage.data?.total_count ?? parsed.data.analysis.clash_records.length })}</div></details></div></section>}
+                    {detailTab === 'evidence' && <section className="grid gap-4 xl:grid-cols-2"><div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><h2 className="font-semibold text-white">Support authorities</h2><p className="mt-1 text-xs text-slate-500">Persisted canonical records; no support is reconstructed from metric shape or provenance text.</p><div className="mt-3 space-y-3">{supportRecords.length ? supportRecords.map((item) => <details key={`${item.type}:${item.key}`} className="rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">{item.key} · <span className="font-mono text-slate-500">{shortHash(item.sha256)}</span></summary><div className="mt-2">{json({ artifact: item.artifact, payload: item.payload })}<NativeEvidencePage key={`${requestId}:${item.type}:${item.key}:${item.sha256}`} requestId={requestId} record={item} collection={item.type === 'support' ? 'records' : 'result_records'} /></div></details>) : <p className="text-sm text-slate-500">No separate support record was persisted. Analysis-row support fields remain authoritative.</p>}</div><details className="mt-4 rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">Analysis support records ({analysisRecord?.pages?.support_records?.total_count ?? parsed.data.analysis.support_records.length})</summary><div className="mt-2">{analysisRecord && <NativeEvidencePage key={`${requestId}:${analysisRecord.key}:${analysisRecord.sha256}:support_records`} requestId={requestId} record={analysisRecord} collection="support_records" />}</div></details><details className="mt-3 rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">Pair ledger ({parsed.data.analysis.pair_ledger.length})</summary><div className="mt-2">{json(parsed.data.analysis.pair_ledger)}</div></details></div><div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><h2 className="font-semibold text-white">Missingness and clash evidence</h2><p className="mt-1 text-xs text-slate-500">Missing values remain explicit and are never imputed in the browser.</p><div className="mt-3 space-y-3">{missingnessRecords.length ? missingnessRecords.map((item) => <details key={`${item.type}:${item.key}`} className="rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">{item.key} · <span className="font-mono text-slate-500">{shortHash(item.sha256)}</span></summary><div className="mt-2">{json({ artifact: item.artifact, payload: item.payload })}<NativeEvidencePage key={`${requestId}:${item.type}:${item.key}:${item.sha256}`} requestId={requestId} record={item} collection={item.type === 'support' ? 'records' : 'result_records'} /></div></details>) : <p className="text-sm text-slate-500">No separate missingness record was persisted. Landscape slot statuses and mapping reasons remain explicit.</p>}</div><details className="mt-4 rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">Clash records ({analysisRecord?.pages?.clash_records?.total_count ?? parsed.data.analysis.clash_records.length})</summary><div className="mt-2">{analysisRecord && <NativeEvidencePage key={`${requestId}:${analysisRecord.key}:${analysisRecord.sha256}:clash_records`} requestId={requestId} record={analysisRecord} collection="clash_records" />}</div></details></div></section>}
 
                     {detailTab === 'downloads' && <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><h2 className="font-semibold text-white">Native and canonical content-addressed downloads</h2><p className="mt-1 text-xs text-slate-500">Every link uses the authenticated artifact identity returned by the canonical API. Hash, byte count, role, and candidate binding are shown verbatim.</p><div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">{parsed.data.value.artifacts.map((artifact) => <a key={artifact.artifact_id} href={cmArtifactUrl(requestId, artifact.artifact_id)} className="rounded-lg border border-slate-800 p-3 text-xs hover:border-slate-600 focus:border-orange-400"><div className="truncate font-medium text-slate-200">{artifact.relative_path}</div><div className="mt-1 text-slate-500">{artifact.role} · {artifact.bytes.toLocaleString()} bytes</div><div className="mt-1 truncate font-mono text-[10px] text-slate-600" title={artifact.sha256}>{artifact.sha256}</div><div className="mt-1 truncate font-mono text-[10px] text-slate-600">{artifact.candidate_id || 'request-level'}</div></a>)}</div></section>}
                     </>}

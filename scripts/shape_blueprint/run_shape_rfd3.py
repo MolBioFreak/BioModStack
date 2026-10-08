@@ -340,14 +340,64 @@ def run_shape_rfd3(
     run_environment = os.environ.copy()
     if environment:
         run_environment.update(environment)
+    candidate_invocations = []
     try:
-        subprocess.run(command, check=True, env=run_environment)
-    except subprocess.CalledProcessError as exc:
+        if request.get("candidate_ids") is None:
+            subprocess.run(command, check=True, env=run_environment)
+            _bind_candidate_output_names(output_dir, request)
+        else:
+            # Keep the planner's child batch/task, order and diffusion microbatch
+            # size (=1). The pinned CLI has one scalar seed, so seed each native
+            # microbatch explicitly inside this same declared work unit. No
+            # sampler monkeypatch, candidate expansion or new scheduler task.
+            if request.get("candidate_effective_seeds") is None:
+                raise ValueError("planned RFD3 candidates require exact effective seeds")
+            for index, (candidate_id, candidate_seed) in enumerate(zip(
+                request["candidate_ids"], request["candidate_effective_seeds"], strict=True
+            )):
+                native_dir = output_dir.parent / f"rfd3_native_{index:04d}"
+                if native_dir.exists():
+                    raise ValueError("RFD3 candidate native output directory must be new")
+                native_dir.mkdir()
+                invocation = {
+                    "candidate_id": candidate_id, "effective_seed": candidate_seed,
+                    "local_candidate_index": index, "status": "running",
+                }
+                candidate_invocations.append(invocation)
+                native_command = [
+                    f"out_dir={native_dir.resolve()}" if arg.startswith("out_dir=") else
+                    "n_batches=1" if arg.startswith("n_batches=") else
+                    f"seed={candidate_seed}" if arg.startswith("seed=") else arg
+                    for arg in command
+                ]
+                subprocess.run(native_command, check=True, env=run_environment)
+                # Bind the single native sample directly to its planned identity;
+                # never lexically sort native names across seeds (10 before 2).
+                native_structures = sorted(native_dir.glob("*.cif.gz"))
+                if len(native_structures) != 1:
+                    raise RuntimeError("RFD3 seeded microbatch did not emit exactly one candidate")
+                source = native_structures[0]
+                target = output_dir / f"{candidate_id}.cif.gz"
+                if target.exists():
+                    raise RuntimeError("RFD3 candidate output identity collision")
+                source.rename(target)
+                source_json = native_dir / f"{source.name[:-7]}.json"
+                if source_json.exists():
+                    target_json = output_dir / f"{candidate_id}.json"
+                    if target_json.exists():
+                        raise RuntimeError("RFD3 candidate metadata identity collision")
+                    source_json.rename(target_json)
+                invocation["status"] = "completed"
+    except Exception as exc:
+        if candidate_invocations and candidate_invocations[-1]["status"] == "running":
+            candidate_invocations[-1]["status"] = "failed"
         failure = {
             "schema": "bms_shape_rfd3_runtime_receipt_v1",
             "status": "failed",
-            "failure_kind": "rfd3_process_failure",
-            "exit_code": exc.returncode,
+            "failure_kind": "rfd3_process_failure" if isinstance(exc, subprocess.CalledProcessError) else "rfd3_output_contract_failure",
+            "failure_type": type(exc).__name__,
+            "exit_code": exc.returncode if isinstance(exc, subprocess.CalledProcessError) else None,
+            "candidate_invocations": candidate_invocations,
             "request_id": request.get("request_id"),
             "request_sha256": request.get("request_sha256"),
             "parent_request_sha256": request.get("parent_request_sha256"),
@@ -404,7 +454,6 @@ def run_shape_rfd3(
         receipt_path.parent.mkdir(parents=True, exist_ok=True)
         receipt_path.write_bytes(_canonical(failure) + b"\n")
         raise
-    _bind_candidate_output_names(output_dir, request)
     structures = sorted(output_dir.glob("*.cif.gz"))
     if len(structures) != request["num_backbones"]:
         raise RuntimeError(
@@ -430,6 +479,7 @@ def run_shape_rfd3(
     receipt = {
         "schema": "bms_shape_rfd3_runtime_receipt_v1",
         "status": "completed",
+        "candidate_invocations": candidate_invocations,
         "request_id": request.get("request_id"),
         "request_sha256": request.get("request_sha256"),
         "parent_request_sha256": request.get("parent_request_sha256"),

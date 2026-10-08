@@ -536,8 +536,9 @@ def analyze_landscapes(
         matched_key = canonical_sha256(list((*item[1:-1], item[-1])))
         matched = matched_switch.get(matched_key)
         if matched is not None:
-            result["switch_score"] = matched["switch_score"]
-            result["sort_keys"]["switch_score"] = matched["switch_score"]
+            if status != "insufficient_support":
+                result["switch_score"] = matched["switch_score"]
+                result["sort_keys"]["switch_score"] = matched["switch_score"]
             result["components"]["matched_comparison"] = matched
         results.append(result)
         support_records.append({"source_row_key": source_key, **components})

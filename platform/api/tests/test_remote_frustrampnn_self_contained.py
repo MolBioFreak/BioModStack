@@ -80,8 +80,106 @@ def test_remote_grouped_path_rejects_settings_cardinality_mismatch(tmp_path, ena
     dirs = [tmp_path / str(i) for i in range(count)]
     for i, path in enumerate(dirs):
         prepared(path, i, enabled=enabled, size=size)
-    with pytest.raises(ValueError, match='cardinality'):
-        remote.materialize_batch(dirs, tmp_path / 'authority')
+    if enabled and count <= size:
+        # A final singleton is a valid native group, not a short-batch error.
+        _, batch = remote.materialize_batch(dirs, tmp_path / 'authority')
+        assert batch['expected_cardinality'] == count
+    else:
+        with pytest.raises(ValueError, match='cardinality'):
+            remote.materialize_batch(dirs, tmp_path / 'authority')
+
+
+def test_runtime_child_preparation_retains_canonical_native_envelope(tmp_path, monkeypatch):
+    from scripts.run_frustrampnn_parent_fanout import prepare_runtime_child
+    source_dir = tmp_path / 'source'
+    request = prepared(source_dir, 0)
+    context = tmp_path / 'context.json'
+    context.write_text(json.dumps(dict(ledger_path=str(tmp_path / 'ledger.sqlite'),
+        artifact_root=str(tmp_path), attempt_id='attempt', root_job_id='parent',
+        target_id='target', lease_id='lease')))
+    monkeypatch.setenv('BMS_COMPONENT_CONTEXT', str(context))
+    source = source_dir / 'model.pdb'
+    settings = dict(request['requested_settings'])
+    origin = settings.pop('settings_value_origin')
+    payload = dict(parent_job_id='parent', params=dict(frustrampnn_component_group=dict(
+        settings=settings, settings_value_origin=origin, candidates=[dict(
+            source_relative_path=source.relative_to(tmp_path).as_posix(),
+            source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+            source_size_bytes=source.stat().st_size,
+            metadata=dict(candidate_id=request['candidate_id'], parent_job_id='parent',
+                parent_workflow_id='protein_design', producer_stage='terminal',
+                producer_candidate_key='terminal/model.pdb', requiredness='required'))])))
+    output = tmp_path / 'child'
+    params = prepare_runtime_child(payload, child_id='child', output_root=output)
+    assert prepare_runtime_child(payload, child_id='child', output_root=output) == params
+    manifest = Path(params['frustrampnn_batch_manifest_path'])
+    assert manifest == output / 'inputs/frustrampnn_scheduler_batch_v3.json'
+    envelope = params['_frustrampnn_child_v1']
+    assert envelope['normalized_requested_settings'] == request['requested_settings']
+    assert envelope['settings_sha256'] == request['requested_settings_sha256']
+    assert envelope['batch_manifest_sha256'] == hashlib.sha256(manifest.read_bytes()).hexdigest()
+    from services.nextflow import build_nextflow_command
+    command = build_nextflow_command('frustrampnn', 'analyze', {**params, 'gpu_id': 0}, str(output), job_id='child')
+    assert command[command.index('--frustrampnn_batch_manifest_path') + 1] == str(manifest)
+    source.write_bytes(source.read_bytes() + b'REMARK changed after submission\n')
+    with pytest.raises(ValueError, match='source binding changed'):
+        prepare_runtime_child(payload, child_id='child', output_root=output)
+    for use_runtime in (False, True):
+        root = tmp_path / str(use_runtime)
+        root.mkdir()
+        with monkeypatch.context() as scoped:
+            _assert_parent_fanout_submission_reuses_grouping_source_snapshot(root, scoped, use_runtime)
+
+
+def _assert_parent_fanout_submission_reuses_grouping_source_snapshot(tmp_path, monkeypatch, use_runtime):
+    from types import SimpleNamespace
+    from scripts import run_frustrampnn_parent_fanout as client
+    from lib import component_adapter
+
+    directory = tmp_path / 'candidate'
+    directory.mkdir()
+    source = directory / 'source.pdb'
+    raw = _two_model_pdb()
+    source.write_bytes(raw)
+    metadata = dict(candidate_id='candidate-1', parent_job_id='parent',
+        parent_workflow_id='protein_design', producer_stage='terminal',
+        producer_candidate_key='terminal/model.pdb', requiredness='required')
+    (directory / 'metadata.json').write_bytes(client._canonical_bytes(metadata))
+    settings = dict(batching_enabled=False, structures_per_job=1)
+    original_plan = client.plan_frustrampnn
+    planned = []
+
+    def plan(records, requested):
+        planned.extend(records)
+        result = original_plan(records, requested)
+        source.write_bytes(raw + b'REMARK changed after grouping snapshot\n')
+        return result
+
+    class SubmissionObserved(Exception):
+        pass
+
+    def submit(payload, **kwargs):
+        member = payload['params']['frustrampnn_component_group']['candidates'][0]
+        assert member['metadata'] == metadata
+        assert member['source_relative_path'] == 'candidate/source.pdb'
+        assert member['source_sha256'] == planned[0]['input_sha256'] == hashlib.sha256(raw).hexdigest()
+        assert member['source_size_bytes'] == len(raw)
+        raise SubmissionObserved
+
+    def post(*args, **kwargs):
+        assert kwargs['files'] == [('structure_files', ('source.pdb', raw, 'chemical/x-pdb'))]
+        raise SubmissionObserved
+
+    monkeypatch.setattr(client, 'component_runtime_enabled', lambda: use_runtime)
+    monkeypatch.setattr(component_adapter, 'runtime_from_environment', lambda: SimpleNamespace(artifact_root=tmp_path))
+    monkeypatch.setattr(client, 'plan_frustrampnn', plan)
+    monkeypatch.setattr(client, 'submit_child_job', submit)
+    monkeypatch.setattr(client.requests, 'post', post)
+    with pytest.raises(SubmissionObserved):
+        client.execute_parent_fanout(parent_job_id='parent', parent_workflow_id='protein_design',
+            settings_json=client._canonical_bytes(settings).decode(), candidate_dirs=[directory],
+            output_receipt=tmp_path / 'terminal.json', output_bundles=tmp_path / 'bundles',
+            capability='test-capability')
 
 
 def test_remote_batch_rejects_duplicate_identity(tmp_path):

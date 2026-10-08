@@ -13,7 +13,30 @@ import uuid
 import pytest
 
 from services.remote_execution import cache, bundle as bundle_module
-from test_remote_bundle_runtime_gaps import package
+from component_runtime import NativeInvocation, SourceIdentity
+from dataclasses import replace
+
+
+def cache_only_plan_fixture(invocation):
+    """Typed asset-free view with a real CPU policy for transport-only tests."""
+    from component_runtime import SelectedExecutionMetadata, SelectedExecutionPlan, canonical_bytes
+    from test_remote_bundle_runtime_gaps import bundle_resource_components_fixture
+    metadata = SelectedExecutionMetadata('fixture', 'explicit cache/input test boundary',
+        bundle_resource_components_fixture(), (), (), (), (), b'{}', None, None, ())
+    plan = SelectedExecutionPlan(invocation.source_identity, Path(invocation.entrypoint).stem,
+        invocation.model_id, invocation.mode, invocation.entrypoint, invocation.requested_json,
+        invocation.effective_json, canonical_bytes(invocation.native_parameters), metadata)
+    return replace(invocation, execution_plan=plan)
+
+
+def cache_invocation_fixture():
+    """Explicit source/cache projection fixture; not a scientific compiler proof."""
+    return cache_only_plan_fixture(replace(NativeInvocation.capture(model_id='example', mode='predict',
+        command=['nextflow', 'run', 'workflow.nf'], requested={}, effective={},
+        native_parameters={}, entrypoint='workflow.nf'),
+        source_identity=SourceIdentity('a'*40, 'b'*40)))
+
+from test_remote_bundle_runtime_gaps import package, bundle_resource_components_fixture
 from services.remote_execution.bundle import CacheTransferArtifact, TransferPlan, cache_transfer_artifacts, uncached_runtime_transfers
 
 
@@ -85,9 +108,15 @@ async def test_prewarm_launch_share_verified_cache_and_links(tmp_path, monkeypat
     artifacts = cache_transfer_artifacts(bundle)
     assert len(artifacts) == 2
     assert [p.remote_destination for p in uncached_runtime_transfers(bundle)] == [bundle.remote_runtime_dir + '/support-python']
-    monkeypatch.setattr(cache, '_prewarm_plan', lambda *args: artifacts)
+    invocation = cache_invocation_fixture()
+    def prewarm_plan(*args, native_invocation):
+        assert native_invocation is invocation
+        assert args[1] == list(invocation.command)
+        return artifacts
+    monkeypatch.setattr(cache, '_prewarm_plan', prewarm_plan)
     calls, uploads = local_transport
-    await cache.prewarm_cache(connection=connection, job=None, command=[], source_revision='a'*40,
+    await cache.prewarm_cache(connection=connection, job=None, command=list(invocation.command),
+                              native_invocation=invocation, source_revision='a'*40,
                               source_tree='b'*40, operation_id=str(uuid.uuid4()),
                               progress=cache._noop, check_fence=cache._noop)
     assert len(uploads) == 2
@@ -153,7 +182,7 @@ def test_prewarm_plan_pins_source_and_excludes_support(tmp_path, monkeypatch, id
     revision, tree = 'a' * 40, 'b' * 40
     monkeypatch.setattr(cache, 'get_code_root', lambda: tmp_path)
     monkeypatch.setattr(cache, 'current_source_identity', lambda repo: (revision, tree if identity_matches else 'c' * 40))
-    monkeypatch.setattr(cache, '_runtime_assets', lambda *args: [(tmp_path / 'weights', 'weights'),
+    monkeypatch.setattr(cache, '_runtime_assets', lambda *args, **kwargs: [(tmp_path / 'weights', 'weights'),
                                                               (tmp_path / 'missing-support', 'support-python')])
     calls = []
     def archive(argv, **kwargs):
@@ -163,12 +192,15 @@ def test_prewarm_plan_pins_source_and_excludes_support(tmp_path, monkeypatch, id
     directory = tmp_path / 'prewarm'
     directory.mkdir()
     job = SimpleNamespace(model_id='example', mode='predict')
+    invocation = cache_invocation_fixture()
     if not identity_matches:
         with pytest.raises(ValueError, match='source identity'):
-            cache._prewarm_plan(job, [], revision, tree, directory)
+            cache._prewarm_plan(job, list(invocation.command), revision, tree, directory,
+                                native_invocation=invocation)
         assert calls == []
         return
-    planned = cache._prewarm_plan(job, [], revision, tree, directory)
+    planned = cache._prewarm_plan(job, list(invocation.command), revision, tree, directory,
+                                native_invocation=invocation)
     assert calls == [['git', 'archive', '--format=tar', revision]]
     launched = cache_transfer_artifacts(bundle)
     assert {(a.sha256, a.size_bytes) for a in planned} == {(a.sha256, a.size_bytes) for a in launched}
@@ -178,7 +210,24 @@ def test_prewarm_plan_pins_source_and_excludes_support(tmp_path, monkeypatch, id
 @pytest.mark.asyncio
 async def test_real_bundle_generations_exclude_stale_files(package, local_transport):
     roots, release, job, target, command = package
-    first = bundle_module.prepare_remote_bundle(job=job, target=target, command=command)
+    from component_runtime import SelectedDependency, SelectedExecutionMetadata, SelectedExecutionPlan
+    # Explicit lower-layer fixture assets, not a second scientific planner.
+    invocation = job.native_invocation
+    metadata = SelectedExecutionMetadata(
+        availability='fixture', settings_authority=__file__, static_components=bundle_resource_components_fixture(),
+        dynamic_templates=(), dependencies=(
+            SelectedDependency('fixture:image', 'image', 'protenix.sif', __file__),
+            SelectedDependency('fixture:weights', 'weights', 'protenix', __file__),
+            SelectedDependency('fixture:support', 'support_python', None, __file__)),
+        artifact_roles=(), external_services=(), result_contract_json=b'{}',
+        admission_authority=None, retrieval_authority=None, blockers=(), closure_reviewed=True)
+    job.native_invocation = replace(invocation, execution_plan=SelectedExecutionPlan(
+        source_identity=invocation.source_identity, workflow='fixture',
+        model_id=invocation.model_id, mode=invocation.mode, entrypoint=invocation.entrypoint,
+        requested_json=invocation.requested_json, effective_json=invocation.effective_json,
+        native_parameters_json=invocation.native_parameters_json, metadata=metadata))
+    first = bundle_module.prepare_remote_bundle(job=job, target=target, command=command,
+                                                  native_invocation=job.native_invocation)
     await cache.stage_cached_bundle(connection=target, bundle=first)
     preserved = [Path(first.remote_source_dir) / 'unexpected.py',
                  Path(first.remote_runtime_dir) / 'weights/protenix/unexpected.ckpt',
@@ -191,7 +240,8 @@ async def test_real_bundle_generations_exclude_stale_files(package, local_transp
         path.write_bytes(b'preserve-old-generation')
     calls, uploads = local_transport
     upload_count = len(uploads)
-    second = bundle_module.prepare_remote_bundle(job=job, target=target, command=command)
+    second = bundle_module.prepare_remote_bundle(job=job, target=target, command=command,
+                                                  native_invocation=job.native_invocation)
     assert first.envelope.root_job_id == second.envelope.root_job_id
     assert first.envelope.source_tree == second.envelope.source_tree
     assert first.attempt_id != second.attempt_id

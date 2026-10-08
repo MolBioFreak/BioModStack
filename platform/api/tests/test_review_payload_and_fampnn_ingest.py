@@ -287,6 +287,7 @@ def test_repair_job_for_response_marks_ok_history_job_completed_without_gate(tmp
     monkeypatch.setattr("routers.jobs.has_stage_gate", lambda job: False)
 
     job = SimpleNamespace(
+        execution_target_id=None,
         output_dir=str(tmp_path),
         awaiting_stage=None,
         awaiting_payload={},
@@ -318,6 +319,7 @@ def test_repair_job_for_response_marks_err_history_job_failed_without_gate(tmp_p
     monkeypatch.setattr("routers.jobs.has_stage_gate", lambda job: False)
 
     job = SimpleNamespace(
+        execution_target_id=None,
         output_dir=str(tmp_path),
         awaiting_stage=None,
         awaiting_payload={},
@@ -361,6 +363,7 @@ def test_repair_job_for_response_preserves_terminal_closeout_completion_on_err_h
     (tmp_path / "final_designs.txt").write_text("\n".join(f"design_{idx}.pdb" for idx in range(50)), encoding="utf-8")
 
     job = SimpleNamespace(
+        execution_target_id=None,
         output_dir=str(tmp_path),
         awaiting_stage=None,
         awaiting_payload={},
@@ -1042,6 +1045,7 @@ def test_build_antibody_iteration_job_accepts_saved_review_dataset(tmp_path: Pat
     selection_dir.mkdir()
 
     root_job = SimpleNamespace(
+        execution_target_id=None,
         id="root-job",
         name="RBX1 beta large_resumed",
         params={
@@ -1314,6 +1318,7 @@ def test_build_antibody_iteration_job_allows_ppiflow_backbone_outputs_to_feed_fa
     selection_dir.mkdir()
 
     root_job = SimpleNamespace(
+        execution_target_id=None,
         id="root-job",
         name="RBX1 beta large_resumed",
         params={
@@ -1415,6 +1420,7 @@ def test_build_antibody_iteration_job_accepts_rfantibody_review_rows_with_source
     selection_dir.mkdir()
 
     root_job = SimpleNamespace(
+        execution_target_id=None,
         id="root-job",
         name="RBX1 best of 100 RFA outputs",
         params={"epitope_residues": "A45,A53"},
@@ -1477,6 +1483,7 @@ def test_build_antibody_iteration_job_allows_post_ppiflow_backbone_reattempt(tmp
     selection_dir.mkdir()
 
     root_job = SimpleNamespace(
+        execution_target_id=None,
         id="root-job",
         name="RBX1 beta large_resumed",
         params={"epitope_residues": "A45,A53"},
@@ -1578,6 +1585,7 @@ def test_build_antibody_iteration_job_accepts_explicit_sequence_designed_artifac
     selection_dir.mkdir()
 
     root_job = SimpleNamespace(
+        execution_target_id=None,
         id="root-job",
         name="RBX1 modular refinement",
         params={"epitope_residues": "A45,A53"},

@@ -22,9 +22,14 @@ vi.mock('../../src/lib/projectManager', () => ({
     getLaunchContext: apiMocks.getLaunchContext,
 }));
 
-vi.mock('../../src/lib/api', () => ({
+vi.mock('../../src/components/ExecutionTargetPicker', () => ({ ExecutionTargetPicker: () => null }));
+vi.mock('../../src/lib/api', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../src/lib/api')>();
+    return {
+    // Keep the real placement authority; only transport dependencies are mocked.
+    prepareExecutionPlacement: actual.prepareExecutionPlacement,
     api: { get: apiMocks.get, post: apiMocks.post },
-    EXECUTION_TARGET_STORAGE_KEY: 'bms.execution-target-id',
+    EXECUTION_TARGET_STORAGE_KEY: actual.EXECUTION_TARGET_STORAGE_KEY,
     VAST_DISCOVERY_QUERY_KEY: ['execution-targets', 'providers', 'vast', 'inventory'],
     activateExecutionTarget: vi.fn(),
     completeCurrentLaunchContext: vi.fn(async () => null),
@@ -38,7 +43,8 @@ vi.mock('../../src/lib/api', () => ({
     refreshVastExecutionTargets: vi.fn(async () => ({ data: { instances: [] } })),
     submitJob: vi.fn(),
     uploadFile: vi.fn(),
-}));
+    };
+});
 vi.mock('../../src/components/ModelIntegrationControl', () => ({
     ModelIntegrationControl: () => null,
     useModelIntegrationConfig: () => ({ data: { workflows: {} }, isFetching: false, isError: false }),

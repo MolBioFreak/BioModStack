@@ -85,7 +85,7 @@ async def test_explicit_local_variant_policy_rejects_before_any_row_mutation(adm
     assert exc.value.status_code == 422
     assert exc.value.detail == (
         "Local MSA search is disabled by the BMS 1.0 interim policy. "
-        "Explicitly select ColabFold API — external service and re-preview the job; "
+        "Explicitly select ColabFold API or Neurosnap API and re-preview the job; "
         "supplied/verified alignments and model-supported no-MSA modes remain supported."
     )
     assert not admission.new
@@ -214,7 +214,7 @@ async def admission(monkeypatch, tmp_path):
 
 def request(**kwargs):
     return JobCreate(name="sci-contract", model_id="boltz2", mode="predict",
-                     params={"sequence": "ACDEFGHIK", "use_msa": False}, **kwargs)
+                     params={"sequence": "ACDEFGHIK", "use_msa": False, "boltz_use_msa": False}, **kwargs)
 
 
 @pytest.mark.asyncio

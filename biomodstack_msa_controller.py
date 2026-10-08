@@ -48,18 +48,22 @@ def _write(path: Path, state: dict) -> None:
         stream.flush()
         os.fsync(stream.fileno())
     temporary.replace(path)
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
-def prepare(config_path: Path, request: dict, operation):
-    """Execute a whole preparation under one cross-process serial lock.
+def validate_controller_config(config_path: Path) -> dict:
+    """Validate deployment qualification without submitting or creating state.
 
-    Operation runs in this process only and must return a JSON-serializable
-    receipt (normally a prepared input manifest). Request includes the complete
-    effective settings and input digests. Completed identical requests replay
-    the receipt; artifact callers must reverify files before delivery.
-    This is a service integration primitive, not an exposed worker RPC/CLI.
+    This checks the existing operator assertion, not live egress connectivity.
+    The returned configuration is internal and must not be a public receipt.
     """
-    config = json.loads(config_path.read_text())
+    config = json.loads(Path(config_path).read_text())
+    if not isinstance(config, dict):
+        raise RuntimeError(BLOCKED)
     machine = Path('/etc/machine-id').read_text().strip()
     if (config.get('machine_id') != machine or config.get('qualified_single_egress') is not True
             or not config.get('egress_identity') or config.get('role') != 'msa_controller'):
@@ -70,22 +74,49 @@ def prepare(config_path: Path, request: dict, operation):
     root = Path(config['state_dir'])
     if not root.is_absolute():
         raise ValueError('Controller state_dir must be absolute')
+    return config
+
+
+def prepare(config_path: Path, request: dict, operation, *, resume_same_request=False):
+    """Serialize controller work; opt-in is ONLY for the durable shared client.
+
+    Legacy callbacks remain non-resumable. The opt-in must be present on the
+    original attempt and its retry, with the identical request (including cache
+    identity). Shared-client replays execute its verified cache read, not a stale
+    controller receipt. This internal primitive is not a worker RPC.
+    """
+    from biomodstack_msa_api import PendingMSA, ReconciliationRequired
+
+    if type(resume_same_request) is not bool:
+        raise ValueError('resume_same_request must be boolean')
+    config = validate_controller_config(config_path)
+    root = Path(config['state_dir'])
     root.mkdir(parents=True, exist_ok=True)
-    key = hashlib.sha256(json.dumps(request, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    key = hashlib.sha256(json.dumps(request, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
     if _active.get() is not None:
         raise RuntimeError('Nested MSA controller preparation is forbidden')
     # One lock for the entire controller, not per sequence/cache/job/worker.
     with (root / 'submission.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         active_path = root / 'active.json'
+        state = None
         if active_path.exists():
-            raise RuntimeError('MSA controller requires reconciliation of interrupted/failed preparation')
+            state = json.loads(active_path.read_text())
+            if (not resume_same_request or not isinstance(state, dict)
+                    or state.get('resume_same_request') is not True
+                    or state.get('request_sha256') != key
+                    or state.get('service') != PUBLIC_HOST
+                    or state.get('egress_identity') != config['egress_identity']):
+                raise ReconciliationRequired('MSA controller requires reconciliation of interrupted/failed preparation')
         receipt_path = root / f'{key}.json'
-        if receipt_path.exists():
+        if state is None and receipt_path.exists() and not resume_same_request:
             return json.loads(receipt_path.read_text())['result']
-        state = {'request_sha256': key, 'status': 'preparing', 'started_at': time.time(),
-                 'service': PUBLIC_HOST, 'egress_identity': config['egress_identity'],
-                 'provider_database_version': None}
+        if state is None:
+            state = {'request_sha256': key, 'started_at': time.time(),
+                     'service': PUBLIC_HOST, 'egress_identity': config['egress_identity'],
+                     'provider_database_version': None,
+                     'resume_same_request': resume_same_request}
+        state.update(status='preparing')
         _write(active_path, state)
         token = _active.set((os.getpid(), threading.get_ident()))
         state_token = _state_path.set(active_path)
@@ -98,7 +129,8 @@ def prepare(config_path: Path, request: dict, operation):
             return result
         except BaseException as exc:
             state = json.loads(active_path.read_text())
-            state.update(status='blocked_reconciliation', error_type=type(exc).__name__)
+            status = 'pending' if resume_same_request and isinstance(exc, PendingMSA) else 'blocked_reconciliation'
+            state.update(status=status, error_type=type(exc).__name__)
             _write(active_path, state)
             raise
         finally:

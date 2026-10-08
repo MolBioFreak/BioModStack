@@ -6,7 +6,13 @@ export const normalizeResultPolicy = (value: unknown): RemoteResultPolicy => val
 export function newJobExecutionPolicy(): ExecutionPolicy {
     return { remote_result_policy: normalizeResultPolicy(typeof window === 'undefined' ? null : window.localStorage.getItem(RESULT_POLICY_DEFAULT_KEY)) };
 }
-export function setDraftExecutionPolicy(value: ExecutionPolicy | undefined) { draft = value; }
+export function setDraftExecutionPolicy(value: ExecutionPolicy | undefined) {
+    const previous = submissionExecutionPolicy().remote_result_policy;
+    draft = value;
+    if (typeof window !== 'undefined' && previous !== submissionExecutionPolicy().remote_result_policy) {
+        window.dispatchEvent(new Event('bms:execution-policy-change'));
+    }
+}
 export function submissionExecutionPolicy(): ExecutionPolicy { return draft ?? newJobExecutionPolicy(); }
 export function saveNewJobExecutionPolicy(value: ExecutionPolicy) {
     window.localStorage.setItem(RESULT_POLICY_DEFAULT_KEY, value.remote_result_policy);

@@ -1458,6 +1458,10 @@ class ComparisonResultReferenceResponse(BaseModel):
 class ComparisonResidueKeyResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    source_entity_id: str | None = None
+    label_asym_id: str | None = None
+    sequence_index: int | None = None
+    wt: str | None = None
     entity_instance_id: str
     auth_asym_id: str
     auth_seq_id: int
@@ -1744,6 +1748,7 @@ class GuidanceCreateRequest(BaseModel):
 class GuidanceResolvedResidueResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    entity_instance_id: str | None = None
     auth_asym_id: str
     auth_seq_id: int
     insertion_code: str
@@ -3724,6 +3729,7 @@ async def create_comparison(
             await load_persisted_landscape(session, target_result),
         )
         comparison_id = "cmp-" + canonical_sha256([
+            "frustrampnn_comparison_v1",
             reference_landscape["landscape_sha256"], target_landscape["landscape_sha256"],
         ])[:32]
         metadata = comparison_compatibility(
@@ -3778,6 +3784,7 @@ async def create_multi_comparison(
             for result in target_results
         ]
         comparison_id = "cmp-" + canonical_sha256([
+            "frustrampnn_multistate_comparison_v1",
             reference_landscape["landscape_sha256"],
             *[landscape["landscape_sha256"] for landscape in target_landscapes],
         ])[:32]
@@ -3884,12 +3891,15 @@ async def create_guidance(
         source_result = await _scoped_result(body.source_invocation_id, body.source_job_id, session)
         landscape = await load_persisted_landscape(session, source_result)
         region = body.region.model_dump(mode="json", exclude_none=True, exclude_unset=True)
-        objective = body.objective.model_dump(mode="json", exclude_none=True, exclude_unset=True)
+        # Bind objective identity to the same effective defaults that the typed
+        # browser client sends and build_guidance_plan already persists.
+        objective = body.objective.model_dump(mode="json")
         constraints = body.constraints.model_dump(
             mode="json", exclude_none=True, exclude_unset=True
         )
         ranking = body.ranking.model_dump(mode="json", exclude_none=True, exclude_unset=True)
         guidance_id = body.guidance_id or "gdp-" + canonical_sha256({
+            "derivation": "entity-scoped-guidance-v1",
             "source_landscape_sha256": landscape["landscape_sha256"],
             "region": region,
             "objective": objective,
@@ -4198,7 +4208,7 @@ async def result_statistics(
 ) -> FrustraMPNNStatisticsResponse:
     result = await _scoped_result(invocation_id, job_id, session)
     authority = _result_authority(result)
-    available = bool(authority["availability"])
+    available = bool(authority["statistics_available"])
     return FrustraMPNNStatisticsResponse.model_validate(
         {
             "result_id": result.invocation_id,

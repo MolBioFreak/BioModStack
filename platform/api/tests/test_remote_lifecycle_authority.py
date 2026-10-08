@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from database import Job, ExecutionTarget
 from services.remote_execution import executor as ex
-from test_remote_lifecycle_gaps import store, preparing, receipt
+from test_remote_lifecycle_gaps import store, preparing, receipt, lifecycle_invocation
 
 
 @pytest.mark.asyncio
@@ -74,9 +74,10 @@ async def test_production_poller_reconciles_two_remote_jobs_and_local(store, mon
         return {}
     monkeypatch.setattr(ex, 'remote_status', remote_status)
     monkeypatch.setattr(go, '_read_nextflow_history_statuses', history)
-    poller = go.GPUOrchestrator.__new__(go.GPUOrchestrator)
-    poller.db_session_factory = store
+    poller = go.GPUOrchestrator(store, lambda: [], lambda **kwargs: None)
     await poller.check_job_completions()
+    await asyncio.gather(*poller._remote_reconciliation_tasks.values())
+    await poller.stop()
     assert set(seen) == {'job', 'job2'}
     assert local_seen == ['local']
 
@@ -134,13 +135,25 @@ async def test_live_staging_producer_is_not_expired(store, monkeypatch):
     monkeypatch.setattr(ex, '_worker_argv', lambda *_: [])
     monkeypatch.setattr(ex, '_connection_for_attempt', lambda *_: (None, '/attempt'))
     monkeypatch.setattr(ex, '_remote_receipt', lambda b, t, **kw: {'state': kw['state']})
-    bundle = SimpleNamespace(attempt_id='attempt', envelope_sha256='hash', remote_attempt_dir='/attempt', envelope=SimpleNamespace(source_revision='rev', source_tree='tree'))
+    bundle = SimpleNamespace(attempt_id='attempt', envelope_sha256='hash', remote_attempt_dir='/attempt', envelope=SimpleNamespace(source_revision='rev', source_tree='tree', environment={'BMS_TARGET_RESOURCES': '{"required":{"cpus":1,"memory_bytes":1,"scratch_bytes":0},"gpu_ids":[0]}' }))
     monkeypatch.setattr(ex, 'prepare_remote_bundle', lambda **_: bundle)
+    # Resource admission is independently covered; exercise the publication fence.
+    from services.remote_execution import targets, bundle as bundle_module
+    monkeypatch.setattr(bundle_module, 'bind_resource_admission', lambda value, admission: value)
+    async def admitted(target, **requirements):
+        return {'schema': 'bms.target-resource-admission.v1', 'execution_target_id': target.id,
+                'required': {'cpus': 1, 'memory_bytes': 1, 'scratch_bytes': 0},
+                'available': {'cpus': 1, 'memory_bytes': 1, 'scratch_bytes': 0},
+                'devices': [{'gpu_index': 0, 'gpu_uuid': 'fixture-gpu'}]}
+    monkeypatch.setattr(targets, 'admit_target_resources', admitted)
     monkeypatch.setattr(ex, 'run_remote', unavailable)
     async def launch():
         async with store() as s:
-            with pytest.raises(ex.RemoteExecutionError):
-                await ex.launch_remote_job(s, await s.get(Job, 'job'), command=['true'])
+            # This fixture deliberately changed the claim snapshot while staging;
+            # its eventual publication must lose the generation fence.
+            with pytest.raises(ex.RemoteExecutionError, match='Remote staging attempt or lease was superseded'):
+                await ex.launch_remote_job(s, await s.get(Job, 'job'), command=['true'],
+                                           native_invocation=lifecycle_invocation(['true']))
     producer = asyncio.create_task(launch())
     await asyncio.wait_for(entered.wait(), 5)
     try:

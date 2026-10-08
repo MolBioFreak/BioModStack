@@ -756,6 +756,23 @@ def _resolve_cm_effective_settings(
     )
 
 
+def candidate_requested_settings(
+    requested: FrustraMPNNRequestedSettings,
+    snapshot: Mapping[str, Any],
+    *,
+    backend: str,
+) -> FrustraMPNNRequestedSettings:
+    """Bind normalization identity to a validated native candidate snapshot."""
+
+    # Historical snapshots without a model declaration retain model 1.
+    selected_model = int(snapshot.get("source_model_id", "1")) if backend == "external_import" else 1
+    return requested.model_copy(update={
+        "source_structure": FrustraMPNNSourceStructureSettings(
+            selected_model_number=selected_model,
+        ),
+    })
+
+
 def prepare_cm_candidate_v2(
     *,
     source: Path | str,
@@ -792,9 +809,6 @@ def prepare_cm_candidate_v2(
         if isinstance(requested_settings, FrustraMPNNRequestedSettings)
         else validate_persisted_requested_settings(requested_settings)
     )
-    requested = requested.model_copy(
-        update={"source_structure": FrustraMPNNSourceStructureSettings()}
-    )
     try:
         source_bytes = read_structure_bytes(source_path)
         source_sha256 = hashlib.sha256(source_bytes).hexdigest()
@@ -805,6 +819,11 @@ def prepare_cm_candidate_v2(
             source_suffix=source_path.suffix,
             source_relative_path=source_relative_path,
         )
+        # Imported coordinates retain their authorized source model; generated
+        # conformers have model 1 independently of their source snapshot model.
+        requested = candidate_requested_settings(
+            requested, bound_snapshot, backend=backend,
+        )
         structure_map = normalize_cm_structure(
             input_path=source_path,
             output_pdb_path=output_path,
@@ -814,7 +833,7 @@ def prepare_cm_candidate_v2(
             parent_job_id=parent_job_id,
             candidate_id=candidate_id,
             complex_snapshot=bound_snapshot,
-            selected_model=1,
+            selected_model=requested.source_structure.selected_model_number,
             altloc_policy="blank_or_explicit:<blank>",
             source_bytes=source_bytes,
         )

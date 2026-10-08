@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { FampnnAnalysisControls, fampnnOverridePayload, hydrateFampnnOverrides } from './FampnnAnalysisControls';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
+import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { completeCurrentLaunchContext, fetchDesigns, fetchJobById, submitJob, uploadImmutableFile, type Design, type Job } from '../lib/api';
 import { jobPollingInterval } from '../lib/queryPolling';
 import { Rfd3SourceSelector, type Rfd3SelectedSource } from './Rfd3SourceSelector';
@@ -14,7 +15,6 @@ import { getModelByNumber, parseStructureFile, type Chain, type ParsedPDB } from
 import {
     getProteinLocalRedesignUiState,
     resolveProteinLocalRedesignSourcePath,
-    selectResidueKeysFromRanges,
     summarizeChainsFromPdbContent,
     type ProteinLocalChainType,
 } from './proteinLocalRedesignUiState';
@@ -91,6 +91,59 @@ const getChainTypeAccent = (type: ChainType): string => {
         default:
             return 'var(--text-secondary)';
     }
+};
+
+// Native contract accepts string/list selectors or maps of selection -> string/list.
+const selectorListText = (value: unknown): string => {
+    if (value == null) return '';
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value) && value.every(item => typeof item === 'string')) return value.join(',');
+    throw new Error('Selector must be a string or list of strings.');
+};
+const selectorError = (value: unknown): string => {
+    try {
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+            for (const [key, items] of Object.entries(value)) {
+                if (!key.trim()) throw new Error('Selector map needs a nonempty selection key.');
+                selectorListText(items);
+            }
+        } else selectorListText(value);
+        return '';
+    } catch (error) { return String(error); }
+};
+function NativeSelectorInput({ value, onChange }: { value: unknown; onChange: (value: unknown) => void }) {
+    const error = selectorError(value);
+    if (error) return <div role="alert">{error} Saved value: {JSON.stringify(value)} <button type="button" onClick={() => onChange('')}>Replace invalid selector</button></div>;
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const rows = Object.entries(value);
+        return <div className="space-y-2">{rows.map(([selection, targets], index) => <div key={index} className="flex gap-2">
+            <input aria-label="Target selection" value={selection} onChange={event => {
+                if (rows.some(([key], i) => i !== index && key === event.target.value)) return;
+                onChange(Object.fromEntries(rows.map((row, i) => i === index ? [event.target.value, targets] : row)));
+            }} />
+            <input aria-label="Selected atoms or targets" value={selectorListText(targets)} onChange={event => onChange({ ...value, [selection]: event.target.value })} />
+            <button type="button" onClick={() => onChange(Object.fromEntries(rows.filter((_, i) => i !== index)))}>Remove</button>
+        </div>)}<button type="button" onClick={() => { let key = 'selection'; while (key in value) key += '_'; onChange({ ...value, [key]: [] }); }}>Add selection</button></div>;
+    }
+    return <input className="w-full rounded-lg border px-3 py-2 text-sm" style={themedInputStyle} value={selectorListText(value)} onChange={event => onChange(event.target.value)} />;
+}
+
+// Source-bound role projection follows native range grammar; never discard a token.
+const hydrateRoleResidues = (chain: Chain, text: string): Set<string> => {
+    const selected = new Set<string>();
+    for (const token of text.split(/[,\n]+/).map(value => value.trim()).filter(Boolean)) {
+        const match = token.match(/^(?:([^0-9,\s-]+))?(\d+)([A-Za-z]?)(?:-(?:([^0-9,\s-]+))?(\d+)([A-Za-z]?))?$/);
+        if (!match) throw new Error(`Unsupported range: ${token}`);
+        const [, startChain, startText, startCode, endChain, endText, endCode] = match;
+        const start = Number(startText), end = Number(endText ?? startText);
+        if ((startChain && startChain !== chain.id) || (endChain && endChain !== chain.id)
+            || end < start || (end !== start && (startCode || endCode))) throw new Error(`Range cannot be projected on chain ${chain.id}: ${token}`);
+        const matches = chain.residues.filter(residue => residue.resNum >= start && residue.resNum <= end
+            && (end !== start || (residue.iCode || '') === (startCode || '')));
+        if (!matches.length) throw new Error(`Range does not match the source structure: ${token}`);
+        matches.forEach(residue => selected.add(`${chain.id}${residue.resNum}${residue.iCode || ''}`));
+    }
+    return selected;
 };
 
 const normalizeChainList = (value: unknown): string[] => {
@@ -270,7 +323,7 @@ export function ProteinLocalRedesignTemplate({
     const isNativeLocalRedesign = executionDepth === 'native';
 
     const [jobName, setJobName] = useState('protein_local_redesign');
-    const [selectedTarget, setSelectedTarget] = useState<Rfd3SelectedSource | null>(null);
+    const [selectedTarget, setSelectedTarget] = useState<(Rfd3SelectedSource & { contextChainIds?: string[] }) | null>(null);
     const [sourcePath, setSourcePath] = useState<string | null>(null);
     const [parsedStructure, setParsedStructure] = useState<ParsedPDB | null>(null);
     const [selectedModelNumber, setSelectedModelNumber] = useState<number | null>(null);
@@ -302,9 +355,9 @@ export function ProteinLocalRedesignTemplate({
     const [nativeInsertionMaxLength, setNativeInsertionMaxLength] = useState('6');
 
     const [nativeLigand, setNativeLigand] = useState('');
-    const [nativeHotspots, setNativeHotspots] = useState('');
-    const [nativeHbondDonors, setNativeHbondDonors] = useState('');
-    const [nativeHbondAcceptors, setNativeHbondAcceptors] = useState('');
+    const [nativeHotspots, setNativeHotspots] = useState<unknown>('');
+    const [nativeHbondDonors, setNativeHbondDonors] = useState<unknown>('');
+    const [nativeHbondAcceptors, setNativeHbondAcceptors] = useState<unknown>('');
     const [nativeSeed, setNativeSeed] = useState('');
     const [nativeDumpTrajectories, setNativeDumpTrajectories] = useState(false);
     const [nativePinnedGpu, setNativePinnedGpu] = useState<number | null>(() => (
@@ -329,6 +382,9 @@ export function ProteinLocalRedesignTemplate({
     const [pendingRoleHydration, setPendingRoleHydration] = useState<{ editable: string; recall: string } | null>(null);
     const [activeResidueRole, setActiveResidueRole] = useState<ResidueRole>('coordinate');
     const [manualRangesText, setManualRangesText] = useState('');
+    const [recallRangesText, setRecallRangesText] = useState('');
+    const [roleHydrationError, setRoleHydrationError] = useState('');
+    const [roleTextIsManual, setRoleTextIsManual] = useState(true);
     const [interfaceCutoff, setInterfaceCutoff] = useState(6.0);
     const [regionPadding, setRegionPadding] = useState(2);
     const [numDesigns, setNumDesigns] = useState(8);
@@ -356,7 +412,18 @@ export function ProteinLocalRedesignTemplate({
             setSourcePath(initialSourcePath);
             const synthetic = toSyntheticSelectedTarget(initialSourcePath);
             if (synthetic) {
-                setSelectedTarget(synthetic);
+                setSelectedTarget({
+                    ...synthetic,
+                    modelNumber: typeof initialValues.model_number === 'number' ? initialValues.model_number : undefined,
+                    designChainId: Array.isArray(initialValues.design_chains)
+                        ? initialValues.design_chains.join(',')
+                        : typeof initialValues.design_chains === 'string' ? initialValues.design_chains : undefined,
+                    contextChainIds: Array.isArray(initialValues.context_chains)
+                        ? initialValues.context_chains
+                        : typeof initialValues.context_chains === 'string'
+                            ? normalizeChainList(initialValues.context_chains)
+                            : undefined,
+                });
             }
         }
         if (typeof initialValues.model_number === 'number') setSelectedModelNumber(initialValues.model_number);
@@ -367,14 +434,15 @@ export function ProteinLocalRedesignTemplate({
         if (initialValues.region_mode === 'manual_ranges' || initialValues.region_mode === 'interface_shell') {
             setRegionMode(initialValues.region_mode);
         }
-        if (typeof initialValues.redesign_ranges === 'string') setManualRangesText(initialValues.redesign_ranges);
-        const editableRanges = typeof initialValues.redesign_ranges === 'string' ? initialValues.redesign_ranges : '';
-        const recallRanges = typeof initialValues.select_unfixed_sequence === 'string'
-            ? initialValues.select_unfixed_sequence
-            : typeof initialValues.sequence_redesign_ranges === 'string'
-                ? initialValues.sequence_redesign_ranges
-                : '';
-        setPendingRoleHydration(editableRanges || recallRanges ? { editable: editableRanges, recall: recallRanges } : null);
+        try {
+            const editableRanges = selectorListText(initialValues.redesign_ranges);
+            const recallRanges = selectorListText(initialValues.select_unfixed_sequence ?? initialValues.sequence_redesign_ranges);
+            setRoleTextIsManual(true);
+            setManualRangesText(editableRanges);
+            setRecallRangesText(recallRanges);
+            setRoleHydrationError('');
+            setPendingRoleHydration({ editable: editableRanges, recall: recallRanges });
+        } catch (error) { setRoleHydrationError(`${String(error)} Saved ranges: ${JSON.stringify([initialValues.redesign_ranges, initialValues.select_unfixed_sequence])}`); }
         if (typeof initialValues.interface_cutoff === 'number') setInterfaceCutoff(initialValues.interface_cutoff);
         if (typeof initialValues.region_padding === 'number') setRegionPadding(initialValues.region_padding);
         if (typeof initialValues.num_designs === 'number') setNumDesigns(initialValues.num_designs);
@@ -403,9 +471,9 @@ export function ProteinLocalRedesignTemplate({
         if (typeof initialValues.insertion_max_length === 'number') setNativeInsertionMaxLength(String(initialValues.insertion_max_length));
 
         if (typeof initialValues.ligand === 'string') setNativeLigand(initialValues.ligand);
-        if (typeof initialValues.select_hotspots === 'string') setNativeHotspots(initialValues.select_hotspots);
-        if (typeof initialValues.select_hbond_donor === 'string') setNativeHbondDonors(initialValues.select_hbond_donor);
-        if (typeof initialValues.select_hbond_acceptor === 'string') setNativeHbondAcceptors(initialValues.select_hbond_acceptor);
+        setNativeHotspots(initialValues.select_hotspots ?? '');
+        setNativeHbondDonors(initialValues.select_hbond_donor ?? '');
+        setNativeHbondAcceptors(initialValues.select_hbond_acceptor ?? '');
         if (typeof initialValues.seed === 'number') setNativeSeed(String(initialValues.seed));
         if (typeof initialValues.dump_trajectories === 'boolean') setNativeDumpTrajectories(initialValues.dump_trajectories);
         const initialPinnedGpu = parseExplicitGpuPin(initialValues.pinned_gpu);
@@ -461,6 +529,9 @@ export function ProteinLocalRedesignTemplate({
 
                 setParsedStructure(parsed);
                 const requestedModelNumber = selectedTarget.modelNumber;
+                if (requestedModelNumber != null && !parsed.models.some((model) => model.modelNumber === requestedModelNumber)) {
+                    throw new Error(`Saved source model ${requestedModelNumber} is unavailable. Select a source model explicitly.`);
+                }
                 const selectedModel = (
                     requestedModelNumber != null
                     && parsed.models.find((model) => model.modelNumber === requestedModelNumber)
@@ -471,6 +542,12 @@ export function ProteinLocalRedesignTemplate({
                     ? summarizeChainsFromPdbContent(selectedModel.content)
                     : parsed.chains.map((chain) => ({ id: chain.id, residueCount: chain.length, type: 'protein' as ChainType }));
                 const requestedDesignChain = selectedTarget.designChainId;
+                if (requestedDesignChain && !chainSummaries.some((chain) => chain.id === requestedDesignChain && chain.type === 'protein')) {
+                    throw new Error(`Saved design chain ${requestedDesignChain} is unavailable. Select a design chain explicitly.`);
+                }
+                if (selectedTarget.contextChainIds?.some((id) => !chainSummaries.some((chain) => chain.id === id))) {
+                    throw new Error('A saved context chain is unavailable in the selected source model.');
+                }
                 const nextDesignChain = (
                     requestedDesignChain
                     && chainSummaries.some((chain) => chain.id === requestedDesignChain && chain.type === 'protein')
@@ -478,7 +555,7 @@ export function ProteinLocalRedesignTemplate({
                     ? requestedDesignChain
                     : chainSummaries.find((chain) => chain.type === 'protein')?.id || '';
                 setDesignChain(nextDesignChain);
-                setContextChains(chainSummaries.filter((chain) => chain.id !== nextDesignChain).map((chain) => chain.id));
+                setContextChains(selectedTarget.contextChainIds ?? chainSummaries.filter((chain) => chain.id !== nextDesignChain).map((chain) => chain.id));
             } catch (err: unknown) {
                 if (cancelled) return;
                 setParsedStructure(null);
@@ -578,19 +655,6 @@ export function ProteinLocalRedesignTemplate({
     }, [activeDesignChain]);
 
     useEffect(() => {
-        if (!designableProteinChains.length) return;
-        if (!designableProteinChains.some((chain) => chain.id === designChain)) {
-            setDesignChain(designableProteinChains[0].id);
-        }
-    }, [designChain, designableProteinChains]);
-
-    useEffect(() => {
-        setContextChains((current) =>
-            current.filter((chainId) => chainId !== designChain && allChainSummaries.some((chain) => chain.id === chainId))
-        );
-    }, [designChain, allChainSummaries]);
-
-    useEffect(() => {
         setSelectedEditableResidues((current) =>
             new Set(Array.from(current).filter((key) => designResidueKeys.has(key)))
         );
@@ -601,19 +665,16 @@ export function ProteinLocalRedesignTemplate({
 
     useEffect(() => {
         if (!pendingRoleHydration || !activeDesignChain) return;
-        const editable = selectResidueKeysFromRanges(
-            activeDesignChain.id,
-            activeDesignChain.residues,
-            pendingRoleHydration.editable,
-        );
-        const recalled = selectResidueKeysFromRanges(
-            activeDesignChain.id,
-            activeDesignChain.residues,
-            pendingRoleHydration.recall,
-        );
-        setSelectedEditableResidues(new Set([...editable, ...recalled]));
-        setSelectedSequenceRecallResidues(recalled);
-        setPendingRoleHydration(null);
+        try {
+            const editable = hydrateRoleResidues(activeDesignChain, pendingRoleHydration.editable);
+            const recalled = hydrateRoleResidues(activeDesignChain, pendingRoleHydration.recall);
+            if ([...recalled].some(key => !editable.has(key))) throw new Error('Sequence recall must be a subset of editable residues.');
+            setSelectedEditableResidues(editable);
+            setSelectedSequenceRecallResidues(recalled);
+            setRoleHydrationError('');
+            setPendingRoleHydration(null);
+        } catch (error) { setRoleHydrationError(String(error)); }
+
     }, [activeDesignChain, pendingRoleHydration]);
 
     const derivedManualRanges = useMemo(
@@ -633,9 +694,10 @@ export function ProteinLocalRedesignTemplate({
     }, [activeResidueRole, designResidueKeys, selectedEditableResidues, selectedSequenceRecallResidues]);
 
     useEffect(() => {
-        if (regionMode !== 'manual_ranges') return;
+        if (regionMode !== 'manual_ranges' || pendingRoleHydration || roleHydrationError || roleTextIsManual) return;
         setManualRangesText(selectedEditableResidues.size > 0 ? derivedManualRanges : '');
-    }, [regionMode, selectedEditableResidues, derivedManualRanges]);
+        setRecallRangesText(rfd3SequenceRecallRanges);
+    }, [regionMode, selectedEditableResidues, derivedManualRanges, rfd3SequenceRecallRanges, pendingRoleHydration, roleHydrationError, roleTextIsManual]);
 
     let fampnnError = '';
     try { hydrateFampnnOverrides(fampnnOverrides); } catch (error) { fampnnError = String(error); }
@@ -648,10 +710,11 @@ export function ProteinLocalRedesignTemplate({
         sequence_policy: nativeRedesignMode === 'minimal_insertion'
             ? 'insert_only'
             : rfd3SequenceRecallRanges ? 'explicit_positions' : 'preserve',
-        select_unfixed_sequence: rfd3SequenceRecallRanges,
+        select_unfixed_sequence: roleTextIsManual ? recallRangesText : rfd3SequenceRecallRanges,
         insertion_anchor: nativeInsertionAnchor.trim(),
         insertion_min_length: Number.parseInt(nativeInsertionMinLength, 10),
         insertion_max_length: Number.parseInt(nativeInsertionMaxLength, 10),
+        select_hotspots: nativeHotspots, select_hbond_donor: nativeHbondDonors, select_hbond_acceptor: nativeHbondAcceptors,
         partial_t: nativePartialT, ligand: nativeLigand.trim(), num_designs: numDesigns,
         seed: parseOptionalIntegerInput(nativeSeed) ?? 0,
         dump_trajectories: nativeDumpTrajectories, write_full_json: true,
@@ -662,6 +725,9 @@ export function ProteinLocalRedesignTemplate({
     }, [onDraftChange, projectDraftJson]);
 
     const handleResidueRoleSelectionChange = (residues: Set<string>) => {
+        setRoleTextIsManual(false);
+        setRoleHydrationError('');
+        setPendingRoleHydration(null);
         const filtered = new Set(Array.from(residues).filter((key) => designResidueKeys.has(key)));
         if (activeResidueRole === 'static') {
             const editable = new Set(Array.from(designResidueKeys).filter((key) => !filtered.has(key)));
@@ -790,12 +856,10 @@ export function ProteinLocalRedesignTemplate({
         [sourceSimulationDesignsResponse],
     );
 
-    const handleLaunchSourceSimulation = async () => {
-        setSourceLaunchError(null);
+    const buildSourceSimulationRequest = () => {
         const normalizedSequence = sanitizeSequenceInput(sourceSequence);
         if (!normalizedSequence) {
-            setSourceLaunchError('Primary protein sequence is required to launch source simulation.');
-            return;
+            return null;
         }
 
         const complexMode = sourceLigands.length > 0;
@@ -827,12 +891,18 @@ export function ProteinLocalRedesignTemplate({
             }
         }
 
-        await sourceSimulationMutation.mutateAsync({
+        return {
             name: sourceSimulationJobName.trim() || `${jobName.trim() || 'protein_local_redesign'}_source`,
             model_id: 'boltz2',
             mode: complexMode ? 'complex' : 'predict',
             params,
-        });
+        };
+    };
+    const handleLaunchSourceSimulation = async () => {
+        setSourceLaunchError(null);
+        const request = buildSourceSimulationRequest();
+        if (!request) { setSourceLaunchError('Primary protein sequence is required to launch source simulation.'); return; }
+        await sourceSimulationMutation.mutateAsync(request);
     };
 
     const handlePredictedSourceDesign = (design: Design) => {
@@ -850,71 +920,59 @@ export function ProteinLocalRedesignTemplate({
         setShowSourceSimulation(false);
     };
 
-    const handleSubmit = async () => {
-        setError(null);
-        if (effectiveSeqMethod === 'fampnn' && fampnnError) { setError(fampnnError); return; }
+    const validateWorkflowDraft = (forProvision = false) => {
+        if (effectiveSeqMethod === 'fampnn' && fampnnError) { throw new Error(fampnnError); }
         if (!jobName.trim()) {
-            setError('Job name is required');
-            return;
+            throw new Error('Job name is required');
         }
         if (!isNativeLocalRedesign && !designChain.trim()) {
-            setError('Choose a design chain before submitting.');
-            return;
+            throw new Error('Choose a design chain before submitting.');
         }
         if (!selectedTarget && !sourcePath) {
-            setError('Choose a source complex before submitting.');
-            return;
+            throw new Error('Choose a source complex before submitting.');
         }
         if (selectedTarget && (!parsedStructure || structureError)) {
-            setError('The selected source must load successfully before submission.');
-            return;
+            throw new Error('The selected source must load successfully before submission.');
         }
-        if (isNativeLocalRedesign) {
+        if (isNativeLocalRedesign && !forProvision) {
             if (effectiveNativePinnedGpu === null) {
-                setError('Choose one physical GPU for native RFD3 before submitting.');
-                return;
+                throw new Error('Choose one physical GPU for native RFD3 before submitting.');
             }
             if (!gpuOptions.some((gpu) => gpu.index === effectiveNativePinnedGpu)) {
-                setError('The selected native RFD3 GPU is absent from the live GPU inventory.');
-                return;
+                throw new Error('The selected native RFD3 GPU is absent from the live GPU inventory.');
             }
         }
 
+        const nativeSelectorError = [nativeHotspots, nativeHbondDonors, nativeHbondAcceptors].map(selectorError).find(Boolean);
+        if (nativeSelectorError) throw new Error(nativeSelectorError);
+        if (roleHydrationError || pendingRoleHydration) throw new Error(roleHydrationError || 'Source selectors are still loading.');
         const effectiveRanges = (manualRangesText || derivedManualRanges).trim();
+        if (activeDesignChain && regionMode === 'manual_ranges' && effectiveRanges) hydrateRoleResidues(activeDesignChain, effectiveRanges);
         if (!isNativeLocalRedesign && regionMode === 'manual_ranges' && !effectiveRanges) {
-            setError('Select editable residues visually or provide a redesign range string.');
-            return;
+            throw new Error('Select editable residues visually or provide a redesign range string.');
         }
         if (!isNativeLocalRedesign && regionMode === 'interface_shell' && contextChains.length === 0) {
-            setError('Choose at least one context chain or nucleic-acid partner for interface-shell mode.');
-            return;
+            throw new Error('Choose at least one context chain or nucleic-acid partner for interface-shell mode.');
         }
 
-        let resolvedPath: string | null = null;
-        try {
-            resolvedPath = await resolveSourceStructurePath();
-        } catch (err: unknown) {
-            setError(err instanceof Error ? err.message : 'Failed to resolve source structure path');
-            return;
-        }
+        return effectiveRanges;
+    };
 
+    const buildWorkflowRequest = (resolvedPath: string | null, forProvision = false) => {
+        const effectiveRanges = validateWorkflowDraft(forProvision);
         if (!resolvedPath) {
-            setError('Failed to determine the source structure path for the workflow.');
-            return;
+            throw new Error('Failed to determine the source structure path for the workflow.');
         }
 
         if (isNativeLocalRedesign) {
             if (nativeRedesignMode === 'partial_diffusion' && !effectiveRanges) {
-                setError('Partial diffusion requires at least one selected editable residue.');
-                return;
+                throw new Error('Partial diffusion requires at least one selected editable residue.');
             }
             if (nativeRedesignMode === 'minimal_insertion' && !generatedInsertionContig) {
-                setError('Minimal insertion requires a valid source-bound anchor and insertion length range.');
-                return;
+                throw new Error('Minimal insertion requires a valid source-bound anchor and insertion length range.');
             }
             if (nativeRedesignMode === 'minimal_insertion' && rfd3SequenceRecallRanges) {
-                setError('Minimal insertion derives sequence freedom from the inserted segment. Clear RFD3 recall roles on source residues.');
-                return;
+                throw new Error('Minimal insertion derives sequence freedom from the inserted segment. Clear RFD3 recall roles on source residues.');
             }
 
             const nativeParams: Record<string, unknown> = {
@@ -942,30 +1000,28 @@ export function ProteinLocalRedesignTemplate({
                 insertion_max_length: nativeRedesignMode === 'minimal_insertion' ? Number.parseInt(nativeInsertionMaxLength, 10) : undefined,
                 partial_t: nativeRedesignMode === 'partial_diffusion' ? nativePartialT : undefined,
                 ligand: nativeLigand.trim() || undefined,
-                select_hotspots: nativeHotspots.split(',').map((value) => value.trim()).filter(Boolean),
-                select_hbond_donor: nativeHbondDonors.split(',').map((value) => value.trim()).filter(Boolean),
-                select_hbond_acceptor: nativeHbondAcceptors.split(',').map((value) => value.trim()).filter(Boolean),
+                select_hotspots: nativeHotspots,
+                select_hbond_donor: nativeHbondDonors,
+                select_hbond_acceptor: nativeHbondAcceptors,
                 num_designs: numDesigns,
                 seed: parseOptionalIntegerInput(nativeSeed),
                 dump_trajectories: nativeDumpTrajectories,
                 write_full_json: true,
             };
-            await submitMutation.mutateAsync({
+            return {
                 name: jobName.trim(),
                 model_id: 'protein_local_redesign',
                 mode: 'local_redesign',
                 pinned_gpu: effectiveNativePinnedGpu,
                 params: nativeParams,
-            });
-            return;
+            };
         }
 
         if (!rfd3SequenceRecallRanges) {
-            setError('Validated depth requires at least one sequence-redesign residue for FA-MPNN.');
-            return;
+            throw new Error('Validated depth requires at least one sequence-redesign residue for FA-MPNN.');
         }
 
-        await submitMutation.mutateAsync({
+        return {
             name: jobName.trim(),
             model_id: 'protein_modification_experimental',
             mode: 'region_redesign',
@@ -1000,11 +1056,38 @@ export function ProteinLocalRedesignTemplate({
                 rfd_min_rog: parseOptionalNumberInput(rfdMinRog),
                 rfd_max_rog: parseOptionalNumberInput(rfdMaxRog),
             },
-        });
+        };
     };
+
+    const handleSubmit = async () => {
+        setError(null);
+        try { validateWorkflowDraft(); }
+        catch (err: unknown) { setError(err instanceof Error ? err.message : 'Invalid redesign request'); return; }
+
+        let resolvedPath: string | null = null;
+        try {
+            resolvedPath = await resolveSourceStructurePath();
+        } catch (err: unknown) {
+            setError(err instanceof Error ? err.message : 'Failed to resolve source structure path');
+            return;
+        }
+
+        try {
+            await submitMutation.mutateAsync(buildWorkflowRequest(resolvedPath));
+        } catch (err: unknown) {
+            setError(err instanceof Error ? err.message : 'Invalid redesign request');
+        }
+    };
+    const workflowRequest = (() => {
+        // A selected in-memory model still needs an immutable upload at launch.
+        // Never preview a guessed path, a previous source, or perform that upload here.
+        if (selectedTarget || !sourcePath?.toLowerCase().endsWith('.pdb')) return null;
+        try { return buildWorkflowRequest(sourcePath, true); } catch { return null; }
+    })();
 
     return (
         <div className="w-full space-y-6 text-[var(--text-primary)]" data-bms-rfd3-layout="wide" data-bms-rfd3-iteration-workbench="unified">
+            <ExecutionTargetPicker workflowRequest={workflowRequest} />
             <div className="space-y-4 rounded-xl border p-5" style={themedPanelStyle}>
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
@@ -1106,15 +1189,15 @@ export function ProteinLocalRedesignTemplate({
                                 </label>
                                 <label className="space-y-1 text-xs font-medium">
                                     Hotspots
-                                    <input className="w-full rounded-lg border px-3 py-2 text-sm" style={themedInputStyle} value={nativeHotspots} onChange={(event) => setNativeHotspots(event.target.value)} placeholder="A310,A315" />
+                                    <NativeSelectorInput value={nativeHotspots} onChange={setNativeHotspots} />
                                 </label>
                                 <label className="space-y-1 text-xs font-medium">
                                     Desired H-bond donors
-                                    <input className="w-full rounded-lg border px-3 py-2 text-sm" style={themedInputStyle} value={nativeHbondDonors} onChange={(event) => setNativeHbondDonors(event.target.value)} placeholder="DATP_ID:N1" />
+                                    <NativeSelectorInput value={nativeHbondDonors} onChange={setNativeHbondDonors} />
                                 </label>
                                 <label className="space-y-1 text-xs font-medium">
                                     Desired H-bond acceptors
-                                    <input className="w-full rounded-lg border px-3 py-2 text-sm" style={themedInputStyle} value={nativeHbondAcceptors} onChange={(event) => setNativeHbondAcceptors(event.target.value)} placeholder="DATP_ID:N6" />
+                                    <NativeSelectorInput value={nativeHbondAcceptors} onChange={setNativeHbondAcceptors} />
                                 </label>
                             </div>
                             <div className="grid gap-3 md:grid-cols-3">
@@ -1223,6 +1306,7 @@ export function ProteinLocalRedesignTemplate({
                 {showSourceSimulation && (
                     <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
                         <div className="space-y-4">
+                            <ExecutionTargetPicker workflowRequest={buildSourceSimulationRequest()} submissionOptions={{ launchContext: false }} />
                             <div className="rounded-lg border p-3" style={themedInsetStyle}>
                                 <div className="grid gap-4 md:grid-cols-2">
                                     <div>
@@ -1657,11 +1741,18 @@ export function ProteinLocalRedesignTemplate({
                                         <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Range String</label>
                                         <input
                                             value={manualRangesText}
-                                            onChange={(event) => setManualRangesText(event.target.value)}
+                                            onChange={(event) => { setRoleTextIsManual(true); setManualRangesText(event.target.value); setPendingRoleHydration({ editable: event.target.value, recall: recallRangesText }); }}
                                             className="w-full rounded-lg border px-3 py-2 text-sm font-mono outline-none"
                                             style={themedInputStyle}
                                             placeholder="A45-58,A83-91"
                                         />
+                                        <label className="mt-2 block text-xs">Sequence-recall ranges</label>
+                                        <input value={recallRangesText} style={themedInputStyle} onChange={event => {
+                                            setRoleTextIsManual(true);
+                                            setRecallRangesText(event.target.value);
+                                            setPendingRoleHydration({ editable: manualRangesText, recall: event.target.value });
+                                        }} />
+                                        {roleHydrationError && <p role="alert" className="text-red-400">{roleHydrationError}</p>}
                                         <p className="mt-2 text-xs text-[var(--text-secondary)]">
                                             This field is auto-filled from the visual selector and remains editable if you want to refine the exact range string manually.
                                         </p>
@@ -1761,7 +1852,7 @@ export function ProteinLocalRedesignTemplate({
                                 </select>
                             </div>
 
-                            {proteinLocalRedesignUiState.showSequenceSampling && <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                            {(isNativeLocalRedesign || proteinLocalRedesignUiState.showSequenceSampling) && <div className="rounded-lg border p-3" style={themedInsetStyle}>
                                 <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Backbone Designs</label>
                                 <input
                                     type="number"

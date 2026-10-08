@@ -301,7 +301,6 @@
               ]
             },
             "display_order": {
-              "maximum": 256,
               "minimum": 1,
               "type": "integer"
             },
@@ -453,7 +452,6 @@
               "const": "none"
             },
             "display_order": {
-              "maximum": 256,
               "minimum": 1,
               "type": "integer"
             },
@@ -1596,2005 +1594,17 @@
       "$ref": "#/$defs/alignmentSummary"
     },
     "alignment_sessions": {
-      "items": false,
+      "items": {
+        "$ref": "#/$defs/alignmentSession"
+      },
       "maxItems": 2,
-      "minItems": 1,
-      "prefixItems": [
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/alignmentSession"
-            },
-            {
-              "properties": {
-                "mode": {
-                  "const": "primary"
-                },
-                "ready": {
-                  "const": true
-                },
-                "unavailable_reason": {
-                  "type": "null"
-                }
-              },
-              "required": [
-                "mode",
-                "ready",
-                "unavailable_reason"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/alignmentSession"
-            },
-            {
-              "properties": {
-                "mode": {
-                  "const": "dimer_candidates"
-                }
-              },
-              "required": [
-                "mode"
-              ]
-            }
-          ]
-        }
-      ],
       "type": "array"
     },
     "artifacts": {
-      "items": false,
-      "maxItems": 36,
-      "minItems": 36,
-      "prefixItems": [
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "attachment"
-                },
-                "display_order": {
-                  "const": 1
-                },
-                "filename_extension": {
-                  "const": "json"
-                },
-                "kind": {
-                  "const": "sequence_qc_manifest"
-                },
-                "mime_type": {
-                  "const": "application/json"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "authority"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "inline"
-                },
-                "display_order": {
-                  "const": 2
-                },
-                "filename_extension": {
-                  "const": "fasta"
-                },
-                "kind": {
-                  "const": "reference"
-                },
-                "mime_type": {
-                  "const": "application/octet-stream"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "reference"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "none"
-                },
-                "display_order": {
-                  "const": 3
-                },
-                "filename_extension": {
-                  "const": null
-                },
-                "kind": {
-                  "const": "modified_bases"
-                },
-                "mime_type": {
-                  "const": null
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": false
-                },
-                "scientific_role": {
-                  "const": "optional_evidence"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "not_applicable_to_input_mode"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "inline"
-                },
-                "display_order": {
-                  "const": 4
-                },
-                "filename_extension": {
-                  "const": "fai"
-                },
-                "kind": {
-                  "const": "reference_index"
-                },
-                "mime_type": {
-                  "const": "application/octet-stream"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "reference"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "attachment"
-                },
-                "display_order": {
-                  "const": 5
-                },
-                "filename_extension": {
-                  "const": "tsv"
-                },
-                "kind": {
-                  "const": "summary"
-                },
-                "mime_type": {
-                  "const": "text/tab-separated-values"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "qc_metrics"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "attachment"
-                },
-                "display_order": {
-                  "const": 6
-                },
-                "filename_extension": {
-                  "const": "tsv"
-                },
-                "kind": {
-                  "const": "read_lengths"
-                },
-                "mime_type": {
-                  "const": "text/tab-separated-values"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "qc_metrics"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "attachment"
-                },
-                "display_order": {
-                  "const": 7
-                },
-                "filename_extension": {
-                  "const": "tsv"
-                },
-                "kind": {
-                  "const": "alignment_stats"
-                },
-                "mime_type": {
-                  "const": "text/tab-separated-values"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "qc_metrics"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "attachment"
-                },
-                "display_order": {
-                  "const": 8
-                },
-                "filename_extension": {
-                  "const": "tsv"
-                },
-                "kind": {
-                  "const": "coverage"
-                },
-                "mime_type": {
-                  "const": "text/tab-separated-values"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "qc_metrics"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "attachment"
-                },
-                "display_order": {
-                  "const": 9
-                },
-                "filename_extension": {
-                  "const": "tsv"
-                },
-                "kind": {
-                  "const": "per_base_support"
-                },
-                "mime_type": {
-                  "const": "text/tab-separated-values"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "qc_metrics"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "attachment"
-                },
-                "display_order": {
-                  "const": 10
-                },
-                "filename_extension": {
-                  "const": "fasta"
-                },
-                "kind": {
-                  "const": "consensus"
-                },
-                "mime_type": {
-                  "const": "application/octet-stream"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "consensus"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "attachment"
-                },
-                "display_order": {
-                  "const": 11
-                },
-                "filename_extension": {
-                  "const": "fai"
-                },
-                "kind": {
-                  "const": "consensus_index"
-                },
-                "mime_type": {
-                  "const": "application/octet-stream"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "consensus"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "attachment"
-                },
-                "display_order": {
-                  "const": 12
-                },
-                "filename_extension": {
-                  "const": "log"
-                },
-                "kind": {
-                  "const": "consensus_log"
-                },
-                "mime_type": {
-                  "const": "application/octet-stream"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "audit_log"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "inline"
-                },
-                "display_order": {
-                  "const": 13
-                },
-                "filename_extension": {
-                  "const": "bam"
-                },
-                "kind": {
-                  "const": "alignment_bam"
-                },
-                "mime_type": {
-                  "const": "application/octet-stream"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "alignment"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "inline"
-                },
-                "display_order": {
-                  "const": 14
-                },
-                "filename_extension": {
-                  "const": "bai"
-                },
-                "kind": {
-                  "const": "alignment_bai"
-                },
-                "mime_type": {
-                  "const": "application/octet-stream"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "alignment"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "inline"
-                },
-                "display_order": {
-                  "const": 15
-                },
-                "filename_extension": {
-                  "const": "bedgraph"
-                },
-                "kind": {
-                  "const": "igv_coverage_depth"
-                },
-                "mime_type": {
-                  "const": "application/octet-stream"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "viewer_auxiliary"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "inline"
-                },
-                "display_order": {
-                  "const": 16
-                },
-                "filename_extension": {
-                  "const": "bedgraph"
-                },
-                "kind": {
-                  "const": "igv_position_gradient"
-                },
-                "mime_type": {
-                  "const": "application/octet-stream"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "viewer_auxiliary"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "inline"
-                },
-                "display_order": {
-                  "const": 17
-                },
-                "filename_extension": {
-                  "const": "bedgraph"
-                },
-                "kind": {
-                  "const": "igv_gc_content"
-                },
-                "mime_type": {
-                  "const": "application/octet-stream"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "viewer_auxiliary"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "inline"
-                },
-                "display_order": {
-                  "const": 18
-                },
-                "filename_extension": {
-                  "const": "bedgraph"
-                },
-                "kind": {
-                  "const": "igv_gc_zscore"
-                },
-                "mime_type": {
-                  "const": "application/octet-stream"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "viewer_auxiliary"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "inline"
-                },
-                "display_order": {
-                  "const": 19
-                },
-                "filename_extension": {
-                  "const": "bedgraph"
-                },
-                "kind": {
-                  "const": "igv_split_read_density"
-                },
-                "mime_type": {
-                  "const": "application/octet-stream"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "viewer_auxiliary"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "inline"
-                },
-                "display_order": {
-                  "const": 20
-                },
-                "filename_extension": {
-                  "const": "bedgraph"
-                },
-                "kind": {
-                  "const": "igv_softclip_density"
-                },
-                "mime_type": {
-                  "const": "application/octet-stream"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "viewer_auxiliary"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "inline"
-                },
-                "display_order": {
-                  "const": 21
-                },
-                "filename_extension": {
-                  "const": "bed"
-                },
-                "kind": {
-                  "const": "igv_junction_hotspots"
-                },
-                "mime_type": {
-                  "const": "application/vnd.realvnc.bed"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "viewer_auxiliary"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "inline"
-                },
-                "display_order": {
-                  "const": 22
-                },
-                "filename_extension": {
-                  "const": "bed"
-                },
-                "kind": {
-                  "const": "igv_report_sites_bed"
-                },
-                "mime_type": {
-                  "const": "application/vnd.realvnc.bed"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "viewer_auxiliary"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "inline"
-                },
-                "display_order": {
-                  "const": 23
-                },
-                "filename_extension": {
-                  "const": "tsv"
-                },
-                "kind": {
-                  "const": "igv_report_sites_tsv"
-                },
-                "mime_type": {
-                  "const": "text/tab-separated-values"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "viewer_auxiliary"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "inline"
-                },
-                "display_order": {
-                  "const": 24
-                },
-                "filename_extension": {
-                  "const": "json"
-                },
-                "kind": {
-                  "const": "igv_track_config"
-                },
-                "mime_type": {
-                  "const": "application/json"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "viewer_auxiliary"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "attachment"
-                },
-                "display_order": {
-                  "const": 25
-                },
-                "filename_extension": {
-                  "const": "html"
-                },
-                "kind": {
-                  "const": "igv_report"
-                },
-                "mime_type": {
-                  "const": "text/html"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "report"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "attachment"
-                },
-                "display_order": {
-                  "const": 26
-                },
-                "filename_extension": {
-                  "const": "log"
-                },
-                "kind": {
-                  "const": "log"
-                },
-                "mime_type": {
-                  "const": "application/octet-stream"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "audit_log"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "attachment"
-                },
-                "display_order": {
-                  "const": 27
-                },
-                "filename_extension": {
-                  "const": "log"
-                },
-                "kind": {
-                  "const": "log"
-                },
-                "mime_type": {
-                  "const": "application/octet-stream"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "audit_log"
-                },
-                "source": {
-                  "const": "sequence_qc"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "attachment"
-                },
-                "display_order": {
-                  "const": 28
-                },
-                "filename_extension": {
-                  "const": "json"
-                },
-                "kind": {
-                  "const": "construct_verification_manifest"
-                },
-                "mime_type": {
-                  "const": "application/json"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "authority"
-                },
-                "source": {
-                  "const": "construct_verification"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "attachment"
-                },
-                "display_order": {
-                  "const": 29
-                },
-                "filename_extension": {
-                  "const": "tsv"
-                },
-                "kind": {
-                  "const": "verification_summary"
-                },
-                "mime_type": {
-                  "const": "text/tab-separated-values"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "verification"
-                },
-                "source": {
-                  "const": "construct_verification"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "attachment"
-                },
-                "display_order": {
-                  "const": 30
-                },
-                "filename_extension": {
-                  "const": "vcf"
-                },
-                "kind": {
-                  "const": "normalized_variants"
-                },
-                "mime_type": {
-                  "const": "text/x-vcf"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "verification"
-                },
-                "source": {
-                  "const": "construct_verification"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "attachment"
-                },
-                "display_order": {
-                  "const": 31
-                },
-                "filename_extension": {
-                  "const": "tsv"
-                },
-                "kind": {
-                  "const": "per_base_metrics"
-                },
-                "mime_type": {
-                  "const": "text/tab-separated-values"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "verification"
-                },
-                "source": {
-                  "const": "construct_verification"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "attachment"
-                },
-                "display_order": {
-                  "const": 32
-                },
-                "filename_extension": {
-                  "const": "html"
-                },
-                "kind": {
-                  "const": "human_evidence_report"
-                },
-                "mime_type": {
-                  "const": "text/html"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "report"
-                },
-                "source": {
-                  "const": "construct_verification"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "attachment"
-                },
-                "display_order": {
-                  "const": 33
-                },
-                "filename_extension": {
-                  "const": "fasta"
-                },
-                "kind": {
-                  "const": "observed_consensus"
-                },
-                "mime_type": {
-                  "const": "application/octet-stream"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "consensus"
-                },
-                "source": {
-                  "const": "construct_verification"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "attachment"
-                },
-                "display_order": {
-                  "const": 34
-                },
-                "filename_extension": {
-                  "const": "json"
-                },
-                "kind": {
-                  "const": "source_read_provenance"
-                },
-                "mime_type": {
-                  "const": "application/json"
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "source_input"
-                },
-                "source": {
-                  "const": "construct_verification_input"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "attachment"
-                },
-                "display_order": {
-                  "const": 35
-                },
-                "filename_extension": {
-                  "const": "fastq.gz"
-                },
-                "kind": {
-                  "const": "source_reads_fastq"
-                },
-                "mime_type": {
-                  "const": "application/octet-stream"
-                },
-                "owner_scope": {
-                  "const": "managed_input_snapshot"
-                },
-                "range_capable": {
-                  "const": true
-                },
-                "scientific_role": {
-                  "const": "source_input"
-                },
-                "source": {
-                  "const": "construct_verification_input"
-                },
-                "state": {
-                  "const": "present"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        },
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/artifact"
-            },
-            {
-              "properties": {
-                "content_disposition": {
-                  "const": "none"
-                },
-                "display_order": {
-                  "const": 36
-                },
-                "filename_extension": {
-                  "const": null
-                },
-                "kind": {
-                  "const": "signal_data"
-                },
-                "mime_type": {
-                  "const": null
-                },
-                "owner_scope": {
-                  "const": "result_root"
-                },
-                "range_capable": {
-                  "const": false
-                },
-                "scientific_role": {
-                  "const": "optional_evidence"
-                },
-                "source": {
-                  "const": "input_mode"
-                },
-                "state": {
-                  "const": "not_applicable_to_input_mode"
-                }
-              },
-              "required": [
-                "source",
-                "kind",
-                "state",
-                "scientific_role",
-                "display_order",
-                "content_disposition",
-                "filename_extension",
-                "mime_type",
-                "range_capable",
-                "artifact_id",
-                "owner_scope"
-              ]
-            }
-          ]
-        }
-      ],
+      "items": {
+        "$ref": "#/$defs/artifact"
+      },
+      "maxItems": 256,
       "type": "array"
     },
     "authority": {
@@ -3613,13 +1623,15 @@
           "$ref": "#/$defs/sha256"
         },
         "declared_artifact_count": {
-          "const": 36
+          "minimum": 0,
+          "type": "integer"
         },
         "manifest_readiness": {
           "const": "ready"
         },
         "present_artifact_count": {
-          "const": 34
+          "minimum": 0,
+          "type": "integer"
         },
         "reference_sequence_sha256": {
           "$ref": "#/$defs/sha256"
@@ -3628,7 +1640,8 @@
           "$ref": "#/$defs/sha256"
         },
         "unavailable_artifact_count": {
-          "const": 2
+          "minimum": 0,
+          "type": "integer"
         }
       },
       "required": [
@@ -3774,7 +1787,10 @@
               "type": "null"
             },
             "evidence_status": {
-              "const": "historical_unavailable"
+              "enum": [
+                "historical_unavailable",
+                "unavailable"
+              ]
             },
             "execution_invocation_id": {
               "type": "null"
@@ -3839,7 +1855,7 @@
               "type": "integer"
             },
             "observed_pids_peak": {
-              "minimum": 1,
+              "minimum": 0,
               "type": "integer"
             },
             "outcome": {
@@ -3851,7 +1867,66 @@
               "type": "string"
             },
             "receipt_schema": {
-              "const": "bms.workflow-resource-usage.v1"
+              "enum": [
+                "bms.workflow-resource-usage.v1",
+                "bms.workflow-resource-usage.v2"
+              ]
+            },
+            "receipt_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "run_attempt_id": {
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string"
+            },
+            "scheduler_gpu_assignment": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "properties": {
+            "admitted_cpu_threads": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "admitted_vram_bytes": {
+              "const": 0
+            },
+            "configured_dorado_device_ignored": {
+              "type": "null"
+            },
+            "evidence_status": {
+              "const": "accepted"
+            },
+            "execution_invocation_id": {
+              "type": "null"
+            },
+            "gpu_index": {
+              "type": "null"
+            },
+            "gpu_uuid": {
+              "type": "null"
+            },
+            "observed_memory_peak_bytes": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "observed_pids_peak": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "outcome": {
+              "const": "completed"
+            },
+            "receipt_id": {
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string"
+            },
+            "receipt_schema": {
+              "const": "bms.workflow-resource-usage.v3"
             },
             "receipt_sha256": {
               "$ref": "#/$defs/sha256"
@@ -3898,7 +1973,8 @@
         "evidence_status": {
           "enum": [
             "historical_unavailable",
-            "accepted"
+            "accepted",
+            "unavailable"
           ]
         },
         "execution_invocation_id": {
@@ -4065,6 +2141,80 @@
       ],
       "type": "object"
     },
+    "pagination": {
+      "additionalProperties": false,
+      "properties": {
+        "artifacts": {
+          "additionalProperties": false,
+          "properties": {
+            "count": {
+              "maximum": 256,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "next_offset": {
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "offset": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "total": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "offset",
+            "count",
+            "total",
+            "next_offset"
+          ],
+          "type": "object"
+        },
+        "variants": {
+          "additionalProperties": false,
+          "properties": {
+            "count": {
+              "maximum": 256,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "next_offset": {
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "offset": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "total": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "offset",
+            "count",
+            "total",
+            "next_offset"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "variants",
+        "artifacts"
+      ],
+      "type": "object"
+    },
     "read_length_histogram": {
       "additionalProperties": false,
       "properties": {
@@ -4104,7 +2254,6 @@
           "const": "fixed_width_v1"
         },
         "source_row_count": {
-          "maximum": 2000000,
           "minimum": 1,
           "type": "integer"
         }
@@ -4226,27 +2375,25 @@
   "title": "BioModStack ONT FASTQ-QC bounded result projection v1",
   "type": "object",
   "x-bms-cross-field-invariants": [
-    "authority.declared_artifact_count equals artifacts.length",
+    "authority.declared_artifact_count equals pagination.artifacts.total when paginated, otherwise artifacts.length",
     "authority.declared_artifact_count equals authority.present_artifact_count plus authority.unavailable_artifact_count",
-    "present and unavailable authority counts equal artifact item states",
-    "every artifact URL contains the exact encoded job.id and its own sha256",
+    "present and unavailable authority counts cover the complete inventory; page counts do not exceed them and equal them on a complete page",
+    "every present artifact URL contains the exact encoded job.id and its opaque artifact_id",
     "alignment_readiness is ready if and only if at least one alignment session is ready",
     "read_length_histogram bins are contiguous half-open fixed_width_v1 bins beginning at zero and sum(read_count) equals source_row_count",
     "coverage points retain one producer reference and strict ascending 1-based order; bucket_width_rows follows ceil(source_row_count/1024); each bucket retains earliest tied minimum and maximum; reported minimum_depth equals the source global minimum",
     "summary, alignment, verification.summary, alignment sessions, coverage, and reference authority identify one exact reference name and length",
-    "verification.summary.variant_count equals verification.variants.length",
+    "verification.summary.variant_count equals pagination.variants.total when paginated, otherwise verification.variants.length",
     "each variant record and affected interval follow vcf_left_anchored_v1 kind/ref/alt semantics; insertion intervals are between_bases and cross-origin records are rejected",
     "stages contain the four canonical entries once and in canonical order",
     "encoded UTF-8 compact JSON size is at most 262144 bytes",
     "all JSON numbers are finite",
     "wire validator recomputes coverage projection digest and validates construction attestation without claiming access to omitted source rows",
     "artifact scientific role, media type, disposition, and display order equal the SOW UI-5 table",
-    "artifact display_order is unique and contiguous from 1 through artifact_count",
+    "artifact display_order retains the native inventory order across pages",
     "completed accepted results contain no missing_required artifact",
-    "execution resource branch fields are coherent with historical_unavailable or accepted state",
+    "execution resource branch fields distinguish unavailable, historical_unavailable, accepted v1/v2 systemd invocation and accepted v3 sampled remote observations with no systemd invocation",
     "all four stage summaries have complete status and exact output counts 5, 6, 8, 6",
-    "result alignment session summaries equal the governed session list with ready primary first and optional dimer second",
-    "wire validator recomputes bms.ngs.package-authority.v1 from all 36 descriptors and requires exact artifact counts and persisted digest equality",
     "threshold_profile.sha256 equals SHA-256 over UTF-8 canonical JSON of threshold_profile.values using sorted keys, separators comma and colon, allow_nan false; outer version, calibration_status, and public_accuracy_validated equal values",
     "verification verdict is REVIEW when any check status is review or fail or any reason code is present",
     "verification verdict PASS requires every check pass, empty aggregate and row reason codes, automatic_pass_eligible true, public_accuracy_validated true, and all profile thresholds satisfied",

@@ -8,6 +8,7 @@ from database import get_session
 from services.remote_execution.contracts import (
     ExecutionTargetActivateRequest,
     PreloadRequest, ProvisionRequest, ProvisionSelection, ProvisionPreview, ObservedArtifactInventory,
+    WorkflowProvisionSelection, WorkflowProvisionRequest,
     ExecutionTargetInventoryResponse,
     ExecutionTargetResponse,
 )
@@ -114,25 +115,50 @@ async def provision_catalog():
 
 
 @router.post("/{execution_target_id}/provision/preview", response_model=ProvisionPreview)
-async def preview_provision(execution_target_id: str, request: ProvisionSelection,
+async def preview_provision(execution_target_id: str, request: ProvisionSelection | WorkflowProvisionSelection,
                             http_request: Request, session: AsyncSession = Depends(get_session)):
     controller = getattr(http_request.app.state, "preload_controller", None)
     if controller is None:
         raise HTTPException(status_code=503, detail="Preload service is unavailable")
     try:
-        return await controller.preview(session, execution_target_id, request)
+        return await controller.preview(session, execution_target_id, request, http_request=http_request)
     except ExecutionTargetError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/{execution_target_id}/provision", response_model=ExecutionTargetResponse, status_code=202)
-async def provision_execution_target(execution_target_id: str, request: ProvisionRequest,
+async def provision_execution_target(execution_target_id: str, request: ProvisionRequest | WorkflowProvisionRequest,
                                       http_request: Request, session: AsyncSession = Depends(get_session)):
     controller = getattr(http_request.app.state, "preload_controller", None)
     if controller is None:
         raise HTTPException(status_code=503, detail="Preload service is unavailable")
     try:
-        return await controller.start(session, execution_target_id, request)
+        return await controller.start(session, execution_target_id, request, http_request=http_request)
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/{execution_target_id}/provision/{operation_id}/cancel", response_model=ExecutionTargetResponse, status_code=202)
+async def cancel_provision(execution_target_id: str, operation_id: str, http_request: Request,
+                           session: AsyncSession = Depends(get_session)):
+    controller = getattr(http_request.app.state, "preload_controller", None)
+    if controller is None:
+        raise HTTPException(status_code=503, detail="Preload service is unavailable")
+    try:
+        return await controller.cancel(session, execution_target_id, operation_id)
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/{execution_target_id}/provision/{operation_id}/retry", response_model=ExecutionTargetResponse, status_code=202)
+async def retry_provision(execution_target_id: str, operation_id: str,
+                          request: ProvisionRequest | WorkflowProvisionRequest, http_request: Request,
+                          session: AsyncSession = Depends(get_session)):
+    controller = getattr(http_request.app.state, "preload_controller", None)
+    if controller is None:
+        raise HTTPException(status_code=503, detail="Preload service is unavailable")
+    try:
+        return await controller.start(session, execution_target_id, request, retry_operation_id=operation_id, http_request=http_request)
     except ExecutionTargetError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 

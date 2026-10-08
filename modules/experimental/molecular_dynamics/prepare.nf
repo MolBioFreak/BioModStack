@@ -46,6 +46,9 @@ if config.get('schema') == 'bms.md.job.v2':
             '/opt/bms-md-preparation-runtime.lock',
         )),
         runtime_image=runtime_image,
+        padding_nm=config['preparation']['padding_nm'],
+        salt_molar=config['preparation']['salt_molar'],
+        neutralize=config['preparation']['neutralize'],
     )
     bundle_sha = manifest['bundle_sha256']
 else:

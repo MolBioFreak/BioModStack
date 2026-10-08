@@ -15,6 +15,141 @@ import shutil
 CONTRACT = json.loads(Path(__file__).with_name('boltzgen_native_source.json').read_text())
 KEYS = ('design_ptm', 'affinity_probability', 'filter_rmsd')
 
+PROTOCOLS = ('protein-anything', 'protein-small_molecule', 'peptide-anything',
+             'nanobody-anything', 'antibody-anything')
+
+
+def protocol_from_entities(entities):
+    """Wrapper's native top-level decision, including per-entity precedence."""
+    kinds = set()
+    for entity in entities:
+        for kind in ('dna', 'rna', 'ligand', 'protein'):
+            if kind in entity:
+                kinds.add(kind)
+                break
+    if kinds & {'dna', 'rna'}:
+        return 'protein-anything'
+    return 'protein-small_molecule' if 'ligand' in kinds else 'protein-anything'
+
+
+def selected_checkpoint_members(protocol, mode='both', skip_inverse_folding=False):
+    """Installed BinderDesignPipeline/ARTIFACTS placement; no model import.
+
+    Keep diverse then adherence and leave equal fractions to the native CLI.
+    """
+    if protocol not in PROTOCOLS or mode not in ('both', 'diverse', 'adherence'):
+        raise ValueError('Unresolved native BoltzGen protocol/checkpoint selection')
+    variants = ('diverse', 'adherence') if mode == 'both' else (mode,)
+    members = [f'boltzgen1_{variant}.ckpt' for variant in variants]
+    if not skip_inverse_folding:
+        members.append('boltzgen1_ifold.ckpt')
+    members.append('boltz2_conf_final.ckpt')
+    if protocol == 'protein-small_molecule':
+        members.append('boltz2_aff.ckpt')
+    return members
+
+
+class ProtocolMetadata(dict):
+    """In-process compiler-derived metadata, not a JSON/request flag.
+
+    Pass the original object in metadata_settings['_boltzgen_protocol_metadata'].
+    Serialized receipts are evidence only and must be recomputed on recompilation.
+    """
+
+
+def protocol_request_identity(params):
+    return digest(json.dumps({key: value for key, value in params.items()
+                              if key.startswith('boltzgen_')}, sort_keys=True).encode())
+
+
+def preview_protocol_metadata(params, *, preparation_inputs=None, allowed_input_roots=()):
+    """Pure native preparation preview on validated, normalized compiler inputs.
+
+    No generated files, SDK execution or providers. Declared file inputs are
+    bounded read-only snapshots under compiler-approved roots; missing/unsafe
+    native inputs remain unresolved. No process-global output redirection.
+    """
+    import argparse
+    from scripts import prep_boltzgen as prep
+
+    parser = prep.preparation_parser()
+    values = {action.dest: action.default for action in parser._actions
+              if action.dest not in ('help', 'output_yaml')}
+    if preparation_inputs is None:
+        for key in values:
+            source = 'boltzgen_target_pdb_path' if key == 'target_pdb' else 'boltzgen_' + key
+            if params.get(source) not in (None, ''):
+                values[key] = params[source]
+    else:
+        if set(preparation_inputs) - set(values):
+            raise ValueError('Unknown native preparation input')
+        values.update(preparation_inputs)
+    requested = params.get('boltzgen_protocol') or 'auto'
+    values['output_yaml'] = 'boltzgen_input.yaml'
+    identity = {name: digest(path.read_bytes()) for name, path in (
+        ('scripts/prep_boltzgen.py', Path(prep.__file__)),
+        ('scripts/lib/boltzgen_native.py', Path(__file__)))}
+    result = ProtocolMetadata(schema=1, state='unresolved', requested_protocol=requested,
+        request_identity=protocol_request_identity(params),
+        effective_protocol=None, source_identity=identity,
+        config_identity={'authority': 'scripts/prep_boltzgen.py:build_design_config',
+                         'generated_input': 'boltzgen_input.yaml',
+                         'preparation_sha256': digest(json.dumps(values, sort_keys=True).encode())},
+        selected_checkpoint_members=[], unresolved_inputs=[])
+    if requested not in ('auto', *PROTOCOLS):
+        result['unresolved_inputs'] = ['boltzgen_protocol']
+        return result
+    if requested == 'auto':
+        from scripts.lib.portable_inputs import _contained, MAX_DOCUMENT_BYTES
+        import stat
+        input_texts, input_identities = {}, {}
+        for name in ('input_pdb', 'ligand_pdb', 'dna_structure', 'target_pdb'):
+            value = values[name]
+            if not value:
+                continue
+            try:
+                # Reuse the shared native-input containment authority. Roots are
+                # supplied only by the compiler, never by scientific params.
+                path = _contained(value, [Path(root).resolve() for root in allowed_input_roots])
+                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                with os.fdopen(fd, 'rb') as stream:
+                    before = os.fstat(stream.fileno())
+                    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > MAX_DOCUMENT_BYTES:
+                        raise ValueError('Native preparation input must be a bounded regular file')
+                    raw = stream.read(MAX_DOCUMENT_BYTES + 1)
+                    after = os.fstat(stream.fileno())
+                if len(raw) > MAX_DOCUMENT_BYTES or (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+                    raise ValueError('Native input changed during preview')
+                input_texts[str(value)] = raw.decode()
+                input_identities[name] = {'path': str(path), 'sha256': digest(raw), 'size_bytes': len(raw)}
+            except (OSError, ValueError) as exc:
+                result['unresolved_inputs'] = [name]
+                result['reason'] = type(exc).__name__ + ': ' + str(exc)
+                return result
+        result['config_identity']['input_files'] = input_identities
+        try:
+            config = prep.build_design_config(argparse.Namespace(**values), preview=True, input_texts=input_texts)
+        except prep.UnresolvedPreparationInput as exc:
+            result['unresolved_inputs'] = exc.inputs
+            return result
+        except (ValueError, TypeError, KeyError) as exc:
+            result['unresolved_inputs'] = ['invalid_native_preparation:' + type(exc).__name__]
+            return result
+        import yaml
+        result['config_identity']['yaml_sha256'] = digest(
+            yaml.dump(config, default_flow_style=False).encode())
+        protocol = protocol_from_entities(config['entities'])
+    else:
+        protocol = requested
+    try:
+        members = selected_checkpoint_members(protocol, params.get('boltzgen_checkpoint_mode') or 'both',
+                                               bool(params.get('boltzgen_skip_inverse_folding')))
+    except ValueError:
+        result['unresolved_inputs'] = ['boltzgen_checkpoint_mode']
+        return result
+    result.update(state='ok', effective_protocol=protocol, selected_checkpoint_members=members)
+    return result
+
 
 def digest(raw):
     return hashlib.sha256(raw).hexdigest()

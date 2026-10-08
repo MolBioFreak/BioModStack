@@ -428,6 +428,10 @@ def _landscape_hash(landscape: Mapping[str, Any]) -> str:
     return str(landscape.get("landscape_sha256") or canonical_sha256(dict(landscape)))
 
 
+def _configuration_id(landscape: Mapping[str, Any]) -> Any:
+    return landscape.get("execution_configuration_id") or landscape.get("configuration_id")
+
+
 def _configuration_sha256(landscape: Mapping[str, Any]) -> Any:
     return landscape.get("execution_configuration_sha256") or landscape.get(
         "configuration_sha256"
@@ -461,8 +465,8 @@ def _compatibility(
             else "incompatible"
         ),
         "reasons": reasons,
-        "reference_configuration_id": reference.get("configuration_id"),
-        "target_configuration_id": target.get("configuration_id"),
+        "reference_configuration_id": _configuration_id(reference),
+        "target_configuration_id": _configuration_id(target),
         "reference_configuration_sha256": _configuration_sha256(reference),
         "target_configuration_sha256": _configuration_sha256(target),
     }, metadata
@@ -537,6 +541,10 @@ def compare_landscapes(
         rows.append({
             "residue_key": {
                 "entity_instance_id": residue["entity_instance_id"],
+                "source_entity_id": residue.get("source_entity_id"),
+                "label_asym_id": residue.get("label_asym_id"),
+                "sequence_index": residue["sequence_index"],
+                "wt": residue["wt"],
                 "auth_asym_id": residue["auth_asym_id"],
                 "auth_seq_id": residue["auth_seq_id"],
                 "insertion_code": residue.get("insertion_code") or "",
@@ -590,7 +598,7 @@ def compare_landscapes(
         "comparison_id": comparison_id,
         "reference_landscape_sha256": _landscape_hash(reference),
         "target_landscape_sha256": _landscape_hash(target),
-        "configuration_id": reference.get("configuration_id"),
+        "configuration_id": _configuration_id(reference),
         "configuration_sha256": _configuration_sha256(reference),
         "reference_configuration_sha256": _configuration_sha256(reference),
         "target_configuration_sha256": _configuration_sha256(target),
@@ -622,25 +630,19 @@ def compare_landscape_set(
         )
         for target in targets
     ]
-    row_maps: list[dict[tuple[str, str, int, str, str], dict[str, Any]]] = []
+    row_maps: list[dict[tuple[Any, ...], dict[str, Any]]] = []
     for payload in pairwise:
         row_maps.append({
-            (
-                row["residue_key"]["entity_instance_id"],
-                row["residue_key"]["auth_asym_id"],
-                int(row["residue_key"]["auth_seq_id"]),
-                row["residue_key"].get("insertion_code", ""),
-                row["mutation_aa"],
-            ): row
+            (*_source_residue_key(row["residue_key"]), row["mutation_aa"]): row
             for row in payload["rows"]
         })
-    keys = sorted(set().union(*(mapping.keys() for mapping in row_maps)), key=lambda value: (value[:4], value[4]))
+    keys = sorted(set().union(*(mapping.keys() for mapping in row_maps)))
     comparable = compatibility_metadata["compatibility_status"] == "compatible"
     reasons = sorted({f"target_{index}:{reason}" for index, payload in enumerate(pairwise) for reason in payload["comparability"]["reasons"]})
     rows: list[dict[str, Any]] = []
     for key in keys:
         states = [mapping.get(key) for mapping in row_maps]
-        reference_row = next((state for state in states if state is not None), None)
+        reference_row = next(state for state in states if state is not None)
         missingness_by_target = [state["missingness_state"] if state else "target_unmapped" for state in states]
         biological_states = [state["biological_status"] if state else "unmapped" for state in states]
         if all(value == "incompatible" for value in biological_states):
@@ -654,11 +656,9 @@ def compare_landscape_set(
         else:
             biological_status = "unmapped"
         rows.append({
-            "residue_key": reference_row["residue_key"] if reference_row else {
-                "entity_instance_id": key[0], "auth_asym_id": key[1], "auth_seq_id": key[2], "insertion_code": key[3]
-            },
-            "sequence_index": reference_row.get("sequence_index") if reference_row else None,
-            "mutation_aa": key[4],
+            "residue_key": reference_row["residue_key"],
+            "sequence_index": reference_row.get("sequence_index"),
+            "mutation_aa": key[-1],
             "mapping_state": "mapped" if all(state and state["mapping_state"] == "mapped" for state in states) else "unmapped",
             "missingness_state": "none" if all(value == "none" for value in missingness_by_target) else "per_target",
             "missingness_by_target": missingness_by_target,
@@ -677,7 +677,7 @@ def compare_landscape_set(
         "target_landscape_sha256": _landscape_hash(targets[0]),
         "target_landscape_sha256s": [_landscape_hash(target) for target in targets],
         "target_labels": [f"target-{index:04d}" for index in range(1, len(targets) + 1)],
-        "configuration_id": reference.get("configuration_id"),
+        "configuration_id": _configuration_id(reference),
         "configuration_sha256": _configuration_sha256(reference),
         "reference_configuration_sha256": _configuration_sha256(reference),
         "target_configuration_sha256s": [

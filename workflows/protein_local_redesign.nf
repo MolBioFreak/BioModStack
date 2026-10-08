@@ -770,7 +770,9 @@ workflow PROTEIN_LOCAL_REDESIGN {
 
         if (selectedValidators.contains('protenix_v2')) {
             PrepareProteinLocalValidatorInput.out.prepared
-                .map { producerMeta, sourcePdb, contract, protenixJson -> [producerMeta, protenixJson] }
+                .map { producerMeta, sourcePdb, contract, protenixJson ->
+                    tuple(producerMeta, protenixJson, params.protenix_prepared_msa_dir ? file(params.protenix_prepared_msa_dir, checkIfExists: true) : [])
+                }
                 .set { protenixValidatorInputs }
             ProtenixFromComplex(protenixValidatorInputs)
             validatorSummaryChannels << ProtenixFromComplex.out.canonical_structures

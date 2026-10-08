@@ -82,3 +82,75 @@ row-group/header convention and records `protenix-bd54a05-native-row-group-heade
 as the conversion identity; cached provider bytes remain immutable. A regression
 checks matching row-group extraction and unchanged alignment rows. This is native
 input-contract proof, not live complex inference acceptance.
+
+## Neurosnap hosted search and required native handoffs
+
+The authoritative [service schema](https://neurosnap.ai/api/service/mmseqs2%20MSA%20Generation),
+[generated API example](https://neurosnap.ai/service/mmseqs2%20MSA%20Generation)
+and [API tutorial](https://neurosnap.ai/blog/post/66b00dacec3f2aa9b4be703a)
+were read on 2026-09-11 without credentials or sequence submission. These public
+reads are contract evidence, not live provider acceptance.
+
+- Submit is multipart `POST /api/job/submit/mmseqs2%20MSA%20Generation`,
+  authenticated with the controller-owned `X-API-KEY`. The response is a JSON
+  job-ID string. `Query Sequence` is a JSON object with `aa` name-to-sequence
+  mapping and empty `dna`/`rna` mappings, not a FASTA upload. The existing adapter
+  submits one named `query` per independent monomer operation.
+- All five exposed scientific controls are sent explicitly: Coverage (default
+  35, bounds 10–90), Identity threshold (50, 25–100), Max Sequences (1000000,
+  10–1000000), Force Uppercase and Pad Sequences (both false). The last two
+  transformations destroy native A3M insertion/column semantics and remain
+  explicitly incompatible with these native A3M consumers, not silently reset.
+- Poll is `GET /api/job/status/{id}`, returning a JSON string: pending, running,
+  failed, completed, deleted or cancelled. Output metadata is
+  `GET /api/job/data/{id}` with `out: [[filename, size-label], ...]`; download is
+  `GET /api/job/file/{id}/out/{filename}`. The adapter requires one listed native
+  monomer A3M and exact query/aligned-row validity, never guesses archive layout.
+  Existing signed-output handling allows only its constrained credential-free
+  download hop; the public tutorial does not itself specify a CDN identity.
+- Safe-read throttling/outage becomes `PendingMSA` with the retained ticket and
+  Retry-After delay (seconds or HTTP date), consumed by the ordinary Nextflow
+  preparation waiter for both placements. Authentication/content errors remain
+  errors. POSTs are never retried: an ambiguous submit stays reconciliation-
+  required. `POST /api/job/cancel/{id}` requests cancellation; only a later
+  terminal status proves the remote outcome. Stopping local polling does not.
+- The public schema permits 1–10 sequences of length 20–25000 and markets pairing
+  support, but exposes **no pairing-mode field or paired output/chain mapping**.
+  BMS therefore executes explicitly unpaired multichain requests as independent
+  monomer jobs, retains ordered chain indices/receipts and reuses repeated-chain
+  cache entries. This is not paired generation or ColabFold-compatible pairing.
+  A requested paired Neurosnap operation requires authoritative provider output
+  and pairing evidence before implementation; marketing text is insufficient.
+- Protenix consumes `unpairedMsaPath` without an invented paired file. At pin
+  bd54a05, `runner/msa_search.py:35–59` does not re-search when that path exists;
+  `msa_featurizer.py:603–631` accepts either role independently. The controller
+  binds the once-compiled native invocation before packaging, retaining ordered
+  task/chain identities. The worker verifies the sealed manifest and relocates
+  paths through `hydrate_prepared_protenix_task`, not search or string replacement.
+- Boltz2 and Boltz-CP consume the independent unpaired A3Ms through the same
+  `prepare_model_msa` cache boundary and existing native artifact adapters above.
+  Supplied alignments, explicit no-MSA modes and the deferred generated-antibody
+  cache-miss case remain distinct; no provider fallback is introduced.
+
+Setup is the shared `provider_readiness()` boundary, consumed by
+`GET /api/msa/providers`, `MsaProviderReadiness` and
+`python scripts/manage_msa_providers.py --require neurosnap_api`. It checks the
+protected credential reference's metadata and both cache/controller journal
+storage without reading the key or submitting science. `configured` does not
+mean authenticated or scientifically accepted.
+
+### Bounded acceptance prerequisites (not authorization)
+
+First qualify offline provider/recovery and relocated native-consumer tests on
+one frozen source. A separately approved live check then requires an existing
+managed private credential reference, operator-approved public protein sequence
+of 20–25000 residues, approved credit/request ceiling and selected native runtime.
+Use the ordinary typed Job launch with `msa_provider=neurosnap_api`, all five
+explicit provider settings above and the native model's MSA-enable flag; require
+successful preview/admission before launch. Reopen the same request to prove
+cache replay without a second POST, then consume its prepared inputs with a
+relocated worker root through the normal model launch. Record ticket, requested/
+effective settings, native A3M hashes, ordered chain identities and actual native
+output/receipt. Pairing-required acceptance additionally needs the missing
+provider-specific pairing contract, not a fabricated paired fixture. No live
+provider, inference, credential change or paid operation was performed here.

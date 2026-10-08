@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { IndependentProvisionPanel } from './IndependentProvisionPanel';
 import { isAxiosError } from 'axios';
 import { useIsMutating, useMutation, useQueryClient } from '@tanstack/react-query';
-import { preloadExecutionTarget, type ExecutionTarget } from '../../lib/api';
+import { preloadExecutionTarget, provisionSelectionLabel, type ExecutionTarget } from '../../lib/api';
 
 interface Props {
   target: ExecutionTarget;
@@ -26,7 +26,7 @@ export function RemotePreloadPanel({ target, jobs, onChanged }: Props) {
     ? mutation.error.response.data.detail : mutation.error?.message;
   const preload = target.preload;
   const progress = target.progress;
-  const busy = mutation.isPending || activePreloads > 0 || ['checking', 'transferring', 'verifying'].includes(preload?.phase ?? '');
+  const busy = mutation.isPending || activePreloads > 0 || preload?.recovery_required || ['checking', 'transferring', 'verifying', 'cancelling', 'recovery_blocked'].includes(preload?.phase ?? '');
   const validRecipe = jobs.some(job => job.id === jobId);
   const canPreload = target.active && target.state === 'ready' && !progress && !busy;
   function submit() {
@@ -51,7 +51,7 @@ export function RemotePreloadPanel({ target, jobs, onChanged }: Props) {
       {preload.phase === 'source_download_ready' && <p>Source/download ready — not scientific Ready</p>}
       <p>{preload.message}</p>
       {preload.artifact && <p className="break-all font-mono">{preload.artifact}</p>}
-      <p className="text-xs text-[var(--text-muted)]">{preload.selection ? `${preload.selection.kind} ${preload.selection.model_id}` : `Recipe ${preload.job_id}`} · Source {preload.source_revision.slice(0, 12)} · Updated {preload.updated_at}</p>
+      <p className="text-xs text-[var(--text-muted)]">{preload.selection ? `${preload.selection.kind} ${provisionSelectionLabel(preload.selection)}` : `Recipe ${preload.job_id}`} · Source {preload.source_revision.slice(0, 12)} · Updated {preload.updated_at}</p>
     </div>}
     {progress && <div role="status" aria-label="Worker activity" className="text-sm">
       <p>{progress.message}</p>

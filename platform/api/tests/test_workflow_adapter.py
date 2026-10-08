@@ -46,6 +46,7 @@ def _set_adapter_identity(monkeypatch: pytest.MonkeyPatch, root: Path, lane: str
     monkeypatch.setenv("BMS_STATE_DIR", str(state_root))
     monkeypatch.setenv("BMS_DB_PATH", str(state_root / "biomodstack.db"))
     monkeypatch.setenv("BMS_WORK", str(state_root / "work"))
+    monkeypatch.setenv("BMS_WORK_DIR", str(state_root / "work"))
     monkeypatch.setenv("BMS_RESULTS_DIR", str(state_root / "results"))
 
 
@@ -450,13 +451,15 @@ def test_generic_adapter_request_reads_json_from_gpu_path(monkeypatch: pytest.Mo
 
 
 def test_workflow_adapter_app_exposes_gpu_routes() -> None:
-    with TestClient(workflow_adapter_app.app) as client:
-        for path in (
-            "/api/gpu/status",
-            "/api/gpu/power-control",
-            "/api/gpu/scheduler-config",
-        ):
-            assert client.get(path).status_code == 200
+    """Route registration only; not DB migration/startup or GPU acceptance."""
+    # No context-manager lifespan: production migration guards stay untouched.
+    client = TestClient(workflow_adapter_app.app)
+    for path in (
+        "/api/gpu/status",
+        "/api/gpu/power-control",
+        "/api/gpu/scheduler-config",
+    ):
+        assert client.get(path).status_code == 200
 
 
 def test_workflow_adapter_exposes_runtime_state_route(
@@ -567,6 +570,8 @@ def test_nextflow_command_uses_authoritative_data_root_for_fresh_work_dir(monkey
     output_dir.mkdir(parents=True)
     monkeypatch.setattr(nextflow, "PROJECT_ROOT", project_root)
     monkeypatch.setenv("BMS_DATA", str(nvme_root))
+    monkeypatch.delenv("BMS_WORK_DIR", raising=False)
+    monkeypatch.delenv("BMS_WORK", raising=False)
     monkeypatch.setenv("BMS_WEIGHTS", str(nvme_root / "weights"))
     monkeypatch.setenv("BMS_COLABFOLD_DB", str(nvme_root / "colabfold_db"))
     monkeypatch.setenv("BMS_MSA_CACHE", str(nvme_root / "msa_cache"))
@@ -824,7 +829,8 @@ async def test_launch_nextflow_job_routes_to_adapter_before_local_subprocess(mon
 
     job = SimpleNamespace(
         id="job-123",
-        model_id="boltz2",
+        model_id="frustrampnn",
+        mode="analyze",
         status="queued",
         started_at=None,
         params={},
@@ -835,6 +841,8 @@ async def test_launch_nextflow_job_routes_to_adapter_before_local_subprocess(mon
         completed_at=None,
         error_message=None,
         awaiting_input=False,
+        execution_target_id=None,
+        provenance={},
     )
     session = _FakeAsyncSession(job)
 
@@ -869,8 +877,8 @@ async def test_launch_nextflow_job_routes_to_adapter_before_local_subprocess(mon
 
     await nextflow.launch_nextflow_job(
         job_id="job-123",
-        model_id="boltz2",
-        mode="predict",
+        model_id="frustrampnn",
+        mode="analyze",
         params={"gpu_id": 1, "allow_retries": True},
         output_dir=str(output_dir),
     )
@@ -878,8 +886,8 @@ async def test_launch_nextflow_job_routes_to_adapter_before_local_subprocess(mon
     assert adapter_calls == [
         {
             "job_id": "job-123",
-            "model_id": "boltz2",
-            "mode": "predict",
+            "model_id": "frustrampnn",
+            "mode": "analyze",
             "params": {"gpu_id": 1, "allow_retries": True},
             "output_dir": str(output_dir),
         }
@@ -909,6 +917,8 @@ async def test_launch_nextflow_job_does_not_block_event_loop_during_adapter_requ
         completed_at=None,
         error_message=None,
         awaiting_input=False,
+        execution_target_id=None,
+        provenance={},
     )
     session = _FakeAsyncSession(job)
     monkeypatch.setattr(database, "async_session", lambda: session)
@@ -951,6 +961,8 @@ async def test_conformational_mapping_handoff_omits_generic_dynamic_cpu_hint(
 
     job = SimpleNamespace(
         id="cm-job-123",
+        model_id="conformational_mapping",
+        mode="map",
         status="running",
         started_at=datetime.utcnow(),
         params={},
@@ -961,6 +973,8 @@ async def test_conformational_mapping_handoff_omits_generic_dynamic_cpu_hint(
         completed_at=None,
         error_message=None,
         awaiting_input=False,
+        execution_target_id=None,
+        provenance={},
     )
     session = _FakeAsyncSession(job)
     monkeypatch.setattr(database, "async_session", lambda: session)
@@ -1022,6 +1036,8 @@ async def test_frustrampnn_handoff_omits_generic_dynamic_cpu_hint(
 
     job = SimpleNamespace(
         id="frustrampnn-job-123",
+        model_id="frustrampnn",
+        mode="analyze",
         status="running",
         started_at=datetime.utcnow(),
         params={},
@@ -1032,6 +1048,8 @@ async def test_frustrampnn_handoff_omits_generic_dynamic_cpu_hint(
         completed_at=None,
         error_message=None,
         awaiting_input=False,
+        execution_target_id=None,
+        provenance={},
     )
     session = _FakeAsyncSession(job)
     monkeypatch.setattr(database, "async_session", lambda: session)
@@ -1267,7 +1285,7 @@ def test_workflow_adapter_launch_endpoint_claims_transient_unit_and_persists_rec
     assert job.nextflow_run_id == unit
 
 
-def test_workflow_adapter_does_not_downgrade_runner_terminal_receipt(
+def test_workflow_adapter_started_receipt_can_terminalize_without_downgrade(
     monkeypatch: pytest.MonkeyPatch,
     production_adapter_identity: None,
 ) -> None:
@@ -1292,7 +1310,9 @@ def test_workflow_adapter_does_not_downgrade_runner_terminal_receipt(
     monkeypatch.setattr(database, "async_session", lambda: session)
     monkeypatch.setattr(workflow_adapter_router, "create_systemd_workflow_unit", lambda _command: unit)
 
-    def finish_before_adapter_commit(*_args):
+    def finish_after_adapter_commit():
+        # The real runner takes BEGIN IMMEDIATE; it cannot terminalize while
+        # the adapter holds its launch transaction. Model that ordering.
         receipt = execution_ownership.latest_execution_attempt(job.params)
         assert receipt is not None
         job.params = execution_ownership.update_execution_attempt(
@@ -1321,7 +1341,12 @@ def test_workflow_adapter_does_not_downgrade_runner_terminal_receipt(
             "invocation-terminal",
         )
 
-    monkeypatch.setattr(workflow_adapter_router, "wait_for_unit_invocation", finish_before_adapter_commit)
+    monkeypatch.setattr(
+        workflow_adapter_router, "wait_for_unit_invocation",
+        lambda *_args: execution_ownership.UnitProperties(
+            "active", "running", "", "42", "0", "success",
+            execution_ownership.workflow_slice_for_lane("production"), "invocation-terminal"),
+    )
 
     client = TestClient(workflow_adapter_app.app)
     response = client.post(
@@ -1336,8 +1361,17 @@ def test_workflow_adapter_does_not_downgrade_runner_terminal_receipt(
     )
 
     assert response.status_code == 202, response.text
+    started_receipt = execution_ownership.latest_execution_attempt(job.params)
+    assert started_receipt is not None and started_receipt["state"] == "started"
+    finish_after_adapter_commit()
     receipt = execution_ownership.latest_execution_attempt(job.params)
     assert receipt is not None
+    with pytest.raises(execution_ownership.ExecutionOwnershipError, match="terminal"):
+        execution_ownership.update_execution_attempt(
+            job.params, lane="production", generation=receipt["generation"],
+            attempt=receipt["attempt"], unit=unit, owner_nonce=receipt["owner_nonce"],
+            changes={"state": "started"},
+        )
     assert receipt["state"] == "completed"
     assert receipt["invocation_id"] == "invocation-terminal"
     assert job.status == "completed"
@@ -1370,6 +1404,8 @@ async def test_launch_nextflow_job_allows_shared_db_prestarted_jobs_when_explici
         completed_at=None,
         error_message=None,
         awaiting_input=False,
+        execution_target_id=None,
+        provenance={},
     )
     session = _FakeAsyncSession(job)
 

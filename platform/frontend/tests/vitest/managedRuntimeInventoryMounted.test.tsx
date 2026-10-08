@@ -26,6 +26,48 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); container.remove(); api.defaults.adapter = adapter; vi.restoreAllMocks(); });
 
+it('accepts the actual critical-runtime boolean and compatibility shape, without promoting stale readiness', async () => {
+  saved!.critical_runtime_ready = true;
+  saved!.blockers = ['scientific_readiness_not_checked'];
+  saved!.releases.push({ selection: { kind: 'critical_runtime', model_id: 'worker' },
+    release_sha256: '1'.repeat(64), source_revision: '2'.repeat(40), source_tree: '3'.repeat(40),
+    state: 'verified', artifacts: [], critical: { compatible: true, requirements: { os: 'Linux' }, observed: { os: 'Linux' } } });
+  await render();
+  expect(container.textContent).toContain('Critical runtime ready: true');
+  expect(container.textContent).toContain('critical_runtime · worker');
+  expect(container.textContent).toContain('os: required Linux · observed Linux');
+  expect(container.textContent).not.toContain('Unsupported managed inventory observation');
+  saved = { ...saved!, state: 'stale' };
+  await act(async () => { await client.invalidateQueries(); await settle(); });
+  expect(container.textContent).toContain('Critical runtime ready: unknown (no fresh evidence)');
+  expect(container.textContent).toContain('Last observed critical readiness: true');
+  expect(requests.every(request => request.method === 'get')).toBe(true);
+});
+it.each(['passed', 'failed'] as const)('retains scoped native %s evidence across polling without promoting scientific readiness', async outcome => {
+  saved!.critical_runtime_ready = true;
+  saved!.releases[0].native_readiness = {
+    state: outcome === 'passed' ? 'unverified' : 'blocked', scope: 'native_runtime_preflight_only',
+    authority: 'test-native-authority', blockers: outcome === 'failed' ? ['native_runtime_preflight_failed'] : [],
+    missing_authorities: ['complete_selected_model_native_probe_coverage'],
+    probe: { authority: 'scripts/check_rfantibody_runtime.py:run_preflight', outcome, gpu_id: 0,
+      observed_at: saved!.observed_at, release_sha256: 'a'.repeat(64), image_sha256: 'd'.repeat(64),
+      script_sha256: 'e'.repeat(64), source_revision: 'b'.repeat(40), source_tree: 'c'.repeat(40),
+      boot_id: saved!.boot_id },
+  };
+  await render();
+  expect(container.textContent).toContain(`Last recorded native preflight: ${outcome} · GPU 0`);
+  expect(container.textContent).toContain('Scientific ready: false');
+  expect(container.textContent).toContain('complete_selected_model_native_probe_coverage');
+  for (const state of ['current', 'stale'] as const) {
+    saved = { ...saved!, state };
+    await act(async () => { await client.invalidateQueries(); await settle(); });
+    expect(container.textContent).toContain(`Last recorded native preflight: ${outcome}`);
+    expect(container.textContent).toContain('weights/model.pt');
+    expect(container.textContent).toContain('Scientific ready: false');
+  }
+  expect(container.textContent).toContain('(historical; not current readiness)');
+  expect(requests.every(request => request.method === 'get')).toBe(true);
+});
 it('GETs saved cumulative image/model evidence without POST, keeping freshness distinct from asset state/readiness', async () => {
   await render();
   expect(requests).toEqual([{ method: 'get', url: '/api/execution-targets/vast%3A123/runtime-inventory', data: undefined }]);
@@ -102,4 +144,20 @@ it.each(['inactive', 'busy', 'running'])('disables refresh for %s workers withou
   if (state === 'running') target.progress = { operation_id: 'run', job_id: 'job', phase: 'running', artifact: null, message: 'Running', updated_at: 'now' };
   await render(); expect(button().disabled).toBe(true); await click();
   expect(requests.every(r => r.method === 'get')).toBe(true);
+});
+
+it.each(['cancelling', 'recovery_blocked', 'cancelled'] as const)('does not promote stored critical readiness while %s has unresolved transport ownership', async phase => {
+  saved!.critical_runtime_ready = true;
+  saved!.releases.push({ selection: { kind: 'workflow', model_id: '1'.repeat(64) }, release_sha256: '2'.repeat(64),
+    source_revision: '3'.repeat(40), source_tree: '4'.repeat(40), state: 'verified', artifacts: [],
+    bounded_readiness: 'verified_assets_and_critical_runtime', readiness_scope: 'asset_integrity_and_critical_compatibility_only' });
+  await render(); expect(container.textContent).toContain('Critical runtime ready: true');
+  target = { ...target, preload: { operation_id: 'recovering', selection: { kind: 'model', model_id: 'boltz2' },
+    source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40), request_sha256: 'c'.repeat(64), phase,
+    recovery_required: true, artifact: null, message: 'Transport quiescence unknown', started_at: 'now', updated_at: 'now' } };
+  await render();
+  expect(container.textContent).toContain('Critical runtime ready: unknown (no fresh evidence)');
+  expect(container.textContent).toContain('Bounded readiness: stale');
+  expect(button().disabled).toBe(true);
+  expect(requests.every(request => request.method === 'get')).toBe(true);
 });

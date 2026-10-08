@@ -257,7 +257,7 @@ export function JobDetailPage() {
                                     {currentSdf ? (
                                         <MolstarViewer
                                             structureUrl={`/api/jobs/${jobId}/docking-results/${currentSdf.name}`}
-                                            format="pdb"
+                                            format={currentSdf.engine === 'unidock' ? 'pdb' : 'sdf'}
                                             height={500}
                                             backgroundColor="#0f172a"
                                             alphafoldView={false}

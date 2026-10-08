@@ -68,6 +68,7 @@ class QueuedJobResponse(BaseModel):
     execution_target_id: Optional[str] = None
     remote_state: Optional[str] = None
     remote_waiting_reason: Optional[str] = None
+    provenance: Optional[Dict[str, Any]] = None
     priority: int
     vram_estimate_mb: Optional[int]
     sequence_length: Optional[int]
@@ -224,7 +225,7 @@ def _get_process_cmdline(pid: int, cache: Dict[int, str]) -> str:
 
 
 def _collect_live_vram_by_job(jobs: List[Job]) -> Dict[str, int]:
-    running_jobs = [job for job in jobs if job.queue_status == "running" and job_uses_assigned_gpu(job)]
+    running_jobs = [job for job in jobs if job.queue_status == "running" and not job.execution_target_id and job_uses_assigned_gpu(job)]
     if not running_jobs:
         return {}
     try:
@@ -324,7 +325,7 @@ def _collect_stage_progress_by_job(jobs: List[Job]) -> Dict[str, str]:
 
     progress_by_job: Dict[str, str] = {}
     for job in jobs:
-        if job.queue_status != "running" or not job.current_stage:
+        if job.execution_target_id or job.queue_status != "running" or not job.current_stage:
             continue
         work_dir = job.stage_work_dir or _infer_stage_work_dir(job)
         if not work_dir:
@@ -533,6 +534,10 @@ async def list_queue(
             execution_target_id=job.execution_target_id,
             remote_state=job.remote_state,
             remote_waiting_reason=(job.error_message if job.execution_target_id else None),
+            provenance={"remote_execution_receipt": {
+                key: ((job.provenance or {}).get("remote_execution_receipt") or {}).get(key)
+                for key in ("result_manifest_sha256", "received_manifest_sha256")
+            }} if job.execution_target_id else None,
             priority=job.priority,
             vram_estimate_mb=job.vram_estimate_mb,
             sequence_length=job.sequence_length,

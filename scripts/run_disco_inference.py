@@ -9,6 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from lib.portable_inputs import bind_native_document, resolve_input_path
+
 
 def _sanitize_name(value: str) -> str:
     cleaned = "".join(ch if ch.isalnum() else "_" for ch in str(value).strip())
@@ -40,7 +42,9 @@ def main() -> None:
     parser.add_argument("--output-dir", required=True)
     args = parser.parse_args()
 
-    request = json.loads(Path(args.request).read_text(encoding="utf-8"))
+    request_path = resolve_input_path(args.request)
+    request = bind_native_document(json.loads(request_path.read_text(encoding="utf-8")),
+                                   "protein-cad", owner=request_path)
     disco = request["disco"]
     output_dir = Path(args.output_dir).resolve()
     raw_pdb_dir = output_dir / "raw" / "pdbs"
@@ -53,6 +57,13 @@ def main() -> None:
     input_json_path = disco.get("input_json_path") or disco.get("compiled_input_json")
     if not input_json_path:
         raise ValueError("DISCO request does not contain an input_json_path")
+    # Preserve original native JSON; only this invocation consumes a derived file.
+    source_json = resolve_input_path(input_json_path)
+    bound_jobs = bind_native_document(json.loads(source_json.read_text(encoding="utf-8")),
+                                      "disco-json", owner=source_json)
+    derived_json = output_dir / "disco_execution_input.json"
+    derived_json.write_text(json.dumps(bound_jobs, indent=2), encoding="utf-8")
+    input_json_path = str(derived_json)
 
     cmd = [
         sys.executable,

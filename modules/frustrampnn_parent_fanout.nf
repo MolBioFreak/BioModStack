@@ -80,9 +80,11 @@ process ReportFrustraMPNNParentChildrenComplete {
     mkdir -p "\$(dirname "\${destination}")"
     test ! -e "\${destination}"
     cp -L '${terminal_receipt}' "\${destination}"
+    if [[ -z "\${BMS_COMPONENT_CONTEXT:-}" ]]; then
     '${params.api_python}' '${params.code_root}/scripts/stage_reporter.py' --job-root-relative \
       '${parent_job_id}' frustrampnn complete \
       'frustrampnn/parent_fanout/${parent_workflow_id}_terminal_v1.json'
+    fi
     : > frustrampnn_children_complete.reported
     """
 }

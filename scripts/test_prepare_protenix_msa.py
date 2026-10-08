@@ -397,3 +397,176 @@ def test_cache_colabfold_results_persists_api_a3m_and_never_overwrites(tmp_path:
     dest.write_text("PROTECTED", encoding="utf-8")  # simulate a concurrent/older write
     assert prepare_protenix_msa.cache_colabfold_results(payload, str(cache_root)) == 0
     assert dest.read_text(encoding="utf-8") == "PROTECTED"
+
+
+def test_precomputed_directory_does_not_overwrite_supplied_role(tmp_path):
+    supplied = tmp_path / 'supplied.a3m'
+    supplied.write_text('>query\nACDE\n>native\nVCDE\n')
+    legacy = tmp_path / 'legacy'
+    legacy.mkdir()
+    (legacy / 'non_pairing.a3m').write_text('>query\nACDE\n')
+    chain = {'sequence': 'ACDE', 'unpairedMsaPath': str(supplied),
+             'msa': {'precomputed_msa_dir': str(legacy)}}
+    prepare_protenix_msa._hydrate_old_precomputed_dir(chain)
+    assert chain['unpairedMsaPath'] == str(supplied)
+    assert supplied.read_text() == '>query\nACDE\n>native\nVCDE\n'
+
+
+def test_prepared_complex_batch_cli_binds_native_task_names(tmp_path, monkeypatch):
+    import copy
+    import shutil
+    from biomodstack_msa_handoff import package_alignments, digest
+    tasks, chains = [], []
+    for task_index, name in enumerate(('one', 'two')):
+        task = {'name': name, 'modelSeeds': [7, 19], 'sequences': []}
+        for chain_index, (cid, sequence) in enumerate((('B', 'ACDE'), ('A', 'FGHI'))):
+            task['sequences'].append({'proteinChain': {'id': [cid], 'count': 2, 'sequence': sequence}})
+            source = tmp_path / f'{name}-{cid}.a3m'
+            source.write_text(f'>query\n{sequence}\n>{name}-{cid}\n{sequence}\n')
+            chains.append(dict(chain_id=f'{task_index}:{chain_index}', role='unpaired', sequence=sequence, source=str(source)))
+        task['sequences'].append({'ion': {'ion': 'ZN', 'count': 1}})
+        tasks.append(task)
+    host = tmp_path / 'host'
+    manifest = package_alignments(host, chains=chains, settings={'fixture': True}, provenance={'fixture': True})
+    manifest['model_input'] = tasks
+    (host / 'msa-inputs.json').write_text(json.dumps(manifest))
+    sha = digest((host / 'msa-inputs.json').read_bytes())
+    worker = tmp_path / 'worker'
+    shutil.copytree(host, worker)
+    shutil.rmtree(host)
+    payload = copy.deepcopy([tasks[1], tasks[0]])
+    payload[0]['modelSeeds'] = [31]
+    input_json, output_json = tmp_path / 'input.json', tmp_path / 'out.json'
+    input_json.write_text(json.dumps(payload))
+    monkeypatch.setattr(prepare_protenix_msa, 'prepare_with_colabfold_api', lambda *a, **k: (_ for _ in ()).throw(AssertionError('worker provider forbidden')))
+    monkeypatch.setattr(sys, 'argv', ['prepare_protenix_msa.py', '--input_json', str(input_json),
+        '--output_json', str(output_json), '--out_dir', str(tmp_path / 'out'),
+        '--prepared-inputs', str(worker), '--prepared-sha256', sha])
+    prepare_protenix_msa.main()
+    result = json.loads(output_json.read_text())
+    assert [t['name'] for t in result] == ['two', 'one']
+    assert result[0]['modelSeeds'] == [31]
+    for task in result:
+        assert task['sequences'][2] == {'ion': {'ion': 'ZN', 'count': 1}}
+        for chain_index, cid in enumerate(('B', 'A')):
+            chain = task['sequences'][chain_index]['proteinChain']
+            assert chain['id'] == [cid] and chain['count'] == 2
+            path = Path(chain['unpairedMsaPath'])
+            assert path.is_relative_to(worker)
+            assert f">{task['name']}-{cid}" in path.read_text()
+
+
+def test_prepared_batch_rejects_missing_or_ambiguous_task_identity(tmp_path):
+    import copy
+    import pytest
+    from biomodstack_msa_handoff import package_alignments, digest, hydrate_prepared_protenix_task
+    source = tmp_path / 'q.a3m'
+    source.write_text('>q\nACDE\n')
+    task = {'name': 'same', 'sequences': [{'proteinChain': {'sequence': 'ACDE', 'id': ['A'], 'count': 1}}]}
+    tasks = [copy.deepcopy(task), copy.deepcopy(task)]
+    root = tmp_path / 'prepared'
+    manifest = package_alignments(root, chains=[dict(chain_id=f'{i}:0', role='unpaired',
+        sequence='ACDE', source=str(source)) for i in range(2)], settings={}, provenance={})
+    manifest['model_input'] = tasks
+    for name in ('same', 'renamed'):
+        (root / 'msa-inputs.json').write_text(json.dumps(manifest))
+        sha = digest((root / 'msa-inputs.json').read_bytes())
+        payload = [copy.deepcopy(task)]
+        payload[0]['name'] = name
+        with pytest.raises(ValueError, match='identity is missing, ambiguous'):
+            hydrate_prepared_protenix_task(payload, root, sha)
+        assert 'unpairedMsaPath' not in payload[0]['sequences'][0]['proteinChain']
+
+
+def test_native_adapter_preserves_original_complex_construction(tmp_path):
+    # Expected values retain the original PrepProtenixComplex construction,
+    # including CCD prefixing, count coercion, ID lists and default naming.
+    components = [
+        {"type": "protein", "id": "B", "sequence": "ACDE", "count": 2},
+        {"type": "peptide", "id": "A", "sequence": "FGHI"},
+        {"type": "dna", "id": "D", "sequence": "ACGT", "count": "2"},
+        {"type": "rna", "id": "R", "sequence": "ACGU"},
+        {"type": "ligand", "id": "L", "ccd": "ATP"},
+        {"type": "ligand", "smiles": "CCO", "count": 0},
+        {"type": "ion", "id": "Z", "element": "zn", "count": "invalid"},
+    ]
+    source = tmp_path / "native-name.json"
+    source.write_text(json.dumps({"components": components}, indent=2))
+    original = source.read_bytes()
+    payload = prepare_protenix_msa.load_native_protenix_input({
+        "complex_json_path": str(source), "protenix_seeds": "7,19"})
+    assert payload == [{"name": "native-name", "modelSeeds": [7, 19], "sequences": [
+        {"proteinChain": {"sequence": "ACDE", "count": 2, "id": ["B"]}},
+        {"proteinChain": {"sequence": "FGHI", "count": 1, "id": ["A"]}},
+        {"dnaSequence": {"sequence": "ACGT", "count": 2, "id": ["D"]}},
+        {"rnaSequence": {"sequence": "ACGU", "count": 1, "id": ["R"]}},
+        {"ligand": {"ligand": "CCD_ATP", "count": 1, "id": ["L"]}},
+        {"ligand": {"ligand": "CCO", "count": 1}},
+        {"ion": {"ion": "ZN", "count": 1, "id": ["Z"]}},
+    ]}]
+    assert source.read_bytes() == original
+    assert prepare_protenix_msa.build_native_protenix_input(
+        seeds=[7, 19], complexes=[("native-name", {"components": components})]) == payload
+
+
+def test_native_adapter_named_batches_and_collision_rejection(tmp_path):
+    import pytest
+    folder = tmp_path / "complexes"
+    folder.mkdir()
+    for filename, name in (("002.json", "second"), ("001.json", "first")):
+        (folder / filename).write_text(json.dumps({"name": name, "components": [
+            {"type": "protein", "id": "A", "sequence": "ACDE"},
+            {"type": "protein", "id": "B", "sequence": "ACDE"}]}))
+    params = {"complex_batch_dir": str(folder), "protenix_seeds": "5,8"}
+    payload = prepare_protenix_msa.load_native_protenix_input(params)
+    assert [task["name"] for task in payload] == ["first", "second"]
+    assert payload[0]["sequences"] == [
+        {"proteinChain": {"sequence": "ACDE", "count": 1, "id": ["A"]}},
+        {"proteinChain": {"sequence": "ACDE", "count": 1, "id": ["B"]}}]
+    manifest = tmp_path / "sequence_batch_manifest.json"
+    manifest.write_text(json.dumps([{"name": "v_001_A", "sequence": "FGHI"},
+                                    {"name": "v_002_A", "sequence": "ACDE"}]))
+    result = prepare_protenix_msa.load_native_protenix_input({
+        "sequence_batch_json_path": str(manifest), "protenix_seeds": "5,8"})
+    assert [task["name"] for task in result] == ["v_001_A", "v_002_A"]
+    assert [task["sequences"][0]["proteinChain"]["sequence"] for task in result] == ["FGHI", "ACDE"]
+    (folder / "002.json").write_bytes((folder / "001.json").read_bytes())
+    with pytest.raises(ValueError, match="unique"):
+        prepare_protenix_msa.load_native_protenix_input(params)
+    with pytest.raises(ValueError, match="compiled native"):
+        prepare_protenix_msa.load_native_protenix_input({"sequence_batch_entries": [{"sequence": "ACDE"}]})
+
+
+def test_native_adapter_generated_roster_copy_preserves_science():
+    import copy
+    tasks = [{"name": "candidate-pdb-stem", "modelSeeds": [3, 11],
+              "templatesPath": "/native/templates", "constraint": {"pocket": [{"binder_chain": 1}]},
+              "sequences": [{"proteinChain": {"sequence": "ACDE", "count": 2, "id": ["B"]}},
+                            {"ion": {"ion": "ZN", "count": 3}}]}]
+    original = copy.deepcopy(tasks)
+    result = prepare_protenix_msa.build_native_protenix_input(seeds=[99], native_payload=tasks)
+    assert result == original
+    result[0]["sequences"][0]["proteinChain"]["id"].append("C")
+    assert tasks == original
+
+
+def test_native_adapter_reordered_entities_cannot_consume_prepared(tmp_path):
+    import copy
+    import pytest
+    from biomodstack_msa_handoff import package_alignments, digest, hydrate_prepared_protenix_task
+    payload = prepare_protenix_msa.build_native_protenix_input(seeds=[7], complexes=[("heteromer", {
+        "components": [{"type": "protein", "id": "B", "sequence": "ACDE"},
+                       {"type": "protein", "id": "A", "sequence": "FGHI"}]})])
+    chains = []
+    for index, sequence in enumerate(("ACDE", "FGHI")):
+        source = tmp_path / f"{index}.a3m"
+        source.write_text(f">q\n{sequence}\n")
+        chains.append(dict(chain_id=f"0:{index}", role="unpaired", sequence=sequence, source=str(source)))
+    root = tmp_path / "prepared"
+    manifest = package_alignments(root, chains=chains, settings={}, provenance={})
+    manifest["model_input"] = payload
+    (root / "msa-inputs.json").write_text(json.dumps(manifest))
+    changed = copy.deepcopy(payload)
+    changed[0]["sequences"].reverse()
+    with pytest.raises(ValueError, match="identity"):
+        hydrate_prepared_protenix_task(changed, root, digest((root / "msa-inputs.json").read_bytes()))

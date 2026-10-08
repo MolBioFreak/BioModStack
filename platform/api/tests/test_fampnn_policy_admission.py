@@ -64,7 +64,8 @@ def test_large_declaration_uses_job_owned_file(tmp_path):
     from services.nextflow import build_nextflow_command
     declaration = {'input_domain': [f'A:{i}:' for i in range(30000)]}
     command = build_nextflow_command('fampnn', 'design',
-        {'fampnn_analysis_declaration': declaration}, str(tmp_path / 'command'), job_id='large')
+        {'input_pdb': payload(tmp_path, {}).params['input_pdb'],
+         'fampnn_analysis_declaration': declaration}, str(tmp_path / 'command'), job_id='large')
     assert max(len(arg.encode()) for arg in command) < 131072
     path = Path(command[command.index('--fampnn_analysis_declaration_path') + 1])
     assert path.parent == tmp_path / 'command'

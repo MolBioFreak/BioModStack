@@ -68,7 +68,11 @@ export interface OntFastqQcVariant {
     circular_event_id: string | null;
 }
 
+export type OntResultCollection = 'variants' | 'artifacts';
+export interface OntResultPage { offset: number; count: number; total: number; next_offset: number | null }
+
 export interface OntFastqQcResult {
+    pagination?: Record<OntResultCollection, OntResultPage>;
     schema: 'bms.ngs.fastq-qc-result.v1';
     job: {
         id: string;
@@ -167,7 +171,7 @@ export interface OntFastqQcResult {
         dorado_invoked: false;
         scheduler_gpu_assignment: string | number | null;
         configured_dorado_device_ignored: string | null;
-        evidence_status: 'accepted' | 'historical_unavailable';
+        evidence_status: 'accepted' | 'historical_unavailable' | 'unavailable';
         receipt_schema: string | null;
         receipt_id: string | null;
         receipt_sha256: string | null;
@@ -660,7 +664,23 @@ function parseVariant(value: unknown): OntFastqQcVariant {
 
 export function parseOntFastqQcResult(value: unknown, expectedJobId: string): OntFastqQcResult {
     const root = object(value, 'NGS result');
-    exactKeys(root, TOP_LEVEL_KEYS, 'NGS result');
+    exactKeys(root, root.pagination === undefined ? TOP_LEVEL_KEYS : [...TOP_LEVEL_KEYS, 'pagination'], 'NGS result');
+    let pagination: OntFastqQcResult['pagination'];
+    if (root.pagination !== undefined) {
+        const rawPages = object(root.pagination, 'pagination');
+        exactKeys(rawPages, ['variants', 'artifacts'], 'pagination');
+        const parsePage = (name: OntResultCollection): OntResultPage => {
+            const page = object(rawPages[name], `${name} page`);
+            exactKeys(page, ['offset', 'count', 'total', 'next_offset'], `${name} page`);
+            const offset = integer(page.offset, 'page offset');
+            const count = integer(page.count, 'page count');
+            const total = integer(page.total, 'page total');
+            const next = page.next_offset === null ? null : integer(page.next_offset, 'next offset');
+            if (count > 256 || offset + count > total || next !== (offset + count < total ? offset + count : null)) throw new Error(`${name} pagination is inconsistent`);
+            return { offset, count, total, next_offset: next };
+        };
+        pagination = { variants: parsePage('variants'), artifacts: parsePage('artifacts') };
+    }
     const encodedSize = new TextEncoder().encode(JSON.stringify(value)).byteLength;
     if (encodedSize > 256 * 1024) throw new Error('NGS result exceeds the response-size bound');
     if (root.schema !== 'bms.ngs.fastq-qc-result.v1') throw new Error('Unsupported NGS result schema');
@@ -691,7 +711,7 @@ export function parseOntFastqQcResult(value: unknown, expectedJobId: string): On
     const declaredArtifactCount = integer(authority.declared_artifact_count, 'declared artifact count');
     const presentArtifactCount = integer(authority.present_artifact_count, 'present artifact count');
     const unavailableArtifactCount = integer(authority.unavailable_artifact_count, 'unavailable artifact count');
-    if (declaredArtifactCount !== presentArtifactCount + unavailableArtifactCount || declaredArtifactCount > 256) {
+    if (declaredArtifactCount !== presentArtifactCount + unavailableArtifactCount) {
         throw new Error('artifact counts are inconsistent');
     }
     if (authority.manifest_readiness !== 'ready' || !['ready', 'unavailable'].includes(String(authority.alignment_readiness))) {
@@ -709,7 +729,7 @@ export function parseOntFastqQcResult(value: unknown, expectedJobId: string): On
         alignment_readiness: authority.alignment_readiness as 'ready' | 'unavailable',
     };
 
-    if (!Array.isArray(root.artifacts) || root.artifacts.length !== declaredArtifactCount) {
+    if (!Array.isArray(root.artifacts) || root.artifacts.length > 256 || root.artifacts.length !== (pagination?.artifacts.count ?? declaredArtifactCount) || (pagination && pagination.artifacts.total !== declaredArtifactCount)) {
         throw new Error('artifact inventory is invalid');
     }
     const artifacts: OntFastqQcResult['artifacts'] = root.artifacts.map((entry) => {
@@ -818,8 +838,9 @@ export function parseOntFastqQcResult(value: unknown, expectedJobId: string): On
     });
     const actualPresentArtifactCount = artifacts.filter((artifact) => artifact.state === 'present').length;
     if (
-        actualPresentArtifactCount !== presentArtifactCount
-        || artifacts.length - actualPresentArtifactCount !== unavailableArtifactCount
+        actualPresentArtifactCount > presentArtifactCount
+        || artifacts.length - actualPresentArtifactCount > unavailableArtifactCount
+        || (artifacts.length === declaredArtifactCount && (actualPresentArtifactCount !== presentArtifactCount || artifacts.length - actualPresentArtifactCount !== unavailableArtifactCount))
     ) {
         throw new Error('artifact counts are inconsistent');
     }
@@ -1015,7 +1036,8 @@ export function parseOntFastqQcResult(value: unknown, expectedJobId: string): On
         throw new Error('reference identity is inconsistent across the result');
     }
     if (
-        parsedVerificationSummary.variant_count !== parsedVariants.length
+        parsedVerificationSummary.variant_count !== (pagination?.variants.total ?? parsedVariants.length)
+        || (pagination !== undefined && pagination.variants.count !== parsedVariants.length)
         || parsedVariants.some((variant) => (
             variant.record_end_1based > referenceLength
             || variant.affected_start_1based > referenceLength
@@ -1064,6 +1086,21 @@ export function parseOntFastqQcResult(value: unknown, expectedJobId: string): On
     if (resources.accelerator_applicability !== 'not_applicable' || resources.dorado_invoked !== false) {
         throw new Error('FASTQ-only accelerator semantics are invalid');
     }
+    if (!['accepted', 'historical_unavailable', 'unavailable'].includes(String(resources.evidence_status))) {
+        throw new Error('resource evidence status is invalid');
+    }
+    if (resources.evidence_status === 'accepted') {
+        const remote = resources.receipt_schema === 'bms.workflow-resource-usage.v3';
+        if ((!remote && !['bms.workflow-resource-usage.v1', 'bms.workflow-resource-usage.v2'].includes(String(resources.receipt_schema)))
+            || (remote ? resources.execution_invocation_id !== null : typeof resources.execution_invocation_id !== 'string')
+            || !resources.receipt_id || !resources.receipt_sha256 || !resources.run_attempt_id) {
+            throw new Error('accepted resource receipt identity is invalid');
+        }
+    } else if (['receipt_schema', 'receipt_id', 'receipt_sha256', 'run_attempt_id', 'execution_invocation_id',
+        'gpu_index', 'gpu_uuid', 'admitted_vram_bytes', 'outcome', 'admitted_cpu_threads',
+        'observed_memory_peak_bytes', 'observed_pids_peak'].some((key) => resources[key] !== null)) {
+        throw new Error('unavailable resource observations must be null');
+    }
     const schedulerGpuAssignment = resources.scheduler_gpu_assignment;
     if (schedulerGpuAssignment !== null && typeof schedulerGpuAssignment !== 'string' && typeof schedulerGpuAssignment !== 'number') {
         throw new Error('scheduler GPU assignment is invalid');
@@ -1077,7 +1114,7 @@ export function parseOntFastqQcResult(value: unknown, expectedJobId: string): On
             resources.configured_dorado_device_ignored,
             'configured Dorado device',
         ),
-        evidence_status: string(resources.evidence_status, 'resource evidence status') as 'accepted' | 'historical_unavailable',
+        evidence_status: string(resources.evidence_status, 'resource evidence status') as 'accepted' | 'historical_unavailable' | 'unavailable',
         receipt_schema: nullableString(resources.receipt_schema, 'resource receipt schema'),
         receipt_id: nullableString(resources.receipt_id, 'resource receipt id'),
         receipt_sha256: nullableSha256(resources.receipt_sha256, 'resource receipt digest'),
@@ -1094,6 +1131,7 @@ export function parseOntFastqQcResult(value: unknown, expectedJobId: string): On
 
     return {
         schema: 'bms.ngs.fastq-qc-result.v1',
+        ...(pagination ? { pagination } : {}),
         job: parsedJob,
         authority: parsedAuthority,
         artifacts,
@@ -1120,9 +1158,9 @@ export function parseOntFastqQcResult(value: unknown, expectedJobId: string): On
     };
 }
 
-export async function fetchOntFastqQcResult(jobId: string): Promise<OntFastqQcResult> {
+export async function fetchOntFastqQcResult(jobId: string, params: { variant_offset?: number; artifact_offset?: number; page_size?: number; collection?: OntResultCollection | 'all' } = { page_size: 0 }): Promise<OntFastqQcResult> {
     return withAlignmentAccessRecovery(jobId, async () => {
-        const response = await api.get<unknown>(`/api/jobs/${encodeURIComponent(jobId)}/ngs-result`);
+        const response = await api.get<unknown>(`/api/jobs/${encodeURIComponent(jobId)}/ngs-result`, { params });
         try {
             return parseOntFastqQcResult(response.data, jobId);
         } catch (reason) {

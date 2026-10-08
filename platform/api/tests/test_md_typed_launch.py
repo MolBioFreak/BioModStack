@@ -83,6 +83,57 @@ def _intent(starting_structures, *, launch_context_id: str | None = None):
     )
 
 
+@pytest.mark.asyncio
+async def test_native_provision_plan_preserves_settings_input_identity_without_writes(monkeypatch, tmp_path):
+    import json
+    from starlette.requests import Request
+    from services import nextflow
+    from routers import molecular_dynamics as md
+    from services.remote_execution import bundle, cache
+    from services.remote_execution.contracts import WorkflowProvisionSelection
+    from component_runtime import SelectedExecutionPlan
+    from types import SimpleNamespace
+    monkeypatch.setenv("BMS_FEATURE_MOLECULAR_DYNAMICS", "1")
+    monkeypatch.setattr(md, "get_chemistry_catalog", lambda: _Catalog())
+    monkeypatch.setattr(bundle, "current_source_identity", lambda: ("a" * 40, "b" * 40))
+    monkeypatch.setattr(cache, "current_source_identity", lambda: ("a" * 40, "b" * 40))
+    def forbidden(*args, **kwargs):
+        pytest.fail("dependency-only provisioning must not resolve biology, compile commands or create Jobs")
+    monkeypatch.setattr(md, "resolve_source", forbidden)
+    monkeypatch.setattr(nextflow, "compile_workflow_provision_request", forbidden)
+    monkeypatch.setattr(nextflow, "compile_nextflow_invocation", forbidden)
+    request = Request({"type": "http", "headers": []})
+    payload = {"workflow_type": "molecular_dynamics", "request": {
+        "schema_version": "bms.md.launch-preview-request.v1", "intent": _intent_payload()}}
+    selection = WorkflowProvisionSelection(kind="workflow", workflow_request=payload)
+    plan = await nextflow.compile_native_workflow_provision_request(selection.workflow_request, request, _UnusedSession())
+    assert isinstance(plan, SelectedExecutionPlan) and not hasattr(plan, "command")
+    assert plan.dependency_closure_complete
+    assert json.loads(plan.requested_json) == _intent_payload()
+    bindings = json.loads(plan.native_parameters_json)["input_bindings"]
+    assert bindings[0]["expected_sha256"] == ONE_AKI_SHA256
+    assert not list(tmp_path.iterdir())
+    seen = []
+    def assets(model, mode, params, *, include_support, native_invocation, selected_plan):
+        assert native_invocation is None and selected_plan is plan
+        seen.append(selected_plan)
+        return []
+    monkeypatch.setattr(cache, "_runtime_assets", assets)
+    target = SimpleNamespace(id="worker", host="worker", port=22, username="root", remote_root="/worker", host_key_sha256="e"*64)
+    preview, _ = cache.independent_preview(selection, target, compiled_plan=plan)
+    assert seen == [plan] and preview.plan_sha256 == plan.plan_sha256
+    payload["request"]["intent"]["expected_source_sha256"] = "f" * 64
+    changed = WorkflowProvisionSelection(kind="workflow", workflow_request=payload)
+    changed_plan = await nextflow.compile_native_workflow_provision_request(changed.workflow_request, request, _UnusedSession())
+    assert changed_plan.plan_sha256 != plan.plan_sha256
+    with pytest.raises(ValueError, match="authenticated"):
+        await nextflow.compile_native_workflow_provision_request(selection.workflow_request, None, _UnusedSession())
+    monkeypatch.setattr(cache, "current_source_identity", lambda: ("c"*40, "b"*40))
+    with pytest.raises(ValueError, match="source identity changed"):
+        cache.independent_preview(selection, target, compiled_plan=plan)
+    assert seen == [plan]
+
+
 def test_requested_settings_are_closed_required_finite_and_cross_bounded() -> None:
     starting_structures = importlib.import_module("services.md.starting_structures")
 

@@ -197,6 +197,21 @@ async def cancel_job_lineage(
     # caller-owned transaction.
     await session.commit()
 
+    # Capture the authority whose writer stop is about to be observed. Refresh
+    # after I/O must not turn proof for an old attempt into successor authority.
+    remote_fences = {}
+    for job in [*cancellable, *already_cancelled]:
+        if job.execution_target_id:
+            target = await session.get(ExecutionTarget, job.execution_target_id, populate_existing=True)
+            fields = ("execution_target_id", "remote_attempt_id", "nextflow_run_id",
+                      "execution_source_revision", "execution_source_tree",
+                      "execution_bundle_sha256", "provenance")
+            remote_fences[str(job.id)] = (
+                {field: getattr(job, field) for field in fields},
+                target.lease_acquired_at if target else None,
+                bool(target and target.leased_job_id == job.id),
+            )
+
     incomplete: list[str] = []
     for job in cancellable:
         if not job.nextflow_run_id:
@@ -255,6 +270,26 @@ async def cancel_job_lineage(
                     Job.completed_at == intent_completed_at[str(job.id)],
                 )
             )
+        remote_fence = remote_fences.get(str(job.id))
+        release_remote = False
+        lease_epoch = None
+        if remote_fence:
+            authority, lease_epoch, lease_owned = remote_fence
+            predicates.extend(getattr(Job, field) == value for field, value in authority.items())
+            # Already terminal legacy rows have not stopped a writer in this
+            # invocation. Let the remote reconciler obtain quiescence evidence.
+            release_remote = (str(job.id) in cancellable_ids and
+                              (not authority["remote_attempt_id"] or bool(authority["nextflow_run_id"])))
+            if authority["remote_attempt_id"] and str(job.id) in cancellable_ids and not release_remote:
+                terminal_conflicts.append(str(job.id))
+                continue
+            release_remote = release_remote and lease_owned
+            if release_remote:
+                predicates.append(select(ExecutionTarget.id).where(
+                    ExecutionTarget.id == authority["execution_target_id"],
+                    ExecutionTarget.leased_job_id == str(job.id),
+                    ExecutionTarget.lease_acquired_at == lease_epoch,
+                ).exists())
         terminalized = await session.execute(
             update(Job)
             .where(*predicates)
@@ -277,12 +312,13 @@ async def cancel_job_lineage(
         )
         if terminalized.rowcount != 1:
             terminal_conflicts.append(str(job.id))
-        elif job.execution_target_id:
+        elif release_remote:
             await session.execute(
                 update(ExecutionTarget)
                 .where(
                     ExecutionTarget.id == str(job.execution_target_id),
                     ExecutionTarget.leased_job_id == str(job.id),
+                    ExecutionTarget.lease_acquired_at == lease_epoch,
                 )
                 .values(
                     leased_job_id=None,

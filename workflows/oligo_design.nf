@@ -32,7 +32,7 @@ workflow OLIGO_DESIGNER {
     )
 
     // Stage 2: Boltz-2 validation (if enabled)
-    if (params.oligo_validate_boltz) {
+    if (params.oligo_validate_boltz != null ? params.oligo_validate_boltz : polymer_chains.toString().toLowerCase().contains('protein')) {
         // PrepBoltzOligo is already called in OLIGO_DESIGN
         // Now run Boltz-2 prediction on the prepared YAMLs
         boltz_yamls = OLIGO_DESIGN.out.boltz_yamls
@@ -79,19 +79,19 @@ workflow {
     }
 
     def input_pdb = scaffoldPdb
-        ? channel.fromPath(scaffoldPdb)
+        ? channel.fromPath(scaffoldPdb, checkIfExists: true)
         : (rfdpolyInputPdb
-            ? channel.fromPath(rfdpolyInputPdb)
+            ? channel.fromPath(rfdpolyInputPdb, checkIfExists: true)
             : channel.of(file("${params.code_root}/NO_FILE")))
 
     def target_pdb = targetPdb
-        ? channel.fromPath(targetPdb)
+        ? channel.fromPath(targetPdb, checkIfExists: true)
         : channel.of(file("${params.code_root}/NO_FILE"))
 
     OLIGO_DESIGNER(
-        channel.of(designId),
-        channel.of(params.rfdpoly_contigs),
-        channel.of(params.rfdpoly_polymer_chains),
+        designId,
+        params.rfdpoly_contigs,
+        params.rfdpoly_polymer_chains,
         input_pdb,
         target_pdb
     )

@@ -256,6 +256,10 @@
     "residueKey": {
       "additionalProperties": false,
       "properties": {
+        "source_entity_id": {"type": ["string", "null"]},
+        "label_asym_id": {"type": ["string", "null"]},
+        "sequence_index": {"type": ["integer", "null"]},
+        "wt": {"type": ["string", "null"]},
         "auth_asym_id": {
           "type": "string"
         },

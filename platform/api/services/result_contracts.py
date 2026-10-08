@@ -470,6 +470,9 @@ def build_review_artifact_manifest(design: Any) -> Dict[str, Any]:
     if profile_id == "shape_blueprint":
         supplied = getattr(design, "review_artifact_manifest", None)
         supplied = supplied if isinstance(supplied, dict) else {}
+        # ORM/replay callers may already carry the normalized envelope.
+        supplied = supplied.get("artifacts", supplied)
+        supplied = supplied if isinstance(supplied, dict) else {}
         structure_raw = supplied.get("structure")
         source_raw = supplied.get("source_backbone")
         metrics_raw = supplied.get("metrics")
@@ -487,9 +490,26 @@ def build_review_artifact_manifest(design: Any) -> Dict[str, Any]:
             for key in ("sha256", "bytes", "format", "relative_path"):
                 if key in source:
                     target[key] = source[key]
+        artifacts = {"structure": structure_artifact, "source_backbone": source_artifact, "metrics": metrics_artifact}
+        provenance = getattr(design, "provenance", None)
+        provenance = provenance if isinstance(provenance, dict) else {}
+        evidence = provenance.get("shape_validator_evidence")
+        native = provenance.get("shape_validator_artifacts")
+        descriptors = {"validator_evidence": evidence} if isinstance(evidence, dict) else {}
+        if isinstance(native, list):
+            descriptors.update({f"validator_artifact_{index:04d}": descriptor
+                                for index, descriptor in enumerate(native) if isinstance(descriptor, dict)})
+        for role, descriptor in descriptors.items():
+            projected = artifact(descriptor.get("path"), kind=role, metadata_ready=bool(
+                descriptor.get("sha256") and type(descriptor.get("bytes")) is int
+            ))
+            projected.update({key: descriptor[key] for key in (
+                "sha256", "bytes", "format", "relative_path", "validator", "native_path",
+            ) if key in descriptor})
+            artifacts[role] = projected
         return {
             "schema": REVIEW_ARTIFACT_SCHEMA,
-            "artifacts": {"structure": structure_artifact, "source_backbone": source_artifact, "metrics": metrics_artifact},
+            "artifacts": artifacts,
             "roles": {**role_map, "has_binder": False},
         }
 

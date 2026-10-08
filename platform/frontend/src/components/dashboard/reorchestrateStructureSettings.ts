@@ -345,8 +345,8 @@ export const buildStructureReorchestrateOverrides = (
     maybeSet('msa_target_shard_min_size_gb', next.msaTargetShardMinSizeGb, previous.msaTargetShardMinSizeGb);
     maybeSet('msa_allow_empty_fallback', next.msaAllowEmptyFallback, previous.msaAllowEmptyFallback);
 
-    if (next.predictors.includes('boltz')) {
-        maybeSet('boltz_use_msa', next.skipMsa ? false : previous.boltz.useMsa, previous.boltz.useMsa);
+    if (next.predictors.includes('boltz') || next.predictors.includes('fold_cp')) {
+        maybeSet('boltz_use_msa', next.skipMsa ? false : previous.skipMsa ? true : next.boltz.useMsa, previous.boltz.useMsa);
         maybeSet('boltz_recycling_steps', next.boltz.recyclingSteps, previous.boltz.recyclingSteps);
         maybeSet('boltz_sampling_steps', next.boltz.samplingSteps, previous.boltz.samplingSteps);
         maybeSet('boltz_num_samples', next.boltz.numSamples, previous.boltz.numSamples);
@@ -406,7 +406,10 @@ export const buildStructureReorchestrateOverrides = (
 
 
     if (next.predictors.includes('protenix')) {
-        maybeSet('protenix_use_msa', next.skipMsa ? false : previous.protenix.useMsa, previous.protenix.useMsa);
+        maybeSet('protenix_use_msa', next.skipMsa ? false : previous.skipMsa ? true : next.protenix.useMsa, previous.protenix.useMsa);
+        if (!next.skipMsa && previous.skipMsa && ['none', 'esm'].includes(String(job.params?.protenix_msa_backend))) {
+            overrides.protenix_msa_backend = next.msaProvider;
+        }
         maybeSet('protenix_model_weights', next.protenix.modelWeights, previous.protenix.modelWeights);
         maybeSet('protenix_seeds', next.protenix.seeds, previous.protenix.seeds);
         maybeSet('protenix_n_sample', next.protenix.nSample, previous.protenix.nSample);

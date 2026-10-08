@@ -79,6 +79,8 @@ def _ratio(numerator: int | float | None, denominator: int | float | None) -> fl
 
 
 def _base_identity(row: Any) -> dict[str, Any]:
+    summary = row.summary_json or {}
+    configuration_prefix = "execution_" if summary.get("schema_version") in {2, 3} else ""
     return {
         "dataset_id": row.parent_job_id,
         "workflow_family": _workflow_family(row.parent_metadata_json, row.job_params, row.parent_workflow_id),
@@ -88,8 +90,8 @@ def _base_identity(row: Any) -> dict[str, Any]:
         "invocation_id": row.invocation_id,
         "source_artifact_sha256": row.source_artifact_sha256,
         "checkpoint_sha256": (row.runtime_identity_json or {}).get("checkpoint_sha256"),
-        "configuration_id": (row.summary_json or {}).get("configuration_id"),
-        "configuration_sha256": (row.summary_json or {}).get("configuration_sha256"),
+        "configuration_id": summary.get(f"{configuration_prefix}configuration_id"),
+        "configuration_sha256": summary.get(f"{configuration_prefix}configuration_sha256"),
         "threshold_policy_id": ((row.summary_json or {}).get("threshold_policy") or {}).get("id")
             or ((row.summary_json or {}).get("threshold_policy") or {}).get("policy_id"),
     }

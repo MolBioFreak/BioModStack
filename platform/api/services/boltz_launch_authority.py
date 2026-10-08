@@ -83,8 +83,14 @@ def build_authority(job, command):
     files = {}
 
     def snapshot(path):
+        # Snapshot keys remain the native source identity, never the placement.
+        import sys
+        scripts_root = str(Path(__file__).resolve().parents[3] / "scripts")
+        if scripts_root not in sys.path:
+            sys.path.insert(0, scripts_root)
+        from lib.portable_inputs import resolve_input_path
         path = str(Path(path).absolute())
-        with Path(path).open('rb') as stream:
+        with resolve_input_path(path).open('rb') as stream:
             data = stream.read(MAX_BYTES + 1)
         if not data or len(data) > MAX_BYTES:
             raise ValueError('Boltz input snapshot size invalid')

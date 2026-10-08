@@ -210,13 +210,26 @@ def boltzInputDigest(byte[] bytes) {
     java.security.MessageDigest.getInstance('SHA-256').digest(bytes).encodeHex().toString()
 }
 
+// Placement resolves access only; sealed roster/request/result identity stays native.
+def portableBoltzInputPath(value) {
+    if (!System.getenv('BMS_PORTABLE_INPUT_BINDINGS')) return value.toString()
+    def process = new ProcessBuilder('python3', "${params.code_root}/scripts/lib/portable_inputs.py",
+        'resolve', value.toString()).start()
+    def output = process.inputStream.text.trim()
+    def error = process.errorStream.text
+    if (process.waitFor() != 0 || !output) {
+        throw new IllegalArgumentException("Boltz portable input binding failed: ${error}")
+    }
+    return output
+}
+
 def readBoltzLaunchAuthority() {
     if (!params.boltz_launch_authority_path || !params.boltz_launch_authority_sha256) {
         throw new IllegalArgumentException('Boltz task inventory missing launch authority')
     }
-    def source = file(params.boltz_launch_authority_path.toString()).toAbsolutePath().normalize()
+    def source = file(portableBoltzInputPath(params.boltz_launch_authority_path)).toAbsolutePath().normalize()
     def expected = file("${params.out_dir}/.boltz-launch-authority.json").toAbsolutePath().normalize()
-    if (source != expected || java.nio.file.Files.isSymbolicLink(source) ||
+    if ((!System.getenv('BMS_PORTABLE_INPUT_BINDINGS') && source != expected) || java.nio.file.Files.isSymbolicLink(source) ||
         java.nio.file.Files.size(source) > 2 * 1024 * 1024) {
         throw new IllegalArgumentException('Boltz task inventory foreign or oversized launch authority path')
     }
@@ -251,17 +264,18 @@ def checkedBoltzInputs(inputChannel, owner) {
                 'result_root', 'request_sha256', 'tasks', 'input_files', 'model_id', 'mode'] as Set) ||
             authority.schema_name != 'boltz_launch_authority' || authority.schema_version != 1 ||
             !(authority.attempt instanceof Integer) || authority.attempt < 0 ||
-            authority.job_id != params.job_id?.toString() || authority.result_root != params.out_dir?.toString()) {
+            authority.job_id != params.job_id?.toString() || portableBoltzInputPath(authority.result_root) != params.out_dir?.toString()) {
             throw new IllegalArgumentException('Boltz task inventory launch binding invalid')
         }
         def captured = [:]
         authority.input_files.each { path, descriptor ->
             byte[] expected = descriptor.content_base64.toString().decodeBase64()
-            byte[] actual = file(path).bytes
+            byte[] actual = file(portableBoltzInputPath(path)).bytes
             if (boltzInputDigest(expected) != descriptor.sha256 || !Arrays.equals(expected, actual)) {
                 throw new IllegalArgumentException('Boltz task inventory input snapshot changed')
             }
             captured[file(path).toString()] = actual
+            captured[file(portableBoltzInputPath(path)).toString()] = actual
         }
         def normalized = records ?: []
         def tasks = normalized.collect { record ->
@@ -403,15 +417,14 @@ def complexCanonicalProducerOutputs(outputs) {
         if (manifestKeys.size() != manifest.candidates.size()) {
             throw new IllegalArgumentException('complex producer manifest contains duplicate output keys')
         }
-        def manifestNames = manifest.candidates.collect { record ->
-            record.producer_output_key.toString().tokenize('/')[-1]
-        }
-        if ((manifestNames as Set).size() != manifestNames.size()) {
-            throw new IllegalArgumentException('complex producer manifest contains ambiguous output filenames')
-        }
+        def predictionsRoot = producerManifest.getParent().resolve('predictions').toAbsolutePath().normalize()
         def boundKeys = [] as Set
         def bound = predictedFiles.collect { predicted ->
-            def stagedOutputName = predicted.toFile().name
+            def sourcePath = predicted.toAbsolutePath().normalize()
+            if (!sourcePath.startsWith(predictionsRoot)) {
+                throw new IllegalArgumentException('complex producer output escaped its declared predictions root')
+            }
+            def outputKey = predictionsRoot.relativize(sourcePath).toString().replace('\\', '/')
             def digest = java.security.MessageDigest.getInstance('SHA-256')
             predicted.toFile().withInputStream { stream ->
                 byte[] buffer = new byte[1024 * 1024]
@@ -420,7 +433,7 @@ def complexCanonicalProducerOutputs(outputs) {
             }
             def artifactDigest = digest.digest().encodeHex().toString()
             def matches = manifest.candidates.findAll { record ->
-                record.producer_output_key.toString().tokenize('/')[-1] == stagedOutputName &&
+                record.producer_output_key == outputKey &&
                     record.producer_artifact_sha256 == artifactDigest
             }
             if (matches.size() != 1) {
@@ -696,6 +709,22 @@ for chain_id, chain_seq in zip(chain_ids, chains):
         entry["protein"]["msa"] = "empty"  # Boltz-2 API for single-sequence mode
     boltz_yaml["sequences"].append(entry)
 
+# Prepared task roster supplies alignments, never a worker search.
+prepared_source = "${params.boltz_prepared_msa_dir ?: ''}"
+if prepared_source:
+    import sys
+    sys.path.insert(0, "${params.code_root}")
+    sys.path.insert(0, "${params.code_root}/scripts")
+    from lib.portable_inputs import resolve_input_path
+    from biomodstack_boltz_msa import hydrate_prepared_boltz_task
+    # The sequence builder's empty/shared-MSA values are placeholders; the
+    # sealed per-task chain roster, not that legacy broadcast, is authoritative.
+    for entry in boltz_yaml['sequences']:
+        if 'protein' in entry:
+            entry['protein'].pop('msa', None)
+    boltz_yaml = hydrate_prepared_boltz_task(boltz_yaml, resolve_input_path(prepared_source),
+        "${params.boltz_prepared_msa_sha256 ?: ''}", task_name=sequence_name)
+
 # Write YAML
 yaml_path = f"yamls/{sequence_name}.yaml"
 with open(yaml_path, "w") as f:
@@ -886,6 +915,22 @@ for chain_id, chain_seq in zip(chain_ids, chains):
         entry["protein"]["msa"] = msa_path
     boltz_yaml["sequences"].append(entry)
 
+# Prepared task roster supplies alignments, never a worker search.
+prepared_source = "${params.boltz_prepared_msa_dir ?: ''}"
+if prepared_source:
+    import sys
+    sys.path.insert(0, "${params.code_root}")
+    sys.path.insert(0, "${params.code_root}/scripts")
+    from lib.portable_inputs import resolve_input_path
+    from biomodstack_boltz_msa import hydrate_prepared_boltz_task
+    # The sequence builder's empty/shared-MSA values are placeholders; the
+    # sealed per-task chain roster, not that legacy broadcast, is authoritative.
+    for entry in boltz_yaml['sequences']:
+        if 'protein' in entry:
+            entry['protein'].pop('msa', None)
+    boltz_yaml = hydrate_prepared_boltz_task(boltz_yaml, resolve_input_path(prepared_source),
+        "${params.boltz_prepared_msa_sha256 ?: ''}", task_name=sequence_name)
+
 # Write YAML
 yaml_path = f"yamls/{sequence_name}.yaml"
 with open(yaml_path, "w") as f:
@@ -1053,6 +1098,16 @@ from pathlib import Path
 
 with open("${complex_json}") as f:
     complex_def = json.load(f)
+prepared_source = "${params.boltz_prepared_msa_dir ?: ''}"
+if prepared_source:
+    import sys
+    sys.path.insert(0, "${params.code_root}")
+    sys.path.insert(0, "${params.code_root}/scripts")
+    from lib.portable_inputs import resolve_input_path
+    from biomodstack_boltz_msa import hydrate_prepared_boltz_components, hydrate_prepared_boltz_task
+    prepared_source = resolve_input_path(prepared_source)
+    complex_def = hydrate_prepared_boltz_components(complex_def, prepared_source,
+        "${params.boltz_prepared_msa_sha256 ?: ''}", task_name="${complex_name}")
 
 boltz_yaml = {"version": 1, "sequences": []}
 binder_chain = None
@@ -1357,6 +1412,10 @@ for comp in complex_def.get("components", []):
             # Short peptides use single-sequence mode to avoid MSA consistency errors
             entry["protein"]["msa"] = "empty"
             record["msa_mode"] = "empty_short_peptide"
+        elif comp.get("msa_path"):
+            entry["protein"]["msa"] = str(Path(comp["msa_path"]).resolve())
+            record["msa_mode"] = "provided"
+            record["msa_path"] = entry["protein"]["msa"]
         elif use_msa and peptide_seq:
             # Longer peptides: try MSA generation using same logic as proteins
             if peptide_seq in seq_to_msa:
@@ -1456,6 +1515,9 @@ manifest_payload = {
 }
 Path("msa/complex_msa_manifest.json").write_text(json.dumps(manifest_payload, indent=2), encoding="utf-8")
 
+if prepared_source:
+    boltz_yaml = hydrate_prepared_boltz_task(boltz_yaml, prepared_source,
+        "${params.boltz_prepared_msa_sha256 ?: ''}", task_name=complex_name)
 yaml_path = f"yamls/{complex_name}.yaml"
 with open(yaml_path, "w") as f:
     yaml.dump(boltz_yaml, f, default_flow_style=False)
@@ -1595,7 +1657,7 @@ workflow structure_prediction_wf {
     def need_msa = need_boltz_msa
 
     if (need_msa) {
-        def provided_msa = params.msa_path ? file(params.msa_path) : null
+        def provided_msa = params.boltz_prepared_msa_dir ? file(params.boltz_prepared_msa_dir, checkIfExists: true) : (params.msa_path ? file(portableBoltzInputPath(params.msa_path)) : null)
         def hasProvidedMsa = provided_msa && provided_msa.exists()
 
         if (hasProvidedMsa) {
@@ -1731,7 +1793,9 @@ workflow complex_prediction_wf {
 
     if (pred_method == 'protenix') {
         // Convert BMS JSON → Protenix-format JSON, then predict.
-        PrepProtenixComplex(input_ch)
+        PrepProtenixComplex(input_ch.map { name, complexJson, msaFile ->
+            tuple(name, complexJson, msaFile, params.protenix_prepared_msa_dir ? file(params.protenix_prepared_msa_dir, checkIfExists: true) : [])
+        })
         ProtenixFromComplex(PrepProtenixComplex.out.protenix_json)
         canonical_candidates = complexCanonicalProducerOutputs(
             ProtenixFromComplex.out.canonical_structures
@@ -1743,7 +1807,9 @@ workflow complex_prediction_wf {
         PrepareComplexWithMSA(boltz_inputs)
         BoltzFromComplex(PrepareComplexWithMSA.out.prepared)
 
-        PrepProtenixComplex(input_ch)
+        PrepProtenixComplex(input_ch.map { name, complexJson, msaFile ->
+            tuple(name, complexJson, msaFile, params.protenix_prepared_msa_dir ? file(params.protenix_prepared_msa_dir, checkIfExists: true) : [])
+        })
         ProtenixFromComplex(PrepProtenixComplex.out.protenix_json)
 
         boltz_candidates = complexCanonicalProducerOutputs(

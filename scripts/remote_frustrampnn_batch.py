@@ -46,13 +46,14 @@ def prepare_record(record, *, authority_root, work_root):
 
 
 def materialize_batch(directories, authority_root):
+    from plan_frustrampnn_groups import immutable_write
     candidates = ordered_candidates([read_candidate(path) for path in directories], lambda item: item[0])
     if not candidates:
         raise ValueError("remote batch has no candidates")
     first = candidates[0][0]
     settings = first['requested_settings']
     size = settings['structures_per_job']
-    if settings['batching_enabled'] is not True or not 2 <= len(candidates) <= size:
+    if not 1 <= len(candidates) <= (size if settings['batching_enabled'] else 1):
         raise ValueError("remote batch cardinality disagrees with settings")
     ids = [request['candidate_id'] for request, _ in candidates]
     plan = plan_frustrampnn([request for request, _ in candidates], settings)
@@ -67,17 +68,16 @@ def materialize_batch(directories, authority_root):
             relative = f"inputs/{folder}/{ordinal:04d}/{name}"
             path = authority_root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open('xb') as handle:
-                handle.write(payload)
+            immutable_write(path, payload)
             record.update({f'{kind}_relative_path': relative, f'{kind}_sha256': hashlib.sha256(payload).hexdigest(), f'{kind}_size_bytes': len(payload)})
         records.append(record)
     batch = dict(schema_name='bms_frustrampnn_scheduler_batch', schema_version=3,
-                 execution_owner_job_id=first['parent_job_id'], batching_enabled=True,
+                 execution_owner_job_id=first['parent_job_id'], batching_enabled=settings['batching_enabled'],
                  structures_per_job=size, settings_sha256=first['requested_settings_sha256'],
                  expected_cardinality=len(records), records=records)
     manifest = authority_root / 'batches' / 'batch.json'
-    manifest.parent.mkdir(parents=True)
-    manifest.write_bytes(canonical_json_bytes(batch))
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    immutable_write(manifest, canonical_json_bytes(batch))
     return manifest, batch
 
 

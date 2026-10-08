@@ -115,6 +115,7 @@ def _resolve_region(landscape: Mapping[str, Any], region: Mapping[str, Any]) -> 
         except (KeyError, TypeError, ValueError) as exc:
             raise GuidanceValidationError("region residue identity is invalid") from exc
         normalized = {
+            "entity_instance_id": key[0],
             "auth_asym_id": key[1],
             "auth_seq_id": key[2],
             "insertion_code": key[3],
@@ -128,8 +129,8 @@ def _resolve_region(landscape: Mapping[str, Any], region: Mapping[str, Any]) -> 
     output = {
         "region_type": region_type,
         "requested_residues": [dict(item) for item in requested],
-        "resolved_residues": sorted(resolved, key=lambda item: (item["auth_asym_id"], item["auth_seq_id"], item["insertion_code"])),
-        "unresolved_residues": sorted(unresolved, key=lambda item: (item["auth_asym_id"], item["auth_seq_id"], item["insertion_code"])),
+        "resolved_residues": sorted(resolved, key=_residue_key),
+        "unresolved_residues": sorted(unresolved, key=_residue_key),
         "region_sha256": canonical_sha256({"region_type": region_type, "residues": resolved}),
     }
     for key in ("mapping_method", "source_artifact_sha256", "mapping_artifact_sha256", "start", "end"):
@@ -166,12 +167,12 @@ def _aggregate(values: list[float], aggregation: str) -> float | None:
 
 
 def _rank_slots(landscape: Mapping[str, Any], region: Mapping[str, Any], objective: Mapping[str, Any], constraints: Mapping[str, Any], ranking: Mapping[str, Any]) -> list[dict[str, Any]]:
-    allowed_keys = {(item["auth_asym_id"], item["auth_seq_id"], item["insertion_code"]) for item in region["resolved_residues"]}
+    allowed_keys = {_residue_key(item) for item in region["resolved_residues"]}
     prohibited = _prohibited(constraints)
     target_class = objective.get("target_class")
     candidates: list[dict[str, Any]] = []
     for residue in landscape.get("residues", []):
-        key = (str(residue["auth_asym_id"]), int(residue["auth_seq_id"]), str(residue.get("insertion_code") or ""))
+        key = _residue_key(residue)
         if key not in allowed_keys:
             continue
         for slot in residue.get("slots", []):
@@ -216,7 +217,7 @@ def build_guidance_plan(
     guidance_id: str | None = None,
 ) -> dict[str, Any]:
     """Build a deterministic, immutable decision-support plan."""
-    if landscape.get("schema_version") == 2:
+    if landscape.get("schema_version") in {2, 3}:
         configuration_id = landscape.get("execution_configuration_id")
         configuration_sha256 = landscape.get("execution_configuration_sha256")
     else:

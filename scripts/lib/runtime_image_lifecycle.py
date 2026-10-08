@@ -210,8 +210,58 @@ def acquire_lease(root, digests, *, owner):
         return _acquire_lease_locked(root, state, digests, owner)
 
 
-def _acquire_lease_locked(root, state, digests, owner):
-    identities = {d: verify_image(object_path(root, d), d) for d in digests}
+def ensure_lease(root, digests, *, owner):
+    """Idempotently pin an exact durable owner; never extend/change its identity.
+
+    Existing owners are reverified, including inode identity. No expiry or
+    process-liveness inference is made; recovery uses the same token.
+    """
+    if not isinstance(owner, str) or not owner.strip():
+        raise ValueError("lease owner/job identity is required")
+    digests = sorted({_digest(d) for d in digests})
+    if not digests:
+        raise ValueError("lease requires image digests")
+    with transaction(root) as root:
+        return _ensure_lease_locked(root, load_state(root), digests, owner)
+
+
+def _ensure_lease_locked(root, state, digests, owner, *, identities=None):
+    matches = [(token, row) for token, row in state['leases'].items() if row['owner'] == owner]
+    if len(matches) > 1 or (matches and set(matches[0][1]['identities']) != set(digests)):
+        raise Error('lease owner identity mismatch')
+    if identities is None:
+        identities = {d: verify_image(object_path(root, d), d) for d in digests}
+    if set(identities) != set(digests):
+        raise Error('lease identity set mismatch')
+    if matches:
+        token, row = matches[0]
+        if row['identities'] != identities:
+            raise Error('leased image identity changed')
+        return token, identities
+    return _acquire_lease_locked(root, state, digests, owner, identities=identities)
+
+
+def publish_leased_image(source, root, digest, *, owner):
+    """Publish and durably pin before releasing the retirement fence.
+
+    Reuse the publisher's full no-follow/hash verification receipt under the
+    same lock; do not recursively flock or hash multi-GB bytes again for pinning.
+    """
+    from .shared_runtime_images import _publish_image_locked
+    if not isinstance(owner, str) or not owner.strip():
+        raise ValueError('lease owner/job identity is required')
+    digest = _digest(digest)
+    with transaction(root) as root:
+        state = load_state(root)
+        receipts = {}
+        path = _publish_image_locked(source, root, digest, _receipts=receipts)
+        token, identities = _ensure_lease_locked(root, state, [digest], owner, identities=receipts)
+        return path, token, identities
+
+
+def _acquire_lease_locked(root, state, digests, owner, *, identities=None):
+    if identities is None:
+        identities = {d: verify_image(object_path(root, d), d) for d in digests}
     token = uuid.uuid4().hex
     state["leases"][token] = {"owner": owner, "identities": identities, "created_ns": time.time_ns()}
     save_state(root, state)

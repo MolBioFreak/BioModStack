@@ -12,7 +12,7 @@ import uuid
 from paths import get_code_root
 from .bundle import (CacheTransferArtifact, cache_transfer_artifacts, current_source_identity,
                      compile_remote_dependencies, _runtime_assets, _records_for_source,
-                     _safe_extract, _is_runtime_image)
+                     _safe_extract, _is_runtime_image, verify_selected_runtime_hashes, verify_selected_preparation_inputs)
 from .transport import run_remote, rsync_to_remote
 from .images import resolve_image
 
@@ -28,9 +28,9 @@ async def _install_helper(connection, check_fence, helper_name='bms_artifact_cac
     payloads = {helper_name: (Path(__file__).parents[2] / 'tools' / helper_name).read_bytes()}
     if helper_name == 'bms_artifact_cache.py':
         payloads['shared_runtime_images.py'] = (Path(__file__).parents[4] / 'scripts/lib/shared_runtime_images.py').read_bytes()
+        # Lifecycle retention is mandatory, not an optional worker capability.
         lifecycle = Path(__file__).parents[4] / 'scripts/lib/runtime_image_lifecycle.py'
-        if lifecycle.is_file():
-            payloads[lifecycle.name] = lifecycle.read_bytes()
+        payloads[lifecycle.name] = lifecycle.read_bytes()
     generation = hashlib.sha256(b''.join(payloads.values())).hexdigest()
     destination = f'{connection.remote_root}/runner/cache-{generation}/{helper_name}'
     # Small source modules: stdin transfers, each verified before atomic publication.
@@ -59,7 +59,7 @@ finally:
 
 
 async def _cache_artifacts(*, connection, artifacts, operation_id, progress, check_fence,
-                           materialize=False, links=(), runtime_root=None):
+                           materialize=False, links=(), runtime_root=None, track_artifacts=False):
     # Caller owns operation identity and destination authority; never use public paths.
     uuid.UUID(operation_id)
     tool = await _install_helper(connection, check_fence)
@@ -71,6 +71,11 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
         return json.loads(result.stdout)
     artifacts = tuple(artifacts)
     states = {}
+    activity = [dict(name=e.remote_destination.removeprefix(connection.remote_root.rstrip("/") + "/"),
+                     sha256=e.sha256, size_bytes=e.size_bytes, state="pending") for e in artifacts]
+    async def report(phase, artifact, message):
+        await progress(dict(phase=phase, artifact=artifact, message=message,
+                            **({"artifact_progress": [dict(row) for row in activity]} if track_artifacts else {})))
     def identity(entry):
         return {'sha256': entry.sha256, 'size_bytes': entry.size_bytes,
                 **({'kind': 'runtime_image'} if entry.role == 'image' else {})}
@@ -78,12 +83,12 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
         return (entry.role == 'image', entry.sha256)
     for offset in range(0, len(artifacts), 128):
         batch = artifacts[offset:offset + 128]
-        await progress({'phase': 'checking', 'artifact': None, 'message': 'Verifying cached artifact batch'})
+        await report('checking', None, 'Verifying cached artifact batch')
         response = await call({'action': 'probe', 'artifacts': [identity(entry) for entry in batch]})
         states.update({(row.get('kind') == 'runtime_image', row['sha256']): row['state']
                        for row in response['artifacts']})
     receipts = []
-    for entry in artifacts:
+    for index, entry in enumerate(artifacts):
         item = identity(entry)
         # Names only from authoritative relative destinations, never source paths.
         name = entry.remote_destination.removeprefix(connection.remote_root.rstrip('/') + '/')
@@ -91,19 +96,23 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
             incoming = f'{root}/incoming/{operation_id}/{uuid.uuid4().hex}'
             await check_fence()
             await run_remote(connection, ['mkdir', '-p', str(Path(incoming).parent)])
-            await progress({'phase': 'transferring', 'artifact': name, 'message': 'Transferring artifact'})
-            try:
-                await check_fence()
-                await rsync_to_remote(connection, entry.source, incoming, delete=False)
-                await progress({'phase': 'verifying', 'artifact': name, 'message': 'Verifying and publishing artifact'})
-                await call({'action': 'ingest', 'artifact': item, 'source': incoming})
-            finally:
-                # This operation owns precisely this upload, including partial/fenced
-                # transfers. Never collect objects, old attempts or other operations.
-                await run_remote(connection, ['rm', '-f', '--', incoming])
+            activity[index]['state'] = 'transferring'
+            await report('transferring', name, 'Transferring artifact')
+            await check_fence()
+            await rsync_to_remote(connection, entry.source, incoming, delete=False)
+            activity[index]['state'] = 'verifying'
+            await report('verifying', name, 'Verifying and publishing artifact')
+            await call({'action': 'ingest', 'artifact': item, 'source': incoming})
+            # Clean only a confirmed completed ingest, never race an uncertain
+            # remote writer after cancellation or SSH loss.
+            await check_fence()
+            await run_remote(connection, ['rm', '-f', '--', incoming])
             await check_fence()
             states[key(entry)] = 'cache_hit'
         receipts.append({'name': name, 'sha256': entry.sha256, 'size_bytes': entry.size_bytes})
+        activity[index]['state'] = 'verified'
+        if track_artifacts:
+            await report('verifying', name, 'Artifact cache identity verified')
     if materialize:
         for offset in range(0, len(artifacts), 128):
             batch = artifacts[offset:offset + 128]
@@ -165,10 +174,15 @@ p.mkdir(mode=0o700,exist_ok=False)
                                   links=links, runtime_root=bundle.remote_runtime_dir)
 
 
-def _prewarm_plan(job, command, source_revision, source_tree, directory):
+def _prewarm_plan(job, command, source_revision, source_tree, directory, *, native_invocation):
     repo = get_code_root().resolve()
     if current_source_identity(repo) != (source_revision, source_tree):
         raise ValueError('Prewarm source identity does not match current committed source')
+    identity = native_invocation.source_identity
+    if identity is None or (identity.revision, identity.tree) != (source_revision, source_tree):
+        raise ValueError('Prewarm source identity does not match current committed source')
+    _, effective = compile_remote_dependencies(str(job.model_id), str(job.mode), command,
+                                                native_invocation=native_invocation)
     archive = directory / 'source.tar'
     with archive.open('wb') as stream:
         subprocess.run(['git', 'archive', '--format=tar', source_revision], cwd=repo,
@@ -176,11 +190,12 @@ def _prewarm_plan(job, command, source_revision, source_tree, directory):
     source = directory / 'source'
     _safe_extract(archive, source)
     archive.replace(source / '.bms-source.tar')
-    _, effective = compile_remote_dependencies(str(job.model_id), str(job.mode), command)
+
     entries = []
     assets = [(source / '.bms-source.tar', 'source/.bms-source.tar')]
     assets.extend((path, 'runtime/' + relative) for path, relative in
-                  _runtime_assets(str(job.model_id), str(job.mode), effective)
+                  _runtime_assets(str(job.model_id), str(job.mode), effective,
+                                  native_invocation=native_invocation)
                   if relative != 'support-python')
     for path, prefix in assets:
         if prefix.startswith('runtime/') and _is_runtime_image(path, prefix):
@@ -194,6 +209,9 @@ def _prewarm_plan(job, command, source_revision, source_tree, directory):
                                                   record.size_bytes, record.mode,
                                                   'source' if prefix.startswith('source/') else
                                                   'image' if _is_runtime_image(local, record.relative_path) else 'runtime'))
+    verify_selected_preparation_inputs(native_invocation.execution_plan)
+    verify_selected_runtime_hashes(native_invocation.execution_plan,
+        {entry.remote_destination.removeprefix('runtime/'): entry.sha256 for entry in entries})
     return entries
 
 
@@ -223,24 +241,133 @@ def independent_plan(selection):
     return entries
 
 
-def independent_preview(selection, target):
-    from .contracts import ProvisionPreview, ProvisionSelection, CachedArtifactReceipt
-    entries = independent_plan(selection)
+def validate_workflow_provision_authority(params):
+    """Runtime acquisition is server-owned; typed biological references are not.
+
+    The scientific compiler still owns unknown/model-specific scientific keys.
+    Inspect key names, not path-looking values or input-reference sha256 fields.
+    """
+    from .images import IMAGE_SELECTORS
+    forbidden = {flag for flag, _ in IMAGE_SELECTORS.values()} | {
+        'command', 'argv', 'shell', 'environment', 'container', 'container_path',
+        'container_dir', 'image_path', 'image_digest', 'image_sha256', 'runtime_sif',
+        'runtime_image_store', 'runtime_assets', 'runtime_lock', 'runtime_root',
+        'weights_path', 'weights_dir', 'weights_root', 'checkpoint_path', 'repo_path',
+        'code_root', 'data_root', 'work_dir', 'out_dir', 'out', 'output_dir',
+        'cm_api_runtime_dir', 'msa_cache_dir', 'acquisition_url', 'acquisition_command',
+    }
+    suffixes = ('_container_path', '_runtime_sif', '_repo_path', '_checkpoint_path',
+                '_weights_path', '_weights_dir', '_runtime_lock', '_runtime_root',
+                '_image_digest', '_image_sha256', '_acquisition_url')
+    def visit(value):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key in forbidden or str(key).endswith(suffixes):
+                    raise ValueError('Workflow provisioning runtime acquisition is server-owned')
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+    visit(params)
+
+
+def workflow_plan(selection, *, compiled_plan=None):
+    """Bind an authorized shared plan; inspect runtime leaves, never inputs."""
+    from services.nextflow import compile_workflow_provision_request
+    from schemas import JobCreate
+    invocation = None
+    if compiled_plan is None:
+        if not isinstance(selection.workflow_request, JobCreate):
+            raise ValueError('Native workflow requires fresh authenticated compilation')
+        validate_workflow_provision_authority(selection.workflow_request.params)
+        invocation = compile_workflow_provision_request(selection.workflow_request)
+        plan = invocation.execution_plan
+    else:
+        plan = compiled_plan
+    source = current_source_identity()
+    identity = plan.source_identity if plan is not None else None
+    if identity is None or (identity.revision, identity.tree) != source:
+        raise ValueError('Workflow provision source identity changed')
+    if plan is None or not plan.dependency_closure_complete:
+        raise ValueError('Workflow dependency closure is unresolved')
+    entries = []
+    asset_kwargs = dict(include_support=False, native_invocation=invocation)
+    if compiled_plan is not None:
+        asset_kwargs['selected_plan'] = plan
+    for path, prefix in _runtime_assets(plan.model_id, plan.mode,
+            json.loads(plan.native_parameters_json), **asset_kwargs):
+        for record in _records_for_source(path, prefix, 'runtime'):
+            if record.link_target is not None:
+                raise ValueError('Managed provisioning does not support runtime symlinks')
+            suffix = record.relative_path[len(prefix):].lstrip('/')
+            local = path / suffix if suffix else path
+            entries.append(CacheTransferArtifact(local, record.relative_path, record.sha256,
+                record.size_bytes, record.mode, 'image' if _is_runtime_image(local, record.relative_path) else 'runtime'))
+    verify_selected_runtime_hashes(plan, {entry.remote_destination: entry.sha256 for entry in entries})
+    verify_selected_preparation_inputs(plan)
+    return entries, plan
+
+
+def independent_preview(selection, target, *, compiled_plan=None):
+    from .contracts import ProvisionPreview, CachedArtifactReceipt
+    plan = None
+    if selection.kind == 'workflow':
+        entries, plan = workflow_plan(selection, compiled_plan=compiled_plan)
+    else:
+        entries = independent_plan(selection)
+    # A shared dependency may occur in many components, but one destination has
+    # exactly one immutable identity. Do not hide conflicting selected assets.
+    unique = {}
+    for entry in entries:
+        previous = unique.setdefault(entry.remote_destination, entry)
+        if (previous.sha256, previous.size_bytes, previous.mode, previous.role) != (
+                entry.sha256, entry.size_bytes, entry.mode, entry.role):
+            raise ValueError('Conflicting managed dependency destinations')
+    entries = list(unique.values())
     artifacts = [dict(name=e.remote_destination, sha256=e.sha256, size_bytes=e.size_bytes) for e in entries]
-    identity = dict(scope='managed_asset_activation.v1', selection=ProvisionSelection(kind=selection.kind, model_id=selection.model_id).model_dump(),
+    source = current_source_identity()
+    if plan is not None and source != (plan.source_identity.revision, plan.source_identity.tree):
+        raise ValueError('Workflow provision source identity changed')
+    identity = dict(scope='managed_asset_activation.v1', selection=selection.model_dump(mode='json'),
         target=[target.id, target.host, target.port, target.username, target.remote_root, target.host_key_sha256],
-        source=current_source_identity(), artifacts=artifacts,
-        modes=[e.mode for e in entries])
+        source=source, artifacts=artifacts, modes=[e.mode for e in entries])
+    if plan is not None:
+        identity['plan_sha256'] = plan.plan_sha256
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-    return ProvisionPreview(selection=ProvisionSelection(kind=selection.kind, model_id=selection.model_id), preview_sha256=digest,
+    observed = getattr(target, 'managed_inventory', None)
+    inventory_state = observed.state if observed is not None else 'unobserved'
+    known = {}
+    if inventory_state == 'current':
+        for release in observed.releases:
+            for row in release.artifacts:
+                key = (row.name, row.sha256, row.size_bytes)
+                # Conflicting observations cannot certify readiness.
+                if key in known and known[key] != row.state:
+                    known[key] = 'unknown'
+                else:
+                    known[key] = row.state
+    states = [dict(row, state=known.get((row['name'], row['sha256'], row['size_bytes']), 'unknown'))
+              for row in artifacts]
+    objects = {(e.role == 'image', e.sha256, e.size_bytes) for e in entries}
+    missing = {(e.role == 'image', e.sha256, e.size_bytes) for e, row in zip(entries, states, strict=True)
+               if row['state'] != 'verified'}
+    return ProvisionPreview(selection=selection, preview_sha256=digest,
         artifacts=[CachedArtifactReceipt.model_validate(r) for r in artifacts],
-        total_bytes=sum(e.size_bytes for e in entries)), entries
+        total_bytes=sum(e.size_bytes for e in entries),
+        destination=dict(target_id=target.id, remote_root=target.remote_root),
+        effective_params=json.loads(plan.effective_json) if plan else None,
+        plan_sha256=plan.plan_sha256 if plan else None,
+        asset_states=states, inventory_state=inventory_state,
+        transfer_bytes=sum(size for _, _, size in missing),
+        # Conservative space estimate: one immutable cache object plus each
+        # non-image installed destination. Images are never copied into releases.
+        storage_bytes=sum(size for _, _, size in objects) + sum(e.size_bytes for e in entries if e.role != 'image')), entries
 
 
 async def provision_cache(*, connection, entries, operation_id, progress, check_fence):
     entries = tuple(entries)
     receipts = await _cache_artifacts(connection=connection, artifacts=entries,
-        operation_id=operation_id, progress=progress, check_fence=check_fence)
+        operation_id=operation_id, progress=progress, check_fence=check_fence, track_artifacts=True)
     # Read back exact installed cache-object identities after all transfers. This
     # is download evidence, NOT a materialized runtime or scientific acceptance.
     tool = await _install_helper(connection, check_fence)
@@ -263,14 +390,21 @@ async def provision_cache(*, connection, entries, operation_id, progress, check_
 
 
 async def prewarm_cache(*, connection, job, command, source_revision, source_tree,
-                        operation_id, progress, check_fence):
+                        operation_id, progress, check_fence, native_invocation):
     """Only source/runtime: no input admission, envelope creation or scientific run."""
     await check_fence()
     with tempfile.TemporaryDirectory(prefix='bms-prewarm-') as temporary:
-        entries = await asyncio.to_thread(_prewarm_plan, job, command, source_revision,
-                                           source_tree, Path(temporary))
+        plan_task = asyncio.create_task(asyncio.to_thread(_prewarm_plan, job, command, source_revision,
+                                           source_tree, Path(temporary),
+                                           native_invocation=native_invocation))
+        try:
+            entries = await asyncio.shield(plan_task)
+        except asyncio.CancelledError:
+            # The hashing/archive writer must stop before its directory closes.
+            await plan_task
+            raise
         receipts = await _cache_artifacts(connection=connection, artifacts=entries,
                                           operation_id=operation_id, progress=progress,
-                                          check_fence=check_fence)
+                                          check_fence=check_fence, track_artifacts=True)
     return {'source_revision': source_revision, 'source_tree': source_tree, 'artifacts': receipts,
             'excluded': [{'name': 'runtime/support-python', 'reason': 'destination-dependent relocation at launch'}]}

@@ -254,6 +254,152 @@ async def test_remote_failure_reports_readiness_marker_before_login_banner(
         await transport_module.run_remote(connection, ["bash", "-lc", "probe"])
 
 
+@pytest.mark.asyncio
+async def test_provision_transport_wraps_command_stdin_and_upload_receiver(monkeypatch, tmp_path):
+    import shlex
+    from dataclasses import replace
+    connection = RemoteConnection('test', 'unused', 22, 'user', str(tmp_path))
+    bound = replace(connection, provision_operation_id='operation-1')
+    calls = []
+    async def fake_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return transport_module.CommandResult(0, '', '')
+    monkeypatch.setattr(transport_module, '_run', fake_run)
+    monkeypatch.setattr(transport_module, '_ssh_base', lambda c: ['ssh', 'user@unused'])
+    await transport_module.run_remote(bound, ['python3', '-', 'argument'], input_bytes=b'{"helper":true}')
+    command = shlex.split(calls[-1][0][-1])
+    assert command[0:2] == ['python3', '-c']
+    assert command[3:] == ['run', str(tmp_path), 'operation-1', 'python3', '-', 'argument']
+    assert calls[-1][1]['input_bytes'] == b'{"helper":true}'
+    await transport_module.rsync_to_remote(bound, tmp_path, '/remote/incoming', delete=False)
+    receiver = next(arg for arg in calls[-1][0] if arg.startswith('--rsync-path='))
+    assert shlex.split(receiver.split('=', 1)[1])[3:] == ['run', str(tmp_path), 'operation-1', 'rsync']
+    await transport_module.rsync_to_remote(connection, tmp_path, '/remote/incoming')
+    assert not any(arg.startswith('--rsync-path=') for arg in calls[-1][0])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('reply,expected', [
+    ('{"schema":"bms.provision-transport.v1","operation_id":"op","quiescent":true}', True),
+    ('{"schema":"bms.provision-transport.v1","operation_id":"other","quiescent":true}', False),
+    ('{"schema":"bms.provision-transport.v1","operation_id":"op","quiescent":false}', False),
+    ('not a receipt', False),
+])
+async def test_provision_quiescence_requires_exact_remote_receipt(monkeypatch, reply, expected):
+    async def fake_run(*args, **kwargs):
+        return transport_module.CommandResult(0, reply, '')
+    monkeypatch.setattr(transport_module, '_run', fake_run)
+    monkeypatch.setattr(transport_module, '_ssh_base', lambda c: ['ssh'])
+    assert await transport_module.quiesce_provision(
+        RemoteConnection('test', 'unused', 22, 'user', '/remote'), 'op') is expected
+
+
+def _provision_command(root, operation, mode, *argv):
+    connection = RemoteConnection('test', 'unused', 22, 'user', str(root))
+    command = transport_module._provision_argv(connection, operation, mode, argv)
+    command[0] = sys.executable
+    return command
+
+
+def test_provision_envelope_preserves_stdin_and_fences_late_command(tmp_path):
+    command = _provision_command(tmp_path, 'stdin', 'run', sys.executable, '-c',
+        'import sys;sys.stdout.buffer.write(sys.stdin.buffer.read())')
+    result = subprocess.run(command, input=b'{"selection":"sanitized"}', capture_output=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == b'{"selection":"sanitized"}'
+    receipt = subprocess.run(_provision_command(tmp_path, 'stdin', 'quiesce'), capture_output=True, timeout=10)
+    assert json.loads(receipt.stdout)['quiescent'] is True
+    denied = subprocess.run(command, input=b'late', capture_output=True, timeout=10)
+    assert denied.returncode != 0
+    assert denied.stdout == b''
+
+
+def test_provision_cancel_stops_group_after_controller_loss(tmp_path):
+    import os
+    marker = tmp_path / 'mutation'
+    mutation = 'import pathlib,time,signal; signal.signal(signal.SIGTERM,signal.SIG_IGN); p=pathlib.Path(' + repr(str(marker)) + '); p.write_text("started"); time.sleep(30); p.write_text("late")'
+    script = 'import subprocess,sys,time; subprocess.Popen([sys.executable,"-c",' + repr(mutation) + ']); time.sleep(30)'
+    process = subprocess.Popen(_provision_command(tmp_path, 'cancel', 'run', sys.executable, '-c', script),
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        deadline = time.monotonic() + 5
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(.02)
+        assert marker.exists()
+        from services.remote_execution._provision_transport import identity, live_group, same_process
+        records = tmp_path / 'managed-assets/provision-operations/cancel'
+        leader = json.loads(next(records.glob('*.json')).read_text())['leader']
+        assert same_process(identity(leader['pid']), leader)
+        assert live_group(leader['group'])
+        process.kill()  # API/SSH supervisor loss is NOT a quiescence receipt.
+        process.wait(timeout=5)
+        receipt = subprocess.run(_provision_command(tmp_path, 'cancel', 'quiesce'), capture_output=True, timeout=10)
+        assert json.loads(receipt.stdout)['quiescent'] is True
+        rows = list((tmp_path / 'managed-assets/provision-operations/cancel').glob('*.json'))
+        assert all(json.loads(p.read_text()).get('phase') == 'stopped' for p in rows if p.name != 'cancelled.json')
+        assert marker.read_text() == 'started'
+        # TERM-resistant descendant must be killed, not just a stopped receipt.
+        assert not live_group(leader['group'])
+        late = subprocess.run(_provision_command(tmp_path, 'cancel', 'run', sys.executable,
+            '-c', 'raise SystemExit(0)'), capture_output=True, timeout=10)
+        assert late.returncode != 0
+    finally:
+        # The same exact-identity owner performs cleanup, never a guessed PID.
+        subprocess.run(_provision_command(tmp_path, 'cancel', 'quiesce'), capture_output=True, timeout=10)
+        if process.poll() is None:
+            process.kill()
+        process.communicate(timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_provision_bound_helper_upload_and_rsync_execute_offline(tmp_path, monkeypatch):
+    import shlex
+    import shutil
+    from services.remote_execution import cache
+    if not shutil.which('rsync'):
+        pytest.skip('local rsync unavailable')
+    root = tmp_path / 'worker'
+    connection = RemoteConnection('test', 'unused', 22, 'user', str(root), provision_operation_id='uploads')
+    # Local shell stands in for the SSH command channel, never contacts a host.
+    monkeypatch.setattr(transport_module, '_ssh_base', lambda c: ['bash', '-c'])
+    async def fence():
+        pass
+    installed = await cache._install_helper(connection, fence, 'bms_managed_runtime.py')
+    assert Path(installed).read_bytes() == (Path(__file__).parents[1] / 'tools/bms_managed_runtime.py').read_bytes()
+    fake_ssh = tmp_path / 'offline-ssh'
+    fake_ssh.write_text('#!' + sys.executable + '\nimport os,sys\na=sys.argv[1:]\nif a[:1]==["-l"]: a=a[2:]\nos.execvp("sh", ["sh", "-c", " ".join(a[1:])])\n')
+    fake_ssh.chmod(0o700)
+    monkeypatch.setattr(transport_module, '_ssh_base', lambda c: [str(fake_ssh), 'unused'])
+    source = tmp_path / 'bytes'
+    source.write_bytes(b'fixture upload')
+    destination = root / 'uploaded'
+    await transport_module.rsync_to_remote(connection, source, str(destination), delete=False, timeout=10)
+    assert destination.read_bytes() == source.read_bytes()
+    monkeypatch.setattr(transport_module, '_ssh_base', lambda c: ['bash', '-c'])
+    assert await transport_module.quiesce_provision(connection, 'uploads')
+    with pytest.raises(RemoteTransportError):
+        await cache._install_helper(connection, fence, 'bms_managed_runtime.py')
+    monkeypatch.setattr(transport_module, '_ssh_base', lambda c: [str(fake_ssh), 'unused'])
+    source.write_bytes(b'late mutation')
+    with pytest.raises(RemoteTransportError):
+        await transport_module.rsync_to_remote(connection, source, str(destination), delete=False, timeout=10)
+    assert destination.read_bytes() == b'fixture upload'
+
+
+def test_provision_unknown_start_and_reused_identity_remain_blocked(tmp_path):
+    import os
+    operation = tmp_path / 'managed-assets/provision-operations/unknown'
+    operation.mkdir(parents=True)
+    row = dict(schema='bms.provision-transport.v1', phase='starting',
+               boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip())
+    witness = operation / 'command.json'
+    for leader in (None, dict(pid=os.getpid(), start='not-current', group=os.getpid(), session=os.getpid())):
+        witness.write_text(json.dumps(row | ({'leader': leader} if leader else {})))
+        result = subprocess.run(_provision_command(tmp_path, 'unknown', 'quiesce'), capture_output=True, timeout=10)
+        assert json.loads(result.stdout)['quiescent'] is False
+        assert json.loads(witness.read_text())['phase'] == 'starting'
+
+
 def test_source_identity_rejects_dirty_tracked_checkout(tmp_path: Path) -> None:
     subprocess.run(["git", "init", "-q", tmp_path], check=True)
     subprocess.run(["git", "-C", tmp_path, "config", "user.email", "test@example.invalid"], check=True)
@@ -263,9 +409,14 @@ def test_source_identity_rejects_dirty_tracked_checkout(tmp_path: Path) -> None:
     subprocess.run(["git", "-C", tmp_path, "add", "tracked.txt"], check=True)
     subprocess.run(["git", "-C", tmp_path, "commit", "-qm", "fixture"], check=True)
     revision, tree = current_source_identity(tmp_path)
+    from component_runtime import SourceIdentity
+
+    assert SourceIdentity.from_checkout(tmp_path) == SourceIdentity(revision, tree)
     assert len(revision) == 40
     assert len(tree) == 40
     tracked.write_text("two\n", encoding="utf-8")
+    # Compiler metadata is deliberately not a replacement for clean-source admission.
+    assert SourceIdentity.from_checkout(tmp_path) == SourceIdentity(revision, tree)
     with pytest.raises(RemoteBundleError, match="clean tracked"):
         current_source_identity(tmp_path)
 
@@ -308,6 +459,7 @@ def test_bundle_preserves_committed_source_and_relocates_managed_paths(
     monkeypatch.setattr(bundle_module, "get_data_root", lambda: data_root)
     monkeypatch.setattr(bundle_module, "get_container_dir", lambda: container_root)
     monkeypatch.setattr(bundle_module, "get_weights_root", lambda: weights_root)
+    monkeypatch.setenv("BMS_CM_API_RUNTIME_DIR", str(runtime_root.parent))
     monkeypatch.setenv("BMS_REMOTE_API_BASE_URL", "https://bms.example.invalid")
     job = SimpleNamespace(
         id="job-1",
@@ -324,14 +476,44 @@ def test_bundle_preserves_committed_source_and_relocates_managed_paths(
         stage_family=None,
         stage_mode=None,
         selected_input_artifact_class=None,
-        provenance={"remote_execution_assignment": {"gpu_indices": [0]}},
+        provenance={"remote_execution_assignment": {"gpu_indices": [0], "lease_id": "fixture-lease"}},
         assigned_gpu=0,
     )
 
+    # Lower-layer bundle fixture, not evidence of scientific compilation.
+    from dataclasses import replace
+    from component_runtime import NativeInvocation, SourceIdentity
+
+    invocation = replace(NativeInvocation.capture(
+        model_id=job.model_id, mode=job.mode,
+        command=["nextflow", "run", str(repository / "main.nf"),
+                 "--input", str(job_input), "--out", str(output_dir)],
+        requested=job.params, effective=job.params,
+        native_parameters={"input": str(job_input), "out": str(output_dir)},
+        entrypoint="main.nf",
+    ), source_identity=SourceIdentity(revision, tree))
+    from component_runtime import SelectedDependency, SelectedExecutionMetadata, SelectedExecutionPlan
+    # Declared fixture closure: only the support interpreter is relocated here.
+    # This tests archive/path mechanics, not scientific descriptor completeness.
+    from test_remote_bundle_runtime_gaps import bundle_resource_components_fixture
+    metadata = SelectedExecutionMetadata(
+        availability='fixture', settings_authority=__file__, static_components=bundle_resource_components_fixture(),
+        dynamic_templates=(), dependencies=(SelectedDependency(
+            'fixture:support', 'support_python', None, __file__),),
+        artifact_roles=(), external_services=(), result_contract_json=b'{}',
+        admission_authority=None, retrieval_authority=None, blockers=(), closure_reviewed=True)
+    assert invocation.source_identity is not None and invocation.entrypoint is not None
+    invocation = replace(invocation, execution_plan=SelectedExecutionPlan(
+        source_identity=invocation.source_identity, workflow='fixture',
+        model_id=invocation.model_id, mode=invocation.mode, entrypoint=invocation.entrypoint,
+        requested_json=invocation.requested_json, effective_json=invocation.effective_json,
+        native_parameters_json=invocation.native_parameters_json, metadata=metadata))
+    invocation.materialize_inputs(output_dir)
     bundle = prepare_remote_bundle(
         job=job,
         target=SimpleNamespace(id="vast:123", remote_root="/opt/biomodstack"),
-        command=["nextflow", "run", str(repository / "main.nf"), "--input", str(job_input), "--out", str(output_dir)],
+        command=list(invocation.command),
+        native_invocation=invocation,
         environment={"NXF_ANSI_LOG": "false"},
     )
     try:

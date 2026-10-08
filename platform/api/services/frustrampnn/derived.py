@@ -30,7 +30,9 @@ def _result_landscape_metadata(
     summary = dict(result.summary_json or {})
     provenance = dict(first_row["provenance"] or {})
     policy = provenance.get("threshold_policy") or summary.get("threshold_policy")
-    schema_version = 2 if summary.get("schema_version") == 2 else 1
+    schema_version = summary.get("schema_version", 1)
+    if schema_version not in {1, 2, 3}:
+        raise DerivedPersistenceError("unsupported persisted landscape schema version")
     common = {
         "schema_name": "frustrampnn_landscape",
         "schema_version": schema_version,
@@ -52,7 +54,7 @@ def _result_landscape_metadata(
             or provenance.get("threshold_policy_sha256")
         ),
     }
-    if schema_version == 2:
+    if schema_version in {2, 3}:
         return {
             **common,
             "execution_configuration_id": summary.get(
@@ -86,7 +88,7 @@ def _result_landscape_metadata(
 async def load_persisted_landscape(
     session: AsyncSession, result: FrustraMPNNResult
 ) -> dict[str, Any]:
-    """Reconstruct a canonical landscape through bounded verified artifact pages."""
+    """Project persisted landscape metadata and verified rows for derived consumers."""
     try:
         page = await landscape_page(
             session,

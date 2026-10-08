@@ -14,6 +14,8 @@ import requests
 from pathlib import Path
 
 from child_job_utils import (
+    component_runtime_enabled,
+    submit_child_job,
     apply_child_resume_params,
     child_status_kind,
     fetch_children_status,
@@ -59,6 +61,8 @@ def check_existing_children(parent_job_id: str, stage: str, api_url: str, batch_
         children = data.get("children", [])
         return data.get("all_done", False), children, data
     except Exception as e:
+        if component_runtime_enabled():
+            raise
         print(f"[SPAWN-FAMPNN] Warning: Could not check existing child status: {e}", file=sys.stderr)
         return False, [], {}
 
@@ -157,7 +161,7 @@ def spawn_fampnn_jobs(
         )
         existing_kind = child_status_kind(existing_child)
 
-        if existing_kind == "completed":
+        if existing_kind == "completed" and not component_runtime_enabled():
             reused += 1
             created.append({
                 "job_id": existing_child.get("job_id"),
@@ -168,7 +172,7 @@ def spawn_fampnn_jobs(
             print(f"[SPAWN-FAMPNN] RESUME: Reusing completed child {child_name}")
             continue
 
-        if existing_kind == "active":
+        if existing_kind == "active" and not component_runtime_enabled():
             reused += 1
             created.append({
                 "job_id": existing_child.get("job_id"),
@@ -206,15 +210,24 @@ def spawn_fampnn_jobs(
             "child_stage": "fampnn",
             "sequence_length": estimated_seq_len,
         }
-        effective_pinned_gpu = preferred_child_gpu(existing_child, pinned_gpu)
+        effective_pinned_gpu = preferred_child_gpu(None if component_runtime_enabled() else existing_child, pinned_gpu)
         if effective_pinned_gpu is not None:
             job_data["pinned_gpu"] = effective_pinned_gpu
-        if existing_kind == "failed":
+        if existing_kind == "failed" and not component_runtime_enabled():
             job_data["params"] = apply_child_resume_params(job_data["params"], existing_child)
             resumed += 1
             print(f"[SPAWN-FAMPNN] RESUME: Relaunching failed child with Nextflow resume: {child_name}")
         
         try:
+            if component_runtime_enabled():
+                job_id = submit_child_job(
+                    job_data, parent_job_id=parent_job_id,
+                    stage=job_data["child_stage"], child_key=str(i), required=False,
+                )
+                created.append({"job_id": job_id, "index": i, "pdb_count": len(job_pdbs),})
+                print(f"[SPAWN] Created child job {job_id}")
+                continue
+
             resp = requests.post(
                 f"{api_url}/api/jobs",
                 json=job_data,
@@ -234,6 +247,8 @@ def spawn_fampnn_jobs(
                 failed += 1
                 
         except Exception as e:
+            if component_runtime_enabled():
+                raise
             print(f"[SPAWN-FAMPNN] Error creating job {i}: {e}", file=sys.stderr)
             failed += 1
     
@@ -245,6 +260,8 @@ def spawn_fampnn_jobs(
         "failed_spawns": failed,
         "total_pdbs": total_pdbs,
         "pdbs_per_job": pdbs_per_job,
+        "parent_job_id": parent_job_id,
+        "children": [{"id": child["job_id"]} for child in created],
         "child_jobs": created
     }
     

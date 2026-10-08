@@ -54,17 +54,20 @@ process RunDiffDock {
     """
     mkdir -p results
     
-    # Run DiffDock inference from project directory where SO(3) cache exists
-    # The container binds project directory, so cache files are at ./
+    # Numerical SO(3)/torus tables are native generated non-biological caches.
+    # Keep them writable in /cache; checkpoints are read-only nested mounts.
+    task_dir="\$(pwd)"
+    input_csv="\$(readlink -f ${csv})"
+    cd /cache
     python3 /app/DiffDock/inference.py \\
         --config /app/DiffDock/default_inference_args.yaml \\
-        --protein_ligand_csv ${csv} \\
-        --out_dir results \\
+        --protein_ligand_csv "\${input_csv}" \\
+        --out_dir "\${task_dir}/results" \\
         --inference_steps ${inferenceSteps} \\
         --samples_per_complex ${numPoses} \\
         --batch_size 1 \\
         ${params.diffdock_extra_config ?: ''} \\
-        2>&1 | tee diffdock_${batch_id}.log
+        2>&1 | tee "\${task_dir}/diffdock_${batch_id}.log"
         
     # Post-processing: DiffDock outputs SDF files as results/complex_name/rankX_confidenceY.sdf
     echo "DiffDock inference completed for batch ${batch_id}"

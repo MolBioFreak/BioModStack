@@ -27,6 +27,7 @@ def local_install(tmp_path, monkeypatch):
             monkeypatch.delenv(key)
     for key, value in {
         'BMS_HOME': REPO, 'BMS_DATA': tmp_path / 'data',
+        'BMS_RESULTS_DIR': tmp_path,
         'BMS_CONTAINER_DIR': tmp_path / 'containers',
         'BMS_WORK_DIR': tmp_path / 'work',
         'BMS_RUNTIME_IMAGE_STORE': tmp_path / 'store',

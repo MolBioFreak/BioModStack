@@ -224,9 +224,9 @@ def test_governed_ngs_openapi_has_exact_web6_components_and_status_maps() -> Non
     assert error_schema["properties"]["message"]["maxLength"] == 512
     assert error_schema["allOf"][0]["then"]["properties"]["retryable"] == {"const": True}
     sessions_schema = components["OntAlignmentSessionListV1"]["properties"]["sessions"]
-    assert sessions_schema["minItems"] == 1 and sessions_schema["maxItems"] == 2
-    assert sessions_schema["items"] is False
-    assert len(sessions_schema["prefixItems"]) == 2
+    assert sessions_schema["maxItems"] == 2
+    assert "minItems" not in sessions_schema
+    assert sessions_schema["items"]["$ref"].endswith("OntAlignmentSessionV1")
     artifact_roles = components["OntAlignmentArtifactsV1"]
     assert {"alignment", "alignment_index", "reference", "reference_index"} <= set(artifact_roles["required"])
     for role in ("alignment", "alignment_index", "reference", "reference_index"):
@@ -898,43 +898,31 @@ async def test_locus_artifact_get_serves_a_current_authority(
 
 
 @pytest.mark.asyncio
-async def test_presentation_get_path_never_materializes_a_missing_package(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from contextlib import asynccontextmanager
+async def test_presentation_get_materializes_only_requested_ready_session(tmp_path, monkeypatch):
     from routers import ngs_alignment_sessions as router
     from services import ngs_alignment_sessions as service
-
-    job = SimpleNamespace(
-        output_dir=str(tmp_path), child_output_dir=None,
-        provenance={"result_integrity": {"alignment_presentations": [{
-            "session_id": "1" * 24,
-            "authority_sha256": "7" * 64,
-            "manifest_sha256": "8" * 64,
-        }]}},
-    )
-    monkeypatch.setattr(
-        service,
-        "resolve_cached_alignment_presentation",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(service.AlignmentSessionError("not prepared")),
-    )
-
+    job = SimpleNamespace(params={"reference_sequence_sha256": "a" * 64, "ont_workflow_id": "ont_fastq_qc", "ont_input_mode": "fastq"})
     @asynccontextmanager
     async def pinned_root(_job):
         yield tmp_path
-
     monkeypatch.setattr(router, "_validated_pinned_result_root", pinned_root)
-    (tmp_path / ".alignment-presentations").mkdir()
     monkeypatch.setattr(router, "_job_session_authority", lambda _job: {})
-    monkeypatch.setattr(
-        service,
-        "build_alignment_sessions",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("HTTP request tried to prepare presentation")),
-    )
-
-    with pytest.raises(service.AlignmentSessionError, match="not prepared"):
-        await router._prepare_presentation("job-a", "1" * 24, job)
+    session = {"ready": True, "mode": "primary", "artifact_set_sha256": "b" * 64, "alignment_pair_sha256": "c" * 64}
+    monkeypatch.setattr(service, "resolve_alignment_session", lambda *a, **kw: session)
+    monkeypatch.setattr(service, "resolve_session_alignment_bundle", lambda *a, **kw: (tmp_path / "a.bam", {"sha256": "d" * 64, "size_bytes": 3, "source_manifest_sha256": "e" * 64}, tmp_path / "a.bai", {"sha256": "f" * 64, "size_bytes": 2}))
+    calls = []
+    monkeypatch.setattr(service, "build_alignment_presentation", lambda *a, **kw: calls.append(kw) or {"prepared": True})
+    async with router._prepared_presentation("job-a", "1" * 24, job) as (package, root):
+        assert package == {"prepared": True}
+        assert root == tmp_path
+    assert len(calls) == 1
+    assert calls[0]["session_id"] == "1" * 24
+    assert calls[0]["cache_root"] == tmp_path / ".alignment-presentations"
+    session["ready"] = False
+    with pytest.raises(service.AlignmentSessionError, match="unavailable"):
+        async with router._prepared_presentation("job-a", "1" * 24, job):
+            pytest.fail("unready session must not materialize")
+    assert len(calls) == 1
 
 
 def test_presentation_publication_rejects_symlinked_authority_root(
@@ -1849,7 +1837,7 @@ def test_reconciled_fastq_qc_session_authority_uses_the_validated_historical_rec
 
 
 @pytest.mark.asyncio
-async def test_pinned_result_root_validates_external_signal_alignment_package_without_fastq_projection(
+async def test_pinned_result_root_does_not_rebuild_unrelated_package_projection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1894,6 +1882,7 @@ async def test_pinned_result_root_validates_external_signal_alignment_package_wi
         router,
         "_build_file_projection_from_pinned_root",
         lambda *_args: (_ for _ in ()).throw(OntNgsResultError("FASTQ projection must not run")),
+        raising=False,
     )
     monkeypatch.setattr(
         router.service,
@@ -1905,16 +1894,7 @@ async def test_pinned_result_root_validates_external_signal_alignment_package_wi
     async with router._validated_pinned_result_root(job) as pinned_root:
         assert pinned_root.name.isdigit()
 
-    assert calls == [
-        {
-            "source_reference_sha256": "b" * 64,
-            "workflow_id": "ont_plasmid_qc",
-            "input_mode": "bam",
-            "source_input_path": str(tmp_path / "source.bam"),
-            "job_output_dir": Path(calls[0]["job_output_dir"]),
-            "pinned_root_descriptor": True,
-        }
-    ]
+    assert calls == []
 
 
 def test_sequence_qc_manifest_wrapper_accepts_the_pinned_result_root_descriptor(tmp_path: Path) -> None:
@@ -3437,40 +3417,16 @@ def _isolate_snapshot_state(service, monkeypatch: pytest.MonkeyPatch, tmp_path: 
     monkeypatch.setattr(service, "_snapshot_inflight_bytes", 0, raising=False)
 
 
-def test_oversized_snapshot_is_rejected_before_source_or_temporary_open(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_oversized_snapshot_uses_uncached_verified_bytes(tmp_path, monkeypatch):
     from services import ngs_alignment_sessions as service
-
     _isolate_snapshot_state(service, monkeypatch, tmp_path, limit=4)
     artifact = tmp_path / "artifact.bin"
     artifact.write_bytes(b"12345")
-    source_opened = False
-    temporary_opened = False
-
-    def fail_source(_path: Path):
-        nonlocal source_opened
-        source_opened = True
-        raise AssertionError("source must not open")
-
-    def fail_temporary(*_args, **_kwargs):
-        nonlocal temporary_opened
-        temporary_opened = True
-        raise AssertionError("temporary must not open")
-
-    monkeypatch.setattr(service, "_open_regular_file_no_symlinks", fail_source)
-    monkeypatch.setattr(service.tempfile, "NamedTemporaryFile", fail_temporary)
-
-    with pytest.raises(service.AlignmentSessionError, match="exceeds snapshot limit"):
-        service.open_verified_artifact_snapshot(
-            artifact,
-            expected_size=5,
-            expected_sha256=hashlib.sha256(b"12345").hexdigest(),
-        )
-
-    assert source_opened is False
-    assert temporary_opened is False
+    with service.open_verified_artifact_snapshot(artifact, expected_size=5, expected_sha256=hashlib.sha256(b"12345").hexdigest()) as snapshot:
+        artifact.write_bytes(b"drift")
+        assert snapshot.read() == b"12345"
+    with pytest.raises(service.AlignmentSessionError, match="digest mismatch"):
+        service.open_verified_artifact_snapshot(artifact, expected_size=5, expected_sha256=hashlib.sha256(b"12345").hexdigest())
 
 
 def test_same_digest_snapshot_copy_is_single_flight(
@@ -3567,9 +3523,9 @@ def test_active_snapshot_lease_causes_fail_fast_capacity_rejection(
             expected_sha256=hashlib.sha256(b"2222").hexdigest(),
         )
         try:
-            with pytest.raises(service.AlignmentSessionError, match="capacity unavailable"):
-                second.result(timeout=0.2)
-            assert second_source_opened.is_set() is False
+            with second.result(timeout=2) as independent_snapshot:
+                assert independent_snapshot.read() == b"2222"
+            assert second_source_opened.is_set() is True
         finally:
             first_snapshot.close()
 
@@ -3811,7 +3767,7 @@ def test_every_governed_read_route_uses_the_package_authority_dependency() -> No
 
 
 def test_artifact_route_rejects_package_drift_before_descriptor_resolution(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
     from routers import ngs_alignment_sessions as routes
     from services import alignment_access
@@ -3821,12 +3777,13 @@ def test_artifact_route_rejects_package_drift_before_descriptor_resolution(
         id="00000000-0000-4000-8000-000000000001",
         model_id="nanopore",
         status="completed",
-        params={"ont_workflow_id": "ont_fastq_qc", "ont_input_mode": "fastq"},
-        provenance={},
+        params={"ont_workflow_id": "ont_fastq_qc", "ont_input_mode": "fastq", "reference_sequence_sha256": "b" * 64, "fastq_path": str(tmp_path / "input.fastq")},
+        output_dir=str(tmp_path),
+        provenance={"result_integrity": {"artifacts": [], "artifact_set_sha256": "0" * 64}},
     )
     app, token = _build_public_ngs_result_test_app(monkeypatch, job, {})
 
-    async def reject_drift(_job):
+    async def reject_drift(_job, **_pagination):
         raise OntNgsResultError("persisted package digest mismatch")
 
     monkeypatch.setattr(routes, "build_ont_fastq_qc_result", reject_drift)
@@ -3840,7 +3797,7 @@ def test_artifact_route_rejects_package_drift_before_descriptor_resolution(
         response = client.get(f"/api/jobs/{job.id}/ngs-artifacts/{'a' * 64}")
 
     assert response.status_code == 409
-    assert response.json()["code"] == "NGS_PACKAGE_INTEGRITY_CONFLICT"
+    assert response.json()["code"] == "NGS_AUTHORITY_CONFLICT"
 
 
 def test_read_inspection_caps_cursor_and_total_records_scanned(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -4009,7 +3966,7 @@ def _build_public_ngs_result_test_app(monkeypatch: pytest.MonkeyPatch, job, payl
     async def allow_project(*_args, **_kwargs):
         return "test-operator"
 
-    async def build_result(_job):
+    async def build_result(_job, **pagination):
         return payload
 
     monkeypatch.setenv("BMS_RUNTIME_MODE", "dev")
@@ -4092,7 +4049,7 @@ def test_public_ngs_result_route_translates_result_builder_failure(
     payload = {"schema": "bms.ngs.fastq-qc-result.v1"}
     app, token = _build_public_ngs_result_test_app(monkeypatch, job, payload)
 
-    async def fail_builder(_job):
+    async def fail_builder(_job, **_pagination):
         raise OntNgsResultError("result artifact digest mismatch")
 
     monkeypatch.setattr(router, "build_ont_fastq_qc_result", fail_builder)
@@ -4101,7 +4058,7 @@ def test_public_ngs_result_route_translates_result_builder_failure(
         response = client.get(f"/api/jobs/{job.id}/ngs-result")
 
     assert response.status_code == 409
-    assert response.json()["code"] == "NGS_PACKAGE_INTEGRITY_CONFLICT"
+    assert response.json()["code"] == "NGS_ARTIFACT_INTEGRITY_CONFLICT"
 
 
 def test_public_ngs_result_route_translates_missing_artifact(
@@ -4120,7 +4077,7 @@ def test_public_ngs_result_route_translates_missing_artifact(
     )
     app, token = _build_public_ngs_result_test_app(monkeypatch, job, {})
 
-    async def fail_builder(_job):
+    async def fail_builder(_job, **_pagination):
         raise OntNgsResultError("result artifact not found")
 
     monkeypatch.setattr(router, "build_ont_fastq_qc_result", fail_builder)
@@ -4128,8 +4085,8 @@ def test_public_ngs_result_route_translates_missing_artifact(
         client.cookies.set(alignment_access.cookie_name(job.id), token, path="/")
         response = client.get(f"/api/jobs/{job.id}/ngs-result")
 
-    assert response.status_code == 409
-    assert response.json()["code"] == "NGS_PACKAGE_INTEGRITY_CONFLICT"
+    assert response.status_code == 404
+    assert response.json()["code"] == "NGS_RESOURCE_NOT_FOUND"
 
 
 def test_rotation_validates_signal_alignment_package_without_fastq_projection(
@@ -4149,6 +4106,10 @@ def test_rotation_validates_signal_alignment_package_without_fastq_projection(
             "source_external_move_registration_receipt_id": "ont-external-move-exact",
         },
     )
+    job.id = "signal-rotation"
+    job.provenance = {"result_integrity": router.canonical_ngs_package_authority([])}
+    monkeypatch.setattr(router, "_job_package_authority", lambda _job: {})
+    monkeypatch.setattr(router.service, "build_ngs_package_artifacts", lambda *a, **kw: [])
     calls: list[str] = []
 
     class PinnedPackage:
@@ -4169,6 +4130,9 @@ def test_rotation_validates_signal_alignment_package_without_fastq_projection(
     asyncio.run(validate(job))
 
     assert calls == ["signal"]
+    job.provenance["result_integrity"]["artifact_set_sha256"] = "0" * 64
+    with pytest.raises(router.service.AlignmentSessionError, match="persisted authority"):
+        asyncio.run(validate(job))
 
 
 def test_sortable_locus_page_is_server_sorted_null_last_and_query_bound() -> None:
@@ -4250,3 +4214,20 @@ def test_dorado_move_metrics_require_complete_legal_signal_bounds() -> None:
         "dorado_emission_rate_bases_per_second": None,
         "samples_per_aligned_reference_base": None,
     }
+
+
+
+def test_result_route_passes_pagination_without_cached_summary(monkeypatch):
+    job = SimpleNamespace(id="paged", model_id="nanopore", status="completed", params={"ont_workflow_id": "ont_fastq_qc", "ont_input_mode": "fastq"}, provenance={})
+    app, token = _build_public_ngs_result_test_app(monkeypatch, job, {})
+    calls = []
+    async def builder(_job, **kwargs):
+        calls.append(kwargs)
+        return json.loads((API_ROOT / "tests/fixtures/ont_fastq_qc_result_retry3_v1.json").read_text())
+    monkeypatch.setattr(ngs_routes, "build_ont_fastq_qc_result", builder)
+    from services import alignment_access
+    with TestClient(app, client=("127.0.0.1", 40000)) as client:
+        client.cookies.set(alignment_access.cookie_name(job.id), token, path="/")
+        response = client.get(f"/api/jobs/{job.id}/ngs-result?variant_offset=10&artifact_offset=20&page_size=3&collection=artifacts")
+    assert response.status_code == 200
+    assert calls == [{"variant_offset": 10, "artifact_offset": 20, "page_size": 3, "collection": "artifacts"}]

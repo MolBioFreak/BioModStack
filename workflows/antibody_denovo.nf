@@ -536,6 +536,7 @@ process SpawnRFantibodyJobs {
     ])
     def frameworkArg = params.framework_pdb ? "--framework_pdb \"${params.framework_pdb}\" \\\n        " : ""
     """
+    set -euo pipefail
     python3 ${params.code_root}/scripts/spawn_rfantibody_children.py \\
         --parent_job_id "${parent_job_id}" \\
         --total_designs ${total_designs} \\
@@ -868,6 +869,7 @@ process SpawnFAMPNNJobs {
     ])
     def params_json_base64 = params_json.getBytes('UTF-8').encodeBase64().toString()
     """
+    set -euo pipefail
     python3 ${params.code_root}/scripts/spawn_fampnn_children.py \\
         --parent_job_id "${parent_job_id}" \\
         --pdb_dir "${admittedPdbDir}" \\
@@ -891,12 +893,15 @@ process WaitForChildren {
     val poll_interval_seconds
     val batch_name
     
+    path spawn_receipt
+
     output:
     path "child_outputs.json", emit: child_outputs
     
     script:
     """
     python3 ${params.code_root}/scripts/wait_for_children.py \\
+        --expected_children "${spawn_receipt}" \\
         --parent_job_id "${parent_job_id}" \\
         --stage "${stage_name}" \\
         --poll_interval ${poll_interval_seconds} \\
@@ -933,7 +938,11 @@ process CollectChildOutputs {
     with open("${child_outputs_json}") as f:
         data = json.load(f)
     
+    import sys
+    sys.path.insert(0, "${params.code_root}/scripts")
+    from child_job_utils import complete_native_collection
     output_dirs = data.get("child_output_dirs", [])
+    accepted = {str(d): [] for d in output_dirs}
     collected = []
     collected_trbs = []
     collected_trajs = []
@@ -957,6 +966,7 @@ process CollectChildOutputs {
                 if not dest.exists():
                     shutil.copy(pdb, dest)
                     collected.append(str(dest))
+                    accepted[output_dir].append(pdb)
                     print(f"Collected: {pdb} -> {dest}")
                 trb = pdb.with_suffix(".trb")
                 if trb.exists():
@@ -964,6 +974,7 @@ process CollectChildOutputs {
                     if not trb_dest.exists():
                         shutil.copy(trb, trb_dest)
                         collected_trbs.append(str(trb_dest))
+                        accepted[output_dir].append(trb)
                         print(f"Collected: {trb} -> {trb_dest}")
             traj_search = search_path / "traj"
             if traj_search.exists():
@@ -972,6 +983,7 @@ process CollectChildOutputs {
                     if not traj_dest.exists():
                         shutil.copy(traj, traj_dest)
                         collected_trajs.append(str(traj_dest))
+                        accepted[output_dir].append(traj)
                         print(f"Collected trajectory: {traj} -> {traj_dest}")
     
     manifest = {
@@ -983,6 +995,8 @@ process CollectChildOutputs {
         "count": len(collected)
     }
     
+    manifest["component_collection"] = complete_native_collection(
+        data, accepted, authority="workflows/antibody_denovo.nf:CollectChildOutputs:${stage_name}")
     with open("collection_manifest.json", "w") as f:
         json.dump(manifest, f, indent=2)
     
@@ -999,12 +1013,15 @@ process WaitForFAMPNNChildren {
     val poll_interval_seconds
     val batch_name
     
+    path spawn_receipt
+
     output:
     path "child_outputs.json", emit: child_outputs
     
     script:
     """
     python3 ${params.code_root}/scripts/wait_for_children.py \\
+        --expected_children "${spawn_receipt}" \\
         --parent_job_id "${parent_job_id}" \\
         --stage "${stage_name}" \\
         --poll_interval ${poll_interval_seconds} \\
@@ -1038,7 +1055,11 @@ process CollectFAMPNNOutputs {
     with open("${child_outputs_json}") as f:
         data = json.load(f)
     
+    import sys
+    sys.path.insert(0, "${params.code_root}/scripts")
+    from child_job_utils import complete_native_collection
     output_dirs = data.get("child_output_dirs", [])
+    accepted = {str(d): [] for d in output_dirs}
     collected_pdbs = []
     collected_jsons = []
     
@@ -1077,6 +1098,7 @@ process CollectFAMPNNOutputs {
                 if not dest.exists():
                     shutil.copy(pdb, dest)
                     collected_pdbs.append(str(dest))
+                    accepted[output_dir].append(pdb)
                     print(f"Collected PDB: {pdb} -> {dest}")
             
             # Collect JSONs (analysis results)
@@ -1085,6 +1107,7 @@ process CollectFAMPNNOutputs {
                 if not dest.exists():
                     shutil.copy(json_file, dest)
                     collected_jsons.append(str(dest))
+                    accepted[output_dir].append(json_file)
     
     manifest = {
         "stage": "${stage_name}",
@@ -1095,6 +1118,11 @@ process CollectFAMPNNOutputs {
         "json_count": len(collected_jsons)
     }
     
+    # Preserve this process's required Nextflow output tuple before sealing.
+    if not list(Path(".").glob("job*.pdb")) or not list(Path(".").glob("job*.json")):
+        raise FileNotFoundError("CollectFAMPNNOutputs requires job*.pdb and job*.json")
+    manifest["component_collection"] = complete_native_collection(
+        data, accepted, authority="workflows/antibody_denovo.nf:CollectFAMPNNOutputs:${stage_name}")
     with open("collection_manifest.json", "w") as f:
         json.dump(manifest, f, indent=2)
     
@@ -1226,6 +1254,7 @@ process SpawnMaturationJobs {
         pinned_gpus: params.pinned_gpus
     ])
     """
+    set -euo pipefail
     python3 ${params.code_root}/scripts/spawn_maturation_children.py \\
         --parent_job_id "${parent_job_id}" \\
         --pdb_dir "${pdb_dir}" \\
@@ -1249,12 +1278,15 @@ process WaitForMaturationChildren {
     val poll_interval_seconds
     val batch_name
 
+    path spawn_receipt
+
     output:
     path "child_outputs.json", emit: child_outputs
 
     script:
     """
     python3 ${params.code_root}/scripts/wait_for_children.py \\
+        --expected_children "${spawn_receipt}" \\
         --parent_job_id "${parent_job_id}" \\
         --stage "${stage_name}" \\
         --poll_interval ${poll_interval_seconds} \\
@@ -1415,6 +1447,7 @@ process SpawnValidatedMaturationJobs {
         pinned_gpus: params.pinned_gpus
     ])
     """
+    set -euo pipefail
     python3 ${params.code_root}/scripts/spawn_maturation_children.py \\
         --parent_job_id "${parent_job_id}" \\
         --pdb_dir "${pdb_dir}" \\
@@ -1438,12 +1471,15 @@ process WaitForValidatedMaturationChildren {
     val poll_interval_seconds
     val batch_name
 
+    path spawn_receipt
+
     output:
     path "child_outputs.json", emit: child_outputs
 
     script:
     """
     python3 ${params.code_root}/scripts/wait_for_children.py \\
+        --expected_children "${spawn_receipt}" \\
         --parent_job_id "${parent_job_id}" \\
         --stage "${stage_name}" \\
         --poll_interval ${poll_interval_seconds} \\
@@ -1552,15 +1588,28 @@ process OpenInteractiveGate {
 
     output:
     path "gate_${stage_name}.json", emit: report
+    path "gate_${stage_name}_annotations.json", emit: annotations
 
     script:
     def filteredArg = filtered_dir ? "--filtered_dir \"${filtered_dir}\"" : ""
+    def annotationArgs = [candidate_dir, raw_dir, filtered_dir].findAll { it }.unique().collect { '--candidate_dir "' + it + '"' }.join(' ')
     def rawArg = raw_dir ? "--raw_dir \"${raw_dir}\"" : ""
     """
     echo "Gate trigger ready: ${gate_trigger}" >&2
+    set -euo pipefail
+    export BMS_ANARCII_EXECUTION_MODE="${params.anarcii_execution_mode ?: 'auto'}"
+    export BMS_ANARCII_CPU_THREADS="${params.anarcii_cpu_threads ?: 24}"
+    export BMS_ANARCII_GPU_ID="${params.anarcii_gpu_id != null ? params.anarcii_gpu_id : (params.gpu_id != null ? params.gpu_id : '')}"
+    python3 ${params.code_root}/scripts/trigger_anarcii_annotation.py \\
+        --job_id "${job_id}" \\
+        ${annotationArgs} \\
+        --batch_size ${params.anarcii_batch_size ?: 500} \\
+        --output "gate_${stage_name}_annotations.json"
+
     python3 ${params.code_root}/scripts/open_stage_gate.py \\
         --job_id "${job_id}" \\
         --stage "${stage_name}" \\
+        --payload_json "gate_${stage_name}_annotations.json" \\
         --candidate_dir "${candidate_dir}" \\
         ${rawArg} \\
         ${filteredArg} \\
@@ -1645,15 +1694,18 @@ process TriggerANARCIIAnnotationPostFAMPNNGate {
     input:
     val job_id
     val include_children
+    val candidate_dir
 
     output:
     path "anarcii_trigger.log", emit: log
+    path "cdr_annotations.json", emit: annotations
 
     script:
     """
+    set -euo pipefail
     python3 ${params.code_root}/scripts/trigger_anarcii_annotation.py \\
         --job_id "${job_id}" \\
-        --include_children "${include_children}" \\
+        --candidate_dir "${candidate_dir}" \\
         --api_url "${params.api_url}" \\
         2>&1 | tee anarcii_trigger.log
     """
@@ -1665,15 +1717,18 @@ process TriggerANARCIIAnnotationPostValidationGate {
     input:
     val job_id
     val include_children
+    val candidate_dir
 
     output:
     path "anarcii_trigger.log", emit: log
+    path "cdr_annotations.json", emit: annotations
 
     script:
     """
+    set -euo pipefail
     python3 ${params.code_root}/scripts/trigger_anarcii_annotation.py \\
         --job_id "${job_id}" \\
-        --include_children "${include_children}" \\
+        --candidate_dir "${candidate_dir}" \\
         --api_url "${params.api_url}" \\
         2>&1 | tee anarcii_trigger.log
     """
@@ -1685,15 +1740,18 @@ process TriggerANARCIIAnnotationFinal {
     input:
     val job_id
     val include_children
+    val candidate_dir
 
     output:
     path "anarcii_trigger.log", emit: log
+    path "cdr_annotations.json", emit: annotations
 
     script:
     """
+    set -euo pipefail
     python3 ${params.code_root}/scripts/trigger_anarcii_annotation.py \\
         --job_id "${job_id}" \\
-        --include_children "${include_children}" \\
+        --candidate_dir "${candidate_dir}" \\
         --api_url "${params.api_url}" \\
         2>&1 | tee anarcii_trigger.log
     """
@@ -1765,15 +1823,6 @@ process SpawnChildJobs {
         --api_url "${params.api_url}" \\
         2>&1 | tee -a spawn.log
     
-    SPAWN_EXIT=\${PIPESTATUS[0]}
-    
-    if [ "\$SPAWN_EXIT" -eq 0 ]; then
-        CREATED_CHILDREN=\$(awk 'index(\$0, "[SPAWN] Created ") == 1 {count++} END {print count+0}' spawn.log)
-        echo '{"spawned_jobs": '\$CREATED_CHILDREN', "status": "complete", "error": null}' > spawn_result.json
-    else
-        echo '{"spawned_jobs": 0, "status": "failed", "error": "spawn script exited with '\$SPAWN_EXIT'"}' > spawn_result.json
-    fi
-    
     echo "Spawn process complete" | tee -a spawn.log
     """
 }
@@ -1794,6 +1843,8 @@ process WaitAndAggregateChildResults {
     val expected_child_count
     val child_stage
     
+    path spawn_receipt
+
     output:
     path "validated_designs/*.pdb", emit: pdbs, optional: true
     path "validated_designs/*.json", emit: scores, optional: true
@@ -1810,6 +1861,7 @@ process WaitAndAggregateChildResults {
     
     mkdir -p validated_designs validated_designs/aligned_error intermediates/boltz intermediates/scores
     declare -A COPIED_BASENAMES
+    : > collection_sources.bin
 
     choose_dest_name() {
         local base_dir="${'$'}1"
@@ -1843,6 +1895,7 @@ process WaitAndAggregateChildResults {
     
     # Wait for all children using the wait script
     python3 ${params.code_root}/scripts/wait_for_children.py \\
+        --expected_children "${spawn_receipt}" \\
         --parent_job_id "${parent_job_id}" \\
         --stage "${child_stage}" \\
         --batch_name "${batch_name}" \\
@@ -1885,7 +1938,9 @@ with open('wait_result.json') as f:
                             dest_dir="validated_designs/aligned_error"
                         fi
                         dest_path=\$(choose_dest_name "\$dest_dir" "\$child_idx" "\$basename")
-                        cp "\$artifact_path" "\$dest_path" 2>/dev/null || true
+                        if cp "\$artifact_path" "\$dest_path" 2>/dev/null; then
+                            printf '%s\\0%s\\0' "\$child_dir" "\$artifact_path" >> collection_sources.bin
+                        fi
                         COPIED_BASENAMES[\$basename]=1
                         case "\$artifact_path" in
                             *.pdb)
@@ -1916,6 +1971,23 @@ with open('wait_result.json') as f:
 }
 EOF
 
+    python3 - <<'PY'
+import json
+import sys
+from pathlib import Path
+sys.path.insert(0, "${params.code_root}/scripts")
+from child_job_utils import complete_native_collection
+data = json.loads(Path("wait_result.json").read_text())
+accepted = {str(d): [] for d in data.get("child_output_dirs", [])}
+parts = Path("collection_sources.bin").read_bytes().split(bytes([0]))[:-1]
+for directory, source in zip(parts[::2], parts[1::2]):
+    accepted[directory.decode()].append(Path(source.decode()))
+report = json.loads(Path("aggregation_report.json").read_text())
+report["component_collection"] = complete_native_collection(
+    data, accepted, authority="workflows/antibody_denovo.nf:WaitAndAggregateChildResults")
+Path("aggregation_report.json").write_text(json.dumps(report, indent=2))
+PY
+
     # Trigger result ingestion for parent job (updates database)
     if [ \$TOTAL_PDBS -gt 0 ]; then
         mkdir -p "${params.out_dir}/pdb_files/validated_designs"
@@ -1926,12 +1998,7 @@ EOF
             cp -f "\$staged_artifact" "\$dest_dir/"
         done < <(find validated_designs -type f -print0)
         cp -f aggregation_report.json "${params.out_dir}/aggregation_report.json"
-        echo "Triggering result ingestion for parent job..."
-        python3 ${params.code_root}/scripts/result_ingester.py \\
-            --job_id "${parent_job_id}" \\
-            --results_dir "${params.out_dir}" \\
-            --api_url "${params.api_url}" \\
-            2>&1 | tee ingest.log || echo "Warning: Ingestion had issues (non-fatal)"
+        # Native host ingestion runs only after authorized result return.
     fi
     
     echo "Aggregation complete: \$TOTAL_PDBS designs ready for analytics"
@@ -2028,7 +2095,8 @@ if (use_orchestrator) {
         wait_trigger,
         "rfantibody",
         30,  // poll_interval_seconds
-        batch_name
+        batch_name,
+        SpawnRFantibodyJobs.out.result
     )
 
     CollectChildOutputs(
@@ -2214,7 +2282,8 @@ if (shouldPauseAfterRFantibody) {
             backbone_refine_wait_trigger,
             "backbone_refine",
             30,
-            backbone_refine_batch_name
+            backbone_refine_batch_name,
+            SpawnMaturationJobs.out.result
         )
 
         CollectMaturationOutputs(
@@ -2349,7 +2418,8 @@ if (shouldPauseAfterRFantibody) {
             fampnn_wait_trigger,
             "fampnn",
             30,  // poll_interval
-            fampnn_batch_name
+            fampnn_batch_name,
+            SpawnFAMPNNJobs.out.result
         )
 
         CollectFAMPNNOutputs(
@@ -2571,7 +2641,8 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
                     maturation_wait_trigger,
                     "maturation",
                     30,
-                    maturation_batch_name
+                    maturation_batch_name,
+                    SpawnMaturationJobs.out.result
                 )
 
                 CollectMaturationOutputs(
@@ -2935,7 +3006,8 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
                     parent_id,
                     batch,
                     spawn_child_count,
-                    validation_stage_name
+                    validation_stage_name,
+                    SpawnChildJobs.out.result
                 )
 
                 WaitAndAggregateChildResults.out.report.subscribe { report_file ->
@@ -3169,7 +3241,8 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
                 validated_maturation_wait_trigger,
                 "maturation_post_validation",
                 30,
-                "${orchestrator_batch_name}_post_validation"
+                "${orchestrator_batch_name}_post_validation",
+                SpawnValidatedMaturationJobs.out.result
             )
 
             CollectValidatedMaturationOutputs(

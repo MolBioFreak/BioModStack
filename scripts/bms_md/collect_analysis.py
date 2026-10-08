@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .aggregate_children import publish_file_immutable, publish_json_immutable
+from .aggregate_children import publish_file_immutable, publish_json_immutable, validate_collection_receipt
 
 
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -57,8 +57,15 @@ def _replica_manifest_hashes(parent_root: Path, aggregate: dict[str, Any]) -> di
     return hashes
 
 
-def collect_analysis(child_status_path: Path, aggregate_manifest: Path, output_dir: Path) -> dict[str, Any]:
+def collect_analysis(
+    child_status_path: Path, aggregate_manifest: Path, output_dir: Path,
+    *, spawn_receipt: Path | None = None,
+) -> dict[str, Any]:
     status = json.loads(child_status_path.read_text(encoding="utf-8"))
+    receipt = (
+        validate_collection_receipt(status, spawn_receipt, "bms.md.analysis-spawn.v1")
+        if spawn_receipt is not None else None
+    )
     aggregate_manifest = aggregate_manifest.expanduser().resolve()
     parent_root = aggregate_manifest.parent
     output_dir = output_dir.expanduser().resolve()
@@ -75,9 +82,19 @@ def collect_analysis(child_status_path: Path, aggregate_manifest: Path, output_d
         raise ValueError("completed MD aggregate manifest is required")
     parent_job_id = aggregate["job_id"]
     replica_hashes = _replica_manifest_hashes(parent_root, aggregate)
+    if receipt is not None:
+        submitted_hashes = {child["replica_index"]: child.get("manifest_sha256") for child in receipt["children"]}
+        if (
+            receipt["parent_job_id"] != parent_job_id
+            or receipt.get("aggregate_manifest_sha256") != _sha256(aggregate_manifest)
+            or submitted_hashes != replica_hashes
+            or receipt.get("analysis_count") != len(replica_hashes)
+        ):
+            raise ValueError("MD analysis receipt does not match the immutable replica aggregate")
 
     child_dirs = [Path(value).expanduser().resolve() for value in status.get("child_output_dirs") or []]
     completed_records: list[dict[str, Any]] = []
+    validated_children = []
     seen_replicas: set[int] = set()
     analysis_root = output_dir / "analysis"
     for child_dir in child_dirs:
@@ -154,6 +171,8 @@ def collect_analysis(child_status_path: Path, aggregate_manifest: Path, output_d
                 "artifacts": artifact_records,
             }
         )
+        validated_children.append((child_dir, replica_index, sidecar,
+            [sidecar_path] + [sidecar_path.parent / record["path"] for record in artifact_records]))
 
     completed_records.sort(key=lambda item: item["replica_index"])
     failed = int(status.get("failed") or 0)
@@ -182,6 +201,17 @@ def collect_analysis(child_status_path: Path, aggregate_manifest: Path, output_d
             json.dumps(collection, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
         publish_json_immutable(collection, analysis_root / "collections" / f"partial_{partial_identity}.json")
+    from scripts.child_job_utils import component_runtime_enabled, seal_validated_child_files
+    if component_runtime_enabled():
+        if receipt is None:
+            raise ValueError("runtime MD analysis collection requires its exact spawn receipt")
+        expected = {child["replica_index"]: child["id"] for child in receipt["children"]}
+        for child_dir, index, sidecar, files in validated_children:
+            seal_validated_child_files(expected[index], output_dir=child_dir, result=sidecar,
+                                      files=files, role="md-native-analysis")
+        if is_complete:
+            from scripts.lib.component_adapter import join_children
+            join_children([child["id"] for child in receipt["children"]])
     return collection
 
 
@@ -190,9 +220,10 @@ def main() -> None:
     parser.add_argument("--child-status", type=Path, required=True)
     parser.add_argument("--aggregate-manifest", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--spawn-receipt", type=Path)
     args = parser.parse_args()
 
-    collect_analysis(args.child_status, args.aggregate_manifest, args.output_dir)
+    collect_analysis(args.child_status, args.aggregate_manifest, args.output_dir, spawn_receipt=args.spawn_receipt)
     print(args.output_dir / "analysis" / "manifest.json")
 
 

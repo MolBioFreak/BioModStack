@@ -24,6 +24,8 @@ from math import ceil
 DEFAULT_API_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
 
 from child_job_utils import (
+    component_runtime_enabled,
+    submit_child_job,
     apply_child_resume_params,
     child_status_kind,
     fetch_children_status,
@@ -127,6 +129,8 @@ def check_existing_children(parent_job_id: str, stage: str, api_url: str, batch_
         return all_done, completed_children, data
         
     except Exception as e:
+        if component_runtime_enabled():
+            raise
         print(f"[SPAWN] Warning: Failed to check existing children: {e}", file=sys.stderr)
         return False, [], {}
 
@@ -250,6 +254,7 @@ def spawn_children(
     # =========================================================================
     print(f"[SPAWN] {total_seqs} sequences → {num_jobs} {validator_label} validation jobs ({effective_batch_size} seqs/job ratio)")
     
+    child_ids = []
     created = 0
     failed = 0
     reused = 0
@@ -269,12 +274,14 @@ def spawn_children(
             )
             existing_kind = child_status_kind(existing_child)
 
-            if existing_kind == "completed":
+            if existing_kind == "completed" and not component_runtime_enabled():
+                child_ids.append(existing_child["job_id"])
                 reused += 1
                 print(f"[SPAWN] RESUME: Reusing completed child {child_name}")
                 continue
 
-            if existing_kind == "active":
+            if existing_kind == "active" and not component_runtime_enabled():
+                child_ids.append(existing_child["job_id"])
                 reused += 1
                 print(f"[SPAWN] RESUME: Child still active, leaving in place: {child_name}")
                 continue
@@ -312,15 +319,25 @@ def spawn_children(
                 "child_stage": child_stage,
                 "sequence_length": seq_length,  # Single sequence, not multiplied!
             }
-            effective_pinned_gpu = preferred_child_gpu(existing_child, pinned_gpu)
+            effective_pinned_gpu = preferred_child_gpu(None if component_runtime_enabled() else existing_child, pinned_gpu)
             if effective_pinned_gpu is not None:
                 job_data["pinned_gpu"] = effective_pinned_gpu
-            if existing_kind == "failed":
+            if existing_kind == "failed" and not component_runtime_enabled():
                 job_data["params"] = apply_child_resume_params(job_data["params"], existing_child)
                 resumed += 1
                 print(f"[SPAWN] RESUME: Relaunching failed child with Nextflow resume: {child_name}")
 
             
+            if component_runtime_enabled():
+                job_id = submit_child_job(
+                    job_data, parent_job_id=parent_job_id,
+                    stage=job_data["child_stage"], child_key=str(job_idx), required=False,
+                )
+                child_ids.append(job_id)
+                created += 1
+                print(f"[SPAWN] Created {validator_label} batch {job_idx} ({len(chunk_pdbs)} seqs): {job_id}")
+                continue
+
             resp = requests.post(
                 f"{api_url}/api/jobs",
                 json=job_data,
@@ -330,12 +347,15 @@ def spawn_children(
             if resp.ok:
                 job_id = resp.json().get("id", "unknown")
                 print(f"[SPAWN] Created {validator_label} batch {job_idx} ({len(chunk_pdbs)} seqs): {job_id}")
+                child_ids.append(job_id)
                 created += 1
             else:
                 print(f"[SPAWN] Failed to create batch {job_idx}: {resp.status_code} {resp.text}", file=sys.stderr)
                 failed += 1
                 
         except Exception as e:
+            if component_runtime_enabled():
+                raise
             print(f"[SPAWN] Error creating batch {job_idx}: {e}", file=sys.stderr)
             failed += 1
     
@@ -346,6 +366,8 @@ def spawn_children(
     
     if failed > 0:
         sys.exit(1)
+    return {"parent_job_id": parent_job_id, "children": [{"id": value} for value in child_ids],
+            "spawned_jobs": created, "reused_jobs": reused, "status": "complete", "error": None}
 
 
 if __name__ == "__main__":
@@ -358,11 +380,12 @@ if __name__ == "__main__":
     parser.add_argument("--params_json", default="", help="JSON string with quality settings from parent")
     parser.add_argument("--seqs_per_validation_job", type=int, default=None, help="Sequences per validation job (1=no batch, higher=more batch)")
     parser.add_argument("--seqs_per_boltz_job", type=int, default=None, help="Legacy alias for sequences per validation job")
+    parser.add_argument("--output", default="spawn_result.json", help="Exact child-set receipt")
     parser.add_argument("--api_url", default=DEFAULT_API_URL, help="API URL")
     
     args = parser.parse_args()
     
-    spawn_children(
+    result = spawn_children(
         parent_job_id=args.parent_job_id,
         pdb_dir=args.pdb_dir,
         batch_name=args.batch_name,
@@ -372,3 +395,4 @@ if __name__ == "__main__":
         seqs_per_validation_job=args.seqs_per_validation_job or args.seqs_per_boltz_job or 10,
         api_url=args.api_url
     )
+    Path(args.output).write_text(json.dumps(result, indent=2))

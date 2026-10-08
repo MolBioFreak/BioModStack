@@ -40,6 +40,7 @@ must not be reused as proof of a currently identical remote database.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import fcntl
@@ -66,12 +67,76 @@ class MSAAPIError(RuntimeError):
     """Sanitized failure; remote response bodies/credentials are never included."""
 
 
+class MSATransportError(MSAAPIError):
+    """Transient transport failure; safe reads may resume, POSTs may not."""
+
+
+class MSACacheMiss(MSAAPIError):
+    """No published identity-qualified entry; never corruption or pending work."""
+
+    def __init__(self):
+        super().__init__("no verified provider/settings/query-bound cached MSA")
+
+
 class ReconciliationRequired(MSAAPIError):
     """Do not delete journal/active marker or repeat the submission."""
 
 
 class PendingMSA(MSAAPIError):
     """Bounded polling ended; call again to resume the existing remote job."""
+
+    def __init__(self, message, *, operation=None):
+        super().__init__(message)
+        # Project only known non-secret fields, never paths, sequences, headers,
+        # response bodies or arbitrary provider metadata. This is not a store.
+        self.operation = None
+        if isinstance(operation, dict):
+            safe = {}
+            if isinstance(operation.get('provider'), str) and operation['provider'] in SERVICES:
+                safe['provider'] = operation['provider']
+            digest = operation.get('request_digest')
+            if isinstance(digest, str) and re.fullmatch(r'[0-9a-f]{64}', digest):
+                safe['request_digest'] = digest
+            tickets = operation.get('tickets')
+            if isinstance(tickets, dict):
+                safe['tickets'] = {}
+                for role in ('unpaired', 'paired'):
+                    ticket = tickets.get(role)
+                    if not isinstance(ticket, dict):
+                        continue
+                    item = {}
+                    if ticket.get('phase') in ('submitting', 'polling', 'complete', 'terminal'):
+                        item['phase'] = ticket['phase']
+                    remote_id = ticket.get('remote_id')
+                    if isinstance(remote_id, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,128}', remote_id):
+                        item['remote_id'] = remote_id
+                    safe['tickets'][role] = item
+            delay = operation.get('retry_after_seconds')
+            if isinstance(delay, (int, float)) and not isinstance(delay, bool) and math.isfinite(delay) and delay >= 0:
+                safe['retry_after_seconds'] = delay
+            self.operation = safe or None
+
+
+class MSAPreparationInterrupted(PendingMSA):
+    """Local polling stopped, not remote cancellation; durable tickets remain."""
+
+
+_preparation_stop = ContextVar('bms_msa_preparation_stop', default=None)
+
+
+@contextmanager
+def preparation_stop_scope(event):
+    token = _preparation_stop.set(event)
+    try:
+        yield
+    finally:
+        _preparation_stop.reset(token)
+
+
+def _check_preparation_stop():
+    event = _preparation_stop.get()
+    if event is not None and event.is_set():
+        raise MSAPreparationInterrupted('Local MSA polling stopped; retain/reconcile the provider ticket')
 
 
 def _json(value):
@@ -161,14 +226,20 @@ def validate_settings(provider: str, settings: dict) -> dict:
     return effective_settings(provider, settings, sequences)
 
 
-def _directory(path):
+def _directory(path, *, create=True):
     path = Path(path).absolute()
     # Trusted controller-owned roots only; reject symlink ancestors, even within root.
     for parent in (path, *path.parents):
         if parent.is_symlink():
             raise MSAAPIError("symlink storage paths are forbidden")
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    info = path.stat()
+    if create:
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        info = path.stat()
+    except FileNotFoundError:
+        raise MSACacheMiss() from None
+    if not stat.S_ISDIR(info.st_mode):
+        raise MSAAPIError("storage path must be a directory")
     if info.st_uid != os.getuid() or info.st_mode & 0o022:
         raise MSAAPIError("storage directory must be controller-owned and not publicly writable")
     return path
@@ -300,7 +371,7 @@ class RequestsTransport:
                     return HTTPResponse(response.status_code, b"".join(chunks),
                                         response.headers.get("Retry-After"), response.headers.get("Location"))
         except requests.RequestException:
-            raise MSAAPIError("provider transport failure") from None
+            raise MSATransportError("provider transport failure") from None
 
 
 @dataclass(frozen=True)
@@ -330,6 +401,14 @@ class MSAClient:
             raise MSAAPIError("invalid bounded client configuration")
         self.transport = transport or RequestsTransport()
         self.sleep = sleep
+
+    def _pause(self, seconds):
+        event = _preparation_stop.get()
+        if event is None:
+            self.sleep(seconds)
+        else:
+            event.wait(seconds)
+            _check_preparation_stop()
 
     @contextmanager
     def _authority(self, provider):
@@ -362,22 +441,40 @@ class MSAClient:
             valid = False
         if not valid:
             raise MSAAPIError('unsafe provider file redirect; existing state retained')
+        _check_preparation_stop()
         try:
             result = self.transport.request('GET', location, headers={},
                                             timeout=self.config.timeout, max_bytes=self.config.max_bytes)
+        except MSATransportError:
+            raise PendingMSA('signed output transport unavailable; resume the existing ticket') from None
         except Exception:
             raise MSAAPIError('signed output download failed; existing state retained') from None
         # One explicit cross-origin hop only; never chase arbitrary redirects.
         return result
 
     def _http(self, provider, path, headers, *, method="GET", data=None, files=None):
+        if provider == "colabfold_api":
+            from biomodstack_msa_controller import require_controller_submission
+            require_controller_submission(SERVICES[provider])
         attempts = self.config.safe_attempts if method == "GET" else 1
         for attempt in range(attempts):
+            # A durable POST intent is an in-flight transaction: finish recording
+            # its response/ambiguity. Cancellation prevents subsequent GETs/roles.
+            if method == 'GET':
+                _check_preparation_stop()
             response = None
             try:
                 response = self.transport.request(
                     method, SERVICES[provider] + path, headers=headers, data=data, files=files,
                     timeout=self.config.timeout, max_bytes=self.config.max_bytes)
+            except MSATransportError:
+                if attempt + 1 == attempts:
+                    if method == 'GET':
+                        raise PendingMSA('provider transport unavailable; resume the existing ticket') from None
+                    raise MSAAPIError('provider transport failure; existing state retained') from None
+            except MSAAPIError:
+                # Unsafe/oversized content is not a transient availability error.
+                raise
             except Exception:
                 if attempt + 1 == attempts:
                     raise MSAAPIError("provider transport failure; existing state retained") from None
@@ -392,20 +489,33 @@ class MSAClient:
                     raise MSAAPIError("provider response contained credential material")
                 if response.status == 200:
                     return response.body
-                if response.status not in (408, 429, 500, 502, 503, 504) or attempt + 1 == attempts:
+                if response.status not in (408, 429, 500, 502, 503, 504) or method != 'GET':
                     raise MSAAPIError(f"provider HTTP {response.status}; existing state retained")
             delay = min(60, self.config.poll_seconds * 2 ** attempt)
             if response and response.retry_after:
                 try:
-                    retry = float(response.retry_after)
-                    if math.isfinite(retry) and retry > 60:
-                        raise PendingMSA("provider Retry-After exceeds retry budget; resume later")
-                    if math.isfinite(retry):
-                        delay = max(delay, max(0, retry))
-                except ValueError:
-                    # Unknown HTTP-date: do not retry earlier than the server requested.
-                    raise PendingMSA("provider Retry-After requires later reconciliation") from None
-            self.sleep(delay)
+                    try:
+                        retry = float(response.retry_after)
+                    except ValueError:
+                        from email.utils import parsedate_to_datetime
+                        retry_at = parsedate_to_datetime(response.retry_after)
+                        if retry_at.tzinfo is None:
+                            raise ValueError('Retry-After date has no timezone')
+                        retry = (retry_at - datetime.now(timezone.utc)).total_seconds()
+                    if not math.isfinite(retry):
+                        raise ValueError('nonfinite Retry-After')
+                    delay = max(delay, max(0, retry))
+                except (ValueError, TypeError, OverflowError):
+                    raise PendingMSA('provider Retry-After is invalid; reconcile before retry',
+                                     operation={'retry_after_seconds': 60}) from None
+            # Exhausted safe reads are a durable wait, not failed science. This
+            # same exception reaches the existing local/remote launch waiter.
+            if delay > 60 or attempt + 1 == attempts:
+                message = ('provider Retry-After requires deferred retry; resume the existing ticket'
+                           if response and response.retry_after else
+                           'provider temporarily unavailable; resume the existing ticket')
+                raise PendingMSA(message, operation={'retry_after_seconds': delay})
+            self._pause(delay)
         raise MSAAPIError("safe request retry budget exhausted")
 
     def _get_json(self, *args, **kwargs):
@@ -428,6 +538,7 @@ class MSAClient:
         if current_active is not None and current_active != binding and not (ticket and ticket.get("phase") == "complete"):
             raise ReconciliationRequired("another provider operation is pending; reconcile it first")
         if ticket is None:
+            _check_preparation_stop()
             # Both records precede POST. A crash in either window fails closed.
             ticket = {"phase": "submitting", "submitted_at": _now()}
             tickets[role] = ticket
@@ -489,37 +600,68 @@ class MSAClient:
                 if status not in ("PENDING", "RUNNING", "pending", "running"):
                     raise PendingMSA("unknown provider status; existing ID retained")
                 if poll + 1 < self.config.max_polls:
-                    self.sleep(self.config.poll_seconds)
+                    self._pause(self.config.poll_seconds)
             else:
                 raise PendingMSA("poll budget exhausted; resume with the same request")
         elif current_active == binding:
             _atomic(active, _json(None))
         return remote_id
 
-    def _outputs(self, provider, role, remote_id, sequences, settings, entry, headers):
+    def _outputs(self, provider, role, remote_id, sequences, settings, entry, headers, *, state=None):
+        # Pin downloaded native bytes in the existing ticket journal before
+        # publishing them. A paired-role retry must not re-download a completed
+        # unpaired result (even gzip metadata can change between GETs).
         native = []
+        native_name = 'native-' + role + ('.a3m' if provider == 'neurosnap_api' else '.tar.gz')
+        ticket = state['tickets'][role] if state is not None else None
+        checkpoint = ticket.get('output') if ticket is not None else None
+        data = None
+        present = (entry / native_name).exists() or (entry / native_name).is_symlink()
+        if checkpoint is not None:
+            if (not isinstance(checkpoint, dict) or set(checkpoint) != {'name', 'sha256'}
+                    or checkpoint.get('name') != native_name
+                    or not isinstance(checkpoint.get('sha256'), str)
+                    or not re.fullmatch(r'[0-9a-f]{64}', checkpoint['sha256'])):
+                raise ReconciliationRequired('invalid native output checkpoint')
+            if present:
+                data = _read(entry / native_name)
+                if _hash(data) != checkpoint['sha256']:
+                    raise MSAAPIError('native output checkpoint corruption')
+        elif ticket is not None and present:
+            raise ReconciliationRequired('interrupted native output lacks a durable digest; reconcile it')
+
+        def store_native(data):
+            record = {'name': native_name, 'sha256': _hash(data)}
+            if checkpoint is not None and checkpoint != record:
+                raise MSAAPIError('provider output changed after durable download checkpoint')
+            if ticket is not None and checkpoint is None:
+                ticket['output'] = record
+                _atomic(entry / 'state.json', _json(state))
+            return self._store(entry, native_name, data)
         if provider == "neurosnap_api":
-            metadata = self._get_json(provider, "/job/data/" + remote_id, headers)
-            outputs = metadata.get("out") if isinstance(metadata, dict) else None
-            if not isinstance(outputs, list) or len(outputs) > 1000:
-                raise MSAAPIError("invalid Neurosnap output listing")
-            names = []
-            for item in outputs:
-                if not isinstance(item, list) or len(item) != 2 or not isinstance(item[0], str):
-                    raise MSAAPIError("invalid Neurosnap output descriptor")
-                name = item[0]
-                if (not name or PurePosixPath(name).name != name or "\\" in name
-                        or name in (".", "..") or any(ord(c) < 32 for c in name)):
-                    raise MSAAPIError("unsafe Neurosnap output filename")
-                if name.lower().endswith(".a3m"):
-                    names.append(name)
-            if len(names) != 1:
-                raise MSAAPIError("expected exactly one listed native monomer A3M; layout unqualified")
-            data = self._http(provider, "/job/file/" + remote_id + "/out/" + quote(names[0], safe=""), headers)
+            if data is None:
+                metadata = self._get_json(provider, "/job/data/" + remote_id, headers)
+                outputs = metadata.get("out") if isinstance(metadata, dict) else None
+                if not isinstance(outputs, list) or len(outputs) > 1000:
+                    raise MSAAPIError("invalid Neurosnap output listing")
+                names = []
+                for item in outputs:
+                    if not isinstance(item, list) or len(item) != 2 or not isinstance(item[0], str):
+                        raise MSAAPIError("invalid Neurosnap output descriptor")
+                    name = item[0]
+                    if (not name or PurePosixPath(name).name != name or "\\" in name
+                            or name in (".", "..") or any(ord(c) < 32 for c in name)):
+                        raise MSAAPIError("unsafe Neurosnap output filename")
+                    if name.lower().endswith(".a3m"):
+                        names.append(name)
+                if len(names) != 1:
+                    raise MSAAPIError("expected exactly one listed native monomer A3M; layout unqualified")
+                data = self._http(provider, "/job/file/" + remote_id + "/out/" + quote(names[0], safe=""), headers)
             validate_a3m(data, sequences[0])
-            native.append(self._store(entry, "native-unpaired.a3m", data))
+            native.append(store_native(data))
             return [data], native
-        data = self._http(provider, "/result/download/" + remote_id, headers)
+        if data is None:
+            data = self._http(provider, "/result/download/" + remote_id, headers)
         wanted = ["pair.a3m"] if role == "paired" else ["uniref.a3m"] + (
             ["bfd.mgnify30.metaeuk30.smag30.a3m"] if settings["use_env"] else [])
         members = {}
@@ -566,7 +708,7 @@ class MSAClient:
         result = [combined[101 + unique.index(seq)] for seq in sequences]
         if role == "paired" and len({validate_a3m(a, s) for a, s in zip(result, sequences)}) != 1:
             raise MSAAPIError("native paired chain row counts differ")
-        native.append(self._store(entry, "native-" + role + ".tar.gz", data))
+        native.append(store_native(data))
         return result, native
 
     @staticmethod
@@ -649,14 +791,18 @@ class MSAClient:
                             database_version=None, live_qualification='not_asserted'))
         identity, digest = self._identity(sequences, provider, settings)
         settings = identity["settings"]
-        root = _directory(cache_root)
-        entry = _directory(root / provider / digest)
+        # Preflight/cache-only lookup is read-only, including a cold miss.
+        root = _directory(cache_root, create=not cache_only)
+        entry = _directory(root / provider / digest, create=not cache_only)
         # Published artifacts are immutable and revalidated; a cache hit does
         # not need the submission lock or a provider credential.
         if (entry / "manifest.json").exists():
             return self._replay(entry, identity, digest)
         if cache_only:
-            raise MSAAPIError("no verified provider/settings/query-bound cached MSA")
+            raise MSACacheMiss()
+        if provider == "colabfold_api":
+            from biomodstack_msa_controller import require_controller_submission
+            require_controller_submission(SERVICES[provider])
         with self._authority(provider) as active:
             if (entry / "manifest.json").exists():
                 return self._replay(entry, identity, digest)
@@ -671,10 +817,16 @@ class MSAClient:
                 raise MSAAPIError("ColabFold must not receive credentials")
             artifacts, native = [], []
             for role in self._roles(provider, settings):
-                remote_id = self._ticket(provider=provider, role=role, sequences=sequences,
-                                         settings=settings, digest=digest, entry=entry,
-                                         state=state, active=active, headers=headers)
-                output, originals = self._outputs(provider, role, remote_id, sequences, settings, entry, headers)
+                try:
+                    _check_preparation_stop()
+                    remote_id = self._ticket(provider=provider, role=role, sequences=sequences,
+                                             settings=settings, digest=digest, entry=entry,
+                                             state=state, active=active, headers=headers)
+                    output, originals = self._outputs(provider, role, remote_id, sequences, settings, entry, headers, state=state)
+                except PendingMSA as exc:
+                    raise type(exc)(str(exc), operation={**(exc.operation or {}),
+                        "provider": provider, "request_digest": digest,
+                        "tickets": state.get("tickets", {})}) from None
                 native.extend(originals)
                 for index, (data, sequence) in enumerate(zip(output, sequences)):
                     validate_a3m(data, sequence)

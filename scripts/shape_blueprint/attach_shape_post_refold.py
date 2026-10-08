@@ -7,6 +7,7 @@ import gzip
 import hashlib
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Any, cast
 
@@ -81,6 +82,34 @@ def attach_post_refold(
     records = validator_envelope.get("records")
     if not isinstance(records, dict):
         raise ValueError("validator suite records are absent")
+    request = _json(request_path, "Shape request")
+    if validator_envelope.get("sequence_name") != (bundle.get("provenance") or {}).get("sequence_name"):
+        raise ValueError("validator suite sequence binding mismatch")
+    if validator_envelope.get("validators") != request.get("validator_suite") or set(records) != set(request.get("validator_suite", [])):
+        raise ValueError("validator suite selection mismatch")
+    evidence_root = validator_records_path.parent.resolve()
+    bindings = []
+    for validator, record in records.items():
+        if validator not in {"esmfold2", "boltz2", "protenix_v2"}:
+            raise ValueError("unsupported validator artifact owner")
+        for index, descriptor in enumerate(record.get("artifacts", [])):
+            relative = Path(descriptor["filename"])
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ValueError("validator artifact path is unsafe")
+            native = evidence_root / relative
+            if (native.is_symlink() or not native.is_file() or native.stat().st_nlink != 1
+                    or not native.resolve().is_relative_to(evidence_root)
+                    or any((evidence_root / Path(*relative.parts[:i])).is_symlink() for i in range(1, len(relative.parts)))):
+                raise ValueError("validator artifact is absent or unsafe")
+            if descriptor.get("sha256") != _sha(native) or descriptor.get("bytes") != native.stat().st_size:
+                raise ValueError("validator native artifact binding mismatch")
+            destination = bundle_dir / f"validator_{validator}_{index:04d}{native.suffix}"
+            shutil.copyfile(native, destination)
+            bindings.append({**_descriptor(destination), "validator": validator, "native_path": relative.as_posix()})
+    suite_destination = bundle_dir / "shape_validator_records.json"
+    shutil.copyfile(validator_records_path, suite_destination)
+    bundle["validator_evidence"] = _descriptor(suite_destination)
+    bundle["validator_artifacts"] = bindings
 
     post_path = bundle_dir / "post_refold_evaluation.json"
     if bundle.get("status") == "accepted":

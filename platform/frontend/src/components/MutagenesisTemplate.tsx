@@ -1,3 +1,4 @@
+import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { SequenceManagerModal } from './SequenceManagerModal';
 import { parseRegions, generateLibrary, normalizeAminoAcids, formatMutationLabel } from '../utils/mutationUtils';
@@ -15,6 +16,54 @@ import { createLatestAsyncResourceController } from '../lib/latestAsyncResource'
 interface MutagenesisTemplateProps {
     onBack: () => void;
     onSubmit: (jobName: string, variants: VariantSequence[], predictorConfig: UntypedApiValue) => void;
+}
+
+export function buildMutagenesisWorkflowRequest(jobNamePrefix: string, variants: VariantSequence[], predictorConfig: UntypedApiValue) {
+    // Build params with mutagenesis_variants array
+    const batchParams = {
+        // Always regenerate MSAs for mutants (no shared reference MSA)
+        msa_force_refresh: true,
+        // Array of variants (each with name + sequence)
+        mutagenesis_variants: variants.map(v => ({
+            name: v.name,
+            sequence: v.sequence
+        })),
+        // Predictor params (same for all variants)
+        boltz_recycling_steps: predictorConfig.recycling_steps,
+        boltz_num_samples: predictorConfig.diffusion_samples,
+        boltz_sampling_steps: predictorConfig.sampling_steps,
+        boltz_use_msa: predictorConfig.use_msa,
+        boltz_use_potentials: predictorConfig.use_potentials,
+        boltz_step_scale: predictorConfig.step_scale,
+        num_parallel_jobs: predictorConfig.num_parallel_jobs,
+        openmm_enabled: predictorConfig.openmm_enabled,
+        openmm_compute_tier: predictorConfig.openmm_compute_tier,
+        openmm_restraint_mode: predictorConfig.openmm_restraint_mode,
+        openmm_mmgbsa_mode: predictorConfig.openmm_mmgbsa_mode,
+        openmm_force_field: predictorConfig.openmm_force_field,
+        openmm_top_n_percentage: predictorConfig.openmm_top_n_percentage,
+        openmm_max_iterations: predictorConfig.openmm_max_iterations,
+        openmm_tolerance: predictorConfig.openmm_tolerance,
+        openmm_restraint_strength: predictorConfig.openmm_restraint_strength,
+        openmm_implicit_solvent: predictorConfig.openmm_implicit_solvent,
+        openmm_platform: predictorConfig.openmm_platform,
+        pred_method: predictorConfig.predictor,
+        run_frustrampnn: predictorConfig.run_frustrampnn,
+        // Complex components: ligands array now includes DNA/RNA with sequence field
+        ...(predictorConfig.ligands?.length ? {
+            ligands: predictorConfig.ligands
+        } : {})
+    };
+        return {
+            name: jobNamePrefix,
+            model_id: predictorConfig.predictor === 'rf3'
+                ? 'rf3'
+                : predictorConfig.predictor === 'esmfold2'
+                    ? 'esmfold2'
+                    : 'boltz2',
+            mode: 'predict',
+            params: batchParams
+        };
 }
 
 export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplateProps) {
@@ -98,26 +147,36 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
     const [show3DViewer, setShow3DViewer] = useState(false);
     const [selectedChainId, setSelectedChainId] = useState<string | null>(null);
 
-    // Convert mutation positions to Set for 3D viewer highlighting
+    const selectedStructureChain = parsedChains.find(chain => chain.id === selectedChainId && chain.sequence === baseSequence);
+    const residueKeyForPosition = (position: number): string | null => {
+        const residue = selectedStructureChain?.residues[position - 1];
+        return residue ? `${residue.chainId}${residue.resNum}${residue.iCode || ''}` : null;
+    };
+
+    // Convert sequence positions through the selected structure's residue map.
     const mutationPositionsSet = useMemo(() => {
         const positions = new Set<string>();
-        const chainId = selectedChainId || 'A';
+        const addPosition = (position: number) => {
+            const key = residueKeyForPosition(position);
+            if (key) positions.add(key);
+        };
         // For library mode, use regions
         if (mode === 'library' && regions.length > 0) {
             for (const region of regions) {
                 for (let i = region.start; i <= region.end; i++) {
-                    positions.add(`${chainId}${i}`);
+                    addPosition(i);
                 }
             }
         }
         // For manual mode, use mutation positions
         if (mode === 'manual') {
             for (const mut of manualMutations) {
-                positions.add(`${chainId}${mut.position}`);
+                addPosition(mut.position);
             }
         }
+        if (mode === 'library') selectedPositions.forEach(addPosition);
         return positions;
-    }, [mode, regions, manualMutations, selectedChainId]);
+    }, [mode, regions, manualMutations, selectedStructureChain, selectedPositions]);
 
     // Handlers for Target Positions selector (positive selection with shift+click/drag)
     const handlePositionClick = (pos: number, event: React.MouseEvent) => {
@@ -267,14 +326,14 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
         setManualMutations(prev => prev.filter(m => m.position !== pos));
     };
 
-    // Auto-update preview in manual mode
-    useMemo(() => {
+    // A generated library belongs to the exact source and rule selection.
+    // Do not regenerate random science implicitly after an operator edit.
+    useEffect(() => {
         if (mode === 'manual') handleGeneratePreview();
+        else setGeneratedVariants([]);
     }, [handleGeneratePreview, mode]);
 
-    const handleSubmit = () => {
-        if (generatedVariants.length === 0) return;
-        onSubmit(jobNamePrefix, generatedVariants, {
+    const buildPredictorConfig = () => ({
             predictor,
             ...predictorParams,
             // Reference sequence for logging (mutants regenerate MSAs)
@@ -300,11 +359,15 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
             openmm_restraint_strength: physicsSettings.restraintStrength,
             openmm_implicit_solvent: physicsSettings.implicitSolvent,
             openmm_platform: physicsSettings.platform
-        });
+    });
+    const handleSubmit = () => {
+        if (generatedVariants.length === 0) return;
+        onSubmit(jobNamePrefix, generatedVariants, buildPredictorConfig());
     };
 
     return (
         <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 shadow-xl animate-in fade-in slide-in-from-bottom-4">
+            <ExecutionTargetPicker key={JSON.stringify([baseSequence, mode, regionInput, strategy, numVariants, mutationsPerVariant, mutationCountMode, mutationCountExact, mutationCountSetInput, selectedPositionsList, excludeResiduesInput, allowedAAsInput, blockedAAsInput, allowInsertions, allowDeletions, indelSizes, indelProbability, manualMutations, physicsSettings])} workflowRequest={generatedVariants.length > 0 ? buildMutagenesisWorkflowRequest(jobNamePrefix, generatedVariants, buildPredictorConfig()) : null} />
             <header className="flex items-center justify-between mb-6 border-b border-slate-800 pb-4">
                 <div className="flex items-center gap-3">
                     <button
@@ -409,10 +472,11 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                         height={350}
                                         selectedResidues={mutationPositionsSet}
                                         onResidueClick={(residueKey) => {
-                                            // Parse residue key (e.g., "A45") to extract position
-                                            const match = residueKey.match(/^([A-Z])(\d+)$/);
-                                            if (match) {
-                                                const pos = parseInt(match[2], 10);
+                                            // Structure numbering is not a sequence index (gaps and insertion codes matter).
+                                            if (selectedStructureChain) {
+                                                const pos = selectedStructureChain.residues.findIndex(residue =>
+                                                    `${residue.chainId}${residue.resNum}${residue.iCode || ''}` === residueKey
+                                                ) + 1;
                                                 if (pos > 0 && pos <= baseSequence.length) {
                                                     setSelectedPositions(prev => {
                                                         const next = new Set(prev);

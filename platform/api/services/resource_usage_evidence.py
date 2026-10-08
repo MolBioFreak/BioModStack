@@ -564,6 +564,42 @@ def _checkpoint_path(job_id: str, generation: int, attempt: int) -> Path:
     return state_dir / "resource-usage" / f"{token}-{generation}-{attempt}.json"
 
 
+REMOTE_RESOURCE_USAGE_RECEIPT_SCHEMA = "bms.workflow-resource-usage.v3"
+
+
+def remote_resource_execution_owner() -> dict[str, Any]:
+    pid = os.getpid()
+    fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+    return {
+        "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+        "supervisor_pid": pid,
+        "supervisor_start_ticks": int(fields[19]),
+        "control_group": Path(f"/proc/{pid}/cgroup").read_text().strip(),
+    }
+
+
+def _owned_processes(pid: int) -> set[int]:
+    """Walk kernel child edges, including non-main-thread children."""
+    pending = [pid]
+    owned: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if current in owned:
+            continue
+        owned.add(current)
+        if len(owned) > 100000:
+            raise ResourceUsageEvidenceError("resource process-tree evidence exceeds its bound")
+        try:
+            for task in Path(f"/proc/{current}/task").iterdir():
+                try:
+                    pending.extend(int(value) for value in (task / "children").read_text().split())
+                except FileNotFoundError:
+                    pass  # A reaped process is accounted by RUSAGE_CHILDREN.
+        except FileNotFoundError:
+            pass
+    return owned
+
+
 @dataclass
 class WorkflowResourceMonitor:
     job_id: str
@@ -588,6 +624,46 @@ class WorkflowResourceMonitor:
     _gpu_observed: bool = False
     _enforcement: dict[str, Any] = field(default_factory=dict)
     _last_accounting: dict[str, Any] | None = None
+    checkpoint_path: Path | None = None
+    producer: str = "bms.workflow_job_runner"
+
+    remote_owner: dict[str, Any] | None = None
+    _remote_peak_rss_bytes: int = 0
+    _remote_peak_processes: int = 0
+
+    @classmethod
+    def from_remote_execution(
+        cls, *, job_id: str, params: Mapping[str, Any],
+        execution: Mapping[str, Any], checkpoint_path: Path,
+    ) -> "WorkflowResourceMonitor":
+        """Observe the existing Linux subreaper under shared target reservation.
+
+        This backend records process-tree accounting, not fictional systemd or
+        cgroup/device containment. It does not allocate or change resource policy.
+        The supervisor must reap/join all children before finish().
+        """
+        handoff = validate_resource_admission_handoff(params.get(GLOBAL_RESOURCE_ADMISSION_PARAM))
+        if handoff is None or handoff["canonical_job_id"] != job_id:
+            raise ResourceUsageEvidenceError("remote resource monitor lost admission authority")
+        authority = validate_dispatch_materialization_authority(
+            params.get(GLOBAL_DISPATCH_AUTHORITY_PARAM), expected_handoff=handoff)
+        owner = remote_resource_execution_owner()
+        if any(execution.get(key) != value for key, value in owner.items()):
+            raise ResourceUsageEvidenceError("remote resource monitor lost supervisor identity")
+        for key in ("generation", "attempt"):
+            if type(execution.get(key)) is not int or execution[key] < 1:
+                raise ResourceUsageEvidenceError("remote resource execution identity is invalid")
+        if execution.get("attempt_id") != handoff["run_attempt_id"]:
+            raise ResourceUsageEvidenceError("remote resource monitor lost attempt identity")
+        path = Path(checkpoint_path)
+        if not path.is_absolute() or path != path.resolve():
+            raise ResourceUsageEvidenceError("remote checkpoint path must be absolute and symlink-free")
+        gpu_index, gpu_uuid = dispatch_gpu_authority(authority, handoff=handoff)
+        return cls(job_id=job_id, lane="remote", generation=execution["generation"],
+                   attempt=execution["attempt"], unit_name="", owner_nonce="",
+                   expected_invocation_id="", handoff=handoff, dispatch_authority=authority,
+                   gpu_index=gpu_index, gpu_uuid=gpu_uuid, checkpoint_path=path,
+                   producer="bms.remote_worker", remote_owner=owner)
 
     @classmethod
     def from_job(cls, job: Any) -> "WorkflowResourceMonitor | None":
@@ -638,6 +714,19 @@ class WorkflowResourceMonitor:
         )
 
     def start(self) -> None:
+        if self.remote_owner is not None:
+            import ctypes
+            subreaper = ctypes.c_int()
+            libc = ctypes.CDLL(None, use_errno=True)
+            if libc.prctl(37, ctypes.byref(subreaper), 0, 0, 0) != 0 or subreaper.value != 1:
+                raise ResourceUsageEvidenceError("resource monitor requires the actual child subreaper")
+            if self.remote_owner != remote_resource_execution_owner():
+                raise ResourceUsageEvidenceError("resource supervisor identity changed")
+            self._last_accounting = self._snapshot_with_retry()
+            self._write_checkpoint(self._last_accounting)
+            self._thread = threading.Thread(target=self._run, name=f"resource-monitor-{self.job_id}", daemon=True)
+            self._thread.start()
+            return
         properties = show_unit_properties(self.unit_name, self.lane)
         if not properties.control_group or not properties.invocation_id:
             raise ResourceUsageEvidenceError("systemd unit lacks cgroup or InvocationID authority")
@@ -729,6 +818,37 @@ class WorkflowResourceMonitor:
         self._thread.start()
 
     def _snapshot(self) -> dict[str, Any]:
+        if self.remote_owner is not None:
+            import resource
+            pids = _owned_processes(os.getpid())
+            rss_bytes = 0
+            for pid in pids:
+                try:
+                    fields = Path(f"/proc/{pid}/statm").read_text().split()
+                    if len(fields) < 2:
+                        raise ResourceUsageEvidenceError("owned process RSS observation is unavailable")
+                    rss_bytes += int(fields[1]) * os.sysconf("SC_PAGE_SIZE")
+                except FileNotFoundError:
+                    pass
+            self._remote_peak_rss_bytes = max(self._remote_peak_rss_bytes, rss_bytes)
+            self._remote_peak_processes = max(self._remote_peak_processes, len(pids))
+            for row in _gpu_rows_for_pids(pids) if self.gpu_index is not None else []:
+                key = (int(row["pid"]), str(row["gpu_uuid"]))
+                if key not in self._gpu_peak_by_pid_uuid and len(self._gpu_peak_by_pid_uuid) >= _MAX_GPU_ROWS:
+                    raise ResourceUsageEvidenceError("GPU process evidence exceeds its bounded row limit")
+                self._gpu_peak_by_pid_uuid[key] = max(self._gpu_peak_by_pid_uuid.get(key, 0), int(row["used_memory_bytes"]))
+                self._gpu_observed |= row["gpu_uuid"] == self.gpu_uuid
+            own = resource.getrusage(resource.RUSAGE_SELF)
+            children = resource.getrusage(resource.RUSAGE_CHILDREN)
+            self._samples += 1
+            return {
+                "cpu_user_usec": int((own.ru_utime + children.ru_utime) * 1_000_000),
+                "cpu_system_usec": int((own.ru_stime + children.ru_stime) * 1_000_000),
+                "sampled_tree_peak_rss_bytes": self._remote_peak_rss_bytes,
+                "reaped_child_maxrss_bytes": int(children.ru_maxrss) * 1024,
+                "supervisor_maxrss_bytes": int(own.ru_maxrss) * 1024,
+                "sampled_peak_processes": self._remote_peak_processes,
+            }
         cgroup = _cgroup_directory(self._control_group)
         cpu = _read_cpu_stat(cgroup / "cpu.stat")
         memory_current = _read_int(cgroup / "memory.current")
@@ -788,8 +908,13 @@ class WorkflowResourceMonitor:
             "sample_count": self._samples,
             "monitor_failures": self._monitor_failures,
         }
+        if self.remote_owner is not None:
+            payload["schema"] = "bms.workflow-resource-usage-checkpoint.v2"
+            payload["execution_owner"] = self.remote_owner
+            for key in ("unit", "owner_nonce_sha256", "invocation_id", "control_group_sha256", "enforcement"):
+                payload.pop(key)
         payload["checkpoint_sha256"] = _sha256(_canonical_json(payload))
-        path = _checkpoint_path(self.job_id, self.generation, self.attempt)
+        path = self.checkpoint_path or _checkpoint_path(self.job_id, self.generation, self.attempt)
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(path.suffix + ".tmp")
         temporary.write_text(_canonical_json(payload), encoding="utf-8")
@@ -810,11 +935,71 @@ class WorkflowResourceMonitor:
                         pass
             self._stop.wait(_RESOURCE_POLL_INTERVAL_SECONDS)
 
-    def finish(self, *, outcome: str) -> dict[str, Any]:
+    def _finish_remote(self, *, outcome: str) -> dict[str, Any]:
+        if self._thread is None:
+            raise ResourceUsageEvidenceError("remote resource observer was not started")
+        if (self.remote_owner != remote_resource_execution_owner()
+                or _owned_processes(os.getpid()) != {os.getpid()}):
+            raise ResourceUsageEvidenceError("remote resource owner is not quiescent")
+        if outcome not in {"completed", "failed", "cancelled"}:
+            raise ResourceUsageEvidenceError("remote resource outcome is not terminal")
+        accounting = self._snapshot_with_retry()
+        self._write_checkpoint(accounting)
+        gpu_peaks = _gpu_uuid_peaks(self._gpu_peak_by_pid_uuid)
+        gpu_exact = self.gpu_index is None or (
+            self._gpu_observed and set(gpu_peaks) == {self.gpu_uuid})
+        complete = self._samples > 0 and self._monitor_failures == 0 and gpu_exact
+        receipt = {
+            "schema": REMOTE_RESOURCE_USAGE_RECEIPT_SCHEMA,
+            "producer": "bms.remote_worker",
+            "producer_source_revision": self.handoff["source_revision"],
+            "producer_source_tree": self.handoff["source_tree"],
+            "job_id": self.job_id, "run_attempt_id": self.handoff["run_attempt_id"],
+            "admission_id": self.handoff["admission_id"], "preparation_id": self.handoff["preparation_id"],
+            "execution": {"generation": self.generation, "attempt": self.attempt,
+                          **(self.remote_owner or {}), "quiescent": True},
+            "admission": {key: self.handoff[key] for key in (
+                "cpu_threads", "dram_bytes", "gpu_index", "gpu_uuid", "policy_source", "policy_version", "owner")},
+            "dispatch": {"gpu_index": self.gpu_index, "gpu_uuid": self.gpu_uuid},
+            "enforcement": {"authority": "shared_target_reservation",
+                            "hard_cpu_memory_limits_observed": False,
+                            "device_denial_observed": False},
+            "observed": {"started_at": self.started_at, "finished_at": _timestamp(),
+                         "sample_interval_seconds": _RESOURCE_POLL_INTERVAL_SECONDS,
+                         "sample_count": self._samples, "monitor_failures": self._monitor_failures,
+                         "accounting": accounting, "accounting_scope": "supervisor_and_reaped_descendants",
+                         "memory_measurement": "sampled_tree_rss_and_kernel_process_maxrss",
+                         "gpu_peak_by_uuid": gpu_peaks,
+                         "gpu_peak_by_pid_uuid": _gpu_process_peak_rows(self._gpu_peak_by_pid_uuid),
+                         "gpu_usage_disposition": "not_requested" if self.gpu_index is None else
+                         "admitted_used" if gpu_exact else "admitted_use_not_exactly_observed"},
+            "outcome": outcome, "complete": complete,
+            "incompleteness_code": None if complete else "producer_resource_evidence_incomplete",
+            "admission_handoff_sha256": self.handoff["handoff_sha256"],
+            "dispatch_payload_sha256": self.dispatch_authority["payload_sha256"],
+            "dispatch_authority_sha256": self.dispatch_authority["authority_sha256"],
+        }
+        receipt["receipt_sha256"] = _sha256(_canonical_json(receipt))
+        return receipt
+
+    def stop_sampling(self) -> None:
+        """Join the observer before a supervisor enumerates/kills scientific writers.
+
+        GPU observation itself uses a bounded nvidia-smi subprocess. It must not
+        race the shared subreaper's descendant-quiescence scan. This is not terminal
+        evidence; finish() still takes final accounting and verifies ownership.
+        """
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=3)
+            if self._thread.is_alive():
+                raise ResourceUsageEvidenceError("resource observer has not quiesced")
+
+    def finish(self, *, outcome: str) -> dict[str, Any]:
+        self.stop_sampling()
         accounting: dict[str, Any] | None = None
+        if self.remote_owner is not None:
+            return self._finish_remote(outcome=outcome)
         if self._control_group:
             try:
                 accounting = self._snapshot_with_retry()
@@ -847,7 +1032,7 @@ class WorkflowResourceMonitor:
         complete = accounting is not None and self._samples > 0 and self._monitor_failures == 0 and gpu_exact
         receipt: dict[str, Any] = {
             "schema": RESOURCE_ASSIGNED_USAGE_RECEIPT_SCHEMA,
-            "producer": "bms.workflow_job_runner",
+            "producer": self.producer,
             "producer_source_revision": self.handoff["source_revision"],
             "producer_source_tree": self.handoff["source_tree"],
             "job_id": self.job_id,
@@ -1190,7 +1375,70 @@ def attach_pre_spawn_nonexecution_receipt(
     return params
 
 
+def _validate_remote_resource_document(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    receipt = dict(candidate)
+    if set(receipt) != {
+        "schema", "producer", "producer_source_revision", "producer_source_tree",
+        "job_id", "run_attempt_id", "admission_id", "preparation_id", "execution",
+        "admission", "dispatch", "enforcement", "observed", "outcome", "complete",
+        "incompleteness_code", "admission_handoff_sha256", "dispatch_payload_sha256",
+        "dispatch_authority_sha256", "receipt_sha256",
+    } or len(_canonical_json(receipt).encode()) > _MAX_CHECKPOINT_BYTES:
+        raise ResourceUsageEvidenceError("remote resource receipt fields/size are invalid")
+    unsigned = dict(receipt)
+    digest = unsigned.pop("receipt_sha256")
+    if digest != _sha256(_canonical_json(unsigned)):
+        raise ResourceUsageEvidenceError("remote resource receipt digest is invalid")
+    execution = receipt["execution"]
+    if not isinstance(execution, Mapping) or set(execution) != {
+        "generation", "attempt", "boot_id", "supervisor_pid", "supervisor_start_ticks", "control_group", "quiescent",
+    }:
+        raise ResourceUsageEvidenceError("remote resource owner fields are invalid")
+    for key in ("generation", "attempt", "supervisor_pid", "supervisor_start_ticks"):
+        if type(execution[key]) is not int or execution[key] < 1:
+            raise ResourceUsageEvidenceError("remote resource owner integer is invalid")
+    for key in ("boot_id", "control_group"):
+        _required_text(execution, key, maximum=4096)
+    admission = receipt["admission"]
+    if not isinstance(admission, Mapping) or set(admission) != {
+        "cpu_threads", "dram_bytes", "gpu_index", "gpu_uuid", "policy_source", "policy_version", "owner",
+    }:
+        raise ResourceUsageEvidenceError("remote resource admission fields are invalid")
+    if receipt["enforcement"] != {
+        "authority": "shared_target_reservation", "hard_cpu_memory_limits_observed": False,
+        "device_denial_observed": False,
+    }:
+        raise ResourceUsageEvidenceError("remote accounting cannot assert unobserved hard containment")
+    observed = receipt["observed"]
+    if not isinstance(observed, Mapping) or set(observed) != {
+        "started_at", "finished_at", "sample_interval_seconds", "sample_count", "monitor_failures",
+        "accounting", "accounting_scope", "memory_measurement", "gpu_peak_by_uuid", "gpu_peak_by_pid_uuid",
+        "gpu_usage_disposition",
+    }:
+        raise ResourceUsageEvidenceError("remote resource observation fields are invalid")
+    accounting = observed["accounting"]
+    if not isinstance(accounting, Mapping) or set(accounting) != {
+        "cpu_user_usec", "cpu_system_usec", "sampled_tree_peak_rss_bytes",
+        "reaped_child_maxrss_bytes", "supervisor_maxrss_bytes", "sampled_peak_processes",
+    } or any(type(value) is not int or value < 0 for value in accounting.values()):
+        raise ResourceUsageEvidenceError("remote resource accounting values are invalid")
+    if (observed["accounting_scope"] != "supervisor_and_reaped_descendants"
+            or observed["memory_measurement"] != "sampled_tree_rss_and_kernel_process_maxrss"
+            or observed["sample_interval_seconds"] != _RESOURCE_POLL_INTERVAL_SECONDS
+            or type(observed["sample_count"]) is not int or observed["sample_count"] < 1
+            or type(observed["monitor_failures"]) is not int or observed["monitor_failures"] < 0):
+        raise ResourceUsageEvidenceError("remote resource measurement scope is invalid")
+    for key in ("started_at", "finished_at"):
+        _required_text(observed, key)
+    peaks = _validate_gpu_process_peak_rows(observed["gpu_peak_by_pid_uuid"])
+    if observed["gpu_peak_by_uuid"] != _gpu_uuid_peaks(peaks):
+        raise ResourceUsageEvidenceError("remote GPU process/UUID accounting disagrees")
+    return receipt
+
+
 def _validate_resource_usage_receipt_document(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    if candidate.get("schema") == REMOTE_RESOURCE_USAGE_RECEIPT_SCHEMA:
+        return _validate_remote_resource_document(candidate)
     receipt = {str(key): value for key, value in candidate.items()}
     base_fields = {
         "schema", "producer", "producer_source_revision", "producer_source_tree",
@@ -1460,6 +1708,46 @@ def attach_cancelled_resource_receipt_from_checkpoint(
     return attach_resource_usage_receipt(params, receipt)
 
 
+def _validate_remote_producer_resource_usage(
+    job: Any, receipt: dict[str, Any], handoff: Mapping[str, Any],
+    dispatch_authority: Mapping[str, Any], latest: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Verify portable observation against independently persisted attempt ownership."""
+    execution = receipt["execution"]
+    if (not getattr(job, "execution_target_id", None)
+            or getattr(job, "remote_attempt_id", None) != handoff["run_attempt_id"]
+            or latest.get("attempt_id") != handoff["run_attempt_id"]
+            or receipt["producer"] != "bms.remote_worker"
+            or receipt["job_id"] != str(job.id)
+            or receipt["preparation_id"] != handoff["preparation_id"]
+            or receipt["producer_source_revision"] != handoff["source_revision"]
+            or receipt["producer_source_tree"] != handoff["source_tree"]
+            or receipt["admission_handoff_sha256"] != handoff["handoff_sha256"]
+            or receipt["dispatch_payload_sha256"] != dispatch_authority["payload_sha256"]
+            or receipt["dispatch_authority_sha256"] != dispatch_authority["authority_sha256"]
+            or any(execution[key] != latest.get(key) for key in execution)
+            or execution["quiescent"] is not True):
+        raise ResourceUsageEvidenceError("remote resource receipt source/owner/attempt disagrees")
+    if receipt["admission"] != {key: handoff[key] for key in receipt["admission"]}:
+        raise ResourceUsageEvidenceError("remote resource receipt reservation differs from admission")
+    gpu_index, gpu_uuid = dispatch_gpu_authority(dispatch_authority, handoff=handoff)
+    if receipt["dispatch"] != {"gpu_index": gpu_index, "gpu_uuid": gpu_uuid}:
+        raise ResourceUsageEvidenceError("remote resource dispatch differs from assignment")
+    observed = receipt["observed"]
+    if gpu_index is None:
+        if observed["gpu_peak_by_pid_uuid"] or observed["gpu_usage_disposition"] != "not_requested":
+            raise ResourceUsageEvidenceError("remote CPU reservation carries unexpected GPU accounting")
+    elif (observed["gpu_usage_disposition"] != "admitted_used"
+          or set(observed["gpu_peak_by_uuid"]) != {gpu_uuid}):
+        raise ResourceUsageEvidenceError("remote GPU accounting does not bind the assigned GPU")
+    if (receipt["complete"] is not True or receipt["incompleteness_code"] is not None
+            or observed["monitor_failures"] != 0
+            or receipt["outcome"] not in {"completed", "failed", "cancelled"}
+            or receipt["outcome"] != str(getattr(job, "status", "")).lower()):
+        raise ResourceUsageEvidenceError("remote resource receipt is not complete terminal observation")
+    return receipt
+
+
 def validate_producer_resource_usage_receipt(
     job: Any,
     expected_handoff: Mapping[str, Any],
@@ -1546,6 +1834,8 @@ def validate_producer_resource_usage_receipt(
         raise ResourceUsageEvidenceError("producer execution/resource receipt history is unavailable")
     latest = executions[-1]
     receipt = _validate_resource_usage_receipt_document(matches[0])
+    if receipt["schema"] == REMOTE_RESOURCE_USAGE_RECEIPT_SCHEMA:
+        return _validate_remote_producer_resource_usage(job, receipt, handoff, dispatch_authority, latest)
     execution = receipt.get("execution")
     if not isinstance(execution, Mapping):
         raise ResourceUsageEvidenceError("producer resource receipt execution identity is absent")
@@ -1687,6 +1977,8 @@ __all__ = [
     "RESOURCE_NONEXECUTION_RECEIPT_SCHEMA",
     "ResourceUsageEvidenceError",
     "WorkflowResourceMonitor",
+    "REMOTE_RESOURCE_USAGE_RECEIPT_SCHEMA",
+    "remote_resource_execution_owner",
     "attach_cancelled_resource_receipt_from_checkpoint",
     "attach_dispatch_materialization_authority",
     "attach_pre_spawn_nonexecution_receipt",

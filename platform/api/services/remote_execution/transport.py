@@ -15,6 +15,7 @@ import sys
 from .result_generation import durable_json, transfer_marker
 from .transfer_supervisor import SCHEMA, process_identity
 from dataclasses import dataclass
+from copy import deepcopy
 from pathlib import Path, PurePosixPath
 from typing import Sequence
 
@@ -40,6 +41,8 @@ class RemoteConnection:
     port: int
     username: str
     remote_root: str
+    runtime_binding: dict | None = None
+    provision_operation_id: str | None = None
 
     @classmethod
     def from_target(cls, target: object) -> "RemoteConnection":
@@ -61,7 +64,9 @@ class RemoteConnection:
             or any(not re.fullmatch(r"[A-Za-z0-9._-]+", part) for part in root_path.parts[1:])
         ):
             raise RemoteTransportError("Execution target has an invalid remote root")
-        return cls(str(getattr(target, "id", "")), host, port, username, remote_root)
+        capabilities = getattr(target, "capabilities", None) or {}
+        return cls(str(getattr(target, "id", "")), host, port, username, remote_root,
+                   deepcopy(capabilities.get("critical_runtime_binding")))
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,6 +273,38 @@ def _controlled_remote_failure(stdout: str) -> str | None:
     return None
 
 
+def _provision_argv(connection: RemoteConnection, operation_id: str, mode: str,
+                    argv: Sequence[str] = ()) -> list[str]:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", operation_id):
+        raise RemoteTransportError("Invalid provisioning operation identity")
+    # No bootstrap upload outside the fence. The exact checked-in stdlib source
+    # travels over the already authenticated SSH command channel; caller stdin
+    # remains untouched (helper bytes, JSON, or the rsync receiver protocol).
+    source = Path(__file__).with_name("_provision_transport.py").read_bytes()
+    encoded = base64.b64encode(source).decode("ascii")
+    loader = "import base64;exec(compile(base64.b64decode(" + repr(encoded) + "),'<bms-provision-transport>','exec'))"
+    return ["python3", "-c", loader, mode, connection.remote_root, operation_id, *map(str, argv)]
+
+
+async def quiesce_provision(connection: RemoteConnection, operation_id: str) -> bool:
+    """Fence late admissions and prove remote provisioning groups have stopped.
+
+    This is intentionally independent of the bound connection's operation so
+    restart reconciliation can stop its persisted predecessor. Unknown receipts,
+    SSH failure and uncertain process identity retain backend recovery ownership.
+    """
+    try:
+        argv = _provision_argv(connection, operation_id, "quiesce")
+        result = await _run([*_ssh_base(connection), shlex.join(argv)], timeout=60)
+        value = json.loads(result.stdout)
+        return (result.returncode == 0 and isinstance(value, dict)
+                and value.get("schema") == "bms.provision-transport.v1"
+                and value.get("operation_id") == operation_id
+                and value.get("quiescent") is True)
+    except (RemoteTransportError, OSError, ValueError):
+        return False
+
+
 async def run_remote(
     connection: RemoteConnection,
     argv: Sequence[str],
@@ -277,6 +314,8 @@ async def run_remote(
 ) -> CommandResult:
     if not argv or any("\x00" in str(value) for value in argv):
         raise RemoteTransportError("Invalid remote command")
+    if connection.provision_operation_id is not None:
+        argv = _provision_argv(connection, connection.provision_operation_id, "run", argv)
     remote_command = " ".join(shlex.quote(str(value)) for value in argv)
     result = await _run(
         [*_ssh_base(connection), remote_command],
@@ -311,6 +350,9 @@ async def rsync_to_remote(
     ]
     if source.is_dir() and delete:
         rsync_options.append("--delete")
+    if connection.provision_operation_id is not None:
+        receiver = _provision_argv(connection, connection.provision_operation_id, "run", ["rsync"])
+        rsync_options.append("--rsync-path=" + shlex.join(receiver))
     result = await _run(
         [
             *rsync_options,

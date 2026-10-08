@@ -16,7 +16,8 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { completeCurrentLaunchContext, submitJob } from '../lib/api';
+import { ExecutionTargetPicker } from './ExecutionTargetPicker';
+import { completeCurrentLaunchContext, materializeStructureTarget, submitJob } from '../lib/api';
 import { PhysicsRefinementPanel, type PhysicsRefinementSettings } from './PhysicsRefinementPanel';
 import { DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './physicsRefinementSettings';
 import { TargetAntigenSelector, type SelectedTarget } from './TargetAntigenSelector';
@@ -189,6 +190,11 @@ const getChainLength = (chain: ChainConfig): number => {
 };
 
 const checkSizeLimit = (chain: ChainConfig): { exceed: boolean; warning: boolean; message?: string } => {
+    const bounds = chain.useRange ? [chain.lengthMin, chain.lengthMax] : [chain.length];
+    if (bounds.some(value => typeof value !== 'number' || !Number.isInteger(value) || value <= 0)
+        || (chain.useRange && Number(chain.lengthMin) > Number(chain.lengthMax))) {
+        return { exceed: true, warning: true, message: 'Chain lengths must be positive integers with minimum no greater than maximum.' };
+    }
     const length = getChainLength(chain);
     const limits = SIZE_LIMITS[chain.type];
 
@@ -219,6 +225,9 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
     // State: Target Protein (for protein-binding aptamer mode)
     // ============================================================================
     const [selectedTarget, setSelectedTarget] = useState<SelectedTarget | null>(null);
+    const [resolvedTarget, setResolvedTarget] = useState<{ selection: SelectedTarget; path: string } | null>(null);
+    const [targetError, setTargetError] = useState('');
+    const targetPath = resolvedTarget?.selection === selectedTarget ? resolvedTarget.path : null;
     const [bindingChains, setBindingChains] = useState<string>('A');
     const [hotspotResidues, setHotspotResidues] = useState<string>('');
 
@@ -238,8 +247,8 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
     // State: Generation Settings
     // ============================================================================
     const [numDesigns, setNumDesigns] = useState(4);
-    const [qualityPreset, setQualityPreset] = useState<QualityPreset>('standard');
-    const [checkpoint, setCheckpoint] = useState<'generalized' | 'rna_optimized'>('generalized');
+    const [diffusionSteps, setDiffusionSteps] = useState(50);
+    const [checkpoint, setCheckpoint] = useState<'generalized' | 'rna_optimized'>('rna_optimized');
 
     // ============================================================================
     // State: Validation & Filtering
@@ -248,6 +257,7 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
     const [boltzValidationMode, setBoltzValidationMode] = useState<'structure_only' | 'complex'>('structure_only');
     const [filterPreset, setFilterPreset] = useState<FilterPreset>('default');
     const [customMinPlddt, setCustomMinPlddt] = useState(70.0);
+    const [boltzMinPlddt, setBoltzMinPlddt] = useState(70.0);
     const [customMinPtm, setCustomMinPtm] = useState(0.5);
     const [customMaxPae, setCustomMaxPae] = useState(15.0);
     // Boltz-2 model params
@@ -260,7 +270,8 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
     // ============================================================================
     // State: Storage Optimization
     // ============================================================================
-    const [storagePreset, setStoragePreset] = useState<StoragePreset>('standard');
+    const [keepIntermediates, setKeepIntermediates] = useState(false);
+    const [compressOutputs, setCompressOutputs] = useState(false);
 
     // ============================================================================
     // State: Parallelism (SWA)
@@ -291,6 +302,7 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
     // State: UI
     // ============================================================================
     const [error, setError] = useState<string | null>(null);
+    const [cloneError, setCloneError] = useState('');
 
 
 
@@ -338,19 +350,110 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
     // Effects
     // ============================================================================
 
-    // Update chains when mode changes
+    // Hydrate canonical persisted params; presets are recommendations, never replay authority.
     useEffect(() => {
-        setChains(DESIGN_MODE_INFO[designMode].defaultChains.map((c, i) => ({ ...c, id: String(i + 1) })));
-        if (designMode === 'protein_binding_aptamer') {
-            setBindingGuidance(true);
+        if (!initialValues) return;
+        const p = initialValues;
+        setCloneError('');
+        // A new clone must not inherit omitted settings from the previous draft.
+        const mode = typeof p.designMode === 'string' && Object.prototype.hasOwnProperty.call(DESIGN_MODE_INFO, p.designMode)
+            ? p.designMode as DesignMode : 'rna_aptamer';
+        setDesignMode(mode); setChains(DESIGN_MODE_INFO[mode].defaultChains);
+        setDesignName(typeof p.designName === 'string' ? p.designName : '');
+        setSelectedAptamer(null); setSelectedTarget(null); setBindingChains('A'); setHotspotResidues('');
+        setDesignApproach('denovo'); setScaffoldPdbPath('');
+        setNumDesigns(4); setTotalDesigns(16); setDiffusionSteps(50);
+        setCheckpoint(mode === 'rna_aptamer' || mode === 'protein_rna' ? 'rna_optimized' : 'generalized');
+        setValidateWithBoltz(false); setBoltzValidationMode('structure_only');
+        setCustomMinPlddt(70); setBoltzMinPlddt(70); setCustomMinPtm(0.5); setCustomMaxPae(15);
+        setBoltzSamplingSteps(200); setBoltzRecyclingSteps(3); setBoltzNumSamples(1);
+        setPhysicsSettings(PHYSICS_DEFAULTS); setKeepIntermediates(false); setCompressOutputs(false);
+        setUseSwa(false); setDesignsPerJob(4); setSeed(null); setBindingGuidance(mode === 'protein_binding_aptamer');
+        setNampnnNumSeqs(4); setNampnnTemperature(0.2); setNampnnFixedResidues('');
+        setNampnnChainsToDesign(''); setNampnnDesignNaOnly(false); setNampnnSeed(null);
+        if (typeof p.job_name === 'string') setDesignName(p.job_name);
+        else if (typeof p.name === 'string') setDesignName(p.name);
+        if ((p.rfdpoly_contigs !== undefined || p.rfdpoly_polymer_chains !== undefined)
+            && (typeof p.rfdpoly_contigs !== 'string' || typeof p.rfdpoly_polymer_chains !== 'string')) {
+            setCloneError('Saved chains require both canonical contigs and polymer-chain strings.');
+            return;
         }
-        // Auto-select checkpoint based on mode
-        if (designMode === 'rna_aptamer' || designMode === 'protein_rna') {
-            setCheckpoint('rna_optimized');
-        } else {
-            setCheckpoint('generalized');
+        if (typeof p.rfdpoly_contigs === 'string' && typeof p.rfdpoly_polymer_chains === 'string') {
+            const lengths = p.rfdpoly_contigs.trim().split(/\s+/);
+            const polymers = p.rfdpoly_polymer_chains.split(',').map(value => value.trim());
+            if (lengths.length !== polymers.length || lengths.some(value => !/^\d+(?:-\d+)?$/.test(value))
+                || polymers.some(value => !['dna', 'rna', 'protein'].includes(value))) {
+                setCloneError('Saved chain configuration cannot be represented by this form. Correct the source request before replay.');
+                return;
+            }
+            setChains(lengths.map((value, i) => {
+                const [min, max] = value.split('-').map(Number);
+                return { id: String(i + 1), type: polymers[i] as PolymerType, length: min,
+                    useRange: max !== undefined, lengthMin: min, lengthMax: max ?? min };
+            }));
+            setDesignMode(p.target_pdb ? 'protein_binding_aptamer' : 'custom');
         }
-    }, [designMode]);
+        if (typeof p.target_pdb === 'string') setSelectedTarget({ type: 'run', name: p.target_pdb, path: p.target_pdb });
+        if (typeof p.scaffold_pdb === 'string') { setDesignApproach('scaffold'); setScaffoldPdbPath(p.scaffold_pdb); }
+        if (p.rfdpoly_checkpoint === 'generalized' || p.rfdpoly_checkpoint === 'rna_optimized') setCheckpoint(p.rfdpoly_checkpoint);
+        if (p.boltz_validation_mode === 'structure_only' || p.boltz_validation_mode === 'complex') setBoltzValidationMode(p.boltz_validation_mode);
+        if (typeof p.rfdpoly_num_designs === 'number') setTotalDesigns(p.rfdpoly_num_designs);
+        if (p.nampnn_design_na_only !== undefined) setNampnnDesignNaOnly(p.nampnn_design_na_only === true || p.nampnn_design_na_only === 1);
+        setPhysicsSettings(current => ({ ...current,
+            ...(typeof p.openmm_enabled === 'boolean' ? { enabled: p.openmm_enabled } : {}),
+            ...(p.openmm_compute_tier === 'fast' || p.openmm_compute_tier === 'standard' || p.openmm_compute_tier === 'full' ? { computeTier: p.openmm_compute_tier } : {}),
+            ...(typeof p.openmm_cdr_only === 'boolean' ? { cdrOnly: p.openmm_cdr_only } : {}),
+            ...(p.openmm_restraint_mode === 'none' || p.openmm_restraint_mode === 'framework' || p.openmm_restraint_mode === 'backbone' ? { restraintMode: p.openmm_restraint_mode } : {}),
+            ...(p.openmm_mmgbsa_mode === 'off' || p.openmm_mmgbsa_mode === 'interface' || p.openmm_mmgbsa_mode === 'stability' || p.openmm_mmgbsa_mode === 'both' ? { mmgbsaMode: p.openmm_mmgbsa_mode } : {}),
+            ...(p.openmm_force_field === 'amber14sb' || p.openmm_force_field === 'charmm36m' ? { forceField: p.openmm_force_field } : {}),
+            ...(typeof p.openmm_top_n_percentage === 'number' ? { topNPercentage: p.openmm_top_n_percentage } : {}),
+            ...(typeof p.openmm_max_iterations === 'number' ? { maxIterations: p.openmm_max_iterations } : {}),
+            ...(typeof p.openmm_tolerance === 'number' ? { tolerance: p.openmm_tolerance } : {}),
+            ...(typeof p.openmm_restraint_strength === 'number' ? { restraintStrength: p.openmm_restraint_strength } : {}),
+            ...(p.openmm_implicit_solvent === 'gbsa' || p.openmm_implicit_solvent === 'vacuum' || p.openmm_implicit_solvent === 'obc2' ? { implicitSolvent: p.openmm_implicit_solvent } : {}),
+            ...(p.openmm_platform === 'auto' || p.openmm_platform === 'cuda' || p.openmm_platform === 'cpu' ? { platform: p.openmm_platform } : {}),
+        }));
+        if (typeof p.rfdpoly_num_designs === 'number') setNumDesigns(p.rfdpoly_num_designs);
+        if (typeof p.rfdpoly_diffusion_steps === 'number') setDiffusionSteps(p.rfdpoly_diffusion_steps);
+        if (typeof p.oligo_validate_boltz === 'boolean') setValidateWithBoltz(p.oligo_validate_boltz);
+        if (typeof p.oligo_min_plddt === 'number') setCustomMinPlddt(p.oligo_min_plddt);
+        if (typeof p.boltz_min_plddt === 'number') setBoltzMinPlddt(p.boltz_min_plddt);
+        else if (typeof p.oligo_min_plddt === 'number') setBoltzMinPlddt(p.oligo_min_plddt);
+        if (typeof p.oligo_min_ptm === 'number') setCustomMinPtm(p.oligo_min_ptm);
+        if (typeof p.oligo_max_pae === 'number') setCustomMaxPae(p.oligo_max_pae);
+        if (typeof p.boltz_sampling_steps === 'number') setBoltzSamplingSteps(p.boltz_sampling_steps);
+        if (typeof p.boltz_recycling_steps === 'number') setBoltzRecyclingSteps(p.boltz_recycling_steps);
+        if (typeof p.boltz_num_samples === 'number') setBoltzNumSamples(p.boltz_num_samples);
+        if (typeof p.keep_intermediates === 'boolean') setKeepIntermediates(p.keep_intermediates);
+        if (typeof p.compress_outputs === 'boolean') setCompressOutputs(p.compress_outputs);
+        if (typeof p.use_swa === 'boolean') setUseSwa(p.use_swa);
+        if (typeof p.designs_per_job === 'number') setDesignsPerJob(p.designs_per_job);
+        if (typeof p.rfdpoly_seed === 'number') setSeed(p.rfdpoly_seed);
+        if (typeof p.binding_guidance === 'boolean') setBindingGuidance(p.binding_guidance);
+        if (typeof p.nampnn_num_seqs === 'number') setNampnnNumSeqs(p.nampnn_num_seqs);
+        if (typeof p.nampnn_temperature === 'number') setNampnnTemperature(p.nampnn_temperature);
+        if (typeof p.nampnn_fixed_residues === 'string') setNampnnFixedResidues(p.nampnn_fixed_residues);
+        if (Array.isArray(p.nampnn_fixed_residues) && p.nampnn_fixed_residues.every(value => typeof value === 'string')) setNampnnFixedResidues(p.nampnn_fixed_residues.join(','));
+        if (typeof p.nampnn_chains_to_design === 'string') setNampnnChainsToDesign(p.nampnn_chains_to_design);
+        if (Array.isArray(p.nampnn_chains_to_design) && p.nampnn_chains_to_design.every(value => typeof value === 'string')) setNampnnChainsToDesign(p.nampnn_chains_to_design.join(','));
+        if (typeof p.nampnn_seed === 'number') setNampnnSeed(p.nampnn_seed);
+        if (typeof p.target_chains === 'string') setBindingChains(p.target_chains);
+        if (typeof p.hotspot_residues === 'string') setHotspotResidues(p.hotspot_residues);
+        if (Array.isArray(p.hotspot_residues) && p.hotspot_residues.every(value => typeof value === 'string')) setHotspotResidues(p.hotspot_residues.join(','));
+    }, [initialValues]);
+
+    // Both preview and submit consume only the materialized current selection.
+    useEffect(() => {
+        let current = true;
+        setResolvedTarget(null);
+        setTargetError('');
+        if (selectedTarget) {
+            materializeStructureTarget(selectedTarget, 'inputs/oligo').then(path => {
+                if (current) setResolvedTarget({ selection: selectedTarget, path });
+            }).catch(error => { if (current) setTargetError(String(error)); });
+        }
+        return () => { current = false; };
+    }, [selectedTarget]);
 
     // Apply aptamer sequence when selected
     useEffect(() => {
@@ -370,12 +473,18 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
     // ============================================================================
     const handleModeChange = (mode: DesignMode) => {
         setDesignMode(mode);
+        setChains(DESIGN_MODE_INFO[mode].defaultChains.map((chain, i) => ({ ...chain, id: String(i + 1) })));
+        setBindingGuidance(mode === 'protein_binding_aptamer');
+        setCheckpoint(mode === 'rna_aptamer' || mode === 'protein_rna' ? 'rna_optimized' : 'generalized');
         setSelectedAptamer(null);
     };
 
     const addChain = () => {
-        const newId = String(chains.length + 1);
-        setChains([...chains, { id: newId, type: 'protein', length: 50, useRange: false }]);
+        setChains(previous => {
+            let nextId = 1;
+            while (previous.some(chain => chain.id === String(nextId))) nextId += 1;
+            return [...previous, { id: String(nextId), type: 'protein', length: 50, useRange: false }];
+        });
     };
 
     const removeChain = (id: string) => {
@@ -391,9 +500,10 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
     // ============================================================================
     // Job Submission
     // ============================================================================
-    const submitMutation = useMutation({
-        mutationFn: async () => {
-            const storageSettings = STORAGE_PRESETS[storagePreset];
+    const buildWorkflowRequest = () => {
+            if (cloneError) throw new Error(cloneError);
+            if (!Number.isInteger(diffusionSteps) || diffusionSteps <= 0) throw new Error('Diffusion steps must be a positive integer.');
+            if (selectedTarget && !targetPath) throw new Error(targetError || 'Target structure is still being materialized.');
 
             const effectiveNumDesigns = useSwa ? totalDesigns : numDesigns;
 
@@ -403,18 +513,18 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                 mode: 'oligo_design',
                 params: {
                     rfdpoly_enabled: true,
+                    binding_guidance: bindingGuidance,
                     rfdpoly_contigs: contigsString,
                     rfdpoly_polymer_chains: polymerChainsString,
                     rfdpoly_num_designs: effectiveNumDesigns,
-                    rfdpoly_diffusion_steps: QUALITY_PRESETS[qualityPreset].steps,
+                    rfdpoly_diffusion_steps: diffusionSteps,
                     rfdpoly_checkpoint: checkpoint,
 
                     // Target binding (for protein-binding aptamer mode)
                     ...(selectedTarget && {
-                        target_pdb: selectedTarget.path || selectedTarget.url,
+                        target_pdb: targetPath,
                         target_chains: bindingChains,
                         hotspot_residues: hotspotResidues || undefined,
-                        binding_guidance: bindingGuidance,
                     }),
                     // Scaffold (for scaffold-constrained design)
                     ...(designApproach === 'scaffold' && scaffoldPdbPath && {
@@ -427,7 +537,7 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                     oligo_min_plddt: customMinPlddt,
                     oligo_min_ptm: customMinPtm,
                     oligo_max_pae: customMaxPae,
-                    boltz_min_plddt: customMinPlddt,
+                    boltz_min_plddt: boltzMinPlddt,
                     // Boltz-2 model parameters
                     boltz_sampling_steps: boltzSamplingSteps,
                     boltz_recycling_steps: boltzRecyclingSteps,
@@ -435,14 +545,22 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                     // Physics refinement
                     openmm_enabled: physicsSettings.enabled,
                     openmm_compute_tier: physicsSettings.computeTier,
+                    openmm_cdr_only: physicsSettings.cdrOnly,
+                    openmm_restraint_mode: physicsSettings.restraintMode,
+                    openmm_mmgbsa_mode: physicsSettings.mmgbsaMode,
+                    openmm_force_field: physicsSettings.forceField,
+                    openmm_top_n_percentage: physicsSettings.topNPercentage,
+                    openmm_max_iterations: physicsSettings.maxIterations,
+                    openmm_tolerance: physicsSettings.tolerance,
+                    openmm_restraint_strength: physicsSettings.restraintStrength,
+                    openmm_implicit_solvent: physicsSettings.implicitSolvent,
+                    openmm_platform: physicsSettings.platform,
                     // Storage
-                    keep_intermediates: storageSettings.keep_intermediates,
-                    compress_outputs: storageSettings.compress_outputs,
+                    keep_intermediates: keepIntermediates,
+                    compress_outputs: compressOutputs,
                     // SWA Parallelism
-                    ...(useSwa && {
-                        use_swa: true,
-                        designs_per_job: designsPerJob,
-                    }),
+                    use_swa: useSwa,
+                    designs_per_job: designsPerJob,
                     // Advanced options
                     ...(seed !== null && { rfdpoly_seed: seed }),
                     // NA-MPNN sequence design
@@ -450,12 +568,17 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                     nampnn_temperature: nampnnTemperature,
                     ...(nampnnFixedResidues.trim() && { nampnn_fixed_residues: nampnnFixedResidues.trim() }),
                     ...(nampnnChainsToDesign.trim() && { nampnn_chains_to_design: nampnnChainsToDesign.trim() }),
-                    ...(nampnnDesignNaOnly && { nampnn_design_na_only: 1 }),
+                    nampnn_design_na_only: nampnnDesignNaOnly ? 1 : 0,
                     ...(nampnnSeed !== null && { nampnn_seed: nampnnSeed }),
                 }
             };
 
-            return submitJob(jobPayload);
+        return jobPayload;
+    };
+
+    const submitMutation = useMutation({
+        mutationFn: async () => {
+            return submitJob(buildWorkflowRequest());
         },
         onSuccess: async (response) => {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
@@ -469,6 +592,11 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
 
     const handleSubmit = () => {
         setError(null);
+        if (!Number.isInteger(diffusionSteps) || diffusionSteps <= 0) { setError('Diffusion steps must be a positive integer.'); return; }
+        if (cloneError || targetError || (selectedTarget && !targetPath)) {
+            setError(cloneError || targetError || 'Target structure is still being materialized.');
+            return;
+        }
         if (!designName.trim()) {
             setError('Please enter a design name');
             return;
@@ -477,8 +605,12 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
             setError('This design mode requires a target protein. Please select one.');
             return;
         }
+        if (designApproach === 'scaffold' && !scaffoldPdbPath.trim()) {
+            setError('Select a scaffold structure before submitting scaffold-constrained design.');
+            return;
+        }
         if (hasSizeErrors) {
-            setError('One or more chains exceed the maximum size limits. Please reduce chain lengths.');
+            setError('Correct invalid or oversized chain lengths before submitting.');
             return;
         }
         submitMutation.mutate();
@@ -489,6 +621,9 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
     // ============================================================================
     return (
         <div className="oligo-designer-template p-6 space-y-6 max-w-4xl mx-auto">
+            <ExecutionTargetPicker workflowRequest={Number.isInteger(diffusionSteps) && diffusionSteps > 0 && !cloneError && !targetError && (!selectedTarget || targetPath) && designName.trim() && (!requiresTarget || selectedTarget) && (designApproach !== 'scaffold' || scaffoldPdbPath.trim()) && !hasSizeErrors ? buildWorkflowRequest() : null} />
+            {(cloneError || targetError) && <p role="alert" className="text-red-400">{cloneError || targetError}</p>}
+            {selectedTarget && !targetPath && !targetError && <p role="status">Preparing selected target structure…</p>}
             {/* Header */}
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -555,7 +690,7 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
             {(designMode === 'rna_aptamer' || designMode === 'dna_aptamer') && (
                 <div className="bg-slate-800 rounded-lg p-4">
                     <div className="flex justify-between items-center mb-3">
-                        <label className="text-sm font-medium text-slate-300">Start from Known Aptamer (Optional)</label>
+                        <label className="text-sm font-medium text-slate-300">Use Known Aptamer Length / Polymer Type (Optional)</label>
                         <button
                             onClick={() => setShowAptamerBrowser(!showAptamerBrowser)}
                             className="text-sm text-emerald-400 hover:text-emerald-300"
@@ -572,7 +707,7 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                     )}
                     {selectedAptamer && !showAptamerBrowser && (
                         <div className="p-2 bg-emerald-500/10 border border-emerald-500/30 rounded text-sm">
-                            <span className="text-emerald-300">Using: {selectedAptamer.name}</span>
+                            <span className="text-emerald-300">Length/type inspiration only (sequence not constrained): {selectedAptamer.name}</span>
                             <button onClick={() => setSelectedAptamer(null)} className="ml-2 text-slate-400 hover:text-white text-xs">Clear</button>
                         </div>
                     )}
@@ -616,6 +751,13 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                 </div>
             )}
 
+            <div className="flex gap-4 text-sm text-slate-300">
+                <label><input type="checkbox" checked={keepIntermediates} onChange={event => setKeepIntermediates(event.target.checked)} /> Keep intermediates</label>
+                <label><input type="checkbox" checked={compressOutputs} onChange={event => setCompressOutputs(event.target.checked)} /> Compress outputs</label>
+            </div>
+            <label className="block text-xs text-slate-400">Boltz minimum pLDDT (effective validation threshold)
+                <input type="number" min={0} max={100} value={boltzMinPlddt} onChange={event => setBoltzMinPlddt(Number(event.target.value))} />
+            </label>
             {/* Design Approach Toggle */}
             <div className="bg-slate-800 rounded-lg p-4">
                 <label className="block text-sm font-medium text-slate-300 mb-3">Design Approach</label>
@@ -918,16 +1060,19 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                     <div>
                         <label className="text-xs text-slate-400 mb-1 block">Quality Preset</label>
                         <select
-                            value={qualityPreset}
-                            onChange={(e) => setQualityPreset(e.target.value as QualityPreset)}
+                            value={Object.entries(QUALITY_PRESETS).find(([, preset]) => preset.steps === diffusionSteps)?.[0] ?? ''}
+                            onChange={(e) => { const preset = e.target.value as QualityPreset; setDiffusionSteps(QUALITY_PRESETS[preset].steps); }}
                             className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white"
                         >
+                            <option value="" disabled>Custom diffusion steps</option>
                             {Object.entries(QUALITY_PRESETS).map(([key, preset]) => (
                                 <option key={key} value={key}>{preset.label} ({preset.steps} steps)</option>
                             ))}
                         </select>
                     </div>
                     <div>
+                        <label className="text-xs text-slate-400 mb-1 block">Diffusion Steps (effective)</label>
+                        <input type="number" min={1} value={diffusionSteps} onChange={event => setDiffusionSteps(Number(event.target.value))} />
                         <label className="text-xs text-slate-400 mb-1 block">Model Checkpoint</label>
                         <select
                             value={checkpoint}
@@ -942,7 +1087,13 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                         <label className="text-xs text-slate-400 mb-1 block">Filter Preset</label>
                         <select
                             value={filterPreset}
-                            onChange={(e) => setFilterPreset(e.target.value as FilterPreset)}
+                            onChange={(e) => {
+                                const preset = e.target.value as FilterPreset;
+                                setFilterPreset(preset);
+                                setCustomMinPlddt(FILTER_PRESETS[preset].min_plddt);
+                                setBoltzMinPlddt(FILTER_PRESETS[preset].min_plddt);
+                                setCustomMinPtm(FILTER_PRESETS[preset].min_ptm);
+                            }}
                             className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white"
                         >
                             {Object.entries(FILTER_PRESETS).map(([key, preset]) => (
@@ -1154,8 +1305,11 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                                 <input
                                     type="radio"
                                     name="storage"
-                                    checked={storagePreset === key}
-                                    onChange={() => setStoragePreset(key as StoragePreset)}
+                                    checked={keepIntermediates === preset.keep_intermediates && compressOutputs === preset.compress_outputs}
+                                    onChange={() => {
+                                        if (key !== 'minimal' && key !== 'standard' && key !== 'full_debug') return;
+                                        setKeepIntermediates(preset.keep_intermediates); setCompressOutputs(preset.compress_outputs);
+                                    }}
                                     className="rounded"
                                 />
                                 <span className="text-white">{preset.label}</span>

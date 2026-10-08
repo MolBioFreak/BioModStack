@@ -160,24 +160,97 @@ def _find_run_manifest(output_dir: Path) -> Path:
     return matches[0]
 
 
-def collect_children(child_status_path: Path, output_dir: Path) -> dict[str, Any]:
+def validate_collection_receipt(
+    status: dict[str, Any], receipt_path: Path, schema: str,
+) -> dict[str, Any]:
+    """Bind native collection to the exact submitted set, including failed lanes."""
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    children = receipt.get("children")
+    if receipt.get("schema") != schema or not receipt.get("parent_job_id") or not isinstance(children, list) or not children:
+        raise ValueError("invalid MD spawn receipt")
+    ids = [child.get("id") for child in children if isinstance(child, dict)]
+    indices = [child.get("replica_index") for child in children if isinstance(child, dict)]
+    if (
+        len(ids) != len(children)
+        or any(not isinstance(value, str) or not value for value in ids)
+        or len(set(ids)) != len(ids)
+        or any(isinstance(index, bool) or not isinstance(index, int) or index < 0 for index in indices)
+        or len(set(indices)) != len(indices)
+    ):
+        raise ValueError("invalid or duplicate MD spawn identity")
+    observed = status.get("child_ids") or []
+    directories = [str(Path(value).expanduser().resolve()) for value in status.get("child_output_dirs") or []]
+    if (
+        set(observed) != set(ids) or len(observed) != len(ids)
+        or status.get("total") != len(ids)
+        or sum(int(status.get(key) or 0) for key in ("completed", "execution_finished", "failed", "cancelled")) != len(ids)
+        or int(status.get("completed") or 0) + int(status.get("execution_finished") or 0) != len(directories)
+        or len(set(directories)) != len(directories)
+    ):
+        raise ValueError("MD collection does not match the exact terminal child set")
+    return receipt
+
+
+def collect_children(
+    child_status_path: Path, output_dir: Path, *, spawn_receipt: Path | None = None,
+) -> dict[str, Any]:
     status = json.loads(child_status_path.read_text(encoding="utf-8"))
+    receipt = (
+        validate_collection_receipt(status, spawn_receipt, "bms.md.replica-spawn.v1")
+        if spawn_receipt is not None else None
+    )
     child_dirs = [Path(value).expanduser().resolve() for value in status.get("child_output_dirs") or []]
     if not child_dirs:
         raise ValueError("no completed MD child output directories were supplied")
 
+    source_manifests = [_find_run_manifest(child_dir) for child_dir in child_dirs]
+    # Validate native identity before publishing any lane into the parent.
+    aggregate = aggregate_manifests(source_manifests)
+    from scripts.child_job_utils import component_runtime_enabled, seal_validated_child_files
+    use_runtime = component_runtime_enabled()
+    validated_files = {}
+    if use_runtime:
+        if receipt is None:
+            raise ValueError("runtime MD collection requires its exact spawn receipt")
+        from scripts.lib.component_adapter import runtime_from_environment
+        runtime = runtime_from_environment()
+        expected_ids = [child['id'] for child in receipt['children']]
+        if tuple(expected_ids) != runtime.group_children(f"{receipt['parent_job_id']}:md_replica"):
+            raise ValueError('MD collector receipt is not the current exact required replica set')
+        observed_dirs = {
+            str(Path(row['output_dir']).resolve()) for row in
+            (runtime.child_status(identity) for identity in expected_ids)
+            if row['status'] in {'completed', 'execution_finished'} and row['output_dir']}
+        if observed_dirs != {str(path) for path in child_dirs}:
+            raise ValueError('MD collector directories do not belong to its exact attempts')
+        from .analysis import _verify_artifact
+        for source_manifest in source_manifests:
+            run = json.loads(source_manifest.read_bytes())
+            validated_files[source_manifest] = [source_manifest] + [
+                _verify_artifact(source_manifest.parent, record)[0]
+                for record in run["artifacts"].values()]
+    if receipt is not None:
+        expected = {child["replica_index"]: child for child in receipt["children"]}
+        if set(expected) != set(range(receipt["replica_count"])):
+            raise ValueError("MD spawn receipt does not cover its declared replicas")
+        for source_manifest in source_manifests:
+            run = json.loads(source_manifest.read_text(encoding="utf-8"))
+            lane = expected.get(run["replica_index"])
+            if (
+                lane is None or run.get("job_id") != receipt["parent_job_id"]
+                or run.get("replica_seed") != lane.get("replica_seed")
+                or not isinstance(run.get("engine"), dict)
+                or run["engine"].get("name") != receipt["engine"]
+            ):
+                raise ValueError("MD replica output does not match submitted native identity")
+
     output_dir.mkdir(parents=True, exist_ok=True)
-    collected_manifests: list[Path] = []
-    for child_dir in child_dirs:
-        source_manifest = _find_run_manifest(child_dir)
+    for source_manifest in source_manifests:
         run_manifest = json.loads(source_manifest.read_text(encoding="utf-8"))
         replica_index = int(run_manifest["replica_index"])
         source_replica_dir = source_manifest.parent
         target_replica_dir = output_dir / "replicas" / f"replica_{replica_index}"
         publish_tree_immutable(source_replica_dir, target_replica_dir)
-        collected_manifests.append(target_replica_dir / "manifest.json")
-
-    aggregate = aggregate_manifests(collected_manifests)
     aggregate["lineage"] = {
         "total_children": int(status.get("total") or len(child_dirs)),
         "completed_children": int(status.get("completed") or len(child_dirs)),
@@ -188,6 +261,15 @@ def collect_children(child_status_path: Path, output_dir: Path) -> dict[str, Any
     if aggregate["lineage"]["failed_children"] or aggregate["lineage"]["cancelled_children"]:
         aggregate["status"] = "partial_failure"
     publish_json_immutable(aggregate, output_dir / "manifest.json")
+    if use_runtime:
+        for child_dir, source_manifest in zip(child_dirs, source_manifests, strict=True):
+            run = json.loads(source_manifest.read_bytes())
+            child_id = expected[run["replica_index"]]["id"]
+            seal_validated_child_files(child_id, output_dir=child_dir, result=run,
+                                      files=validated_files[source_manifest], role="md-native-replica")
+        if aggregate["status"] == "completed":
+            from scripts.lib.component_adapter import join_children
+            join_children([child["id"] for child in receipt["children"]])
     return aggregate
 
 
@@ -195,9 +277,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Collect durable MD replica child outputs")
     parser.add_argument("--child-status", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--spawn-receipt", type=Path)
     args = parser.parse_args()
 
-    collect_children(args.child_status, args.output_dir)
+    collect_children(args.child_status, args.output_dir, spawn_receipt=args.spawn_receipt)
     print(args.output_dir / "manifest.json")
 
 

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { afterEach, test } from 'vitest';
+import { afterEach, beforeEach, test } from 'vitest';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
@@ -84,7 +84,14 @@ const clickButton = async (renderer: ReactTestRenderer, label: RegExp) => {
     await flush();
 };
 
-afterEach(() => sessionStorage.clear());
+const originalAdapter = api.defaults.adapter;
+beforeEach(() => {
+    api.defaults.adapter = async config => {
+        if (config.url === '/api/execution-targets') return { data: [{ id: 'vast:123', name: 'Worker', state: 'ready', active: true, capabilities: {} }], status: 200, statusText: 'OK', headers: {}, config };
+        throw new Error(`Unexpected mounted API request: ${config.url}`);
+    };
+});
+afterEach(() => { sessionStorage.clear(); api.defaults.adapter = originalAdapter; });
 
 test('mounted launcher uses independent record/source and science/preview columns', async () => {
     const mounted = await mountLauncher({
@@ -174,8 +181,21 @@ test('mounted launcher round-trips reference state-landscape authority into the 
     });
 
     assert.match(text(mounted.renderer.root), /Reference comparison/i);
+    const provisionRequests: unknown[] = [];
+    api.defaults.adapter = async config => {
+        const selection = JSON.parse(String(config.data));
+        assert.match(String(config.url), /execution-targets\/vast%3A123\/provision\/preview$/);
+        provisionRequests.push(selection);
+        return { data: { selection, scope: 'managed_asset_activation', artifacts: [], total_bytes: 0, preview_sha256: sha('e'), scientific_ready: false }, status: 200, statusText: 'OK', headers: {}, config };
+    };
+    await clickButton(mounted.renderer, /Vast · Worker/);
+    await clickButton(mounted.renderer, /Preview artifact downloads/);
+    assert.equal(submissions.length, 0);
+    assert.equal(provisionRequests.length, 1);
+    await clickButton(mounted.renderer, /^Local$/);
     await clickButton(mounted.renderer, /Launch conformational mapping/i);
     assert.equal(submissions.length, 1);
+    assert.deepEqual(provisionRequests[0], { kind: 'workflow', workflow_request: { workflow_type: 'conformational_mapping', request: submissions[0] } });
     assert.deepEqual(submissions[0].state_landscape_comparison, {
         mode: 'reference', target_id: 'target-a', scope: 'all_other_within_target',
         reference_backend_coordinates: {
@@ -829,7 +849,7 @@ test('mounted RCSB source path supports keyword search, entry metadata, and expl
 test('mounted RCSB search rejects incomplete server entries without rendering fabricated selectors', async () => {
     const originalAdapter = api.defaults.adapter;
     api.defaults.adapter = async (config) => ({
-        data: {
+        data: config.url === '/api/execution-targets' ? [] : {
             query: '4HHB', cached: false,
             entries: [{
                 accession: '4HHB', title: 'Incomplete haemoglobin',
@@ -997,7 +1017,7 @@ test('mounted /jobs/:id routes a CM job to the canonical viewer without generic 
     globalThis.fetch = (async (input: RequestInfo | URL) => {
         if (String(input).endsWith('/api/jobs/cm-route')) {
             return new Response(JSON.stringify({
-                id: 'cm-route', name: 'Canonical routed CM', model_id: 'conformational_mapping', mode: 'map',
+                id: 'cm-route', conformational_mapping_request_id: 'cm-route', name: 'Canonical routed CM', model_id: 'conformational_mapping', mode: 'map',
                 status: 'running', created_at: '2026-08-09T00:00:00Z', output_dir: '/unused',
             }), { status: 200, headers: { 'content-type': 'application/json' } });
         }
@@ -1024,6 +1044,7 @@ test('mounted /designs/:id dispatches a CM job to the existing canonical viewer'
     const originalAdapter = api.defaults.adapter;
     const job = {
         id: 'cm-results-route',
+        conformational_mapping_request_id: 'cm-results-route',
         name: 'Canonical CM results',
         model_id: 'conformational_mapping',
         mode: 'map',

@@ -130,12 +130,12 @@ class MetadataConverter:
                         fold_id = data.get('fold_id')
                         seq_id = data.get('seq_id')
                         
-                        if fold_id is None:
-                            logging.warning("Found metadata entry without fold_id, skipping")
+                        candidate_id = data.get('candidate_id')
+                        if fold_id is None and candidate_id in (None, ''):
+                            logging.warning("Found unbound metadata entry without fold_id, skipping")
                             continue
 
                         metadata_fold_ids.add(fold_id)
-                        candidate_id = data.get('candidate_id')
                         # Candidate-bound terminal rows are keyed by canonical
                         # identity, never by fold/sequence IDs, filename,
                         # basename, physical path, row order, or content hash.

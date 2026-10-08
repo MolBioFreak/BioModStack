@@ -1,6 +1,8 @@
 """Actual scheduler/SQL claims, isolated SQLite; no provider or science calls."""
 from datetime import datetime
+import asyncio
 import sqlite3
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -11,6 +13,37 @@ from sqlalchemy.orm import sessionmaker
 from database import Base, ExecutionTarget, Job
 import services.gpu_orchestrator as scheduler
 from migrations.enable_multiple_execution_targets import migrate
+from test_managed_runtime_safety import critical_package
+
+
+@pytest.mark.parametrize('shortage', [None, 'cpus', 'memory_bytes', 'scratch_bytes'])
+def test_local_checkpoint_uses_actual_plan_and_current_local_authority(tmp_path, monkeypatch, shortage):
+    from types import SimpleNamespace
+    import json
+    import shutil
+    import biomodstack_local_resources as local
+    from component_runtime import GeneratedInput
+    from services.nextflow import component_checkpoint_resources
+    component = SimpleNamespace(component_key='native', resources_json=json.dumps(
+        dict(cpus=dict(value=4), memory=dict(value='12 GB'))))
+    invocation = SimpleNamespace(execution_plan=SimpleNamespace(metadata=SimpleNamespace(
+        static_components=(component,), dynamic_templates=())),
+        generated_inputs=[GeneratedInput('new.json', b'new'), GeneratedInput('retained.json', b'old')])
+    (tmp_path / 'retained.json').write_bytes(b'old')
+    context = dict(target_id='local', artifact_root=str(tmp_path),
+        resources=dict(gpu_ids=[], gpu_id=None, required=dict(cpus=1, memory_bytes=1, scratch_bytes=999999)))
+    monkeypatch.setattr(local, 'applied_local_policy', lambda: local.LocalCapacity(8, 16*1024**3))
+    monkeypatch.setattr(local, 'detect_local_capacity', lambda: local.LocalCapacity(
+        1 if shortage == 'cpus' else 8, 1 if shortage == 'memory_bytes' else 16*1024**3))
+    monkeypatch.setattr(shutil, 'disk_usage', lambda _: SimpleNamespace(free=0 if shortage == 'scratch_bytes' else 3))
+    if shortage:
+        with pytest.raises(ValueError, match='capacity'):
+            component_checkpoint_resources(invocation, context)
+    else:
+        result = component_checkpoint_resources(invocation, context)
+        assert result['required'] == dict(cpus=4, memory_bytes=12*1024**3, scratch_bytes=3)
+        assert result['gpu_ids'] == [] and not result['admission_required']
+        assert context['resources']['required']['cpus'] == 1
 
 
 @pytest_asyncio.fixture
@@ -45,6 +78,142 @@ async def workers(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_slow_target_control_does_not_block_other_target_or_release_terminal_lease(workers, monkeypatch):
+    from services.remote_execution import executor
+    blocked, second, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    async with workers() as session:
+        for i in (1, 2):
+            target = await session.get(ExecutionTarget, f"vast:{i}")
+            target.leased_job_id = f"job-{i}"
+            job = await session.get(Job, f"job-{i}")
+            job.status = job.queue_status = "failed"
+        await session.commit()
+    calls = []
+    async def reconcile(session, job):
+        calls.append(job.id)
+        if job.id == "job-1":
+            blocked.set()
+            await release.wait()
+        else:
+            second.set()
+    monkeypatch.setattr(executor, "reconcile_remote_job", reconcile)
+    owner = scheduler.GPUOrchestrator(workers, lambda: [], lambda **kwargs: None)
+    try:
+        await owner.check_job_completions()
+        await asyncio.wait_for(blocked.wait(), 2)
+        await asyncio.wait_for(second.wait(), 2)
+        await owner.check_job_completions()
+        assert calls.count("job-1") == 1
+        async with workers() as session:
+            assert (await session.get(ExecutionTarget, "vast:1")).leased_job_id == "job-1"
+    finally:
+        release.set()
+        await owner.stop()
+    assert not owner._remote_reconciliation_tasks
+
+
+def test_remote_device_zero_is_not_local_device_zero():
+    from types import SimpleNamespace
+    remote = SimpleNamespace(id="remote", execution_target_id="vast:2", queue_status="running")
+    # Remote rows must be removed before local PID/GPU attribution or model limits.
+    assert scheduler.collect_live_vram_by_job([remote], []) == {}
+    assert scheduler.build_queue_scheduler_diagnostics([remote], [remote], [object()], {}) == {}
+
+
+@pytest.mark.asyncio
+async def test_claim_preserves_physical_assignment_and_rejects_endpoint_drift(workers):
+    async with workers() as session:
+        job = await session.get(Job, "job-2")
+        target = await session.get(ExecutionTarget, "vast:2")
+        identity = {key: getattr(target, key) for key in
+                    ("host", "port", "username", "remote_root", "host_key_sha256")}
+        bad = {**identity, "host": "replacement"}
+        assert await scheduler._claim_remote_job(session, job, gpu_id=3, gpu_ids=[3],
+            vram_estimate_mb=100, admission_snapshot={"target_identity": bad}) is None
+        sample = {"target_identity": identity, "devices": [{"gpu_index": 3, "gpu_uuid": "GPU-two"}]}
+        assert await scheduler._claim_remote_job(session, job, gpu_id=3, gpu_ids=[3],
+            vram_estimate_mb=100, admission_snapshot=sample) is not None
+        assignment = job.provenance["remote_execution_assignment"]
+        assert assignment["root_job_id"] == "job-2" and assignment["lease_id"]
+        assert assignment["execution_target_id"] == "vast:2"
+        assert assignment["gpu_indices"] == [3]
+        assert assignment["admission_snapshot"]["devices"] == sample["devices"]
+
+
+@pytest.mark.asyncio
+async def test_stale_worker_does_not_hide_ready_fleet_member(workers):
+    from services.remote_execution import targets
+    async with workers() as session:
+        first = await session.get(ExecutionTarget, "vast:1")
+        first.provider_metadata = {"inventory": {"status": "unknown", "present": True}}
+        await session.commit()
+        listed = {row.id: row for row in await targets.list_targets(session)}
+        assert set(listed) == {"vast:1", "vast:2"}
+        assert not listed["vast:1"].capabilities["scheduling"]["new_work_ready"]
+        assert listed["vast:2"].capabilities["scheduling"]["new_work_ready"]
+        with pytest.raises(targets.ExecutionTargetError):
+            await targets.get_ready_target(session, "vast:1")
+        assert (await targets.get_target(session, "vast:1")).id == "vast:1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shortage", [None, "cpu", "ram", "disk", "uuid"])
+async def test_compiled_resources_bind_to_selected_target_only(workers, monkeypatch, shortage):
+    from services.remote_execution import targets
+    sample = {"available": True, "observed_at": "fixture", "cpu": {"allocated_cores": 8},
+              "ram": {"limit_bytes": 1000, "used_bytes": 200},
+              "disk": {"path": "/opt/biomodstack", "free_bytes": 500},
+              "gpus": [{"index": 3, "uuid": "GPU-target-two"}]}
+    if shortage == "cpu": sample["cpu"]["allocated_cores"] = 1
+    if shortage == "ram": sample["ram"]["used_bytes"] = 950
+    if shortage == "disk": sample["disk"]["free_bytes"] = 0
+    if shortage == "uuid": sample["gpus"][0]["uuid"] = None
+    async def telemetry(target):
+        assert target.id == "vast:2"
+        return sample
+    monkeypatch.setattr(targets, "remote_target_telemetry", telemetry)
+    async with workers() as session:
+        target = await session.get(ExecutionTarget, "vast:2")
+        target.remote_root = "/opt/biomodstack"
+        kwargs: dict[str, Any] = dict(required_cpus=4, required_memory_bytes=100, required_scratch_bytes=200, gpu_ids=[3])
+        if shortage:
+            with pytest.raises(targets.ExecutionTargetError):
+                await targets.admit_target_resources(target, **kwargs)
+        else:
+            receipt = await targets.admit_target_resources(target, **kwargs)
+            assert receipt["execution_target_id"] == "vast:2"
+            assert receipt["devices"] == [{"gpu_index": 3, "gpu_uuid": "GPU-target-two"}]
+            assert receipt["required"] == {"cpus": 4, "memory_bytes": 100, "scratch_bytes": 200}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unresolved", [False, True])
+async def test_selected_plan_binds_native_resources(monkeypatch, unresolved):
+    from types import SimpleNamespace
+    from native_components import native_resource_policy
+    from services.remote_execution import targets
+    components = [SimpleNamespace(component_key="cpu", resources_json=native_resource_policy({}, "CPU")),
+                  SimpleNamespace(component_key="gpu", resources_json=native_resource_policy({}, "gpu"))]
+    if unresolved:
+        components[1].resources_json = None
+    plan = SimpleNamespace(metadata=SimpleNamespace(static_components=tuple(components), dynamic_templates=()))
+    def forbidden(*args, **kwargs):
+        pytest.fail("pure selected-plan projection must not probe or admit")
+    monkeypatch.setattr(targets, "admit_target_resources", forbidden)
+    target = SimpleNamespace(id="vast:2")
+    if unresolved:
+        with pytest.raises(targets.ExecutionTargetError, match="gpu"):
+            targets.selected_plan_target_resources(target, plan, gpu_ids=[3], scratch_bytes=200)
+    else:
+        result = targets.selected_plan_target_resources(target, plan, gpu_ids=[3], scratch_bytes=200)
+        assert result["required"] == dict(cpus=4, memory_bytes=12 * 1024**3, scratch_bytes=200)
+        assert result["gpu_ids"] == [3] and result["admission_required"]
+        assert [row["component_key"] for row in result["components"]] == ["cpu", "gpu"]
+        with pytest.raises(targets.ExecutionTargetError, match="GPU requirement"):
+            targets.selected_plan_target_resources(target, plan, gpu_ids=[], scratch_bytes=200)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("conflict", ["lease", "job_changed"])
 async def test_losing_claim_does_not_expire_other_workers_or_hold_target(workers, conflict):
     async with workers() as session:
@@ -69,6 +238,45 @@ async def test_losing_claim_does_not_expire_other_workers_or_hold_target(workers
         assert first_target.leased_job_id == ("predecessor" if conflict == "lease" else None)
         assert second_target.leased_job_id == "job-2"
         assert (await verify.get(Job, "job-2")).name == "pending-unrelated-edit"
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_executor_transmits_fresh_same_target_admission(workers, monkeypatch):
+    from types import SimpleNamespace
+    import json
+    from unittest.mock import AsyncMock
+    from services.remote_execution import executor, targets
+    from tools import bms_remote_worker as worker
+    devices = [dict(gpu_index=3, gpu_uuid='GPU-two')]
+    observed = dict(schema='bms.target-resource-admission.v1', execution_target_id='vast:2', devices=devices,
+        required=dict(cpus=1, memory_bytes=1, scratch_bytes=0),
+        available=dict(cpus=8, memory_bytes=16*1024**3, scratch_bytes=50))
+    admission = AsyncMock(return_value=observed)
+    monkeypatch.setattr(targets, 'admit_target_resources', admission)
+    monkeypatch.setattr(executor, '_connection_for_attempt', lambda *args: (object(), '/fixture/attempt'))
+    monkeypatch.setattr(executor, '_worker_argv', lambda *args: ['checkpoint-resume', '--attempt-dir', '/fixture/attempt'])
+    monkeypatch.setattr(executor, '_publish_remote_transition', AsyncMock(return_value=True))
+    async def control(connection, argv, **kwargs):
+        args = worker.parser().parse_args(argv)
+        assert json.loads(args.resource_admission_json) == observed
+        assert args.expected_boot_id == 'boot' and args.lease_id == 'lease'
+        return SimpleNamespace(stdout=SimpleNamespace(attempt_id='attempt', job_id='job-2',
+            boot_id='boot', continuation_lease_id=args.continuation_lease_id,
+            generation=1, plan_sha256='b'*64, native_output_directory='generations/review'))
+    monkeypatch.setattr(executor, 'run_remote', control)
+    monkeypatch.setattr(executor, '_parse_status', lambda value: value)
+    async with workers() as session:
+        job = await session.get(Job, 'job-2')
+        job.remote_attempt_id = 'attempt'
+        job.provenance = dict(remote_execution_receipt=dict(boot_id='boot'),
+            remote_execution_assignment=dict(resources=dict(gpu_ids=[3], admission=dict(devices=devices),
+                required=dict(cpus=999, memory_bytes=999, scratch_bytes=999))))
+        checkpoint = dict(attempt_id='attempt', target_id='vast:2', lease_id='lease',
+            checkpoint_id='review', checkpoint_sha256='a'*64)
+        result = await executor.request_remote_checkpoint_resume(session, job, checkpoint, {'continue': True})
+        assert result['state'] == 'continuing'
+        assert admission.call_args.kwargs == dict(required_cpus=1, required_memory_bytes=1,
+            required_scratch_bytes=0, gpu_ids=[3], minimum_gpu_memory_mb=0)
 
 
 @pytest.mark.asyncio
@@ -184,7 +392,7 @@ async def test_attachment_controller_admits_distinct_workers_but_not_duplicate_s
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("other_activity", ["idle", "lease", "preload", "nonterminal"])
-async def test_attachment_is_target_scoped_and_preserves_other_active_worker(workers, monkeypatch, tmp_path, other_activity):
+async def test_attachment_is_target_scoped_and_preserves_other_active_worker(workers, monkeypatch, tmp_path, other_activity, critical_package):
     from types import SimpleNamespace
     from sqlalchemy import select
     from services.remote_execution import targets, vast
@@ -225,6 +433,19 @@ async def test_attachment_is_target_scoped_and_preserves_other_active_worker(wor
         monkeypatch.setattr(targets, "rsync_to_remote", noop)
         monkeypatch.setattr(targets, "run_remote", run)
         monkeypatch.setattr(targets, "_sha256_file", lambda *args: "fixturehash")
+        from services.remote_execution import critical_runtime, managed_inventory, cache
+        manifest, artifacts, _, _ = critical_package
+        async def helper(*args, **kwargs): return {"boot_id": "fixture-boot"}
+        async def activate(*args, **kwargs):
+            return SimpleNamespace(model_dump=lambda **kw: {"state": "ready"})
+        async def observe(*args, **kwargs):
+            return SimpleNamespace(boot_id="fixture-boot", critical_runtime_ready=True,
+                                   model_dump=lambda **kw: {"boot_id": "fixture-boot"})
+        monkeypatch.setattr(critical_runtime, "project_runtime", lambda *args: (manifest, artifacts))
+        monkeypatch.setattr(managed_inventory, "helper_call", helper)
+        monkeypatch.setattr(managed_inventory, "activate_release", activate)
+        monkeypatch.setattr(managed_inventory, "observe_releases", observe)
+        monkeypatch.setattr(cache, "_cache_artifacts", noop)
         response = await targets.activate_target(session, ExecutionTargetActivateRequest(provider_instance_id="2"))
         assert response.active and response.state == "ready"
         assert (await session.execute(select(ExecutionTarget.__table__).where(ExecutionTarget.id == "vast:1"))).one() == before

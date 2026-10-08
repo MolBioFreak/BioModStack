@@ -10,7 +10,9 @@ include {
     RunShapeProteinMPNN
     RunShapeFAMPNN
     EvaluateShapeCandidate
-    RunShapeValidatorEvidence
+    RunShapeBoltzValidator
+    RunShapeProtenixValidator
+    AggregateShapeValidatorEvidence
     AttachShapePostRefold
     BuildShapeSkipBundle
     BuildShapeResult
@@ -89,11 +91,14 @@ workflow {
     if (validatorSuite.any { !(it in ['boltz2', 'esmfold2', 'protenix_v2']) }) {
         error "Shape validator suite contains an unsupported validator"
     }
+    if (validatorSuite.unique(false).size() != validatorSuite.size()) {
+        error "Shape validator suite contains duplicates"
+    }
 
     ValidateShapeBundle(requestFile, manifestFile, verticesFile, facesFile, pointsFile, sdfFile)
     PlanRFD3Batches(requestFile)
     RunShapeRFD3(
-        PlanRFD3Batches.out.batch_requests,
+        PlanRFD3Batches.out.batch_requests.flatten(),
         manifestFile,
         pointsFile,
         sdfFile,
@@ -120,9 +125,9 @@ workflow {
             tuple(candidateId, backboneBundle.resolve('shape_backbone.pdb'))
         }
         if (sequenceEngine == 'proteinmpnn') {
-            RunShapeProteinMPNN(shapeBackbones, sequenceCount, seed)
+            RunShapeProteinMPNN(shapeBackbones, sequenceCount, seed, requestFile)
         } else {
-            RunShapeFAMPNN(shapeBackbones, sequenceCount, seed)
+            RunShapeFAMPNN(shapeBackbones, sequenceCount, seed, requestFile)
         }
         def sequenceBundles = sequenceEngine == 'proteinmpnn'
             ? RunShapeProteinMPNN.out.bundle
@@ -134,11 +139,33 @@ workflow {
             tuple(producerMeta, sequence, name)
         })
         def validatorInputs = ESMFold2Predict.out.shape_result.join(
-            shapeSequences.map { producerMeta, sequence, name, source -> tuple(name, sequence) }
+            shapeSequences.map { producerMeta, sequence, name, source -> tuple(name, sequence) },
+            failOnDuplicate: true, failOnMismatch: true
         )
-        RunShapeValidatorEvidence(validatorInputs, validatorSuite, seed)
+        def nativeValidatorInputs = shapeSequences.map { producerMeta, sequence, name, source -> tuple(name, sequence) }
+        def suiteInputs = validatorInputs.map { name, structure, metrics, sequence ->
+            tuple(name, structure, metrics, sequence, [])
+        }
+        if ('boltz2' in validatorSuite) {
+            RunShapeBoltzValidator(nativeValidatorInputs, seed)
+            suiteInputs = suiteInputs.join(
+                RunShapeBoltzValidator.out.evidence, failOnDuplicate: true, failOnMismatch: true
+            ).map { name, structure, metrics, sequence, peers, evidence ->
+                tuple(name, structure, metrics, sequence, peers + [evidence])
+            }
+        }
+        if ('protenix_v2' in validatorSuite) {
+            RunShapeProtenixValidator(nativeValidatorInputs, seed)
+            suiteInputs = suiteInputs.join(
+                RunShapeProtenixValidator.out.evidence, failOnDuplicate: true, failOnMismatch: true
+            ).map { name, structure, metrics, sequence, peers, evidence ->
+                tuple(name, structure, metrics, sequence, peers + [evidence])
+            }
+        }
+        AggregateShapeValidatorEvidence(suiteInputs, validatorSuite, seed)
         def evaluatedInputs = ESMFold2Predict.out.shape_result.join(
-            shapeSequences.map { producerMeta, sequence, name, source -> tuple(name, source) }
+            shapeSequences.map { producerMeta, sequence, name, source -> tuple(name, source) },
+            failOnDuplicate: true, failOnMismatch: true
         )
         EvaluateShapeCandidate(
             evaluatedInputs,
@@ -147,7 +174,7 @@ workflow {
             pointsFile,
             sdfFile,
         )
-        def attachInputs = EvaluateShapeCandidate.out.bundle.join(RunShapeValidatorEvidence.out.evidence)
+        def attachInputs = EvaluateShapeCandidate.out.bundle.join(AggregateShapeValidatorEvidence.out.evidence, failOnDuplicate: true, failOnMismatch: true)
         AttachShapePostRefold(attachInputs, requestFile, manifestFile, pointsFile, sdfFile)
         candidateBundles = AttachShapePostRefold.out.bundle.map { sequenceName, bundle -> bundle }
     } else {

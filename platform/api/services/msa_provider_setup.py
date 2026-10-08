@@ -78,6 +78,13 @@ def credential_file() -> Path | None:
     return path
 
 
+def controller_config_path() -> Path:
+    value = os.environ.get('BMS_MSA_CONTROLLER_CONFIG')
+    if not value or not Path(value).is_absolute():
+        raise ValueError('Configure BMS_MSA_CONTROLLER_CONFIG as an absolute qualified controller configuration path')
+    return Path(value)
+
+
 def _credential_configured() -> bool:
     path = credential_file()
     if path is None:
@@ -86,7 +93,8 @@ def _credential_configured() -> bool:
         info = path.lstat()
     except OSError:
         return False
-    return (stat.S_ISREG(info.st_mode) and info.st_size > 0
+    return (stat.S_ISREG(info.st_mode) and 1 <= info.st_size <= 4096
+            and info.st_uid == os.getuid()
             and not info.st_mode & 0o077 and os.access(path, os.R_OK))
 
 
@@ -94,24 +102,39 @@ def provider_readiness() -> dict:
     """Inspect configuration without reading keys or making provider requests."""
     blockers: list[str] = []
     try:
-        root = cache_root()
-        if any(path.is_symlink() for path in (root, *root.parents)):
-            blockers.append("MSA cache must not traverse symlinks")
-        if root.exists():
-            info = root.stat()
-            if info.st_uid != os.getuid() or info.st_mode & 0o022:
-                blockers.append("MSA API cache must be service-owned and not group/world writable")
-        parent = root
-        while not parent.exists() and parent != parent.parent:
-            parent = parent.parent
-        if not parent.is_dir() or not os.access(parent, os.W_OK | os.X_OK):
-            blockers.append("MSA cache parent is not writable by the service")
+        roots = [('MSA cache', cache_root()), ('MSA controller state', Path(os.environ.get(
+            'BMS_MSA_API_STATE_ROOT', str(Path.home() / '.cache/biomodstack/msa-api-controller'))))]
+        for label, root in roots:
+            if not root.is_absolute():
+                blockers.append(f'{label} must be absolute')
+                continue
+            if any(path.is_symlink() for path in (root, *root.parents)):
+                blockers.append(f'{label} must not traverse symlinks')
+                continue
+            if root.exists():
+                info = root.stat()
+                if not stat.S_ISDIR(info.st_mode):
+                    blockers.append(f'{label} must be a directory')
+                    continue
+                if info.st_uid != os.getuid() or info.st_mode & 0o022:
+                    blockers.append(f'{label} must be service-owned and not group/world writable')
+            parent = root
+            while not parent.exists() and parent != parent.parent:
+                parent = parent.parent
+            if not parent.is_dir() or not os.access(parent, os.W_OK | os.X_OK):
+                blockers.append(f'{label} parent is not writable by the service')
     except (OSError, ValueError):
-        blockers.append("MSA cache configuration is invalid")
+        blockers.append("MSA cache/controller state configuration is invalid")
     result = {}
     for provider in PROVIDERS:
         errors = list(blockers)
         configured = None
+        if provider == "colabfold_api":
+            from biomodstack_msa_controller import validate_controller_config
+            try:
+                validate_controller_config(controller_config_path())
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+                errors.append('Configure BMS_MSA_CONTROLLER_CONFIG with qualified single-egress controller settings')
         if provider == "neurosnap_api":
             try:
                 configured = _credential_configured()
@@ -139,6 +162,26 @@ def preflight_msa_provider(model_id: str, params: dict) -> None:
     from biomodstack_msa_api import validate_settings
     provider = selected_provider(params)
     validate_settings(provider, provider_settings(params))
+    # A literal or typed-complex verified replay needs no submission setup.
+    # Unknown/generated rosters remain the native compiler's responsibility.
+    import json
+    components = params.get('complex_components')
+    if isinstance(components, str):
+        components = json.loads(components)
+    sequences = [c['sequence'] for c in (components or [])
+                 if c.get('type', 'protein') in {'protein', 'peptide'}]
+    sequence = params.get('sequence_input') or params.get('sequence')
+    if not sequences and sequence:
+        sequences = [sequence]
+    import re
+    if sequences and all(isinstance(s, str) and re.fullmatch(r'[A-Z]+', s) for s in sequences):
+        from services.msa_preparation import prepare_model_msa
+        from biomodstack_msa_api import MSACacheMiss
+        try:
+            prepare_model_msa(sequences=sequences, params={**params, 'msa_cache_only': True})
+            return
+        except MSACacheMiss:
+            pass
     readiness = provider_readiness()["providers"][provider]
     if not readiness["configured"]:
         raise ValueError("; ".join(readiness["blockers"]))

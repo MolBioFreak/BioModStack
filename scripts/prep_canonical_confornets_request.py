@@ -13,6 +13,8 @@ import stat
 from pathlib import Path
 from typing import Any
 
+from lib.portable_inputs import trusted_results_root
+
 
 class CanonicalPrepError(ValueError):
     pass
@@ -70,9 +72,9 @@ def _resolved_request_root(request_root: Path) -> tuple[Path, os.stat_result]:
         resolved = request_root.resolve(strict=True)
     except OSError as exc:
         raise CanonicalPrepError(f"request root is not resolvable: {exc}") from exc
-    allowed_root = Path(
+    allowed_root = trusted_results_root(
         os.environ.get("BMS_RESULTS_ROOT", "/home/dalab/.biomodstack-dev/bms_results")
-    ).resolve()
+    )
     try:
         resolved.relative_to(allowed_root)
     except ValueError as exc:

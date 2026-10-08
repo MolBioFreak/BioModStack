@@ -189,7 +189,7 @@ async def test_external_signal_alignment_completion_persists_primary_package_aut
     assert result["declared_artifact_count"] == 5
     assert job.provenance["result_integrity"]["result_kind"] == "ngs_alignment_session"
     assert job.provenance["result_integrity"]["sequence_qc_manifest_sha256"] == "c" * 64
-    assert "resource_evidence_status" not in result
+    assert result["resource_evidence_status"] == "unavailable"
     assert job.params["run_fastq_qc"] is False
     assert job.status == "completed"
     assert job.queue_status == "completed"
@@ -205,10 +205,8 @@ async def test_external_signal_alignment_completion_persists_primary_package_aut
             f"bms_results/{output_root.name}/qc_manifest.json",
         ]
     }
-    assert {call["session_id"] for call in presentation_calls} == {"1" * 24, "6" * 24}
-    assert all(call["job_id"] == job.id for call in presentation_calls)
-    assert all(call["cache_root"].name == ".alignment-presentations" for call in presentation_calls)
-    assert all(str(call["cache_root"]).startswith("/proc/self/fd/") for call in presentation_calls)
+    assert presentation_calls == []
+    assert "alignment_presentations" not in result
 
 
 def test_package_builder_rejects_exact_five_field_duplicate_descriptors(
@@ -547,8 +545,13 @@ def test_terminal_stage_receipts_reject_noncanonical_order_extras_and_cross_stag
         output_by_stage["fastq_align"].append(f"bms_results/{result_root.name}/align/extra.txt")
     else:
         output_by_stage["dimer_qc"][0] = output_by_stage["fastq_align"][0]
-    with pytest.raises(OntNgsCompletionError, match="output contract mismatch|duplicated across stages"):
-        _validate_terminal_stages(cast(Any, _job_with_terminal_states(output_by_stage)), result_root, result_root)
+    if mutation == "reorder":
+        stages, outputs = _validate_terminal_stages(cast(Any, _job_with_terminal_states(output_by_stage)), result_root, result_root)
+        assert stages == list(_REQUIRED_TERMINAL_STAGES)
+        assert outputs == output_by_stage
+    else:
+        with pytest.raises(OntNgsCompletionError, match="output contract mismatch|duplicated across stages"):
+            _validate_terminal_stages(cast(Any, _job_with_terminal_states(output_by_stage)), result_root, result_root)
 
 
 def test_terminal_stage_validation_rejects_a_relative_receipt_for_another_result_root(
@@ -729,20 +732,24 @@ async def test_finalizer_persists_stage_mirrors_without_a_transient_all_stages_f
     assert integrity["present_artifact_count"] == 34
     assert integrity["unavailable_artifact_count"] == 2
     assert integrity["source_fastq_sha256"] == "f" * 64
-    assert integrity["alignment_presentations"] == [
-        {
-            "session_id": "1" * 24,
-            "authority_sha256": "2" * 64,
-            "manifest_sha256": "3" * 64,
-        }
-    ]
-    assert len(materialization_calls) == 1
-    materialization = materialization_calls[0]
-    assert materialization["job"] is job
-    assert str(materialization["pinned_result_root"]).startswith("/proc/self/fd/")
-    assert materialization["source_reference_sha256"] == reference_sha256
-    assert materialization["workflow_id"] == "ont_fastq_qc"
-    assert materialization["input_mode"] == "fastq"
-    assert materialization["package_artifact_set_sha256"] == integrity["artifact_set_sha256"]
+    assert "alignment_presentations" not in integrity
+    assert materialization_calls == []
     assert attached_receipts == [{"complete": True, "receipt_sha256": "9" * 64}]
     assert job.params["resource_usage_receipts"] == attached_receipts
+
+
+
+def test_package_source_custody_and_published_reopen_are_distinct(tmp_path, monkeypatch):
+    from tests.ont_ngs_completion_fixture import configure_valid_ont_terminal_completion
+    from services import ngs_alignment_sessions as service
+    job = SimpleNamespace(id="source-custody", model_id="nanopore", params={}, provenance={})
+    configure_valid_ont_terminal_completion(monkeypatch, job, tmp_path, production_validation=True)
+    root = tmp_path / "state/bms_results/source-custody"
+    authority: dict[str, Any] = dict(workflow_id="ont_fastq_qc", input_mode="fastq", source_reference_sha256=job.params["reference_sequence_sha256"], source_input_path=job.params["fastq_path"], job_output_dir=root)
+    inventory = service.build_ngs_package_artifacts(job.id, **authority, verify_source_input=True)
+    assert inventory
+    Path(job.params["fastq_path"]).write_bytes(b"different-input")
+    with pytest.raises(service.AlignmentSessionError, match="source|FASTQ|input"):
+        service.build_ngs_package_artifacts(job.id, **authority, verify_source_input=True)
+    monkeypatch.setattr(service, "_stable_file_identity", lambda *a, **kw: pytest.fail("reopen rescanned managed input"))
+    assert service.build_ngs_package_artifacts(job.id, **authority, published_artifacts=inventory) == inventory

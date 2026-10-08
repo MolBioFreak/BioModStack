@@ -87,6 +87,7 @@ def main():
     parser = argparse.ArgumentParser(description='Restores side-chains to PDB files after RFdiffusion processing')
     parser.add_argument('--input_dir', required=True, help='Input directory containing PDB files')
     parser.add_argument('--out_dir', default='./outputpdbs', help='Output directory for updated PDB files')
+    parser.add_argument('--generic_identity', action='store_true', help='Require unchanged author identities without chain-order relabeling')
     parser.add_argument('--publish_identity', action='store_true', help='Publish trusted residue-object preparation provenance')
     parser.add_argument('--maturation_transport', action='store_true', help='Carry request-owned maturation identity, rejecting parser loss')
     args = parser.parse_args()
@@ -107,6 +108,25 @@ def main():
 
         # Import design. PyRosetta will automatically restore missing side-chains
         pose_design = pyrosetta.pose_from_pdb(str(pdb_file))
+
+        if args.generic_identity:
+            from prep_fampnn_constraints_generic import pdb_domain
+            domain = pdb_domain(pdb_file)
+            info = pose_design.pdb_info()
+            parsed = [(info.chain(i), int(info.number(i)))
+                      for i in range(1, pose_design.total_residue() + 1)]
+            if parsed != list(domain) or any(info.icode(i).strip() for i in range(1, pose_design.total_residue() + 1)):
+                raise ValueError('preparation parser lost exact source residue identity')
+            output_path = out_dir / pdb_file.name
+            pose_design.dump_pdb(str(output_path))
+            if pdb_domain(output_path) != domain:
+                raise ValueError('preparation export changed source residue identity')
+            if args.publish_identity:
+                from fampnn_policy_resolution import prep_receipt
+                source_ids = [f'{chain}:{number}:' for chain, number in parsed]
+                receipt = prep_receipt(pdb_file, output_path, [(identity, identity) for identity in source_ids])
+                output_path.with_suffix('.fampnn_prep.json').write_text(json.dumps(receipt, sort_keys=True) + '\n')
+            continue
 
         if args.maturation_transport:
             prepare_maturation(pdb_file, out_dir / pdb_file.name, pose_design)

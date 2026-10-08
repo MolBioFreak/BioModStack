@@ -144,6 +144,7 @@ process FastqDimerAnalysis {
     path "dominant_dimer_consensus.fasta", emit: dominant_consensus, optional: true
     path "dominant_dimer_consensus.log", emit: dominant_consensus_log, optional: true
     path "dominant_dimer_consensus_metadata.tsv", emit: dominant_consensus_metadata, optional: true
+    path "dominant_dimer_consensus.read_ids.txt", emit: dominant_consensus_reads, optional: true
     path "dimer_junction_profile.tsv", emit: junction_profile, optional: true
     path "dimer_read_junctions.tsv", emit: junction_reads, optional: true
     path "dimer_junction_events.tsv", emit: junction_events, optional: true
@@ -169,9 +170,9 @@ process FastqDimerAnalysis {
     def minReadLength = (params.min_fastq_read_length ?: 0) as Integer
     def enableRotation = params.enable_rotating_reference_frames == false ? 'false' : 'true'
     def rotationScanStep = (params.rotation_scan_step_bp ?: 1) as Integer
-    def singleRefMinMapq = (params.single_ref_split_min_mapq ?: 20) as Integer
+    def singleRefMinMapq = (params.single_ref_split_min_mapq != null ? params.single_ref_split_min_mapq : 20) as Integer
     def singleRefMinSegBp = (params.single_ref_split_min_segment_bp ?: 250) as Integer
-    def singleRefMaxGapBp = (params.single_ref_split_max_query_gap_bp ?: 500) as Integer
+    def singleRefMaxGapBp = (params.single_ref_split_max_query_gap_bp != null ? params.single_ref_split_max_query_gap_bp : 500) as Integer
     def minimapPreset = ((params.fastq_minimap2_preset ?: 'map-ont') as String).trim()
     def minimapAllowSecondary = (params.fastq_minimap2_allow_secondary == true) ? 'true' : 'false'
     def codeRoot = params.code_root ?: projectDir
@@ -662,6 +663,7 @@ process FastqDimerAnalysis {
             samtools index dimer_candidates.single_ref.aligned.bam
 
             samtools view -F 260 dimer_candidates.single_ref.aligned.bam \\
+                | LC_ALL=C sort -k1,1 -k4,4n \\
                 | awk -v ref_len="\${ref_len}" -v min_mapq=${singleRefMinMapq} -v min_seg_bp=${singleRefMinSegBp} -v max_gap=${singleRefMaxGapBp} \\
                     -f dimer_single_ref_split_events.awk \\
                 > dimer_single_ref_split_events.unsorted.tsv
@@ -737,7 +739,9 @@ process FastqDimerAnalysis {
                 printf "0"
             }
         }')
+        dominant_split_evidence_source="dimer_reference"
         if [[ "\${single_ref_dominant_split_support}" -gt "\${dominant_split_junction_support}" ]]; then
+            dominant_split_evidence_source="single_reference"
             dominant_split_junction_pos="\${single_ref_dominant_split_pos}"
             dominant_split_junction_support="\${single_ref_dominant_split_support}"
         fi
@@ -1265,6 +1269,8 @@ process FastqDimerAnalysis {
 
         bash "${codeRoot}/scripts/dominant_dimer_consensus.sh" \\
             --events dimer_junction_events.tsv \\
+            --single-ref-events dimer_single_ref_split_events.tsv \\
+            --dominant-split-source "\${dominant_split_evidence_source}" \\
             --bam dimer_candidates.aligned.bam \\
             --dimer-count "\${dimer_count}" \\
             --screened-pos "\${screened_primary_breakpoint_position_mod_ref}" \\

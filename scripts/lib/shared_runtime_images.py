@@ -235,7 +235,7 @@ def _recover_publications_locked(root: Path) -> None:
             raise
 
 
-def _publish_image_locked(source: Path, store_root: Path, expected_sha256: str) -> Path:
+def _publish_image_locked(source: Path, store_root: Path, expected_sha256: str, *, _receipts=None) -> Path:
     """Publish once, or verify/reuse objects/sha256/<digest>/runtime.sif.
 
     Source identity and SHA-256 are checked before and after the sole byte copy.
@@ -258,7 +258,9 @@ def _publish_image_locked(source: Path, store_root: Path, expected_sha256: str) 
         except FileNotFoundError:
             pass
         else:
-            verify_image(result, expected)
+            receipt = verify_image(result, expected)
+            if _receipts is not None:
+                _receipts[expected] = receipt
             _check_directory(objects, objects_fd)
             return result
 
@@ -300,7 +302,9 @@ def _publish_image_locked(source: Path, store_root: Path, expected_sha256: str) 
             os.rename(stage, expected, src_dir_fd=objects_fd, dst_dir_fd=objects_fd)
             published = True
             os.fsync(objects_fd)
-            verify_image(result, expected)
+            receipt = verify_image(result, expected)
+            if _receipts is not None:
+                _receipts[expected] = receipt
             _check_directory(objects, objects_fd)
             return result
         finally:

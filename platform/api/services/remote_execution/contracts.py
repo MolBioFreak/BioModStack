@@ -6,7 +6,8 @@ from pathlib import PurePosixPath
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
+from schemas import JobCreate
 
 SHA256_PATTERN = r"^[0-9a-f]{64}$"
 
@@ -76,7 +77,70 @@ class ProvisionSelection(StrictModel):
     model_id: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
 
 
+from services.workflow_request_types import SubmitRequest
+from services.md.starting_structures import MdLaunchPreviewRequest
+
+
+class ConformationalMappingProvisionWorkflow(StrictModel):
+    workflow_type: Literal["conformational_mapping"]
+    request: SubmitRequest
+
+    # Persist/replay an actual caller request, not server-authored provenance.
+    # SubmitRequest's native validator deliberately rejects supplied origin.
+    @field_serializer("request")
+    def serialize_request(self, value):
+        excluded = ({"frustrampnn_settings": {"settings_value_origin"}}
+                    if "frustrampnn_settings" in value.model_fields_set else {"frustrampnn_settings": True})
+        return value.model_dump(mode="json", exclude=excluded)
+
+
+class MolecularDynamicsProvisionWorkflow(StrictModel):
+    workflow_type: Literal["molecular_dynamics"]
+    request: MdLaunchPreviewRequest
+
+
+class WorkflowProvisionSelection(StrictModel):
+    kind: Literal["workflow"]
+    workflow_request: JobCreate | ConformationalMappingProvisionWorkflow | MolecularDynamicsProvisionWorkflow
+
+    @field_validator("workflow_request", mode="before")
+    @classmethod
+    def closed_workflow_request(cls, value):
+        if isinstance(value, dict) and "workflow_type" in value:
+            native_type = {
+                "conformational_mapping": ConformationalMappingProvisionWorkflow,
+                "molecular_dynamics": MolecularDynamicsProvisionWorkflow,
+            }.get(value["workflow_type"])
+            if native_type is None:
+                raise ValueError("Unsupported native workflow type")
+            return native_type.model_validate(value)
+        if isinstance(value, dict) and set(value) - set(JobCreate.model_fields):
+            raise ValueError("Workflow provisioning accepts only existing JobCreate fields")
+        return value
+
+
+class WorkflowRuntimeSelection(StrictModel):
+    """Non-biological workflow identity sent to the managed asset helper."""
+    kind: Literal["workflow"]
+    model_id: str = Field(pattern=SHA256_PATTERN)
+
+
+class CriticalRuntimeSelection(StrictModel):
+    kind: Literal["critical_runtime"] = "critical_runtime"
+    model_id: Literal["worker"] = "worker"
+
+
+class CriticalRuntimeCompatibility(StrictModel):
+    requirements: dict[str, str]
+    observed: dict[str, str]
+    compatible: bool
+
+
 class ProvisionRequest(ProvisionSelection):
+    preview_sha256: str = Field(pattern=SHA256_PATTERN)
+
+
+class WorkflowProvisionRequest(WorkflowProvisionSelection):
     preview_sha256: str = Field(pattern=SHA256_PATTERN)
 
 
@@ -91,24 +155,50 @@ class CachedArtifactReceipt(StrictModel):
         return _clean_relative_posix_path(value, field="name")
 
 
+class ProvisionAssetState(CachedArtifactReceipt):
+    state: Literal["verified", "missing", "corrupt", "incompatible", "unknown"]
+
+
+class ProvisionArtifactProgress(CachedArtifactReceipt):
+    state: Literal["pending", "transferring", "verifying", "verified", "interrupted"]
+
+
+class ProvisionDestination(StrictModel):
+    target_id: str
+    remote_root: str
+
+
 class ProvisionPreview(StrictModel):
-    selection: ProvisionSelection
+    selection: ProvisionSelection | WorkflowProvisionSelection
     preview_sha256: str = Field(pattern=SHA256_PATTERN)
     artifacts: list[CachedArtifactReceipt]
     total_bytes: int = Field(ge=0)
     scientific_ready: Literal[False] = False
     scope: Literal["managed_asset_activation"] = "managed_asset_activation"
+    destination: ProvisionDestination | None = None
+    effective_params: dict[str, Any] | None = None
+    plan_sha256: str | None = Field(default=None, pattern=SHA256_PATTERN)
+    asset_states: list[ProvisionAssetState] = Field(default_factory=list)
+    transfer_bytes: int = Field(default=0, ge=0)
+    storage_bytes: int = Field(default=0, ge=0)
+    inventory_state: Literal["current", "stale", "unobserved"] = "unobserved"
+    blockers: list[str] = Field(default_factory=list)
 
 
 class PreloadProgress(StrictModel):
     operation_id: str
     job_id: str | None = None
-    selection: ProvisionSelection | None = None
+    selection: ProvisionSelection | WorkflowProvisionSelection | None = None
+    artifact_progress: list[ProvisionArtifactProgress] = Field(default_factory=list)
+    sequence: int = Field(default=0, ge=0)
+    endpoint_sha256: str | None = Field(default=None, pattern=SHA256_PATTERN)
+    cancel_requested: bool = False
+    recovery_required: bool = False
     artifacts: list[CachedArtifactReceipt] = Field(default_factory=list)
     source_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
     source_tree: str = Field(pattern=r"^[0-9a-f]{40}$")
     request_sha256: str = Field(pattern=SHA256_PATTERN)
-    phase: Literal["checking", "transferring", "verifying", "source_download_ready", "failed"]
+    phase: Literal["checking", "transferring", "verifying", "source_download_ready", "failed", "cancelling", "recovery_blocked", "cancelled"]
     artifact: str | None = Field(default=None, max_length=256)
     message: str = Field(min_length=1, max_length=500)
     started_at: datetime
@@ -117,7 +207,7 @@ class PreloadProgress(StrictModel):
 
 class ObservedArtifactInventory(StrictModel):
     operation_id: str
-    selection: ProvisionSelection
+    selection: ProvisionSelection | WorkflowProvisionSelection
     observed_at: datetime
     artifacts: list[CachedArtifactReceipt]
     scope: Literal["last_independent_provision"] = "last_independent_provision"
@@ -209,6 +299,7 @@ class RemoteExecutionEnvelope(StrictModel):
     working_directory: str
     environment: dict[str, str] = Field(default_factory=dict)
     output_directory: str
+    resource_monitor: dict[str, Any] | None = None
     expected_result_contract: dict[str, Any]
     path_map: dict[str, str]
     files: list[RemoteFileRecord]
@@ -216,14 +307,22 @@ class RemoteExecutionEnvelope(StrictModel):
 
 
 class RemoteAttemptStatus(StrictModel):
+    generation: int = Field(default=0, ge=0, strict=True)
+    native_output_directory: str | None = None
+    control_group: str | None = None
+    plan_sha256: str | None = Field(default=None, pattern=SHA256_PATTERN)
+    continuation_lease_id: str | None = None
+    checkpoints: list[dict[str, Any]] = Field(default_factory=list)
     activity: RemoteWorkflowActivity | None = None
+    boot_id: str | None = None
+    quiescent: bool = False
     schema_name: Literal["bms.remote-attempt-status.v1"] = Field(
         default="bms.remote-attempt-status.v1", alias="schema", serialization_alias="schema"
     )
     attempt_id: str
     job_id: str
     state: Literal[
-        "prepared", "running", "cancelling", "cancelled", "succeeded", "failed", "lost"
+        "prepared", "running", "awaiting_input", "cancelling", "cancelled", "succeeded", "failed", "lost"
     ]
     supervisor_pid: int | None = None
     supervisor_start_ticks: int | None = None
@@ -237,6 +336,7 @@ class RemoteAttemptStatus(StrictModel):
 
 
 class RemoteResultManifest(StrictModel):
+    generation: int = Field(default=0, ge=0, strict=True)
     schema_name: Literal["bms.remote-result-manifest.v1"] = Field(
         default="bms.remote-result-manifest.v1", alias="schema", serialization_alias="schema"
     )

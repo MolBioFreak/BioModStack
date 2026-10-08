@@ -42,6 +42,123 @@ DEFAULT_SMALL_MAX_PROTEIN_CHAINS = 4
 DEFAULT_SMALL_MAX_TOTAL_RESIDUES = 1500
 
 
+type_map = {
+    'protein': 'proteinChain',
+    'peptide': 'proteinChain',
+    'dna': 'dnaSequence',
+    'rna': 'rnaSequence',
+}
+
+def _convert_complex_entry(bms, default_name, seeds):
+    sequences = []
+    for comp in bms.get('components', []):
+        t = comp.get('type', 'protein').lower()
+        seq = comp.get('sequence', '')
+        comp_id = str(comp.get('id') or '').strip()
+        count_raw = comp.get('count', 1)
+        try:
+            count = max(1, int(count_raw))
+        except Exception:
+            count = 1
+
+        if t in type_map:
+            if seq:
+                chain_entry = {"sequence": seq, "count": count}
+                if comp_id:
+                    chain_entry["id"] = [comp_id]
+                sequences.append({type_map[t]: chain_entry})
+        elif t == 'ligand':
+            ccd = comp.get('ccd', '')
+            smiles = comp.get('smiles', '')
+            entry = {}
+            if ccd:
+                ligand_id = str(ccd)
+                if not ligand_id.startswith("CCD_"):
+                    ligand_id = f"CCD_{ligand_id}"
+                ligand_entry = {"ligand": ligand_id, "count": count}
+                if comp_id:
+                    ligand_entry["id"] = [comp_id]
+                entry = {"ligand": ligand_entry}
+            elif smiles:
+                ligand_entry = {"ligand": str(smiles), "count": count}
+                if comp_id:
+                    ligand_entry["id"] = [comp_id]
+                entry = {"ligand": ligand_entry}
+            if entry:
+                sequences.append(entry)
+        elif t == 'ion':
+            entry = {}
+            ion = comp.get('ion') or comp.get('element') or comp.get('ccd')
+            if ion:
+                ion_entry = {"ion": str(ion).upper(), "count": count}
+                if comp_id:
+                    ion_entry["id"] = [comp_id]
+                entry = {"ion": ion_entry}
+            if entry:
+                sequences.append(entry)
+
+    protenix_entry = {
+        "name": str(bms.get("name") or default_name),
+        "modelSeeds": list(seeds),
+        "sequences": sequences,
+    }
+    return protenix_entry
+
+def build_native_protenix_input(*, seeds, complexes=None, sequences=None, native_payload=None):
+    """The native format adapter shared by controller and Nextflow preparation.
+
+    Complex conversion is factored verbatim from PrepProtenixComplex. Callers
+    supply already compiled ordered tasks, never uncompiled batch requests.
+    Native generated-PDB rosters are copied, not reconstructed or renamed.
+    """
+    import copy
+    if sum(value is not None for value in (complexes, sequences, native_payload)) != 1:
+        raise ValueError("Exactly one compiled Protenix task roster is required")
+    if native_payload is not None:
+        payload = copy.deepcopy(native_payload)
+    elif complexes is not None:
+        payload = [_convert_complex_entry(bms, name, seeds) for name, bms in complexes]
+    else:
+        assert sequences is not None
+        payload = [{"name": name, "modelSeeds": list(seeds),
+                    "sequences": [{"proteinChain": {"sequence": sequence, "count": 1}}]}
+                   for name, sequence in sequences]
+    if not isinstance(payload, list) or not payload:
+        raise ValueError("Compiled Protenix task roster must be a nonempty list")
+    names = [task.get("name") for task in payload]
+    if any(not isinstance(name, str) or not name for name in names) or len(set(names)) != len(names):
+        raise ValueError("Compiled Protenix task names must be nonempty and unique")
+    return payload
+
+
+def load_native_protenix_input(params):
+    """Read native compiler products without running the scientific compiler again.
+
+    Input files are read-only. Raw request components/batch entries must first
+    pass the existing compiler; no replacement-chain or name policy lives here.
+    """
+    seeds = [int(seed.strip()) for seed in str(params.get("protenix_seeds") or "42").split(",")]
+    complex_source = params.get("complex_batch_dir") or params.get("complex_json_path")
+    if complex_source:
+        source = Path(complex_source)
+        files = sorted(path for path in source.glob("*.json") if path.is_file()) if source.is_dir() else [source]
+        return build_native_protenix_input(seeds=seeds, complexes=[
+            (path.stem, json.loads(path.read_text(encoding="utf-8"))) for path in files])
+    if params.get("sequence_batch_json_path"):
+        entries = json.loads(Path(params["sequence_batch_json_path"]).read_text(encoding="utf-8"))
+        if any(entry.get("complex_json") for entry in entries):
+            raise ValueError("Compiled complex batch requires its complex_batch_dir")
+        return build_native_protenix_input(seeds=seeds, sequences=[
+            (entry["name"], entry["sequence"]) for entry in entries])
+    if params.get("sequence_batch_entries") or params.get("complex_components"):
+        raise ValueError("Controller MSA handoff requires compiled native complex/batch inputs")
+    sequence = str(params.get("sequence_input") or "")
+    if not sequence or not re.fullmatch(r"[A-Z]+", sequence):
+        raise ValueError("Controller MSA handoff requires a compiled literal protein sequence_input")
+    return build_native_protenix_input(seeds=seeds, sequences=[
+        (str(params.get("sequence_name") or "predicted"), sequence)])
+
+
 def load_json(path: Path) -> List[Dict[str, Any]]:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, list):
@@ -104,9 +221,9 @@ def _hydrate_old_precomputed_dir(chain: Dict[str, Any]) -> None:
     precomputed_path = Path(precomputed_dir)
     pairing = precomputed_path / "pairing.a3m"
     non_pairing = precomputed_path / "non_pairing.a3m"
-    if pairing.exists():
+    if pairing.exists() and not chain.get("pairedMsaPath"):
         chain["pairedMsaPath"] = str(pairing.resolve())
-    if non_pairing.exists():
+    if non_pairing.exists() and not chain.get("unpairedMsaPath"):
         chain["unpairedMsaPath"] = str(non_pairing.resolve())
 
 

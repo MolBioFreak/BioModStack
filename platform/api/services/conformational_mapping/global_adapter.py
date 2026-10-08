@@ -4,10 +4,11 @@ from __future__ import annotations
 import json
 import copy
 import shutil
-import subprocess
 from pathlib import Path
 from typing import Any, Mapping
 
+from schemas import ExecutionPolicy
+from services.remote_execution.targets import submission_target_fields
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +21,7 @@ from routers.conformational_mapping import (
     _bind_confornets_submission_policy,
     _bind_runtime_policy,
     _cm_job_admission,
+    _build_retry_authority,
     _managed_checkpoint_for_submission,
     _runtime_registry,
     _server_confornets_identity,
@@ -36,6 +38,7 @@ from services.conformational_mapping.persistence import (
     transition_request,
 )
 from services.conformational_mapping.request_builder import (
+    canonical_launch_params,
     materialize_trusted_internal_request,
     validate_materialized_coordinate_plan,
     validate_request_params,
@@ -102,37 +105,6 @@ def _seal_confornets_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     return sealed
 
 
-def _largest_gpu_with_memory(minimum_mb: int) -> int:
-    try:
-        completed = subprocess.run(
-            [
-                "nvidia-smi",
-                "--query-gpu=index,memory.total",
-                "--format=csv,noheader,nounits",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise DispatchFailure("cannot discover GPU inventory for memory-bound CM attempt") from exc
-    candidates: list[tuple[int, int]] = []
-    for line in completed.stdout.splitlines():
-        parts = [part.strip() for part in line.split(",")]
-        if len(parts) != 2:
-            continue
-        try:
-            gpu_id, memory_mb = int(parts[0]), int(parts[1])
-        except ValueError:
-            continue
-        if memory_mb >= minimum_mb:
-            candidates.append((memory_mb, gpu_id))
-    if not candidates:
-        raise DispatchFailure(f"no installed GPU satisfies the {minimum_mb} MB CM memory requirement")
-    return max(candidates)[1]
-
-
 def _registered(source: ConformationalMappingSource) -> RegisteredArtifact:
     return RegisteredArtifact(
         artifact_id=source.source_id,
@@ -175,10 +147,12 @@ def _verify_existing_attempt_authority(
 
     expected_request_path = expected_output_root / "cm_request_v1.json"
     expected_coordinate_plan_path = expected_output_root / "cm_coordinate_plan_v1.json"
-    expected_job_params = {"cm_request_path": str(expected_request_path)}
+    expected_job_params = canonical_launch_params(expected_request_path)
     if (
         not isinstance(existing_job.params, dict)
-        or existing_job.params != expected_job_params
+        or {key: value for key, value in existing_job.params.items() if key != "remote_result_policy"} != expected_job_params
+        or existing_job.execution_target_id != scheduler.get("execution_target_id")
+        or ExecutionPolicy.from_params(existing_job.params) != ExecutionPolicy.model_validate(scheduler.get("execution_policy", {}))
         or existing_job.output_dir != str(expected_output_root)
         or expected_output_root.is_symlink()
         or not expected_output_root.is_dir()
@@ -349,6 +323,9 @@ async def _materialize_preallocated_cm_job(
         "runtime_policy": runtime_policy,
         "analysis_policy": analysis_policy,
     }
+    for field in ("frustrampnn_settings", "state_landscape_comparison"):
+        if field in submission:
+            request_params[field] = copy.deepcopy(submission[field])
     analysis_targets: list[dict[str, Any]]
     if backend == "protenix_v2_ensemble":
         snapshot_source = await _source(core_session, str(submission["registered_snapshot_id"]), "complex_snapshot")
@@ -485,17 +462,17 @@ async def _materialize_preallocated_cm_job(
         encoding="utf-8",
     )
     token, token_digest = issue_request_capability()
-    admission = _cm_job_admission(backend, {"targets": analysis_targets})
-    if backend == "confornets" and int(submission.get("confornets", {}).get("confornet_count", 0)) >= 5:
-        admission["vram_estimate_mb"] = 24000
-        admission["pinned_gpu"] = _largest_gpu_with_memory(32000)
+    admission = _cm_job_admission(backend, {**request_payload, "targets": analysis_targets})
+    placement = await submission_target_fields(core_session, scheduler.get("execution_target_id"))
+    execution_policy = ExecutionPolicy.model_validate(scheduler.get("execution_policy", {}))
     job = Job(
         id=attempt_id,
         name=str(submission["name"]),
         status="queued",
         model_id="conformational_mapping",
         mode="map",
-        params=materialized.launch_params,
+        params={**materialized.launch_params, "remote_result_policy": execution_policy.remote_result_policy},
+        **placement,
         output_dir=str(output_root),
         queue_status="queued",
         **admission,
@@ -507,6 +484,7 @@ async def _materialize_preallocated_cm_job(
             "cm_request_sha256": request_payload["request_sha256"],
             "cm_coordinate_plan_sha256": coordinate_plan["coordinate_plan_sha256"],
             "cm_principal_id": _PERSONAL_WORKFLOW_PRINCIPAL,
+            "cm_retry_authority_v1": _build_retry_authority(output_root),
             "cm_workflow_adapter": adapter_id,
             "cm_scheduler_sha256": scheduler_sha256,
             "cm_submission_sha256": submission_sha256,
