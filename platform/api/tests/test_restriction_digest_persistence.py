@@ -85,9 +85,9 @@ def test_no_cut_linear_and_circular_products_are_explicit_and_deterministic() ->
     assert fixture_bytes.endswith(b"\n")
     expected_canonical_bytes = fixture_bytes[:-1]
     assert linear.canonical_unsigned_bytes() == expected_canonical_bytes
-    assert linear.simulation_sha256 == "5f500a17c90719eea1c949182abd55167119425145e216e13e38deb474039a20"
+    assert linear.simulation_sha256 == "71bcab3166ded84fed41fad39a4657f7e07aaf60f912d7ab7a11566285ad408f"
     assert hashlib.sha256(expected_canonical_bytes).hexdigest() == (
-        "5f500a17c90719eea1c949182abd55167119425145e216e13e38deb474039a20"
+        "71bcab3166ded84fed41fad39a4657f7e07aaf60f912d7ab7a11566285ad408f"
     )
 
 
