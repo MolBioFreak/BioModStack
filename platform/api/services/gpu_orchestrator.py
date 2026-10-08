@@ -2484,21 +2484,39 @@ class GPUOrchestrator:
                 if i > 0:
                     await asyncio.sleep(0.5)
                 
+                original_params = dict(job.params or {})
+                scheduler_params = {**original_params, "gpu_id": int(gpu_id)}
                 try:
-                    # Launch Nextflow with GPU assignment
+                    # Persist the scheduler-owned assignment before handing the job
+                    # to a transient adapter. The adapter runner reloads Job.params
+                    # from the shared database, so an in-memory-only gpu_id is lost
+                    # at that boundary.
+                    job.params = scheduler_params
+                    job.assigned_gpu = int(gpu_id)
+                    job.vram_estimate_mb = job_info.vram_estimate_mb
+                    await session.commit()
+
+                    # Launch Nextflow with the same scheduler-owned assignment.
                     await self.launch_nextflow_job(
                         job_id=job.id,
                         model_id=job.model_id,
                         mode=job.mode,
-                        params={**job.params, 'gpu_id': gpu_id},
+                        params=scheduler_params,
                         output_dir=job.child_output_dir or job.output_dir
                     )
-                    
-                    # Update job status
-                    job.queue_status = "running"
-                    job.assigned_gpu = gpu_id
-                    job.started_at = datetime.utcnow()
-                    job.vram_estimate_mb = job_info.vram_estimate_mb
+
+                    # The adapter may have appended an execution receipt in a
+                    # separate session. Refresh before publishing scheduler state
+                    # so this session cannot overwrite that receipt.
+                    await session.refresh(job)
+                    if str(job.status or "").strip().lower() not in {
+                        "completed",
+                        "failed",
+                        "cancelled",
+                        "awaiting_input",
+                    }:
+                        job.queue_status = "running"
+                        job.started_at = datetime.utcnow()
 
                     if _gpu_quick_enable(gpu_id, config):
                         used_quick_enable_gpu_ids.add(gpu_id)
@@ -2507,8 +2525,18 @@ class GPUOrchestrator:
                     
                 except Exception as e:
                     logger.error(f"[LAUNCH FAILED] {job.name}: {e}")
+                    await session.refresh(job)
                     job.queue_status = "failed"
+                    job.assigned_gpu = None
                     job.error_message = str(e)
+                    if "gpu_id" not in original_params:
+                        restored_params = dict(job.params or {})
+                        restored_params.pop("gpu_id", None)
+                        job.params = restored_params
+                    else:
+                        restored_params = dict(job.params or {})
+                        restored_params["gpu_id"] = original_params["gpu_id"]
+                        job.params = restored_params
 
             if used_quick_enable_gpu_ids:
                 def consume_quick_enable_tokens(latest_config: Dict[str, Any]) -> None:
