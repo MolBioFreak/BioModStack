@@ -46,7 +46,7 @@ export function withHandlersHook(handlerCreators) {
                 return result;
             }, [props]);
 
-            return <WrappedComponent key={_key} {...props} {...handlers} />;
+            return <WrappedComponent {...props} {...handlers} />;
         };
 
         WithHandlers.displayName = `withHandlersHook(${getDisplayName(WrappedComponent)})`;
@@ -70,7 +70,7 @@ export function withPropsHook(propsOrMapper) {
                 return propsOrMapper;
             }, [props]);
 
-            return <WrappedComponent key={_key} {...props} {...additionalProps} />;
+            return <WrappedComponent {...props} {...additionalProps} />;
         };
 
         WithProps.displayName = `withPropsHook(${getDisplayName(WrappedComponent)})`;
@@ -134,7 +134,7 @@ export function lifecycleHook(spec) {
                 prevPropsRef.current = props;
             }, [props]);
 
-            return <WrappedComponent key={_key} {...props} />;
+            return <WrappedComponent {...props} />;
         };
 
         WithLifecycle.displayName = `lifecycleHook(${getDisplayName(WrappedComponent)})`;
@@ -157,9 +157,9 @@ export function branchHook(test, left, right = x => x) {
 
         const Branch = ({ key: _key, ...props }) => {
             if (test(props)) {
-                return <LeftComponent key={_key} {...props} />;
+                return <LeftComponent {...props} />;
             }
-            return <RightComponent key={_key} {...props} />;
+            return <RightComponent {...props} />;
         };
 
         Branch.displayName = `branchHook(${getDisplayName(WrappedComponent)})`;
@@ -176,7 +176,7 @@ export function branchHook(test, left, right = x => x) {
  */
 export function renderComponentHook(Component) {
     return function () {
-        const RenderComponent = ({ key: _key, ...props }) => <Component key={_key} {...props} />;
+        const RenderComponent = ({ key: _key, ...props }) => <Component {...props} />;
         RenderComponent.displayName = `renderComponentHook(${getDisplayName(Component)})`;
         return RenderComponent;
     };
@@ -219,7 +219,7 @@ export function mapPropsHook(propsMapper) {
     return function (WrappedComponent) {
         const MapProps = ({ key: _key, ...props }) => {
             const mappedProps = useMemo(() => propsMapper(props), [props]);
-            return <WrappedComponent key={_key} {...mappedProps} />;
+            return <WrappedComponent {...mappedProps} />;
         };
 
         MapProps.displayName = `mapPropsHook(${getDisplayName(WrappedComponent)})`;

@@ -44,7 +44,7 @@ export function withSize() {
             const { ref, size } = useSize();
             return (
                 <div ref={ref} style={{ width: '100%', height: '100%' }}>
-                    <WrappedComponent key={_key} {...props} size={size} />
+                    <WrappedComponent {...props} size={size} />
                 </div>
             );
         };
