@@ -40,6 +40,15 @@ test('unsupported advanced identities remain explicit and fail-closed', () => {
     }
 });
 
+test('direct trajectory capability is limited to governed GRO/XTC display-frame selection', () => {
+    const capability = MOLSTAR_DIRECT_45_CAPABILITIES.capabilities.trajectories;
+
+    assert.equal(capability.status, 'partial');
+    assert.equal(capability.boundary, 'bms-direct-adapter');
+    assert.match(capability.summary, /GRO\/XTC/);
+    assert.match(capability.summary, /display-frame/i);
+});
+
 test('retired PDBe runtime is absent from production dependency and resolution surfaces', () => {
     const packageSource = readFileSync(path.resolve(frontendRoot, 'package.json'), 'utf8');
     const viteConfig = readFileSync(path.resolve(frontendRoot, 'vite.config.ts'), 'utf8');
