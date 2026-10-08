@@ -114,6 +114,76 @@ def test_robot_client_routes_only_current_compact_commissioning_contracts() -> N
     asyncio.run(client.close())
 
 
+def test_dynamic_full_lifecycle_run_path_is_percent_encoded_and_template_bound() -> None:
+    target = ValidatedBioXpTarget(
+        api_url="http://robot:8123",
+        scheme="http",
+        hostname="robot",
+        port=8123,
+        resolved_addresses=(ip_address("100.64.0.10"),),
+    )
+    transport = RecordingTransport()
+    client = BioXpRobotClient(target, transport=transport)
+
+    asyncio.run(client.request("get_oem_full_lifecycle_run", path_params={"run_id": "run/../../status"}))
+    assert transport.requests[0].url.path == "/oem/runtime/movement-runs/run/../../status"
+    assert transport.requests[0].url.raw_path == b"/oem/runtime/movement-runs/run%2F..%2F..%2Fstatus"
+
+    try:
+        asyncio.run(client.request("get_oem_full_lifecycle_run"))
+    except Exception as exc:
+        assert "route parameters" in str(exc)
+    else:
+        raise AssertionError("missing route parameter must fail closed")
+    asyncio.run(client.close())
+
+
+def test_lifecycle_mutation_routes_use_server_side_token_file_and_gets_do_not(tmp_path) -> None:
+    target = ValidatedBioXpTarget(
+        api_url="http://robot:8123",
+        scheme="http",
+        hostname="robot",
+        port=8123,
+        resolved_addresses=(ip_address("100.64.0.10"),),
+    )
+    token_path = tmp_path / "oem-runtime.token"
+    token_path.write_text("test-only-bms-oem-token-0000000000000000", encoding="utf-8")
+    token_path.chmod(0o600)
+    transport = RecordingTransport()
+    client = BioXpRobotClient(target, transport=transport, oem_lifecycle_token_file=token_path)
+
+    asyncio.run(client.request("oem_full_lifecycle_contract"))
+    asyncio.run(client.request("plan_oem_full_lifecycle", json_data={"mode": "dry_run"}))
+    asyncio.run(client.request("cancel_oem_full_lifecycle_run", path_params={"run_id": "run-12345678"}))
+
+    assert "X-BioXP-OEM-Token" not in transport.requests[0].headers
+    assert transport.requests[1].headers["X-BioXP-OEM-Token"] == "test-only-bms-oem-token-0000000000000000"
+    assert transport.requests[2].headers["X-BioXP-OEM-Token"] == "test-only-bms-oem-token-0000000000000000"
+    asyncio.run(client.close())
+
+
+def test_lifecycle_mutation_route_fails_before_http_without_private_token_file(monkeypatch) -> None:
+    monkeypatch.delenv("BMS_BIOXP_OEM_RUNTIME_TOKEN_FILE", raising=False)
+    target = ValidatedBioXpTarget(
+        api_url="http://robot:8123",
+        scheme="http",
+        hostname="robot",
+        port=8123,
+        resolved_addresses=(ip_address("100.64.0.10"),),
+    )
+    transport = RecordingTransport()
+    client = BioXpRobotClient(target, transport=transport)
+
+    try:
+        asyncio.run(client.request("plan_oem_full_lifecycle", json_data={"mode": "dry_run"}))
+    except Exception as exc:
+        assert "token file is not configured" in str(exc)
+    else:
+        raise AssertionError("missing lifecycle token file must fail closed")
+    assert transport.requests == []
+    asyncio.run(client.close())
+
+
 def test_probe_never_posts_hidden_snapshot_when_hardware_evidence_is_stale() -> None:
     target = ValidatedBioXpTarget(
         api_url="http://robot:8123",

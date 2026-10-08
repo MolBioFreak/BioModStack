@@ -147,9 +147,67 @@ export interface BioXpEmergencyResult {
     detail: string;
 }
 
+export interface BioXpOemFullLifecycleProvider {
+    source_contract: boolean;
+    implemented: boolean | string;
+    live_bound: boolean;
+    commissioned: boolean;
+}
+
+export interface BioXpOemFullLifecycleContract {
+    schema_version: string;
+    command: 'initialize_oem_movement_lifecycle';
+    machine_serial: 206;
+    registry_sha256: string;
+    evidence_lock_sha256: string;
+    source_authority_verified: boolean;
+    initialize_system_producers: ReadonlyArray<{
+        producer: string;
+        source_anchor: string;
+        selected_by_this_route: boolean;
+    }>;
+    plan_available: boolean;
+    plan_blockers: string[];
+    live_creation_enabled: boolean;
+    physical_commissioning_complete: boolean;
+    providers: Record<string, BioXpOemFullLifecycleProvider>;
+    safety_boundary: {
+        caller_supplied_motion_parameters: false;
+        dry_run_commands_hardware: false;
+        queue_acceptance_is_execution: false;
+        physical_effect_verified: false;
+    };
+}
+
+export interface BioXpOemFullLifecycleStage {
+    stage_id: string;
+    stage_index: number;
+    state: string;
+    source_anchor: string;
+    would_command_hardware: boolean;
+    would_command_physical_motion: boolean;
+    movement_ledger_stage?: string;
+    branch?: string;
+    execution_semantics?: string;
+    caller_result_used?: boolean;
+}
+
+export interface BioXpOemFullLifecycleRun {
+    run_id: string;
+    mode: 'dry_run';
+    run_state: string;
+    machine_serial: 206;
+    registry_sha256: string;
+    expected_next_stage: string | null;
+    physical_command_sent: false;
+    physical_effect_verified: false;
+    stages: BioXpOemFullLifecycleStage[];
+}
+
 const statusKey = ['bioxp', 'status'] as const;
 const profileKey = ['bioxp', 'profile'] as const;
 const jobsKey = ['bioxp', 'jobs'] as const;
+const fullLifecycleContractKey = ['bioxp', 'oem-full-lifecycle', 'contract'] as const;
 export function bioXpErrorText(error: unknown): string {
     if (error && typeof error === 'object') {
         const response = 'response' in error
@@ -183,6 +241,25 @@ export const useBioXpStatus = (enabled = true) => useQuery({
     retry: false,
 });
 
+export const useBioXpOemFullLifecycleContract = (enabled = true) => useQuery({
+    queryKey: fullLifecycleContractKey,
+    queryFn: async () => (
+        await api.get<BioXpOemFullLifecycleContract>('/api/bioxp/oem-full-lifecycle/contract')
+    ).data,
+    enabled,
+    refetchInterval: enabled ? 10_000 : false,
+    retry: false,
+});
+
+export const useBioXpOemFullLifecycleRun = (runId: string | null) => useQuery({
+    queryKey: ['bioxp', 'oem-full-lifecycle', 'run', runId],
+    queryFn: async () => (
+        await api.get<BioXpOemFullLifecycleRun>(`/api/bioxp/oem-full-lifecycle/runs/${encodeURIComponent(runId ?? '')}/ledger`)
+    ).data,
+    enabled: Boolean(runId),
+    retry: false,
+});
+
 export const useBioXpProfile = (enabled = true) => useQuery({
     queryKey: profileKey,
     queryFn: async () => (await api.get<BioXpProfileView>('/api/bioxp/profile')).data,
@@ -211,6 +288,7 @@ const useRefreshMutation = <TVariables, TData>(
                 queryClient.invalidateQueries({ queryKey: statusKey }),
                 queryClient.invalidateQueries({ queryKey: profileKey }),
                 queryClient.invalidateQueries({ queryKey: jobsKey }),
+                queryClient.invalidateQueries({ queryKey: fullLifecycleContractKey }),
             ]);
         },
     });
@@ -259,6 +337,32 @@ export const useSubmitBioXpProtocol = () => useRefreshMutation(
 export const useBioXpCommand = () => useRefreshMutation(
     async (payload: Record<string, unknown>) => (
         await api.post<BioXpCommandRecord>('/api/bioxp/commands', payload)
+    ).data,
+);
+
+export const usePlanBioXpOemFullLifecycle = () => useRefreshMutation(
+    async ({ generation, machineSerial, registrySha256, evidenceLockSha256 }: {
+        generation: number;
+        machineSerial: 206;
+        registrySha256: string;
+        evidenceLockSha256: string;
+    }) => (
+        await api.post<BioXpOemFullLifecycleRun>('/api/bioxp/oem-full-lifecycle/runs', {
+            expected_generation: generation,
+            expected_machine_serial: machineSerial,
+            expected_registry_sha256: registrySha256,
+            expected_evidence_lock_sha256: evidenceLockSha256,
+            idempotency_key: crypto.randomUUID(),
+        })
+    ).data,
+);
+
+export const useCancelBioXpOemFullLifecycle = () => useRefreshMutation(
+    async ({ runId, generation }: { runId: string; generation: number }) => (
+        await api.post<BioXpOemFullLifecycleRun>(
+            `/api/bioxp/oem-full-lifecycle/runs/${encodeURIComponent(runId)}/cancel`,
+            { expected_generation: generation },
+        )
     ).data,
 );
 

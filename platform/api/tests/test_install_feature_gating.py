@@ -40,7 +40,8 @@ def test_bioxp_api_routes_are_registered_when_feature_enabled(monkeypatch) -> No
     assert "/api/bioxp/status" in bioxp_paths
     assert "/api/bioxp/profile" in bioxp_paths
     assert "/api/bioxp/commands" in bioxp_paths
-    assert len(bioxp_paths) <= 15
+    assert "/api/bioxp/oem-full-lifecycle/contract" in bioxp_paths
+    assert len(bioxp_paths) <= 18
     assert not any("interlink" in path or "proxy" in path for path in bioxp_paths)
 
 

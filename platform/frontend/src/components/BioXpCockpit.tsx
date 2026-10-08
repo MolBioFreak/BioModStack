@@ -6,8 +6,12 @@ import {
     useBioXpCommand,
     useBioXpEmergencyStop,
     useBioXpJobs,
+    useBioXpOemFullLifecycleContract,
+    useBioXpOemFullLifecycleRun,
     useBioXpStatus,
+    useCancelBioXpOemFullLifecycle,
     useCompileBioXpProtocol,
+    usePlanBioXpOemFullLifecycle,
     useSubmitBioXpProtocol,
 } from '../lib/bioxpClient';
 import {
@@ -76,6 +80,11 @@ export function BioXpCockpit() {
     const submitProtocol = useSubmitBioXpProtocol();
     const executeCommand = useBioXpCommand();
     const emergencyStop = useBioXpEmergencyStop();
+    const fullLifecycleContract = useBioXpOemFullLifecycleContract(true);
+    const planFullLifecycle = usePlanBioXpOemFullLifecycle();
+    const cancelFullLifecycle = useCancelBioXpOemFullLifecycle();
+    const plannedRunId = planFullLifecycle.data?.run_id ?? null;
+    const fullLifecycleRun = useBioXpOemFullLifecycleRun(plannedRunId);
     const [protocolName, setProtocolName] = useState('BioXP offline validation');
     const [nowMs, setNowMs] = useState(() => Date.now());
 
@@ -98,6 +107,22 @@ export function BioXpCockpit() {
         connection?.command_active ?? false,
         status?.available_commands,
     );
+    const lifecycleContract = fullLifecycleContract.isError ? undefined : fullLifecycleContract.data;
+    const lifecycleRun = cancelFullLifecycle.data ?? fullLifecycleRun.data ?? planFullLifecycle.data;
+    const lifecyclePlanAvailable = mutationAccessEnabled
+        && controlPlaneFresh
+        && lifecycleContract?.plan_available === true
+        && lifecycleContract?.source_authority_verified === true
+        && connection?.generation !== undefined;
+    const lifecyclePlanBlockedReason = fullLifecycleContract.isError
+        ? bioXpErrorText(fullLifecycleContract.error)
+        : !mutationAccessEnabled
+            ? `BMS mutation gate ${mutationAccessSetting} is disabled.`
+            : !controlPlaneFresh
+                ? 'The process-local BioXP control plane is not fresh.'
+                : lifecycleContract?.source_authority_verified !== true
+                    ? 'The robot has not verified the frozen OEM source authority.'
+                    : lifecycleContract?.plan_blockers?.join('; ') || 'The robot has not admitted lifecycle planning.';
     const protocol: BioXpProtocol = {
         name: protocolName,
         steps: [{ action: 'initialize_motors' }],
@@ -153,6 +178,24 @@ export function BioXpCockpit() {
             operator_note: trimmedNote,
             expected_generation: connection?.generation ?? 0,
             idempotency_key: crypto.randomUUID(),
+        });
+    };
+
+    const runFullLifecyclePlan = () => {
+        if (!lifecycleContract || !connection) return;
+        planFullLifecycle.mutate({
+            generation: connection.generation,
+            machineSerial: lifecycleContract.machine_serial,
+            registrySha256: lifecycleContract.registry_sha256,
+            evidenceLockSha256: lifecycleContract.evidence_lock_sha256,
+        });
+    };
+
+    const cancelCurrentLifecyclePlan = () => {
+        if (!lifecycleRun || !connection) return;
+        cancelFullLifecycle.mutate({
+            runId: lifecycleRun.run_id,
+            generation: connection.generation,
         });
     };
 
@@ -224,6 +267,77 @@ export function BioXpCockpit() {
                     })}
                 </div>
                 {!connection?.startup_lifecycle && <p className="mt-3 text-sm text-amber-300">Collect a hardware snapshot or probe the active robot to load lifecycle evidence.</p>}
+            </section>
+
+            <section className="rounded-xl border border-violet-700/60 bg-violet-950/20 p-5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h2 className="text-lg font-semibold">Full OEM Lifecycle · Dry-run Contract</h2>
+                    <span className="text-xs text-violet-200">Planning only · no hardware command</span>
+                </div>
+                <p className="mt-2 text-sm text-slate-300">
+                    The robot owns all branch inputs and stage order. This surface creates a persisted selected-path plan;
+                    it does not enqueue execution, prove provider binding, or verify any physical effect.
+                </p>
+                {lifecycleContract && (
+                    <>
+                        <dl className="mt-4 grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
+                            <div><dt className="text-slate-500">machine_serial</dt><dd>{lifecycleContract.machine_serial}</dd></div>
+                            <div><dt className="text-slate-500">plan_available</dt><dd>{String(lifecycleContract.plan_available)}</dd></div>
+                            <div><dt className="text-slate-500">live_creation_enabled</dt><dd>{String(lifecycleContract.live_creation_enabled)}</dd></div>
+                            <div><dt className="text-slate-500">commissioned</dt><dd>{String(lifecycleContract.physical_commissioning_complete)}</dd></div>
+                            <div><dt className="text-slate-500">source_authority_verified</dt><dd>{String(lifecycleContract.source_authority_verified)}</dd></div>
+                            <div className="sm:col-span-2 lg:col-span-4"><dt className="text-slate-500">registry_sha256</dt><dd className="break-all font-mono">{lifecycleContract.registry_sha256}</dd></div>
+                            <div className="sm:col-span-2 lg:col-span-4"><dt className="text-slate-500">evidence_lock_sha256</dt><dd className="break-all font-mono">{lifecycleContract.evidence_lock_sha256}</dd></div>
+                        </dl>
+                        <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                            {Object.entries(lifecycleContract.providers).map(([name, provider]) => (
+                                <article key={name} className="rounded border border-violet-800/50 bg-slate-950/40 p-3 text-xs">
+                                    <h3 className="font-mono text-violet-200">{name}</h3>
+                                    <p className="mt-1">implemented={String(provider.implemented)}</p>
+                                    <p>live_bound={String(provider.live_bound)} · commissioned={String(provider.commissioned)}</p>
+                                </article>
+                            ))}
+                        </div>
+                    </>
+                )}
+                <button
+                    type="button"
+                    disabled={!lifecyclePlanAvailable || planFullLifecycle.isPending}
+                    onClick={runFullLifecyclePlan}
+                    className="mt-4 rounded bg-violet-700 px-4 py-2 text-sm font-semibold disabled:opacity-40"
+                >Create persisted dry-run plan</button>
+                {!lifecyclePlanAvailable && <p className="mt-2 text-xs text-amber-300">Blocked: {lifecyclePlanBlockedReason}</p>}
+                {planFullLifecycle.error && <p className="mt-2 text-sm text-red-300">{bioXpErrorText(planFullLifecycle.error)}</p>}
+                {lifecycleRun && (
+                    <div className="mt-4 rounded border border-violet-800/50 bg-slate-950/50 p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                                <h3 className="font-semibold">Persisted lifecycle ledger</h3>
+                                <p className="font-mono text-xs text-slate-400">{lifecycleRun.run_id} · {lifecycleRun.run_state}</p>
+                            </div>
+                            <button
+                                type="button"
+                                disabled={lifecycleRun.run_state !== 'planned' || !mutationAccessEnabled || !controlPlaneFresh || cancelFullLifecycle.isPending}
+                                onClick={cancelCurrentLifecyclePlan}
+                                className="rounded bg-slate-700 px-3 py-2 text-xs font-semibold disabled:opacity-40"
+                            >Cancel dry-run record</button>
+                        </div>
+                        <p className="mt-2 text-xs text-slate-400">
+                            physical_command_sent={String(lifecycleRun.physical_command_sent)} · physical_effect_verified={String(lifecycleRun.physical_effect_verified)}
+                        </p>
+                        <div className="mt-3 max-h-[32rem] space-y-2 overflow-auto">
+                            {lifecycleRun.stages.map((stage) => (
+                                <article key={`${stage.stage_index}-${stage.stage_id}`} className="rounded border border-slate-800 p-3 text-xs">
+                                    <div className="flex flex-wrap justify-between gap-2"><span className="font-mono text-violet-200">{stage.stage_index}. {stage.stage_id}</span><span>{stage.state}</span></div>
+                                    <p className="mt-1 text-slate-400">{stage.source_anchor}</p>
+                                    <p className="mt-1">would_command_hardware={String(stage.would_command_hardware)} · would_command_physical_motion={String(stage.would_command_physical_motion)}</p>
+                                    {stage.execution_semantics && <p className="text-slate-400">execution_semantics={stage.execution_semantics}</p>}
+                                </article>
+                            ))}
+                        </div>
+                    </div>
+                )}
+                {cancelFullLifecycle.error && <p className="mt-2 text-sm text-red-300">{bioXpErrorText(cancelFullLifecycle.error)}</p>}
             </section>
 
             <section className="rounded-xl border border-cyan-700/60 bg-cyan-950/20 p-5">

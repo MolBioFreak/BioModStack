@@ -19,7 +19,7 @@ test('BioXP topbar status menu remains install-feature gated', () => {
     assert.match(panel, /connect\.mutate\(undefined\)/);
 });
 
-test('frontend client contains only compact BioXP endpoints', () => {
+test('frontend client contains only compact and typed lifecycle BioXP endpoints', () => {
     const allowed = [
         '/api/bioxp/status',
         '/api/bioxp/profile',
@@ -32,6 +32,7 @@ test('frontend client contains only compact BioXP endpoints', () => {
         '/api/bioxp/jobs',
         '/api/bioxp/commands',
         '/api/bioxp/emergency-stop',
+        '/api/bioxp/oem-full-lifecycle',
     ];
     const actual = [...client.matchAll(/['`]\/api\/bioxp\/[^'`${}]*['`]/g)]
         .map((match) => match[0].slice(1, -1));
