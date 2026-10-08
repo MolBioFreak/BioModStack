@@ -39,12 +39,12 @@ class BmsPackageManagerIntegrationTest {
         }.toSet()
 
         assertEquals("org.biomodstack.mobile", info.packageName)
-        assertEquals(401L, versionCode)
-        assertEquals("0.4.1", info.versionName)
+        assertEquals(402L, versionCode)
+        assertEquals("0.4.2", info.versionName)
         assertEquals(24, info.applicationInfo?.minSdkVersion)
         assertTrue(digests.isNotEmpty())
-        assertEquals("up_to_date", InstallerReturnPolicy.status(versionCode, 401L))
-        assertEquals("available", InstallerReturnPolicy.status(versionCode, 402L))
+        assertEquals("up_to_date", InstallerReturnPolicy.status(versionCode, 402L))
+        assertEquals("available", InstallerReturnPolicy.status(versionCode, 403L))
     }
 
     @Test
@@ -75,8 +75,8 @@ class BmsPackageManagerIntegrationTest {
             }
 
             assertEquals("org.biomodstack.mobile", archive.packageName)
-            assertEquals(401L, versionCode)
-            assertEquals("0.4.1", archive.versionName)
+            assertEquals(402L, versionCode)
+            assertEquals("0.4.2", archive.versionName)
             assertEquals(24, archive.applicationInfo?.minSdkVersion)
             assertTrue(signatures.isNotEmpty())
         } finally {
