@@ -1,5 +1,13 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 
+interface Selection {
+    chain_id?: string;
+    start_residue_number?: number;
+    end_residue_number?: number;
+    color?: { r: number; g: number; b: number };
+    focus?: boolean;
+}
+
 interface Props {
     structureUrl?: string;
     format?: 'cif' | 'pdb';
@@ -8,6 +16,7 @@ interface Props {
     height?: number | string;
     backgroundColor?: string;
     label?: string;  // Optional label to show on viewer
+    selections?: Selection[]; // Highlights
 }
 
 // Track if script is loaded globally to avoid multiple loads
@@ -59,7 +68,8 @@ export default function MolstarViewer({
     hideControls = true,
     height = 500,
     backgroundColor = '#0f172a',
-    label
+    label,
+    selections
 }: Props) {
     const [isScriptLoaded, setIsScriptLoaded] = useState(scriptLoaded);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -147,6 +157,7 @@ export default function MolstarViewer({
                 'select-interaction': 'true',
                 'granularity': 'residue',
                 'pdbe-link': 'false',
+                'selection-data': selections && selections.length > 0 ? JSON.stringify(selections) : undefined,
                 style: { width: '100%', height: '100%', display: 'block' }
             })}
         </div>

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
 from datetime import datetime
 from pathlib import Path
@@ -497,3 +497,90 @@ async def get_pae_data(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read PAE data: {str(e)}")
+
+
+class AntibodyData(BaseModel):
+    """Aggregate antibody metrics."""
+    design_id: str
+    cdrs: Dict[str, Optional[str]]
+    humanness_score: Optional[float]
+    stability_data: Optional[Dict[str, Any]]
+    imgt_pdb_url: Optional[str]
+    
+@router.get("/{design_id}/antibody", response_model=AntibodyData)
+async def get_antibody_data(
+    design_id: str,
+    session: AsyncSession = Depends(get_session)
+):
+    """Get antibody-specific data (CDRs, humanness, stability)."""
+    result = await session.execute(select(Design).where(Design.id == design_id))
+    design = result.scalar_one_or_none()
+    
+    if not design:
+        raise HTTPException(status_code=404, detail="Design not found")
+    
+    imgt_url = None
+    if design.pdb_path:
+        pdb_path = Path(design.pdb_path)
+        # Check for _imgt.pdb variant
+        # If original is "X.pdb", look for "X_imgt.pdb"
+        # If original is "X_imgt.pdb", we are good.
+        if "_imgt" in pdb_path.name:
+             imgt_url = f"/api/designs/{design.id}/pdb"
+        else:
+             imgt_chk = pdb_path.parent / f"{pdb_path.stem}_imgt.pdb"
+             if imgt_chk.exists():
+                 imgt_url = f"/api/designs/{design.id}/pdb-imgt"
+
+    return AntibodyData(
+        design_id=design.id,
+        cdrs={
+            "H1": design.cdr_h1, "H2": design.cdr_h2, "H3": design.cdr_h3,
+            "L1": design.cdr_l1, "L2": design.cdr_l2, "L3": design.cdr_l3
+        },
+        humanness_score=design.humanness_score,
+        stability_data=design.stability_data,
+        imgt_pdb_url=imgt_url
+    )
+
+@router.get("/{design_id}/pdb-imgt")
+async def get_design_imgt_pdb(
+    design_id: str,
+    session: AsyncSession = Depends(get_session)
+):
+    """Download the IMGT-renumbered PDB file for a design."""
+    result = await session.execute(select(Design).where(Design.id == design_id))
+    design = result.scalar_one_or_none()
+    
+    if not design or not design.pdb_path:
+        raise HTTPException(status_code=404, detail="Design not found or no PDB")
+    
+    pdb_path = Path(design.pdb_path)
+    imgt_path = pdb_path.parent / f"{pdb_path.stem}_imgt.pdb"
+    
+    if not imgt_path.exists():
+        raise HTTPException(status_code=404, detail="IMGT renumbered PDB not found")
+    
+    return FileResponse(
+        path=imgt_path,
+        filename=f"{design.name}_imgt.pdb",
+        media_type="text/plain"
+    )
+
+@router.get("/{design_id}/antifold-logits")
+async def get_antifold_logits(
+    design_id: str,
+    session: AsyncSession = Depends(get_session)
+):
+    """Get AntiFold probability CSV data (if available)."""
+    result = await session.execute(select(Design).where(Design.id == design_id))
+    design = result.scalar_one_or_none()
+    
+    if not design or not design.antifold_logits_path:
+        raise HTTPException(status_code=404, detail="No AntiFold data for this design")
+        
+    path = Path(design.antifold_logits_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Logits file not found")
+        
+    return FileResponse(path, media_type="text/csv", filename=f"{design.name}_logits.csv")

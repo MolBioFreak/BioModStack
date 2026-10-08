@@ -658,3 +658,135 @@ export function IPTMHeatmap({ data, title = "ipTM Pairs", width = 200, height = 
         </div>
     );
 }
+
+export interface StabilityHeatmapProps {
+    data: Record<string, Record<string, number>>; // {"A": {"1": -0.5, "2": 1.2}, ...}
+    title?: string;
+    width?: number;
+    height?: number;
+}
+
+export function StabilityHeatmap({ data, title = "Stability (ddG)", width = 300, height = 300 }: StabilityHeatmapProps) {
+    if (!data || Object.keys(data).length === 0) {
+        return (
+            <div className="flex items-center justify-center text-slate-500 text-xs h-full bg-slate-800/20 rounded-xl">
+                No stability data
+            </div>
+        );
+    }
+
+    // Extract chains and residues
+    // Data structure: chain -> residue_index -> ddG
+    const chains = Object.keys(data).sort();
+
+    // Flatten to a grid for visualization
+    // We'll visualize one chain at a time or stack them? 
+    // For now, let's just take the first chain if multiple, or allow selection?
+    // Simpler: Just visualize the first chain found.
+    const chainId = chains[0];
+    const residueMap = data[chainId];
+    const residueIndices = Object.keys(residueMap).sort((a, b) => parseInt(a) - parseInt(b));
+
+    // We need 20 amino acids on Y axis (mutations) and Residue Index on X axis (positions)
+    // Wait, ThermoMPNN output is usually (position, mutant_aa) -> ddG
+    // Let's assume the data passed here is already processed into:
+    // { "position_1": { "A": 0.0, "C": -0.5, ... }, ... }
+
+    // If the data is raw ddG per position:
+    // We need to know the specific structure of `stability_data` stored in DB.
+    // Assuming it's a matrix of [Position x 20AA]
+
+    // Let's assume input `data` is: { "1": {"A": 0.1, "R": -0.2...}, "2": ... } (Residue Index -> Mutation AA -> Score)
+
+    const positions = Object.keys(data).sort((a, b) => parseInt(a) - parseInt(b));
+    const aminoAcids = ['A', 'R', 'N', 'D', 'C', 'Q', 'E', 'G', 'H', 'I', 'L', 'K', 'M', 'F', 'P', 'S', 'T', 'W', 'Y', 'V'];
+
+    const cellSizeX = Math.max(10, (width - 60) / positions.length);
+    const cellSizeY = Math.max(10, (height - 40) / aminoAcids.length);
+
+    // Color scale: Blue (Stabilizing, < 0) -> White (0) -> Red (Destabilizing, > 0)
+    const getColor = (val: number) => {
+        if (val === undefined || val === null) return '#1e293b';
+
+        // Clamp -2.0 to +2.0 roughly
+        if (val < 0) {
+            // Blue scale
+            const intensity = Math.min(1, Math.abs(val) / 2.0);
+            // White (255,255,255) to Blue (59, 130, 246)
+            const r = Math.round(255 + intensity * (59 - 255));
+            const g = Math.round(255 + intensity * (130 - 255));
+            const b = Math.round(255 + intensity * (246 - 255));
+            return `rgb(${r},${g},${b})`;
+        } else {
+            // Red scale
+            const intensity = Math.min(1, val / 2.0);
+            // White to Red (239, 68, 68)
+            const r = Math.round(255 + intensity * (239 - 255));
+            const g = Math.round(255 + intensity * (68 - 255));
+            const b = Math.round(255 + intensity * (68 - 255));
+            return `rgb(${r},${g},${b})`;
+        }
+    };
+
+    return (
+        <div className="flex flex-col bg-slate-800/40 p-4 rounded-xl border border-slate-700/40" style={{ width: '100%', maxWidth: width }}>
+            {title && (
+                <div className="text-xs text-slate-300 font-medium mb-3 flex justify-between items-center">
+                    <span>{title}</span>
+                    <span className="text-[10px] text-slate-500">Chain {chainId}</span>
+                </div>
+            )}
+
+            <div className="overflow-x-auto">
+                <div className="flex">
+                    {/* Y-axis labels (AAs) */}
+                    <div className="flex flex-col mr-2 pt-6">
+                        {aminoAcids.map(aa => (
+                            <div key={aa} className="text-[9px] text-slate-400 h-[14px] leading-[14px] text-right">
+                                {aa}
+                            </div>
+                        ))}
+                    </div>
+
+                    {/* Heatmap */}
+                    <div className="flex flex-col">
+                        {/* X-axis labels (every 10th) */}
+                        <div className="flex h-6 mb-0.5">
+                            {positions.map((pos, i) => (
+                                <div key={pos} className="text-[9px] text-slate-500 text-center relative" style={{ width: cellSizeX }}>
+                                    {(i % 5 === 0) ? pos : ''}
+                                </div>
+                            ))}
+                        </div>
+
+                        {/* Grid */}
+                        <div className="flex">
+                            {positions.map(pos => (
+                                <div key={pos} className="flex flex-col">
+                                    {aminoAcids.map(aa => {
+                                        const val = (data as any)[pos]?.[aa];
+                                        return (
+                                            <div
+                                                key={`${pos}-${aa}`}
+                                                className="h-[14px] border-[0.5px] border-slate-900/10 hover:border-slate-400 z-0 hover:z-10 relative"
+                                                style={{ width: cellSizeX, backgroundColor: getColor(val) }}
+                                                title={`Pos ${pos} -> ${aa}: ${val?.toFixed(2)}`}
+                                            />
+                                        );
+                                    })}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {/* Legend */}
+            <div className="flex items-center justify-center gap-2 mt-3 text-[10px] text-slate-400">
+                <span>Stabilizing (&lt;0)</span>
+                <div className="w-24 h-2 rounded bg-gradient-to-r from-blue-500 via-white to-red-500"></div>
+                <span>Destabilizing (&gt;0)</span>
+            </div>
+        </div>
+    );
+}

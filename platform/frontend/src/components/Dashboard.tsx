@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchJobs, fetchSystemStatus, cancelJob, fetchPowerControl, setPowerControlManual, fetchSchedulerConfig, toggleGpuDisabled } from '../lib/api';
+import { fetchJobs, fetchSystemStatus, cancelJob, resubmitJob, fetchPowerControl, setPowerControlManual, fetchSchedulerConfig, toggleGpuDisabled } from '../lib/api';
 import type { GPUStatus, CPUStatus, RAMStatus } from '../lib/api';
 import { JobDetailsPanel } from './JobDetailsPanel';
 import { QuickViewer } from './QuickViewer';
@@ -28,6 +28,23 @@ export function Dashboard() {
     const handleCancel = (jobId: string, jobName: string) => {
         if (confirm(`Cancel job "${jobName}"?`)) {
             cancelMutation.mutate(jobId);
+        }
+    };
+
+    const resubmitMutation = useMutation({
+        mutationFn: (jobId: string) => resubmitJob(jobId),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['jobs'] });
+            alert(`Job resubmitted! New job: ${response.data.new_job_name}`);
+        },
+        onError: (error: any) => {
+            alert(`Resubmit failed: ${error.response?.data?.detail || error.message}`);
+        }
+    });
+
+    const handleResubmit = (jobId: string, jobName: string) => {
+        if (confirm(`Resubmit job "${jobName}"?`)) {
+            resubmitMutation.mutate(jobId);
         }
     };
 
@@ -375,6 +392,18 @@ export function Dashboard() {
                                                                         {cancelMutation.isPending ? '...' : 'Cancel'}
                                                                     </button>
                                                                 )}
+                                                                {(job.status === 'failed' || job.status === 'cancelled') && (
+                                                                    <button
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation();
+                                                                            handleResubmit(job.id, job.name);
+                                                                        }}
+                                                                        disabled={resubmitMutation.isPending}
+                                                                        className="px-2 py-1 text-xs bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 hover:text-yellow-300 rounded transition-colors disabled:opacity-50"
+                                                                    >
+                                                                        {resubmitMutation.isPending ? '...' : '🔄 Retry'}
+                                                                    </button>
+                                                                )}
                                                             </div>
                                                         </td>
                                                     </tr>
@@ -712,7 +741,7 @@ function Sparkline({ data, color, height = 24 }: { data: number[]; color: string
 
 // Queue Status Table - shows running GPU processes
 // Uses running jobs data to show model names instead of generic 'python'
-function QueueStatusTable({ gpus, runningJobs }: { gpus: GPUStatus[]; runningJobs: Array<{ model_id: string; name: string }> }) {
+function _QueueStatusTable({ gpus, runningJobs }: { gpus: GPUStatus[]; runningJobs: Array<{ model_id: string; name: string }> }) {
     // Flatten all GPU processes into a single list with GPU info
     const tasks = gpus.flatMap(gpu =>
         gpu.processes.map(proc => ({
@@ -796,16 +825,45 @@ interface SchedulerConfig {
         busy_threshold: number;
         cooldown_ms: number;
         enabled: boolean;
+        target_vram_fill: number;
+        capacity_weight: number;
+        emptiness_weight: number;
+        msa_concurrency_limit: number;
     };
-    overrides: Record<string, { force_available: boolean; quick_enable: boolean; threshold: number | null }>;
+    overrides: Record<string, {
+        force_available: boolean;
+        quick_enable: boolean;
+        threshold: number | null;
+        disabled?: boolean;
+        priority_tier?: number | null;
+        vram_safety_margin_mb?: number;
+        max_concurrent_jobs?: number | null;
+    }>;
 }
 
 function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
     const [config, setConfig] = useState<SchedulerConfig | null>(null);
     const [loading, setLoading] = useState(false);
-    const [localThreshold, setLocalThreshold] = useState(50);
+    const [localThreshold, setLocalThreshold] = useState(75);
     const [localCooldown, setLocalCooldown] = useState(10);
+    const [localCapacityWeight, setLocalCapacityWeight] = useState(3.0);
+    const [localEmptinessWeight, setLocalEmptinessWeight] = useState(5.0);
     const [expanded, setExpanded] = useState(false);
+    const [debugExpanded, setDebugExpanded] = useState(false);
+
+    // GPU specs: name and max VRAM in MB
+    const GPU_SPECS: Record<number, { name: string; maxVramMb: number }> = {
+        0: { name: 'RTX 5090', maxVramMb: 32768 },      // 32GB
+        1: { name: 'RTX 5060 Ti', maxVramMb: 16384 },   // 16GB
+        2: { name: 'RTX 3090 #1', maxVramMb: 24576 },   // 24GB
+        3: { name: 'RTX 3090 #2', maxVramMb: 24576 },   // 24GB
+    };
+
+    // Per-GPU local state for overrides (stores pending changes)
+    const [localGpuOverrides, setLocalGpuOverrides] = useState<Record<string, {
+        vramLimitMb: number;
+        priorityTier: number | null;
+    }>>({});
 
     // Fetch config on mount
     useEffect(() => {
@@ -813,11 +871,143 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
             .then(res => res.json())
             .then(data => {
                 setConfig(data);
-                setLocalThreshold(Math.round((data.global?.busy_threshold ?? 0.5) * 100));
+                setLocalThreshold(Math.round((data.global?.target_vram_fill ?? 0.75) * 100));
                 setLocalCooldown(Math.round((data.global?.cooldown_ms ?? 10000) / 1000));
+                setLocalCapacityWeight(data.global?.capacity_weight ?? 3.0);
+                setLocalEmptinessWeight(data.global?.emptiness_weight ?? 5.0);
+
+                // Initialize per-GPU local state from config
+                const gpuStates: typeof localGpuOverrides = {};
+                for (const gpuIdStr of Object.keys(data.overrides || {})) {
+                    const gpuIdx = parseInt(gpuIdStr);
+                    const override = data.overrides[gpuIdStr] || {};
+                    const maxVram = GPU_SPECS[gpuIdx]?.maxVramMb ?? 24576;
+                    // Calculate vramLimit from threshold and safety margin
+                    const thresholdPct = override.threshold ?? (data.global?.target_vram_fill ?? 0.75);
+                    const safetyMb = override.vram_safety_margin_mb ?? 0;
+                    gpuStates[gpuIdStr] = {
+                        vramLimitMb: Math.round(maxVram * thresholdPct - safetyMb),
+                        priorityTier: override.priority_tier ?? null,
+                    };
+                }
+                setLocalGpuOverrides(gpuStates);
             })
             .catch(console.error);
     }, []);
+
+    // Get or initialize local GPU override
+    const getLocalGpuOverride = (gpuId: string) => {
+        const gpuIdx = parseInt(gpuId);
+        const maxVram = GPU_SPECS[gpuIdx]?.maxVramMb ?? 24576;
+
+        if (localGpuOverrides[gpuId]) return localGpuOverrides[gpuId];
+
+        const override = (config?.overrides[gpuId] || {}) as {
+            threshold?: number | null;
+            vram_safety_margin_mb?: number;
+            priority_tier?: number | null;
+        };
+
+        // Calculate vramLimit from threshold and safety margin
+        const thresholdPct = override.threshold ?? (config?.global?.target_vram_fill ?? 0.75);
+        const safetyMb = override.vram_safety_margin_mb ?? 0;
+
+        return {
+            vramLimitMb: Math.round(maxVram * thresholdPct - safetyMb),
+            priorityTier: override.priority_tier ?? null,
+        };
+    };
+
+    // Update local GPU override state
+    const updateLocalGpuOverride = (gpuId: string, field: string, value: number | null) => {
+        setLocalGpuOverrides(prev => ({
+            ...prev,
+            [gpuId]: {
+                ...getLocalGpuOverride(gpuId),
+                [field]: value,
+            }
+        }));
+    };
+
+    // Save per-GPU override to backend
+    const saveGpuOverride = async (gpuId: string) => {
+        if (!config) return;
+        const local = getLocalGpuOverride(gpuId);
+        const existing = config.overrides[gpuId] || {};
+        const gpuIdx = parseInt(gpuId);
+        const maxVram = GPU_SPECS[gpuIdx]?.maxVramMb ?? 24576;
+
+        // Convert vramLimitMb back to threshold percentage
+        const thresholdPct = local.vramLimitMb / maxVram;
+
+        try {
+            const res = await fetch(`/api/gpu/scheduler-config/gpu/${gpuId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    force_available: existing.force_available ?? false,
+                    quick_enable: existing.quick_enable ?? false,
+                    threshold: thresholdPct,
+                    disabled: existing.disabled ?? false,
+                    priority_tier: local.priorityTier,
+                    vram_safety_margin_mb: 0, // No longer using separate safety margin
+                    max_concurrent_jobs: existing.max_concurrent_jobs ?? null,
+                })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setConfig(prev => prev ? { ...prev, overrides: data.overrides } : null);
+            }
+        } catch (error) {
+            console.error('Failed to update GPU override:', error);
+        }
+    };
+
+    // Apply VRAM preset to all GPUs (percentage of max)
+    const applyVramPreset = async (percentage: number) => {
+        if (!config) return;
+        setLoading(true);
+
+        for (const gpu of gpus) {
+            const gpuId = String(gpu.index);
+            const maxVram = GPU_SPECS[gpu.index]?.maxVramMb ?? 24576;
+            const vramLimitMb = Math.round(maxVram * (percentage / 100));
+            const thresholdPct = percentage / 100;
+            const existing = config.overrides[gpuId] || {};
+
+            try {
+                await fetch(`/api/gpu/scheduler-config/gpu/${gpuId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        force_available: existing.force_available ?? false,
+                        quick_enable: existing.quick_enable ?? false,
+                        threshold: thresholdPct,
+                        disabled: existing.disabled ?? false,
+                        priority_tier: null,
+                        vram_safety_margin_mb: 0,
+                        max_concurrent_jobs: null,
+                    })
+                });
+
+                // Update local state
+                setLocalGpuOverrides(prev => ({
+                    ...prev,
+                    [gpuId]: { vramLimitMb, priorityTier: null }
+                }));
+            } catch (error) {
+                console.error(`Failed to set preset for GPU ${gpuId}:`, error);
+            }
+        }
+
+        // Refresh config
+        const res = await fetch('/api/gpu/scheduler-config');
+        if (res.ok) {
+            const data = await res.json();
+            setConfig(data);
+        }
+        setLoading(false);
+    };
 
     const updateGlobal = async () => {
         setLoading(true);
@@ -826,9 +1016,13 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    busy_threshold: localThreshold / 100,
+                    busy_threshold: config?.global?.busy_threshold ?? 0.5,
                     cooldown_ms: localCooldown * 1000,
-                    enabled: config?.global?.enabled ?? true
+                    enabled: config?.global?.enabled ?? true,
+                    target_vram_fill: localThreshold / 100,
+                    capacity_weight: localCapacityWeight,
+                    emptiness_weight: localEmptinessWeight,
+                    msa_concurrency_limit: config?.global?.msa_concurrency_limit ?? 1,
                 })
             });
             if (res.ok) {
@@ -837,30 +1031,6 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
             }
         } catch (error) {
             console.error('Failed to update scheduler config:', error);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const toggleEnabled = async () => {
-        if (!config) return;
-        setLoading(true);
-        try {
-            const res = await fetch('/api/gpu/scheduler-config', {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    busy_threshold: config.global.busy_threshold,
-                    cooldown_ms: config.global.cooldown_ms,
-                    enabled: !config.global.enabled
-                })
-            });
-            if (res.ok) {
-                const data = await res.json();
-                setConfig({ global: data.global, overrides: data.overrides });
-            }
-        } catch (error) {
-            console.error('Failed to toggle scheduler:', error);
         } finally {
             setLoading(false);
         }
@@ -914,8 +1084,11 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
 
     if (!config) return null;
 
-    const isDirty = localThreshold !== Math.round(config.global.busy_threshold * 100) ||
-        localCooldown !== Math.round(config.global.cooldown_ms / 1000);
+    const isDirty =
+        localThreshold !== Math.round((config.global.target_vram_fill ?? 0.75) * 100) ||
+        localCooldown !== Math.round(config.global.cooldown_ms / 1000) ||
+        localCapacityWeight !== (config.global.capacity_weight ?? 3.0) ||
+        localEmptinessWeight !== (config.global.emptiness_weight ?? 5.0);
 
     return (
         <div className="bg-slate-800/30 backdrop-blur-sm border border-slate-700 rounded-xl p-4 mb-4">
@@ -925,8 +1098,11 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
             >
                 <div className="flex items-center gap-3">
                     <span className="text-sm font-medium text-slate-200">⚙️ GPU Scheduler</span>
-                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${config.global.enabled ? 'bg-green-500/20 text-green-400' : 'bg-slate-500/20 text-slate-400'}`}>
-                        {config.global.enabled ? `${Math.round(config.global.busy_threshold * 100)}% Fill` : 'OFF'}
+                    <span className="px-2 py-0.5 rounded text-xs font-medium bg-green-500/20 text-green-400">
+                        {gpus.length} GPUs
+                    </span>
+                    <span className="px-2 py-0.5 rounded text-xs font-medium bg-cyan-500/20 text-cyan-400">
+                        Cap: {config.global.capacity_weight ?? 3.0}
                     </span>
                 </div>
                 <span className="text-slate-500">{expanded ? '▲' : '▼'}</span>
@@ -934,56 +1110,73 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
 
             {expanded && (
                 <div className="mt-4 space-y-4">
-                    {/* Master Enable Toggle */}
+                    {/* VRAM Preset Buttons - Set all GPUs at once */}
                     <div className="flex items-center justify-between">
-                        <span className="text-sm text-slate-400">Capacity Lock</span>
-                        <button
-                            onClick={toggleEnabled}
-                            disabled={loading}
-                            className={`relative w-12 h-6 rounded-full transition-colors ${config.global.enabled ? 'bg-green-500' : 'bg-slate-600'}`}
-                        >
-                            <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${config.global.enabled ? 'left-7' : 'left-1'}`} />
-                        </button>
-                    </div>
-
-                    {/* Threshold Slider */}
-                    <div>
-                        <div className="flex justify-between text-xs text-slate-400 mb-1">
-                            <span>Target VRAM Fill</span>
-                            <span className="text-cyan-400 font-medium">{localThreshold}%</span>
-                        </div>
-                        <input
-                            type="range"
-                            min="20"
-                            max="90"
-                            value={localThreshold}
-                            onChange={(e) => setLocalThreshold(parseInt(e.target.value))}
-                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
-                        />
-                        <div className="flex justify-between text-xs text-slate-500 mt-1">
-                            <span>20%</span>
-                            <span>90%</span>
+                        <span className="text-sm text-slate-400">VRAM Presets</span>
+                        <div className="flex items-center gap-2">
+                            {[25, 50, 75, 95].map(pct => (
+                                <button
+                                    key={pct}
+                                    onClick={() => applyVramPreset(pct)}
+                                    disabled={loading}
+                                    className="px-3 py-1.5 rounded text-xs font-medium bg-slate-700/50 text-slate-300 hover:bg-cyan-500/30 hover:text-cyan-300 transition-colors disabled:opacity-50"
+                                >
+                                    {pct}%
+                                </button>
+                            ))}
                         </div>
                     </div>
 
-                    {/* Cooldown Slider */}
-                    <div>
-                        <div className="flex justify-between text-xs text-slate-400 mb-1">
-                            <span>Cooldown Time</span>
-                            <span className="text-purple-400 font-medium">{localCooldown}s</span>
+                    {/* GPU Priority Weights Section */}
+                    <div className="border-t border-slate-700 pt-4">
+                        <div className="text-xs text-slate-400 mb-3">GPU Priority Weights</div>
+
+                        {/* Capacity Weight Slider */}
+                        <div className="mb-4">
+                            <div className="flex justify-between text-xs text-slate-400 mb-1">
+                                <span>Capacity Weight <span className="text-slate-600">(prefer bigger GPUs)</span></span>
+                                <span className="text-emerald-400 font-medium">{localCapacityWeight.toFixed(1)}</span>
+                            </div>
+                            <input
+                                type="range"
+                                min="0"
+                                max="10"
+                                step="0.5"
+                                value={localCapacityWeight}
+                                onChange={(e) => setLocalCapacityWeight(parseFloat(e.target.value))}
+                                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                            />
+                            <div className="flex justify-between text-xs text-slate-500 mt-1">
+                                <span>0 (ignore size)</span>
+                                <span>10 (strongly prefer big)</span>
+                            </div>
                         </div>
-                        <input
-                            type="range"
-                            min="5"
-                            max="30"
-                            value={localCooldown}
-                            onChange={(e) => setLocalCooldown(parseInt(e.target.value))}
-                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
-                        />
-                        <div className="flex justify-between text-xs text-slate-500 mt-1">
-                            <span>5s</span>
-                            <span>30s</span>
+
+                        {/* Emptiness Weight Slider */}
+                        <div>
+                            <div className="flex justify-between text-xs text-slate-400 mb-1">
+                                <span>Emptiness Weight <span className="text-slate-600">(prefer idle GPUs)</span></span>
+                                <span className="text-amber-400 font-medium">{localEmptinessWeight.toFixed(1)}</span>
+                            </div>
+                            <input
+                                type="range"
+                                min="0"
+                                max="10"
+                                step="0.5"
+                                value={localEmptinessWeight}
+                                onChange={(e) => setLocalEmptinessWeight(parseFloat(e.target.value))}
+                                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                            />
+                            <div className="flex justify-between text-xs text-slate-500 mt-1">
+                                <span>0 (pack tight)</span>
+                                <span>10 (spread out)</span>
+                            </div>
                         </div>
+
+                        <p className="text-xs text-slate-500 mt-3">
+                            <span className="text-emerald-400">↑ Capacity</span> = fill 5090 first, then 3090s, then 5060 Ti<br />
+                            <span className="text-amber-400">↑ Emptiness</span> = prefer idle GPUs over partially-full ones
+                        </p>
                     </div>
 
                     {/* Apply Button */}
@@ -997,57 +1190,165 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                         </button>
                     )}
 
-                    {/* Per-GPU Controls */}
+                    {/* Per-GPU Controls (Debug) - Toggleable */}
                     <div className="border-t border-slate-700 pt-4">
-                        <div className="text-xs text-slate-400 mb-3">Per-GPU Controls</div>
-                        <div className="space-y-2">
-                            {gpus.map(gpu => {
-                                const gpuId = String(gpu.index);
-                                const override = config.overrides[gpuId] || {};
-                                const isForced = override.force_available ?? false;
-                                const isQuickEnabled = override.quick_enable ?? false;
-                                const memoryUsed = ((gpu.memory_used_mb / gpu.memory_total_mb) * 100).toFixed(0);
+                        <button
+                            onClick={() => setDebugExpanded(!debugExpanded)}
+                            className="flex items-center justify-between w-full text-left"
+                        >
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs text-slate-400">Per-GPU Controls</span>
+                                <span className="text-xs px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400">Debug</span>
+                            </div>
+                            <span className="text-slate-500 text-xs">{debugExpanded ? '▲ Hide' : '▼ Show'}</span>
+                        </button>
 
-                                return (
-                                    <div key={gpu.index} className="flex items-center justify-between bg-slate-800/50 rounded-lg px-3 py-2">
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-xs text-slate-300">GPU {gpu.index}</span>
-                                            <span className={`text-xs px-1.5 py-0.5 rounded ${Number(memoryUsed) > 50 ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'
-                                                }`}>
-                                                {memoryUsed}%
-                                            </span>
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                            {/* Quick Enable Button (one-shot, toggleable) */}
-                                            <button
-                                                onClick={() => toggleQuickEnable(gpuId)}
-                                                className={`px-2 py-1 rounded text-xs font-medium transition-colors ${isQuickEnabled
-                                                    ? 'bg-cyan-500/40 text-cyan-200 hover:bg-red-500/30 hover:text-red-300'
-                                                    : 'bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30'
-                                                    }`}
-                                            >
-                                                {isQuickEnabled ? '✓ Queued (click to cancel)' : '+ Enable'}
-                                            </button>
+                        {debugExpanded && (
+                            <div className="mt-4 space-y-4">
+                                {gpus.map(gpu => {
+                                    const gpuId = String(gpu.index);
+                                    const override = config.overrides[gpuId] || {};
+                                    const isForced = override.force_available ?? false;
+                                    const isQuickEnabled = override.quick_enable ?? false;
+                                    const isDisabled = override.disabled ?? false;
+                                    const memoryUsed = ((gpu.memory_used_mb / gpu.memory_total_mb) * 100).toFixed(0);
 
-                                            {/* Debug Mode Checkbox (permanent) */}
-                                            <label className="flex items-center gap-1 text-xs text-slate-500 cursor-pointer">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={isForced}
-                                                    onChange={() => toggleForceAvailable(gpuId)}
-                                                    className="w-3 h-3 accent-red-500"
-                                                />
-                                                <span className={isForced ? 'text-red-400' : ''}>Debug</span>
-                                            </label>
+                                    // GPU Name mapping
+                                    const gpuNames: Record<number, string> = {
+                                        0: 'RTX 5090',
+                                        1: 'RTX 5060 Ti',
+                                        2: 'RTX 3090 #1',
+                                        3: 'RTX 3090 #2',
+                                    };
+                                    const gpuName = gpuNames[gpu.index] || `GPU ${gpu.index}`;
+
+                                    // Get local state for this GPU
+                                    const localOverride = getLocalGpuOverride(gpuId);
+
+                                    // GPU specs for this GPU
+                                    const maxVram = GPU_SPECS[gpu.index]?.maxVramMb ?? 24576;
+                                    const minVram = 1024; // 1GB minimum
+
+                                    // Check if this GPU has unsaved changes
+                                    const serverOverride = config.overrides[gpuId] || {};
+                                    const serverThreshold = serverOverride.threshold ?? (config.global?.target_vram_fill ?? 0.75);
+                                    const serverSafetyMb = serverOverride.vram_safety_margin_mb ?? 0;
+                                    const serverVramLimitMb = Math.round(maxVram * serverThreshold - serverSafetyMb);
+                                    const serverPriorityTier = serverOverride.priority_tier ?? null;
+
+                                    const hasUnsavedChanges =
+                                        localOverride.vramLimitMb !== serverVramLimitMb ||
+                                        localOverride.priorityTier !== serverPriorityTier;
+
+                                    return (
+                                        <div key={gpu.index} className={`bg-slate-800/50 rounded-lg px-4 py-4 ${isDisabled ? 'opacity-50' : ''}`}>
+                                            {/* Header Row */}
+                                            <div className="flex items-center justify-between mb-3">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-sm font-medium text-slate-200">{gpuName}</span>
+                                                    <span className={`text-xs px-1.5 py-0.5 rounded ${Number(memoryUsed) > 50 ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'}`}>
+                                                        {memoryUsed}%
+                                                    </span>
+                                                    {isDisabled && (
+                                                        <span className="text-xs px-1.5 py-0.5 rounded bg-red-500/20 text-red-400">Disabled</span>
+                                                    )}
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <button
+                                                        onClick={() => toggleQuickEnable(gpuId)}
+                                                        className={`px-2 py-1 rounded text-xs font-medium transition-colors ${isQuickEnabled
+                                                            ? 'bg-cyan-500/40 text-cyan-200'
+                                                            : 'bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30'
+                                                            }`}
+                                                    >
+                                                        {isQuickEnabled ? '✓ Queued' : '+ Enable'}
+                                                    </button>
+                                                    <label className="flex items-center gap-1 text-xs text-slate-500 cursor-pointer">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={isForced}
+                                                            onChange={() => toggleForceAvailable(gpuId)}
+                                                            className="w-3 h-3 accent-red-500"
+                                                        />
+                                                        <span className={isForced ? 'text-red-400' : ''}>Force</span>
+                                                    </label>
+                                                </div>
+                                            </div>
+
+                                            {/* Sliders Row - 2 columns now */}
+                                            <div className="grid grid-cols-2 gap-4 text-xs">
+                                                {/* Priority Tier Slider */}
+                                                <div>
+                                                    <div className="flex justify-between text-slate-500 mb-1">
+                                                        <span>Priority</span>
+                                                        <span className="text-emerald-400">
+                                                            {localOverride.priorityTier !== null ? localOverride.priorityTier : 'Auto'}
+                                                        </span>
+                                                    </div>
+                                                    <input
+                                                        type="range"
+                                                        min="0"
+                                                        max="10"
+                                                        value={localOverride.priorityTier ?? 5}
+                                                        onChange={(e) => {
+                                                            const val = parseInt(e.target.value);
+                                                            updateLocalGpuOverride(gpuId, 'priorityTier', val);
+                                                        }}
+                                                        className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                                                    />
+                                                    <div className="flex justify-between text-slate-600 mt-0.5">
+                                                        <span>Low</span>
+                                                        <button
+                                                            onClick={() => updateLocalGpuOverride(gpuId, 'priorityTier', null)}
+                                                            className="text-slate-500 hover:text-emerald-400"
+                                                        >
+                                                            Reset
+                                                        </button>
+                                                        <span>High</span>
+                                                    </div>
+                                                </div>
+
+                                                {/* VRAM Limit Slider (merged) */}
+                                                <div>
+                                                    <div className="flex justify-between text-slate-500 mb-1">
+                                                        <span>VRAM Limit</span>
+                                                        <span className="text-cyan-400">{(localOverride.vramLimitMb / 1024).toFixed(1)}GB</span>
+                                                    </div>
+                                                    <input
+                                                        type="range"
+                                                        min={minVram}
+                                                        max={maxVram}
+                                                        step="512"
+                                                        value={localOverride.vramLimitMb}
+                                                        onChange={(e) => updateLocalGpuOverride(gpuId, 'vramLimitMb', parseInt(e.target.value))}
+                                                        className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                                                    />
+                                                    <div className="flex justify-between text-slate-600 mt-0.5">
+                                                        <span>1GB</span>
+                                                        <span>{(maxVram / 1024).toFixed(0)}GB</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            {/* Save Button for this GPU */}
+                                            {hasUnsavedChanges && (
+                                                <button
+                                                    onClick={() => saveGpuOverride(gpuId)}
+                                                    className="mt-3 w-full py-1.5 bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 rounded text-xs font-medium transition-colors"
+                                                >
+                                                    Save {gpuName} Settings
+                                                </button>
+                                            )}
                                         </div>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                        <p className="text-xs text-slate-500 mt-2">
-                            <span className="text-cyan-400">+ Enable</span> = Accept 1 job, then normal rules apply.<br />
-                            <span className="text-red-400">Debug</span> = Permanent override (⚠️ can cause OOM!)
-                        </p>
+                                    );
+                                })}
+
+                                <p className="text-xs text-slate-500">
+                                    <span className="text-emerald-400">Priority</span>: Higher = preferred for jobs (Auto uses GPU capacity).<br />
+                                    <span className="text-cyan-400">VRAM Limit</span>: Maximum VRAM the scheduler will use on this GPU.
+                                </p>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}

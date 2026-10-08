@@ -204,24 +204,42 @@ def pack_jobs_to_gpus(
                 if not gpu_caps.get('supports_heavy', True):
                     continue
             
-            # Check 3: VRAM availability
-            available = (capacity[gpu.index] * target_fill) - projected[gpu.index]
+            # Check 3: VRAM availability (with per-GPU safety margin)
+            gpu_override = config.get("overrides", {}).get(str(gpu.index), {})
+            safety_margin = gpu_override.get("vram_safety_margin_mb", 500)
+            target_fill = config.get("global", {}).get("target_vram_fill", 0.75)
+            available = (capacity[gpu.index] * target_fill) - projected[gpu.index] - safety_margin
             
             if job.vram_estimate_mb > available:
                 continue  # Doesn't fit
             
             # ═══════════════════════════════════════════════════════════════
-            # SCORING: Prefer larger/faster GPUs first, then consider packing
+            # SCORING: Configurable weights for GPU preference
             # ═══════════════════════════════════════════════════════════════
-            # Primary: Prefer GPUs with more total VRAM (faster/better)
-            # Secondary: Prefer emptier GPUs (lower current utilization)
-            # Tertiary: Prefer lower-index GPUs (determinism)
+            # Read weights from config
+            global_config = config.get("global", {})
+            capacity_weight = global_config.get("capacity_weight", 3.0)
+            emptiness_weight = global_config.get("emptiness_weight", 5.0)
+            
+            # Check for per-GPU priority tier override
+            priority_tier = gpu_override.get("priority_tier")
             
             current_utilization = projected[gpu.index] / capacity[gpu.index]
             
+            # Calculate score
+            if priority_tier is not None:
+                # User-defined priority tier (higher = preferred)
+                base_tier = priority_tier * 10
+            else:
+                # Auto-calculate from capacity
+                # 5090 (32GB) → 9.6, 3090 (24GB) → 7.2, 5060 Ti (16GB) → 4.8
+                base_tier = (capacity[gpu.index] / 10000) * capacity_weight
+            
+            emptiness_bonus = (1.0 - current_utilization) * emptiness_weight
+            
             score = (
-                capacity[gpu.index] / 10000  # Prefer larger GPUs (5090 > 3090 > 5060 Ti)
-                + (1.0 - current_utilization) * 5  # Prefer emptier GPUs
+                base_tier
+                + emptiness_bonus
                 - gpu.index * 0.001  # Tie-breaker: prefer GPU 0
             )
             

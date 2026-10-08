@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { fetchInputPresets, fetchPresetDirectories } from '../lib/api';
 
 export interface PresetSelectorProps {
-    presetType: 'pdb' | 'sequence' | 'yaml' | 'contig' | 'ntp';
+    presetType: 'pdb' | 'sequence' | 'yaml' | 'contig' | 'ntp' | 'ligand';
     value: string;
     onChange: (value: string) => void;
     onBrowse: () => void;

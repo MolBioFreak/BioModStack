@@ -12,7 +12,7 @@
 
 process PrepUniDock {
     tag "${pdbs}"
-    label 'pyrosetta_tools'
+    label 'UniDock'
 
     publishDir "${params.out_dir}/run/unidock/prep", mode: 'copy', pattern: '*.log'
 
@@ -36,7 +36,10 @@ process PrepUniDock {
     def ntpArg = ntp_type ? "--ntp_type '${ntp_type}'" : ''
     def boxCenterArg = box_center ? "--box_center '${box_center}'" : ''
     def flexArg = flexible_residues ? "--flexible_residues '${flexible_residues}'" : ''
-    def boxSizeVal = box_size ?: 25
+    // Limit box size to 30 to prevent SIGSEGV on current hardware/drivers
+    // Large boxes (e.g. 50) cause crashes on RTX 3090 and Blackwell
+    def rawBoxSize = box_size ?: 25
+    def boxSizeVal = (rawBoxSize.toString().toFloat() > 30.0 ? 30 : rawBoxSize).toInteger()
     """
     set -euo pipefail
     
@@ -88,6 +91,10 @@ process RunUniDock {
     """
     set -euo pipefail
     
+    # Force RTX 3090 (GPU 2) - Blackwell GPUs (RTX 50-series) currently crash
+    # due to missing kernel support in Uni-Dock. Will be updated when upstream adds support.
+    export CUDA_VISIBLE_DEVICES=2
+    
     echo "=== Uni-Dock GPU Docking ===" | tee unidock_${batch_id}.log
     echo "Batch ID: ${batch_id}" | tee -a unidock_${batch_id}.log
     echo "Receptor: ${receptor}" | tee -a unidock_${batch_id}.log
@@ -96,17 +103,20 @@ process RunUniDock {
     echo "Exhaustiveness: ${exhaustiveness}" | tee -a unidock_${batch_id}.log
     echo "Num poses: ${numPoses}" | tee -a unidock_${batch_id}.log
     
-    # Parse box parameters from JSON
-    BOX_PARAMS=\$(python3 -c "
+    # Parse box parameters from JSON using heredoc to avoid escaping issues
+    BOX_PARAMS=\$(python3 << 'PYEOF2'
 import json
-with open('${box}') as f:
+with open('box_params.json') as f:
     b = json.load(f)
-print(f'--center_x {b[\"cx\"]} --center_y {b[\"cy\"]} --center_z {b[\"cz\"]} --size_x {b[\"sx\"]} --size_y {b[\"sy\"]} --size_z {b[\"sz\"]}')
-")
+cx, cy, cz = b['cx'], b['cy'], b['cz']
+sx, sy, sz = b['sx'], b['sy'], b['sz']
+print('--center_x {} --center_y {} --center_z {} --size_x {} --size_y {} --size_z {}'.format(cx, cy, cz, sx, sy, sz))
+PYEOF2
+)
     echo "Box params: \$BOX_PARAMS" | tee -a unidock_${batch_id}.log
     
-    # Create ligand index file
-    find ${ligand_dir} -name "*.pdbqt" > ligand_list.txt
+    # Create ligand index file (-L follows symlinks)
+    find -L ${ligand_dir} -name "*.pdbqt" > ligand_list.txt
     echo "Found \$(wc -l < ligand_list.txt) ligands" | tee -a unidock_${batch_id}.log
     
     mkdir -p poses
@@ -136,7 +146,7 @@ print(f'--center_x {b[\"cx\"]} --center_y {b[\"cy\"]} --center_z {b[\"cz\"]} --s
 
 process FilterUniDock {
     tag "filter"
-    label 'pyrosetta_tools'
+    label 'UniDock'
 
     publishDir "${params.out_dir}/run/unidock/filtered", mode: 'copy'
 
@@ -150,7 +160,8 @@ process FilterUniDock {
     path "*.log", emit: logs
 
     script:
-    def threshold = params.unidock_affinity_threshold ?: -7.0
+    // Default to high positive value to show all results by default
+    def threshold = params.unidock_affinity_threshold ?: 999.0
     """
     set -euo pipefail
     

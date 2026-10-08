@@ -93,7 +93,7 @@ export function DesignComparePane({ designs, preSelectedId }: DesignComparePaneP
         return dataPoints;
     }, [metricsMap, designs]);
 
-    const designNames = selectedIds.map(id => designs.find(d => d.id === id)?.name || id).filter(name =>
+    const designNames = selectedIds.map(id => designs.find(d => d.id === id)?.name || id).filter(_name =>
         // Only include if data actually exists in chartData keys (optimization?)
         // Actually map directly to selectedIds order for color consistency
         true
@@ -113,8 +113,8 @@ export function DesignComparePane({ designs, preSelectedId }: DesignComparePaneP
                             key={design.id}
                             onClick={() => toggleDesign(design.id)}
                             className={`p-3 rounded-lg mb-1 cursor-pointer transition-colors border flex items-center justify-between ${selectedIds.includes(design.id)
-                                    ? 'bg-blue-500/10 border-blue-500/50'
-                                    : 'bg-transparent border-transparent hover:bg-slate-800'
+                                ? 'bg-blue-500/10 border-blue-500/50'
+                                : 'bg-transparent border-transparent hover:bg-slate-800'
                                 }`}
                         >
                             <div className="truncate pr-2">

@@ -1,8 +1,9 @@
 
-import { useState, useEffect, useRef } from 'react';
+
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchModels, fetchFiles, submitJob, uploadFile, fetchTemplates, fetchTemplateById } from '../lib/api';
+import { fetchModels, fetchFiles, submitJob, uploadFile, fetchTemplates, fetchTemplateById, fetchInputPresets } from '../lib/api';
 import { SequenceManagerModal } from './SequenceManagerModal';
 import { TemplateManagerModal } from './TemplateManagerModal';
 import { MutagenesisTemplate } from './MutagenesisTemplate';
@@ -120,6 +121,140 @@ function FileBrowser({ onSelect, onCancel }: FileBrowserProps) {
     );
 }
 
+// Reusable param field component for grouped rendering
+function ParamField({
+    param,
+    params,
+    updateParam,
+    setShowFileBrowser,
+    setActiveSequenceField,
+    setShowSequenceManager,
+    ligandPresets
+}: {
+    param: any;
+    params: Record<string, any>;
+    updateParam: (key: string, value: any) => void;
+    setShowFileBrowser: (name: string | null) => void;
+    setActiveSequenceField: (name: string) => void;
+    setShowSequenceManager: (show: boolean) => void;
+    ligandPresets: any[];
+}) {
+    const isWide = param.type === 'file' || param.type === 'directory' || param.preset_type === 'pdb' || param.preset_type === 'ligand';
+
+    return (
+        <div className={isWide ? 'col-span-full' : ''}>
+            <label className="block text-sm font-medium text-slate-400 mb-1.5">
+                {param.description}
+                {param.required && <span className="text-red-400 ml-1">*</span>}
+            </label>
+
+            {param.type === 'boolean' ? (
+                <label className="flex items-center gap-3 cursor-pointer">
+                    <div className={`w-10 h-6 rounded-full p-1 transition-colors ${params[param.name] ? 'bg-blue-500' : 'bg-slate-700'}`}>
+                        <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${params[param.name] ? 'translate-x-4' : ''}`} />
+                    </div>
+                    <input
+                        type="checkbox"
+                        className="hidden"
+                        checked={params[param.name] || false}
+                        onChange={(e) => updateParam(param.name, e.target.checked)}
+                    />
+                    <span className="text-sm text-slate-300">Enabled</span>
+                </label>
+            ) : param.enum ? (
+                <select
+                    value={params[param.name] ?? param.default ?? ''}
+                    onChange={(e) => updateParam(param.name, e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                >
+                    {param.enum.map((opt: string) => (
+                        <option key={opt} value={opt}>{opt}</option>
+                    ))}
+                </select>
+            ) : param.preset_type === 'pdb' ? (
+                <StructureInput
+                    value={params[param.name] || ''}
+                    onChange={(v) => updateParam(param.name, v)}
+                    onBrowse={() => setShowFileBrowser(param.name)}
+                    targetChain={params['target_chain'] || ''}
+                    onTargetChainChange={(c) => updateParam('target_chain', c)}
+                    enableMultiSelect={false}
+                    enableDirectory={false}
+                />
+            ) : param.preset_type === 'ligand' ? (
+                <div className="space-y-2">
+                    <select
+                        value=""
+                        onChange={(e) => updateParam(param.name, e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                    >
+                        <option value="">Select preset ligand...</option>
+                        {ligandPresets.map((preset: any) => (
+                            <option key={preset.id} value={preset.smiles}>
+                                {preset.name}
+                            </option>
+                        ))}
+                    </select>
+                    <input
+                        type="text"
+                        value={params[param.name] || ''}
+                        onChange={(e) => updateParam(param.name, e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm font-mono focus:ring-2 focus:ring-blue-500 outline-none"
+                        placeholder={param.ui_placeholder || "Or enter SMILES string..."}
+                    />
+                </div>
+            ) : param.preset_type === 'sequence' ? (
+                <div className="space-y-2">
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setActiveSequenceField(param.name);
+                            setShowSequenceManager(true);
+                        }}
+                        className="px-3 py-2 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 rounded-lg text-sm transition-colors border border-emerald-600/30"
+                    >
+                        📚 Sequence Library
+                    </button>
+                    <textarea
+                        value={params[param.name] || ''}
+                        onChange={(e) => updateParam(param.name, e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
+                        rows={4}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm font-mono resize-y focus:ring-2 focus:ring-blue-500 outline-none"
+                        placeholder="Enter amino acid sequence..."
+                    />
+                </div>
+            ) : param.type === 'file' || param.type === 'directory' ? (
+                <div className="flex gap-2">
+                    <input
+                        type="text"
+                        value={params[param.name] || ''}
+                        onChange={(e) => updateParam(param.name, e.target.value)}
+                        className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm font-mono outline-none"
+                        placeholder={param.type === 'file' ? '/path/to/file' : '/path/to/directory'}
+                    />
+                    <button
+                        type="button"
+                        onClick={() => setShowFileBrowser(param.name)}
+                        className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-200 text-sm transition-colors"
+                    >
+                        Browse
+                    </button>
+                </div>
+            ) : (
+                <input
+                    type={param.type === 'integer' || param.type === 'number' ? 'number' : 'text'}
+                    value={params[param.name] ?? param.default ?? ''}
+                    onChange={(e) => updateParam(param.name, param.type === 'integer' ? parseInt(e.target.value) : param.type === 'number' ? parseFloat(e.target.value) : e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                    placeholder={param.ui_placeholder || ''}
+                    min={param.minimum}
+                    max={param.maximum}
+                />
+            )}
+        </div>
+    );
+}
+
 export function JobSubmission() {
     const queryClient = useQueryClient();
     const navigate = useNavigate();
@@ -135,6 +270,7 @@ export function JobSubmission() {
     const [sequenceToSave, setSequenceToSave] = useState<{ sequence: string; name?: string } | null>(null);
     const [activeSequenceField, setActiveSequenceField] = useState<string>('sequence');
     const [ligands, setLigands] = useState<LigandEntry[]>([]);
+    const [showAdvanced, setShowAdvanced] = useState(false);
 
     const { data: modelsData } = useQuery({
         queryKey: ['models'],
@@ -151,6 +287,13 @@ export function JobSubmission() {
         queryFn: () => selectedTemplateId ? fetchTemplateById(selectedTemplateId) : null,
         enabled: !!selectedTemplateId,
     });
+
+    // Fetch ligand presets for dynamic dropdown
+    const { data: ligandPresetsData } = useQuery({
+        queryKey: ['presets', 'ligand'],
+        queryFn: () => fetchInputPresets('ligand'),
+    });
+    const ligandPresets = ligandPresetsData?.data ?? [];
 
     const submitMutation = useMutation({
         mutationFn: submitJob,
@@ -207,6 +350,21 @@ export function JobSubmission() {
         }
         return !p.hidden;
     }) ?? [];
+
+    // Group visible params by ui_group
+    const groupedParams = useMemo(() => {
+        const groups: Record<string, any[]> = {};
+        visibleParams.forEach((p: any) => {
+            const group = p.ui_group || 'General';
+            if (!groups[group]) groups[group] = [];
+            groups[group].push(p);
+        });
+        // Sort params within each group by ui_order
+        Object.values(groups).forEach(grp => {
+            grp.sort((a, b) => (a.ui_order ?? 99) - (b.ui_order ?? 99));
+        });
+        return groups;
+    }, [visibleParams]);
 
     // Check if ready to submit - works for both template mode and manual mode
     const isReady = jobName && (
@@ -392,54 +550,50 @@ export function JobSubmission() {
                                 <MutagenesisTemplate
                                     onBack={() => setSelectedTemplateId(null)}
                                     onSubmit={async (jobNamePrefix, variants, predictorConfig) => {
-                                        // NEW: Single batch submission with all variants
-                                        // This triggers MSA batch job creation in the API
-                                        console.log('DEBUG: Submitting mutagenesis batch with', variants.length, 'variants');
-                                        console.log('DEBUG: predictorConfig:', predictorConfig);
-                                        console.log('DEBUG: msa_reference_sequence:', predictorConfig.msa_reference_sequence);
+                                        // PHASED MSA BATCH: Single API call with all variants
+                                        // This triggers:
+                                        // 1. Creation of 1 MSA batch job (runs first)
+                                        // 2. Creation of N inference jobs (pending_msa status)
+                                        // 3. CPU orchestrator schedules MSA job to GPU
+                                        // 4. When MSA completes, inference jobs become schedulable
 
-                                        // For mutagenesis, we need to submit each variant as a separate job
-                                        // BUT with num_parallel_jobs=1 per job and msa_reference_sequence set
-                                        // The API will detect msa_reference_sequence and create an MSA batch job
+                                        console.log('[MUTAGENESIS BATCH] Submitting', variants.length, 'variants as single batch');
+                                        console.log('[MUTAGENESIS BATCH] Reference sequence:', predictorConfig.msa_reference_sequence?.slice(0, 30) + '...');
 
-                                        const promises = variants.map((variant) => {
-                                            const jobParams = {
-                                                sequence: variant.sequence,
-                                                sequence_name: variant.name,
-                                                // CRITICAL: Pass msa_reference_sequence for MSA sharing
-                                                msa_reference_sequence: predictorConfig.msa_reference_sequence,
-                                                // Map predictor params
-                                                boltz_recycling_steps: predictorConfig.recycling_steps,
-                                                boltz_num_samples: predictorConfig.diffusion_samples,
-                                                boltz_sampling_steps: predictorConfig.sampling_steps,
-                                                num_parallel_jobs: 1, // Each variant is 1 job
-                                                boltz_use_msa: predictorConfig.use_msa,
-                                                boltz_use_potentials: predictorConfig.use_potentials,
-                                                boltz_step_scale: predictorConfig.step_scale,
-                                                pred_method: predictorConfig.predictor,
-                                                // Complex mode: include ligands/ions if any
-                                                ...(predictorConfig.ligands?.length ? {
-                                                    complex_components: [
-                                                        { type: 'protein', id: 'A', sequence: variant.sequence },
-                                                        ...predictorConfig.ligands
-                                                    ]
-                                                } : {})
-                                            };
-                                            console.log('DEBUG: Submitting job with msa_reference_sequence:', jobParams.msa_reference_sequence?.slice(0, 30) + '...');
-                                            return submitMutation.mutateAsync({
-                                                name: `${jobNamePrefix}_${variant.name}`,
-                                                model_id: predictorConfig.predictor === 'rf3' ? 'rf3' : 'boltz2',
-                                                mode: 'predict',
-                                                params: jobParams
-                                            });
-                                        });
+                                        // Build params with mutagenesis_variants array
+                                        const batchParams = {
+                                            // MSA Reference sequence for cache sharing
+                                            msa_reference_sequence: predictorConfig.msa_reference_sequence,
+                                            // Array of variants (each with name + sequence)
+                                            mutagenesis_variants: variants.map(v => ({
+                                                name: v.name,
+                                                sequence: v.sequence
+                                            })),
+                                            // Predictor params (same for all variants)
+                                            boltz_recycling_steps: predictorConfig.recycling_steps,
+                                            boltz_num_samples: predictorConfig.diffusion_samples,
+                                            boltz_sampling_steps: predictorConfig.sampling_steps,
+                                            boltz_use_msa: predictorConfig.use_msa,
+                                            boltz_use_potentials: predictorConfig.use_potentials,
+                                            boltz_step_scale: predictorConfig.step_scale,
+                                            pred_method: predictorConfig.predictor,
+                                            // Complex components if ligands present
+                                            ...(predictorConfig.ligands?.length ? {
+                                                ligands: predictorConfig.ligands
+                                            } : {})
+                                        };
 
                                         try {
-                                            await Promise.all(promises);
+                                            await submitMutation.mutateAsync({
+                                                name: jobNamePrefix,
+                                                model_id: predictorConfig.predictor === 'rf3' ? 'rf3' : 'boltz2',
+                                                mode: 'predict',
+                                                params: batchParams
+                                            });
                                             queryClient.invalidateQueries({ queryKey: ['jobs'] });
                                             navigate('/');
                                         } catch (error) {
-                                            console.error("Batch submission failed", error);
+                                            console.error("[MUTAGENESIS BATCH] Submission failed", error);
                                         }
                                     }}
                                 />
@@ -743,239 +897,49 @@ export function JobSubmission() {
                                     )}
                                 </div>
 
-                                {/* Dynamic Parameters */}
-                                {selectedMode && visibleParams.length > 0 && (
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-6 border-t border-slate-700/50">
-                                        {visibleParams.map((param: any) => {
-                                            return (
-                                                <div key={param.name} className={param.type === 'file' || param.type === 'directory' ? 'col-span-full' : ''}>
-                                                    <label className="block text-sm font-medium text-slate-400 mb-1">
-                                                        {param.description}
-                                                        {param.required && <span className="text-red-400 ml-1">*</span>}
-                                                    </label>
-
-                                                    {param.type === 'boolean' ? (
-                                                        <label className="flex items-center gap-3 cursor-pointer">
-                                                            <div className={`w-10 h-6 rounded-full p-1 transition-colors ${params[param.name] ? 'bg-blue-500' : 'bg-slate-700'}`}>
-                                                                <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${params[param.name] ? 'translate-x-4' : ''}`} />
-                                                            </div>
-                                                            <input
-                                                                type="checkbox"
-                                                                className="hidden"
-                                                                checked={params[param.name] || false}
-                                                                onChange={(e) => updateParam(param.name, e.target.checked)}
-                                                            />
-                                                            <span className="text-sm text-slate-300">Enabled</span>
-                                                        </label>
-                                                    ) : param.enum ? (
-                                                        <select
-                                                            value={params[param.name] || ''}
-                                                            onChange={(e) => updateParam(param.name, e.target.value)}
-                                                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                                                        >
-                                                            {param.enum.map((opt: string) => (
-                                                                <option key={opt} value={opt}>{opt}</option>
-                                                            ))}
-                                                        </select>
-                                                    ) : param.type === 'text' || param.preset_type === 'sequence' ? (
-                                                        /* Sequence textarea with library button */
-                                                        <div className="space-y-2">
-                                                            <div className="flex gap-2">
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => {
-                                                                        setActiveSequenceField(param.name);
-                                                                        setShowSequenceManager(true);
-                                                                    }}
-                                                                    className="px-3 py-2 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 rounded-lg text-sm transition-colors border border-emerald-600/30"
-                                                                >
-                                                                    📚 Sequence Library
-                                                                </button>
-                                                                {params[param.name] && (
-                                                                    <span className="text-xs text-slate-500 self-center">
-                                                                        {(params[param.name] || '').length} aa
-                                                                    </span>
-                                                                )}
-                                                            </div>
-                                                            <textarea
-                                                                value={params[param.name] || ''}
-                                                                onChange={(e) => updateParam(param.name, e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
-                                                                rows={4}
-                                                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm font-mono resize-y focus:ring-2 focus:ring-blue-500 outline-none"
-                                                                placeholder="Enter amino acid sequence (A-Z) or use Sequence Library..."
-                                                            />
-                                                        </div>
-                                                    ) : param.preset_type === 'pdb' ? (
-                                                        /* Enhanced PDB Structure Input */
-                                                        <StructureInput
-                                                            value={params[param.name] || ''}
-                                                            onChange={(v) => updateParam(param.name, v)}
-                                                            onBrowse={() => setShowFileBrowser(param.name)}
-                                                            showChainSelectors={selectedModel?.id === 'fampnn'}
-                                                            designChain={params['design_chain'] || 'A'}
-                                                            targetChain={params['target_chain'] || ''}
-                                                            onDesignChainChange={(c) => updateParam('design_chain', c)}
-                                                            onTargetChainChange={(c) => updateParam('target_chain', c)}
-                                                            enableMultiSelect={false}
-                                                            enableDirectory={false}
-                                                        />
-                                                    ) : param.preset_type === 'ligand' ? (
-                                                        /* Ligand/SMILES with preset dropdown and nucleotide converter */
-                                                        <div className="space-y-3">
-                                                            <select
-                                                                value=""
-                                                                onChange={(e) => updateParam(param.name, e.target.value)}
-                                                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                                                            >
-                                                                <option value="">Select preset ligand...</option>
-                                                                <optgroup label="DNA Nucleotides (dNTPs)">
-                                                                    <option value="Nc1ncnc2c1ncn2[C@H]3C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O3">dATP</option>
-                                                                    <option value="Cc1cn([C@H]2C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O2)c(=O)[nH]c1=O">dTTP</option>
-                                                                    <option value="Nc1nc2c(ncn2[C@H]3C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O3)c(=O)[nH]1">dGTP</option>
-                                                                    <option value="Nc1ccn([C@H]2C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O2)c(=O)n1">dCTP</option>
-                                                                </optgroup>
-                                                                <optgroup label="RNA Nucleotides (NTPs)">
-                                                                    <option value="Nc1ncnc2c1ncn2[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O">ATP</option>
-                                                                    <option value="O=c1ccn([C@@H]2O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]2O)c(=O)[nH]1">UTP</option>
-                                                                    <option value="Nc1nc2c(ncn2[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O)c(=O)[nH]1">GTP</option>
-                                                                    <option value="Nc1ccn([C@@H]2O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]2O)c(=O)n1">CTP</option>
-                                                                </optgroup>
-                                                                <optgroup label="Common Small Molecules">
-                                                                    <option value="CC(=O)Oc1ccccc1C(=O)O">Aspirin</option>
-                                                                    <option value="CC(C)Cc1ccc(C(C)C(=O)O)cc1">Ibuprofen</option>
-                                                                    <option value="Cn1cnc2c1c(=O)[nH]c(=O)n2C">Caffeine</option>
-                                                                </optgroup>
-                                                            </select>
-
-                                                            {/* DNA/RNA Sequence Converter */}
-                                                            <div className="p-3 bg-slate-900/50 rounded-lg border border-slate-700/50">
-                                                                <label className="block text-xs text-slate-500 mb-1">🧬 Convert DNA/RNA sequence to SMILES</label>
-                                                                <div className="flex gap-2">
-                                                                    <input
-                                                                        type="text"
-                                                                        placeholder="Enter DNA (ACGT) or RNA (ACGU)..."
-                                                                        className="flex-1 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-white text-sm font-mono outline-none"
-                                                                        onKeyDown={async (e) => {
-                                                                            if (e.key === 'Enter') {
-                                                                                const input = e.currentTarget;
-                                                                                const seq = input.value.toUpperCase().replace(/[^ACGTU]/g, '');
-                                                                                if (seq.length > 0 && seq.length <= 15) {
-                                                                                    try {
-                                                                                        const seqType = seq.includes('U') ? 'rna' : 'dna';
-                                                                                        const res = await fetch('http://localhost:8000/api/smiles/convert', {
-                                                                                            method: 'POST',
-                                                                                            headers: { 'Content-Type': 'application/json' },
-                                                                                            body: JSON.stringify({ sequence: seq, sequence_type: seqType })
-                                                                                        });
-                                                                                        const data = await res.json();
-                                                                                        if (data.smiles) {
-                                                                                            updateParam(param.name, data.smiles);
-                                                                                            input.value = '';
-                                                                                        }
-                                                                                    } catch (err) { console.error(err); }
-                                                                                }
-                                                                            }
-                                                                        }}
-                                                                    />
-                                                                    <button
-                                                                        type="button"
-                                                                        onClick={async (e) => {
-                                                                            const input = e.currentTarget.previousElementSibling as HTMLInputElement;
-                                                                            const seq = input.value.toUpperCase().replace(/[^ACGTU]/g, '');
-                                                                            if (seq.length > 0 && seq.length <= 15) {
-                                                                                try {
-                                                                                    const seqType = seq.includes('U') ? 'rna' : 'dna';
-                                                                                    const res = await fetch('http://localhost:8000/api/smiles/convert', {
-                                                                                        method: 'POST',
-                                                                                        headers: { 'Content-Type': 'application/json' },
-                                                                                        body: JSON.stringify({ sequence: seq, sequence_type: seqType })
-                                                                                    });
-                                                                                    const data = await res.json();
-                                                                                    if (data.smiles) {
-                                                                                        updateParam(param.name, data.smiles);
-                                                                                        input.value = '';
-                                                                                    }
-                                                                                } catch (err) { console.error(err); }
-                                                                            }
-                                                                        }}
-                                                                        className="px-2 py-1.5 bg-purple-600/30 hover:bg-purple-600/50 text-purple-300 rounded text-xs transition-colors"
-                                                                    >
-                                                                        Convert
-                                                                    </button>
-                                                                </div>
-                                                                <p className="text-[10px] text-slate-600 mt-1">Max 15 nt. Press Enter or click Convert.</p>
-                                                            </div>
-
-                                                            <div className="flex gap-2">
-                                                                <input
-                                                                    type="text"
-                                                                    value={params[param.name] || ''}
-                                                                    onChange={(e) => updateParam(param.name, e.target.value)}
-                                                                    className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm outline-none font-mono"
-                                                                    placeholder="Or enter custom SMILES string..."
-                                                                />
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={async () => {
-                                                                        const smiles = params[param.name];
-                                                                        if (!smiles) return;
-                                                                        try {
-                                                                            const res = await fetch('http://localhost:8000/api/smiles/generate-3d', {
-                                                                                method: 'POST',
-                                                                                headers: { 'Content-Type': 'application/json' },
-                                                                                body: JSON.stringify({
-                                                                                    smiles,
-                                                                                    name: 'ligand_' + Date.now(),
-                                                                                    energy_minimize: true
-                                                                                })
-                                                                            });
-                                                                            const data = await res.json();
-                                                                            if (data.success && data.file_path) {
-                                                                                updateParam('ligand_pdb', data.file_path);
-                                                                                alert(`✓ 3D coordinates generated!\n${data.num_atoms} atoms, ${data.energy?.toFixed(1)} kcal/mol\nSaved: ${data.file_path}`);
-                                                                            } else {
-                                                                                alert('Error: ' + (data.error || 'Failed to generate 3D'));
-                                                                            }
-                                                                        } catch (err) {
-                                                                            console.error(err);
-                                                                            alert('Failed to generate 3D coordinates');
-                                                                        }
-                                                                    }}
-                                                                    className="px-3 py-2 bg-green-600/30 hover:bg-green-600/50 text-green-300 rounded-lg text-sm transition-colors whitespace-nowrap"
-                                                                    title="Generate 3D coordinates from SMILES using RDKit"
-                                                                >
-                                                                    🧪 Generate 3D
-                                                                </button>
-                                                            </div>
-                                                        </div>
-                                                    ) : (param.type === 'file' || param.type === 'directory') ? (
-                                                        <div className="flex gap-2">
-                                                            <input
-                                                                type="text"
-                                                                value={params[param.name] || ''}
-                                                                onChange={(e) => updateParam(param.name, e.target.value)}
-                                                                className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm outline-none font-mono"
-                                                                placeholder={param.type === 'file' ? '/path/to/file' : '/path/to/directory'}
-                                                            />
-                                                            <button
-                                                                onClick={() => setShowFileBrowser(param.name)}
-                                                                className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-200 text-sm transition-colors"
-                                                            >
-                                                                Browse
-                                                            </button>
-                                                        </div>
-                                                    ) : (
-                                                        <input
-                                                            type={param.type === 'integer' || param.type === 'number' ? 'number' : 'text'}
-                                                            value={params[param.name] || ''}
-                                                            onChange={(e) => updateParam(param.name, param.type === 'integer' ? parseInt(e.target.value) : param.type === 'number' ? parseFloat(e.target.value) : e.target.value)}
-                                                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                                                        />
-                                                    )}
+                                {/* Dynamic Parameters - Grouped */}
+                                {selectedMode && Object.keys(groupedParams).length > 0 && (
+                                    <div className="space-y-6 pt-6 border-t border-slate-700/50">
+                                        {/* Render groups in preferred order */}
+                                        {['Inputs', 'Docking Settings', 'General'].filter(g => groupedParams[g]).map(groupName => (
+                                            <div key={groupName}>
+                                                {groupName !== 'General' && (
+                                                    <h3 className="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
+                                                        <span className={`w-1 h-4 rounded-full ${groupName === 'Inputs' ? 'bg-emerald-500' : 'bg-blue-500'}`} />
+                                                        {groupName}
+                                                    </h3>
+                                                )}
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                    {groupedParams[groupName].map((param: any) => (
+                                                        <ParamField key={param.name} param={param} params={params} updateParam={updateParam} setShowFileBrowser={setShowFileBrowser} setActiveSequenceField={setActiveSequenceField} setShowSequenceManager={setShowSequenceManager} ligandPresets={ligandPresets} />
+                                                    ))}
                                                 </div>
-                                            );
-                                        })
-                                        }
+                                            </div>
+                                        ))}
+
+                                        {/* Advanced section - collapsible */}
+                                        {groupedParams['Advanced'] && (
+                                            <div className="border border-slate-700/50 rounded-lg overflow-hidden">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowAdvanced(!showAdvanced)}
+                                                    className="w-full flex items-center justify-between px-4 py-3 bg-slate-800/50 hover:bg-slate-800/70 transition-colors"
+                                                >
+                                                    <span className="text-sm font-medium text-slate-400 flex items-center gap-2">
+                                                        <span className="w-1 h-4 rounded-full bg-slate-500" />
+                                                        Advanced Settings
+                                                    </span>
+                                                    <span className="text-slate-500 text-xs">{showAdvanced ? '▲' : '▼'}</span>
+                                                </button>
+                                                {showAdvanced && (
+                                                    <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                        {groupedParams['Advanced'].map((param: any) => (
+                                                            <ParamField key={param.name} param={param} params={params} updateParam={updateParam} setShowFileBrowser={setShowFileBrowser} setActiveSequenceField={setActiveSequenceField} setShowSequenceManager={setShowSequenceManager} ligandPresets={ligandPresets} />
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
                                     </div>
                                 )
                                 }

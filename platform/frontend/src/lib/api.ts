@@ -115,6 +115,13 @@ export const fetchJobs = () => api.get<{ jobs: Job[]; total: number }>('/api/job
 export const fetchSystemStatus = () => api.get<SystemStatus>('/api/gpu/status');
 export const fetchJobById = (id: string) => api.get<Job>(`/api/jobs/${id}`);
 export const cancelJob = (id: string) => api.delete(`/api/jobs/${id}`);
+export const resubmitJob = (id: string) => api.post<{
+    message: string;
+    original_job_id: string;
+    new_job_id: string;
+    new_job_name: string;
+}>(`/api/jobs/${id}/resubmit`);
+
 
 // Upload file
 export const uploadFile = async (path: string, file: File) => {
@@ -529,3 +536,109 @@ export const killActiveNextflowJobs = () =>
     api.post('/api/queue/kill-active');
 
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// NUCLEOTIDE SEQUENCES API (BioDesigner)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export interface SequenceFeature {
+    id: string;
+    name: string;
+    type: string;
+    start: number;
+    end: number;
+    strand: number;
+    color?: string;
+    notes?: Record<string, any>;
+}
+
+export interface SequencePrimer {
+    id: string;
+    name: string;
+    sequence: string;
+    start: number;
+    end: number;
+    tm?: number;
+    gc_percent?: number;
+}
+
+export interface NucleotideSequence {
+    id: string;
+    name: string;
+    description: string | null;
+    sequence: string;
+    sequence_type: 'dna' | 'rna';
+    is_circular: boolean;
+    length: number;
+    features: SequenceFeature[] | null;
+    primers: SequencePrimer[] | null;
+    organism: string | null;
+    accession: string | null;
+    source_file: string | null;
+    gc_content: number | null;
+    created_at: string;
+    updated_at: string | null;
+}
+
+export interface NucleotideSequenceListItem {
+    id: string;
+    name: string;
+    description: string | null;
+    sequence_type: string;
+    is_circular: boolean;
+    length: number;
+    gc_content: number | null;
+    feature_count: number;
+    created_at: string;
+}
+
+export interface NucleotideSequenceCreate {
+    name: string;
+    description?: string;
+    sequence: string;
+    sequence_type?: 'dna' | 'rna';
+    is_circular?: boolean;
+    features?: SequenceFeature[];
+    primers?: SequencePrimer[];
+    organism?: string;
+    accession?: string;
+    source_file?: string;
+}
+
+export const fetchNucleotideSequences = (limit: number = 100, offset: number = 0) =>
+    api.get<NucleotideSequenceListItem[]>('/api/sequences/', { params: { limit, offset } });
+
+export const fetchNucleotideSequence = (id: string) =>
+    api.get<NucleotideSequence>(`/api/sequences/${id}`);
+
+export const createNucleotideSequence = (data: NucleotideSequenceCreate) =>
+    api.post<NucleotideSequence>('/api/sequences/', data);
+
+export const updateNucleotideSequence = (id: string, data: Partial<NucleotideSequenceCreate>) =>
+    api.put<NucleotideSequence>(`/api/sequences/${id}`, data);
+
+export const deleteNucleotideSequence = (id: string) =>
+    api.delete(`/api/sequences/${id}`);
+
+export const addSequenceFeature = (sequenceId: string, feature: Omit<SequenceFeature, 'id'>) =>
+    api.post<NucleotideSequence>(`/api/sequences/${sequenceId}/features`, feature);
+
+export const deleteSequenceFeature = (sequenceId: string, featureId: string) =>
+    api.delete(`/api/sequences/${sequenceId}/features/${featureId}`);
+
+// Antibody API
+export interface AntibodyData {
+    design_id: string;
+    cdrs: {
+        H1?: string; H2?: string; H3?: string;
+        L1?: string; L2?: string; L3?: string;
+    };
+    humanness_score?: number;
+    stability_data?: Record<string, Record<string, number>>; // chain -> pos -> ddG
+    imgt_pdb_url?: string;
+}
+
+export const fetchAntibodyData = (designId: string) =>
+    api.get<AntibodyData>(`/api/designs/${designId}/antibody`);
+
+export const fetchAntiFoldLogits = (designId: string) =>
+    `/api/designs/${designId}/antifold-logits`;

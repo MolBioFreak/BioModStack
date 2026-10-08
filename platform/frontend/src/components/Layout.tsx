@@ -51,6 +51,15 @@ export function Layout({ children }: LayoutProps) {
                                 New Job
                             </Link>
                             <Link
+                                to="/designer"
+                                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${isActive('/designer')
+                                    ? 'bg-emerald-500/20 text-emerald-300'
+                                    : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
+                                    }`}
+                            >
+                                BioDesigner
+                            </Link>
+                            <Link
                                 to="/designs"
                                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${isActive('/designs')
                                     ? 'bg-purple-500/20 text-purple-300'

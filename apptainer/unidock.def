@@ -3,7 +3,7 @@ From: nvcr.io/nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
 
 %labels
     Author ProteinDJ Pipeline
-    Version 1.0.0
+    Version 1.1.0
     Description Uni-Dock GPU-accelerated molecular docking with Meeko flexible receptor support
 
 %post
@@ -32,6 +32,7 @@ From: nvcr.io/nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
     conda activate unidock
     
     # Install Uni-Dock from conda-forge (includes GPU support)
+    # This version is tested and works with CUDA 11.x/12.x on Ampere GPUs
     conda install -c conda-forge unidock -y
     
     # Install Python dependencies via pip (faster than conda for these)
@@ -41,7 +42,9 @@ From: nvcr.io/nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
         biopython \
         pandas \
         numpy \
-        openbabel-wheel
+        scipy \
+        openbabel-wheel \
+        gemmi
     
     # Clean up
     conda clean -afy
@@ -65,7 +68,12 @@ From: nvcr.io/nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
     conda activate unidock
     echo "Testing Uni-Dock installation..."
     which unidock && echo "✓ unidock binary found"
+    unidock --version && echo "✓ unidock version check passed"
     python3 -c "from meeko import MoleculePreparation, PDBQTWriterLegacy; print('✓ Meeko imported')"
     python3 -c "from rdkit import Chem; print('✓ RDKit imported')"
     python3 -c "from Bio.PDB import PDBParser; print('✓ BioPython imported')"
+    python3 -c "import gemmi; print('✓ Gemmi imported')"
+    python3 -c "from openbabel import openbabel; print('✓ OpenBabel imported')"
+    python3 -c "import numpy; print('✓ NumPy imported')"
+    python3 -c "import scipy; print('✓ SciPy imported')"
     echo "All imports successful!"

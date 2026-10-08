@@ -13,7 +13,7 @@ import asyncio
 import logging
 
 from database import init_db, async_session
-from routers import jobs, gpu, files, models, templates, inputs, designs, analytics, user_sequences, user_templates, smiles_converter, queue, rcsb
+from routers import jobs, gpu, files, models, templates, inputs, designs, analytics, user_sequences, user_templates, smiles_converter, queue, rcsb, nucleotide_sequences
 from services.gpu_orchestrator import GPUOrchestrator
 from routers.gpu import get_gpu_stats
 
@@ -104,6 +104,7 @@ app.include_router(user_templates.router, prefix="/api/user-templates", tags=["u
 app.include_router(smiles_converter.router, prefix="/api/smiles", tags=["smiles"])
 app.include_router(queue.router, prefix="/api", tags=["queue"])  # /api/queue/*
 app.include_router(rcsb.router, prefix="/api/rcsb", tags=["rcsb"])
+app.include_router(nucleotide_sequences.router)  # /api/sequences/*
 
 
 @app.get("/api/health")

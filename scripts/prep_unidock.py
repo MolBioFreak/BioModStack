@@ -98,13 +98,26 @@ def prepare_receptor_pdbqt(pdb_path: Path, out_dir: Path,
                 raise RuntimeError(f"mk_prepare_receptor failed: {result.stderr}")
         except (FileNotFoundError, RuntimeError) as e:
             print(f"Meeko CLI failed ({e}), using OpenBabel fallback...")
-            # OpenBabel fallback
+            # OpenBabel fallback - use 'r' option for rigid receptor format
             from openbabel import openbabel as ob
             conv = ob.OBConversion()
             conv.SetInAndOutFormats("pdb", "pdbqt")
+            # 'r' option tells OpenBabel to treat as receptor (no ROOT/BRANCH/ENDROOT)
+            conv.AddOption("r", ob.OBConversion.OUTOPTIONS)
             mol = ob.OBMol()
             conv.ReadFile(mol, str(pdb_path))
             conv.WriteFile(mol, str(receptor_pdbqt))
+            
+            # Verify output doesn't have ROOT tag (sanity check)
+            with open(receptor_pdbqt, 'r') as f:
+                content = f.read()
+            if 'ROOT' in content:
+                print("Warning: Receptor PDBQT has ROOT tag, stripping...")
+                # Strip all ligand-specific lines
+                lines = content.split('\n')
+                clean_lines = [l for l in lines if not l.startswith(('ROOT', 'ENDROOT', 'BRANCH', 'ENDBRANCH', 'TORSDOF', 'REMARK  Name', 'REMARK  1', 'REMARK  2', 'REMARK  3', 'REMARK  4', 'REMARK  5', 'REMARK  6', 'REMARK  7', 'REMARK  8', 'REMARK  9', 'REMARK  status', 'REMARK    '))]
+                with open(receptor_pdbqt, 'w') as f:
+                    f.write('\n'.join(clean_lines))
     
     print(f"Wrote receptor PDBQT: {receptor_pdbqt}")
     return receptor_pdbqt, flex_pdbqt
@@ -124,7 +137,6 @@ def prepare_ligand_pdbqt(smiles: str, name: str, out_dir: Path) -> Path:
     """
     from rdkit import Chem
     from rdkit.Chem import AllChem
-    from meeko import MoleculePreparation, PDBQTWriterLegacy
     
     # Generate 3D structure
     mol = Chem.MolFromSmiles(smiles)
@@ -133,26 +145,81 @@ def prepare_ligand_pdbqt(smiles: str, name: str, out_dir: Path) -> Path:
     
     mol = Chem.AddHs(mol)
     
-    # Generate 3D conformer
-    result = AllChem.EmbedMolecule(mol, AllChem.ETKDGv3())
+    # Generate 3D conformer using ETKDGv3
+    params = AllChem.ETKDGv3()
+    params.randomSeed = 42
+    result = AllChem.EmbedMolecule(mol, params)
     if result == -1:
-        # Try with random coordinates
-        AllChem.EmbedMolecule(mol, useRandomCoords=True)
+        # Try with random coordinates as fallback
+        result = AllChem.EmbedMolecule(mol, randomSeed=42)
+        if result == -1:
+            raise ValueError(f"Failed to generate 3D conformer for: {smiles[:50]}...")
     
-    # Optimize geometry
-    AllChem.MMFFOptimizeMolecule(mol, maxIters=500)
+    # Optimize geometry with MMFF
+    try:
+        AllChem.MMFFOptimizeMolecule(mol, maxIters=500)
+    except:
+        try:
+            AllChem.UFFOptimizeMolecule(mol, maxIters=500)
+        except:
+            pass  # Continue without optimization
     
-    # Prepare for docking using Meeko
-    preparator = MoleculePreparation()
-    mol_setup = preparator.prepare(mol)
-    
-    # Write PDBQT
     pdbqt_path = out_dir / f"{name}.pdbqt"
-    pdbqt_string = PDBQTWriterLegacy.write_string(mol_setup)[0]
-    pdbqt_path.write_text(pdbqt_string)
     
-    print(f"  Ligand '{name}': {smiles[:50]}... -> {pdbqt_path}")
-    return pdbqt_path
+    # Try Meeko first (preferred for docking)
+    try:
+        from meeko import MoleculePreparation, PDBQTWriterLegacy
+        preparator = MoleculePreparation()
+        mol_setups = preparator.prepare(mol)
+        
+        # Meeko 0.6+ returns a list of MoleculeSetup objects
+        if isinstance(mol_setups, list):
+            if len(mol_setups) == 0:
+                raise ValueError("Meeko returned empty list")
+            mol_setup = mol_setups[0]
+        else:
+            mol_setup = mol_setups
+        
+        pdbqt_string = PDBQTWriterLegacy.write_string(mol_setup)[0]
+        pdbqt_path.write_text(pdbqt_string)
+        print(f"  Ligand '{name}' (Meeko): {smiles[:40]}... -> {pdbqt_path}")
+        return pdbqt_path
+        
+    except Exception as meeko_err:
+        print(f"  Meeko failed for '{name}': {meeko_err}, trying OpenBabel...")
+    
+    # Fallback: Use OpenBabel for PDBQT conversion
+    try:
+        from openbabel import openbabel as ob
+        
+        # First write PDB
+        pdb_path = out_dir / f"{name}_temp.pdb"
+        pdb_block = Chem.MolToPDBBlock(mol)
+        pdb_path.write_text(pdb_block)
+        
+        # Convert PDB to PDBQT using OpenBabel
+        obConversion = ob.OBConversion()
+        obConversion.SetInAndOutFormats("pdb", "pdbqt")
+        
+        obMol = ob.OBMol()
+        obConversion.ReadFile(obMol, str(pdb_path))
+        
+        # Add hydrogens and compute partial charges (Gasteiger)
+        obMol.AddHydrogens()
+        
+        # Write PDBQT
+        obConversion.WriteFile(obMol, str(pdbqt_path))
+        
+        # Clean up temp file
+        pdb_path.unlink()
+        
+        print(f"  Ligand '{name}' (OpenBabel): {smiles[:40]}... -> {pdbqt_path}")
+        return pdbqt_path
+        
+    except Exception as ob_err:
+        raise ValueError(f"Both Meeko and OpenBabel failed for '{name}': {ob_err}")
+
+
 
 
 def compute_box_center(pdb_path: Path, ligand_coords: Optional[np.ndarray] = None) -> Tuple[float, float, float]:
@@ -264,13 +331,14 @@ def main():
         cx, cy, cz = compute_box_center(input_pdb, ligand_coords)
         print(f"Auto-computed center: ({cx:.2f}, {cy:.2f}, {cz:.2f})")
     
+    # Convert to Python floats for JSON serialization (numpy float32 not serializable)
     box_params = {
-        'cx': round(cx, 3),
-        'cy': round(cy, 3),
-        'cz': round(cz, 3),
-        'sx': args.box_size,
-        'sy': args.box_size,
-        'sz': args.box_size,
+        'cx': float(round(cx, 3)),
+        'cy': float(round(cy, 3)),
+        'cz': float(round(cz, 3)),
+        'sx': int(args.box_size),
+        'sy': int(args.box_size),
+        'sz': int(args.box_size),
     }
     
     box_file = out_dir / "box_params.json"

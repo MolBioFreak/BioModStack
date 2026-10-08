@@ -121,10 +121,18 @@ async def create_job(
     # JOB MULTIPLIER: Create N separate jobs for multi-GPU distribution
     # ═══════════════════════════════════════════════════════════════════════════
     
+    # Check for mutagenesis batch submission (variants array)
+    # This allows a single API call to create MSA batch job + N inference jobs
+    mutagenesis_variants = job_data.params.pop('mutagenesis_variants', None)
+    
     # Extract num_parallel_jobs (job multiplier) and remove from params passed to Nextflow
     # This way each individual Nextflow run does 1 simulation, but we create N jobs
     num_jobs = job_data.params.pop('num_parallel_jobs', 1)
-    if num_jobs is None or num_jobs < 1:
+    if mutagenesis_variants and len(mutagenesis_variants) > 0:
+        # Mutagenesis mode: num_jobs = number of variants
+        num_jobs = len(mutagenesis_variants)
+        logger.info(f"[MUTAGENESIS] Detected {num_jobs} variants in batch submission")
+    elif num_jobs is None or num_jobs < 1:
         num_jobs = 1
     
     # Create output directory (base for all jobs in batch)
@@ -224,13 +232,24 @@ async def create_job(
     for i in range(num_jobs):
         job_id = str(uuid.uuid4())
         
-        # For multiple jobs: use sim_1, sim_2, etc. subdirectories
-        if num_jobs > 1:
+        # For multiple jobs: use sim_1, sim_2, etc. subdirectories (or variant names for mutagenesis)
+        if mutagenesis_variants and i < len(mutagenesis_variants):
+            # Mutagenesis mode: use variant name and sequence
+            variant = mutagenesis_variants[i]
+            job_name = f"{job_data.name}_{variant.get('name', f'var_{i+1}')}"
+            output_dir = str(Path(base_output_dir) / variant.get('name', f'var_{i+1}'))
+            # Override sequence with variant-specific sequence
+            job_params = {**job_data.params}
+            job_params['sequence'] = variant.get('sequence')
+            job_params['sequence_name'] = variant.get('name', f'var_{i+1}')
+        elif num_jobs > 1:
             job_name = f"{job_data.name}_sim{i+1}"
             output_dir = str(Path(base_output_dir) / f"sim_{i+1}")
+            job_params = job_data.params
         else:
             job_name = job_data.name
             output_dir = base_output_dir
+            job_params = job_data.params
         
         os.makedirs(output_dir, exist_ok=True)
         
@@ -244,7 +263,7 @@ async def create_job(
             name=job_name,
             model_id=job_data.model_id,
             mode=job_data.mode,
-            params=job_data.params,  # num_parallel_jobs already removed
+            params=job_params,  # Variant-specific params for mutagenesis
             output_dir=output_dir,
             status=JobStatus.QUEUED.value,
             # Batch grouping for job sets
@@ -357,6 +376,88 @@ async def cancel_job(
     await session.commit()
     
     return {"message": "Job cancelled", "job_id": job_id}
+
+
+@router.post("/{job_id}/resubmit")
+async def resubmit_job(
+    job_id: str,
+    session: AsyncSession = Depends(get_session)
+):
+
+    """
+    Resubmit a failed or cancelled job with the same parameters.
+    Creates a new job with a fresh ID but copies all settings from the original.
+    """
+    # Find original job
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    original_job = result.scalar_one_or_none()
+    
+    if not original_job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Only allow resubmit for failed or cancelled jobs
+    if original_job.status not in [JobStatus.FAILED.value, JobStatus.CANCELLED.value]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot resubmit job with status: {original_job.status}. Only failed or cancelled jobs can be resubmitted."
+        )
+    
+    # Build resubmit name
+    resubmit_suffix = "_resubmit"
+    base_name = original_job.name
+    # Handle multiple resubmits by not doubling suffix
+    if base_name.endswith(resubmit_suffix):
+        new_name = base_name
+    else:
+        new_name = f"{base_name}{resubmit_suffix}"
+    
+    # Create new job with same params - GPU orchestrator will pick it up
+    import uuid
+    import os
+    from pathlib import Path
+    
+    # Create new output directory for resubmitted job
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    PROJECT_ROOT = Path(__file__).resolve().parents[3]
+    output_dir = str(PROJECT_ROOT / "pdj_results" / f"{new_name}_{timestamp}")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    new_job = Job(
+        id=str(uuid.uuid4()),
+        name=new_name,
+        model_id=original_job.model_id,
+        mode=original_job.mode,
+        params=original_job.params or {},
+        status=JobStatus.QUEUED.value,
+        created_at=datetime.utcnow(),
+        output_dir=output_dir,
+        # Preserve batch info if any
+        batch_id=original_job.batch_id,
+        batch_name=original_job.batch_name,
+        # GPU Orchestrator fields - let orchestrator pick it up
+        queue_status='queued',
+        vram_estimate_mb=original_job.vram_estimate_mb,
+        sequence_length=original_job.sequence_length,
+        priority=0,
+        paused=False,
+        retry_count=0,
+        max_retries=2,
+    )
+
+    session.add(new_job)
+    await session.commit()
+    await session.refresh(new_job)
+    
+    # No need to manually queue - GPU orchestrator picks up jobs with queue_status='queued'
+    
+    return {
+        "message": "Job resubmitted successfully",
+        "original_job_id": job_id,
+        "new_job_id": new_job.id,
+        "new_job_name": new_job.name
+    }
+
+
 
 
 @router.get("/{job_id}/structure-files")

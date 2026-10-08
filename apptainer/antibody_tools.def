@@ -1,0 +1,38 @@
+Bootstrap: docker
+From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+
+%post
+    # Update and install system dependencies
+    apt-get update && apt-get install -y \
+        wget \
+        git \
+        python3 \
+        python3-pip \
+        hmmer \
+        && apt-get clean \
+        && rm -rf /var/lib/apt/lists/*
+
+    # Install PyTorch with CUDA 12.4 support
+    # Using stable release compatible with CUDA 12
+    pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+
+    # Install ANARCI (Discngine fork for better license/maintenance)
+    pip3 install git+https://github.com/Discngine/anarci.git
+
+    # Install AntiFold
+    # Cloning from repo to get latest
+    git clone https://github.com/oxpig/AntiFold.git /opt/AntiFold
+    cd /opt/AntiFold
+    pip3 install .
+
+    # Install ImmuneBuilder
+    # Requires OpenMM and pdbfixer
+    pip3 install openmm pdbfixer
+    pip3 install ImmuneBuilder
+
+    # Cleanup
+    rm -rf /root/.cache/pip
+
+%environment
+    export PATH="/opt/AntiFold:$PATH"
+    export PYTHONPATH="/opt/AntiFold:$PYTHONPATH"
