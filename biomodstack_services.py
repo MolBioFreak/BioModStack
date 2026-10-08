@@ -1378,6 +1378,12 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     build_id = build_identity["build_id"]
     build_time = build_identity["build_time"]
     log_rotator = root / "scripts" / "rotate_biomodstack_logs.py"
+    from biomodstack_python_prerequisites import resolve_python_environment
+    python_environment = resolve_python_environment(root)
+    python_root_directive = (
+        "Environment=" + systemd_value(f"BMS_PYTHON_ROOT={python_environment['root']}")
+        if python_environment is not None else ""
+    )
     from biomodstack_local_resources import configured_local_policy
     local_policy = configured_local_policy()
     shared_data_root = Path(str(resolved.get("data_root", Path("/mnt/BioModStack")))).expanduser().resolve()
@@ -1409,10 +1415,11 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment={systemd_value(f"BMS_HOME={root}")}
         Environment={systemd_value(f"BMS_TELEMETRY_DB_PATH={telemetry_db}")}
         Environment=PYTHONUNBUFFERED=1
+        {python_root_directive}
         WorkingDirectory={systemd_value(root / 'platform' / 'api')}
         ExecStartPre=/usr/bin/env python3 {systemd_exec_arg(log_rotator)}
         ExecStartPre=/usr/bin/mkdir -p {systemd_exec_arg(Path(telemetry_db).parent)}
-        ExecStart={systemd_exec_arg(root / 'platform' / 'api' / '.venv' / 'bin' / 'python')} -m tools.telemetry_collector
+        ExecStart={systemd_exec_arg(root / 'scripts' / 'run_biomodstack_telemetry.sh')}
         Restart=on-failure
         RestartSec=5
         TimeoutStopSec=15
@@ -1623,6 +1630,15 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         "\n", "\n        "
     )
     proxy_identity_env = development_proxy_identity_env_path()
+    from biomodstack_configuration import configured_ingress_policy
+    ingress_policy = configured_ingress_policy()
+    # A clean local-only install must not activate Tailnet through a transitive
+    # dependency of its otherwise runtime-independent mobile publisher.
+    publisher_tailnet_dependency = (
+        TAILNET_GLOBAL_SERVICE
+        if ingress_policy is None or ingress_policy.get("mode") == "tailnet"
+        else ""
+    )
 
     tailnet_global_unit = dedent(
         f"""\
@@ -1651,7 +1667,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         [Unit]
         Description=BioModStack runtime-independent mobile update publisher
         After=network-online.target
-        Wants=network-online.target {TAILNET_GLOBAL_SERVICE}
+        Wants=network-online.target {publisher_tailnet_dependency}
         Before={TAILNET_GLOBAL_SERVICE}
         StartLimitIntervalSec=300
         StartLimitBurst=3
@@ -1667,6 +1683,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment={systemd_value(f"BMS_BUILD_ID={build_id}")}
         Environment={systemd_value(f"BMS_BUILD_TIME={build_time}")}
         Environment=PYTHONUNBUFFERED=1
+        {python_root_directive}
         ExecStartPre=/usr/bin/mkdir -p {systemd_exec_arg(shared_data_root / 'mobile-ui-updates')} {systemd_exec_arg(shared_data_root / 'mobile-apk-updates')}
         ExecStartPre=/usr/bin/env python3 {systemd_exec_arg(log_rotator)}
         ExecStart={systemd_exec_arg(mobile_update_publisher_runner)}
@@ -1698,6 +1715,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment={systemd_value(f"BMS_HOME={root}")}
         Environment={systemd_value(f"BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}")}
         Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_LANE={DEVELOPMENT_LANE}")}
+        {python_root_directive}
         Environment=BMS_REQUIRE_TRANSIENT_WORKFLOW_UNITS=1
         Environment={systemd_value(f"BMS_STATE_DIR={dev_data_root}")}
         Environment={systemd_value(f"BMS_DATA={dev_data_root}")}
@@ -1754,6 +1772,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment={systemd_value(f"BMS_HOME={root}")}
         Environment={systemd_value(f"BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}")}
         Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_LANE={DEVELOPMENT_LANE}")}
+        {python_root_directive}
         Environment=BMS_REQUIRE_TRANSIENT_WORKFLOW_UNITS=1
         Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_URL={workflow_adapter_url_for_lane(DEVELOPMENT_LANE)}")}
         Environment={systemd_value(f"BMS_FRONTEND_HEALTH_URL=http://127.0.0.1:{dev_web_host_port}/")}
@@ -2425,6 +2444,8 @@ def start_all(
 
     if mode == DEV_RUNTIME_MODE:
         services_to_start: list[str] = []
+        if not service_is_active(DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE, project_root=root):
+            services_to_start.append(DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE)
         if not service_is_active(TELEMETRY_SERVICE, project_root=root):
             services_to_start.append(TELEMETRY_SERVICE)
         if not service_is_active(API_SERVICE, project_root=root) and not url_is_ready(runtime_api_health_url(mode, project_root=root)):
@@ -2433,6 +2454,11 @@ def start_all(
             services_to_start.append(FRONTEND_SERVICE)
         if services_to_start:
             run_systemctl("start", *services_to_start, DEV_TARGET_UNIT, project_root=root)
+        if not skip_workflow_adapter_wait:
+            wait_for_http(
+                workflow_adapter_health_url_for_lane(DEVELOPMENT_LANE),
+                timeout_seconds=wait_timeout_seconds,
+            )
         if not skip_api_wait:
             wait_for_http(runtime_api_health_url(mode, project_root=root), timeout_seconds=wait_timeout_seconds)
         wait_for_http(frontend_url, timeout_seconds=wait_timeout_seconds)

@@ -673,7 +673,7 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path, mo
     assert '/.image-store/references/development.env' in adapter_unit
 
     telemetry_unit = units[services.TELEMETRY_SERVICE]
-    assert f"ExecStart={project_root / 'platform' / 'api' / '.venv' / 'bin' / 'python'} -m tools.telemetry_collector" in telemetry_unit
+    assert f"ExecStart={project_root / 'scripts' / 'run_biomodstack_telemetry.sh'}" in telemetry_unit
     assert f"Environment=BMS_TELEMETRY_DB_PATH={telemetry_db}" in telemetry_unit
     assert f"WorkingDirectory={project_root / 'platform' / 'api'}" in telemetry_unit
     assert f"ExecStartPre=/usr/bin/env python3 {project_root / 'scripts' / 'rotate_biomodstack_logs.py'}" in telemetry_unit
@@ -779,7 +779,7 @@ def test_start_all_dev_enables_global_publisher_without_runtime_ownership(monkey
         services,
         "service_is_active",
         lambda service_name, project_root=None: service_name
-        in {services.TELEMETRY_SERVICE, services.API_SERVICE, services.FRONTEND_SERVICE},
+        in {services.TELEMETRY_SERVICE, services.API_SERVICE, services.FRONTEND_SERVICE, services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE},
     )
     monkeypatch.setattr(services, "url_is_ready", lambda *args, **kwargs: True)
     monkeypatch.setattr(
@@ -1362,7 +1362,8 @@ def test_start_all_dev_mode_keeps_container_runtime_and_starts_only_dev_frontend
 
     assert calls == [
         ("ensure", "dev"),
-        ("systemctl", ("start", services.TELEMETRY_SERVICE, services.FRONTEND_SERVICE, services.DEV_TARGET_UNIT)),
+        ("systemctl", ("start", services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE, services.TELEMETRY_SERVICE, services.FRONTEND_SERVICE, services.DEV_TARGET_UNIT)),
+        ("wait", services.workflow_adapter_health_url_for_lane(services.DEVELOPMENT_LANE)),
         ("wait", services.runtime_api_health_url("dev", project_root=project_root)),
         ("wait", "http://127.0.0.1:18082/"),
         ("systemctl", ("enable", services.MOBILE_UPDATE_PUBLISHER_SERVICE)),
@@ -1398,13 +1399,29 @@ def test_start_all_dev_mode_starts_missing_telemetry_when_api_and_frontend_are_a
 
     assert calls == [
         ("ensure", "dev"),
-        ("systemctl", ("start", services.TELEMETRY_SERVICE, services.DEV_TARGET_UNIT)),
+        ("systemctl", ("start", services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE, services.TELEMETRY_SERVICE, services.DEV_TARGET_UNIT)),
+        ("wait", services.workflow_adapter_health_url_for_lane(services.DEVELOPMENT_LANE)),
         ("wait", services.runtime_api_health_url("dev", project_root=project_root)),
         ("wait", services.runtime_frontend_url("dev")),
         ("systemctl", ("enable", services.MOBILE_UPDATE_PUBLISHER_SERVICE)),
         ("systemctl", ("start", services.MOBILE_UPDATE_PUBLISHER_SERVICE)),
         ("wait", services.MOBILE_UPDATE_PUBLISHER_HEALTH_URL),
     ]
+
+
+def test_start_all_dev_rejects_unready_adapter_even_when_ui_and_api_are_active(monkeypatch, tmp_path: Path) -> None:
+    calls = []
+    monkeypatch.setattr(services, "assert_runtime_listener_preflight", lambda *args, **kwargs: {})
+    monkeypatch.setattr(services, "ensure_user_units", lambda *args, **kwargs: None)
+    monkeypatch.setattr(services, "service_is_active", lambda *args, **kwargs: True)
+    monkeypatch.setattr(services, "run_systemctl", lambda *args, **kwargs: calls.append(args))
+    def wait(url, **kwargs):
+        calls.append(url)
+        raise services.ServiceManagerError("adapter unavailable")
+    monkeypatch.setattr(services, "wait_for_http", wait)
+    with pytest.raises(services.ServiceManagerError, match="adapter unavailable"):
+        services.start_all(project_root=tmp_path / "repo", runtime_mode="dev")
+    assert calls == [services.workflow_adapter_health_url_for_lane(services.DEVELOPMENT_LANE)]
 
 
 def test_status_lines_keep_existing_container_human_output(monkeypatch, tmp_path: Path) -> None:

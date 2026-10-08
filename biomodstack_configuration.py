@@ -306,6 +306,26 @@ def configuration_identity() -> str | None:
     return target
 
 
+def configured_ingress_policy() -> dict | None:
+    """Return committed setup ingress intent without applying any service changes.
+
+    Legacy installations have no managed policy and retain their existing launch
+    behavior. Incomplete or changed generations fail closed like other readers.
+    """
+    before = configuration_identity()
+    assert_configuration_readable()
+    if before is None:
+        return None
+    policy = _load().get("ingress")
+    if not isinstance(policy, dict) or policy.get("mode") not in {"local-only", "tailnet"}:
+        raise ConfigurationBlocked("invalid_ingress_policy")
+    if policy["mode"] == "tailnet" and policy.get("target") not in {"development", "production"}:
+        raise ConfigurationBlocked("invalid_ingress_policy")
+    if before != configuration_identity():
+        raise ConfigurationBlocked("configuration_changed: retry ingress read")
+    return dict(policy)
+
+
 def _receipt(receipt: dict) -> dict:
     from scripts.biomodstack_release import BuildIdentity
     if not isinstance(receipt, dict) or set(receipt) != RECEIPT_KEYS:

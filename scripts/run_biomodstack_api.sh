@@ -113,7 +113,10 @@ cpu_power_strict_enabled() {
     esac
 }
 
-if ! command -v uv >/dev/null 2>&1; then
+source "$SCRIPT_DIR/python_runtime_guard.sh"
+bms_python_runtime_resolve || exit 78
+
+if [ -z "$BMS_MANAGED_PYTHON" ] && ! command -v uv >/dev/null 2>&1; then
     echo "BioModStack API launcher requires uv on PATH" >&2
     exit 1
 fi
@@ -130,9 +133,13 @@ export API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:${bms_api_port}}"
 
 # Apply every registered forward migration before the API can accept traffic.
 # A migration failure aborts the managed start and preserves the previous owner.
-uv run --frozen python run_migrations.py
-
-cmd=(uv run uvicorn main:app --port "$bms_api_port" --host 127.0.0.1 --no-access-log)
+if [ -n "$BMS_MANAGED_PYTHON" ]; then
+    "$BMS_MANAGED_PYTHON" run_migrations.py
+    cmd=("$BMS_MANAGED_PYTHON" -m uvicorn main:app --port "$bms_api_port" --host 127.0.0.1 --no-access-log)
+else
+    uv run --frozen python run_migrations.py
+    cmd=(uv run --frozen uvicorn main:app --port "$bms_api_port" --host 127.0.0.1 --no-access-log)
+fi
 case "$(api_mode)" in
     dev)
         if api_reload_enabled; then

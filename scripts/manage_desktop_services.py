@@ -100,7 +100,7 @@ def main() -> int:
         report = prerequisite_report(args.action, project_root=REPO_ROOT)
         print(json.dumps(report, indent=2, sort_keys=True))
         return 0 if report["status"] in {"planned", "installed", "already-installed", "verified"} else 3
-    if args.action in SETUP_ACTIONS:
+    if args.action in SETUP_ACTIONS or args.action in {"start", "start-api", "start-target", "restart", "restart-api", "status"}:
         try:
             dispatch_setup(REPO_ROOT)
         except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:

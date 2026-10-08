@@ -146,6 +146,23 @@ def test_stale_input_operation_and_corrupt_stage(fixture, monkeypatch):
     assert result["operation_id"]
 
 
+@pytest.mark.parametrize("mode", ["local-only", "tailnet"])
+def test_committed_ingress_policy_controls_development_publisher_dependency(fixture, mode):
+    from biomodstack_services import render_user_units, MOBILE_UPDATE_PUBLISHER_SERVICE, TAILNET_GLOBAL_SERVICE
+    raw = json.loads(fixture.read_text())
+    raw["ingress"] = {"mode": mode}
+    if mode == "tailnet":
+        raw["ingress"]["target"] = "development"
+    fixture.write_text(json.dumps(raw))
+    assert tx.configured_ingress_policy() is None
+    result = apply(fixture)
+    assert result["configured"], result
+    assert tx.configured_ingress_policy() == {**raw["ingress"], "applied": False}
+    unit = render_user_units(ROOT, runtime_mode="dev")[MOBILE_UPDATE_PUBLISHER_SERVICE]
+    wants = next(line.strip() for line in unit.splitlines() if line.strip().startswith("Wants="))
+    assert (TAILNET_GLOBAL_SERVICE in wants) == (mode == "tailnet")
+
+
 def test_existing_configuration_preserved(fixture):
     path = profiles.get_install_profile_path()
     path.parent.mkdir(parents=True)
