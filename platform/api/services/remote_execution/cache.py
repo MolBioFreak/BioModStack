@@ -60,8 +60,7 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
     states = {}
     for offset in range(0, len(artifacts), 128):
         batch = artifacts[offset:offset + 128]
-        for entry in batch:
-            await progress({'phase': 'checking', 'artifact': entry.remote_destination.removeprefix(connection.remote_root.rstrip('/') + '/'), 'message': 'Verifying cached artifact'})
+        await progress({'phase': 'checking', 'artifact': None, 'message': 'Verifying cached artifact batch'})
         response = await call({'action': 'probe', 'artifacts': [{'sha256': entry.sha256, 'size_bytes': entry.size_bytes} for entry in batch]})
         states.update({row['sha256']: row['state'] for row in response['artifacts']})
     receipts = []
@@ -85,8 +84,7 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
     if materialize:
         for offset in range(0, len(artifacts), 128):
             batch = artifacts[offset:offset + 128]
-            for entry in batch:
-                await progress({'phase': 'verifying', 'artifact': entry.remote_destination.removeprefix(connection.remote_root.rstrip('/') + '/'), 'message': 'Materializing verified artifact'})
+            await progress({'phase': 'verifying', 'artifact': None, 'message': 'Materializing verified artifact batch'})
             await call({'action': 'materialize_many', 'destination_root': connection.remote_root,
                         'entries': [{'artifact': {'sha256': entry.sha256, 'size_bytes': entry.size_bytes},
                                      'destination': entry.remote_destination, 'mode': entry.mode} for entry in batch]})
@@ -107,6 +105,28 @@ async def stage_cached_bundle(*, connection, bundle, progress=_noop, check_fence
     Do NOT run the old full source/runtime rsync after this call. Preserve the
     existing support-python transfer, attempt staging, symlinks and final verify.
     """
+    # Claim one fresh generation before any upload/materialization. A failed or
+    # replayed stage must use a new attempt, never merge into an existing tree.
+    attempt_id = str(uuid.UUID(bundle.attempt_id))
+    generation = f'{connection.remote_root.rstrip("/")}/attempts/{attempt_id}/materialized'
+    if (bundle.attempt_id != attempt_id
+            or bundle.remote_source_dir != generation + '/source'
+            or bundle.remote_runtime_dir != generation + '/runtime'):
+        raise ValueError('Cache materialization paths must belong to this attempt')
+    script = """import pathlib,sys
+p=pathlib.Path(sys.argv[1])
+if not p.is_absolute() or '..' in p.parts: raise RuntimeError('unsafe generation path')
+q=pathlib.Path('/')
+for part in p.parent.parts[1:]:
+ q=q/part
+ if q.is_symlink(): raise RuntimeError('unsafe generation path')
+ q.mkdir(mode=0o700,exist_ok=True)
+p.mkdir(mode=0o700,exist_ok=False)
+(p/'source').mkdir(mode=0o700)
+(p/'runtime').mkdir(mode=0o700)
+"""
+    await check_fence()
+    await run_remote(connection, ['python3', '-c', script, generation])
     links = [{'artifact': {'sha256': record.sha256, 'size_bytes': record.size_bytes},
               'destination': bundle.remote_runtime_dir.rstrip('/') + '/' + record.relative_path.removeprefix('runtime/'),
               'target': record.link_target}

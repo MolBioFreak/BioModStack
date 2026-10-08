@@ -594,14 +594,15 @@ def prepare_remote_bundle(
     archive_copy = source_root / ".bms-source.tar"
     archive_path.replace(archive_copy)
 
-    remote_source = f"{remote_root}/revisions/{tree}"
+    # Byte-addressed cache objects are shared; runnable trees never are.
+    remote_source = f"{remote_attempt}/materialized/source"
     command, effective_params = compile_remote_dependencies(str(job.model_id), str(job.mode), command)
     runtime_assets = _runtime_assets(str(job.model_id), str(job.mode), effective_params)
     runtime_paths = {path.resolve() for path, _ in runtime_assets}
     runtime_records: list[RemoteFileRecord] = []
     runtime_transfers: list[TransferPlan] = []
     runtime_path_map: dict[str, str] = {}
-    remote_runtime = f"{remote_root}/lineages/{safe_root_job_id}/runtime"
+    remote_runtime = f"{remote_attempt}/materialized/runtime"
     for path, relative in runtime_assets:
         destination = f"{remote_runtime}/{relative}"
         source = path
