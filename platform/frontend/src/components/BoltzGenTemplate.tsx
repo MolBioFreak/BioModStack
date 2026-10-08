@@ -11,7 +11,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { submitJob } from '../lib/api';
+import { submitJob, extractChain } from '../lib/api';
 import { StructureInput } from './StructureInput';
 import { TargetAntigenSelector } from './TargetAntigenSelector';
 import { EpitopeSelector } from './EpitopeSelector';
@@ -307,7 +307,7 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
         }
     });
 
-    const handleSubmit = () => {
+    const handleSubmit = async () => {
         if (!isValid) return;
 
         const params: Record<string, any> = {
@@ -340,9 +340,21 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
             params.boltzgen_cdr_h1_length = cdrH1Length;
             params.boltzgen_cdr_h2_length = cdrH2Length;
             params.boltzgen_cdr_h3_length = cdrH3Length;
-            // Target antigen
-            if (targetSource?.path) {
-                params.boltzgen_target_pdb_path = targetSource.path;
+
+            // Target antigen - extract single chain if multi-chain PDB with selected chain
+            let targetPdbPath = targetSource?.path;
+            if (targetPdbPath && selectedChain && parsedChains.length > 1) {
+                try {
+                    const result = await extractChain(targetPdbPath, selectedChain);
+                    targetPdbPath = result.data.output_path;
+                    console.log(`[BoltzGen] Extracted chain ${selectedChain} to: ${targetPdbPath}`);
+                } catch (err) {
+                    console.error('[BoltzGen] Chain extraction failed:', err);
+                }
+            }
+
+            if (targetPdbPath) {
+                params.boltzgen_target_pdb_path = targetPdbPath;
             } else if (targetSource?.url) {
                 params.boltzgen_target_pdb_url = targetSource.url;
             }
