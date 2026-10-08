@@ -85,9 +85,10 @@ def test_real_registry_rejects_shell_syntax_in_dorado_model() -> None:
     module = (ROOT / "modules/ngs/dorado_basecall.nf").read_text(encoding="utf-8")
     assert "def allowedModifiedBases" in module
     assert "allowedModifiedBases.contains(normalizedModifiedBases)" in module
-    assert "split(/\\s+/)?.collect { shellQuote(it) }?.join(' ')" in module
-    assert 'def model = shellQuote(params.dorado_model' in module
-    assert 'def device = shellQuote(doradoDevice)' in module
+    assert "def doradoShellQuote(value)" in module
+    assert "split(/\\s+/)?.collect { value -> doradoShellQuote(value) }?.join(' ')" in module
+    assert 'def model = doradoShellQuote(params.dorado_model' in module
+    assert 'def device = doradoShellQuote(doradoDevice)' in module
     assert '        "${pod5_dir}" \\\\' in module
 
 
@@ -376,8 +377,8 @@ def test_methylation_stage_reports_only_real_module_outputs() -> None:
     assert workflow.count('methylation/modified_base_tag_check.log"') == 2
     assert 'methylation/modkit_summary.tsv' in workflow
     assert 'methylation/summary.log' in workflow
-    assert workflow.count("ModkitPileup.out.log.subscribe { _ ->") == 2
-    assert workflow.count("ModkitSummary.out.log.subscribe { _ ->") == 2
+    assert workflow.count("ModkitPileup.out.log.subscribe { _ignored ->") == 2
+    assert workflow.count("ModkitSummary.out.log.subscribe { _ignored ->") == 2
 
 
 def test_nextflow_contracts_forbid_reference_consensus_and_guard_bam_modkit() -> None:

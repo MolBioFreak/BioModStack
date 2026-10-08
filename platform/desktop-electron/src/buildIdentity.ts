@@ -25,3 +25,7 @@ export function resolveElectronBuildIdentity(
     appVersion: clean(appVersion, 'unknown'),
   });
 }
+
+export function electronAboutVersion(identity: ElectronBuildIdentity): string {
+  return `${identity.appVersion} (revision ${identity.revision})`;
+}

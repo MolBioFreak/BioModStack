@@ -185,8 +185,8 @@ def test_standalone_ngs_entrypoints_resolve_repository_root_without_workflow_rew
     repo_root = Path(__file__).resolve().parents[3]
     config_source = (repo_root / "nextflow.config").read_text(encoding="utf-8")
 
-    assert "new File(new File(projectDir.toString()).parent, 'scripts').exists()" in config_source
-    assert "parentFile.parent" in config_source
+    assert "depth < 3" in config_source
+    assert "new File(candidate, 'scripts').isDirectory()" in config_source
     for workflow_id in CANONICAL_NGS_WORKFLOWS:
         relative = WORKFLOW_ENTRYPOINTS[workflow_id]
         assert (repo_root / relative).is_file(), (workflow_id, relative)
@@ -215,9 +215,9 @@ def test_build_context_and_docs_use_current_scheduler_and_log_limit_names() -> N
     assert "BMS_SCHEDULER_STATE_DIR" in api_readme
     assert "BMS_GPU_CONFIG_PATH" not in api_readme
     for name in (
-        "BMS_NEXTFLOW_LOG_MAX_BYTES",
         "BMS_NEXTFLOW_LOG_READ_BYTES",
         "BMS_NEXTFLOW_RETAINED_LOG_MAX_BYTES",
         "BMS_NEXTFLOW_RETAINED_LOG_MAX_LINES",
     ):
         assert name in api_readme
+    assert "BMS_NEXTFLOW_LOG_MAX_BYTES" not in api_readme
