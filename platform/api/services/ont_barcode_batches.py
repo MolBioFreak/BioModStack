@@ -27,7 +27,7 @@ from database import (
 from paths import get_inputs_dir
 from services import alignment_access, ont_submission_trust
 from services.molbio_ngs_receipts import consume_molbio_ngs_receipt
-from services.ont_barcode_units import load_barcode_units
+from services.ont_barcode_units import _resolve_barcode_catalogs
 from services.ont_ngs_contract import normalized_fasta_sequence_sha256
 
 
@@ -253,7 +253,10 @@ def _validate_source_products(source: Mapping[str, Any]) -> dict[str, Any]:
         "dorado_runtime_provenance": root / "basecall" / "dorado_runtime_provenance.json",
     }
     documents: dict[str, dict[str, Any]] = {}
+    manifest_stats = {}
     for label, path in paths.items():
+        if label in {"demux_manifest", "barcode_units_manifest"}:
+            manifest_stats[path] = _confined_file(path, root, label).stat()
         resolved, payload, payload_bytes = _read_json_file(path, root, label)
         observed = _sha256_bytes(payload_bytes)
         if observed != digests[label]:
@@ -289,17 +292,13 @@ def _validate_source_products(source: Mapping[str, Any]) -> dict[str, Any]:
         raise BarcodeBatchError("source calls/preflight identities are inconsistent", status_code=409)
 
     try:
-        demux_units = load_barcode_units(
-            paths["demux_manifest"],
+        demux_units, catalog_units = _resolve_barcode_catalogs(
+            [
+                (paths["demux_manifest"], demux, digests["demux_manifest"]),
+                (paths["barcode_units_manifest"], catalog, digests["barcode_units_manifest"]),
+            ],
             root,
-            expected_manifest_sha256=digests["demux_manifest"],
-            expected_source_calls_sha256=source_calls_sha256,
-            expected_preflight_sha256=preflight_sha256,
-        )
-        catalog_units = load_barcode_units(
-            paths["barcode_units_manifest"],
-            root,
-            expected_manifest_sha256=digests["barcode_units_manifest"],
+            manifest_stats=manifest_stats,
             expected_source_calls_sha256=source_calls_sha256,
             expected_preflight_sha256=preflight_sha256,
         )

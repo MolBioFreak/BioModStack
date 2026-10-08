@@ -76,7 +76,7 @@ from runtime_policy import (
 from schemas import ExecutionPolicy, JobCreate, JobResponse, JobList, JobSummaryResponse, JobSummaryList, JobStatus
 from services.job_control import cancel_job_lineage, reject_generic_md_lifecycle_control
 from services import alignment_access, ont_submission_trust, stage_reporting, ont_ngs_contract
-from services.ont_barcode_units import load_barcode_units
+from services.ont_barcode_units import _resolve_barcode_catalogs
 from services.md.chemistry_catalog import ChemistryCatalogError, ChemistryProfileSelectionError
 from services.md.feature_gate import require_molecular_dynamics_feature
 from services.md.launch_contract import MDLaunchError, materialize_md_job_spec, normalize_md_job_spec
@@ -9928,6 +9928,7 @@ def _anchor_dorado_demux_products(job: Job) -> dict[str, Any]:
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=409, detail=f"terminal Dorado product escapes result root: {label}") from exc
     try:
+        manifest_stats = {expected[label]: expected[label].stat() for label in ("demux_manifest", "barcode_units_manifest")}
         product_bytes = {label: path.read_bytes() for label, path in expected.items()}
         product_digests = {
             label: hashlib.sha256(payload).hexdigest() for label, payload in product_bytes.items()
@@ -10034,17 +10035,13 @@ def _anchor_dorado_demux_products(job: Job) -> dict[str, Any]:
     ):
         raise HTTPException(status_code=409, detail="terminal Dorado product identities are inconsistent")
     try:
-        anchored_units = load_barcode_units(
-            expected["demux_manifest"],
+        anchored_units, catalog_verified_units = _resolve_barcode_catalogs(
+            [
+                (expected["demux_manifest"], demux, product_digests["demux_manifest"]),
+                (expected["barcode_units_manifest"], unit_catalog, product_digests["barcode_units_manifest"]),
+            ],
             root,
-            expected_manifest_sha256=product_digests["demux_manifest"],
-            expected_source_calls_sha256=str(runtime_calls.get("sha256") or ""),
-            expected_preflight_sha256=preflight_sha256,
-        )
-        catalog_verified_units = load_barcode_units(
-            expected["barcode_units_manifest"],
-            root,
-            expected_manifest_sha256=product_digests["barcode_units_manifest"],
+            manifest_stats=manifest_stats,
             expected_source_calls_sha256=str(runtime_calls.get("sha256") or ""),
             expected_preflight_sha256=preflight_sha256,
         )
