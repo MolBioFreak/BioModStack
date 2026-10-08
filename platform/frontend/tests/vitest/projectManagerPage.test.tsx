@@ -28,7 +28,7 @@ const managerApi = vi.hoisted(() => ({
     reverifySourceReceipt: vi.fn(),
     attachExistingEntity: vi.fn(),
     getResultSurface: vi.fn(),
-    createLaunchContext: vi.fn(),
+    getProjectResultContext: vi.fn(),
     issuePreparedLaunchContext: vi.fn(),
     createProject: vi.fn(),
     createGlobalExperiment: vi.fn(),
@@ -324,8 +324,8 @@ beforeEach(() => {
         valid_until: '2026-08-31T23:00:00Z',
     });
     managerApi.getResultSurface.mockResolvedValue(summaryFor('external_entity_receipt:receipt-9').selection.canonical_surface);
-    managerApi.createLaunchContext.mockResolvedValue({
-        schema: 'bms.launch-context.v1', launch_context_id: 'launch-1', project_id: 'project-1',
+    managerApi.getProjectResultContext.mockResolvedValue({
+        global_experiment_revision_id: 'gr', domain_revision_id: 'dr', project_id: 'project-1',
         global_experiment_id: 'global-1', domain_experiment_id: 'domain-1', workflow_id: null,
         workflow_revision_id: null, return_uri: '/projects/project-1?focus=global-1&selected=domain_experiment%3Adomain-1',
         issued_at: '2026-08-09T00:00:00Z', expires_at: '2026-08-09T00:30:00Z',
@@ -458,14 +458,14 @@ describe('ProjectManager', () => {
             return Promise.resolve(value);
         });
         let reject!: (error: Error) => void;
-        managerApi.createLaunchContext.mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
+        managerApi.getProjectResultContext.mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
         await renderAt('/projects/project-1?focus=global-1&selected=domain_experiment%3Adomain-1');
         await waitUntil(() => expect(container.querySelector('[aria-label="Actions for run run-1"]')).not.toBeNull());
         const actions = container.querySelector('[aria-label="Actions for run run-1"]')!;
         const open = actions.querySelector<HTMLButtonElement>('button')!;
         await act(async () => { open.click(); open.click(); });
         await waitUntil(() => expect(open.textContent).toBe('Opening results…'));
-        expect(managerApi.createLaunchContext).toHaveBeenCalledOnce();
+        expect(managerApi.getProjectResultContext).toHaveBeenCalledOnce();
         expect(Array.from(actions.querySelectorAll('button')).every((button) => button.disabled)).toBe(true);
         expect(actions.closest('article')?.getAttribute('aria-busy')).toBe('true');
         await act(async () => reject(new Error('Result service unavailable')));
@@ -741,7 +741,7 @@ describe('ProjectManager', () => {
             'prep-md-1',
             '/projects/project-1?focus=global-1&selected=workflow_run%3Arun-1',
         );
-        expect(managerApi.createLaunchContext).not.toHaveBeenCalled();
+        expect(managerApi.getProjectResultContext).not.toHaveBeenCalled();
         await waitUntil(() => expect(container.querySelector('[data-testid="location"]')?.textContent).toBe(
             '/submit?template=molecular_dynamics&launch_context_id=88888888-8888-4888-8888-888888888888&source_design_id=77777777-7777-4777-8777-777777777777',
         ));
@@ -780,16 +780,14 @@ describe('ProjectManager', () => {
         const openButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Open canonical source'));
         expect(openButton).not.toBeUndefined();
         await act(async () => openButton?.click());
-        await waitUntil(() => expect(managerApi.createLaunchContext, container.textContent ?? '').toHaveBeenCalledTimes(1));
-        expect(managerApi.createLaunchContext).toHaveBeenCalledWith(
+        await waitUntil(() => expect(managerApi.getProjectResultContext, container.textContent ?? '').toHaveBeenCalledTimes(1));
+        expect(managerApi.getProjectResultContext).toHaveBeenCalledWith(
             'project-1',
             'global-1',
             'domain-1',
-            expect.objectContaining({
-                return_uri: expect.stringContaining('selected=external_entity_receipt%3Areceipt-9'),
-            }),
+            expect.stringContaining('selected=external_entity_receipt%3Areceipt-9'),
         );
-        await waitUntil(() => expect(container.querySelector('[data-testid="location"]')?.textContent).toBe('/designs/job-9?launch_context_id=launch-1'));
+        await waitUntil(() => expect(container.querySelector('[data-testid="location"]')?.textContent).toBe('/designs/job-9?workspace_id=project-1&global_experiment_id=global-1&domain_experiment_id=domain-1&global_experiment_revision_id=gr&domain_revision_id=dr&return_uri=%2Fprojects%2Fproject-1%3Ffocus%3Dglobal-1%26selected%3Ddomain_experiment%253Adomain-1'));
         expect(container.textContent).toContain('Canonical destination');
     });
 
