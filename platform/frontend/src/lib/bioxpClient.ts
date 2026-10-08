@@ -808,6 +808,8 @@ export interface BioXpOperatorActionSpec {
     disabled_reason: string | null;
     dependencies: BioXpOperatorDependency[];
     requires_confirmation: boolean;
+    /** Robot-owned presentation age, not a client-side admission token. */
+    snapshot_freshness?: { state: string; age_s: number | null; fresh_for_s: number | null } | null;
     timeout_seconds: number;
     required_provider_capability: string | null;
     inputs: BioXpOperatorInputSpec[];
