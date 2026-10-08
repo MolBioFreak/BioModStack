@@ -10,6 +10,7 @@ from fastapi import BackgroundTasks, HTTPException
 from routers import ligandmpnn_interface_context as route
 from services import ligandmpnn_interface_publication as publication
 from services.ligandmpnn_interface_selection import InterfaceContextSelection
+from services.ligandmpnn_interface_selection import selected_submission
 from test_ligandmpnn_interface_leaf import fixture, runner
 
 
@@ -65,26 +66,60 @@ async def test_route_resolves_design_owner_and_binds_typed_request_before_queue(
     design = SimpleNamespace(id=native['candidate_id'], job_id='source', pdb_path=str(pdb))
     session = Session(source, [design])
     from routers import jobs
-    async def root_resolver(session, identity): return source, source
-    async def owners(session, src, root, designs):
-        if any(d.job_id != src.id for d in designs):
-            raise HTTPException(422, 'foreign Design owner')
     async def create_job(request, tasks, session):
+        assert selected_submission.get()
         assert request.model_id == 'ligandmpnn' and request.mode == 'interface_context'
         binding = request.params[publication.KEY]
         publication.verify_binding(binding)
         assert request.params['interface_context_manifest'] == binding['manifest']
         assert binding['settings'] == selection(native['candidate_id']).settings.model_dump()
         return SimpleNamespace(id='child')
-    monkeypatch.setattr(jobs, '_resolve_antibody_root_job', root_resolver)
-    monkeypatch.setattr(jobs, '_validate_selected_design_owners', owners)
     monkeypatch.setattr(jobs, 'create_job', create_job)
     response = await route.submit_selected(selection(native['candidate_id']), BackgroundTasks(), session)
+    assert not selected_submission.get()
     assert response['job'].id == 'child'
     assert pdb.read_bytes() == source_file.read_bytes()
     design.job_id = 'foreign'
-    with pytest.raises(HTTPException, match='foreign'):
+    with pytest.raises(HTTPException, match='another Job'):
         await route.submit_selected(selection(native['candidate_id']), BackgroundTasks(), session)
+
+@pytest.mark.asyncio
+async def test_generic_bc2_cif_derivative_preserves_original_identity(tmp_path, monkeypatch):
+    from test_binder_blind_pose_selected import cif
+    from routers import jobs
+    inputs = tmp_path / 'inputs'
+    inputs.mkdir()
+    native = inputs / 'native.cif'
+    native.write_text(cif('B', ['ALA', 'GLY']).replace('\n#\n', '\n') +
+                      'ATOM 3 C CA . TYR A 2 3 ? 10.0 0.0 0.0 1.0 20.0 3 TYR A CA 1\n#\n')
+    original = native.read_bytes()
+    source = SimpleNamespace(id='bc2', model_id='bindcraft2', params={})
+    design = SimpleNamespace(id='chosen', job_id='bc2', pdb_path=str(native),
+                             provenance={'primary_artifact_id': 'native-artifact'})
+    session = Session(source, [design])
+    monkeypatch.setattr(route, 'get_allowed_roots', lambda: {'inputs': inputs})
+    monkeypatch.setattr(route, 'resolve_runtime_data_path', lambda path: Path(path).resolve())
+    monkeypatch.setattr(publication, 'get_inputs_dir', lambda: inputs)
+    from services import bindcraft2_publication
+    async def readback(job, db): return {}
+    monkeypatch.setattr(bindcraft2_publication, 'read_published_native_results', readback)
+    async def create_job(request, tasks, db):
+        assert selected_submission.get()
+        binding = request.params[publication.KEY]
+        publication.verify_binding(binding)
+        identity = binding['sources']['chosen']['original']
+        assert identity == {'path': str(native), 'sha256': hashlib.sha256(original).hexdigest(),
+                            'format': '.cif', 'owner_job_id': 'bc2',
+                            'primary_artifact_id': 'native-artifact'}
+        assert binding['sources']['chosen']['sha256'] != identity['sha256']
+        assert ' B ' in Path(binding['sources']['chosen']['path']).read_text()
+        return SimpleNamespace(id='child')
+    monkeypatch.setattr(jobs, 'create_job', create_job)
+    chosen = selection('chosen', 'bc2').model_copy(update={'settings':
+        selection('chosen', 'bc2').settings.model_copy(update={'target_patch': ['A3']})})
+    await route.submit_selected(chosen, BackgroundTasks(), session)
+    assert native.read_bytes() == original
+    assert not selected_submission.get()
 
 
 @pytest.mark.asyncio

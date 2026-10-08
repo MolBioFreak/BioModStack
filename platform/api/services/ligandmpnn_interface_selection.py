@@ -7,12 +7,17 @@ selected bytes to the Foundry leaf and publishes its native unclassified result.
 import hashlib
 import json
 import re
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from services.ligandmpnn_interface_context import read_context_result
+
+# Shared jobs admission consults this only for the selected interface-context
+# mode; a client-supplied manifest or binding is never submission authority.
+selected_submission: ContextVar[bool] = ContextVar('ligandmpnn_selected_submission', default=False)
 
 
 class InterfaceContextSettings(BaseModel):

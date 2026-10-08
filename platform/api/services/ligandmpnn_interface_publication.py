@@ -21,7 +21,7 @@ def regular_bytes(path: Path) -> bytes:
     return path.read_bytes()
 
 
-def materialize(selection, sources: dict[str, bytes]):
+def materialize(selection, sources: dict[str, bytes], *, source_identities: dict | None = None):
     """Private immutable-by-digest snapshots under managed inputs; no source edits."""
     from services.ligandmpnn_interface_selection import compile_selected_manifest
     directory = get_inputs_dir() / 'ligandmpnn_interface_context' / uuid.uuid4().hex
@@ -38,6 +38,7 @@ def materialize(selection, sources: dict[str, bytes]):
             'manifest': manifest, 'manifest_sha256': hashlib.sha256(regular_bytes(Path(manifest))).hexdigest(),
             'sources': {candidate: {'path': str(directory / f'inputs/ligandmpnn_interface_context/{index:03d}/source.pdb'),
                                     'sha256': hashlib.sha256(sources[candidate]).hexdigest(),
+                                    **({'original': source_identities[candidate]} if source_identities else {}),
                                     'request': str(directory / f'inputs/ligandmpnn_interface_context/{index:03d}/request.json'),
                                     'request_sha256': hashlib.sha256(regular_bytes(directory / f'inputs/ligandmpnn_interface_context/{index:03d}/request.json')).hexdigest()}
                         for index, candidate in enumerate(selection.candidate_ids)}}
@@ -58,6 +59,11 @@ def verify_binding(binding: dict):
             raise ValueError('selected invocation changed')
         if hashlib.sha256(regular_bytes(Path(source['path']))).hexdigest() != source['sha256'] or hashlib.sha256(regular_bytes(Path(source['request']))).hexdigest() != source['request_sha256']:
             raise ValueError('selected input changed')
+        original = source.get('original')
+        if original is not None and (original['owner_job_id'] != binding['source_job_id']
+                or original['format'] not in {'.pdb', '.cif', '.mmcif'}
+                or len(original['sha256']) != 64):
+            raise ValueError('original selected structure identity changed')
         request = json.loads(regular_bytes(Path(source['request'])))
         if (request['candidate_id'] != candidate or request['round_id'] != binding['round_id'] or
             request['source_sha256'] != source['sha256'] or request['structure_path'] != source['path'] or
@@ -90,7 +96,9 @@ async def read_selected(job, session):
         receipts.append(receipt)
     return {'schema': 'bms.ligandmpnn.interface-context.publication.v1',
             'job_id': job.id, 'source_job_id': binding['source_job_id'],
-            'round_id': binding['round_id'], 'settings': binding['settings'], 'records': receipts}
+            'round_id': binding['round_id'], 'settings': binding['settings'],
+            'source_identities': {candidate: binding['sources'][candidate].get('original')
+                                  for candidate in binding['candidate_ids']}, 'records': receipts}
 
 
 async def publish_selected(job, root: Path, session):
@@ -132,6 +140,8 @@ async def publish_selected(job, root: Path, session):
     publication = {'schema': 'bms.ligandmpnn.interface-context.publication.v1',
                    'job_id': job.id, 'source_job_id': binding['source_job_id'],
                    'round_id': binding['round_id'], 'settings': binding['settings'],
+                   'source_identities': {candidate: binding['sources'][candidate].get('original')
+                                         for candidate in binding['candidate_ids']},
                    'records': [{key: value for key, value in receipt.items() if key != 'conditions'}
                                for receipt in receipts]}
     prior = (job.provenance or {}).get('ligandmpnn_interface_publication')
