@@ -22,6 +22,7 @@ type DoradoMolecule = 'dna' | 'rna';
 type DoradoMode = 'simplex' | 'duplex';
 type ModifiedBases = '6mA' | '5mC_5hmC' | 'none';
 type AssemblyTool = 'flye' | 'canu';
+type FlyeReadQuality = 'nano-hq' | 'nano-corr' | 'nano-raw';
 type MinimapPreset = 'map-ont' | 'map-hifi' | 'map-pb' | 'sr';
 type InputSource = 'pod5' | 'bam' | 'fastq';
 type PathField = 'pod5Dir' | 'bamPath' | 'fastqPath' | 'referencePath';
@@ -520,6 +521,21 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     );
     const [wfCloneSample, setWfCloneSample] = useState(initialValues?.wfCloneSample as string || '');
     const [wfCloneLargeConstruct, setWfCloneLargeConstruct] = useState(initialValues?.wfCloneLargeConstruct === true);
+    const [wfCloneAnalyseUnclassified, setWfCloneAnalyseUnclassified] = useState(initialValues?.wfCloneAnalyseUnclassified === true);
+    const [wfCloneFlyeQuality, setWfCloneFlyeQuality] = useState<FlyeReadQuality>(
+        initialValues?.wfCloneFlyeQuality as FlyeReadQuality || 'nano-hq',
+    );
+    const [wfCloneNonUniformCoverage, setWfCloneNonUniformCoverage] = useState(initialValues?.wfCloneNonUniformCoverage === true);
+    const [wfCloneCanuFast, setWfCloneCanuFast] = useState(initialValues?.wfCloneCanuFast === true);
+    const [wfCloneCutsiteMismatch, setWfCloneCutsiteMismatch] = useState<number>(
+        coerceIntegerInput(initialValues?.wfCloneCutsiteMismatch, 1, 0, 10),
+    );
+    const [wfCloneExpectedCoverage, setWfCloneExpectedCoverage] = useState<number>(
+        coerceIntegerInput(initialValues?.wfCloneExpectedCoverage, 95, 0, 100),
+    );
+    const [wfCloneExpectedIdentity, setWfCloneExpectedIdentity] = useState<number>(
+        coerceIntegerInput(initialValues?.wfCloneExpectedIdentity, 99, 0, 100),
+    );
     const [pinnedGpus, setPinnedGpus] = useState<number[]>(() => {
         const raw = (initialValues?.pinnedGpus ?? initialValues?.pinned_gpus ?? initialValues?.pinned_gpu) as unknown;
         if (Array.isArray(raw)) {
@@ -870,6 +886,13 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         wf_clone_min_quality: assemblyMinQuality,
                         wf_clone_basecaller_model: wfCloneBasecallerModel,
                         wf_clone_large_construct: wfCloneLargeConstruct,
+                        wf_clone_analyse_unclassified: wfCloneAnalyseUnclassified,
+                        wf_clone_flye_quality: wfCloneFlyeQuality,
+                        wf_clone_non_uniform_coverage: wfCloneNonUniformCoverage,
+                        wf_clone_canu_fast: wfCloneCanuFast,
+                        wf_clone_cutsite_mismatch: wfCloneCutsiteMismatch,
+                        wf_clone_expected_coverage: wfCloneExpectedCoverage,
+                        wf_clone_expected_identity: wfCloneExpectedIdentity,
                         ...(wfCloneSample.trim() && { wf_clone_sample: wfCloneSample.trim() }),
                         ...(wfClonePrimers.trim() && { wf_clone_primers: wfClonePrimers.trim() }),
                         ...(wfCloneInsertReference.trim() && { wf_clone_insert_reference: wfCloneInsertReference.trim() }),
@@ -999,6 +1022,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             setRunAssembly(true);
             setRunFastqQc(false);
             setRunModkit(false);
+            setShowAdvanced(true);
             return;
         }
         if (workflow === 'plasmidQc') {
@@ -1050,7 +1074,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     // Render
     // ============================================================================
     return (
-        <div className="nanopore-template p-6 space-y-6 max-w-4xl mx-auto">
+        <div className="nanopore-template p-4 lg:p-6 space-y-5 max-w-[1440px] mx-auto">
             {/* Header */}
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -1077,7 +1101,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     <h2 className="text-base font-semibold text-[var(--text-primary)]">Choose what you want to do</h2>
                     <p className="text-sm text-[var(--text-secondary)] mt-1">Choose one path first. The form below then exposes only its compatible inputs and locked runtime settings.</p>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
                     {[
                         { key: 'clone' as const, title: 'Validate a known plasmid / clone from FASTQ', input: 'FASTQ + expected construct FASTA', result: 'Vendor wf-clone-validation HTML report, assembly, construct evidence', tone: 'border-[var(--accent-secondary)]' },
                         { key: 'plasmidQc' as const, title: 'QC plasmid reads', input: 'FASTQ + reference FASTA', result: 'BMS plasmid QC, alignment and generic multimer evidence', tone: 'border-[var(--border-primary)]' },
@@ -1104,8 +1128,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                 </div>
             </section>
 
+            <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-start">
             {/* Job Name */}
-            <div className="bg-[var(--bg-secondary)] rounded-lg p-4">
+            <div className="bg-[var(--bg-secondary)] rounded-lg p-4 xl:col-span-4">
                 <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Job Name *</label>
                 <input
                     type="text"
@@ -1176,7 +1201,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             </div>
 
             {/* Data Source */}
-            <div className="bg-[var(--bg-secondary)] rounded-lg p-4">
+            <div className="bg-[var(--bg-secondary)] rounded-lg p-4 xl:col-span-4">
                 <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Primary Input *</label>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-3">
                     {[
@@ -1298,7 +1323,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             </div>
 
             {/* Reference FASTA — tabbed input */}
-            <div className="bg-[var(--bg-secondary)] rounded-lg p-4">
+            <div className="bg-[var(--bg-secondary)] rounded-lg p-4 xl:col-span-4">
                 <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Reference FASTA</label>
                 <div className="flex gap-1 mb-3">
                     {(['browse', 'paste', 'create'] as ReferenceTab[]).map((tab) => (
@@ -1471,7 +1496,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
 
             {/* Locked P4 molecule, mode, and multiplexing controls */}
             {inputSource === 'pod5' && (
-                <div className="bg-[var(--bg-secondary)] rounded-lg p-4 space-y-3">
+                <div className="bg-[var(--bg-secondary)] rounded-lg p-4 space-y-3 xl:col-span-4">
                     <div className="grid grid-cols-2 gap-3">
                         <label className="text-sm text-[var(--text-secondary)]">Molecule
                             <select value={doradoMolecule} onChange={(event) => {
@@ -1513,7 +1538,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
 
             {/* Basecalling Model */}
             {inputSource === 'pod5' && (
-                <div className="bg-[var(--bg-secondary)] rounded-lg p-4">
+                <div className="bg-[var(--bg-secondary)] rounded-lg p-4 xl:col-span-4">
                     <label className="block text-sm font-medium text-[var(--text-secondary)] mb-3">Basecalling Model</label>
                     <div className="grid grid-cols-3 gap-3">
                         {(Object.entries(DORADO_MODELS) as [DoradoModel, typeof DORADO_MODELS[DoradoModel]][]).map(([key, model]) => (
@@ -1539,7 +1564,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
 
             {/* Methylation Detection */}
             {inputSource === 'pod5' && (
-                <div className="bg-[var(--bg-secondary)] rounded-lg p-4">
+                <div className="bg-[var(--bg-secondary)] rounded-lg p-4 xl:col-span-4">
                     <label className="block text-sm font-medium text-[var(--text-secondary)] mb-3">Modified Base Detection</label>
                     <div className="grid grid-cols-2 gap-3">
                         {(Object.entries(MODIFIED_BASES_OPTIONS) as [ModifiedBases, typeof MODIFIED_BASES_OPTIONS[ModifiedBases]][]).map(([key, opt]) => (
@@ -1566,7 +1591,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
 
             {/* POD5 basecall quality filter */}
             {inputSource === 'pod5' && (
-                <div className="bg-[var(--bg-secondary)] rounded-lg p-4">
+                <div className="bg-[var(--bg-secondary)] rounded-lg p-4 xl:col-span-4">
                     <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">
                         Basecall Quality Filter — <span className="text-[var(--accent-secondary)] font-semibold">Q{minQscore}</span>
                         <span className="ml-2 text-xs font-normal text-[var(--text-secondary)]">{getQscoreLabel(minQscore)}</span>
@@ -1592,7 +1617,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
 
             {/* BAM alignment quality filter */}
             {inputSource === 'bam' && (
-                <div className="bg-[var(--bg-secondary)] rounded-lg p-4">
+                <div className="bg-[var(--bg-secondary)] rounded-lg p-4 xl:col-span-4">
                     <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">
                         Alignment Quality Filter — <span className="text-[var(--accent-secondary)] font-semibold">MAPQ {'>='} {bamMinMapq}</span>
                     </label>
@@ -1616,7 +1641,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             )}
 
             {/* Analysis Toggles — mode-aware: only relevant options shown */}
-            <div className="bg-[var(--bg-secondary)] rounded-lg p-4 space-y-3">
+            <div className="bg-[var(--bg-secondary)] rounded-lg p-4 space-y-3 xl:col-span-6">
                 <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Analysis Options</label>
 
                 {/* Trim adapters — POD5 only */}
@@ -1774,7 +1799,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             </div>
 
             {/* Advanced Options */}
-            <div className="bg-[var(--bg-secondary)] rounded-lg p-4">
+            <div className="bg-[var(--bg-secondary)] rounded-lg p-4 xl:col-span-6">
                 <button
                     onClick={() => setShowAdvanced(!showAdvanced)}
                     className="flex items-center gap-2 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors w-full"
@@ -2004,6 +2029,38 @@ nextflow run workflows/ngs/ont_fastq_qc.nf -profile ont_fastq_qc,apptainer \\
                                             className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
                                         />
                                     </label>
+                                    <label className="text-xs text-[var(--text-secondary)]">
+                                        Flye read quality
+                                        <select value={wfCloneFlyeQuality} onChange={(e) => setWfCloneFlyeQuality(e.target.value as FlyeReadQuality)} disabled={assemblyTool !== 'flye'} className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm disabled:opacity-40">
+                                            <option value="nano-hq">nano-hq — Guppy5+/SUP or Q20 (default)</option>
+                                            <option value="nano-corr">nano-corr — corrected reads</option>
+                                            <option value="nano-raw">nano-raw — legacy/high-error reads</option>
+                                        </select>
+                                    </label>
+                                    <label className="text-xs text-[var(--text-secondary)]">
+                                        Expected reference coverage (%)
+                                        <input type="number" min={0} max={100} value={wfCloneExpectedCoverage} onChange={(e) => setWfCloneExpectedCoverage(coerceIntegerInput(e.target.value, 95, 0, 100))} className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm" />
+                                    </label>
+                                    <label className="text-xs text-[var(--text-secondary)]">
+                                        Expected reference identity (%)
+                                        <input type="number" min={0} max={100} value={wfCloneExpectedIdentity} onChange={(e) => setWfCloneExpectedIdentity(coerceIntegerInput(e.target.value, 99, 0, 100))} className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm" />
+                                    </label>
+                                    <label className="text-xs text-[var(--text-secondary)]">
+                                        Cut-site mismatch allowance
+                                        <input type="number" min={0} max={10} value={wfCloneCutsiteMismatch} onChange={(e) => setWfCloneCutsiteMismatch(coerceIntegerInput(e.target.value, 1, 0, 10))} className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm" />
+                                    </label>
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input type="checkbox" checked={wfCloneAnalyseUnclassified} onChange={(e) => setWfCloneAnalyseUnclassified(e.target.checked)} className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]" />
+                                        <span className="text-xs text-[var(--text-secondary)]">Analyse unclassified reads in multiplex input</span>
+                                    </label>
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input type="checkbox" checked={wfCloneNonUniformCoverage} onChange={(e) => setWfCloneNonUniformCoverage(e.target.checked)} disabled={assemblyTool !== 'flye'} className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)] disabled:opacity-40" />
+                                        <span className="text-xs text-[var(--text-secondary)]">Non-uniform coverage / Flye metagenome mode</span>
+                                    </label>
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input type="checkbox" checked={wfCloneCanuFast} onChange={(e) => setWfCloneCanuFast(e.target.checked)} disabled={assemblyTool !== 'canu'} className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)] disabled:opacity-40" />
+                                        <span className="text-xs text-[var(--text-secondary)]">Canu fast mode (may reduce contiguity)</span>
+                                    </label>
                                     <label className="text-xs text-[var(--text-secondary)] md:col-span-2">
                                         Primers TSV (optional; enables vendor insert discovery)
                                         <input type="text" value={wfClonePrimers} onChange={(e) => setWfClonePrimers(e.target.value)} placeholder="/confined/path/primers.tsv" className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm font-mono" />
@@ -2034,6 +2091,7 @@ nextflow run workflows/ngs/ont_fastq_qc.nf -profile ont_fastq_qc,apptainer \\
                         )}
                     </div>
                 )}
+            </div>
             </div>
 
             {/* Error Display */}
