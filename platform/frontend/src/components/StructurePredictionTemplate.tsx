@@ -1,6 +1,6 @@
 import { useCallback, useState, useRef, useEffect, useMemo } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { submitJob, estimateBoltzApiJob, fetchBoltzApiProviderStatus, submitBoltzApiJob, fetchBoltzCpShardPlans, fetchMsaCacheInfo, uploadFile, type BoltzApiEstimateResponse, type BoltzApiProviderStatus, type BoltzApiStructureRequest, type BoltzCpShardPlan, type MsaCacheInfo } from '../lib/api';
+import { submitJob, estimateBoltzApiJob, fetchBoltzApiProviderStatus, submitBoltzApiJob, fetchBoltzCpShardPlans, fetchMsaCacheInfo, uploadFile, type BoltzApiEstimateResponse, type BoltzApiProviderStatus, type BoltzCpShardPlan, type MsaCacheInfo } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
 import { SequenceManager } from './SequenceManager';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
@@ -19,6 +19,7 @@ import {
     DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MODE,
     DEFAULT_STRUCTURE_MSA_TARGET_SHARDS,
     buildBoltzCpSubmitParams,
+    buildBoltzApiStructureRequest,
     buildStructureMsaSubmitParams,
     buildTargetPreviewSelection,
     buildTargetPreviewSelections,
@@ -43,6 +44,7 @@ import {
     type StructureMsaTargetShardMode,
     type StructurePredictorSelection,
 } from './structurePredictionUiState.js';
+import { BoltzApiNativeSettingsPanel } from './BoltzApiNativeSettings';
 import { parsePDBFile, getModelByNumber, type Chain, type ParsedPDB } from '../utils/pdbUtils';
 import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 import { ModelDocumentationLinks, type ModelDocumentationTopic } from './ModelDocumentationLinks';
@@ -619,13 +621,10 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                 if (!cancelled) setBoltzApiStatus(data);
             })
             .catch(() => {
-                if (!cancelled) setBoltzApiStatus({
-                    available: false,
-                    cli_available: false,
-                    credential_configured: false,
-                    model: 'boltz-2.1',
-                    message: 'Boltz API provider status could not be loaded.',
-                });
+                if (!cancelled) {
+                    setBoltzApiStatus(null);
+                    setBoltzApiEstimateError('Boltz API provider status could not be loaded.');
+                }
             });
         return () => { cancelled = true; };
     }, [isBoltzApi]);
@@ -1090,16 +1089,15 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                 alert('Boltz API submission currently queues one remote prediction per launch. Remove the sequence batch first.');
                 return;
             }
-            const request: BoltzApiStructureRequest = {
+            const request = buildBoltzApiStructureRequest({
                 name: jobName,
-                client_request_id: boltzApiClientRequestId,
-                model: 'boltz-2.1',
+                clientRequestId: boltzApiClientRequestId,
                 sequence: sequence.trim(),
-                primary_chain_id: remotePrimaryChainId,
-                complex_components: remoteComponents,
-                num_samples: Math.min(10, boltzNumSamples),
-                use_msa: boltzUseMsa,
-            };
+                primaryChainId: remotePrimaryChainId,
+                complexComponents: remoteComponents,
+                numSamples: boltzNumSamples,
+                useMsa: boltzUseMsa,
+            });
             if (!boltzApiEstimate) {
                 setBoltzApiEstimating(true);
                 setBoltzApiEstimateError(null);
@@ -1744,6 +1742,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                                 {boltzApiStatus.message}
                             </div>
                         )}
+                        <BoltzApiNativeSettingsPanel status={boltzApiStatus} />
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <div>
                                 <label className="text-xs text-slate-400 block mb-1">Provider model</label>
@@ -2629,7 +2628,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                     {/* Right side: Submit button */}
                     <button
                         onClick={handleSubmit}
-                        disabled={!sequence.trim() || submitMutation.isPending || boltzApiSubmitMutation.isPending || boltzApiEstimating || (isBoltzApi && boltzApiStatus?.available === false)}
+                        disabled={!sequence.trim() || submitMutation.isPending || boltzApiSubmitMutation.isPending || boltzApiEstimating || (isBoltzApi && (!boltzApiStatus || boltzApiStatus.available === false))}
                         className="px-6 py-3 bg-gradient-to-r from-blue-600 to-accent-secondary hover:from-blue-500 hover:to-accent disabled:opacity-50 disabled:grayscale text-white font-bold rounded-lg shadow-lg shadow-accent/20 transition-all transform active:scale-95"
                     >
                         {isBoltzApi

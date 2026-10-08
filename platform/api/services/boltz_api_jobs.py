@@ -6,11 +6,13 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
 import uuid
 from contextlib import contextmanager
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -28,9 +30,53 @@ BOLTZ_API_MODEL = "boltz-2.1"
 BOLTZ_API_PROVIDER = "boltz_api"
 BOLTZ_API_POLL_INTERVAL_SECONDS = 15.0
 TERMINAL_PROVIDER_STATES = {"failed", "stopped"}
-SUPPORTED_COMPONENT_TYPES = {"protein", "peptide", "dna", "rna", "ligand", "ion"}
+SUPPORTED_COMPONENT_TYPES = {"protein", "peptide", "dna", "rna", "ligand", "ion", "ligand_ccd", "ligand_smiles"}
 logger = logging.getLogger(__name__)
 ACTIVE_BOLTZ_JOB_STATUSES = ("queued", "running")
+BOLTZ_API_VERSION_TIMEOUT_SECONDS = 5.0
+_SEMVER_PATTERN = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+_SEMVER_IN_VERSION_OUTPUT_PATTERN = re.compile(r"(?<![0-9A-Za-z.])v?((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))(?![0-9A-Za-z.])")
+
+
+@dataclass(frozen=True)
+class _BoltzApiCapabilityContract:
+    contract_version: str = "bms.boltz_api.capabilities.v1"
+    entity_types: tuple[str, ...] = ("protein", "dna", "rna", "ligand_ccd", "ligand_smiles")
+    sample_minimum: int = 1
+    sample_maximum: int = 10
+    unsupported_local_controls: tuple[str, ...] = (
+        "diffusion_sampling_steps",
+        "recycling_steps",
+        "potentials",
+        "denoiser_chunking",
+        "gpu_pinning",
+        "parallelism",
+        "oom_retry",
+        "conditioning",
+    )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "contract_version": self.contract_version,
+            "entities": {"status": "supported", "types": list(self.entity_types)},
+            "msa": {
+                "status": "supported",
+                "provider_default": "omit",
+                "disable_value": {"type": "empty"},
+            },
+            "num_samples": {
+                "status": "supported",
+                "minimum": self.sample_minimum,
+                "maximum": self.sample_maximum,
+            },
+            "templates": {"status": "unavailable_pending_schema_verification"},
+            "unsupported_local_controls": {
+                control: "unsupported" for control in self.unsupported_local_controls
+            },
+        }
+
+
+_BOLTZ_API_CAPABILITY_CONTRACT = _BoltzApiCapabilityContract()
 
 
 class BoltzApiJobError(RuntimeError):
@@ -137,7 +183,7 @@ def build_boltz_api_input(
         used_chains.update(chain_ids)
 
         if provider_type in {"protein", "dna", "rna"}:
-            value = str(component.get("sequence") or (sequence if index == 0 else "")).strip().upper()
+            value = str(component.get("value") or component.get("sequence") or (sequence if index == 0 else "")).strip().upper()
             alphabet = {
                 "protein": set("ACDEFGHIKLMNPQRSTVWYBXZJUO"),
                 "dna": set("ACGTN"),
@@ -146,7 +192,7 @@ def build_boltz_api_input(
             if not value or any(char not in alphabet for char in value):
                 raise BoltzApiJobError("BOLTZ_API_INPUT_INVALID", f"component {index} has an invalid {provider_type} sequence")
         else:
-            value = str(component.get("ccd") or component.get("smiles") or "").strip()
+            value = str(component.get("value") or component.get("ccd") or component.get("smiles") or "").strip()
             if not value:
                 raise BoltzApiJobError("BOLTZ_API_INPUT_INVALID", f"component {index} needs a CCD code or SMILES value")
 
@@ -209,6 +255,87 @@ def _provider_env() -> dict[str, str]:
     if managed_config.is_file():
         env["HOME"] = str(_cli_home())
     return env
+
+
+def provider_capability_contract() -> dict[str, Any]:
+    """Return a fresh representation of the immutable provider-native contract."""
+    return _BOLTZ_API_CAPABILITY_CONTRACT.as_dict()
+
+
+def _parse_semver(value: str) -> tuple[int, int, int] | None:
+    match = _SEMVER_PATTERN.fullmatch(value)
+    if match is None:
+        return None
+    major, minor, patch = match.groups()
+    return int(major), int(minor), int(patch)
+
+
+def _parse_cli_version_output(value: bytes) -> str | None:
+    if len(value) > 4096:
+        return None
+    text = value.decode("utf-8", errors="replace")
+    match = _SEMVER_IN_VERSION_OUTPUT_PATTERN.search(text)
+    if match is None or _parse_semver(match.group(1)) is None:
+        return None
+    return match.group(1)
+
+
+def _version_check_env() -> dict[str, str]:
+    """Run `--version` without credentials or other provider configuration."""
+    return {
+        "PATH": os.environ.get("PATH", ""),
+        "LANG": "C",
+        "LC_ALL": "C",
+    }
+
+
+async def read_installed_cli_version() -> str | None:
+    binary = _cli_binary()
+    if not binary:
+        return None
+    process: asyncio.subprocess.Process | None = None
+    try:
+        process = await asyncio.create_subprocess_exec(
+            binary,
+            "--version",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_version_check_env(),
+        )
+        stdout, _stderr = await asyncio.wait_for(
+            process.communicate(), timeout=BOLTZ_API_VERSION_TIMEOUT_SECONDS
+        )
+    except (OSError, asyncio.TimeoutError):
+        if process is not None and process.returncode is None:
+            process.kill()
+            await process.wait()
+        return None
+    if process is None:
+        return None
+    if process.returncode != 0:
+        return None
+    return _parse_cli_version_output(stdout)
+
+
+async def get_cli_update_status() -> dict[str, Any]:
+    """Read-only status until a provider-owned manifest contract is independently pinned.
+
+    Deliberately performs no network, filesystem write, package-manager, job, or
+    service-lifecycle operation. The only permitted side effect is `--version`.
+    """
+    try:
+        installed_version = await read_installed_cli_version()
+    except Exception:
+        installed_version = None
+    return {
+        "check_status": "unavailable_pending_official_feed_verification",
+        "installed_version": installed_version,
+        "latest_version": None,
+        "source": "boltz_api_static_cli",
+        "release_feed_url": None,
+        "release_url": None,
+        "checked_at": datetime.now(timezone.utc),
+    }
 
 
 def _boltz_download_root() -> Path:
