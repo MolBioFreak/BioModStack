@@ -2889,7 +2889,18 @@ async def golden_gate_options():
     except AssemblyError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     first = enzymes[0] if enzymes else None
+    from services.assembly.golden_gate_workflow_types import REQUEST_ADAPTER, SaveDesignRequest
+    from services.assembly.golden_gate_fidelity import discover_datasets
+    from services.assembly.golden_gate_design import RAW_ENZYMES
     return {
+        "raw_design": {
+            "schema_version": "bms.golden-gate-design.v1",
+            "request_schema": REQUEST_ADAPTER.json_schema(),
+            "save_schema": SaveDesignRequest.model_json_schema(),
+            "raw_enzyme_adapters": sorted(RAW_ENZYMES),
+            "datasets": discover_datasets(),
+            "limitations": ["No kinetic or exhaustive competing-product simulation", "No shipped standard presets or combinatorial scheduler"],
+        },
         "catalog": (
             {
                 "catalog_id": first.catalog_id,
