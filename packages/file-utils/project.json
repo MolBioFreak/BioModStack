@@ -1,0 +1,15 @@
+{
+  "name": "file-utils",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "packages/file-utils/src",
+  "projectType": "library",
+  "targets": {
+    "version": {},
+    "build": {},
+    "publish": {},
+    "publish-beta": {},
+    "lint": {},
+    "test": {}
+  },
+  "tags": []
+}

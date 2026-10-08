@@ -5,10 +5,15 @@
  * Compatible with React 19
  */
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 
 // Import OVE from ESM bundle (aliased via vite.config.ts)
-import { BioDesigner } from '@biomodstack/bms-plugin';
+// Import OVE directly from workspace package
+import { Editor } from '@biomodstack/ove';
+import { Provider } from 'react-redux';
+import { store } from './store';
+// Import styles directly
+import '@biomodstack/ove/style.css';
 // Note: OVE CSS is loaded via link tag in index.html from /ove/ove.css
 
 // Types for sequence data
@@ -46,8 +51,13 @@ const SAMPLE_SEQUENCE: SequenceData = {
 // OVE Wrapper Component using ESM import
 interface OVEWrapperProps {
     sequenceData: SequenceData;
-    onSave?: (data: unknown) => void;
+    onSave?: (data: any) => void;
 }
+
+// Import updateEditor from OVE package
+import { updateEditor } from '@biomodstack/ove';
+
+const EDITOR_NAME = 'MolBioToolkitEditor';
 
 // OVE Wrapper now uses the ESM-bundled BioDesigner component
 function OVEWrapper({ sequenceData, onSave }: OVEWrapperProps) {
@@ -67,12 +77,40 @@ function OVEWrapper({ sequenceData, onSave }: OVEWrapperProps) {
         }))
     }), [sequenceData]);
 
+    // Use updateEditor to push sequence data into Redux store
+    useEffect(() => {
+        updateEditor(store, EDITOR_NAME, {
+            sequenceData: oveSequenceData
+        });
+    }, [oveSequenceData]);
+
     return (
         <div className="ove-editor-container w-full h-full">
-            <BioDesigner
-                sequenceData={oveSequenceData}
-                onSave={onSave}
-            />
+            <Provider store={store}>
+                <Editor
+                    editorName={EDITOR_NAME}
+                    showMenuBar={true}
+                    onSave={onSave}
+                    ToolBarProps={{
+                        toolList: [
+                            'saveTool',
+                            'downloadTool',
+                            'importTool',
+                            'undoTool',
+                            'redoTool',
+                            'cutsiteTool',
+                            'featureTool',
+                            'oligoTool',
+                            'orfTool',
+                            'editTool',
+                            'findTool',
+                            'alignmentTool',
+                            'visibilityTool',
+                            'printTool'
+                        ]
+                    }}
+                />
+            </Provider>
         </div>
     );
 }
