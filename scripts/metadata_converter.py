@@ -157,7 +157,13 @@ class MetadataConverter:
                         
                         # Fold-only Metadata Merging
                         if fold_id in metadata_fold_data:
-                            combined_entries[key].update(metadata_fold_data[fold_id])
+                            if candidate_id not in (None, ''):
+                                # Earlier fold summaries may enrich a terminal
+                                # row, never replace its bound native values.
+                                combined_entries[key] = {
+                                    **metadata_fold_data[fold_id], **combined_entries[key]}
+                            else:
+                                combined_entries[key].update(metadata_fold_data[fold_id])
                             merge_count += 1
 
                     logging.info(f"Processed {metadata_fold_seq_count} fold_id + seq_id metadata entries")
