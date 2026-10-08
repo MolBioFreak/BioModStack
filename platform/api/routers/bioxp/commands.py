@@ -46,6 +46,8 @@ async def execute_command(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except (CommandBusyError, CommandDeniedError, IdempotencyConflictError) as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    except ConnectionStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return result.model_dump(mode="json")
 
 

@@ -25,6 +25,9 @@ DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "get_oem_full_lifecycle_run": ("GET", "/oem/runtime/movement-runs/{run_id}", 10.0),
     "get_oem_full_lifecycle_ledger": ("GET", "/oem/runtime/movement-runs/{run_id}/ledger", 10.0),
     "cancel_oem_full_lifecycle_run": ("POST", "/oem/runtime/movement-runs/{run_id}/cancel", 15.0),
+    "collect_axis_diagnostics": ("GET", "/motion/diagnostics/status", 45.0),
+    "run_axis_diagnostic": ("POST", "/motion/diagnostics/execute", 180.0),
+    "stop_axis_diagnostic": ("POST", "/motion/diagnostics/stop", 25.0),
     "emergency_stop": ("POST", "/oem/runtime/emergency_stop", 5.0),
 }
 

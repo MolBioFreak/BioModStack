@@ -229,6 +229,16 @@ class BioXpConnectionService:
             self._last_error = str(exc) or exc.__class__.__name__
             self._observed_at = self.clock()
 
+    @asynccontextmanager
+    async def workflow_lease(self, expected_generation: int):
+        """Hold connection authority stable across one admitted robot workflow."""
+        async with self._transition_lock:
+            if self._client is None or self._active_target is None:
+                raise ConnectionStateError("An active BioXP target connection is required")
+            if int(expected_generation) != self._generation:
+                raise ConnectionStateError("Expected connection generation does not match the active generation")
+            yield self._client
+
     async def disconnect(self) -> BioXpSnapshot:
         async with self._transition_lock:
             await self._deactivate_locked(increment=True)

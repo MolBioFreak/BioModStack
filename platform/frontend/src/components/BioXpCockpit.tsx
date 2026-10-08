@@ -32,13 +32,73 @@ type CommissioningCommandName =
     | 'collect_hardware_snapshot'
     | 'initialize_oem_environment';
 
-type OemMotorStage = 'z-home' | 'gripper-current-31' | 'gripper-clear-10000' | 'gripper-home';
+type AxisDiagnosticAxis = 'x' | 'y' | 'z' | 'g' | 'door';
+type AxisDiagnosticOperation =
+    | 'move-negative'
+    | 'move-positive'
+    | 'home'
+    | 'park-6000'
+    | 'commission-home'
+    | 'close'
+    | 'open'
+    | 'open-wide';
 
-const OEM_MOTOR_STAGE_CONTROLS: ReadonlyArray<{ stage: OemMotorStage; label: string; detail: string }> = [
-    { stage: 'z-home', label: 'M01 · Z reference', detail: 'OEM stage M01: source-bound Z axis search-home.' },
-    { stage: 'gripper-current-31', label: 'M02 · Gripper current 31', detail: 'OEM stage M02: source-bound gripper current parameter = 31.' },
-    { stage: 'gripper-clear-10000', label: 'M03 · Gripper clear +10000', detail: 'OEM stage M03: source-bound +10000 relative clearance and stopped wait.' },
-    { stage: 'gripper-home', label: 'M04 · Gripper home', detail: 'OEM stage M04: source-bound gripper home.' },
+type AxisDiagnosticBlock = {
+    axis: AxisDiagnosticAxis;
+    label: string;
+    stopLabel: string;
+    detail: string;
+    operations: ReadonlyArray<{ operation: AxisDiagnosticOperation; label: string; detail: string }>;
+};
+
+const AXIS_DIAGNOSTIC_BLOCKS: ReadonlyArray<AxisDiagnosticBlock> = [
+    {
+        axis: 'x', label: 'X axis', stopLabel: 'Stop X axis',
+        detail: 'OEM X carriage: bounded relative and absolute positioning, switch-search home/set-home, startup park, live state, and stop.',
+        operations: [
+            { operation: 'move-negative', label: 'Commissioning jog −100', detail: 'Small fixed OEM MVP relative direction check; no caller-supplied distance.' },
+            { operation: 'move-positive', label: 'Commissioning jog +100', detail: 'Small fixed OEM MVP relative direction check; no caller-supplied distance.' },
+            { operation: 'home', label: 'Search and set X home', detail: 'OEM negative switch search, stop, and set-home sequence.' },
+            { operation: 'park-6000', label: 'Move to OEM park 6000', detail: 'OEM startup absolute park target after reference.' },
+        ],
+    },
+    {
+        axis: 'y', label: 'Y axis', stopLabel: 'Stop Y axis',
+        detail: 'OEM Y carriage: bounded relative and absolute positioning, switch-search home/set-home, live state, and stop.',
+        operations: [
+            { operation: 'move-negative', label: 'Commissioning jog −100', detail: 'Small fixed OEM MVP relative direction check; no caller-supplied distance.' },
+            { operation: 'move-positive', label: 'Commissioning jog +100', detail: 'Small fixed OEM MVP relative direction check; no caller-supplied distance.' },
+            { operation: 'home', label: 'Search and set Y home', detail: 'OEM negative switch search, stop, and set-home sequence.' },
+        ],
+    },
+    {
+        axis: 'z', label: 'Z axis', stopLabel: 'Stop Z axis',
+        detail: 'OEM Z head: bounded relative and absolute positioning, positive-switch reference, live state, and stop.',
+        operations: [
+            { operation: 'move-negative', label: 'Commissioning jog −100', detail: 'Small fixed OEM MVP relative direction check; verify physical up/down direction.' },
+            { operation: 'move-positive', label: 'Commissioning jog +100', detail: 'Small fixed OEM MVP relative direction check; verify physical up/down direction.' },
+            { operation: 'home', label: 'Search and set Z reference', detail: 'OEM positive switch search, stop, and reference-zero sequence.' },
+        ],
+    },
+    {
+        axis: 'g', label: 'Gripper', stopLabel: 'Stop Gripper',
+        detail: 'Calibrated gripper capability. Temporary OEM action current is internal; commissioning must end with verified idle 10/10 readback.',
+        operations: [
+            { operation: 'commission-home', label: 'OEM clear + home', detail: 'Atomic clear and home transaction with unconditional idle-current cleanup.' },
+            { operation: 'close', label: 'Close gripper', detail: 'Move to the robot calibration close position.' },
+            { operation: 'open', label: 'Open gripper', detail: 'Move to the robot calibration open position.' },
+            { operation: 'open-wide', label: 'Open gripper wide', detail: 'Move to the robot calibration wide-open position.' },
+        ],
+    },
+    {
+        axis: 'door', label: 'Thermal door', stopLabel: 'Stop Thermal door',
+        detail: 'OEM thermal-cover axis: switch-search home, configured open/closed positions, live state, and stop.',
+        operations: [
+            { operation: 'home', label: 'Home thermal door', detail: 'OEM switch-search door home.' },
+            { operation: 'open', label: 'Open thermal door', detail: 'Move to configured OEM open position.' },
+            { operation: 'close', label: 'Close thermal door', detail: 'Move to configured OEM closed position.' },
+        ],
+    },
 ];
 
 const OEM_STARTUP_STAGES = [
@@ -152,36 +212,32 @@ export function BioXpCockpit() {
         executeCommand.mutate(commandPayload(command));
     };
 
-    const runOemMotorStage = (stage: OemMotorStage) => {
+    const collectAxisDiagnostics = () => {
         executeCommand.mutate({
-            command: 'run_oem_motor_stage',
-            stage,
-            mode: 'live',
-            operator_ack: 'HOME',
+            command: 'collect_axis_diagnostics',
             expected_generation: connection?.generation ?? 0,
             idempotency_key: crypto.randomUUID(),
         });
     };
 
-    const recordOemMotorStageObservation = (stage: OemMotorStage, observedPass: boolean) => {
-        const operatorNote = window.prompt(
-            `Describe the physical observation for ${stage}. This note is recorded in the robot-owned OEM movement ledger.`,
-            '',
+    const runAxisDiagnostic = (axis: AxisDiagnosticAxis, operation: AxisDiagnosticOperation, label: string) => {
+        const operatorReason = window.prompt(
+            `Record the supervised test reason for ${label}. Physical motion may occur.`,
+            `Supervised ${axis} ${operation} capability test`,
         );
-        if (operatorNote === null) return;
-        const trimmedNote = operatorNote.trim();
-        if (!trimmedNote) {
-            window.alert('A non-empty physical observation note is required.');
+        if (operatorReason === null) return;
+        const reason = operatorReason.trim();
+        if (!reason) {
+            window.alert('A non-empty operator reason is required.');
             return;
         }
-        const verdict = observedPass ? 'PASS' : 'FAIL';
-        if (!window.confirm(`Record ${verdict} for ${stage}? This advances or terminally fails the ordered OEM stage ledger; it does not command motion.`)) return;
+        if (!window.confirm(`Run ${label} on ${axis}? Physical motion may occur. Confirm the workspace is clear and an operator is watching the robot.`)) return;
         executeCommand.mutate({
-            command: 'record_oem_motor_stage_observation',
-            stage,
-            observed_pass: observedPass,
-            operator_ack: 'OBSERVE',
-            operator_note: trimmedNote,
+            command: 'run_axis_diagnostic',
+            axis,
+            operation,
+            operator_ack: 'RUN_AXIS_DIAGNOSTIC',
+            reason,
             expected_generation: connection?.generation ?? 0,
             idempotency_key: crypto.randomUUID(),
         });
@@ -207,6 +263,30 @@ export function BioXpCockpit() {
             evidenceLockSha256: lifecycleContract.evidence_lock_sha256,
         });
     };
+
+    const stopAxisDiagnostic = (axis: AxisDiagnosticAxis) => {
+        executeCommand.mutate({
+            command: 'stop_axis_diagnostic',
+            axis,
+            operator_ack: 'STOP_AXIS',
+            reason: `Operator requested immediate ${axis} axis stop from diagnostics cockpit`,
+            expected_generation: connection?.generation ?? 0,
+            idempotency_key: crypto.randomUUID(),
+        });
+    };
+
+    const axisStatusAvailable = mutationAccessEnabled && controlPlaneFresh
+        && isBioXpCommandAvailable(status?.available_commands, 'collect_axis_diagnostics', derived?.label);
+    const axisRunAvailable = mutationAccessEnabled && controlPlaneFresh
+        && isBioXpCommandAvailable(status?.available_commands, 'run_axis_diagnostic', derived?.label);
+    const axisStopAvailable = mutationAccessEnabled && connection?.active === true
+        && status?.available_commands?.includes('stop_axis_diagnostic') === true;
+    const axisStatusBlockedReason = status?.unavailable_commands?.collect_axis_diagnostics
+        ?? (statusQuery.isError ? 'Status is unavailable.' : 'Live axis status is not admitted by the robot.');
+    const axisRunBlockedReason = status?.unavailable_commands?.run_axis_diagnostic
+        ?? (statusQuery.isError ? 'Status is unavailable.' : 'Motion requires fresh reachable, runtime-ready, hardware-ready evidence.');
+    const axisStopBlockedReason = status?.unavailable_commands?.stop_axis_diagnostic
+        ?? (statusQuery.isError ? 'Status is unavailable.' : 'Axis stop requires an active managed robot connection.');
 
     return (
         <div className="space-y-6 p-6 text-slate-100">
@@ -367,35 +447,51 @@ export function BioXpCockpit() {
             </section>
 
             <section className="rounded-xl border border-cyan-700/60 bg-cyan-950/20 p-5">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h2 className="text-lg font-semibold">OEM initializeMotors · M01–M04</h2>
-                    <span className="text-xs text-cyan-200">Queued, typed, source-bound</span>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                        <h2 className="text-lg font-semibold">Per-axis OEM capability diagnostics</h2>
+                        <p className="mt-2 max-w-4xl text-sm text-slate-300">Each button targets one finite robot-owned movement mechanism. Values are fixed by the robot contract; there are no arbitrary motor, current, or transport controls. Relative and absolute positioning, OEM switch-search homing, calibrated component positions, and stop can be verified independently before they are composed into initializeSystem.</p>
+                    </div>
+                    <button
+                        type="button"
+                        disabled={!axisStatusAvailable || executeCommand.isPending}
+                        onClick={collectAxisDiagnostics}
+                        className="rounded bg-cyan-700 px-3 py-2 text-sm font-semibold disabled:opacity-40"
+                    >Collect live axis status</button>
                 </div>
-                <p className="mt-2 text-sm text-slate-300">Only the first four completed OEM stages are exposed. Each request is routed to the robot-owned stage ledger; it rejects any out-of-order stage, missing predecessor observation, unavailable runtime, or non-admitted hardware state.</p>
-                <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                    {OEM_MOTOR_STAGE_CONTROLS.map(({ stage, label, detail }) => {
-                        const available = mutationAccessEnabled && controlPlaneFresh
-                            && isBioXpCommandAvailable(status?.available_commands, 'run_oem_motor_stage', derived?.label);
-                        const blockedReason = status?.unavailable_commands?.run_oem_motor_stage
-                            ?? (statusQuery.isError ? 'Status is unavailable.' : 'Robot has not admitted this source stage.');
-                        const observationAvailable = mutationAccessEnabled && controlPlaneFresh
-                            && isBioXpCommandAvailable(status?.available_commands, 'record_oem_motor_stage_observation', derived?.label);
-                        const observationBlockedReason = status?.unavailable_commands?.record_oem_motor_stage_observation
-                            ?? (statusQuery.isError ? 'Status is unavailable.' : 'Observation recording is not admitted by the server.');
-                        return (
-                            <article key={stage} className="rounded border border-cyan-700/50 bg-slate-950/40 p-4">
-                                <h3 className="font-semibold">{label}</h3>
-                                <p className="mt-1 text-sm text-slate-300">{detail}</p>
-                                <button type="button" disabled={!available || executeCommand.isPending} onClick={() => runOemMotorStage(stage)} className="mt-3 rounded bg-cyan-700 px-3 py-2 text-sm font-semibold disabled:opacity-40">Queue {label}</button>
-                                {!available && <p className="mt-2 text-xs text-slate-500">Blocked: {blockedReason}</p>}
-                                <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-800 pt-3">
-                                    <button type="button" disabled={!observationAvailable || executeCommand.isPending} onClick={() => recordOemMotorStageObservation(stage, true)} className="rounded bg-emerald-700 px-3 py-2 text-xs font-semibold disabled:opacity-40">Record observed PASS</button>
-                                    <button type="button" disabled={!observationAvailable || executeCommand.isPending} onClick={() => recordOemMotorStageObservation(stage, false)} className="rounded bg-red-800 px-3 py-2 text-xs font-semibold disabled:opacity-40">Record observed FAIL</button>
+                {!axisStatusAvailable && <p className="mt-2 text-xs text-slate-500">Status blocked: {axisStatusBlockedReason}</p>}
+                <div className="mt-4 grid gap-4 xl:grid-cols-2">
+                    {AXIS_DIAGNOSTIC_BLOCKS.map(({ axis, label, stopLabel, detail, operations }) => (
+                        <article key={axis} className="rounded border border-cyan-700/50 bg-slate-950/50 p-4">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                    <h3 className="font-semibold">{label}</h3>
+                                    <p className="mt-1 text-sm text-slate-300">{detail}</p>
                                 </div>
-                                {!observationAvailable && <p className="mt-2 text-xs text-slate-500">Observation blocked: {observationBlockedReason}</p>}
-                            </article>
-                        );
-                    })}
+                                <button
+                                    type="button"
+                                    disabled={!axisStopAvailable || executeCommand.isPending}
+                                    onClick={() => stopAxisDiagnostic(axis)}
+                                    className="rounded border border-red-600 bg-red-950 px-3 py-2 text-xs font-semibold text-red-200 disabled:opacity-40"
+                                >{stopLabel}</button>
+                            </div>
+                            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                {operations.map(({ operation, label: operationLabel, detail: operationDetail }) => (
+                                    <div key={operation} className="rounded border border-slate-800 p-3">
+                                        <button
+                                            type="button"
+                                            disabled={!axisRunAvailable || executeCommand.isPending}
+                                            onClick={() => runAxisDiagnostic(axis, operation, operationLabel)}
+                                            className="w-full rounded bg-amber-700 px-3 py-2 text-sm font-semibold disabled:opacity-40"
+                                        >{operationLabel}</button>
+                                        <p className="mt-2 text-xs text-slate-400">{operationDetail}</p>
+                                    </div>
+                                ))}
+                            </div>
+                            {!axisRunAvailable && <p className="mt-3 text-xs text-slate-500">Motion blocked: {axisRunBlockedReason}</p>}
+                            {!axisStopAvailable && <p className="mt-1 text-xs text-slate-500">Stop blocked: {axisStopBlockedReason}</p>}
+                        </article>
+                    ))}
                 </div>
             </section>
 
