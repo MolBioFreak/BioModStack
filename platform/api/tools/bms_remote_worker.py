@@ -434,53 +434,81 @@ def _component_checkpoint_runtime(envelope: dict):
 
 def checkpoint_control(attempt_dir: Path, *, attempt_id: str, expected_boot_id: str,
                        lease_id: str, checkpoint_id: str, checkpoint_sha256: str,
-                       decision: dict, continuation_lease_id: str, resource_admission: dict | None = None) -> dict:
-    """Authorize a compiled checkpoint edge, then use the existing supervisor."""
+                       decision: dict, continuation_lease_id: str, resource_admission: dict | None = None,
+                       operation_id: str | None = None, observe_only: bool = False) -> dict:
+    """Replay one explicit decision across ledger/status/spawn crash boundaries."""
+    if not operation_id:
+        raise RuntimeError("Checkpoint durable operation identity required")
+    binding = dict(operation_id=operation_id, attempt_id=attempt_id, boot_id=expected_boot_id,
+        original_lease_id=lease_id, checkpoint_id=checkpoint_id, checkpoint_sha256=checkpoint_sha256,
+        decision=decision, continuation_lease_id=continuation_lease_id, resource_admission=resource_admission)
     with (attempt_dir / "start.lock").open("a+b") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         current = status(attempt_dir)
         if (current.get("attempt_id") != attempt_id or current.get("boot_id") != expected_boot_id
-                or expected_boot_id != boot_id() or current.get("state") != "awaiting_input"
-                or not current.get("quiescent")):
-            raise RuntimeError("Checkpoint attempt/boot/quiescence authority conflicts")
+                or expected_boot_id != boot_id()):
+            raise RuntimeError("Checkpoint attempt/boot authority conflicts")
         runtime = _component_checkpoint_runtime(load_json(envelope_path(attempt_dir)))
         if runtime is None or runtime.lease_id != lease_id:
             raise RuntimeError("Checkpoint lease authority conflicts")
-        checkpoint = runtime.checkpoint_status(checkpoint_id)
-        if checkpoint["checkpoint_sha256"] != checkpoint_sha256:
-            raise RuntimeError("Checkpoint artifact-set binding conflicts")
-        context = runtime.context
-        from services.nextflow import (compile_component_checkpoint_continuation,
-            component_checkpoint_parent_snapshot, component_checkpoint_resources)
-        invocation = compile_component_checkpoint_continuation(context, checkpoint, decision)
-        runtime.resume_checkpoint(checkpoint_id, checkpoint_sha256=checkpoint_sha256,
-            decision=decision, actor="jobs.resume", boot_id=expected_boot_id,
-            invocation=invocation, continuation_lease_id=continuation_lease_id,
-            parent_snapshot=component_checkpoint_parent_snapshot(invocation, context),
-            resources=component_checkpoint_resources(invocation, context, resource_admission))
-        continued = runtime.root_state()
-        # Reset only the proved-quiescent prior supervisor, under the same status
-        # lock as all Phase4 publishers. No running/uncertain owner is reclaimed.
-        with status_path(attempt_dir).with_suffix(".json.lock").open("a+b") as status_lock:
-            fcntl.flock(status_lock.fileno(), fcntl.LOCK_EX)
-            latest = load_json(status_path(attempt_dir))
-            if latest != current or (attempt_dir / CANCEL_REQUEST_FILE).exists():
-                raise RuntimeError("Checkpoint status changed during continuation authorization")
-            latest.update(state="prepared", supervisor_pid=None, supervisor_start_ticks=None,
-                workflow_pid=None, workflow_start_ticks=None, quiescent=False, checkpoints=[],
-                continuation_lease_id=continuation_lease_id, exit_code=None, completed_at=None,
-                started_at=None, result_manifest_sha256=None, error=None, control_group=None,
-                generation=continued["generation"],
-                plan_sha256=continued["continuation_edge"]["plan_sha256"],
-                native_output_directory=continued["continuation_edge"]["parent_snapshot"]["output_dir"])
-            _write_atomic_json(status_path(attempt_dir), latest)
-        # Persist ambiguous start before the spawn; retries may only observe it.
-        atomic_json(attempt_dir / ("checkpoint-launch-" + checkpoint_sha256 + ".json"),
-                    dict(attempt_id=attempt_id, boot_id=expected_boot_id, continuation_lease_id=continuation_lease_id))
+        operation = runtime.checkpoint_operation(operation_id)
+        if operation is not None and operation['binding'] != binding:
+            raise RuntimeError("Checkpoint immutable operation binding conflicts")
+        if observe_only or (operation is not None and operation['state'] == 'rejected'):
+            return dict(operation=operation, worker_status=current)
+        if (attempt_dir / CANCEL_REQUEST_FILE).exists():
+            raise RuntimeError("Cancelled attempt cannot continue")
+        if operation is None:
+            if current.get('state') != 'awaiting_input' or not current.get('quiescent'):
+                raise RuntimeError("Checkpoint quiescence authority conflicts")
+            checkpoint = runtime.checkpoint_status(checkpoint_id)
+            if checkpoint["checkpoint_sha256"] != checkpoint_sha256:
+                raise RuntimeError("Checkpoint artifact-set binding conflicts")
+            context = runtime.context
+            from services.nextflow import (compile_component_checkpoint_continuation,
+                component_checkpoint_parent_snapshot, component_checkpoint_resources)
+            try:
+                invocation = compile_component_checkpoint_continuation(context, checkpoint, decision)
+                runtime.resume_checkpoint(checkpoint_id, checkpoint_sha256=checkpoint_sha256,
+                    decision=decision, actor="jobs.resume", boot_id=expected_boot_id,
+                    invocation=invocation, continuation_lease_id=continuation_lease_id,
+                    parent_snapshot=component_checkpoint_parent_snapshot(invocation, context),
+                    resources=component_checkpoint_resources(invocation, context, resource_admission),
+                    operation_binding=binding)
+            except ValueError as exc:
+                operation = runtime.reject_checkpoint_operation(binding, str(exc))
+                return dict(operation=operation, worker_status=current)
+            operation = runtime.checkpoint_operation(operation_id)
+        edge, generation = operation['edge'], operation['generation']
+        if current.get('generation', 0) == generation:
+            if current.get('continuation_lease_id') != continuation_lease_id:
+                raise RuntimeError('Checkpoint continuation generation conflicts')
+            if current.get('state') != 'prepared' or current.get('supervisor_pid') is not None:
+                return dict(operation=operation, worker_status=current)
+        else:
+            if (current.get('generation', 0) != generation - 1
+                    or current.get('state') != 'awaiting_input' or not current.get('quiescent')):
+                raise RuntimeError('Checkpoint predecessor generation conflicts')
+            with status_path(attempt_dir).with_suffix(".json.lock").open("a+b") as status_lock:
+                fcntl.flock(status_lock.fileno(), fcntl.LOCK_EX)
+                latest = load_json(status_path(attempt_dir))
+                if latest != current or (attempt_dir / CANCEL_REQUEST_FILE).exists():
+                    raise RuntimeError("Checkpoint status changed during continuation authorization")
+                latest.update(state="prepared", supervisor_pid=None, supervisor_start_ticks=None,
+                    workflow_pid=None, workflow_start_ticks=None, quiescent=False, checkpoints=[],
+                    continuation_lease_id=continuation_lease_id, exit_code=None, completed_at=None,
+                    started_at=None, result_manifest_sha256=None, error=None, control_group=None,
+                    generation=generation, plan_sha256=edge['plan_sha256'],
+                    native_output_directory=edge['parent_snapshot']['output_dir'])
+                _write_atomic_json(status_path(attempt_dir), latest)
+        atomic_json(attempt_dir / ("checkpoint-launch-" + hashlib.sha256(operation_id.encode()).hexdigest() + ".json"), binding)
+        # A claimed but not spawned command may be replayed. The existing
+        # supervisor.lock plus prepared/no-PID check serializes actual execution;
+        # a delayed duplicate supervisor cannot start a second root generation.
         with (attempt_dir / "supervisor.log").open("ab", buffering=0) as log:
             subprocess.Popen([sys.executable, os.path.realpath(__file__), "supervise", "--attempt-dir", str(attempt_dir)],
                 stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, close_fds=True, start_new_session=True)
-        return load_json(status_path(attempt_dir))
+        return dict(operation=operation, worker_status=load_json(status_path(attempt_dir)))
 
 
 def component_retry_control(attempt_dir: Path, *, attempt_id: str, expected_boot_id: str,
@@ -974,12 +1002,23 @@ def status(attempt_dir: Path) -> dict[str, Any]:
                 root = runtime.root_state() if runtime is not None else None
                 if (runtime is not None and value.get("quiescent") and not supervisor_alive
                         and not process_matches(value.get("workflow_pid"), value.get("workflow_start_ticks"))
-                        and root and root["state"] == "paused" and root.get("quiescent")
+                        and root and root["state"] in {"paused", "resume_ready"} and root.get("quiescent")
                         and root.get("boot_id") == value.get("boot_id")):
                     runtime.request_cancel()
                     value.update(state="cancelled", quiescent=True, completed_at=utc_now(), exit_code=-15)
                 else:
                     value.update(quiescent=False, error="Paused cancellation awaits durable writer quiescence")
+            elif cancellation_requested and value.get('state') == 'prepared' and value.get('continuation_lease_id'):
+                runtime = _component_checkpoint_runtime(envelope)
+                root = runtime.root_state() if runtime is not None else None
+                edge = (root or {}).get('continuation_edge') or {}
+                if (root and root['state'] == 'resume_ready' and root.get('quiescent')
+                        and root.get('boot_id') == value.get('boot_id')
+                        and root.get('generation') == value.get('generation')
+                        and edge.get('continuation_lease_id') == value['continuation_lease_id']
+                        and value.get('supervisor_pid') is None and value.get('workflow_pid') is None):
+                    runtime.request_cancel()
+                    value.update(state='cancelled', quiescent=True, completed_at=utc_now(), exit_code=-15)
             elif cancellation_requested and value.get("state") == "prepared" and not (attempt_dir / "launch-claim.json").exists():
                 value.update(state="cancelled", quiescent=True, completed_at=utc_now(), exit_code=-15)
             elif value.get("state") in {"running", "cancelling"} and not supervisor_alive:
@@ -1036,12 +1075,11 @@ def parser() -> argparse.ArgumentParser:
     cancel_command = sub.add_parser("cancel")
     cancel_command.add_argument("--attempt-dir", required=True)
     cancel_command.add_argument("--timeout-seconds", type=float, default=30.0)
-    checkpoint = sub.add_parser("checkpoint-resume")
-    for field in ("attempt-dir", "attempt-id", "expected-boot-id", "lease-id", "checkpoint-id", "checkpoint-sha256"):
-        checkpoint.add_argument("--" + field, required=True)
-    checkpoint.add_argument("--resource-admission-json", required=True)
-    checkpoint.add_argument("--decision-json", required=True)
-    checkpoint.add_argument("--continuation-lease-id", required=True)
+    for name in ("checkpoint-resume", "checkpoint-status"):
+        checkpoint = sub.add_parser(name)
+        for field in ("attempt-dir", "attempt-id", "expected-boot-id", "lease-id", "checkpoint-id",
+                      "checkpoint-sha256", "operation-id", "resource-admission-json", "decision-json", "continuation-lease-id"):
+            checkpoint.add_argument("--" + field, required=True)
     for name in ("component-retry", "component-retry-status"):
         retry = sub.add_parser(name)
         for field in ("attempt-dir", "attempt-id", "expected-boot-id", "lease-id", "component-id", "operation-id", "actor"):
@@ -1065,12 +1103,13 @@ def main() -> int:
         result = status(attempt_dir)
     elif args.command == "cancel":
         result = cancel(attempt_dir, args.timeout_seconds)
-    elif args.command == "checkpoint-resume":
+    elif args.command in {"checkpoint-resume", "checkpoint-status"}:
         result = checkpoint_control(attempt_dir, attempt_id=args.attempt_id,
             expected_boot_id=args.expected_boot_id, lease_id=args.lease_id,
             checkpoint_id=args.checkpoint_id, checkpoint_sha256=args.checkpoint_sha256,
             decision=json.loads(args.decision_json), continuation_lease_id=args.continuation_lease_id,
-            resource_admission=json.loads(args.resource_admission_json))
+            resource_admission=json.loads(args.resource_admission_json), operation_id=args.operation_id,
+            observe_only=args.command == 'checkpoint-status')
     elif args.command in {"component-retry", "component-retry-status"}:
         observe = args.command == "component-retry-status"
         result = component_retry_control(attempt_dir, attempt_id=args.attempt_id,

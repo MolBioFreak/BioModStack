@@ -67,12 +67,13 @@ def test_worker_continuation_rebinds_actual_budget(tmp_path, monkeypatch, denial
     monkeypatch.setattr(nextflow, 'compile_component_checkpoint_continuation', lambda *args: invocation)
     spawned = []
     monkeypatch.setattr(worker.subprocess, 'Popen', lambda *a, **kw: spawned.append(a))
-    kwargs = dict(attempt_id='attempt', expected_boot_id='boot', lease_id='lease',
+    kwargs = dict(attempt_id='attempt', expected_boot_id='boot', lease_id='lease', operation_id='review-op',
         checkpoint_id='root:review', checkpoint_sha256=checkpoint['checkpoint_sha256'],
         decision={'continue': True}, continuation_lease_id='new-lease', resource_admission=admission)
     if denial:
-        with pytest.raises(ValueError, match='capacity|devices'):
-            worker.checkpoint_control(tmp_path, **kwargs)
+        rejected = worker.checkpoint_control(tmp_path, **kwargs)
+        assert rejected['operation']['state'] == 'rejected'
+        assert any(word in rejected['operation']['error'] for word in ('capacity', 'devices'))
         assert runtime.root_state()['state'] == 'paused'
         assert runtime.checkpoint_status('root:review')['decision'] is None
         assert not spawned and not (tmp_path / 'new.json').exists()
@@ -164,10 +165,10 @@ def test_worker_pause_is_quiescent_not_result_ready_and_resume_is_fenced(tmp_pat
     assert status["state"] == "awaiting_input" and status["quiescent"]
     assert status["result_manifest_sha256"] is None
     monkeypatch.setattr(worker, "status", lambda path: status)
-    kwargs = dict(attempt_id="attempt", expected_boot_id="boot", lease_id="lease",
+    kwargs = dict(attempt_id="attempt", expected_boot_id="boot", lease_id="lease", operation_id='review-op',
                   checkpoint_id="root:review", checkpoint_sha256=checkpoint["checkpoint_sha256"],
                   decision={"selected_artifacts": ["one.pdb"]}, continuation_lease_id="next-lease")
-    with pytest.raises(RuntimeError, match="boot/quiescence"):
+    with pytest.raises(RuntimeError, match="boot authority"):
         worker.checkpoint_control(tmp_path, **dict(kwargs, expected_boot_id="old-boot"))
     with pytest.raises(RuntimeError, match="artifact-set"):
         worker.checkpoint_control(tmp_path, **dict(kwargs, checkpoint_sha256="0" * 64))

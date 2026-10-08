@@ -254,23 +254,37 @@ async def test_checkpoint_executor_transmits_fresh_same_target_admission(workers
     admission = AsyncMock(return_value=observed)
     monkeypatch.setattr(targets, 'admit_target_resources', admission)
     monkeypatch.setattr(executor, '_connection_for_attempt', lambda *args: (object(), '/fixture/attempt'))
-    monkeypatch.setattr(executor, '_worker_argv', lambda *args: ['checkpoint-resume', '--attempt-dir', '/fixture/attempt'])
-    monkeypatch.setattr(executor, '_publish_remote_transition', AsyncMock(return_value=True))
+    monkeypatch.setattr(executor, '_worker_argv', lambda connection, command, directory, *args:
+        [command, '--attempt-dir', directory, *args])
     async def control(connection, argv, **kwargs):
         args = worker.parser().parse_args(argv)
         assert json.loads(args.resource_admission_json) == observed
         assert args.expected_boot_id == 'boot' and args.lease_id == 'lease'
-        return SimpleNamespace(stdout=SimpleNamespace(attempt_id='attempt', job_id='job-2',
-            boot_id='boot', continuation_lease_id=args.continuation_lease_id,
-            generation=1, plan_sha256='b'*64, native_output_directory='generations/review'))
+        binding = dict(operation_id=args.operation_id, attempt_id=args.attempt_id, boot_id=args.expected_boot_id,
+            original_lease_id=args.lease_id, checkpoint_id=args.checkpoint_id, checkpoint_sha256=args.checkpoint_sha256,
+            decision=json.loads(args.decision_json), continuation_lease_id=args.continuation_lease_id,
+            resource_admission=json.loads(args.resource_admission_json))
+        status = dict(attempt_id='attempt', job_id='job-2', boot_id='boot', state='awaiting_input',
+            generation=0, quiescent=True)
+        operation = None
+        if args.command == 'checkpoint-resume':
+            status.update(state='running', generation=1, continuation_lease_id=args.continuation_lease_id,
+                plan_sha256='b'*64, native_output_directory='generations/review', quiescent=False)
+            operation = dict(binding=binding, state='accepted', generation=1,
+                edge=dict(plan_sha256='b'*64, parent_snapshot={'output_dir': 'generations/review'}))
+        return SimpleNamespace(stdout=json.dumps(dict(operation=operation, worker_status=status)))
     monkeypatch.setattr(executor, 'run_remote', control)
-    monkeypatch.setattr(executor, '_parse_status', lambda value: value)
     async with workers() as session:
         job = await session.get(Job, 'job-2')
         job.remote_attempt_id = 'attempt'
-        job.provenance = dict(remote_execution_receipt=dict(boot_id='boot'),
+        job.status, job.queue_status, job.awaiting_input = 'awaiting_input', 'completed', True
+        job.provenance = dict(remote_execution_receipt=dict(boot_id='boot', generation=0,
+            source_revision=job.execution_source_revision, source_tree=job.execution_source_tree,
+            execution_envelope_sha256=job.execution_bundle_sha256,
+            component_context_identity=dict(root_job_id='job-2', attempt_id='attempt', target_id='vast:2', lease_id='lease')),
             remote_execution_assignment=dict(resources=dict(gpu_ids=[3], admission=dict(devices=devices),
                 required=dict(cpus=999, memory_bytes=999, scratch_bytes=999))))
+        await session.commit()
         checkpoint = dict(attempt_id='attempt', target_id='vast:2', lease_id='lease',
             checkpoint_id='review', checkpoint_sha256='a'*64)
         result = await executor.request_remote_checkpoint_resume(session, job, checkpoint, {'continue': True})

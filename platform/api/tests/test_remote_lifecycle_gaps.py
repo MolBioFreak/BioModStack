@@ -130,7 +130,7 @@ async def test_start_receipt_publication_is_claim_fenced(store, monkeypatch, com
     monkeypatch.setattr(ex, "prepare_remote_bundle", lambda **_: bundle)
     # Resource admission is independently covered; exercise the publication fence.
     from services.remote_execution import targets, bundle as bundle_module
-    monkeypatch.setattr(bundle_module, 'bind_resource_admission', lambda value, admission: value)
+    monkeypatch.setattr(bundle_module, 'bind_resource_admission', lambda value, admission, *, resource_monitor=None: value)
     async def admitted(target, **requirements):
         return {'schema': 'bms.target-resource-admission.v1', 'execution_target_id': target.id,
                 'required': {'cpus': 1, 'memory_bytes': 1, 'scratch_bytes': 0},
@@ -213,10 +213,17 @@ async def test_aged_preparation_recovers_without_resetting_clock(store, monkeypa
 
 @pytest.mark.asyncio
 async def test_prepared_resume_cancellation_during_run_wins(store, monkeypatch):
+    from services.remote_execution import targets
+    from unittest.mock import AsyncMock
     await preparing(store)
+    devices = [{'gpu_index': 0, 'gpu_uuid': 'fixture-gpu'}]
+    resources = dict(gpu_ids=[0], required=dict(cpus=1, memory_bytes=1, scratch_bytes=0),
+                     admission=dict(devices=devices))
+    monkeypatch.setattr(targets, 'admit_target_resources', AsyncMock(return_value=dict(devices=devices)))
     async with store() as s:
         job = await s.get(Job, "job")
         job.remote_attempt_id, job.nextflow_run_id, job.remote_state = "attempt", "remote:attempt", "staging"
+        job.provenance = dict(job.provenance, remote_execution_assignment=dict(resources=resources))
         await s.commit()
     async def status(*_):
         return receipt("prepared")
@@ -594,7 +601,7 @@ async def test_fresh_admission_and_start_share_one_publication(store, monkeypatc
             environment={"BMS_TARGET_RESOURCES": json.dumps({
                 "required": {"cpus": 1, "memory_bytes": 1, "scratch_bytes": 0}, "gpu_ids": [0]})}))
     monkeypatch.setattr(ex, "prepare_remote_bundle", lambda **_: bundle)
-    monkeypatch.setattr(bundle_module, "bind_resource_admission", lambda value, admission: value)
+    monkeypatch.setattr(bundle_module, "bind_resource_admission", lambda value, admission, *, resource_monitor=None: value)
     monkeypatch.setattr(ex, "_remote_receipt", lambda b, t, **kw: {
         "state": kw["state"], "lease_acquired_at": t.lease_acquired_at.isoformat()})
     admissions = []
