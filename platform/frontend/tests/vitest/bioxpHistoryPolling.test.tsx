@@ -251,7 +251,7 @@ it('fetches full retained evidence only on expansion and hides it on disconnect'
     });
     await flush();
     expect(api.get).toHaveBeenCalledTimes(1);
-    expect(api.get.mock.calls[0]).toEqual(['/api/bioxp/operator-controls/v2/receipts/retained-proof', { params: { detail: true } }]);
+    expect(api.get.mock.calls[0]).toEqual(['/api/bioxp/operator-controls/v2/receipts/retained-proof', { params: { detail: true }, signal: expect.any(AbortSignal), timeout: 12000 }]);
     expect(container.textContent).toContain('native-proof-value');
     await act(async () => { render(false); });
     expect(container.textContent).not.toContain('native-proof-value');
@@ -288,7 +288,7 @@ it.each(['detail', 'unavailable'] as const)('actual sparse Y5 history opens its 
     });
     await flush();
     expect(api.get).toHaveBeenCalledTimes(2);
-    expect(api.get.mock.calls[1]).toEqual([`/api/bioxp/operator-controls/v2/receipts/${actualY5Detail.command_id}`, { params: { detail: true } }]);
+    expect(api.get.mock.calls[1]).toEqual([`/api/bioxp/operator-controls/v2/receipts/${actualY5Detail.command_id}`, { params: { detail: true }, signal: expect.any(AbortSignal), timeout: 12000 }]);
     if (outcome === 'detail') expect(plain()).toContain(explanation);
     else { expect(plain()).not.toContain(explanation); expect(container.textContent).toContain('Receipt evidence unavailable'); }
     await act(async () => {

@@ -1063,11 +1063,124 @@ export interface BioXpJobListResponse {
     jobs: BioXpJob[];
 }
 
-export interface BioXpProtocolSubmissionResponse {
-    job: BioXpJob;
-    delivery_attempted: false;
-    robot_compatible: null;
+// Live workflows use robot custody; BioXpJob above remains offline history only.
+export type BioXpWorkflowPhase = 'queued' | 'preparing' | 'starting' | 'executing' | 'waiting' | 'waking' | 'epilogue' | 'cleanup' | 'reconciling' | 'terminal';
+export type BioXpWorkflowGate = 'ordinary_pause' | 'deferred_pause' | 'delaypoint' | 'review' | 'error_hold';
+export type BioXpWorkflowAction =
+    | { action: 'pause'; mode: 'ordinary' | 'deferred' }
+    | { action: 'wake'; gate_id: string }
+    | { action: 'continue'; gate: 'ordinary_pause' | 'deferred_pause' | 'delaypoint'; gate_id: string }
+    | { action: 'safe_stop' | 'abort' };
+export interface BioXpWorkflowState {
+    command_id: string;
+    phase: BioXpWorkflowPhase;
+    gate: BioXpWorkflowGate | null;
+    gate_id: string | null;
+    source_occurrence_id: string | null;
+    requested_control: BioXpWorkflowAction | null;
+    last_control_id: string | null;
+    reached_control_id: string | null;
+    held_reason: string | null;
+    child_command_ids: string[];
 }
+export interface BioXpWorkflowCommand {
+    command_id: string;
+    idempotency_key: string;
+    ownership_generation: number;
+    state_version: number;
+    status: 'queued' | 'dispatched' | 'interrupting' | 'completed' | 'failed' | 'interrupted' | 'cleared' | 'ambiguous' | 'rejected';
+    terminal: boolean;
+    status_path: string;
+}
+export interface BioXpWorkflowSourceWell {
+    content: string | null;
+    volume: number;
+    capacity: number;
+    empty: boolean;
+    zone_index: number | null;
+}
+export interface BioXpWorkflowSourceTray {
+    tray_id: string;
+    location: number;
+    wells: BioXpWorkflowSourceWell[];
+    tip_type: number | null;
+    tray_empty: boolean | null;
+    strip_color: string | null;
+}
+export interface BioXpWorkflowSourceModel {
+    logical_tip_present: boolean | null;
+    carried_plate_present: boolean | null;
+    allow_to_stop: boolean | null;
+    trays: Record<string, BioXpWorkflowSourceTray>;
+    strips: BioXpWorkflowSourceTray[];
+    tip_trays: BioXpWorkflowSourceTray[];
+    pressure_baseline: number[];
+    pressure_history: number[][];
+    fluid_name: string | null;
+    tip_zone_index: number | null;
+    old_tip_well: string | null;
+}
+export interface BioXpWorkflowJob {
+    job_id: string;
+    status: string;
+    command?: BioXpWorkflowCommand | null;
+    operator?: { manual_review_required: boolean; pending_review: { stage_id: string | null; action_id: string | null; reason: string | null } | null };
+    execution?: {
+        dry_run: boolean;
+        runtime_state: {
+            completed: boolean;
+            current_stage_id: string | null;
+            stage_states: Record<string, { current_action_id: string | null; pause_marker_action_id: string | null }>;
+            workflow?: BioXpWorkflowState | null;
+            source_model?: BioXpWorkflowSourceModel;
+        };
+    };
+}
+export interface BioXpWorkflowInput {
+    source_type: 'native' | 'oem_xml';
+    document?: Record<string, unknown> | null;
+    xml_path?: string | null;
+    live_execution?: Record<string, unknown> | null;
+    live_execution_ack?: boolean;
+    operator_id?: string | null;
+    physical_console_verified?: boolean;
+    deck_manifest?: Record<string, unknown> | null;
+    preflight?: Record<string, unknown> | null;
+    artifact_refs?: string[];
+    snapshot_refs?: string[];
+}
+export type BioXpWorkflowSubmission = BioXpWorkflowInput & {
+    expected_connection_generation: number;
+    idempotency_key: string;
+    dry_run: false;
+};
+export interface BioXpWorkflowBinding {
+    expected_connection_generation: number;
+    expected_ownership_generation: number;
+    command_id: string;
+    idempotency_key: string;
+}
+export type BioXpWorkflowControlRequest = BioXpWorkflowBinding & BioXpWorkflowAction;
+export interface BioXpWorkflowControlResponse {
+    control_command_id: string;
+    idempotency_key: string;
+    command_id: string;
+    job_id: string;
+    ownership_generation: number;
+    state_version: number;
+    accepted: boolean;
+    reached: boolean;
+    phase: BioXpWorkflowPhase;
+    gate: BioXpWorkflowGate | null;
+    gate_id: string | null;
+    status_path: string;
+}
+export type BioXpWorkflowReviewRequest = BioXpWorkflowBinding & {
+    reviewer: string;
+    note?: string | null;
+    stage_id: string;
+    action_id: string | null;
+};
 
 
 export interface BioXpOemFullLifecycleProvider {
@@ -2606,17 +2719,43 @@ export const useCompileBioXpProtocol = () => useMutation({
     ).data,
 });
 
-export const useSubmitBioXpProtocol = () => useRefreshMutation(
-    async ({ protocol, idempotencyKey }: {
-        protocol: BioXpProtocol;
-        idempotencyKey: string;
-    }) => (
-        await api.post<BioXpProtocolSubmissionResponse>('/api/bioxp/protocols/submit', {
-            protocol,
-            idempotency_key: idempotencyKey,
-        })
+const workflowJobsKey = ['bioxp', 'protocols', 'jobs'] as const;
+export const useBioXpWorkflowJobs = (generation: number, enabled: boolean) => useQuery({
+    queryKey: [...workflowJobsKey, generation],
+    queryFn: async () => (await api.get<{ rows: BioXpWorkflowJob[] }>('/api/bioxp/protocols/jobs', {
+        params: { expected_connection_generation: generation },
+    })).data.rows,
+    enabled: enabled && generation > 0,
+    retry: false,
+    refetchInterval: enabled ? 2_000 : false,
+});
+export const useBioXpWorkflowJob = (jobId: string | null, generation: number, enabled: boolean) => useQuery({
+    queryKey: [...workflowJobsKey, generation, jobId],
+    queryFn: async () => (await api.get<BioXpWorkflowJob>(`/api/bioxp/protocols/jobs/${encodeURIComponent(jobId!)}`, {
+        params: { expected_connection_generation: generation },
+    })).data,
+    enabled: enabled && generation > 0 && jobId !== null,
+    retry: false,
+    refetchInterval: enabled ? 2_000 : false,
+});
+export const useSubmitBioXpProtocol = () => useMutation({
+    mutationFn: async (request: BioXpWorkflowSubmission) => (
+        await api.post<BioXpWorkflowJob>('/api/bioxp/protocols/submit', request)
     ).data,
-);
+    retry: false,
+});
+export const useControlBioXpWorkflow = () => useMutation({
+    mutationFn: async ({ jobId, request }: { jobId: string; request: BioXpWorkflowControlRequest }) => (
+        await api.post<BioXpWorkflowControlResponse>(`/api/bioxp/protocols/jobs/${encodeURIComponent(jobId)}/control`, request)
+    ).data,
+    retry: false,
+});
+export const useReviewBioXpWorkflow = () => useMutation({
+    mutationFn: async ({ jobId, request }: { jobId: string; request: BioXpWorkflowReviewRequest }) => (
+        await api.post<BioXpWorkflowJob>(`/api/bioxp/protocols/jobs/${encodeURIComponent(jobId)}/review`, request)
+    ).data,
+    retry: false,
+});
 
 
 const refreshBioXpHistoryCaches = (queryClient: QueryClient, generation: number) => {
