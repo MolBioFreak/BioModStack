@@ -4,7 +4,7 @@
  * Wraps calls to /api/sequences and /api/molbio endpoints.
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { isAxiosError } from 'axios';
 import type {
     NucleotideSequenceResponse,
@@ -21,6 +21,7 @@ import {
     type FetchNucleotideSequencesParams,
     type NucleotideSequenceCreate,
 } from '../../../lib/api';
+import { createLatestAsyncResourceController } from '../../../lib/latestAsyncResource';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SEQUENCE CRUD
@@ -29,6 +30,9 @@ import {
 export function useSequenceOperations() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const getSequenceControllerRef = useRef(createLatestAsyncResourceController());
+
+    useEffect(() => () => getSequenceControllerRef.current.dispose(), []);
 
     const getErrorMessage = (value: unknown): string => {
         if (isAxiosError(value)) {
@@ -57,20 +61,32 @@ export function useSequenceOperations() {
         }
     }, []);
 
+    const invalidateGetSequence = useCallback(() => {
+        getSequenceControllerRef.current.dispose();
+        setLoading(false);
+        setError(null);
+    }, []);
+
     // Get single sequence
     const getSequence = useCallback(async (
         id: string
     ): Promise<NucleotideSequenceResponse | null> => {
+        const requestToken = getSequenceControllerRef.current.begin();
         setLoading(true);
         setError(null);
         try {
             const res = await fetchNucleotideSequence(id);
+            if (!getSequenceControllerRef.current.isCurrent(requestToken)) return null;
             return res.data as NucleotideSequenceResponse;
         } catch (e) {
-            setError(getErrorMessage(e));
+            if (getSequenceControllerRef.current.isCurrent(requestToken)) {
+                setError(getErrorMessage(e));
+            }
             return null;
         } finally {
-            setLoading(false);
+            if (getSequenceControllerRef.current.isCurrent(requestToken)) {
+                setLoading(false);
+            }
         }
     }, []);
 
@@ -127,6 +143,7 @@ export function useSequenceOperations() {
         error,
         listSequences,
         getSequence,
+        invalidateGetSequence,
         createSequence,
         updateSequence,
         deleteSequence

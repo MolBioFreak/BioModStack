@@ -9,7 +9,7 @@
     </js-module>
     <platform name="android">
         <framework src="androidx.webkit:webkit:1.10.0" />
-        <config-file target="app/src/main/res/xml/config.xml" parent="/*">
+        <config-file target="res/xml/config.xml" parent="/*">
             <feature name="BmsUiBundle">
                 <param name="android-package" value="org.biomodstack.mobile.updates.BmsUiBundlePlugin" />
                 <param name="onload" value="true" />

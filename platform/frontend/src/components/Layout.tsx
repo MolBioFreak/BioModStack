@@ -708,7 +708,7 @@ export function Layout({ children }: LayoutProps) {
             </nav>
 
             {/* Main Content - takes remaining height, scrollable */}
-            <main className="flex-1 overflow-auto">
+            <main className="bms-layout-main flex-1 overflow-auto">
                 <ProjectReturnBanner />
                 {children}
             </main>

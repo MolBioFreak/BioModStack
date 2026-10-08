@@ -19,6 +19,7 @@ DEV_RUNTIME_MODES = {"dev", "development", "test"}
 
 class DevIssueCreate(BaseModel):
     body: str = Field(min_length=1, max_length=4000)
+    lane: Literal["general", "mobile"] = "general"
     scope_kind: str = Field(min_length=1, max_length=40)
     scope_key: str = Field(min_length=1, max_length=256)
     page_label: str = Field(min_length=1, max_length=160)
@@ -38,6 +39,7 @@ class DevIssue(BaseModel):
     issue_key: str
     body: str
     status: Literal["open", "in_progress", "cleared"]
+    lane: Literal["general", "mobile"]
     scope_kind: str
     scope_key: str
     page_label: str
@@ -82,6 +84,7 @@ def _connect() -> sqlite3.Connection:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             body TEXT NOT NULL CHECK(length(body) BETWEEN 1 AND 4000),
             status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'in_progress', 'cleared')),
+            lane TEXT NOT NULL DEFAULT 'general' CHECK(lane IN ('general', 'mobile')),
             scope_kind TEXT NOT NULL,
             scope_key TEXT NOT NULL,
             page_label TEXT NOT NULL,
@@ -107,6 +110,7 @@ def _connect() -> sqlite3.Connection:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 body TEXT NOT NULL CHECK(length(body) BETWEEN 1 AND 4000),
                 status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'in_progress', 'cleared')),
+                lane TEXT NOT NULL DEFAULT 'general' CHECK(lane IN ('general', 'mobile')),
                 scope_kind TEXT NOT NULL,
                 scope_key TEXT NOT NULL,
                 page_label TEXT NOT NULL,
@@ -124,24 +128,36 @@ def _connect() -> sqlite3.Connection:
         connection.execute(
             """
             INSERT INTO dev_issues (
-                id, body, status, scope_kind, scope_key, page_label, route,
+                id, body, status, lane, scope_kind, scope_key, page_label, route,
                 component_hint, author_kind, frontend_revision, api_revision,
                 created_at, cleared_at, resolution_note
             )
             SELECT id, body,
                    CASE status WHEN 'resolved' THEN 'cleared' ELSE status END,
-                   scope_kind, scope_key, page_label, route, component_hint,
+                   'general', scope_kind, scope_key, page_label, route, component_hint,
                    author_kind, frontend_revision, api_revision, created_at,
                    resolved_at, resolution_note
               FROM dev_issues_legacy
             """
         )
         connection.execute("DROP TABLE dev_issues_legacy")
+    columns = {
+        str(row[1])
+        for row in connection.execute("PRAGMA table_info(dev_issues)").fetchall()
+    }
+    if "lane" not in columns:
+        connection.execute(
+            "ALTER TABLE dev_issues ADD COLUMN lane TEXT NOT NULL DEFAULT 'general' "
+            "CHECK(lane IN ('general', 'mobile'))"
+        )
     connection.execute(
         "CREATE INDEX IF NOT EXISTS idx_dev_issues_scope_status ON dev_issues(scope_key, status, id DESC)"
     )
     connection.execute(
         "CREATE INDEX IF NOT EXISTS idx_dev_issues_status_id ON dev_issues(status, id DESC)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_dev_issues_lane_status_id ON dev_issues(lane, status, id DESC)"
     )
     connection.commit()
     try:
@@ -178,6 +194,7 @@ def _to_issue(row: sqlite3.Row) -> DevIssue:
 @router.get("", response_model=DevIssueList)
 def list_dev_issues(
     status: Literal["open", "in_progress", "cleared", "active", "all"] = "active",
+    lane: Literal["general", "mobile"] | None = Query(default=None),
     scope_key: str | None = Query(default=None, max_length=256),
     limit: int = Query(default=100, ge=1, le=200),
 ) -> DevIssueList:
@@ -191,7 +208,20 @@ def list_dev_issues(
     if scope_key:
         filters.append("scope_key = ?")
         values.append(scope_key)
+    if lane:
+        filters.append("lane = ?")
+        values.append(lane)
     where = f" WHERE {' AND '.join(filters)}" if filters else ""
+
+    active_filters = ["status IN ('open', 'in_progress')"]
+    active_values: list[object] = []
+    if scope_key:
+        active_filters.append("scope_key = ?")
+        active_values.append(scope_key)
+    if lane:
+        active_filters.append("lane = ?")
+        active_values.append(lane)
+    active_where = f" WHERE {' AND '.join(active_filters)}"
 
     with closing(_connect()) as connection:
         rows = connection.execute(
@@ -199,9 +229,8 @@ def list_dev_issues(
             (*values, limit),
         ).fetchall()
         active_count = connection.execute(
-            "SELECT COUNT(*) FROM dev_issues WHERE status IN ('open', 'in_progress')"
-            + (" AND scope_key = ?" if scope_key else ""),
-            (scope_key,) if scope_key else (),
+            f"SELECT COUNT(*) FROM dev_issues{active_where}",
+            active_values,
         ).fetchone()[0]
     return DevIssueList(items=[_to_issue(row) for row in rows], active_count=int(active_count))
 
@@ -221,6 +250,7 @@ def create_dev_issue(payload: DevIssueCreate) -> DevIssue:
     api_revision = str(current_build_identity().get("revision") or "unknown")
     values = (
         _clean_required(payload.body),
+        payload.lane,
         _clean_required(payload.scope_kind),
         _clean_required(payload.scope_key),
         _clean_required(payload.page_label),
@@ -235,9 +265,9 @@ def create_dev_issue(payload: DevIssueCreate) -> DevIssue:
         cursor = connection.execute(
             """
             INSERT INTO dev_issues (
-                body, status, scope_kind, scope_key, page_label, route,
+                body, status, lane, scope_kind, scope_key, page_label, route,
                 component_hint, author_kind, frontend_revision, api_revision, created_at
-            ) VALUES (?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             values,
         )

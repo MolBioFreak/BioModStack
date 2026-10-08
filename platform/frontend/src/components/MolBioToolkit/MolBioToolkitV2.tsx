@@ -7,10 +7,17 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { useLocation } from 'react-router-dom';
 import { ngsResultHref } from '../../lib/ngsResultRouting';
+import { createLatestAsyncResourceController } from '../../lib/latestAsyncResource';
 import { anyToJson } from '@teselagen/bio-parsers';
 import { SequenceViewer, type ColorPaletteName } from './SequenceViewer';
 import { DEFAULT_VISIBILITY } from './sequenceViewerConstants';
 import { SequenceHeader } from './SequenceHeader';
+import {
+    MobileMolBioWorkspace,
+    MobileMolBioReadPanel,
+    parseMobileMolBioWorkups,
+    type MobileMolBioWorkupStatus,
+} from './MobileMolBioWorkspace';
 import { VisibilityPanel } from './VisibilityPanel';
 import { createHistoryState, useSequenceHistory, type HistoryState } from './hooks/useSequenceHistory';
 import { useSequenceOperations } from './hooks/useSequenceOperations';
@@ -107,12 +114,24 @@ import {
     resolveMolBioViewerLayout,
     shouldCollapseMolBioPanelsForViewport,
 } from './utils/viewerLayout';
+import {
+    activateMobileMolBioSequence,
+    detectMolBioCordovaShell,
+    detectMolBioPrimaryCoarsePointer,
+    resolveMolBioMobileBackAction,
+    resolveMolBioMobileSequenceIntent,
+    shouldUseMolBioMobileLayout,
+    type MolBioMobileSequenceIntent,
+    type MolBioMobileSurface,
+} from './utils/mobileLayout';
+import { useMolBioBodyScrollLock } from './useMolBioBodyScrollLock';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SEQUENCE LIBRARY SIDEBAR WITH IMPORT
 // ═══════════════════════════════════════════════════════════════════════════════
 
 interface SequenceLibraryProps {
+    mobile?: boolean;
     sequences: NucleotideSequenceListItem[];
     demos: SequenceData[];
     demoLoading: boolean;
@@ -124,7 +143,8 @@ interface SequenceLibraryProps {
     width: number;
 }
 
-function SequenceLibrary({
+export function SequenceLibrary({
+    mobile = false,
     sequences,
     demos,
     demoLoading,
@@ -139,8 +159,11 @@ function SequenceLibrary({
 
     return (
         <div
-            className="sequence-library flex-shrink-0 bg-slate-900 border-r border-slate-700 flex flex-col overflow-hidden"
-            style={{ width: `${width}px` }}
+            data-molbio-construct-library={mobile ? 'true' : undefined}
+            className={mobile
+                ? 'sequence-library flex h-full min-h-0 w-full flex-col overflow-hidden border-r border-slate-700 bg-slate-900'
+                : 'sequence-library flex flex-shrink-0 flex-col overflow-hidden border-r border-slate-700 bg-slate-900'}
+            style={{ width: mobile ? '100%' : `${width}px` }}
         >
             <div className="flex items-center justify-between p-3 border-b border-slate-700">
                 <div>
@@ -150,7 +173,10 @@ function SequenceLibrary({
                 <button
                     onClick={onRefresh}
                     disabled={loading}
-                    className="p-1.5 hover:bg-slate-700 rounded transition-colors disabled:opacity-50"
+                    data-molbio-mobile-touch-target={mobile ? 'true' : undefined}
+                    className={mobile
+                        ? 'inline-flex min-h-12 min-w-12 items-center justify-center rounded transition-colors hover:bg-slate-700 disabled:opacity-50'
+                        : 'rounded p-1.5 transition-colors hover:bg-slate-700 disabled:opacity-50'}
                     title="Refresh recent constructs"
                 >
                     <svg className={`w-4 h-4 text-slate-400 ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -166,7 +192,8 @@ function SequenceLibrary({
                 <div className="border-b border-slate-700">
                     <button
                         onClick={() => setShowDemos(!showDemos)}
-                        className="w-full flex items-center justify-between p-2 text-xs text-slate-400 hover:bg-slate-800"
+                        data-molbio-mobile-touch-target={mobile ? 'true' : undefined}
+                        className={`flex w-full items-center justify-between p-2 text-xs text-slate-400 hover:bg-slate-800 ${mobile ? 'min-h-12' : ''}`}
                     >
                         <span>Demo Plasmids ({demoLoading ? '…' : demos.length})</span>
                         <svg className={`w-3 h-3 transition-transform ${showDemos ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -181,7 +208,8 @@ function SequenceLibrary({
                                 <button
                                     key={i}
                                     onClick={() => onLoadDemo(demo)}
-                                    className="w-full text-left p-2 pl-4 text-sm text-slate-300 hover:bg-slate-700 transition-colors"
+                                    data-molbio-mobile-touch-target={mobile ? 'true' : undefined}
+                                    className={`w-full p-2 pl-4 text-left text-sm text-slate-300 transition-colors hover:bg-slate-700 ${mobile ? 'min-h-12' : ''}`}
                                 >
                                     <span className="mr-2">{demo.circular ? '○' : '─'}</span>
                                     {demo.name}
@@ -201,7 +229,8 @@ function SequenceLibrary({
                         <button
                             key={seq.id}
                             onClick={() => onSelect(seq.id)}
-                            className={`w-full text-left p-3 border-b border-slate-800 hover:bg-slate-800 transition-colors ${selectedId === seq.id ? 'bg-slate-700' : ''}`}
+                            data-molbio-mobile-touch-target={mobile ? 'true' : undefined}
+                            className={`w-full border-b border-slate-800 p-3 text-left transition-colors hover:bg-slate-800 ${mobile ? 'min-h-12' : ''} ${selectedId === seq.id ? 'bg-slate-700' : ''}`}
                         >
                             <div className="font-medium text-slate-200 truncate">{seq.name}</div>
                             <div className="flex items-center gap-2 mt-1 text-xs text-slate-400">
@@ -623,8 +652,16 @@ export function MolBioToolkitV2() {
     const location = useLocation();
     const { updateQueryParams, contextHref } = useGlobalExperimentContext();
     const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
-    const requestedMolecularSequenceId = queryParams.get('molbio_sequence_id')?.trim() || null;
-    const requestedMolecularRevisionId = queryParams.get('molbio_revision_id')?.trim() || null;
+    const requestedCanonicalMolecularSequenceId = queryParams.get('molbio_sequence_id')?.trim() || null;
+    const requestedCanonicalMolecularRevisionId = queryParams.get('molbio_revision_id')?.trim() || null;
+    const requestedLegacyMolecularSequenceId = queryParams.get('sequence_id')?.trim() || null;
+    const requestedLegacyMolecularRevisionId = queryParams.get('revision_id')?.trim() || null;
+    const hasCanonicalMolecularRequest = requestedCanonicalMolecularSequenceId !== null
+        || requestedCanonicalMolecularRevisionId !== null;
+    const requestedMolecularSequenceId = requestedCanonicalMolecularSequenceId ?? requestedLegacyMolecularSequenceId;
+    const requestedMolecularRevisionId = hasCanonicalMolecularRequest
+        ? requestedCanonicalMolecularRevisionId
+        : requestedLegacyMolecularRevisionId;
     const requestedPcrExperimentId = queryParams.get('pcr_experiment_id')?.trim() || null;
     const requestedPcrRevisionId = queryParams.get('pcr_revision_id')?.trim() || null;
     const hasPcrRevisionQuery = requestedPcrExperimentId !== null || requestedPcrRevisionId !== null;
@@ -633,8 +670,8 @@ export function MolBioToolkitV2() {
     const [exactMolecularRevision, setExactMolecularRevision] = useState<MolecularRevision | null>(null);
     const [exactMolecularLoading, setExactMolecularLoading] = useState(false);
     const [exactMolecularError, setExactMolecularError] = useState<string | null>(null);
-    const deepLinkSequenceId = queryParams.get('sequence_id')?.trim() || requestedMolecularSequenceId;
-    const deepLinkRevisionId = queryParams.get('revision_id')?.trim() || requestedMolecularRevisionId;
+    const deepLinkSequenceId = requestedLegacyMolecularSequenceId;
+    const deepLinkRevisionId = requestedLegacyMolecularRevisionId;
     const deepLinkOperationId = queryParams.get('operation_id')?.trim() || null;
     const deepLinkReceiptId = queryParams.get('receipt_id')?.trim() || null;
     const [deepLinkOperationState, setDeepLinkOperationState] = useState<'loading' | 'loaded' | 'unavailable' | null>(null);
@@ -664,19 +701,36 @@ export function MolBioToolkitV2() {
     const [demoPlasmids, setDemoPlasmids] = useState<SequenceData[]>([]);
     const [demoLoading, setDemoLoading] = useState(true);
     const [ngsWorkups, setNgsWorkups] = useState<Array<{ job_id: string; scientific_status: 'PASS' | 'FAIL' | 'REVIEW'; revision_relation: 'current' | 'historical'; manifest_available: boolean }>>([]);
+    const [ngsWorkupStatus, setNgsWorkupStatus] = useState<MobileMolBioWorkupStatus>('idle');
 
     useEffect(() => {
         if (!selectedSequenceId) {
             setNgsWorkups([]);
+            setNgsWorkupStatus('idle');
             return;
         }
         let cancelled = false;
+        setNgsWorkups([]);
+        setNgsWorkupStatus('loading');
         fetch(`/api/molbio/sequences/${encodeURIComponent(selectedSequenceId)}/ngs-workup`)
-            .then((response) => response.ok ? response.json() : { workups: [] })
-            .then((payload: { workups?: typeof ngsWorkups }) => {
-                if (!cancelled) setNgsWorkups(Array.isArray(payload.workups) ? payload.workups : []);
+            .then((response) => {
+                if (!response.ok) throw new Error(`QC workup request failed with HTTP ${response.status}.`);
+                return response.json();
             })
-            .catch(() => { if (!cancelled) setNgsWorkups([]); });
+            .then((payload: unknown) => {
+                const workups = parseMobileMolBioWorkups(payload);
+                if (!workups) throw new Error('QC workup response is malformed.');
+                if (!cancelled) {
+                    setNgsWorkups(workups);
+                    setNgsWorkupStatus('ready');
+                }
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setNgsWorkups([]);
+                    setNgsWorkupStatus('unavailable');
+                }
+            });
         return () => { cancelled = true; };
     }, [selectedSequenceId]);
 
@@ -731,6 +785,9 @@ export function MolBioToolkitV2() {
     const isExactMolecularAuthority = hasExactMolecularPair || activeExactMolecularRevision !== null;
     const exactMolecularAuthorityRef = useRef(isExactMolecularAuthority);
     exactMolecularAuthorityRef.current = isExactMolecularAuthority;
+    const sequenceLoadControllerRef = useRef(createLatestAsyncResourceController());
+    const mobileSequenceIntentRef = useRef<MolBioMobileSequenceIntent | null>(null);
+    useEffect(() => () => sequenceLoadControllerRef.current.dispose(), []);
     const [activeDisplayStrand, setActiveDisplayStrand] = useState<NucleotideDisplayStrand>(() => sourceDisplayStrandForSequenceData(EMPTY_SEQUENCE));
     const sourceDisplayStrand = useMemo(
         () => sourceDisplayStrandForSequenceData(sequenceData),
@@ -747,6 +804,7 @@ export function MolBioToolkitV2() {
         error,
         listSequences,
         getSequence,
+        invalidateGetSequence,
         createSequence,
         updateSequence
     } = useSequenceOperations();
@@ -903,6 +961,18 @@ export function MolBioToolkitV2() {
             return;
         }
 
+        const mobileIntentResolution = resolveMolBioMobileSequenceIntent(
+            mobileSequenceIntentRef.current,
+            requestedMolecularSequenceId,
+            requestedMolecularRevisionId,
+        );
+        if (!mobileIntentResolution.allow) return;
+        if (mobileIntentResolution.clearIntent) {
+            mobileSequenceIntentRef.current = null;
+            sequenceLoadControllerRef.current.begin();
+            invalidateGetSequence();
+        }
+
         let cancelled = false;
         setExactMolecularRevision(null);
         setExactMolecularLoading(true);
@@ -937,6 +1007,7 @@ export function MolBioToolkitV2() {
         };
     }, [
         hasExactMolecularPair,
+        invalidateGetSequence,
         openExactMolecularWorkspace,
         requestedMolecularRevisionId,
         requestedMolecularSequenceId,
@@ -1036,30 +1107,44 @@ export function MolBioToolkitV2() {
     }, [activePanel, rnaStructureResult, sequenceData.circular, sequenceData.sequence, sequenceData.sequenceType]);
 
     // Load selected sequence
-    const loadSequence = useCallback(async (id: string) => {
-        if (requestedMolecularRevisionId || requestedMolecularSequenceId !== id) {
+    const loadSequence = useCallback(async (id: string): Promise<boolean> => {
+        const loadToken = sequenceLoadControllerRef.current.begin();
+        invalidateGetSequence();
+        const shouldUpdateRequest = requestedMolecularRevisionId || requestedMolecularSequenceId !== id;
+        const existing = workspaceTabs.find((tab) => tab.sequenceId === id && !tab.exactMolecularRevision);
+        if (existing) {
+            if (!sequenceLoadControllerRef.current.isCurrent(loadToken)) return false;
+            activateWorkspace(existing.id);
+            if (shouldUpdateRequest) {
+                updateQueryParams({
+                    molbio_sequence_id: id,
+                    molbio_revision_id: null,
+                });
+            }
+            return true;
+        }
+        const seq = await getSequence(id);
+        if (!sequenceLoadControllerRef.current.isCurrent(loadToken)) return false;
+        if (!seq) {
+            return false;
+        }
+        const converted = sequenceDataFromApiRecord(seq);
+        openWorkspace(converted, {
+            sequenceId: id,
+            dirty: false,
+            label: `Open ${seq.name}`,
+        });
+        if (shouldUpdateRequest) {
             updateQueryParams({
                 molbio_sequence_id: id,
                 molbio_revision_id: null,
             });
         }
-        const existing = workspaceTabs.find((tab) => tab.sequenceId === id && !tab.exactMolecularRevision);
-        if (existing) {
-            activateWorkspace(existing.id);
-            return;
-        }
-        const seq = await getSequence(id);
-        if (seq) {
-            const converted = sequenceDataFromApiRecord(seq);
-            openWorkspace(converted, {
-                sequenceId: id,
-                dirty: false,
-                label: `Open ${seq.name}`,
-            });
-        }
+        return true;
     }, [
         activateWorkspace,
         getSequence,
+        invalidateGetSequence,
         openWorkspace,
         requestedMolecularRevisionId,
         requestedMolecularSequenceId,
@@ -1069,6 +1154,13 @@ export function MolBioToolkitV2() {
 
     useEffect(() => {
         if (!requestedMolecularSequenceId || requestedMolecularRevisionId) return;
+        const mobileIntentResolution = resolveMolBioMobileSequenceIntent(
+            mobileSequenceIntentRef.current,
+            requestedMolecularSequenceId,
+            requestedMolecularRevisionId,
+        );
+        if (!mobileIntentResolution.allow) return;
+        if (mobileIntentResolution.clearIntent) mobileSequenceIntentRef.current = null;
         const activeWorkspace = workspaceTabs.find((tab) => tab.id === activeWorkspaceId);
         if (
             selectedSequenceId === requestedMolecularSequenceId
@@ -1102,46 +1194,16 @@ export function MolBioToolkitV2() {
         const identity = `${deepLinkSequenceId}:${deepLinkRevisionId ?? 'current'}`;
         if (openedDeepLinkRef.current === identity) return;
         openedDeepLinkRef.current = identity;
-        let cancelled = false;
         const openDeepLink = async () => {
             try {
-                if (!deepLinkRevisionId) {
-                    await loadSequence(deepLinkSequenceId);
-                    return;
-                }
-                const [current, response] = await Promise.all([
-                    getSequence(deepLinkSequenceId),
-                    fetch(
-                        `/api/molbio/sequences/${encodeURIComponent(deepLinkSequenceId)}/revisions/${encodeURIComponent(deepLinkRevisionId)}`,
-                    ),
-                ]);
-                if (!current || !response.ok) throw new Error('Exact molecular revision is unavailable.');
-                const detail = await response.json() as { revision_id?: string; sequence_id?: string; snapshot?: Record<string, unknown> };
-                if (
-                    detail.revision_id !== deepLinkRevisionId
-                    || detail.sequence_id !== deepLinkSequenceId
-                    || !detail.snapshot
-                ) {
-                    throw new Error('Molecular revision identity does not match the requested record.');
-                }
-                if (cancelled) return;
-                const converted = sequenceDataFromApiRecord({
-                    ...current,
-                    ...detail.snapshot,
-                    id: deepLinkSequenceId,
-                });
-                openWorkspace(converted, {
-                    sequenceId: deepLinkSequenceId,
-                    dirty: false,
-                    label: `Open revision ${deepLinkRevisionId}`,
-                });
+                if (deepLinkRevisionId) return;
+                await loadSequence(deepLinkSequenceId);
             } catch (error) {
                 console.error('Failed to reopen exact molecular record:', error);
             }
         };
         void openDeepLink();
-        return () => { cancelled = true; };
-    }, [deepLinkRevisionId, deepLinkSequenceId, getSequence, loadSequence, openWorkspace]);
+    }, [deepLinkRevisionId, deepLinkSequenceId, loadSequence]);
 
     useEffect(() => {
         if (!deepLinkOperationId) {
@@ -1339,6 +1401,12 @@ export function MolBioToolkitV2() {
     // Visibility toggle handler
     const handleVisibilityChange = useCallback((key: keyof VisibilityState) => {
         setVisibility(prev => ({ ...prev, [key]: !prev[key] }));
+    }, []);
+
+    const ensureCutSitesVisible = useCallback(() => {
+        setVisibility((previous) => (
+            previous.cutsites ? previous : { ...previous, cutsites: true }
+        ));
     }, []);
 
     // SequenceViewer emits one finalized value per pointer gesture.
@@ -1550,6 +1618,7 @@ export function MolBioToolkitV2() {
     type ViewMode = 'linear' | 'circular' | 'both';
     type ResizeHandleSide = 'left' | 'right';
     const initialViewportWidth = typeof window === 'undefined' ? 1440 : window.innerWidth;
+    const initialViewportHeight = typeof window === 'undefined' ? 900 : window.innerHeight;
     const [workspaceViewModes, setWorkspaceViewModes] = useState<Record<string, ViewMode>>({});
     const viewMode = workspaceViewModes[activeWorkspaceId] ?? 'both';
     const setViewMode = useCallback((mode: ViewMode) => {
@@ -1560,6 +1629,25 @@ export function MolBioToolkitV2() {
     const [isLibraryPanelCollapsed, setIsLibraryPanelCollapsed] = useState(() => shouldCollapseMolBioPanelsForViewport(initialViewportWidth));
     const [isToolPanelCollapsed, setIsToolPanelCollapsed] = useState(() => shouldCollapseMolBioPanelsForViewport(initialViewportWidth));
     const [viewportWidth, setViewportWidth] = useState(initialViewportWidth);
+    const [viewportHeight, setViewportHeight] = useState(initialViewportHeight);
+    const [mobileSurface, setMobileSurface] = useState<MolBioMobileSurface>('map');
+    const [mobileConstructPickerOpen, setMobileConstructPickerOpen] = useState(false);
+    const pendingMobileDemoRef = useRef<SequenceData | null>(null);
+    const [pendingMobileDemoVersion, setPendingMobileDemoVersion] = useState(0);
+    const isCordovaMolBioShell = useMemo(
+        () => detectMolBioCordovaShell(typeof window === 'undefined' ? null : window),
+        [],
+    );
+    const coarsePointer = detectMolBioPrimaryCoarsePointer(
+        typeof window === 'undefined' ? null : window,
+    );
+    const isMobileMolBio = shouldUseMolBioMobileLayout({
+        cordovaShell: isCordovaMolBioShell,
+        coarsePointer,
+        viewportWidth,
+        viewportHeight,
+    });
+    useMolBioBodyScrollLock(isViewerFullscreen, isMobileMolBio);
     const [leftPanelWidth, setLeftPanelWidth] = useState(MOLBIO_LIBRARY_PANEL_DEFAULT_WIDTH);
     const [rightPanelWidth, setRightPanelWidth] = useState(() => getDefaultMolBioToolPanelWidth('view'));
     const resizeStateRef = useRef<{
@@ -1636,7 +1724,10 @@ export function MolBioToolkitV2() {
     }, [primerTmOptions, primerTmSettings.algorithm, sequenceData.sequenceType]);
 
     useEffect(() => {
-        const handleWindowResize = () => setViewportWidth(window.innerWidth);
+        const handleWindowResize = () => {
+            setViewportWidth(window.innerWidth);
+            setViewportHeight(window.innerHeight);
+        };
         handleWindowResize();
         window.addEventListener('resize', handleWindowResize);
         return () => window.removeEventListener('resize', handleWindowResize);
@@ -1651,9 +1742,6 @@ export function MolBioToolkitV2() {
             return undefined;
         }
 
-        const previousOverflow = document.body.style.overflow;
-        document.body.style.overflow = 'hidden';
-
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.key === 'Escape') {
                 setIsViewerFullscreen(false);
@@ -1661,11 +1749,47 @@ export function MolBioToolkitV2() {
         };
 
         window.addEventListener('keydown', handleKeyDown);
-        return () => {
-            document.body.style.overflow = previousOverflow;
-            window.removeEventListener('keydown', handleKeyDown);
-        };
+        return () => window.removeEventListener('keydown', handleKeyDown);
     }, [isViewerFullscreen]);
+
+    const handleMobileBack = useCallback(() => {
+        if (isViewerFullscreen) {
+            setIsViewerFullscreen(false);
+            return;
+        }
+        const action = resolveMolBioMobileBackAction({
+            constructPickerOpen: mobileConstructPickerOpen,
+            hasSequence: Boolean(sequenceData.sequence),
+            surface: mobileSurface,
+        });
+        if (action === 'close-constructs') {
+            setMobileConstructPickerOpen(false);
+            return;
+        }
+        if (action === 'show-map') {
+            setMobileSurface('map');
+            return;
+        }
+        window.history.back();
+    }, [isViewerFullscreen, mobileConstructPickerOpen, mobileSurface, sequenceData.sequence]);
+
+    useEffect(() => {
+        if (!isMobileMolBio && !isViewerFullscreen) {
+            return undefined;
+        }
+        const handleAndroidBack = (event: Event) => {
+            event.preventDefault();
+            handleMobileBack();
+        };
+        document.addEventListener('backbutton', handleAndroidBack);
+        return () => document.removeEventListener('backbutton', handleAndroidBack);
+    }, [handleMobileBack, isMobileMolBio, isViewerFullscreen]);
+
+    useEffect(() => {
+        if (isMobileMolBio) {
+            setIsViewerFullscreen(false);
+        }
+    }, [isMobileMolBio]);
 
     useEffect(() => {
         const handlePointerMove = (event: PointerEvent) => {
@@ -2234,6 +2358,148 @@ export function MolBioToolkitV2() {
         setQuickAddBusy(null);
     }, [handleAddFeature, selectionAction]);
 
+    const handleMobileSelectSequence = useCallback((sequenceId: string) => {
+        mobileSequenceIntentRef.current = {
+            sequenceId,
+            supersededSequenceId: requestedMolecularSequenceId,
+            supersededRevisionId: requestedMolecularRevisionId,
+        };
+        void activateMobileMolBioSequence({
+            sequenceId,
+            loadSequence,
+            onActivated: () => {
+                setMobileConstructPickerOpen(false);
+                setMobileSurface('map');
+            },
+        }).then((activated) => {
+            if (!activated && mobileSequenceIntentRef.current?.sequenceId === sequenceId) {
+                mobileSequenceIntentRef.current = null;
+            }
+        });
+    }, [loadSequence, requestedMolecularRevisionId, requestedMolecularSequenceId]);
+
+    const handleMobileLoadDemo = useCallback((demo: SequenceData) => {
+        mobileSequenceIntentRef.current = null;
+        sequenceLoadControllerRef.current.begin();
+        invalidateGetSequence();
+        pendingMobileDemoRef.current = demo;
+        updateQueryParams({
+            molbio_sequence_id: null,
+            molbio_revision_id: null,
+            sequence_id: null,
+            revision_id: null,
+        });
+        setPendingMobileDemoVersion((current) => current + 1);
+    }, [invalidateGetSequence, updateQueryParams]);
+
+    useEffect(() => {
+        const pendingDemo = pendingMobileDemoRef.current;
+        if (!pendingDemo) return;
+        if (
+            requestedCanonicalMolecularSequenceId
+            || requestedCanonicalMolecularRevisionId
+            || requestedLegacyMolecularSequenceId
+            || requestedLegacyMolecularRevisionId
+        ) return;
+        pendingMobileDemoRef.current = null;
+        sequenceLoadControllerRef.current.begin();
+        invalidateGetSequence();
+        loadDemo(pendingDemo);
+        setMobileConstructPickerOpen(false);
+        setMobileSurface(pendingDemo.circular ? 'map' : 'sequence');
+    }, [
+        invalidateGetSequence,
+        loadDemo,
+        pendingMobileDemoVersion,
+        requestedCanonicalMolecularRevisionId,
+        requestedCanonicalMolecularSequenceId,
+        requestedLegacyMolecularRevisionId,
+        requestedLegacyMolecularSequenceId,
+    ]);
+
+    if (isMobileMolBio) {
+        const mobileMapViewMode: ViewMode = sequenceData.circular ? 'circular' : 'linear';
+        const mobileViewer = (mode: ViewMode) => (
+            <div className="h-full min-h-0 overflow-hidden">
+                <SequenceViewer
+                    sequenceData={viewerSequenceData}
+                    visibility={visibility}
+                    selectedEnzymes={selectedEnzymes}
+                    selection={selection}
+                    onSelection={handleSelection}
+                    highlightedRegions={highlightedRegions}
+                    viewMode={mode}
+                    colorPalette={colorPalette}
+                    visibleFrames={visibleFrames}
+                    activeDisplayStrand={activeDisplayStrand}
+                />
+            </div>
+        );
+
+        return (
+            <MobileMolBioWorkspace
+                constructName={sequenceData.name}
+                digestIdentity={`${activeWorkspaceId}:${selectedSequenceId ?? sequenceData.name}:${sequenceData.sequence.length}`}
+                digestAvailable={!isExactMolecularAuthority}
+                qcAvailable={!isExactMolecularAuthority}
+                error={error}
+                hasSequence={Boolean(sequenceData.sequence)}
+                constructPickerOpen={mobileConstructPickerOpen}
+                surface={mobileSurface}
+                onBack={handleMobileBack}
+                onOpenConstructs={() => setMobileConstructPickerOpen(true)}
+                onSurfaceChange={setMobileSurface}
+                constructs={(
+                    <div className="flex h-full min-h-0 overflow-hidden">
+                        <SequenceLibrary
+                            mobile
+                            sequences={sequences}
+                            demos={demoPlasmids}
+                            demoLoading={demoLoading}
+                            selectedId={selectedSequenceId}
+                            onSelect={handleMobileSelectSequence}
+                            onRefresh={loadLibrary}
+                            onLoadDemo={handleMobileLoadDemo}
+                            loading={loading}
+                            width={viewportWidth}
+                        />
+                    </div>
+                )}
+                map={mobileViewer(mobileMapViewMode)}
+                sequence={mobileViewer('linear')}
+                details={(
+                    <MobileMolBioReadPanel
+                        mode="details"
+                        sequenceData={sequenceData}
+                        workups={ngsWorkups}
+                        workupsStatus={ngsWorkupStatus}
+                    />
+                )}
+                digest={(
+                    <DigestPanel
+                        mobile
+                        compactLandscape={viewportWidth > viewportHeight && viewportHeight <= 500}
+                        sequenceData={sequenceData}
+                        sequenceId={selectedSequenceId}
+                        selection={selection}
+                        onHighlight={setHighlightedRegions}
+                        selectedEnzymes={selectedEnzymes}
+                        onEnzymesChange={setSelectedEnzymes}
+                        onMapVisibilityRequest={ensureCutSitesVisible}
+                    />
+                )}
+                qc={(
+                    <MobileMolBioReadPanel
+                        mode="qc"
+                        sequenceData={sequenceData}
+                        workups={ngsWorkups}
+                        workupsStatus={ngsWorkupStatus}
+                    />
+                )}
+            />
+        );
+    }
+
     return (
         <>
             {(deepLinkOperationId || deepLinkReceiptId) && (
@@ -2262,6 +2528,7 @@ export function MolBioToolkitV2() {
                     ? undefined
                     : { height: 'clamp(36rem, calc(100vh - 8rem), 96rem)' }}
                 data-molbio-viewer-fullscreen={isViewerFullscreen ? 'true' : 'false'}
+                data-molbio-viewer-desktop={!isMobileMolBio ? 'true' : 'false'}
             >
                 {/* Left: Sequence Library */}
                 {viewerLayout.showLibraryPanel && (
@@ -2419,15 +2686,37 @@ export function MolBioToolkitV2() {
 
                     <div className="relative flex-1 overflow-hidden flex flex-col">
                         {sequenceData.circular && (
-                            <div className={`pointer-events-none absolute right-4 z-20 flex items-center gap-2 ${showGCTrack ? 'top-[212px]' : 'top-4'}`}>
-                                <button
-                                    type="button"
-                                    onClick={toggleViewerFullscreen}
-                                    className="pointer-events-auto rounded-full border border-slate-600 bg-slate-900/90 px-3 py-1.5 text-sm font-medium text-slate-100 shadow-lg transition-colors hover:bg-slate-800"
-                                    title={isViewerFullscreen ? 'Exit focused plasmid view' : 'Focus Viewer'}
-                                >
-                                    {isViewerFullscreen ? 'Exit Focus' : 'Focus Viewer'}
-                                </button>
+                            <div
+                                style={isViewerFullscreen ? {
+                                    left: 'calc(env(safe-area-inset-left) + 0.75rem)',
+                                    top: 'calc(env(safe-area-inset-top) + 0.75rem)',
+                                } : undefined}
+                                className={`pointer-events-none absolute z-20 flex items-center gap-2 ${
+                                    isViewerFullscreen
+                                        ? 'left-[max(env(safe-area-inset-left),0.75rem)] top-[max(env(safe-area-inset-top),0.75rem)]'
+                                        : `right-4 ${showGCTrack ? 'top-[212px]' : 'top-4'}`
+                                }`}
+                            >
+                                {isViewerFullscreen ? (
+                                    <button
+                                        type="button"
+                                        data-molbio-focus-exit="true"
+                                        onClick={() => setIsViewerFullscreen(false)}
+                                        className="pointer-events-auto min-h-12 rounded-lg border border-cyan-500/70 bg-slate-950/95 px-4 text-sm font-semibold text-slate-100 shadow-xl transition-colors hover:bg-slate-800"
+                                        title="Exit focused plasmid view"
+                                    >
+                                        Exit Focus
+                                    </button>
+                                ) : (
+                                    <button
+                                        type="button"
+                                        onClick={toggleViewerFullscreen}
+                                        className="pointer-events-auto rounded-full border border-slate-600 bg-slate-900/90 px-3 py-1.5 text-sm font-medium text-slate-100 shadow-lg transition-colors hover:bg-slate-800"
+                                        title="Focus Viewer"
+                                    >
+                                        Focus Viewer
+                                    </button>
+                                )}
                             </div>
                         )}
                         {sequenceData.sequence ? (
@@ -2647,7 +2936,7 @@ export function MolBioToolkitV2() {
                                 selection={selection}
                                 selectedSequenceId={selectedSequenceId}
                                 onLoadProduct={handleLoadAssemblyProduct}
-                                onLoadSavedWorkup={loadSequence}
+                                onLoadSavedWorkup={async (id) => { await loadSequence(id); }}
                             />
                         )}
                         {!isExactMolecularAuthority && activePanel === 'edit' && (
@@ -2672,6 +2961,7 @@ export function MolBioToolkitV2() {
                                 onHighlight={setHighlightedRegions}
                                 selectedEnzymes={selectedEnzymes}
                                 onEnzymesChange={setSelectedEnzymes}
+                                onMapVisibilityRequest={ensureCutSitesVisible}
                             />
                         )}
                         {!isExactMolecularAuthority && activePanel === 'pcr' && (
@@ -2884,7 +3174,7 @@ export function MolBioToolkitV2() {
             <MolecularInputModal
                 isOpen={!isExactMolecularAuthority && showInputModal}
                 onClose={() => setShowInputModal(false)}
-                onSelectSequence={loadSequence}
+                onSelectSequence={async (id) => { await loadSequence(id); }}
                 onImportFile={handleImport}
                 onCreateSequence={handlePasteSequence}
                 onLoadDemo={loadDemo}

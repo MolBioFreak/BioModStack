@@ -47,59 +47,85 @@
    ============================================ */
 @layer base {
 
-/* Theme: Midnight (Default) - Deep slate with purple accents */
+/* Theme: Midnight (Default) - Ink navy with restrained blue-violet accents */
 :root,
 [data-theme="midnight"] {
-  --bg-primary: #0f172a;
-  --bg-secondary: #1e293b;
-  --bg-tertiary: #334155;
-  --bg-gradient-from: #0f172a;
-  --bg-gradient-via: #1e293b;
-  --bg-gradient-to: #0f172a;
-  --text-primary: #f1f5f9;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
-  --accent-primary: #a855f7;
-  --accent-secondary: #ec4899;
-  --accent-gradient-from: #a855f7;
-  --accent-gradient-to: #ec4899;
-  --border-primary: #334155;
-  --border-secondary: #475569;
-  --nav-bg: rgba(15, 23, 42, 0.8);
-  --card-bg: #1e293b;
-  --card-hover: #334155;
-  --success: #22c55e;
-  --warning: #f59e0b;
-  --error: #ef4444;
-  --link: #60a5fa;
-  --link-hover: #93c5fd;
+  --bg-primary: #0b1020;
+  --bg-secondary: #151e33;
+  --bg-tertiary: #1b2740;
+  --bg-gradient-from: #0b1020;
+  --bg-gradient-via: #121a2d;
+  --bg-gradient-to: #0b1020;
+  --text-primary: #eef4ff;
+  --text-secondary: #a6b3ca;
+  --text-muted: #71809b;
+  --accent-primary: #83a7ff;
+  --accent-secondary: #b28cff;
+  --accent-gradient-from: #759cff;
+  --accent-gradient-to: #aa83ff;
+  --border-primary: #293a59;
+  --border-secondary: #3b4f73;
+  --nav-bg: rgba(16, 23, 42, 0.94);
+  --card-bg: #151e33;
+  --card-hover: #1b2740;
+  --success: #54d8a2;
+  --warning: #ffb84a;
+  --error: #ff6b78;
+  --link: #83a7ff;
+  --link-hover: #b8cbff;
+  --surface-page: #0b1020;
+  --surface-card: #151e33;
+  --surface-control: #1b2740;
+  --surface-control-strong: #253456;
+  --surface-plot: #10182a;
+  --chart-grid: #263650;
+  --chart-axis: #8493ad;
+  --chart-legend: #a6b3ca;
+  --control-track: #2a3855;
+  --control-thumb: #83a7ff;
+  --overlay-scrim: rgba(3, 7, 18, 0.76);
+  --text-on-accent: #071020;
+  --shadow-card: 0 10px 28px rgba(2, 7, 20, 0.25);
 }
 
 /* Theme: Black - True black/charcoal for OLED and dark mode purists */
 [data-theme="black"] {
-  --bg-primary: #000000;
-  --bg-secondary: #0a0a0a;
-  --bg-tertiary: #171717;
-  --bg-gradient-from: #000000;
-  --bg-gradient-via: #0a0a0a;
-  --bg-gradient-to: #000000;
-  --text-primary: #fafafa;
-  --text-secondary: #a3a3a3;
-  --text-muted: #737373;
-  --accent-primary: #fafafa;
-  --accent-secondary: #d4d4d4;
-  --accent-gradient-from: #fafafa;
-  --accent-gradient-to: #a3a3a3;
-  --border-primary: #262626;
-  --border-secondary: #404040;
-  --nav-bg: rgba(0, 0, 0, 0.95);
-  --card-bg: #0a0a0a;
-  --card-hover: #171717;
-  --success: #22c55e;
-  --warning: #f59e0b;
-  --error: #ef4444;
-  --link: #60a5fa;
-  --link-hover: #93c5fd;
+  --bg-primary: #050607;
+  --bg-secondary: #0d1014;
+  --bg-tertiary: #15191f;
+  --bg-gradient-from: #050607;
+  --bg-gradient-via: #090b0e;
+  --bg-gradient-to: #050607;
+  --text-primary: #f3f6f9;
+  --text-secondary: #9aa6b3;
+  --text-muted: #65717e;
+  --accent-primary: #54d6bf;
+  --accent-secondary: #62a8ff;
+  --accent-gradient-from: #54d6bf;
+  --accent-gradient-to: #62a8ff;
+  --border-primary: #202730;
+  --border-secondary: #35404c;
+  --nav-bg: rgba(9, 11, 14, 0.96);
+  --card-bg: #0d1014;
+  --card-hover: #15191f;
+  --success: #4ad6a1;
+  --warning: #f2b13c;
+  --error: #ff6673;
+  --link: #62a8ff;
+  --link-hover: #98c7ff;
+  --surface-page: #050607;
+  --surface-card: #0d1014;
+  --surface-control: #15191f;
+  --surface-control-strong: #20262e;
+  --surface-plot: #090c10;
+  --chart-grid: #1b242e;
+  --chart-axis: #788797;
+  --chart-legend: #9aa6b3;
+  --control-track: #252b33;
+  --control-thumb: #54d6bf;
+  --overlay-scrim: rgba(0, 0, 0, 0.78);
+  --text-on-accent: #04110e;
+  --shadow-card: none;
 }
 
 
@@ -132,29 +158,42 @@
 
 /* Theme: Clean Light - Bright white with blue accents (no purple) */
 [data-theme="clean_light"] {
-  --bg-primary: #fafafa;
-  --bg-secondary: #f5f5f5;
-  --bg-tertiary: #e5e5e5;
-  --bg-gradient-from: #fafafa;
-  --bg-gradient-via: #f5f5f5;
-  --bg-gradient-to: #fafafa;
-  --text-primary: #1e293b;
-  --text-secondary: #475569;
-  --text-muted: #94a3b8;
-  --accent-primary: #3b82f6;
-  --accent-secondary: #0ea5e9;
-  --accent-gradient-from: #3b82f6;
-  --accent-gradient-to: #0ea5e9;
-  --border-primary: #d1d5db;
-  --border-secondary: #9ca3af;
-  --nav-bg: rgba(250, 250, 250, 0.95);
+  --bg-primary: #f7f9fc;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #f3f6fa;
+  --bg-gradient-from: #f7f9fc;
+  --bg-gradient-via: #f4f7fb;
+  --bg-gradient-to: #f7f9fc;
+  --text-primary: #172033;
+  --text-secondary: #64718a;
+  --text-muted: #8b97aa;
+  --accent-primary: #2768d8;
+  --accent-secondary: #1598c8;
+  --accent-gradient-from: #2768d8;
+  --accent-gradient-to: #1598c8;
+  --border-primary: #dce3ec;
+  --border-secondary: #bac5d3;
+  --nav-bg: rgba(255, 255, 255, 0.96);
   --card-bg: #ffffff;
-  --card-hover: #f5f5f5;
-  --success: #16a34a;
-  --warning: #d97706;
-  --error: #dc2626;
-  --link: #2563eb;
-  --link-hover: #1d4ed8;
+  --card-hover: #f3f6fa;
+  --success: #0d8d5d;
+  --warning: #b96d00;
+  --error: #c83d4d;
+  --link: #2364d5;
+  --link-hover: #174ca8;
+  --surface-page: #f7f9fc;
+  --surface-card: #ffffff;
+  --surface-control: #f3f6fa;
+  --surface-control-strong: #eaf2ff;
+  --surface-plot: #fbfdff;
+  --chart-grid: #e7edf4;
+  --chart-axis: #718097;
+  --chart-legend: #64718a;
+  --control-track: #e8edf4;
+  --control-thumb: #2768d8;
+  --overlay-scrim: rgba(23, 32, 51, 0.34);
+  --text-on-accent: #ffffff;
+  --shadow-card: 0 3px 14px rgba(27, 46, 78, 0.05);
 }
 
 /* Theme: Slate Dark - Dark gray with teal accents (no purple) */
@@ -450,6 +489,69 @@ body {
   width: 100%;
 }
 
+/* Keep APK settings off the mobile MolBio scientific action plane. */
+html.bms-molbio-mobile-active #bms-cordova-preflight-toggle {
+  display: none !important;
+}
+
+html.bms-cordova-compact #bms-cordova-preflight-toggle {
+  display: none !important;
+}
+
+html.bms-cordova-compact .bms-mobile-operations-dock {
+  left: max(0.75rem, env(safe-area-inset-left));
+  right: max(0.75rem, env(safe-area-inset-right));
+  bottom: max(0.75rem, env(safe-area-inset-bottom));
+  margin-inline: auto;
+  max-width: 28rem;
+}
+
+html.bms-cordova-compact .bms-layout-main {
+  padding-bottom: calc(5.75rem + max(0.75rem, env(safe-area-inset-bottom)));
+}
+
+html.bms-cordova-compact [data-molbio-mobile-layout='true'] {
+  bottom: calc(5.75rem + max(0.75rem, env(safe-area-inset-bottom)));
+  height: auto !important;
+}
+
+html.bms-cordova-compact [data-bms-dev-issues-drawer='true'] {
+  padding-top: max(0.5rem, env(safe-area-inset-top));
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+}
+
+html.bms-cordova-compact [data-bms-telemetry-plot='true'] {
+  contain: layout paint;
+  display: flex;
+  flex-direction: column;
+}
+
+html.bms-cordova-compact [data-bms-telemetry-legend='true'] {
+  position: static !important;
+  flex: 0 0 auto;
+  min-height: 1.75rem;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  padding: 0.25rem 0.5rem;
+}
+
+html.bms-cordova-compact [data-bms-telemetry-canvas='true'] {
+  position: relative !important;
+  inset: auto !important;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+html.bms-cordova-compact [data-bms-telemetry-axis='true'],
+html.bms-cordova-compact [data-bms-telemetry-lines='true'] {
+  top: 0 !important;
+}
+
+/* Android WebView can report a zero top inset after landscape rotation. */
+html.bms-cordova-shell.bms-molbio-mobile-active [data-molbio-mobile-toolbar="true"] {
+  padding-top: calc(max(env(safe-area-inset-top), 1.5rem) + 0.75rem) !important;
+}
+
 /* ============================================
    BORDER RADIUS UTILITIES
    Keep Tailwind/BMS rounded workbench surfaces intact.
@@ -560,14 +662,17 @@ body {
 .bg-red-500 .text-white,
 .bg-amber-600 .text-white,
 .bg-amber-500 .text-white,
+[class*="bg-emerald"].text-white,
+[class*="bg-green"].text-white,
+[class*="bg-purple"].text-white,
+[class*="bg-blue"].text-white,
+[class*="bg-red"].text-white,
+[class*="bg-amber"].text-white,
 [class*="bg-emerald"]>.text-white,
 [class*="bg-green"]>.text-white,
 [class*="bg-purple"]>.text-white,
-[class*="bg-blue"]>.text-white,
-button .text-white,
-button.text-white,
-[role="button"] .text-white {
-  color: #ffffff !important;
+[class*="bg-blue"]>.text-white {
+  color: var(--text-on-accent, #ffffff) !important;
 }
 
 /* Border color overrides */
@@ -815,14 +920,14 @@ a:hover {
 
 /* Plotly main background layer */
 .js-plotly-plot .bg {
-  fill: var(--bg-secondary) !important;
+  fill: var(--surface-plot, var(--bg-secondary)) !important;
 }
 
 /* Plotly axis labels and ticks */
 .js-plotly-plot .xtick text,
 .js-plotly-plot .ytick text,
 .js-plotly-plot .ztick text {
-  fill: var(--text-secondary) !important;
+  fill: var(--chart-axis, var(--text-secondary)) !important;
 }
 
 /* Plotly axis titles */
@@ -841,12 +946,12 @@ a:hover {
 .js-plotly-plot .xgrid line,
 .js-plotly-plot .ygrid line,
 .js-plotly-plot .zgrid line {
-  stroke: var(--border-primary) !important;
+  stroke: var(--chart-grid, var(--border-primary)) !important;
 }
 
 /* Plotly legend text */
 .js-plotly-plot .legendtext {
-  fill: var(--text-primary) !important;
+  fill: var(--chart-legend, var(--text-primary)) !important;
 }
 
 /* Plotly colorbar labels */
@@ -913,7 +1018,11 @@ input[type="range"] {
 }
 
 input[type="range"]::-webkit-slider-runnable-track {
-  background-color: var(--bg-tertiary);
+  background-color: var(--control-track, var(--bg-tertiary));
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  color: var(--control-thumb, var(--accent-primary));
 }
 
 /* ============================================

@@ -51,3 +51,8 @@ test('sequence viewer source wires the touch bridge and explicit plasmid rotatio
     assert.match(source, /Rotate plasmid left/i);
     assert.match(source, /Rotate plasmid right/i);
 });
+
+test('both plasmid rotation controls expose 48 px touch targets', () => {
+    const source = readFileSync(SEQUENCE_VIEWER_PATH, 'utf8');
+    assert.equal(source.match(/min-h-12 min-w-12/gu)?.length, 2);
+});
