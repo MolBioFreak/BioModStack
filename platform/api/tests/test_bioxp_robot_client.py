@@ -105,9 +105,8 @@ def test_robot_client_routes_only_current_compact_commissioning_contracts() -> N
     client = BioXpRobotClient(target, transport=RecordingTransport())
 
     assert client.routes["collect_hardware_snapshot"][:2] == ("POST", "/hardware/snapshot/collect")
-    assert client.routes["construct_pipettes"][:2] == ("POST", "/oem/startup/constructor_pipettes")
-    assert client.routes["initialize_without_motion"][:2] == ("POST", "/oem/startup/initialize_without_motion")
-    assert client.routes["run_initial_check"][:2] == ("POST", "/oem/initial_check")
+    assert client.routes["initialize_oem_environment"][:2] == ("POST", "/oem/startup/initialize_environment")
+    assert client.routes["initialize_oem_environment"][2] >= 460.0
     assert client.routes["collect_hardware_snapshot"][2] >= 195.0
 
     asyncio.run(client.close())

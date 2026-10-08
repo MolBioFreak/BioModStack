@@ -6,21 +6,27 @@ import test from 'node:test';
 const cockpit = readFileSync(resolve('src/components/BioXpCockpit.tsx'), 'utf8');
 const client = readFileSync(resolve('src/lib/bioxpClient.ts'), 'utf8');
 
-test('OEM commissioning controls expose exact stage names and corrected operator copy', () => {
+test('OEM startup is one operator action while internal stage evidence remains visible', () => {
     for (const marker of [
-        'Initialize/Verify Four Pipette Controllers',
-        'Initialize Controllers Without Motion',
+        'Initialize BioXP OEM Environment',
+        'initialize_oem_environment',
         'constructor_pipette_stage',
         'initialization_without_motion',
         'initial_check',
-        'Repeatable OEM check',
-        'final white-LED sequence',
+        'stops before initializeSystem, homing, or axis motion',
     ]) {
         assert.match(cockpit, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     }
-    assert.doesNotMatch(cockpit, /Construct Four Pipettes/);
-    assert.doesNotMatch(cockpit, /red LED stage/);
-    assert.doesNotMatch(cockpit, /and a final read/);
+    for (const retiredControl of [
+        'Initialize/Verify Four Pipette Controllers',
+        'Initialize Controllers Without Motion',
+        'Run OEM Initial Check',
+        "command: 'construct_pipettes'",
+        "command: 'initialize_without_motion'",
+        "command: 'run_initial_check'",
+    ]) {
+        assert.doesNotMatch(cockpit, new RegExp(retiredControl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    }
 });
 
 test('operator receives full handler evidence and explicit non-secret mutation setup', () => {

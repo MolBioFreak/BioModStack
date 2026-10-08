@@ -21,9 +21,7 @@ test('canonical compact page labels the current commissioning tranche without re
     for (const marker of [
         'Collect Hardware Snapshot',
         'Activate USB for BioXP Service',
-        'Initialize/Verify Four Pipette Controllers',
-        'Initialize Controllers Without Motion',
-        'Run OEM Initial Check',
+        'Initialize BioXP OEM Environment',
         'INITIALIZE',
     ]) {
         assert.match(combined, new RegExp(marker));

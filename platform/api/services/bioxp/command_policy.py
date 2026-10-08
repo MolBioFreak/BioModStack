@@ -44,8 +44,30 @@ def evaluate_command(
         reasons.append("USB runtime is already active for the managed service")
     if definition.required_capability is not None and definition.required_capability not in context.capabilities:
         reasons.append(f"Required capability is unavailable: {definition.required_capability}")
+    reasons.extend(required_lifecycle_state_reasons(definition, context.startup_lifecycle))
     reasons.extend(lifecycle_stage_reasons(definition, context.startup_lifecycle))
     return ControlDecision(allowed=not reasons, reasons=tuple(reasons))
+
+
+def required_lifecycle_state_reasons(
+    definition: CommandDefinition,
+    startup_lifecycle: dict[str, Any] | None,
+) -> tuple[str, ...]:
+    if not definition.required_lifecycle_states:
+        return ()
+    stages = ((startup_lifecycle or {}).get("stages") or {})
+    reasons: list[str] = []
+    for name, expected in definition.required_lifecycle_states:
+        stage = stages.get(name)
+        if not isinstance(stage, dict):
+            reasons.append(f"Startup lifecycle stage evidence is malformed or missing: {name}")
+            continue
+        actual = stage.get("state")
+        if actual != expected:
+            reasons.append(
+                f"OEM startup requires a fresh ownership epoch: {name} must be {expected}, got {actual!r}"
+            )
+    return tuple(reasons)
 
 
 def lifecycle_stage_reasons(
