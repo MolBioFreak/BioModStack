@@ -12,6 +12,7 @@ import { TemplateManagerModal } from './TemplateManagerModal';
 import { FrameworkBrowser, type SelectedFramework } from './FrameworkBrowser';
 import { FrameworkEditor, type FrameworkEditorState } from './FrameworkEditor';
 import { PhysicsRefinementPanel, type PhysicsRefinementSettings, DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './PhysicsRefinementPanel';
+import { CDRRangeSelector, type CDRDefinition } from './CDRRangeSelector';
 
 interface AntibodyDenovoTemplateProps {
     onBack: () => void;
@@ -49,6 +50,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [designMode, setDesignMode] = useState<DesignMode>('cdr_only');
     const [selectedCDRLoops, setSelectedCDRLoops] = useState<Set<string>>(new Set(['H1', 'H2', 'H3', 'L1', 'L2', 'L3']));
     const [protectTetrad, setProtectTetrad] = useState(true);
+    // Manual CDR definitions (for custom loop positions)
+    const [manualCDRDefinitions, setManualCDRDefinitions] = useState<CDRDefinition[]>([]);
+    const [showCDREditor, setShowCDREditor] = useState(false);
 
     // Quality settings
     const [qualityPreset, setQualityPreset] = useState<QualityPreset>('balanced');
@@ -784,6 +788,17 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                         structureUrl={viewerMode === 'framework' && frameworkPdbUrl ? frameworkPdbUrl : pdbBlobUrl || ''}
                                         height={400}
                                         selectedResidues={viewerMode === 'target' ? selectedResidues : new Set<string>()}
+                                        onResidueClick={viewerMode === 'target' ? (residueKey) => {
+                                            setSelectedResidues(prev => {
+                                                const next = new Set(prev);
+                                                if (next.has(residueKey)) {
+                                                    next.delete(residueKey);
+                                                } else {
+                                                    next.add(residueKey);
+                                                }
+                                                return next;
+                                            });
+                                        } : undefined}
                                     />
                                 </div>
                             )}
@@ -858,6 +873,47 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         onProtectTetradChange={setProtectTetrad}
                         frameworkType={frameworkType}
                     />
+
+                    {/* Manual CDR Definition - Toggle */}
+                    {designMode === 'cdr_only' && (
+                        <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4">
+                            <div className="flex items-center justify-between mb-3">
+                                <div>
+                                    <h3 className="text-sm font-semibold text-slate-200">Custom CDR Positions</h3>
+                                    <p className="text-xs text-slate-500 mt-0.5">
+                                        Define custom loop positions instead of IMGT defaults
+                                    </p>
+                                </div>
+                                <button
+                                    onClick={() => setShowCDREditor(!showCDREditor)}
+                                    className={`text-xs px-3 py-1.5 rounded transition-colors ${showCDREditor
+                                        ? 'bg-blue-600 text-white'
+                                        : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                                        }`}
+                                >
+                                    {showCDREditor ? 'Use Defaults' : 'Define Manually'}
+                                </button>
+                            </div>
+                            {showCDREditor && parsedChains.length > 0 && (
+                                <CDRRangeSelector
+                                    chains={parsedChains}
+                                    cdrDefinitions={manualCDRDefinitions}
+                                    onDefinitionsChange={setManualCDRDefinitions}
+                                    activeChain={selectedChain || undefined}
+                                />
+                            )}
+                            {showCDREditor && parsedChains.length === 0 && (
+                                <p className="text-sm text-amber-400 italic">
+                                    Load target PDB first to define CDR positions on its structure
+                                </p>
+                            )}
+                            {manualCDRDefinitions.length > 0 && !showCDREditor && (
+                                <p className="text-xs text-emerald-400">
+                                    ✓ {manualCDRDefinitions.length} custom CDR(s) defined
+                                </p>
+                            )}
+                        </div>
+                    )}
 
                     {/* Framework Editor - shown for framework_allowed and full_design modes */}
                     {(designMode === 'framework_allowed' || designMode === 'full_design') && (
@@ -1274,6 +1330,21 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         if (typeof p.protect_tetrad === 'boolean') { setProtectTetrad(p.protect_tetrad); loaded.push('protect_tetrad'); }
                         // Target (path only - user must re-upload if file no longer at path)
                         if (p.uploaded_path) { setUploadedPath(p.uploaded_path); loaded.push('uploaded_path'); } else { skipped.push('uploaded_path'); }
+                        // Target source - restore full context including RCSB sources
+                        if (p.target_source) {
+                            setTargetSource(p.target_source);
+                            loaded.push('target_source');
+                            // Trigger PDB fetch if it's a URL-based source
+                            if (p.target_source.url) {
+                                fetch(p.target_source.url)
+                                    .then(res => res.blob())
+                                    .then(blob => {
+                                        const file = new File([blob], (p.target_source.name || 'structure') + '.pdb', { type: 'chemical/x-pdb' });
+                                        setTargetPdb(file);
+                                    })
+                                    .catch(err => console.error('[TEMPLATE_LOAD] Failed to fetch PDB from source:', err));
+                            }
+                        }
                         if (p.selected_chain) { setSelectedChain(p.selected_chain); loaded.push('selected_chain'); } else { skipped.push('selected_chain'); }
                         if (Array.isArray(p.selected_residues)) { setSelectedResidues(new Set(p.selected_residues)); loaded.push('selected_residues'); }
                         // Quality settings - check both old and new field names
@@ -1283,6 +1354,16 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             loaded.push('quality_settings');
                         }
                         if (p.quality_preset) { setQualityPreset(p.quality_preset); loaded.push('quality_preset'); }
+                        // Manual CDR definitions - deserialize from arrays
+                        if (Array.isArray(p.manual_cdr_definitions)) {
+                            const defs = p.manual_cdr_definitions.map((d: any) => ({
+                                ...d,
+                                residues: new Set(d.residues || [])
+                            }));
+                            setManualCDRDefinitions(defs);
+                            setShowCDREditor(defs.length > 0);
+                            loaded.push('manual_cdr_definitions');
+                        }
 
                         console.log('[TEMPLATE_LOAD] Loaded fields:', loaded.join(', '));
                         console.log('[TEMPLATE_LOAD] Skipped fields (not in template):', skipped.join(', '));
@@ -1315,13 +1396,19 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     protected_positions: frameworkProtection.protectedPositions.join(','),
                     protect_disulfides: frameworkProtection.protectDisulfides,
                     protect_fr_contacts: frameworkProtection.protectFrContacts,
-                    // Target info (path only - file must exist at path)
+                    // Target info - now includes full source context
+                    target_source: targetSource,
                     uploaded_path: uploadedPath,
                     selected_chain: selectedChain,
                     selected_residues: Array.from(selectedResidues),
                     // Quality settings
                     quality_preset: qualityPreset,
                     quality_settings: qualitySettings,
+                    // Manual CDR definitions - serialize Sets to arrays
+                    manual_cdr_definitions: manualCDRDefinitions.map(d => ({
+                        ...d,
+                        residues: Array.from(d.residues)
+                    })),
                 }}
                 currentModelId="template_antibody_denovo"
                 currentMode="antibody_denovo_pipeline"

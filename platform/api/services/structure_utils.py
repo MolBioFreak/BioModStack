@@ -136,7 +136,7 @@ def get_secondary_structure(path: Union[str, Path]) -> dict:
     Annotate secondary structure using P-SEA algorithm.
     
     Returns:
-        Dict with counts: {'helix': n, 'sheet': n, 'coil': n}
+        Dict with percentages (0-100): {'helix': pct, 'sheet': pct, 'coil': pct}
     """
     try:
         structure = load_structure(path)
@@ -144,19 +144,29 @@ def get_secondary_structure(path: Union[str, Path]) -> dict:
         # Only works on protein (amino acid residues)
         protein = structure[struc.filter_amino_acids(structure)]
         if len(protein) == 0:
-            return {'helix': 0, 'sheet': 0, 'coil': 0}
+            return {'helix': 0.0, 'sheet': 0.0, 'coil': 0.0}
         
         # Annotate SSE (returns array of 'a'=helix, 'b'=sheet, 'c'=coil per residue)
         sse = struc.annotate_sse(protein)
         
+        # Count each type
+        total = len(sse)
+        if total == 0:
+            return {'helix': 0.0, 'sheet': 0.0, 'coil': 0.0}
+        
+        helix_count = int(np.sum(sse == 'a'))
+        sheet_count = int(np.sum(sse == 'b'))
+        coil_count = int(np.sum(sse == 'c'))
+        
+        # Convert to percentages
         return {
-            'helix': int(np.sum(sse == 'a')),
-            'sheet': int(np.sum(sse == 'b')),
-            'coil': int(np.sum(sse == 'c'))
+            'helix': round(helix_count / total * 100, 1),
+            'sheet': round(sheet_count / total * 100, 1),
+            'coil': round(coil_count / total * 100, 1)
         }
     except Exception as e:
         logger.error(f"[structure_utils] Error computing SSE for {path}: {e}")
-        return {'helix': 0, 'sheet': 0, 'coil': 0}
+        return {'helix': 0.0, 'sheet': 0.0, 'coil': 0.0}
 
 
 def compute_rmsd(

@@ -1,14 +1,21 @@
 /**
  * EpitopeMolstarViewer Component
- * 3D structure viewer for visualizing epitope selections
+ * 3D structure viewer for visualizing and selecting epitope residues
  * 
  * Features:
  * - Displays uploaded PDB structure in 3D
- * - Highlights selected epitope residues (from 2D selector)
- * - Visualization-only (selection happens in EpitopeSelector)
+ * - Highlights selected epitope residues (synced from 2D selector)
+ * - Click-to-select: clicking residues in 3D syncs back to 2D grid
+ * - Uses shared Molstar loader for efficient script management
  */
 
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
+import {
+    ensureMolstarLoaded,
+    isMolstarLoaded,
+    rgbToHex,
+    parseResidueKey
+} from '../lib/molstar-loader';
 
 interface Selection {
     chain_id?: string;
@@ -25,56 +32,8 @@ interface Props {
     height?: number | string;
     backgroundColor?: string;
     selectedResidues: Set<string>;  // Set of "A45", "B100", etc.
-}
-
-// Track if script is loaded globally
-let scriptLoaded = false;
-let scriptLoading = false;
-const loadCallbacks: (() => void)[] = [];
-
-function loadScript(callback: () => void) {
-    if (scriptLoaded) {
-        callback();
-        return;
-    }
-    loadCallbacks.push(callback);
-    if (scriptLoading) return;
-    scriptLoading = true;
-
-    // Load CSS
-    const link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.type = 'text/css';
-    link.href = 'https://cdn.jsdelivr.net/npm/pdbe-molstar@3.4.0/build/pdbe-molstar.css';
-    document.head.appendChild(link);
-
-    // Load JS
-    const script = document.createElement('script');
-    script.src = 'https://cdn.jsdelivr.net/npm/pdbe-molstar@3.4.0/build/pdbe-molstar-component.js';
-    script.async = true;
-    script.onload = () => {
-        console.log('[EpitopeMolstarViewer] pdbe-molstar loaded');
-        scriptLoaded = true;
-        scriptLoading = false;
-        loadCallbacks.forEach(cb => cb());
-        loadCallbacks.length = 0;
-    };
-    script.onerror = (e) => {
-        console.error('[EpitopeMolstarViewer] Failed to load pdbe-molstar:', e);
-        scriptLoading = false;
-    };
-    document.head.appendChild(script);
-}
-
-function rgbToHex(r: number, g: number, b: number): string {
-    return '#' + [r, g, b].map(x => x.toString(16).padStart(2, '0')).join('');
-}
-
-// Parse residue key like "A45" into { chainId: "A", resNum: 45 }
-function parseResidueKey(key: string): { chainId: string; resNum: number } | null {
-    const match = key.match(/^([A-Z])(\d+)$/);
-    if (!match) return null;
-    return { chainId: match[1], resNum: parseInt(match[2], 10) };
+    /** Callback when a residue is clicked in 3D view (for bidirectional sync) */
+    onResidueClick?: (residueKey: string) => void;
 }
 
 export default function EpitopeMolstarViewer({
@@ -84,15 +43,16 @@ export default function EpitopeMolstarViewer({
     height = 400,
     backgroundColor = '#0f172a',
     selectedResidues,
+    onResidueClick,
 }: Props) {
-    const [isScriptLoaded, setIsScriptLoaded] = useState(scriptLoaded);
+    const [isScriptLoaded, setIsScriptLoaded] = useState(isMolstarLoaded());
     const [blobUrl, setBlobUrl] = useState<string | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const viewerRef = useRef<HTMLElement | null>(null);
 
-    // Load script
+    // Load script using shared loader
     useEffect(() => {
-        loadScript(() => setIsScriptLoaded(true));
+        ensureMolstarLoaded().then(() => setIsScriptLoaded(true));
     }, []);
 
     // Create blob URL from PDB data if provided
@@ -106,6 +66,28 @@ export default function EpitopeMolstarViewer({
             setBlobUrl(null);
         }
     }, [pdbData]);
+
+    // Handle click events from Molstar for 3D→2D sync
+    useEffect(() => {
+        if (!onResidueClick || !isScriptLoaded) return;
+
+        const handleClick = (event: Event) => {
+            const detail = (event as CustomEvent).detail;
+            // Extract residue info from click event
+            // PDBe Molstar click events include residue and chain data
+            const chainId = detail?.authChainId || detail?.chainId;
+            const residueNumber = detail?.residueNumber;
+
+            if (chainId && residueNumber !== undefined) {
+                const residueKey = `${chainId}${residueNumber}`;
+                console.log('[EpitopeMolstarViewer] 3D Click:', residueKey);
+                onResidueClick(residueKey);
+            }
+        };
+
+        document.addEventListener('PDB.molstar.click', handleClick);
+        return () => document.removeEventListener('PDB.molstar.click', handleClick);
+    }, [onResidueClick, isScriptLoaded]);
 
     // Effective URL for the viewer
     const effectiveUrl = useMemo(() => {

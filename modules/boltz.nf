@@ -85,6 +85,7 @@ process RunBoltz {
             ./yamls/ \
             --output_format pdb \
             ${params.boltz_diffusion_samples ? '--diffusion_samples ' + params.boltz_diffusion_samples : ''} \
+            ${params.boltz_max_parallel_samples ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \
             --recycling_steps ${params.boltz_recycling_steps ?: 3} \
             --sampling_steps ${params.boltz_sampling_steps ?: 50} \
             ${params.boltz_use_potentials ? '--use_potentials' : ''} \

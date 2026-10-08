@@ -815,6 +815,15 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                                             : frameworkPdbUrl!
                                         }
                                         selectedResidues={viewerMode === 'target' ? hotspotSet : new Set<string>()}
+                                        onResidueClick={viewerMode === 'target' ? (residueKey) => {
+                                            // Update hotspotResidues text field by toggling the clicked residue
+                                            const current = hotspotResidues.split(',').map(s => s.trim()).filter(Boolean);
+                                            if (current.includes(residueKey)) {
+                                                setHotspotResidues(current.filter(r => r !== residueKey).join(','));
+                                            } else {
+                                                setHotspotResidues([...current, residueKey].join(','));
+                                            }
+                                        } : undefined}
                                     />
                                 </div>
                             )}

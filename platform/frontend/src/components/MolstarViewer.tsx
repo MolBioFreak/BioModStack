@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
+import { ensureMolstarLoaded, isMolstarLoaded, rgbToHex } from '../lib/molstar-loader';
 
 interface Selection {
     chain_id?: string;  // Will be mapped to struct_asym_id
@@ -21,53 +22,6 @@ interface Props {
     residueColors?: Map<string, { r: number; g: number; b: number }>;
 }
 
-// Track if script is loaded globally to avoid multiple loads
-let scriptLoaded = false;
-let scriptLoading = false;
-const loadCallbacks: (() => void)[] = [];
-
-function loadScript(callback: () => void) {
-    if (scriptLoaded) {
-        callback();
-        return;
-    }
-
-    loadCallbacks.push(callback);
-
-    if (scriptLoading) return;
-
-    scriptLoading = true;
-
-    // Load CSS first
-    const link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.type = 'text/css';
-    link.href = 'https://cdn.jsdelivr.net/npm/pdbe-molstar@3.4.0/build/pdbe-molstar.css';
-    document.head.appendChild(link);
-
-    // Load JS
-    const script = document.createElement('script');
-    script.src = 'https://cdn.jsdelivr.net/npm/pdbe-molstar@3.4.0/build/pdbe-molstar-component.js';
-    script.async = true;
-    script.onload = () => {
-        console.log('pdbe-molstar web component script loaded');
-        scriptLoaded = true;
-        scriptLoading = false;
-        loadCallbacks.forEach(cb => cb());
-        loadCallbacks.length = 0;
-    };
-    script.onerror = (e) => {
-        console.error('Failed to load pdbe-molstar script:', e);
-        scriptLoading = false;
-    };
-    document.head.appendChild(script);
-}
-
-// Convert RGB to hex
-function rgbToHex(r: number, g: number, b: number): string {
-    return '#' + [r, g, b].map(x => x.toString(16).padStart(2, '0')).join('');
-}
-
 export default function MolstarViewer({
     structureUrl,
     format = 'pdb',
@@ -79,7 +33,7 @@ export default function MolstarViewer({
     selections,
     residueColors
 }: Props) {
-    const [isScriptLoaded, setIsScriptLoaded] = useState(scriptLoaded);
+    const [isScriptLoaded, setIsScriptLoaded] = useState(isMolstarLoaded());
     const containerRef = useRef<HTMLDivElement>(null);
     const viewerRef = useRef<HTMLElement | null>(null);
 
@@ -94,7 +48,7 @@ export default function MolstarViewer({
 
     // Load the web component script
     useEffect(() => {
-        loadScript(() => setIsScriptLoaded(true));
+        ensureMolstarLoaded().then(() => setIsScriptLoaded(true));
     }, []);
 
     // Apply selections after viewer loads

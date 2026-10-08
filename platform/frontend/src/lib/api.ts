@@ -914,12 +914,26 @@ export const deleteConcurrencyLimit = (modelType: string) =>
 export interface SAbDabSearchResult {
     pdb_code: string;
     h_chain: string;
-    l_chain: string | null;
+    model: number;
     resolution: number | null;
-    method: string;
-    species: string | null;
+    method: string | null;
+    species: string | null;  // heavy_species
+    germline: string | null;  // heavy_subclass
     cdr_h3_length: number | null;
+    cdr_h3_sequence: string | null;
     antigen_type: string | null;
+    antigen_name: string | null;
+    affinity: number | null;
+    date: string | null;
+    engineered: boolean;
+    has_antigen: boolean;
+}
+
+export interface SAbDabSearchResponse {
+    results: SAbDabSearchResult[];
+    total: number;
+    limit: number;
+    offset: number;
 }
 
 export interface FrameworkDownloadResponse {
@@ -949,18 +963,52 @@ export interface SAbDabAttribution {
     license: string;
     license_url: string;
     website: string;
+    local_mirror?: string;
 }
 
-export const searchSabdabFrameworks = (params: {
+export interface SAbDabDatabaseStats {
+    total_entries: number;
+    entries_with_cdr_h3: number;
+    last_sync: string | null;
+    species_distribution: Record<string, number>;
+    db_path: string;
+    db_size_mb: number;
+}
+
+export interface SAbDabFilterOptions {
+    species: string[];
+    methods: string[];
+    antigen_types: string[];
+    germlines: string[];
+    cdr_h3_length_range: [number, number];
+}
+
+export interface SAbDabSearchParams {
     species?: string;
+    resolution_min?: number;
     resolution_max?: number;
     cdr_h3_min?: number;
     cdr_h3_max?: number;
     antigen_type?: string;
-    limit?: number;
-    sort_by?: 'resolution' | 'cdr_h3_length' | 'species' | 'pdb_code';
+    has_antigen?: boolean;
+    methods?: string;  // comma-separated
+    germlines?: string;  // comma-separated
+    has_affinity?: boolean;
+    include_scfv?: boolean;
+    sort_by?: 'resolution' | 'cdr_h3_length' | 'pdb_code' | 'date';
     sort_desc?: boolean;
-}) => api.get<SAbDabSearchResult[]>('/api/frameworks/sabdab/search', { params });
+    limit?: number;
+    offset?: number;
+}
+
+export const searchSabdabFrameworks = (params: SAbDabSearchParams) =>
+    api.get<SAbDabSearchResponse>('/api/frameworks/sabdab/search', { params });
+
+export const getSabdabDatabaseStats = () =>
+    api.get<SAbDabDatabaseStats>('/api/frameworks/sabdab/stats');
+
+export const getSabdabFilterOptions = () =>
+    api.get<SAbDabFilterOptions>('/api/frameworks/sabdab/filters');
 
 export const downloadSabdabFramework = (pdbCode: string, params?: {
     scheme?: string;
@@ -979,3 +1027,4 @@ export const removeCachedFramework = (pdbCode: string, scheme?: string) =>
 
 export const getSabdabAttribution = () =>
     api.get<SAbDabAttribution>('/api/frameworks/attribution');
+

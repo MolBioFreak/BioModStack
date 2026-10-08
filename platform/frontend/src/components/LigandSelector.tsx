@@ -14,6 +14,7 @@ export interface LigandSelectorProps {
     ligands: LigandEntry[];
     setLigands: React.Dispatch<React.SetStateAction<LigandEntry[]>>;
     showCustomSmiles?: boolean;
+    onImportProtein?: () => void;  // Callback to open sequence library/import modal for adding protein
 }
 
 const AVAILABLE_LIGANDS = [
@@ -45,7 +46,7 @@ const reverseComplement = (seq: string, isRna: boolean = false): string => {
     return seq.split('').reverse().map(base => complement[base] || base).join('');
 };
 
-export function LigandSelector({ ligands, setLigands, showCustomSmiles = false }: LigandSelectorProps) {
+export function LigandSelector({ ligands, setLigands, showCustomSmiles = false, onImportProtein }: LigandSelectorProps) {
     const [customSmiles, setCustomSmiles] = useState('');
     const [customName, setCustomName] = useState('');
     const [dnaSequence, setDnaSequence] = useState('');
@@ -53,6 +54,8 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false }
     const [isDsDna, setIsDsDna] = useState(false);
     const [isDsRna, setIsDsRna] = useState(false);
     const [peptideSequence, setPeptideSequence] = useState('');
+    const [proteinSequence, setProteinSequence] = useState('');
+    const [proteinName, setProteinName] = useState('');
     const [showOligoBuilder, setShowOligoBuilder] = useState(false);
 
     const addNucleicAcid = (type: 'dna' | 'rna', sequence: string, isDoubleStranded: boolean) => {
@@ -98,6 +101,20 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false }
                 name: `Peptide (${validSeq.length}aa)`
             }]);
             setPeptideSequence('');
+        }
+    };
+
+    const addProtein = () => {
+        const validSeq = proteinSequence.toUpperCase().replace(/[^ACDEFGHIKLMNPQRSTVWY]/g, '');
+        if (validSeq.length >= 16) {
+            setLigands(prev => [...prev, {
+                id: String.fromCharCode(66 + prev.length),
+                type: 'protein',
+                sequence: validSeq,
+                name: proteinName.trim() || `Protein Chain (${validSeq.length}aa)`
+            }]);
+            setProteinSequence('');
+            setProteinName('');
         }
     };
 
@@ -274,6 +291,52 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false }
                     >
                         + Add Peptide
                     </button>
+                </div>
+
+                {/* Protein Chain Input */}
+                <div className="p-3 bg-slate-800/50 rounded-lg border border-orange-500/20 space-y-2">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                            <span className="text-xs text-orange-400 font-semibold">🧬 Additional Protein Chain</span>
+                            <span className="text-xs text-slate-500">(for protein-protein complex prediction)</span>
+                        </div>
+                        {onImportProtein && (
+                            <button
+                                onClick={onImportProtein}
+                                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-300 text-xs rounded-lg transition-colors flex items-center gap-1.5"
+                            >
+                                <span>📂</span> Select Input / Import
+                            </button>
+                        )}
+                    </div>
+                    <div className="flex gap-2 items-start">
+                        <input
+                            type="text"
+                            value={proteinName}
+                            onChange={(e) => setProteinName(e.target.value)}
+                            placeholder="Chain name (optional)"
+                            className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm w-40"
+                        />
+                        <textarea
+                            value={proteinSequence}
+                            onChange={(e) => setProteinSequence(e.target.value.toUpperCase().replace(/[^ACDEFGHIKLMNPQRSTVWY]/g, ''))}
+                            placeholder="Additional protein sequence (16+ AA)..."
+                            className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm flex-1 font-mono resize-y min-h-[60px]"
+                            rows={2}
+                        />
+                        <button
+                            onClick={addProtein}
+                            disabled={proteinSequence.length < 16}
+                            className="px-3 py-2 bg-orange-500/20 text-orange-400 rounded-lg text-sm hover:bg-orange-500/30 transition-colors disabled:opacity-50 whitespace-nowrap"
+                        >
+                            + Add Protein
+                        </button>
+                    </div>
+                    {proteinSequence.length > 0 && (
+                        <div className="text-xs text-slate-500">
+                            {proteinSequence.length} aa {proteinSequence.length < 16 && <span className="text-amber-400">(min 16 required)</span>}
+                        </div>
+                    )}
                 </div>
 
                 {/* Advanced Oligo Builder Button */}
