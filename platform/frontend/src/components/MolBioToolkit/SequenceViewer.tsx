@@ -569,10 +569,22 @@ export function SequenceViewer({
             {!sequenceData.circular && resolvedViewerMode !== 'linear' && (
                 <div
                     data-linear-circular-projection="true"
-                    className="pointer-events-none absolute left-3 top-3 z-20 rounded-full border border-amber-500/40 bg-slate-950/90 px-2.5 py-1 text-[10px] font-medium text-amber-200 shadow"
-                    title="Display projection only; the stored molecule remains linear"
+                    data-linear-break-marker="true"
+                    className="pointer-events-none absolute top-2 z-20 flex -translate-x-1/2 flex-col items-center"
+                    style={{ left: resolvedViewerMode === 'both' ? '25%' : '50%' }}
+                    title="Linear projection break: end → 1; display only, stored molecule remains linear"
                 >
-                    Linear projection • break: end → 1
+                    <div className="rounded-md border-2 border-amber-300 bg-amber-950 px-3 py-1 text-center font-bold tracking-wide text-amber-100 shadow-[0_0_18px_rgba(251,191,36,0.55)]">
+                        <div className="text-[11px] leading-none">LINEAR BREAK</div>
+                        <div className="mt-1 font-mono text-[10px] leading-none">
+                            {sequenceData.sequence.length.toLocaleString()} → 1
+                        </div>
+                    </div>
+                    <div className="h-10 w-1 bg-amber-300 shadow-[0_0_10px_rgba(251,191,36,0.9)]" />
+                    <div className="-mt-1 h-3 w-3 rotate-45 border-b-2 border-r-2 border-amber-300" />
+                    <div className="mt-1 rounded bg-slate-950/90 px-2 py-0.5 text-[9px] font-medium text-amber-200 shadow">
+                        Linear projection • stored topology remains linear
+                    </div>
                 </div>
             )}
             {showTouchRotationControls && (
