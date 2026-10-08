@@ -428,6 +428,35 @@ def normalize_install_profile(raw: Mapping[str, object] | None) -> dict[str, obj
     return normalized
 
 
+def _consistent_configuration_read(function):
+    from functools import wraps
+
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        from biomodstack_configuration import transaction_dir, assert_configuration_readable
+        before = transaction_dir().exists()
+        assert_configuration_readable()
+        result = function(*args, **kwargs)
+        assert_configuration_readable()
+        if before != transaction_dir().exists():
+            raise RuntimeError("Configuration changed during read; retry after recover")
+        return result
+    return wrapped
+
+
+def _legacy_configuration_write(function):
+    from functools import wraps
+
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        from biomodstack_configuration import configuration_lock, reject_managed_write
+        with configuration_lock():
+            reject_managed_write()
+            return function(*args, **kwargs)
+    return wrapped
+
+
+@_consistent_configuration_read
 def load_install_profile() -> dict[str, object]:
     path = get_install_profile_path()
     if not path.exists():
@@ -783,6 +812,7 @@ def core_runtime_storage_environment(resolved: Mapping[str, object]) -> dict[str
     return values
 
 
+@_consistent_configuration_read
 def resolve_installed_core_runtime_paths(project_root: Path | None = None) -> dict[str, object]:
     """Installation-owned Production configuration, never a Development process's paths."""
     env_path = Path(os.getenv("BMS_CORE_RUNTIME_ENV_FILE") or get_core_runtime_env_path())
@@ -853,7 +883,7 @@ def _core_runtime_env_lines(resolved: Mapping[str, object]) -> list[str]:
     ]
 
 
-def export_install_profile(profile: Mapping[str, object] | None = None, project_root: Path | None = None) -> dict[str, str]:
+def _export_install_profile(profile: Mapping[str, object] | None = None, project_root: Path | None = None) -> dict[str, str]:
     normalized_profile = normalize_install_profile(profile if profile is not None else load_install_profile())
     resolved = resolve_runtime_paths(project_root=project_root, profile=normalized_profile, environ={})
     from biomodstack_local_resources import configured_local_policy
@@ -892,6 +922,12 @@ def export_install_profile(profile: Mapping[str, object] | None = None, project_
     }
 
 
+@_legacy_configuration_write
+def export_install_profile(profile: Mapping[str, object] | None = None, project_root: Path | None = None) -> dict[str, str]:
+    return _export_install_profile(profile, project_root=project_root)
+
+
+@_legacy_configuration_write
 def save_install_profile(raw: Mapping[str, object], project_root: Path | None = None) -> dict[str, object]:
     requested_api_port = _normalize_optional_int(raw.get("api_host_port"))
     if requested_api_port is not None and requested_api_port != DEFAULT_API_HOST_PORT:
@@ -913,7 +949,7 @@ def save_install_profile(raw: Mapping[str, object], project_root: Path | None = 
     profile_path = get_install_profile_path()
     profile_path.parent.mkdir(parents=True, exist_ok=True)
     profile_path.write_text(json.dumps(normalized, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    export_install_profile(normalized, project_root=project_root)
+    _export_install_profile(normalized, project_root=project_root)
     return normalized
 
 

@@ -14,7 +14,8 @@ module bytecode. No profile, export, directory, service, download, ingress or
 registration is written by preview. Syntax-valid previews exit 0 with
 `valid: true`, **`ready: false`, `apply_available: false`**. Invalid documents or
 configuration resolution failures exit 2 with JSON blockers. Argparse usage
-errors remain ordinary stderr/exit 2. No `configure` execution action exists.
+errors remain ordinary stderr/exit 2. `apply_available: false` describes this
+read-only preview action, not the separate [transactional configure command](Transactional_Configuration.md).
 
 ## Closed input v1
 
@@ -79,17 +80,19 @@ existing Tailnet ownership/authentication/provenance/rollback safeguards.
 ## Legacy compatibility and apply gaps
 
 This install document is **not** the persisted legacy `install_profile.json`
-format. Legacy load/save/normalization and fallback heuristics are unchanged.
+format. Legacy normalization and fallback heuristics remain available to legacy
+installations; incomplete managed generations fail closed and legacy writers
+cannot modify them.
 Preview never reads, merges or migrates an existing profile (even malformed
 profiles); it reports its presence and previews an independent candidate.
 External defaults apply only to this explicitly versioned clean-install input,
 not to existing installations. No migration or replacement is authorized.
 
-Apply remains blocked pending a recoverable profile + both exports generation
-transaction: concurrent-writer locking, staging and fsync, a publication
-boundary honored by every reader, rollback/recovery after every interruption,
-cross-filesystem handling (HOME/XDG may differ), preservation of deployment-only
-export settings/secrets, and explicit legacy migration. Tests must inject
-partial writes, export failures, crashes and concurrent operations. Separate
-atomic file renames alone are insufficient. Provisioning, scientific admission,
-ingress enforcement and full clean-machine readiness remain unimplemented.
+First-install configuration and recovery are implemented by the separate
+[transactional configure command](Transactional_Configuration.md). It rejects
+existing installations rather than dropping deployment-only settings/secrets.
+The transaction uses immutable staged files, a durable journal, no-overwrite
+destination links (which may span filesystems), and one activation pointer; it
+does not claim multi-file atomic replacement. Supported managed readers fail
+closed while incomplete. Legacy migration, acquisition, scientific admission,
+ingress enforcement and full clean-machine readiness remain separate blockers.

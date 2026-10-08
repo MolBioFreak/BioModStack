@@ -63,6 +63,8 @@ def bootstrap_report(action: str, *, project_root: Path, runtime: str | None = N
     profile = {}
     profile_valid = True
     try:
+        from biomodstack_configuration import assert_configuration_readable
+        assert_configuration_readable()
         profile_path = get_install_profile_path()
         observations["profile"] = {"path": str(profile_path), "exists": profile_path.exists()}
         if profile_path.exists():
@@ -141,7 +143,7 @@ def bootstrap_report(action: str, *, project_root: Path, runtime: str | None = N
     block("acquisition_unavailable", "No approved pinned acquisition executor is wired into bootstrap; existing files are not acquisition or qualification evidence")
     block("disk_requirement_unknown", "Authoritative acquisition/staging/expansion sizes are unavailable; free space is not a sufficient-disk verdict")
     block("prerequisite_qualification_not_run", "Tool versions, GPU compatibility, service privileges and locked dependencies have not been qualified")
-    block("installation_readiness_not_verified", "Configure, acquire, verify/register and resume are not implemented by this read-only slice")
+    block("installation_readiness_not_verified", "Discover/plan are read-only; configure/recover do not acquire, qualify, register or verify installation readiness")
     if action == "plan":
         report["plan"] = {"executable": False, "steps": [
             {"action": step, "state": "blocked"} for step in

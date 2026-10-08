@@ -148,11 +148,12 @@ def test_real_cli_no_writes(isolated, monkeypatch, shell, raw, exit_code):
     assert snapshot(ROOT) == source
 
 
-def test_missing_document_and_no_apply(isolated):
+def test_missing_document_is_structured_configuration_blocker(isolated):
     assert install.preview_report(isolated / 'missing', project_root=ROOT)['valid'] is False
     result = subprocess.run([sys.executable, str(ROOT / 'scripts/manage_desktop_services.py'), 'configure'],
                             capture_output=True, text=True)
-    assert result.returncode == 2
+    assert result.returncode == 3
+    assert json.loads(result.stdout)["configured"] is False
 
 
 @pytest.mark.parametrize('failure', [OverflowError('overflow'), RuntimeError('symlink loop')])
