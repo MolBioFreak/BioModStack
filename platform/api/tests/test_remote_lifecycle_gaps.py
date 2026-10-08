@@ -363,19 +363,28 @@ async def test_remote_reconciler_never_writes_after_finalizer_loses_authority(st
     import hashlib
     import json
     from services import result_state_integrity as integrity
+    from test_remote_result_generation import package
     async with store() as s:
         job = await s.get(Job, "job")
         job.model_id = "custom_file_workflow"
-        job.provenance = {"remote_execution_receipt": {"expected_result_contract_sha256": hashlib.sha256(json.dumps(ex.resolve_job_result_contract(job), sort_keys=True, separators=(",", ":")).encode()).hexdigest()}}
+        job.output_dir = str(tmp_path / "output")
+        job.params = {"remote_result_policy": "manual"}
+        manifest, incoming, terminal = package(job)
+        job.provenance = {"remote_execution_receipt": {
+            **{key: value for key, value in ex._pull_identity(job).items() if key != "schema"},
+            "remote_attempt_dir": "/fixture/attempt",
+            "expected_result_contract_sha256": hashlib.sha256(json.dumps(ex.resolve_job_result_contract(job), sort_keys=True, separators=(",", ":")).encode()).hexdigest()}}
         await s.commit()
     async def status(*_):
-        return receipt().model_copy(update={"result_manifest_sha256": "a" * 64})
-    async def collect(*_):
-        return SimpleNamespace(artifacts=[], job_id="job", attempt_id="attempt", exit_code=0), tmp_path
+        return terminal
+    async def collect(session, job, status):
+        assert ex._verify_result_package(incoming, job, status) == manifest
+        return manifest, incoming
     monkeypatch.setattr(ex, "remote_status", status)
     monkeypatch.setattr(ex, "collect_remote_results", collect)
-    monkeypatch.setattr(ex, "_publish_result_generation", lambda *_: (tmp_path, None))
+    ingested = []
     async def ingest(_id, _root, session, **_):
+        ingested.append(_id)
         await session.commit()
         async with store() as other:
             job = await other.get(Job, "job")
@@ -396,15 +405,14 @@ async def test_remote_reconciler_never_writes_after_finalizer_loses_authority(st
         await ex.reconcile_remote_job(s, await s.get(Job, "job"))
         assert (await s.get(Job, "job")).remote_state == "results_available"
     from fastapi import BackgroundTasks
-    from services import remote_stage_receipts
     async def proof(*_, **__):
         pass
     monkeypatch.setattr(ex, "_prove_pull_endpoint", proof)
-    monkeypatch.setattr(remote_stage_receipts, "apply_remote_stage_receipts", proof)
     background = BackgroundTasks()
     async with store() as s:
         await ex.request_remote_result_pull(s, await s.get(Job, "job"), background)
     await background()
+    assert ingested == ["job"], "authority interleaving must reach the real finalizer"
     async with store() as s:
         job = await s.get(Job, "job")
         assert job.remote_state == "operator_authority"

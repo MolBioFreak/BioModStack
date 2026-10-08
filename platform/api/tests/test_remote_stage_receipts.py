@@ -254,7 +254,8 @@ def test_checkpoint_domain_uses_ordinary_native_refinement_policy(tmp_path, monk
     candidates.mkdir()
     (candidates / 'one.pdb').write_text('retained native bytes')
     parent = dict(id='root', model_id=model, mode='nanobody', params={'framework_type': 'vhh',
-        'seq_design_fampnn': True, 'interactive_gating': True}, output_dir=str(root))
+        'seq_design_fampnn': True, 'interactive_gating': True, 'remote_result_policy': 'manual'},
+        execution_target_id='worker', output_dir=str(root))
     runtime = ComponentRuntime(tmp_path / 'ledger.sqlite', artifact_root=root,
         attempt_id='attempt', root_job_id='root', target_id='worker', lease_id='lease')
     checkpoint = open_component_gate(runtime, job_id='root', stage=stage, payload={}, directories={'candidate': candidates})
@@ -401,7 +402,7 @@ def test_remote_reporter_does_not_call_http_or_require_credentials(remote, monke
     spec.loader.exec_module(reporter)
     def forbidden(*args, **kwargs):
         pytest.fail("remote stage reporter attempted HTTP")
-    monkeypatch.setattr(reporter.requests, "post", forbidden)
+    monkeypatch.setattr("requests.post", forbidden)
     monkeypatch.setattr("sys.argv", [str(reporter_path), "job-one", "frustrampnn", "not_requested"])
     reporter.main()
     assert (remote[0] / RECEIPT_DIRECTORY / "frustrampnn.terminal.json").exists()
@@ -469,7 +470,7 @@ def test_local_reporter_http_contract_is_unchanged(tmp_path, monkeypatch):
     def post(url, **kwargs):
         calls.append((url, kwargs))
         return SimpleNamespace(status_code=200)
-    monkeypatch.setattr(reporter.requests, "post", post)
+    monkeypatch.setattr("requests.post", post)
     monkeypatch.setattr("sys.argv", [str(reporter_path), "--job-root-relative", "local-job", "protenix", "complete", "final/model.cif"])
     reporter.main()
     assert calls == [("http://local.invalid/api/jobs/local-job/stage-complete", {

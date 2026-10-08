@@ -119,16 +119,16 @@ def test_identity_change_cannot_reuse_or_recover_generation(tmp_path, field):
 
 
 @pytest.mark.asyncio
-async def test_transport_disconnect_reclaims_partial_and_reuses_verified_bytes(tmp_path, monkeypatch):
-    job = job_at(tmp_path)
+async def test_transport_disconnect_reclaims_partial_and_reuses_verified_bytes(store, tmp_path, monkeypatch):
+    async with store() as session:
+        job = await session.get(Job, "job")
+        job.output_dir = str(tmp_path / "output")
+        await session.commit()
     manifest, incoming, status = package(job)
     encoded = (incoming / "result-manifest.json").read_text()
     (incoming / "second.txt").unlink()
     async def run(*args, **kwargs):
         return SimpleNamespace(stdout=encoded)
-    class Session:
-        async def get(self, *args, **kwargs): return object()
-        async def commit(self): pass
     monkeypatch.setattr(ex, "run_remote", run)
     monkeypatch.setattr(ex, "_connection_for_attempt", lambda *args: (None, "/remote/attempt"))
     calls = []
@@ -142,13 +142,17 @@ async def test_transport_disconnect_reclaims_partial_and_reuses_verified_bytes(t
         assert not (destination / "second.txt").exists()
         (destination / "second.txt").write_text("second")
     monkeypatch.setattr(ex, "rsync_selected_from_remote", transfer)
-    with pytest.raises(ex.RemoteCollectionPending, match="disconnect"):
-        await ex.collect_remote_results(Session(), job, status)
+    async with store() as session:
+        job = await session.get(Job, "job")
+        with pytest.raises(ex.RemoteCollectionPending, match="disconnect"):
+            await ex.collect_remote_results(session, job, status)
     # Budget excludes retained verified bytes; only missing file + manifest needed.
     monkeypatch.setattr(ex.shutil, "disk_usage", lambda _: SimpleNamespace(free=ex.RESULT_DISK_RESERVE_BYTES + len(encoded.encode()) + 6))
-    returned, staged = await ex.collect_remote_results(Session(), job, status)
-    assert returned == manifest and staged == incoming and len(calls) == 2
-    await ex.collect_remote_results(Session(), job, status)
+    async with store() as session:
+        job = await session.get(Job, "job")
+        returned, staged = await ex.collect_remote_results(session, job, status)
+        assert returned == manifest and staged == incoming and len(calls) == 2
+        await ex.collect_remote_results(session, job, status)
     assert len(calls) == 2
     assert list(incoming.parent.iterdir()) == [incoming]
 
