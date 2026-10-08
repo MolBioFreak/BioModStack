@@ -90,9 +90,16 @@ def independent_runtime_model_ids() -> tuple[str, ...]:
                         if model.runtime_dependencies is not None))
 
 
-def model_runtime_dependencies(model_id: str) -> tuple[RuntimeDependencyRef, ...]:
-    model = get_registry().get_model(model_id)
-    if model is None or model.runtime_dependencies is None:
+def model_runtime_dependencies(model_id: str, *, include_internal: bool = False) -> tuple[RuntimeDependencyRef, ...]:
+    """Resolve declared assets; internal access is for trusted component compilers.
+
+    Provisioning/API callers retain the public catalog boundary. Allowing a
+    component's assets here does not authorize public launch of that model.
+    """
+    registry = get_registry()
+    model = (registry.get_internal_model_definition(model_id) if include_internal
+             else registry.get_model(model_id))
+    if model is None or not model.enabled or model.runtime_dependencies is None:
         raise ValueError("Independent runtime closure is not available for this model")
     return tuple(model.runtime_dependencies)
 

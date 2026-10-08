@@ -3357,7 +3357,12 @@ def build_job_nextflow_command(job, params, output_dir, *, compiled_parameters=N
     if uses_native_parent_components(command) and params.get('run_frustrampnn') is True:
         from paths import get_container_dir
         from services.remote_execution.images import resolve_image
-        image = resolve_image('frustrampnn.sif', get_container_dir())
+        from model_registry import model_runtime_dependencies
+        images = [ref for ref in model_runtime_dependencies('frustrampnn', include_internal=True)
+                  if ref.kind == 'image']
+        if len(images) != 1:
+            raise ValueError('Native FrustraMPNN requires exactly one declared inference image')
+        image = resolve_image(images[0].relative_path, get_container_dir())
         command.extend(['--frustrampnn_container_path', str(image)])
         if compiled_parameters is not None:
             compiled_parameters['frustrampnn_container_path'] = str(image)

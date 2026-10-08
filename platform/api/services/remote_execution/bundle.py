@@ -318,7 +318,8 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any]) -> list[tu
     if normalized_model == "fampnn_child":
         container_names.add("fampnn.sif")
     if params.get("run_frustrampnn") is True:
-        container_names.add("frustrampnn.sif")
+        for ref in model_runtime_dependencies('frustrampnn', include_internal=True):
+            (container_names if ref.kind == 'image' else weight_names).add(ref.relative_path)
     # Native campaigns use the existing BoltzGen runner and native preparation /
     # filter image. Helpers themselves travel in the full committed source tree.
     if normalized_model in {"boltzgen", "boltzgen_child"} or params.get("diffusion_method") == "boltzgen":
