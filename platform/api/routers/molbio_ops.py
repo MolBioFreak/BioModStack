@@ -2386,6 +2386,14 @@ async def align_molecular_sequences(request: SequenceAlignmentRequest):
 # ============================================================================
 # Auto-Annotation using pLannotate
 # ============================================================================
+# BMS_FUTURE_GAP(plannotate-editor): this endpoint is intentionally a narrow
+# detection adapter, not yet a governed annotation-workup. Before it can be
+# treated as a complete MolBio annotation capability, add: (1) durable raw
+# pLannotate artifacts and run/profile/database provenance; (2) review-first
+# candidate annotations with explicit accept/reject/conflict decisions rather
+# than immediate construct-map merging; and (3) an approved, versioned public
+# and lab annotation-profile catalog rather than an opaque YAML environment seam.
+# Keep pLannotate findings distinct from curated construct annotations.
 
 
 class AutoAnnotateRequest(BaseModel):
