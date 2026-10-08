@@ -1,72 +1,118 @@
 Bootstrap: docker
-From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+From: nvcr.io/nvidia/cuda:12.8.0-devel-ubuntu22.04
 
-# The post section is equivalent to the Docker RUN instruction.
+# RFdiffusion container optimized for NVIDIA RTX 5090 (sm_120) and RTX 3090 (sm_86)
+# Based on successful JMB-Scripts implementation using CUDA 12.8
+# https://github.com/JMB-Scripts/RFdiffusion-dockerfile-nvidia-RTX5090
+
 %post
+    export DEBIAN_FRONTEND=noninteractive
+
+    # Install system dependencies
     apt-get -q update
-    DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
+    apt-get install --no-install-recommends -y \
         git \
-        python3.10 \
-        python3-pip \
-        sed \
-        cmake \
-        build-essential
-    python3.10 -m pip install -q -U --no-cache-dir pip
-    rm -rf /var/lib/apt/lists/*
-    apt-get autoremove -y
-    apt-get clean
+        wget \
+        build-essential \
+        ninja-build \
+        g++-11 \
+        ca-certificates
 
-    # Clone the RFdiffusion repository
+    # Install modern CMake (3.29.3) - Ubuntu 22.04 default is too old
+    cd /tmp
+    wget -q https://github.com/Kitware/CMake/releases/download/v3.29.3/cmake-3.29.3-linux-x86_64.sh
+    sh cmake-3.29.3-linux-x86_64.sh --skip-license --prefix=/usr/local
+    rm cmake-3.29.3-linux-x86_64.sh
+
+    # Install Mambaforge for conda environment management
+    wget -q https://github.com/conda-forge/miniforge/releases/download/24.3.0-0/Mambaforge-24.3.0-0-Linux-x86_64.sh -O /tmp/mambaforge.sh
+    bash /tmp/mambaforge.sh -b -p /opt/conda
+    rm /tmp/mambaforge.sh
+    export PATH="/opt/conda/bin:$PATH"
+
+    # Create Python 3.11 environment
+    mamba create -y -n rfdiffusion python=3.11
+    export PATH="/opt/conda/envs/rfdiffusion/bin:$PATH"
+
+    # Install PyTorch nightly with CUDA 12.8 support (required for RTX 5090 sm_120)
+    pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+
+    # Enforce NumPy < 2.0 to prevent ABI conflicts
+    pip install "numpy<2.0"
+
+    # Clone RFdiffusion repository
     git clone https://github.com/PapenfussLab/RFdiffusion /app/RFdiffusion
-    cd /app/RFdiffusion && git checkout 0938f878388466d30d16f1f468c362afe9c8d345
+    cd /app/RFdiffusion
+    git checkout 0938f878388466d30d16f1f468c362afe9c8d345
 
-    # Install PyTorch nightly with CUDA 12.8 for RTX 5090 (sm_120) support
-    # CUDA 12.8 nightly builds include sm_120 support for Blackwell architecture
-    pip install -q --no-cache-dir \
-        torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
-
-    # Build DGL from source for PyTorch nightly compatibility
-    # Pre-built DGL 1.1.3 from PyPI lacks CUDA operations needed by PyTorch nightly
-    git clone --branch v1.1.3 --recurse-submodules https://github.com/dmlc/dgl.git /tmp/dgl
-    cd /tmp/dgl
-    mkdir build && cd build
-    cmake -DUSE_CUDA=ON -DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda ..
-    make -j$(nproc)
-    cd ../python
-    python3.10 setup.py install
-    cd / && rm -rf /tmp/dgl
-
-    # Install RFdiffusion dependencies (removed TensorFlow, JAX, dm-haiku, dm-tree, ml-collections - not used by RFdiffusion)
-    pip install -q --no-cache-dir \
-        e3nn==0.3.3 \
+    # Install core dependencies
+    pip install --no-cache-dir \
+        hydra-core==1.3.2 \
+        pandas \
+        "pydantic>=2.0" \
         wandb==0.12.0 \
         pynvml==11.0.0 \
-        git+https://github.com/NVIDIA/dllogger#egg=dllogger \
-        decorator==4.4.2 \
-        hydra-core==1.3.2 \
+        decorator==5.1.0 \
         pyrsistent==0.19.3 \
         icecream==2.1.3 \
         biopython==1.81 \
-        /app/RFdiffusion/env/SE3Transformer
+        ml-collections==0.1.1 \
+        git+https://github.com/NVIDIA/dllogger#egg=dllogger
 
-    # CRITICAL FIX: Patch e3nn to add weights_only=False to torch.load() call
-    # This fixes PyTorch nightly's stricter pickle security for RTX 5090 compatibility
-    # Solution adapted from: https://github.com/JMB-Scripts/RFdiffusion-dockerfile-nvidia-RTX5090
-    sed -i "s/torch\.load(os\.path\.join(os\.path\.dirname(__file__), 'constants\.pt'))/torch.load(os.path.join(os.path.dirname(__file__), 'constants.pt'), weights_only=False)/" \
-        /usr/local/lib/python3.10/dist-packages/e3nn/o3/_wigner.py
+    # Install e3nn with version 0.3.3
+    pip install --no-cache-dir e3nn==0.3.3
 
-    # Install RFdiffusion itself
-    pip install --no-cache-dir /app/RFdiffusion --no-deps
+    # Install torchdata (compatible with PyTorch nightly)
+    pip install --no-cache-dir torchdata
 
-    # Create schedules directory for RFdiffusion (read-only filesystem workaround)
-    # RFdiffusion tries to create this at runtime, but Apptainer containers are read-only
-    mkdir -p /usr/local/lib/python3.10/dist-packages/schedules
-    chmod 777 /usr/local/lib/python3.10/dist-packages/schedules
+    # Build and install SE3Transformer
+    cd /app/RFdiffusion/env/SE3Transformer
+    pip install --no-cache-dir . --no-deps
 
-# Setting environment variables
+    # Build and install DGL from source with CUDA 12.8 support
+    # Clean up any existing DGL directory from previous build attempts
+    rm -rf /tmp/dgl
+    cd /tmp
+    git clone --recursive https://github.com/dmlc/dgl.git
+    cd dgl
+    mkdir build
+    cd build
+    cmake -DUSE_CUDA=ON \
+          -DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda \
+          -DCMAKE_BUILD_TYPE=Release \
+          ..
+    make -j$(nproc)
+    cd ../python
+    python setup.py install
+
+    # Install RFdiffusion
+    cd /app/RFdiffusion
+    pip install --no-cache-dir . --no-deps
+
+    # Apply e3nn hotfix for PyTorch nightly compatibility (weights_only parameter)
+    # This fixes: TypeError related to weights_only in torch.load
+    E3NN_INIT="/opt/conda/envs/rfdiffusion/lib/python3.11/site-packages/e3nn/__init__.py"
+    if [ -f "$E3NN_INIT" ]; then
+        sed -i "s/torch\.load(\(.*\))/torch.load(\1, weights_only=False)/g" "$E3NN_INIT"
+    fi
+
+    # Find and patch all e3nn files that use torch.load
+    find /opt/conda/envs/rfdiffusion/lib/python3.11/site-packages/e3nn -name "*.py" -type f -exec \
+        sed -i 's/torch\.load(\([^)]*\))/torch.load(\1, weights_only=False)/g' {} \;
+
+    # Create python3.10 symlink for backward compatibility with Nextflow modules
+    ln -s /opt/conda/envs/rfdiffusion/bin/python /opt/conda/envs/rfdiffusion/bin/python3.10
+
+    # Clean up
+    apt-get autoremove -y
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+    rm -rf /tmp/*
+
 %environment
-    DGLBACKEND="pytorch"
+    export PATH="/opt/conda/envs/rfdiffusion/bin:$PATH"
+    export DGLBACKEND="pytorch"
+    export PYTHONUNBUFFERED=1
 
-# Entry point for the container when run.
 %runscript
-    exec python3.10 /app/RFdiffusion/scripts/run_inference.py "$@"
+    exec python /app/RFdiffusion/scripts/run_inference.py "$@"
