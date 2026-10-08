@@ -423,26 +423,37 @@ def _input_assets(
     repo_root: Path,
     runtime_paths: set[Path],
     output_dir: Path,
+    native_invocation=None,
 ) -> list[tuple[Path, str]]:
+    from component_runtime import NativeInvocation
+    if not isinstance(native_invocation, NativeInvocation):
+        raise RemoteBundleError('Input binding requires the shared native compilation')
     selected: dict[Path, str] = {}
+    generated_paths = set()
+    for item in native_invocation.generated_inputs:
+        reference = item.bind(owner_kind='request',
+            owner_id=hashlib.sha256(native_invocation.requested_json).hexdigest(),
+            format_schema='application/octet-stream')
+        generated_paths.add(reference.resolve(output_dir))
     input_roots = (get_data_root().resolve(), get_inputs_dir().resolve(), get_results_dir().resolve())
     runtime_roots = [path for path in runtime_paths if path.is_dir()]
     system_roots = {get_weights_root().resolve(), get_container_dir().resolve()}
     # Store destinations are worker-owned output locations, not input assets.
-    if "--runtime_image_store" in command:
-        store_index = command.index("--runtime_image_store") + 1
-        if store_index >= len(command):
-            raise RemoteBundleError("runtime image store destination is missing")
-        system_roots.add(Path(command[store_index]).resolve())
+    store_destination = params.get('runtime_image_store')
+    if store_destination is not None:
+        if not isinstance(store_destination, str) or not store_destination:
+            raise RemoteBundleError('Runtime image store destination is missing')
+        system_roots.add(Path(store_destination).resolve())
     cm_request = None
-    if '--cm_request_path' in command:
-        index = command.index('--cm_request_path') + 1
-        if index >= len(command):
+    request_path = params.get('cm_request_path')
+    if request_path is not None:
+        if not isinstance(request_path, str) or not request_path:
             raise RemoteBundleError('Canonical CM request path is missing')
-        cm_request = Path(command[index]).expanduser()
+        cm_request = Path(request_path).expanduser()
         if cm_request.name != 'cm_request_v1.json' or cm_request.is_symlink() or not cm_request.is_file():
             raise RemoteBundleError('Canonical CM request path is not its regular request authority')
-    candidates = [*_flatten_strings(params), *(str(value) for value in command[1:])]
+    # CLI arguments are a projection, never a second input declaration source.
+    candidates = [*_flatten_strings(params), *(str(path) for path in sorted(generated_paths))]
     for raw in candidates:
         if not raw.startswith("/"):
             continue
@@ -457,7 +468,10 @@ def _input_assets(
             continue
         if any(part.is_symlink() for part in (candidate, *candidate.parents)):
             raise RemoteBundleError(f"Input path traverses a symlink: {candidate}")
-        if (path == output_dir.resolve() and (cm_request is None or path != cm_request.parent.resolve())) or _under(path, repo_root):
+        is_cm_root = cm_request is not None and path == cm_request.parent.resolve()
+        if path == output_dir.resolve() and not is_cm_root:
+            continue
+        if _under(path, repo_root) and path not in generated_paths and not is_cm_root:
             continue
         if not path.exists():
             raise RemoteBundleError(f"Declared input is unavailable: {candidate}")
