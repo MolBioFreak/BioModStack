@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from inspect import signature
+import hashlib
+from inspect import getmodule, signature
+from pathlib import Path
 from typing import Callable, List
 import sqlite3
 
@@ -57,6 +59,9 @@ from migrations.add_ont_signal_workbench import migrate as migrate_ont_signal_wo
 from migrations.add_ont_external_move_bam_receipts import (
     migrate as migrate_ont_external_move_bam_receipts,
 )
+from migrations.add_ont_move_source_attempt_lineage import (
+    migrate as migrate_ont_move_source_attempt_lineage,
+)
 from run_migration import migrate as migrate_stage_tracking
 
 
@@ -109,6 +114,7 @@ MIGRATIONS: List[Migration] = [
     Migration(31, "seal_ont_external_source_identity", seal_ont_external_source_identity),
     Migration(32, "add_ont_signal_workbench", migrate_ont_signal_workbench),
     Migration(33, "add_ont_external_move_bam_receipts", migrate_ont_external_move_bam_receipts),
+    Migration(34, "add_ont_move_source_attempt_lineage", migrate_ont_move_source_attempt_lineage),
 ]
 
 
@@ -126,10 +132,16 @@ def _ensure_migrations_table(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS schema_migrations (
             version INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
-            applied_at TEXT NOT NULL
+            applied_at TEXT NOT NULL,
+            content_sha256 TEXT
         )
         """
     )
+    columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info('schema_migrations')")
+    }
+    if "content_sha256" not in columns:
+        conn.execute("ALTER TABLE schema_migrations ADD COLUMN content_sha256 TEXT")
     conn.commit()
 
 
@@ -211,8 +223,16 @@ def _reconcile_legacy_ont_migration_versions(conn: sqlite3.Connection) -> None:
             if cursor.rowcount != 1:
                 raise RuntimeError(f"failed to publish remapped migration version for {name}")
         conn.execute(
-            "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
-            (17, "add_md_lifecycle", datetime.utcnow().isoformat()),
+            """
+            INSERT INTO schema_migrations (version, name, applied_at, content_sha256)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                17,
+                "add_md_lifecycle",
+                datetime.utcnow().isoformat(),
+                None,
+            ),
         )
         _validate_applied_migration_identities(_get_applied_migrations(conn))
         conn.commit()
@@ -249,6 +269,46 @@ def _validate_applied_migration_identities(applied: dict[int, str]) -> None:
         )
 
 
+def _migration_content_sha256(migration: Migration) -> str:
+    module = getmodule(migration.fn)
+    module_file = getattr(module, "__file__", None)
+    if not module_file:
+        raise RuntimeError(
+            f"schema migration version {migration.version} has no readable module byte authority"
+        )
+    try:
+        content = Path(module_file).read_bytes()
+    except OSError as exc:
+        raise RuntimeError(
+            f"schema migration version {migration.version} module bytes are unreadable"
+        ) from exc
+    return hashlib.sha256(content).hexdigest()
+
+
+def _validate_applied_migration_content(conn: sqlite3.Connection) -> None:
+    expected_by_version = {migration.version: migration for migration in MIGRATIONS}
+    rows = conn.execute(
+        "SELECT version, content_sha256 FROM schema_migrations ORDER BY version"
+    ).fetchall()
+    for raw_version, raw_content_sha256 in rows:
+        version = int(raw_version)
+        migration = expected_by_version.get(version)
+        if migration is None:
+            continue
+        recorded = None if raw_content_sha256 is None else str(raw_content_sha256)
+        if recorded in {None, "legacy_unknown"}:
+            if version >= 33:
+                raise RuntimeError(
+                    f"schema migration content checksum is missing for version {version}"
+                )
+            continue
+        observed = _migration_content_sha256(migration)
+        if recorded != observed:
+            raise RuntimeError(
+                f"schema migration content changed after application for version {version}"
+            )
+
+
 def _run_migration(migration: Migration, db_path: str) -> None:
     """Use an explicit database for migrations that support it; preserve legacy no-argument migrations."""
     if "db_path" in signature(migration.fn).parameters:
@@ -270,14 +330,24 @@ def run_all(db_path: str | None = None) -> None:
         _reconcile_legacy_ont_migration_versions(conn)
         applied = _get_applied_migrations(conn)
         _validate_applied_migration_identities(applied)
+        _validate_applied_migration_content(conn)
 
         for mig in MIGRATIONS:
             if mig.version in applied:
                 continue
+            content_sha256 = _migration_content_sha256(mig)
             _run_migration(mig, db_path)
             conn.execute(
-                "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
-                (mig.version, mig.name, datetime.utcnow().isoformat()),
+                """
+                INSERT INTO schema_migrations (version, name, applied_at, content_sha256)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    mig.version,
+                    mig.name,
+                    datetime.utcnow().isoformat(),
+                    content_sha256,
+                ),
             )
             conn.commit()
             print(f"[migrations] applied {mig.name}")

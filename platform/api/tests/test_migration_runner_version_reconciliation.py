@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
 
@@ -41,6 +43,15 @@ def test_migration_versions_are_unique_with_md_before_ont() -> None:
         (23, "add_frustrampnn_persistence"),
         (24, "add_ngs_reference_sets"),
         (25, "add_pooled_ont_reference_assignment"),
+        (26, "add_frustrampnn_statistics"),
+        (27, "add_frustrampnn_reviews"),
+        (28, "add_ont_raw_signal_ledger"),
+        (29, "add_ont_external_registration_identity"),
+        (30, "enforce_ont_external_registration_immutability"),
+        (31, "seal_ont_external_source_identity"),
+        (32, "add_ont_signal_workbench"),
+        (33, "add_ont_external_move_bam_receipts"),
+        (34, "add_ont_move_source_attempt_lineage"),
     ]
     assert len({migration.version for migration in MIGRATIONS}) == len(MIGRATIONS)
 
@@ -82,6 +93,9 @@ def test_full_runner_upgrades_complete_legacy_ont_history_to_canonical_v21(tmp_p
     assert connection.execute(
         "SELECT version, name FROM schema_migrations ORDER BY version"
     ).fetchall() == [(migration.version, migration.name) for migration in migrations_through_v21]
+    assert connection.execute(
+        "SELECT DISTINCT content_sha256 FROM schema_migrations ORDER BY content_sha256"
+    ).fetchall() == [(None,)]
     assert connection.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'md_runs'"
     ).fetchone() == (1,)
@@ -144,6 +158,39 @@ def test_runner_fails_closed_when_applied_version_has_wrong_name(tmp_path) -> No
 
     with pytest.raises(RuntimeError, match="version 18.*unrelated_migration.*add_ont_instrument_run_ledger"):
         runner.run_all(str(db_path))
+
+
+def test_runner_attests_migration_module_bytes_captured_before_execution(
+    tmp_path, monkeypatch
+) -> None:
+    db_path = tmp_path / "pre-execution-attestation.db"
+    module_path = tmp_path / "mutable_migration.py"
+    original_bytes = b"MIGRATION_CONTENT = 'reviewed'\n"
+    changed_bytes = b"MIGRATION_CONTENT = 'mutated-during-execution'\n"
+    module_path.write_bytes(original_bytes)
+
+    def mutating_migration(db_path: str) -> None:
+        with sqlite3.connect(db_path) as connection:
+            connection.execute("CREATE TABLE migration_side_effect (id INTEGER PRIMARY KEY)")
+        module_path.write_bytes(changed_bytes)
+
+    migration = runner.Migration(1, "mutating_migration", mutating_migration)
+    monkeypatch.setattr(runner, "MIGRATIONS", [migration])
+    monkeypatch.setattr(
+        runner,
+        "getmodule",
+        lambda fn: SimpleNamespace(__file__=str(module_path)) if fn is mutating_migration else None,
+    )
+
+    runner.run_all(str(db_path))
+
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT content_sha256 FROM schema_migrations WHERE version = 1"
+        ).fetchone() == (hashlib.sha256(original_bytes).hexdigest(),)
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='migration_side_effect'"
+        ).fetchone() == ("migration_side_effect",)
 
 
 @pytest.mark.parametrize(
