@@ -213,6 +213,14 @@ async def ingest_loose_files(
                 ptm = metrics.get('ptm')
                 ligand_iptm = metrics.get('ligand_iptm')
                 
+                # NEW: Extract interface metrics
+                iptm = metrics.get('iptm')
+                protein_iptm = metrics.get('protein_iptm')
+                complex_iplddt = metrics.get('complex_iplddt')
+                complex_ipde = metrics.get('complex_ipde')
+                chains_ptm = metrics.get('chains_ptm')  # dict: {"0": 0.76, "1": 0.51}
+                pair_chains_iptm = metrics.get('pair_chains_iptm')  # NxN matrix
+                
                 # Boltz2 uses 'complex_pde' not PAE - convert PDE to estimated PAE
                 pae = metrics.get('complex_pae') or metrics.get('pae')
                 if pae is None:
@@ -259,6 +267,14 @@ async def ingest_loose_files(
                     affinity_score=safe_float(affinity_score),
                     binder_probability=safe_float(binder_probability),
                     residue_plddt=residue_plddt,
+                    
+                    # NEW: Interface metrics
+                    iptm=safe_float(iptm),
+                    protein_iptm=safe_float(protein_iptm),
+                    complex_iplddt=safe_float(complex_iplddt),
+                    complex_ipde=safe_float(complex_ipde),
+                    chains_ptm=chains_ptm,
+                    pair_chains_iptm=pair_chains_iptm,
                     
                     # Defaults for others
                     is_favorite=False,
@@ -347,6 +363,7 @@ async def ingest_loose_files(
                     plddt_overall=safe_float(plddt),
                     pae_overall=safe_float(pae),
                     ptm=safe_float(ptm),
+                    iptm=safe_float(iptm),  # NEW: Store RF3 iptm
                     conf_score=safe_float(conf_score),
                     residue_plddt=residue_plddt,
                     

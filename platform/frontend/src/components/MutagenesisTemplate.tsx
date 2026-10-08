@@ -402,7 +402,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                             <input
                                 type="range"
                                 min={10}
-                                max={200}
+                                max={1000}
                                 step={10}
                                 value={predictorParams.sampling_steps}
                                 onChange={(e) => setPredictorParams(p => ({ ...p, sampling_steps: parseInt(e.target.value) }))}
@@ -411,7 +411,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                             <div className="flex justify-between text-xs text-slate-500 mt-1">
                                 <span>10</span>
                                 <span className="text-slate-300 font-medium">{predictorParams.sampling_steps}</span>
-                                <span>200</span>
+                                <span>1000</span>
                             </div>
                         </div>
                         <div>

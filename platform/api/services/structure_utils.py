@@ -224,3 +224,117 @@ def convert_cif_to_pdb(cif_path: Union[str, Path], output_path: Union[str, Path]
     except Exception as e:
         print(f"[structure_utils] Error converting CIF to PDB: {e}")
         return False
+
+
+def get_per_chain_metrics(path: Union[str, Path]) -> dict:
+    """
+    Extract per-chain metrics for proteins AND nucleic acids.
+    
+    Returns:
+        {
+            "A": {"type": "protein", "plddt": [...], "length": 500, "avg_plddt": 85.2, "residue_numbers": [1, 2, ...]},
+            "B": {"type": "dna", "plddt": [...], "length": 50, "avg_plddt": 72.1, "residue_numbers": [1, 2, ...]},
+            ...
+        }
+    """
+    try:
+        structure = load_structure(path)
+        result = {}
+        
+        chain_ids = np.unique(structure.chain_id)
+        
+        for chain_id in chain_ids:
+            chain = structure[structure.chain_id == chain_id]
+            if len(chain) == 0:
+                continue
+                
+            # Detect chain type
+            # Check for amino acids (protein)
+            is_protein = struc.filter_amino_acids(chain)
+            has_protein = np.any(is_protein)
+            
+            # Check for nucleotides (DNA/RNA)
+            is_nucleic = struc.filter_nucleotides(chain)
+            has_nucleic = np.any(is_nucleic)
+            
+            # Get representative atoms based on type (for pLDDT extraction)
+            atoms = None
+            chain_type = "unknown"
+            
+            if has_protein:
+                chain_type = "protein"
+                # For protein, use CA atoms for pLDDT profile
+                atoms = chain[chain.atom_name == "CA"]
+                # Fallback if no CA (e.g. coarse grained?) - unlikely for AlphaFold/Boltz
+                if len(atoms) == 0:
+                    atoms = chain[is_protein] # Use all atoms if no CA found, to just get annot
+            
+            elif has_nucleic:
+                # Distinguish DNA vs RNA based on residue names
+                # DNA: DA, DT, DG, DC. RNA: A, U, G, C (typically) or RA, RU...
+                # Check for Thymine (DNA specific) vs Uracil (RNA specific)
+                res_names = np.unique(chain.res_name)
+                is_dna = np.any([r in ["DT", "DA", "DC", "DG", "THY"] for r in res_names])
+                is_rna = np.any([r in ["U", "URA"] for r in res_names])
+                
+                # If ambiguous, check sugar (C2' atom exists in RNA, not DNA? No, O2' exists in RNA)
+                # But residue name check is usually sufficient for PDBs
+                if is_dna and not is_rna:
+                    chain_type = "dna"
+                elif is_rna:
+                    chain_type = "rna"
+                else:
+                    # Generic nucleic
+                    chain_type = "dna" # Default to DNA if unsure (e.g. all G/C)
+                
+                # For nucleic acids, P (Phosphorous) is often used as "backbone" representative similar to CA
+                # Or C1', C4', etc. Let's use P if available, else C1'
+                atoms = chain[chain.atom_name == "P"]
+                if len(atoms) == 0:
+                    atoms = chain[chain.atom_name == "C1'"]
+            
+            else:
+                # Ligand or Ion
+                chain_type = "ligand"
+                atoms = chain 
+            
+            # Extract pLDDT from B-factors if available
+            plddt_list = []
+            res_nums = []
+            
+            # For ligands, we might just want a single average, but the schema allows list
+            # For polymers (protein/dna), we want per-residue list
+            
+            if atoms is not None and len(atoms) > 0 and 'b_factor' in atoms.get_annotation_categories():
+                b_factors = atoms.get_annotation("b_factor")
+                
+                # Scale if 0-1
+                if len(b_factors) > 0 and np.max(b_factors) <= 1.0:
+                    b_factors = b_factors * 100.0
+                
+                plddt_list = [round(float(b), 2) for b in b_factors]
+                res_nums = list(range(1, len(plddt_list) + 1)) # Simple 1-based index for now
+                
+                # Try to get actual residue numbers if available
+                if 'res_id' in atoms.get_annotation_categories():
+                    res_ids = atoms.res_id
+                    # If strictly increasing, use them. If there are insertion codes (not handled by Biotite simple array),
+                    # simple indexing might be safer. But let's try to use res_id.
+                    if len(res_ids) == len(plddt_list):
+                        res_nums = [int(r) for r in res_ids]
+
+            avg_plddt = float(np.mean(plddt_list)) if plddt_list else None
+            
+            result[chain_id] = {
+                "type": chain_type,
+                "length": len(plddt_list),
+                "avg_plddt": avg_plddt,
+                "plddt": plddt_list,
+                "residue_numbers": res_nums
+            }
+            
+        return result
+        
+    except Exception as e:
+        print(f"[structure_utils] Error extracting chain metrics from {path}: {e}")
+        return {}

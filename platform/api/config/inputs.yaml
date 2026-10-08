@@ -82,11 +82,36 @@ preset_pdbs:
   path: rcsb/5ivx.pdb
   description: Don't eat me signal - macrophage checkpoint
   category: Immune
-- id: tdt
-  name: Human TdT (1kej)
+- id: tdt_mouse_1kej
+  name: Mouse TdT + ddATP (1kej)
   path: rcsb/1kej.pdb
-  description: Terminal deoxynucleotidyl transferase - template-independent polymerase
-  category: Polymerase
+  description: Murine TdT catalytic core with ddATP (2.35Å)
+  category: TdT
+- id: tdt_mouse_1jms
+  name: Mouse TdT Native (1jms)
+  path: rcsb/1jms.pdb
+  description: Murine TdT native catalytic core
+  category: TdT
+- id: tdt_mouse_4i27
+  name: Mouse TdT Ternary (4i27)
+  path: rcsb/4i27.pdb
+  description: Murine TdT + ssDNA + nucleotide (2.4Å)
+  category: TdT
+- id: tdt_mouse_4i28
+  name: Mouse TdT Binary (4i28)
+  path: rcsb/4i28.pdb
+  description: Murine TdT + ssDNA + Zn++ (2.2Å)
+  category: TdT
+- id: tdt_mouse_5d4b
+  name: Mouse TdT Templated (5d4b)
+  path: rcsb/5d4b.pdb
+  description: Murine TdT templated activity complex
+  category: TdT
+- id: tdt_mouse_6go6
+  name: TdT Chimera Ternary (6go6)
+  path: rcsb/6go6.pdb
+  description: TdT-PolMu chimera ternary complex
+  category: TdT
 - id: klenow
   name: E. coli DNA Pol I Klenow (1kln)
   path: rcsb/1kln.pdb
@@ -132,6 +157,48 @@ preset_pdbs:
   path: rcsb/4oo8.pdb
   description: CRISPR-associated protein 9 - gene editing
   category: Enzyme
+# DNA Polymerases (additional)
+- id: polbeta_1bpx
+  name: Human Pol β (1bpx)
+  path: rcsb/1bpx.pdb
+  description: Human DNA polymerase beta (2.2Å)
+  category: Polymerase
+- id: t7pol_2hhq
+  name: T7 DNA Pol Ternary (2hhq)
+  path: rcsb/2hhq.pdb
+  description: T7 DNA polymerase ternary complex (1.85Å)
+  category: Polymerase
+- id: poldelta_3ktq
+  name: Yeast Pol δ (3ktq)
+  path: rcsb/3ktq.pdb
+  description: Yeast DNA polymerase delta (2.0Å)
+  category: Polymerase
+# Myosins
+- id: myosin_x_5i0h
+  name: Myosin X (5i0h)
+  path: rcsb/5i0h.pdb
+  description: Myosin X motor domain pre-powerstroke (1.80Å)
+  category: Myosin
+- id: myosin_iic_5i4e
+  name: Human NM-IIC (5i4e)
+  path: rcsb/5i4e.pdb
+  description: Human nonmuscle myosin-2C pre-powerstroke (2.25Å)
+  category: Myosin
+- id: myosin_v_1w8j
+  name: Myosin V (1w8j)
+  path: rcsb/1w8j.pdb
+  description: Myosin V motor nucleotide-free (2.70Å)
+  category: Myosin
+- id: myosin_iib_4pd3
+  name: Human NM-IIB (4pd3)
+  path: rcsb/4pd3.pdb
+  description: Human nonmuscle myosin-2B rigor-like (2.84Å)
+  category: Myosin
+- id: myosin_smooth_1br4
+  name: Smooth Muscle Myosin (1br4)
+  path: rcsb/1br4.pdb
+  description: Vertebrate smooth muscle myosin pre-powerstroke
+  category: Myosin
 - id: fab_fragment
   name: Fab Fragment (1bbd)
   path: rcsb/1bbd.pdb
@@ -463,6 +530,19 @@ preset_sequences:
     DEQLLQKVMNLWEKKGLLLYYDLVESTFEKLRLPSRKVDALDHFQKCFLIFKLPRQRVDSDQSSWQEGKTWKAI RVDLVLCPYERRAFALLGWTGSRQFERDLRRYATHERKMILDNHALYDKTKRIFFLKAESEEEIFAHLGLDYI
     EPWERNA
   description: Terminal deoxynucleotidyl transferase - template-independent DNA polymerase
+- id: tdt_mouse
+  name: Mouse TdT (P09838)
+  uniprot: P09838
+  length: 510
+  sequence: MDPPRVSHLSPRKKKHPRQTGALMASSPPRDIKFQDLVVFILEKKMGTSRRAFLMELARRTGFQVENELSD
+    SVTHIVAENNTSGSGDVLEWLQAQKVQVSSRSELLDVRSWLIECIRAGRPMEMTGKHQLVVRRDFSDWSTNPGP
+    PKTSTNVQKISQYACQRRTTLNNCNQIFTDAFDILAENSGFRENEDSSCVTFMRVASVLKSLPFTIISMKDT
+    EGIPCLGSKVKGIIEEIIKDGESNEVKAVLNDERYRSFKLFTSVFGVGLKTSEKWFRMGFRTLSKVRSEDKSL
+    RFTRMQKAGFLYYEDLVSCVTRAEAETISVLVKEAVWAFLPDAFVTMTGGFRRGKKMMGHDVDFLITSPGSTTE
+    DEQLFQKVMNLWEKKGLLLYYDHVESTFEKLRLPSNVDALDHFQKCFLILKLPRQRVDSDQSSWQEGKTWKAI
+    RVDLVLCPYERRAFALLGWTGSRQFERDLRRYATHERKMMLDNHALYDKTKRIFFLKAESEEEIFAHLGLDYI
+    EPWERNA
+  description: Murine terminal deoxynucleotidyl transferase (mouse)
 - id: klenow_ecoli
   name: E. coli Klenow Fragment (P00582)
   uniprot: P00582

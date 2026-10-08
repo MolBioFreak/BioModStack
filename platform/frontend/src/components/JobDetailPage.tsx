@@ -1,13 +1,13 @@
 /**
  * JobDetailPage - Standalone page for viewing job details
  * 
- * Fetches job by ID from URL params and displays results with MolViewer.
+ * Fetches job by ID from URL params and displays results with MolstarViewer.
  */
 
 import { useParams, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { useState, useEffect } from 'react';
-import { MolViewer } from './MolViewer';
+import { useState } from 'react';
+import MolstarViewer from './MolstarViewer';
 import type { Job } from '../lib/api';
 
 interface DockingResult {
@@ -30,8 +30,6 @@ interface StructureFile {
 export function JobDetailPage() {
     const { jobId } = useParams<{ jobId: string }>();
     const [selectedPose, setSelectedPose] = useState<number>(0);
-    const [pdbContent, setPdbContent] = useState<string>('');
-    const [sdfContents, setSdfContents] = useState<Record<string, string>>({});
 
     // Fetch job details
     const { data: job, isLoading: jobLoading, error: jobError } = useQuery<Job>({
@@ -73,39 +71,8 @@ export function JobDetailPage() {
         enabled: job?.status === 'completed' && !isDockingJob,
     });
 
-    // Fetch SDF content for selected pose
-    useEffect(() => {
-        if (dockingData?.sdfs?.length > 0 && selectedPose < dockingData.sdfs.length) {
-            const sdf = dockingData.sdfs[selectedPose];
-            if (!sdfContents[sdf.name]) {
-                fetch(`/api/jobs/${jobId}/docking-results/${sdf.name}`)
-                    .then(res => res.text())
-                    .then(content => {
-                        setSdfContents(prev => ({ ...prev, [sdf.name]: content }));
-                    })
-                    .catch(console.error);
-            }
-        }
-    }, [jobId, dockingData, selectedPose, sdfContents]);
-
-    // Fetch PDB content
-    useEffect(() => {
-        if (isDockingJob && job?.status === 'completed') {
-            fetch(`/api/jobs/${jobId}/protein-pdb`)
-                .then(res => {
-                    if (res.ok) return res.text();
-                    throw new Error('PDB not found');
-                })
-                .then(content => {
-                    if (content?.trim()) setPdbContent(content);
-                })
-                .catch(() => { });
-        }
-    }, [jobId, isDockingJob, job?.status]);
-
     const poses = dockingData?.sdfs || [];
     const currentSdf = poses[selectedPose];
-    const currentSdfContent = currentSdf ? sdfContents[currentSdf.name] : '';
 
     if (jobLoading) {
         return (
@@ -236,14 +203,15 @@ export function JobDetailPage() {
                                     </span>
                                 </div>
 
-                                {/* 3D Viewer */}
+                                {/* 3D Viewer - Using MolstarViewer with URL */}
                                 <div className="bg-slate-900/50 rounded-xl overflow-hidden">
-                                    {currentSdfContent ? (
-                                        <MolViewer
-                                            pdbContent={pdbContent || undefined}
-                                            sdfContent={currentSdfContent}
+                                    {currentSdf ? (
+                                        <MolstarViewer
+                                            structureUrl={`/api/jobs/${jobId}/docking-results/${currentSdf.name}`}
+                                            format="pdb"
                                             height={500}
                                             backgroundColor="#0f172a"
+                                            alphafoldView={false}
                                         />
                                     ) : (
                                         <div className="flex items-center justify-center h-[500px] text-slate-500">

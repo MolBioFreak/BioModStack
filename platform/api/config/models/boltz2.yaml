@@ -33,6 +33,7 @@ modes:
       - boltz_sampling_steps
       - boltz_use_msa
       - boltz_method
+      - num_parallel_jobs
 
   - id: complex
     name: Complex Prediction
@@ -46,6 +47,7 @@ modes:
       - boltz_use_potentials
       - boltz_use_msa
       - boltz_method
+      - num_parallel_jobs
 
 params:
   # Input sequence
@@ -75,7 +77,7 @@ params:
     required: false
     default: 1
     minimum: 1
-    maximum: 10
+    maximum: 32
 
   - name: boltz_sampling_steps
     type: integer
@@ -85,6 +87,13 @@ params:
     minimum: 1
     maximum: 1000
 
+  - name: num_parallel_jobs
+    type: integer
+    description: Number of parallel simulation jobs to run
+    required: false
+    default: 1
+    minimum: 1
+    maximum: 500
 
 
   - name: boltz_use_potentials
@@ -95,7 +104,7 @@ params:
 
   - name: boltz_use_msa
     type: boolean
-    description: Enable Remote MSA Generation (slower, better quality)
+    description: Use local MSA database (885GB UniRef30 - fast, no API limits)
     required: false
     default: true
 

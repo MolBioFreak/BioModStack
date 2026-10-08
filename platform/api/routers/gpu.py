@@ -507,6 +507,7 @@ class SchedulerGPUOverride(BaseModel):
     force_available: bool = False      # Permanent override (debug mode)
     quick_enable: bool = False         # One-shot: accept 1 job, then auto-clear
     threshold: Optional[float] = None  # null = use global
+    disabled: bool = False             # GPU excluded from orchestrator scheduling
 
 
 class SchedulerConfigResponse(BaseModel):
@@ -583,7 +584,8 @@ async def set_gpu_override(gpu_id: str, override: SchedulerGPUOverride):
     config["overrides"][gpu_id] = {
         "force_available": override.force_available,
         "quick_enable": override.quick_enable,
-        "threshold": override.threshold
+        "threshold": override.threshold,
+        "disabled": override.disabled
     }
     
     if not write_scheduler_config(config):
@@ -591,8 +593,37 @@ async def set_gpu_override(gpu_id: str, override: SchedulerGPUOverride):
     
     return {
         "success": True,
-        "message": f"GPU {gpu_id}: force_available={override.force_available}, quick_enable={override.quick_enable}",
+        "message": f"GPU {gpu_id}: force_available={override.force_available}, disabled={override.disabled}",
         "overrides": config["overrides"]
+    }
+
+
+@router.post("/scheduler-config/gpu/{gpu_id}/toggle-disable")
+async def toggle_gpu_disabled(gpu_id: str):
+    """Simple toggle to enable/disable a GPU from inference scheduling."""
+    config = read_scheduler_config()
+    
+    # Get current state
+    overrides = config.get("overrides", {})
+    gpu_override = overrides.get(gpu_id, {})
+    current_disabled = gpu_override.get("disabled", False)
+    
+    # Toggle
+    new_disabled = not current_disabled
+    
+    # Update override
+    if gpu_id not in config["overrides"]:
+        config["overrides"][gpu_id] = {}
+    config["overrides"][gpu_id]["disabled"] = new_disabled
+    
+    if not write_scheduler_config(config):
+        raise HTTPException(status_code=500, detail="Failed to save config")
+    
+    return {
+        "success": True,
+        "gpu_id": gpu_id,
+        "disabled": new_disabled,
+        "message": f"GPU {gpu_id} {'disabled' if new_disabled else 'enabled'} for inference"
     }
 
 

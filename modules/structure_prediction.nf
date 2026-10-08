@@ -1,10 +1,12 @@
 // Structure Prediction from Sequence
 // Modules for predicting 3D protein structure directly from amino acid sequence
 
-process GenerateRemoteMSA {
+// Generate MSA using local MMseqs2 database - NO RATE LIMITING!
+// Uses full ColabFold database at /mnt/BioModStack/colabfold_db
+process GenerateLocalMSA {
     label 'CPU'
-    // Running on CPU to save GPU - generates MSA ONCE per unique sequence
-    // Uses local cache to avoid redundant ColabFold API calls
+    // Runs MMseqs2 locally against UniRef30 + ColabFoldDB
+    // No internet required, no API rate limits
     publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "*.a3m"
 
     input:
@@ -15,19 +17,15 @@ process GenerateRemoteMSA {
     path "*.log"
 
     script:
-    def cacheDir = params.msa_cache_dir ?: "${projectDir}/data/msa_cache"
-    def dbPath = params.db_path ?: "${projectDir}/platform/api/proteindj.db"
-    def maxAgeDays = params.msa_cache_max_age_days ?: 30
-    def forceRefresh = params.msa_force_refresh ? '--force_refresh' : ''
+    def dbPath = params.msa_local_db ?: "/mnt/BioModStack/colabfold_db"
+    def threads = params.msa_threads ?: 32
     """
-    python3 ${projectDir}/scripts/fetch_colabfold_msa.py \\
+    python3 ${projectDir}/scripts/run_local_msa.py \\
         --sequence "${sequence}" \\
         --name "${sequence_name}" \\
         --out_dir . \\
-        --cache_dir ${cacheDir} \\
         --db_path ${dbPath} \\
-        --max_age_days ${maxAgeDays} \\
-        ${forceRefresh} \\
+        --threads ${threads} \\
         2>&1 | tee msa_${sequence_name}.log
     """
 }
@@ -39,6 +37,7 @@ process BoltzFromSequence {
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.cif", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.json", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "msa/*.a3m"
 
     input:
     tuple val(sequence), val(sequence_name)
@@ -47,31 +46,63 @@ process BoltzFromSequence {
     path "predictions/*.pdb", emit: pdbs, optional: true
     path "predictions/*.cif", emit: cifs, optional: true
     path "predictions/*.json", emit: jsons, optional: true
+    path "msa/*.a3m", emit: msa, optional: true
     path "*.log"
 
     script:
     def recycling = params.boltz_recycling_steps ?: 3
     def sampling = params.boltz_sampling_steps ?: 50
     def numSamples = params.boltz_diffusion_samples ?: params.boltz_num_samples ?: 1
-    def useMsaServer = params.boltz_use_msa ? '--use_msa_server' : ''
+    def msaDbPath = params.msa_local_db ?: '/mnt/BioModStack/colabfold_db'
+    def msaThreads = params.msa_threads ?: 32
+    def useMsa = params.boltz_use_msa == null || params.boltz_use_msa.toString() == 'true'
     """
     # Setup temp directories for containerized execution
-    mkdir -p tmp yamls predictions
+    mkdir -p tmp yamls predictions msa
     export NUMBA_CACHE_DIR=tmp
     export XDG_CONFIG_HOME=tmp
     export TRITON_CACHE_DIR=tmp
     export HOME=tmp
     
+    # Write sequence to FASTA for MSA generation
+    echo ">${sequence_name}" > msa/${sequence_name}.fasta
+    echo "${sequence}" >> msa/${sequence_name}.fasta
+    
+    # Generate MSA locally if enabled (NO API CALLS!)
+    MSA_PATH=""
+    if [ "${useMsa}" = "true" ]; then
+        echo "Generating MSA locally using ${msaDbPath}..."
+        ${msaDbPath}/mmseqs/bin/colabfold_search \\
+            msa/${sequence_name}.fasta \\
+            ${msaDbPath} \\
+            msa/ \\
+            --threads ${msaThreads} \\
+            2>&1 | tee msa_${sequence_name}.log
+        MSA_PATH=\$(readlink -f msa/${sequence_name}.a3m)
+        echo "Generated local MSA: \${MSA_PATH}"
+    fi
+    
     # Write sequence to YAML format expected by Boltz-2
-    cat > yamls/${sequence_name}.yaml << 'EOF'
+    if [ -n "\${MSA_PATH}" ] && [ -f "\${MSA_PATH}" ]; then
+        cat > yamls/${sequence_name}.yaml << EOF
+version: 1
+sequences:
+  - protein:
+      id: ['A']
+      sequence: ${sequence}
+      msa: \${MSA_PATH}
+EOF
+    else
+        cat > yamls/${sequence_name}.yaml << 'EOF'
 version: 1
 sequences:
   - protein:
       id: ['A']
       sequence: ${sequence}
 EOF
+    fi
     
-    # Run Boltz-2 prediction with optional MSA server
+    # Run Boltz-2 prediction (NO --use_msa_server - MSA is pre-computed!)
     boltz predict \\
         ./yamls/ \\
         --output_format pdb \\
@@ -81,7 +112,6 @@ EOF
         ${params.boltz_use_potentials ? '--use_potentials' : ''} \\
         ${params.boltz_step_scale ? '--step_scale ' + params.boltz_step_scale : ''} \\
         --cache /boltzcache \\
-        ${useMsaServer} \\
         ${params.boltz_extra_config ?: ''} \\
         2>&1 | tee boltz_seq_${sequence_name}.log
     
@@ -175,6 +205,7 @@ process BoltzFromComplex {
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.cif", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.json", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "msa/*.a3m"
 
     input:
     tuple val(complex_name), path(complex_json), path(msa_files)
@@ -183,24 +214,30 @@ process BoltzFromComplex {
     path "predictions/*.pdb", emit: pdbs, optional: true
     path "predictions/*.cif", emit: cifs, optional: true
     path "predictions/*.json", emit: jsons, optional: true
+    path "msa/*.a3m", emit: msa, optional: true
     path "*.log"
 
     script:
     def recycling = params.boltz_recycling_steps ?: 3
     def sampling = params.boltz_sampling_steps ?: 50
     def numSamples = params.boltz_diffusion_samples ?: params.boltz_num_samples ?: 1
-    def use_msa_flag = params.boltz_use_msa == null || params.boltz_use_msa.toString() == 'true' ? '--use_msa_server' : ''
+    def msaDbPath = params.msa_local_db ?: '/mnt/BioModStack/colabfold_db'
+    def msaThreads = params.msa_threads ?: 32
+    def useMsa = params.boltz_use_msa == null || params.boltz_use_msa.toString() == 'true'
     """
-    mkdir -p tmp yamls predictions
+    mkdir -p tmp yamls predictions msa
     export NUMBA_CACHE_DIR=tmp
     export XDG_CONFIG_HOME=tmp
     export TRITON_CACHE_DIR=tmp
     export HOME=tmp
     
     # Convert JSON complex definition to Boltz-2 YAML format
+    # AND generate local MSA for each protein chain
     python3 << 'PYEOF'
 import json
 import yaml
+import subprocess
+import os
 from pathlib import Path
 
 with open("${complex_json}") as f:
@@ -209,29 +246,62 @@ with open("${complex_json}") as f:
 boltz_yaml = {"version": 1, "sequences": []}
 binder_chain = None
 
+msa_db_path = "${msaDbPath}"
+msa_threads = int("${msaThreads}")
+use_msa = "${useMsa}" == "true"
+complex_name = "${complex_name}"
+
 for comp in complex_def.get("components", []):
     comp_type = comp.get("type", "protein")
     comp_id = comp.get("id", "A")
     
     if comp_type == "protein":
-        entry = {"protein": {"id": [comp_id] if isinstance(comp_id, str) else comp_id, "sequence": comp.get("sequence", "")}}
+        sequence = comp.get("sequence", "")
+        entry = {"protein": {"id": [comp_id] if isinstance(comp_id, str) else comp_id, "sequence": sequence}}
+        
+        # Check for pre-existing MSA path
         msa_path = comp.get("msa_path")
         if msa_path and Path(msa_path).exists():
             entry["protein"]["msa"] = str(Path(msa_path).resolve())
+        elif use_msa and sequence:
+            # Generate MSA locally for this protein chain
+            chain_id = comp_id[0] if isinstance(comp_id, list) else comp_id
+            fasta_file = f"msa/{complex_name}_{chain_id}.fasta"
+            with open(fasta_file, "w") as f:
+                f.write(f">{complex_name}_{chain_id}\\n{sequence}\\n")
+            
+            print(f"Generating local MSA for chain {chain_id}...")
+            try:
+                result = subprocess.run([
+                    f"{msa_db_path}/mmseqs/bin/colabfold_search",
+                    fasta_file,
+                    msa_db_path,
+                    "msa/",
+                    "--threads", str(msa_threads)
+                ], capture_output=True, text=True, timeout=600)
+                print(result.stdout)
+                if result.stderr:
+                    print(result.stderr)
+                
+                msa_file = f"msa/{complex_name}_{chain_id}.a3m"
+                if Path(msa_file).exists():
+                    entry["protein"]["msa"] = str(Path(msa_file).resolve())
+                    print(f"Generated MSA: {msa_file}")
+            except Exception as e:
+                print(f"MSA generation failed for chain {chain_id}: {e}")
+                
     elif comp_type == "ligand":
         entry = {"ligand": {"id": [comp_id] if isinstance(comp_id, str) else comp_id}}
         
-        # Track the first real ligand as the binder for affinity prediction
         if binder_chain is None:
             binder_chain = comp_id
 
-        # Common cofactor SMILES to bypass CCD lookup failure
         cofactor_smiles = {
             "ATP": "Nc1ncnc2n(cnc12)[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O",
             "ADP": "Nc1ncnc2n(cnc12)[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O",
             "GTP": "Nc1nc2c(ncn2[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O)c(=O)[nH]1",
             "GDP": "Nc1nc2c(ncn2[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O)c(=O)[nH]1",
-            "HEM": "CC1=C(CCC(=O)O)C2=CC3=C(C)C(C=C)=C([NH]3)C=C4C(C=C)=C(C)C(=N4)C=C1N2" # Simplified Heme
+            "HEM": "CC1=C(CCC(=O)O)C2=CC3=C(C)C(C=C)=C([NH]3)C=C4C(C=C)=C(C)C(=N4)C=C1N2"
         }
 
         if comp.get("ccd"):
@@ -244,44 +314,28 @@ for comp in complex_def.get("components", []):
             entry["ligand"]["smiles"] = comp["smiles"]
     elif comp_type == "ion":
         ccd_code = comp.get("ccd", "MG")
-        # Common ion SMILES map to bypass CCD lookup failure
         ion_smiles = {
-            "MG": "[Mg+2]",
-            "ZN": "[Zn+2]",
-            "CA": "[Ca+2]",
-            "NA": "[Na+]",
-            "CL": "[Cl-]",
-            "K": "[K+]",
-            "MN": "[Mn+2]",
-            "FE": "[Fe+2]", # Default to +2
-            "CO": "[Co+2]",
-            "NI": "[Ni+2]",
-            "CU": "[Cu+2]"
+            "MG": "[Mg+2]", "ZN": "[Zn+2]", "CA": "[Ca+2]", "NA": "[Na+]",
+            "CL": "[Cl-]", "K": "[K+]", "MN": "[Mn+2]", "FE": "[Fe+2]",
+            "CO": "[Co+2]", "NI": "[Ni+2]", "CU": "[Cu+2]"
         }
-        
-        # Prefer SMILES if available (more robust)
         if ccd_code in ion_smiles:
             entry = {"ligand": {"id": [comp_id] if isinstance(comp_id, str) else comp_id, "smiles": ion_smiles[ccd_code]}}
         else:
             entry = {"ligand": {"id": [comp_id] if isinstance(comp_id, str) else comp_id, "ccd": ccd_code}}
-            
     elif comp_type == "dna":
-        # Pass DNA sequence as is (standard is uppercase A, T, G, C)
         dna_seq = comp.get("sequence", "")
         entry = {"dna": {"id": [comp_id] if isinstance(comp_id, str) else comp_id, "sequence": dna_seq}}
     elif comp_type == "rna":
-        # Pass RNA sequence as is (standard is uppercase A, U, G, C)
         rna_seq = comp.get("sequence", "")
         entry = {"rna": {"id": [comp_id] if isinstance(comp_id, str) else comp_id, "sequence": rna_seq}}
     elif comp_type == "peptide":
-        # Peptides are treated as short protein chains
         peptide_seq = comp.get("sequence", "").upper()
         entry = {"protein": {"id": [comp_id] if isinstance(comp_id, str) else comp_id, "sequence": peptide_seq}}
     else:
         continue
     boltz_yaml["sequences"].append(entry)
 
-# Enable binding affinity prediction if a binder was identified
 if binder_chain:
     boltz_yaml["properties"] = [{"binder": [binder_chain] if isinstance(binder_chain, str) else binder_chain}]
 
@@ -290,6 +344,7 @@ with open(f"yamls/${complex_name}.yaml", "w") as f:
 print(yaml.dump(boltz_yaml, default_flow_style=False))
 PYEOF
     
+    # Run Boltz-2 prediction (NO --use_msa_server - MSA is pre-computed!)
     boltz predict \\
         ./yamls/ \\
         --output_format pdb \\
@@ -299,7 +354,6 @@ PYEOF
         ${params.boltz_use_potentials ? '--use_potentials' : ''} \\
         ${params.boltz_step_scale ? '--step_scale ' + params.boltz_step_scale : ''} \\
         --cache /boltzcache \\
-        ${use_msa_flag} \\
         ${params.boltz_extra_config ?: ''} \\
         2>&1 | tee boltz_complex_${complex_name}.log
     
@@ -310,7 +364,6 @@ PYEOF
         for json_file in \${dir}/*.json; do
             if [ -f "\${json_file}" ]; then cp "\${json_file}" predictions/; fi
         done
-        # Copy affinity files if they exist (ignore error if none)
         cp "\${dir}"/affinity_*.json predictions/ 2>/dev/null || :
     done
     """
@@ -454,11 +507,11 @@ workflow structure_prediction_wf {
             .first()
             .map { seq, _name -> tuple(seq, "base_msa") }
 
-        GenerateRemoteMSA(base_seq)
+        GenerateLocalMSA(base_seq)
 
         // STEP 2: Combine the single MSA with all job inputs
-        // GenerateRemoteMSA.out.msa = [sequence, "base_msa", path(msa)]
-        def msa_ch = GenerateRemoteMSA.out.msa.map { _seq, _name, msa_file -> msa_file }
+        // GenerateLocalMSA.out.msa = [sequence, "base_msa", path(msa)]
+        def msa_ch = GenerateLocalMSA.out.msa.map { _seq, _name, msa_file -> msa_file }
 
         def inputs_with_msa = input_ch.combine(msa_ch)
         // Now: [sequence, job_name, msa_file]

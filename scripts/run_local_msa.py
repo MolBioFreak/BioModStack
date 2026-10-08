@@ -80,7 +80,7 @@ def run_local_mmseqs2(
     sequence: str,
     job_name: str,
     out_dir: str,
-    db_path: str = "/media/dalab/Data and Models1/colabfold_db",
+    db_path: str = "/mnt/BioModStack/colabfold_db",
     cache_dir: str = None,
     max_age_days: int = 30,
     force_refresh: bool = False,
@@ -180,7 +180,7 @@ if __name__ == "__main__":
     parser.add_argument("--name", required=True, help="Job name for output files")
     parser.add_argument("--out_dir", required=True, help="Output directory")
     parser.add_argument("--db_path", 
-                        default="/media/dalab/Data and Models1/colabfold_db",
+                        default="/mnt/BioModStack/colabfold_db",
                         help="Path to ColabFold database directory")
     parser.add_argument("--cache_dir", default=None, 
                         help="Cache directory (enables caching)")

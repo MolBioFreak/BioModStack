@@ -268,6 +268,10 @@ export function JobSubmission() {
                 nextflowProfile = selectedTemplateId || 'binder_denovo';
             }
 
+            console.log('DEBUG params state:', params);
+            console.log('DEBUG num_parallel_jobs from params:', params.num_parallel_jobs);
+            console.log('DEBUG mergedParams:', mergedParams);
+            console.log('DEBUG num_parallel_jobs from mergedParams:', mergedParams.num_parallel_jobs);
             console.log('Submitting job:', { name: jobName, model_id: effectiveModelId, mode: nextflowProfile, params: mergedParams });
 
             // Add complex_components if ligands are selected
@@ -571,9 +575,13 @@ export function JobSubmission() {
                                     // Conditional Rendering Logic
                                     if (param.condition) {
                                         const controllingParam = selectedTemplateData.data.user_params.find((p: any) => p.name === param.condition.param);
-                                        const controllingValue = params[param.condition.param] ?? controllingParam?.default;
+                                        // Use params value if set, otherwise fall back to the controlling param's default
+                                        const controllingValue = params[param.condition.param] !== undefined
+                                            ? params[param.condition.param]
+                                            : controllingParam?.default;
 
-                                        if (controllingValue && !param.condition.values.includes(controllingValue)) {
+                                        // Hide this field if the controlling value doesn't match allowed values
+                                        if (!param.condition.values.includes(controllingValue)) {
                                             return null;
                                         }
                                     }
