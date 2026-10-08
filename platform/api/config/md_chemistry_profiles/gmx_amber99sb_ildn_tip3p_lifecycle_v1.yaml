@@ -4,7 +4,7 @@ version: 1.0.0
 display_name: AMBER99SB-ILDN + TIP3P lifecycle control
 family: amber
 assurance: smoke_fixture
-legacy: true
+legacy: false
 automatic_preparation: true
 inventory_class: candidate
 installed: true
