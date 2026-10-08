@@ -279,16 +279,16 @@ def _prewarm_plan(job, command, source_revision, source_tree, directory, *, nati
         raise ValueError('Prewarm source identity does not match current committed source')
     _, effective = compile_remote_dependencies(str(job.model_id), str(job.mode), command,
                                                 native_invocation=native_invocation)
-    archive = directory / 'source.tar'
+    archive = directory / 'source.tar.gz'
     with archive.open('wb') as stream:
-        subprocess.run(['git', 'archive', '--format=tar', source_revision], cwd=repo,
+        subprocess.run(['git', 'archive', '--format=tar.gz', '-6', source_revision], cwd=repo,
                        stdout=stream, stderr=subprocess.PIPE, check=True, timeout=300)
     source = directory / 'source'
     _safe_extract(archive, source)
-    archive.replace(source / '.bms-source.tar')
+    archive.replace(source / '.bms-source.tar.gz')
 
     entries = []
-    assets = [(source / '.bms-source.tar', 'source/.bms-source.tar')]
+    assets = [(source / '.bms-source.tar.gz', 'source/.bms-source.tar.gz')]
     assets.extend((path, 'runtime/' + relative) for path, relative in
                   _runtime_assets(str(job.model_id), str(job.mode), effective,
                                   native_invocation=native_invocation)

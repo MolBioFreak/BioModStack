@@ -378,7 +378,9 @@ class Cache:
                 if not verified(source.fileno(), item):
                     raise ValueError('corrupt_source_archive')
                 source.seek(0)
-                with tarfile.open(fileobj=source, mode='r:') as archive:
+                # Autodetection also permits retained uncompressed attempts. The
+                # digest above authenticates transport bytes before decompression.
+                with tarfile.open(fileobj=source, mode='r:*') as archive:
                     members = archive.getmembers()
                     for member in members:
                         path = PurePosixPath(member.name)

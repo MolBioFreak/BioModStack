@@ -1,4 +1,5 @@
 """Offline real helper protocol exercised through a local transport double."""
+import gzip
 import hashlib
 import io
 import json
@@ -77,7 +78,7 @@ def local_transport(monkeypatch):
     return calls, uploads
 
 
-def make_bundle(tmp_path):
+def make_bundle(tmp_path, compressed=False):
     source = tmp_path / 'source'
     source.mkdir()
     archive = source / '.bms-source.tar'
@@ -85,6 +86,11 @@ def make_bundle(tmp_path):
         info = tarfile.TarInfo('workflow.nf')
         info.size = len(b'workflow')
         tar.addfile(info, io.BytesIO(b'workflow'))
+    if compressed:
+        payload = gzip.compress(archive.read_bytes(), mtime=0)
+        archive.unlink()
+        archive = source / '.bms-source.tar.gz'
+        archive.write_bytes(payload)
     weights = tmp_path / 'weights'
     weights.mkdir()
     (weights / 'model').write_bytes(b'model')
@@ -93,7 +99,7 @@ def make_bundle(tmp_path):
     attempt_id = str(uuid.uuid4())
     generation = remote / 'attempts' / attempt_id / 'materialized'
     runtime = str(generation / 'runtime')
-    files = [record('source/.bms-source.tar', archive.read_bytes(), 'source'),
+    files = [record('source/' + archive.name, archive.read_bytes(), 'source'),
              record('source/workflow.nf', b'workflow', 'source'),
              record('runtime/weights/model', b'model'),
              record('runtime/weights/alias', b'model', link_target='model'),
@@ -120,8 +126,9 @@ def next_attempt(connection, bundle):
 
 
 @pytest.mark.asyncio
-async def test_prewarm_launch_share_verified_cache_and_links(tmp_path, monkeypatch, local_transport):
-    connection, bundle = make_bundle(tmp_path)
+@pytest.mark.parametrize('compressed', [False, True])
+async def test_prewarm_launch_share_verified_cache_and_links(tmp_path, monkeypatch, local_transport, compressed):
+    connection, bundle = make_bundle(tmp_path, compressed=compressed)
     artifacts = cache_transfer_artifacts(bundle)
     assert len(artifacts) == 2
     assert [p.remote_destination for p in uncached_runtime_transfers(bundle)] == [bundle.remote_runtime_dir + '/support-python']
@@ -218,7 +225,7 @@ def test_prewarm_plan_pins_source_and_excludes_support(tmp_path, monkeypatch, id
         return
     planned = cache._prewarm_plan(job, list(invocation.command), revision, tree, directory,
                                 native_invocation=invocation)
-    assert calls == [['git', 'archive', '--format=tar', revision]]
+    assert calls == [['git', 'archive', '--format=tar.gz', '-6', revision]]
     launched = cache_transfer_artifacts(bundle)
     assert {(a.sha256, a.size_bytes) for a in planned} == {(a.sha256, a.size_bytes) for a in launched}
     assert all('support-python' not in a.remote_destination for a in planned)

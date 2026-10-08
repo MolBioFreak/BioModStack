@@ -120,7 +120,7 @@ def cache_transfer_artifacts(bundle: PreparedRemoteBundle) -> tuple[CacheTransfe
             continue
         if relative.parts[0] == "source":
             # The archive carries every workflow/source leaf without thousands of SSH calls.
-            if record.relative_path != "source/.bms-source.tar":
+            if record.relative_path not in {"source/.bms-source.tar", "source/.bms-source.tar.gz"}:
                 continue
             leaf = PurePosixPath(*relative.parts[1:])
             source = bundle.source_transfer.source.joinpath(*leaf.parts)
@@ -203,7 +203,7 @@ def resolve_job_result_contract(job: Any) -> dict[str, Any]:
 def _safe_extract(archive_path: Path, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     root = destination.resolve()
-    with tarfile.open(archive_path, "r:") as archive:
+    with tarfile.open(archive_path, "r:*") as archive:
         for member in archive.getmembers():
             member_path = PurePosixPath(member.name)
             if member_path.is_absolute() or ".." in member_path.parts:
@@ -908,7 +908,7 @@ def prepare_remote_bundle(
     staging_root = data_root / "remote-execution" / "staging" / attempt_id
     staging_root.mkdir(parents=True, exist_ok=False)
     source_root = staging_root / "source"
-    archive_path = staging_root / "source.tar"
+    archive_path = staging_root / "source.tar.gz"
     revision = str(job.execution_source_revision or "").strip()
     inherited_tree = str(job.execution_source_tree or "").strip()
     if not _SOURCE_IDENTITY_RE.fullmatch(revision) or not _SOURCE_IDENTITY_RE.fullmatch(
@@ -925,9 +925,11 @@ def prepare_remote_bundle(
     tree = _git(repo_root, "rev-parse", f"{revision}^{{tree}}")
     if inherited_tree != tree:
         raise RemoteBundleError("Inherited source tree does not match the inherited revision")
+    # Git emits deterministic gzip bytes for this revision; hash the transported
+    # archive, retaining the complete tree and the same format used by prewarm.
     with archive_path.open("wb") as archive_handle:
         completed = subprocess.run(
-            ["git", "archive", "--format=tar", revision],
+            ["git", "archive", "--format=tar.gz", "-6", revision],
             cwd=repo_root,
             check=True,
             stdout=archive_handle,
@@ -938,7 +940,7 @@ def prepare_remote_bundle(
             raise RemoteBundleError("Unable to archive the committed BMS source")
     source_archive_sha256 = _sha256_file(archive_path)
     _safe_extract(archive_path, source_root)
-    archive_copy = source_root / ".bms-source.tar"
+    archive_copy = source_root / ".bms-source.tar.gz"
     archive_path.replace(archive_copy)
 
     # Byte-addressed cache objects are shared; runnable trees never are.
