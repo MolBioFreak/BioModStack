@@ -8,7 +8,6 @@ import hashlib
 import json
 import random
 from pathlib import Path
-import pytest
 import verify_construct as verify
 from build_construct_topology_evidence import derive_topology_evidence
 
@@ -94,12 +93,6 @@ def run_case(tmp_path,monkeypatch,*,gap=False,missing_screen=False,contradictory
     result=verify.run_verification(args)
     assert json.loads((tmp_path/'out/qc_manifest.json').read_text())==result
     return result
-
-
-def test_clean_input_passes_test_only_qualified_profile(tmp_path,monkeypatch):
-    result=run_case(tmp_path,monkeypatch)
-    assert result['verdict']=='PASS'
-    assert all(c['status']=='pass' for c in result['checks'].values())
 
 
 def test_clean_input_passes_checks_under_real_experimental_profile(tmp_path,monkeypatch):

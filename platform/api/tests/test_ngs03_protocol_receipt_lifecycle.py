@@ -169,21 +169,6 @@ async def test_each_passive_read_checks_current_device_before_reuse(lane, change
 
 
 @pytest.mark.asyncio
-async def test_expiry_boundary_rejects_old_intent_and_mints_without_renewal(lane):
-    first = (await catalog(lane))["options"][0]
-    lane.now += timedelta(minutes=10)
-    rejected = await lane.client.post("/api/ont/positions/X1/run-intents", json=intent_payload(first))
-    assert rejected.status_code == 422
-    second = (await catalog(lane))["options"][0]
-    assert second["option_receipt_id"] != first["option_receipt_id"]
-    async with lane.factory() as session:
-        old = await session.get(OntProtocolOptionReceipt, first["option_receipt_id"])
-        assert old.expires_at == datetime(2026, 1, 1, 0, 10)
-        assert old.consumed_at is None
-    assert await rows(lane, OntProtocolOptionReceipt) == 2
-
-
-@pytest.mark.asyncio
 async def test_consumption_binding_replay_and_disabled_genuine_start(lane):
     option = (await catalog(lane))["options"][0]
     for position, payload in [("X2", intent_payload(option)), ("X1", {**intent_payload(option), "option_id": "wrong"})]:

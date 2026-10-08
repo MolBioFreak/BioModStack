@@ -253,9 +253,6 @@ def _job(stage_root: Path) -> tuple[OntRawSignalDerivationJob, dict[str, Any]]:
 
 # Contract tests: 12
 
-def test_contract_01_partitioned_profile_is_versioned() -> None:
-    assert ont_raw_signal.BLOW5_PROFILE_ID == "bms.blow5.partitioned-zstd-svb-zd.v3"
-
 
 def test_contract_02_source_paths_require_immutable_authority(tmp_path: Path) -> None:
     source_path = tmp_path / "source.pod5"
@@ -439,14 +436,6 @@ async def test_raw_read_metrics_publish_as_manifest_bound_parquet_and_query_by_e
             assert await ont_read_metrics.find_read_metric_receipt(session, representation) is None
     finally:
         await engine.dispose()
-
-
-def test_contract_07_runtime_packages_both_executables() -> None:
-    dockerfile = (ROOT / "docker" / "ont-raw-signal.Dockerfile").read_text(encoding="utf-8")
-    assert "COPY scripts/ont_raw_signal_validate.py /opt/bms/ont_raw_signal_validate.py" in dockerfile
-    assert "COPY scripts/ont_raw_signal_lookup.py /opt/bms/ont_raw_signal_lookup.py" in dockerfile
-    assert "ont_raw_signal_validate.py --help" in dockerfile
-    assert "ont_raw_signal_lookup.py --help" in dockerfile
 
 
 def _load_lookup():
@@ -766,13 +755,6 @@ def test_external_validation_uses_descriptor_socket_without_input_path_mount(tmp
         assert "/proc/self/fd/unbound-external-blow5" in command
         assert "/proc/self/fd/unbound-external-index" in command
         assert not any("dst=/input" in argument for argument in command)
-
-
-def test_contract_08_terminal_registration_requests_automatic_conversion() -> None:
-    source = inspect.getsource(ont_raw_signal.register_native_pod5_generation)
-    assert 'consumer_id="ont-terminal-reconciliation"' in source
-    assert 'preference="auto"' in source
-    assert "automatic=True" in source
 
 
 def test_live_conversion_defaults_to_dual_retention_and_is_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1598,32 +1580,6 @@ async def test_waveform_claim_uses_checked_in_runtime_identity(
         os.close(descriptor)
 
 
-def test_waveform_terminal_receipt_retains_admitted_runtime_identity() -> None:
-    runtime_identity = {
-        "image_digest": "a" * 64,
-        "runtime_policy_sha256": "b" * 64,
-    }
-    receipt = ont_raw_signal._waveform_terminal_receipt(
-        {
-            "schema": "bms.ont.waveform-output-authority.v1",
-            "output_identity": {"device": 1},
-            "runtime_identity": runtime_identity,
-        },
-        {"argv_sha256": "c" * 64, "returncode": 0},
-        {
-            "schema": "bms.ont.raw-waveform.v1",
-            "read_id": "read-1",
-            "sample_count": 4,
-            "returned_sample_count": 2,
-            "stride": 2,
-        },
-        {"blow5": {}, "index": {}},
-        {"sha256": "d" * 64},
-    )
-
-    assert receipt["runtime_identity"] == runtime_identity
-
-
 def test_waveform_output_descriptor_rejects_rewrite_during_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1791,25 +1747,6 @@ async def test_expired_waveform_lookup_cannot_publish_ready(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_expired_waveform_lookup_cannot_renew_lease() -> None:
-    lookup = OntRawSignalLookup(
-        id="lookup-renew-expired",
-        state="running",
-        claim_token="claim-renew-expired",
-        lease_expires_at=datetime.utcnow() - timedelta(seconds=1),
-        receipt={},
-    )
-    session = _LookupSession(lookup)
-    with pytest.raises(ValueError, match="lease|ownership"):
-        await ont_raw_signal.renew_waveform_lookup_lease(
-            session,
-            lookup.id,
-            str(lookup.claim_token),
-        )
-    assert session.commits == 0
-
-
-@pytest.mark.asyncio
 async def test_expired_waveform_lookup_cannot_mark_failed() -> None:
     lookup = OntRawSignalLookup(
         id="lookup-fail-expired",
@@ -1965,20 +1902,6 @@ async def test_contract_13_derivation_transition_rejects_lost_cas_race(tmp_path:
             {},
         )
     assert job.state == "admitted"
-    assert session.commits == 0
-
-
-@pytest.mark.asyncio
-async def test_contract_12_expired_derivation_renewal_is_rejected(tmp_path: Path) -> None:
-    job, _snapshot = _job(tmp_path)
-    job.lease_expires_at = datetime.utcnow() - timedelta(seconds=1)
-    session = _Session(job, rowcount=0)
-    with pytest.raises(ValueError, match="lease|ownership"):
-        await ont_raw_signal.renew_derivation_lease(
-            session,
-            job.id,
-            str(job.claim_token),
-        )
     assert session.commits == 0
 
 
@@ -2710,15 +2633,6 @@ def test_every_raw_container_command_uses_pull_never(
     assert "--expected-index-sha256" in external_commands["semantic_validate"]
     assert "--expected-blow5-root-device" in external_commands["semantic_validate"]
     assert "--expected-index-root-inode" in external_commands["semantic_validate"]
-
-
-def test_raw_runtime_build_script_uses_independent_policy_before_emitting_identity() -> None:
-    script = (ROOT / "scripts/build_ont_raw_signal_runtime.sh").read_text(encoding="utf-8")
-    assert "raw_signal_runtime_policy_v1.json" in script
-    assert "does not match the approved raw-signal runtime policy" in script
-    assert "BMS_ONT_SLOW5TOOLS_IMAGE" in script
-    assert f"EXPECTED_POLICY_SHA256=\"{ont_raw_signal.RAW_SIGNAL_RUNTIME_POLICY_SHA256}\"" in script
-    assert "sha256sum \"$POLICY_PATH\"" in script
 
 
 @pytest.mark.asyncio

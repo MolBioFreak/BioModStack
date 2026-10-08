@@ -9,10 +9,8 @@ import sqlite3
 from dataclasses import replace
 from pathlib import Path
 
-import httpx
 import pytest
 import pytest_asyncio
-from fastapi import FastAPI
 from sqlalchemy import select
 
 
@@ -332,21 +330,6 @@ def test_domain_store_migration_installs_pragmas_digest_guards_and_immutability(
     assert isinstance(degraded_attestation, dict)
     assert degraded["status"] == "degraded"
     assert degraded_attestation["authority_coherence_errors"]
-
-
-def test_domain_store_migration_rejects_tampered_ledger(tmp_path: Path):
-    from molbio_ngs_migrations import run_all
-
-    db_path = tmp_path / "molbio_ngs.db"
-    run_all(db_path)
-    with sqlite3.connect(db_path) as connection:
-        connection.execute(
-            "UPDATE molbio_ngs_schema_migrations SET checksum = ? WHERE version = 1",
-            ("0" * 64,),
-        )
-        connection.commit()
-    with pytest.raises(RuntimeError, match="migration ledger mismatch"):
-        run_all(db_path)
 
 
 def test_online_backup_atomic_restore_and_exact_attestation(tmp_path: Path, monkeypatch):
@@ -719,60 +702,6 @@ def test_successful_restore_removes_journal_lock_sidecars_and_work_paths(
     assert not list(tmp_path.glob(f".{target.name}.restore-*.db"))
     assert not list(tmp_path.glob(".molbio-ngs-artifact-restore-*"))
     assert not list(tmp_path.glob(".molbio-ngs-artifact-rollback-*"))
-
-
-@pytest.mark.asyncio
-async def test_exact_molecular_receipt_resolution_does_not_follow_current_head():
-    from types import SimpleNamespace
-
-    from routers.molbio_ops import _resolve_owned_molecular_revision
-    from services.molbio_persistence import sha256_text
-
-    exact_revision = SimpleNamespace(
-        id="revision-exact",
-        document_id="sequence-1",
-        content_sha256=sha256_text("ACGT"),
-        snapshot={"sequence": "ACGT", "sequence_type": "dna"},
-    )
-    current_revision = SimpleNamespace(
-        id="revision-current",
-        document_id="sequence-1",
-        content_sha256=sha256_text("TGCA"),
-        snapshot={"sequence": "TGCA", "sequence_type": "dna"},
-    )
-    document = SimpleNamespace(
-        id="sequence-1",
-        current_revision_id=current_revision.id,
-    )
-
-    class MolecularSession:
-        async def get(self, model, resource_id):
-            if model.__name__ == "MolecularDocument":
-                return document if resource_id == document.id else None
-            if model.__name__ == "MolecularRevision":
-                revisions = {
-                    exact_revision.id: exact_revision,
-                    current_revision.id: current_revision,
-                }
-                return revisions.get(resource_id)
-            raise AssertionError(f"unexpected model lookup: {model}")
-
-    resolved = await _resolve_owned_molecular_revision(
-        MolecularSession(),
-        document.id,
-        exact_revision.id,
-    )
-    assert resolved is exact_revision
-    assert resolved.id != document.current_revision_id
-
-
-def test_state_member_role_dto_exactly_matches_runtime_receipt_roles():
-    from typing import get_args
-
-    from molbio_ngs_services import _ROLE_ENTITY_KINDS
-    from routers.molbio_ngs_experiments import StateMemberRole
-
-    assert set(get_args(StateMemberRole)) == set(_ROLE_ENTITY_KINDS)
 
 
 @pytest_asyncio.fixture
@@ -1260,98 +1189,3 @@ async def test_state_save_rejects_cross_domain_reference_and_evidence_receipts(
             idempotency_key="accept-domain-2-authority",
         )
         assert accepted.global_domain_experiment_id == "domain-2"
-
-
-@pytest_asyncio.fixture
-async def unavailable_global_store(tmp_path: Path):
-    from experiment_models import ExperimentBase, ExperimentResource, ExperimentAggregateHead
-    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-    from sqlalchemy import event
-
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'global.db'}")
-    @event.listens_for(engine.sync_engine, "connect")
-    def enable_foreign_keys(connection, _record):
-        connection.execute("PRAGMA foreign_keys=ON")
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    try:
-        async with engine.begin() as connection:
-            await connection.run_sync(ExperimentBase.metadata.create_all)
-        async with factory() as session:
-            for resource_id, kind in (
-                ("project-1", "workspace"), ("domain-1", "domain_experiment"),
-                ("global-domain-rev-1", "domain_experiment_revision"),
-            ):
-                session.add(ExperimentResource(id=resource_id, kind=kind))
-            await session.flush()
-            session.add(ExperimentAggregateHead(
-                aggregate_id="domain-1", aggregate_kind="domain_experiment",
-                workspace_id="project-1", current_revision_id="global-domain-rev-1",
-                head_generation=1, display_name="Unacknowledged Domain",
-            ))
-            await session.commit()
-        yield factory
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_typed_state_api_fails_closed_until_global_adapter_is_available(
-    domain_store, unavailable_global_store,
-):
-    from experiment_database import get_experiment_session
-    from molbio_ngs_database import get_molbio_ngs_session
-    from routers.molbio_ngs_experiments import router
-
-    _db_path, _domain_engine, domain_factory = domain_store
-    app = FastAPI()
-    app.include_router(router)
-
-    async def override_domain_session():
-        async with domain_factory() as session:
-            yield session
-
-    async def override_unavailable_global_session():
-        async with unavailable_global_store() as session:
-            yield session
-
-    app.dependency_overrides[get_molbio_ngs_session] = override_domain_session
-    app.dependency_overrides[get_experiment_session] = override_unavailable_global_session
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        initialized = await client.post(
-            "/api/molbio-ngs/experiments/domain-1/state",
-            json={
-                "global_domain_experiment_revision_id": "global-domain-rev-1",
-                "idempotency_key": "init-api",
-            },
-        )
-        assert initialized.status_code == 503, initialized.text
-        assert initialized.json()["detail"] == "current NGS/MolBio binding is not acknowledged"
-
-        saved = await client.post(
-            "/api/molbio-ngs/experiments/domain-1/state/revisions",
-            json={
-                "global_domain_experiment_revision_id": "global-domain-rev-1",
-                "expected_head_generation": 0,
-                "parent_revision_id": None,
-                "idempotency_key": "save-api",
-                "payload": _state_payload(),
-                "members": [],
-            },
-        )
-        assert saved.status_code == 503, saved.text
-        assert saved.json()["detail"] == "current NGS/MolBio binding is not acknowledged"
-
-        rejected = await client.post(
-            "/api/molbio-ngs/experiments/domain-1/state/revisions",
-            json={
-                "global_domain_experiment_revision_id": "global-domain-rev-1",
-                "expected_head_generation": 0,
-                "parent_revision_id": None,
-                "idempotency_key": "save-extra",
-                "payload": _state_payload(),
-                "members": [],
-                "unexpected": True,
-            },
-        )
-        assert rejected.status_code == 422

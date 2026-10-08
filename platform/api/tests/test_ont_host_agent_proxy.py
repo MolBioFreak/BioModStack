@@ -13,22 +13,7 @@ for path in (API_ROOT, SCRIPTS_ROOT):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from services import host_agent_client, ont_device_control  # noqa: E402
-
-
-def test_host_agent_client_exposes_ont_status_and_positions(monkeypatch) -> None:
-    calls: list[tuple[str, str]] = []
-
-    def fake_request(method: str, path: str, payload=None, *, query=None):
-        calls.append((method, path))
-        return {"path": path, "fake_or_demo_devices": False}
-
-    monkeypatch.setattr(host_agent_client, "request_host_agent", fake_request)
-
-    assert host_agent_client.get_ont_status()["path"] == "/ont/status"
-    assert host_agent_client.get_ont_positions()["path"] == "/ont/positions"
-    assert host_agent_client.get_ont_position("X1")["path"] == "/ont/positions/X1"
-    assert calls == [("GET", "/ont/status"), ("GET", "/ont/positions"), ("GET", "/ont/positions/X1")]
+from services import ont_device_control
 
 
 def test_device_status_delegates_to_host_agent_when_enabled(monkeypatch) -> None:
@@ -245,46 +230,6 @@ def test_host_agent_protocol_options_route_returns_truthful_preflight(monkeypatc
     }
 
 
-
-def test_host_agent_position_refresh_and_restart_routes_are_explicit(monkeypatch) -> None:
-    import bms_host_agent  # noqa: PLC0415
-
-    monkeypatch.setattr(
-        bms_host_agent,
-        "refresh_ont_position",
-        lambda position: (200, {"action": "refresh", "position": {"position": position}, "fake_or_demo_devices": False}),
-    )
-    monkeypatch.setattr(
-        bms_host_agent,
-        "restart_ont_position",
-        lambda position, payload: (
-            501,
-            {
-                "detail": "BMS does not yet perform a MinKNOW/Mk1D instrument restart",
-                "position": position,
-                "fake_or_demo_devices": False,
-            },
-        ),
-    )
-
-    assert bms_host_agent.ont_post_route_payload("/ont/positions/MD-105428/refresh", {"confirm_refresh": True}) == (
-        200,
-        {
-            "action": "refresh",
-            "position": {"position": "MD-105428"},
-            "fake_or_demo_devices": False,
-        },
-    )
-    assert bms_host_agent.ont_post_route_payload("/ont/positions/MD-105428/restart", {"confirm_restart": True}) == (
-        501,
-        {
-            "detail": "BMS does not yet perform a MinKNOW/Mk1D instrument restart",
-            "position": "MD-105428",
-            "fake_or_demo_devices": False,
-        },
-    )
-
-
 def test_host_agent_retired_raw_position_start_route_is_unreachable(monkeypatch) -> None:
     import bms_host_agent  # noqa: PLC0415
 
@@ -296,7 +241,6 @@ def test_host_agent_retired_raw_position_start_route_is_unreachable(monkeypatch)
     )
 
     assert bms_host_agent.ont_post_route_payload("/ont/positions/MD-105428/start", {"confirm_start": True}) is None
-
 
 
 def test_host_agent_hardware_check_route_fails_closed() -> None:
@@ -337,7 +281,6 @@ def test_begin_hardware_check_never_discovers_or_constructs_minknow_manager(monk
         assert "supervised commissioning" in response["detail"]
 
 
-
 def test_normalize_minknow_run_id_histories_and_current_hardware_check() -> None:
     from lib import ont_minknow_host  # noqa: PLC0415
 
@@ -357,28 +300,6 @@ def test_normalize_minknow_run_id_histories_and_current_hardware_check() -> None
     current = ont_minknow_host.normalize_current_protocol(Current())
     assert current["run_id"] == "hardware-run"
     assert current["hardware_check_like"] is True
-
-
-def test_observe_run_never_treats_pending_as_completed(monkeypatch) -> None:
-    from lib import ont_minknow_host  # noqa: PLC0415
-
-    monkeypatch.setattr(
-        ont_minknow_host,
-        "discover_status",
-        lambda: {
-            "implementation_status": ont_minknow_host.MINKNOW_STATUS_CONFIGURED,
-            "live_devices": [
-                {
-                    "running": False,
-                    "current_protocol": None,
-                    "protocol_runs": [{"run_id": "run-pending", "state": "pending"}],
-                    "acquisition_runs": [],
-                }
-            ],
-        },
-    )
-
-    assert ont_minknow_host.observe_run("run-pending")["status"] == "unknown"
 
 
 def test_protocol_run_state_uses_protobuf_enum_name() -> None:

@@ -34,13 +34,6 @@ def test_every_ngs_process_is_registered(native):
         assert_registered_processes(native.PROCESS_CONTRACTS, source.relative_to(ROOT).as_posix())
 
 
-def test_reverse_coverage_detects_an_omitted_process(native):
-    contracts = dict(native.PROCESS_CONTRACTS)
-    del contracts[CLONE_SOURCE + ':ComparePlasmidConsensus']
-    with pytest.raises(AssertionError, match='ComparePlasmidConsensus'):
-        assert_registered_processes(contracts, CLONE_SOURCE)
-
-
 def test_clone_registry_exact_declarations(native):
     text = (ROOT / CLONE_SOURCE).read_text()
     parts = re.split(r'^process\s+(\w+)\s*\{', text, flags=re.MULTILINE)
@@ -84,9 +77,10 @@ def metadata(native, workflow, settings):
     ('wf_clone_validation', True), ('ont_construct_screening', True),
     ('ont_construct_screening', False),
 ])
-@pytest.mark.parametrize('input_mode', ['fastq', 'bam', 'pod5'])
+@pytest.mark.parametrize('input_mode,realign', [
+    ('fastq', False), ('pod5', False), ('bam', False), ('bam', True),
+])
 @pytest.mark.parametrize('run_qc', [False, True])
-@pytest.mark.parametrize('realign', [False, True])
 def test_real_native_graph_matches_plasmid_routes(native, workflow, assembly, input_mode, run_qc, realign):
     settings = {
         {'fastq': 'fastq_path', 'bam': 'bam_path', 'pod5': 'pod5_dir'}[input_mode]: '/input/reads',

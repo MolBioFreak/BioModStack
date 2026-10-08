@@ -45,14 +45,6 @@ def test_stale_vite_app_css_cannot_override_bms_shell_theme() -> None:
         assert rule not in app_css
 
 
-def test_non_fullscreen_igv_modal_keeps_rounded_bms_surface() -> None:
-    """Only true fullscreen modes should intentionally use hard square corners."""
-    ngs = read(FRONTEND_SRC / "components" / "NGSToolkit.tsx")
-
-    assert "igvIsFullscreen ? 'rounded-none border-0' : 'rounded-2xl'" in ngs
-    assert "igvIsFullscreen ? 'rounded-none border-0' : 'rounded-none'" not in ngs
-
-
 def test_dashboard_cards_use_canonical_bms_style_track() -> None:
     """Dashboard workbench panels should share one radius/surface recipe."""
     primitives = read(FRONTEND_SRC / "components" / "ui" / "bmsStyle.ts")

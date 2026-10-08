@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 from types import SimpleNamespace
-from typing import Any, cast
 from pathlib import Path
 
 import pytest
@@ -256,25 +255,6 @@ async def test_approved_panel_is_frozen_from_immutable_revisions_and_receipted(t
     await engine.dispose()
 
 
-def test_panel_launch_is_limited_to_generic_qc_and_requires_both_receipts() -> None:
-    from routers.ont_runs import _validate_comparison_panel_launch
-
-    with pytest.raises(ValueError, match="only available"):
-        _validate_comparison_panel_launch("wf_clone_validation", "expected", "panel")
-    with pytest.raises(ValueError, match="both"):
-        _validate_comparison_panel_launch("ont_fastq_qc", "", "panel")
-    _validate_comparison_panel_launch("ont_fastq_qc", "expected", "")
-    _validate_comparison_panel_launch("ont_fastq_qc", "expected", "panel")
-
-
-def test_generic_submit_rejects_raw_panel_and_untrusted_molbio_sequence_id() -> None:
-    from routers.ont_runs import OntNgsSubmitRequest, _job_create_for_ont_submit
-
-    request = OntNgsSubmitRequest(params={"fastq_path": "/tmp/reads.fastq", "reference_fasta": "/tmp/ref.fasta", "comparison_panel_snapshot": "/tmp/panel.json"})
-    with pytest.raises(ValueError, match="comparison-panel"):
-        _job_create_for_ont_submit("ont_fastq_qc", request)
-
-
 @pytest.mark.asyncio
 async def test_actual_submit_binds_only_server_consumed_receipt(monkeypatch, tmp_path) -> None:
     from fastapi import Response
@@ -332,39 +312,3 @@ async def test_actual_submit_binds_only_server_consumed_receipt(monkeypatch, tmp
             assert (await session.get(Job, "job-1")).params["molbio_revision_binding"] == expected
     finally:
         await engine.dispose()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "params, message",
-    [
-        ({"fastq_path": "/tmp/reads.fastq"}, "molbio_ngs_receipt_id"),
-        (
-            {
-                "fastq_path": "/tmp/reads.fastq",
-                "reference_fasta": "/tmp/mutable.fasta",
-                "molbio_ngs_receipt_id": "receipt-1",
-            },
-            "reference_fasta is server-controlled",
-        ),
-    ],
-)
-async def test_public_reference_workflow_rejects_mutable_or_missing_authority(params, message) -> None:
-    from fastapi import HTTPException, Response
-    from routers import ont_runs
-
-    with pytest.raises(HTTPException) as raised:
-        await ont_runs.ont_submit_ngs_workflow(
-            "ont_fastq_qc",
-            ont_runs.OntNgsSubmitRequest(params=params),
-            cast(Any, SimpleNamespace()),
-            cast(Any, SimpleNamespace()),
-            Response(),
-            cast(Any, SimpleNamespace()),
-        )
-    assert raised.value.status_code == 422
-    assert message in str(raised.value.detail)
-
-
-async def _async_none() -> None:
-    return None

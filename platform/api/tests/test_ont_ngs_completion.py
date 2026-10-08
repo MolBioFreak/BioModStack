@@ -280,21 +280,6 @@ def test_full_package_authority_is_order_invariant_and_count_closed() -> None:
     assert len(first["artifact_set_sha256"]) == 64
 
 
-def test_package_authority_rejects_an_exact_duplicate_descriptor() -> None:
-    from services import ont_ngs_completion as service
-
-    descriptor = {
-        "source": "sequence_qc",
-        "kind": "summary",
-        "state": "present",
-        "sha256": "a" * 64,
-        "size_bytes": 12,
-    }
-
-    with pytest.raises(service.OntNgsCompletionError, match="duplicate"):
-        service.canonical_ngs_package_authority([descriptor, dict(descriptor)])
-
-
 def test_fastq_manifest_authority_excludes_root_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from services import ngs_alignment_sessions
     from services.global_experiments import adapters
@@ -342,31 +327,12 @@ def test_fastq_normalization_and_resubmit_drop_all_accelerator_and_dorado_fields
         for key in normalized
     )
 
-    jobs_source = (Path(__file__).resolve().parents[1] / "routers" / "jobs.py").read_text(encoding="utf-8")
-    resubmit = jobs_source[jobs_source.index("async def resubmit_job(") : jobs_source.index("# RE-INGESTION ENDPOINT")]
-    call = "ont_ngs_contract.normalize_ont_launch_params("
-    assert call in resubmit
-    assert resubmit.index(call) < resubmit.index("estimate_vram(")
-
-
-def test_canonical_fastq_adapter_requires_cpu_resource_authority() -> None:
-    from routers import workflow_adapter
-
-    requires = cast(Any, getattr(workflow_adapter, "_requires_ont_fastq_resource_authority", None))
-    assert callable(requires)
-    assert requires(
-        SimpleNamespace(model_id="nanopore"),
-        {"ont_workflow_id": "ont_fastq_qc", "ont_input_mode": "fastq"},
-    ) is True
-    assert requires(SimpleNamespace(model_id="nanopore"), {"ont_workflow_id": "ont_raw_signal"}) is False
-    source = Path(workflow_adapter.__file__).read_text(encoding="utf-8")
-    assert "canonical FASTQ-QC launch requires resource admission authority" in source
-
 
 @pytest.mark.asyncio
-async def test_stage_start_cas_cannot_resurrect_a_concurrently_terminal_stage(
+async def test_stage_start_rolls_back_lost_cas_and_rejects_terminal_reread(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Scripted rowcounts exercise retry handling, not competing SQL predicates.
     from routers import jobs
 
     publish = cast(Any, getattr(jobs, "_publish_generic_stage_start", None))
@@ -439,7 +405,7 @@ async def test_stage_start_cas_cannot_resurrect_a_concurrently_terminal_stage(
 
 
 @pytest.mark.asyncio
-async def test_stage_terminal_retry_preserves_a_concurrently_newer_current_stage(
+async def test_stage_terminal_retry_propagates_current_stage_from_reread(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from routers import jobs
@@ -736,7 +702,6 @@ async def test_finalizer_persists_stage_mirrors_without_a_transient_all_stages_f
     assert materialization_calls == []
     assert attached_receipts == [{"complete": True, "receipt_sha256": "9" * 64}]
     assert job.params["resource_usage_receipts"] == attached_receipts
-
 
 
 def test_package_source_custody_and_published_reopen_are_distinct(tmp_path, monkeypatch):

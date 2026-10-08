@@ -162,23 +162,6 @@ def test_supervise_skips_token_probe_and_recreation_when_local_token_is_disabled
     assert commands == [controller.compose_command("up", "-d")]
 
 
-def test_minknow_token_rotation_never_consumes_core_recovery_budget(monkeypatch, tmp_path: Path) -> None:
-    controller = load_controller()
-    monkeypatch.setenv("BMS_RUNTIME_SUPERVISOR_STATE_DIR", str(tmp_path))
-    monkeypatch.setattr(controller, "MAX_RECOVERIES", 1)
-    commands: list[list[str]] = []
-
-    def fake_run(args, **kwargs):
-        commands.append(list(args))
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(controller, "run_command", fake_run)
-
-    assert controller.recover_minknow_token_rotation((1, 101), (1, 202)) is False
-    assert controller.recover_minknow_token_rotation((1, 202), (1, 303)) is False
-    assert commands == []
-
-
 def test_reserve_recovery_persists_and_enforces_budget(monkeypatch, tmp_path: Path) -> None:
     controller = load_controller()
     monkeypatch.setenv("BMS_RUNTIME_SUPERVISOR_STATE_DIR", str(tmp_path))

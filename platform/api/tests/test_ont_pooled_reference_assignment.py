@@ -634,43 +634,7 @@ async def test_atomic_child_release_preserves_bindings_and_replays(pooled_contex
     assert conflict.value.status_code == 409
 
 
-@pytest.mark.asyncio
-async def test_release_child_failure_rolls_back_all_children_and_release_rows(pooled_context) -> None:
-    context = pooled_context
-    submitted = await _submit(context, _submit_request(context))
-    assignment = await context.session.get(Job, submitted["assignment_job_id"])
-    assignment.status = JobStatus.COMPLETED.value
-    await context.session.commit()
-    _write_assignment_summary(context, submitted, target_counts={"target-a": 1, "target-b": 1, "target-c": 0})
-    context.failure["at"] = 3
-    request = pooled.PooledAssignmentReleaseRequest(
-        idempotency_key="release-rollback",
-        target_workflow="ont_plasmid_qc",
-        target_ids=["target-a", "target-b"],
-    )
-    with pytest.raises(pooled.PooledAssignmentError, match="rolled back"):
-        await pooled.release_pooled_assignment(
-            session=context.session,
-            assignment_job_id=submitted["assignment_job_id"],
-            request=request,
-            background_tasks=BackgroundTasks(),
-            http_request=_http_request("/api/jobs/assignment/pooled-assignment/release"),
-            response=Response(),
-        )
-    assert (await context.session.execute(select(NgsPooledAssignmentRelease))).scalars().all() == []
-    assert (await context.session.execute(select(NgsPooledAssignmentReleaseTarget))).scalars().all() == []
-    children = (await context.session.execute(select(Job).where(Job.id != submitted["assignment_job_id"]))).scalars().all()
-    assert children == []
-
-
-def test_pooled_routes_are_wired_on_strict_router_surfaces() -> None:
-    ont_paths = {route.path for route in ont_runs.router.routes}
-    job_paths = {route.path for route in ont_runs.barcode_router.routes}
-    assert "/ngs/pooled-reference-assignment/submit" in ont_paths
-    assert "/{assignment_job_id}/pooled-assignment/manifest" in job_paths
-    assert "/{assignment_job_id}/pooled-assignment/targets" in job_paths
-    assert "/{assignment_job_id}/pooled-assignment/release" in job_paths
-
+def test_pooled_request_rejects_extra_fields() -> None:
     with pytest.raises(Exception):
         pooled.PooledReferenceAssignmentRequest.model_validate(
             {

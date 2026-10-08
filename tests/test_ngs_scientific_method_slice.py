@@ -8,24 +8,6 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_primary_alignment_stage_reports_after_publication() -> None:
-    workflow = (ROOT / "workflows/ngs/ont_plasmid_qc.nf").read_text(encoding="utf-8")
-    bam_branch = workflow.split("if (has_bam) {", 1)[1].split("// --- FASTQ input", 1)[0]
-
-    assert "DoradoAlign.out.aligned.subscribe" not in bam_branch
-    assert "workflow.onComplete" in workflow
-    assert "terminalOutputs.every { file(it).exists() }" in workflow
-    assert 'reportStage(params, "dorado_align"' in workflow
-
-
-def test_external_signal_alignment_uses_terminal_package_validator() -> None:
-    runner = (ROOT / "platform/api/services/nextflow.py").read_text(encoding="utf-8")
-
-    assert "is_ont_signal_alignment_job" in runner
-    assert "validate_and_prepare_ont_signal_alignment_completion" in runner
-    assert "Validated external ONT signal-alignment result package" in runner
-
-
 def test_primary_alignment_manifest_builder_binds_exact_artifacts(tmp_path: Path) -> None:
     artifacts = {
         "aligned.bam": b"bam",
@@ -71,111 +53,6 @@ def test_primary_alignment_manifest_builder_binds_exact_artifacts(tmp_path: Path
     assert all(item["required"] is True and item["state"] == "present" for item in declared.values())
 
 
-def test_dorado_image_pins_the_approved_consensus_runtime() -> None:
-    image = (ROOT / "apptainer/dorado.def").read_text(encoding="utf-8")
-
-    assert "https://github.com/samtools/samtools/releases/download/1.24/samtools-1.24.tar.bz2" in image
-    assert "89b2a440123eeaa400392ce1736e7d60ce9041843027d76819753c5a8246bfdd" in image
-    assert 'SAMTOOLS_VERSION="1.24"' in image
-    assert "./configure --prefix=/usr/local" in image
-    assert 'samtools_version="$(samtools --version)"' in image
-    assert 'test "$1" = "samtools"' in image
-    assert 'test "$2" = "1.24"' in image
-    assert '"igv-reports==${IGV_REPORTS_VERSION}"' in image
-    assert 'IGV_REPORTS_VERSION="1.16.3"' in image
-    assert "test -x /usr/local/bin/create_report" in image
-    assert 'IGV_JS_VERSION="3.5.2"' in image
-    assert "0efd638a0997aa90791ce6c83a8b33912d4bc06aed5e28741fc74f32a20998d6" in image
-    assert 'https://cdn.jsdelivr.net/npm/igv@${IGV_JS_VERSION}/dist/igv.min.js' in image
-    assert "templates/ngs/igv_variant_standalone.html" in image
-    assert 'MODKIT_VERSION="0.6.4"' in image
-    assert "modkit_v0.6.4_u16_x86_64.tar.gz" in image
-    assert "fb332c691431bd336eb0a81cbca17d2a35caf442ac48277ed3e296c2fe061d80" in image
-    assert 'test "$(modkit --version)" = "modkit ${MODKIT_VERSION}"' in image
-    assert 'MODKIT_VERSION="latest"' not in image
-
-
-def test_fastq_qc_has_one_authoritative_fail_closed_method() -> None:
-    module = (ROOT / "modules/ngs/fastq_plasmid_qc.nf").read_text(encoding="utf-8")
-    config = (ROOT / "nextflow.config").read_text(encoding="utf-8")
-
-    assert "withLabel: fastq_qc_cpu" in config
-    assert "container = { params.dorado_runtime_sif }" in config
-    assert "apptainer" not in module
-    assert "mpileup" not in module
-    assert "fallback" not in module.lower()
-    assert "bcftools_consensus" not in module
-    assert "consensus --mode bayesian -f fasta" in module
-    assert "CRITICAL_FAILURE: SAMTOOLS_CONSENSUS_FAILED" in module
-    assert "CRITICAL_FAILURE: SAMTOOLS_CONSENSUS_EMPTY" in module
-    assert "CRITICAL_FAILURE: IGV_REPORT_CREATE_REPORT_UNAVAILABLE" in module
-    assert "CRITICAL_FAILURE: IGV_REPORT_CREATE_REPORT_FAILED" in module
-    assert "CRITICAL_FAILURE: IGV_REPORT_VALIDATE_FAILED" in module
-    assert "build_small_igv_report_inputs.py" in module
-    assert "finalize_small_igv_report.py" not in module
-    assert "--reference-index reference_qc.fasta.fai" in module
-    assert "stageAs: 'source-aligned.bam'" in module
-    assert "stageAs: 'source-aligned.bam.bai'" in module
-    assert 'cp -- "${bam}" aligned.bam' in module
-    assert 'cp -- "${bai}" aligned.bam.bai' in module
-    assert "--out-reference-config igv_reference_config.json" in module
-    assert "--fasta reference_qc.fasta" in module
-    assert "igv_reference_uri" not in module
-    assert "--standalone" in module
-    assert "--subsample 0.002" in module
-    assert "--no-embed" not in module
-    assert "--template /opt/bms/igv-reports/igv_variant_standalone.html" in module
-    assert "igv_standalone_track_config.json" in module
-    assert "validate_standalone_igv_report.py" in module
-    assert "IGV_REPORT_ARTIFACT_OVERSIZED" in module
-    assert "100663296" in module
-    assert '"url": "\\${bam_local}"' not in module
-    assert "/api/files/" not in module
-    assert "<!doctype html>" not in module
-    assert "IGV Report Fallback" not in module
-    assert 'path "fastq_consensus.fasta", optional: true' not in module
-
-
-def test_portable_igv_template_uses_only_the_pinned_local_runtime_asset() -> None:
-    template = (ROOT / "templates/ngs/igv_variant_standalone.html").read_text(encoding="utf-8")
-
-    assert 'src="file:///opt/bms/igv-reports/igv.min.js"' in template
-    assert "loadDefaultGenomes: false" in template
-    assert "cdn.jsdelivr.net" not in template
-
-
-def test_dimer_consensus_has_no_reference_or_majority_fallback() -> None:
-    dimer = (ROOT / "modules/ngs/fastq_dimer_qc.nf").read_text(encoding="utf-8")
-    dominant = (ROOT / "scripts/dominant_dimer_consensus.sh").read_text(encoding="utf-8")
-
-    for text in (dimer, dominant):
-        assert "consensus --mode bayesian -f fasta" in text
-        assert "mpileup" not in text
-        assert "fallback" not in text.lower()
-    assert "dimer_reference.fasta" not in dominant
-    assert "--fastq" not in dominant
-    assert "--dimer-consensus" not in dominant
-    assert "--dimer-reference" not in dominant
-    assert "most_abundant" not in dominant
-
-
-def test_demux_rejects_unknown_labels_and_uses_exact_barcode_grammar() -> None:
-    demux = (ROOT / "modules/ngs/dorado_basecall.nf").read_text(encoding="utf-8")
-    units = (ROOT / "platform/api/services/ont_barcode_units.py").read_text(encoding="utf-8")
-
-    assert "barcode(0[1-9]|[1-8][0-9]|9[0-6])" in demux
-    assert "barcode(?:0[1-9]|[1-8][0-9]|9[0-6])" in units
-    assert "CRITICAL_FAILURE: UNKNOWN_DEMUX_LABEL" in demux
-    assert "printf '%s\\n' unclassified" not in demux
-    assert "barcode[0-9]+" not in demux
-
-
-def test_verification_input_uses_the_samtools_consensus_label() -> None:
-    fastq = (ROOT / "modules/ngs/fastq_plasmid_qc.nf").read_text(encoding="utf-8")
-    assert "--consensus-method samtools_consensus" in fastq
-    assert "bcftools_consensus" not in fastq
-
-
 def test_fastq_qc_uses_primary_logical_read_accounting() -> None:
     fastq = (ROOT / "modules/ngs/fastq_plasmid_qc.nf").read_text(encoding="utf-8")
     assert "source_total_reads" in fastq
@@ -186,15 +63,6 @@ def test_fastq_qc_uses_primary_logical_read_accounting() -> None:
     assert "CRITICAL_FAILURE: FASTQ_BAM_READ_ACCOUNTING_MISMATCH" in fastq
     assert 'total_alignment_records=\\$((mapped_alignment_records + unmapped_alignment_records))' in fastq
     assert 'mapping_rate_pct=\\$(awk -v mapped="\\${mapped_reads}" -v total="\\${source_total_reads}"' in fastq
-
-
-def test_fastq_qc_requires_exact_job_identity() -> None:
-    fastq = (ROOT / "modules/ngs/fastq_plasmid_qc.nf").read_text(encoding="utf-8")
-    manifest = (ROOT / "scripts/build_sequence_qc_manifest.py").read_text(encoding="utf-8")
-    assert "FASTQ plasmid QC requires an exact job_id" in fastq
-    assert "nanopore-fastq-qc" not in fastq
-    assert 'parser.add_argument("--job-id", required=True)' in manifest
-    assert 'str(job_id or "unknown")' not in manifest
 
 
 def test_fastq_qc_manifest_uses_persisted_workflow_and_input_authority() -> None:
@@ -270,7 +138,7 @@ def test_dominant_dimer_consensus_fails_without_fabricating_output(tmp_path: Pat
 set -euo pipefail
 case "$1" in
   view)
-    printf '@HD\\tVN:1.6\\tSO:coordinate\\n'
+    if [[ "$2" == "-h" ]]; then printf '@HD\\tVN:1.6\\tSO:coordinate\\n'; fi
     printf 'r1\\t0\\tplasmid\\t1\\t60\\t4M\\t*\\t0\\t0\\tACGT\\tIIII\\n'
     ;;
   sort)

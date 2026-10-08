@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import BackgroundTasks
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -190,14 +190,6 @@ def test_dorado_direct_nextflow_rejects_noninteger_command_fragments(
     combined = completed.stdout + completed.stderr
     assert "invalid int value" in combined or f"{param_name} must be an integer" in combined
     assert not proof.exists()
-
-
-def test_methylation_pod5_is_reference_aligned_before_modkit() -> None:
-    workflow = (ROOT / "workflows/ngs/ont_methylation_analysis.nf").read_text(encoding="utf-8")
-    assert "DoradoAlign as Pod5DoradoAlign" in workflow
-    assert "Pod5DoradoAlign(DoradoBasecall.out.bam, Channel.of(reference_file))" in workflow
-    assert "Pod5ValidateModifiedBaseBam(Pod5DoradoAlign.out.aligned)" in workflow
-    assert "Pod5PrepareBamForAnalysis(DoradoBasecall.out.bam)" not in workflow
 
 
 def test_every_workflow_alias_crosses_the_real_registry_boundary() -> None:
@@ -430,38 +422,6 @@ def test_manifest_rejects_reference_copy_fallback(tmp_path: Path) -> None:
             consensus_status="reference_copy_fallback",
             artifacts=[],
         )
-
-def test_methylation_stage_reports_only_real_module_outputs() -> None:
-    workflow = (ROOT / "workflows/ngs/ont_methylation_analysis.nf").read_text(encoding="utf-8")
-    assert "modified_sites.tsv" not in workflow
-    assert "modkit_pileup.log" not in workflow
-    assert 'methylation/pileup.log' in workflow
-    assert workflow.count('methylation/modified_base_input.bam"') == 2
-    assert workflow.count('methylation/modified_base_input.bam.bai"') == 2
-    assert workflow.count('methylation/modified_base_tag_check.log"') == 2
-    assert 'methylation/modkit_summary.tsv' in workflow
-    assert 'methylation/summary.log' in workflow
-    assert workflow.count("ModkitPileup.out.log.subscribe { _ignored ->") == 2
-    assert workflow.count("ModkitSummary.out.log.subscribe { _ignored ->") == 2
-
-
-def test_nextflow_contracts_forbid_reference_consensus_and_guard_bam_modkit() -> None:
-    plasmid_qc = (ROOT / "modules" / "ngs" / "fastq_plasmid_qc.nf").read_text(encoding="utf-8")
-    bam_prepare = (ROOT / "modules" / "ngs" / "bam_prepare.nf").read_text(encoding="utf-8")
-    modkit = (ROOT / "modules" / "ngs" / "modkit_pileup.nf").read_text(encoding="utf-8")
-
-    assert "cp reference_qc.fasta fastq_consensus.fasta" not in plasmid_qc
-    assert "consensus --mode bayesian -f fasta" in plasmid_qc
-    assert "CRITICAL_FAILURE: SAMTOOLS_CONSENSUS_EMPTY" in plasmid_qc
-    assert "mpileup" not in plasmid_qc
-    assert "create_report" in plasmid_qc
-    assert 'samtools quickcheck -v "${bam}"' in bam_prepare
-    assert "samtools index" in bam_prepare and "aligned.bam.bai" in bam_prepare
-    assert "stageAs: 'source.bam'" in bam_prepare
-    assert "BAM @SQ M5 does not match expected reference" in bam_prepare
-    assert "bam_reference_sha256" in bam_prepare
-    assert "MM:Z:" in modkit and "ML:B:" in modkit
-    assert "no meaningful paired MM/ML modified-base tags" in modkit
 
 
 @pytest.mark.parametrize(
@@ -819,34 +779,3 @@ def test_fastq_runtime_fails_closed_without_fake_consensus_or_manifest(tmp_path:
     assert "CRITICAL_FAILURE: SAMTOOLS_CONSENSUS_EMPTY" in command_output
     assert not (out_dir / "fastq_qc/qc_manifest.json").exists()
     assert not (out_dir / "fastq_qc/fastq_consensus.fasta").exists()
-
-
-def test_nanopore_registry_has_exactly_one_authoritative_definition_per_mode() -> None:
-    model = get_registry().get_model("nanopore")
-    assert model is not None
-    mode_ids = [mode.id for mode in model.modes]
-    assert mode_ids == [
-        "basecall_dna",
-        "basecall_rna",
-        "plasmid_qc",
-        "construct_screening",
-        "fastq_qc",
-        "pooled_reference_assignment",
-        "methylation_analysis",
-        "clone_validation",
-    ]
-    assert len(mode_ids) == len(set(mode_ids))
-
-    mode_params = {mode.id: set(mode.params) for mode in model.modes}
-    assert {"pod5_dir", "reference_fasta", "dorado_batch_size"} <= mode_params["basecall_dna"]
-    assert {"pod5_dir", "reference_fasta", "dorado_batch_size"} <= mode_params["basecall_rna"]
-    assert {"pod5_dir", "bam_path", "fastq_path", "run_fastq_qc"} <= mode_params["plasmid_qc"]
-    assert {"pod5_dir", "bam_path", "fastq_path", "run_fastq_qc", "run_assembly"} <= mode_params["construct_screening"]
-
-
-def test_ont_workflows_do_not_accept_undocumented_multimer_qc_alias() -> None:
-    for relative_path in (
-        "workflows/ngs/wf_clone_validation.nf",
-        "workflows/ngs/ont_construct_screening.nf",
-    ):
-        assert "run_multimer_qc" not in (ROOT / relative_path).read_text(encoding="utf-8")

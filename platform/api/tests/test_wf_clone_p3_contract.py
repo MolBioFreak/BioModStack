@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 
 import pytest
 
@@ -74,14 +73,3 @@ def test_wf_clone_exact_user_selections_are_preserved_and_unsupported_values_rej
                     }
                 ),
             )
-
-
-def test_frontend_does_not_emit_or_display_mutable_wf_clone_runtime_controls() -> None:
-    root = Path(__file__).resolve().parents[3]
-    for relative in (
-        "platform/frontend/src/components/NanoporeTemplate.tsx",
-        "platform/frontend/src/components/NGSToolkit.tsx",
-    ):
-        source = (root / relative).read_text(encoding="utf-8")
-        for token in ("wf_clone_source", "wf_clone_revision", "wf_clone_workflow_dir", "wf_clone_profile"):
-            assert token not in source

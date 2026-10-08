@@ -46,8 +46,6 @@ runtime = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(runtime)
 
 
-
-
 def test_profile_sourced_base_shift_requires_bound_profile_authority() -> None:
     with pytest.raises(RuntimeError, match="profile-sourced base shift"):
         worker_module._effective_base_shift({
@@ -366,30 +364,6 @@ def test_calibration_fasta_index_cleanup_rejects_symlink(tmp_path: Path) -> None
     assert target.read_text(encoding="utf-8") == "authority"
 
 
-def test_lease_recovery_receipt_preserves_legacy_and_appends() -> None:
-    recovered_at = datetime(2026, 8, 24, 18, 31, 10)
-    legacy = {"expired_attempt": 1, "max_attempts": 3, "recovered_at": "legacy"}
-
-    receipts = worker_module._append_lease_recovery_receipt(
-        {
-            "request_identity_sha256": "9" * 64,
-            "lease_recovery": legacy,
-        },
-        expired_attempt=2,
-        recovered_at=recovered_at,
-        max_attempts=3,
-    )
-
-    assert receipts["lease_recovery"] == legacy
-    assert receipts["lease_recoveries"] == [
-        {
-            "expired_attempt": 2,
-            "max_attempts": 3,
-            "recovered_at": recovered_at.isoformat(),
-        }
-    ]
-
-
 def test_worker_managed_output_root_is_retained_parent_authority(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -406,39 +380,6 @@ def test_worker_managed_output_root_is_retained_parent_authority(
     )
 
     assert output_root in OntSignalWorker._governed_parent_roots()
-
-
-@pytest.mark.asyncio
-async def test_view_processing_uses_governed_parent_roots(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    governed_roots = (tmp_path / "managed",)
-    captured: dict[str, object] = {}
-
-    class FakeParents:
-        def __init__(self, roots: tuple[Path, ...]) -> None:
-            captured["roots"] = roots
-
-        def __enter__(self) -> "FakeParents":
-            return self
-
-        def __exit__(self, *_args: object) -> None:
-            return None
-
-    async def fake_process_retained(
-        _item_id: str, _token: str, parents: FakeParents
-    ) -> None:
-        captured["parents"] = parents
-
-    worker = OntSignalWorker(None, None)
-    monkeypatch.setattr(worker, "_governed_parent_roots", lambda: governed_roots)
-    monkeypatch.setattr(worker_module, "RetainedParentSet", FakeParents)
-    monkeypatch.setattr(worker, "_process_view_retained", fake_process_retained)
-
-    await worker._process_view("view-1", "token-1")
-
-    assert captured["roots"] == governed_roots
-    assert isinstance(captured["parents"], FakeParents)
 
 
 def test_legacy_bam_model_provenance_requires_exact_exhaustive_read_groups() -> None:

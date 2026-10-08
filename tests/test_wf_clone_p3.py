@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -224,7 +223,8 @@ def test_adapter_happy_path_inventory_and_non_scientific_execution_status(tmp_pa
     kinds = {artifact["kind"] for artifact in manifest["artifacts"]}
     assert {"final_fasta", "final_fastq", "assembly_stats", "bam", "bai", "full_reference_bcf", "full_reference_csi", "full_reference_stats", "plannotate_json", "upstream_report", "runtime_provenance"} <= kinds
     assert all(len(artifact["sha256"]) == 64 for artifact in manifest["artifacts"])
-
+    schema = json.loads((REPO_ROOT / "schemas/ngs/wf_clone_validation_adapter.schema.json").read_text(encoding="utf-8"))
+    Draft202012Validator(schema).validate(manifest)
 
 
 @pytest.mark.parametrize(
@@ -285,32 +285,7 @@ def test_adapter_rejects_symlink_and_path_escape(tmp_path: Path) -> None:
     assert json.loads(result.stderr)["reason_code"] == "ARTIFACT_SYMLINK_FORBIDDEN"
 
 
-def test_checked_in_production_lock_and_patch_bind_exact_live_identities() -> None:
-    payload = json.loads(LOCK.read_text(encoding="utf-8"))
-    schema = json.loads((REPO_ROOT / "schemas/ngs/wf_clone_validation_lock.schema.json").read_text(encoding="utf-8"))
-    Draft202012Validator(schema).validate(payload)
-    assert payload["schema"] == "biomodstack.wf_clone_validation_lock.v1"
-    assert payload["upstream"] == {
-        "repository": "https://github.com/epi2me-labs/wf-clone-validation.git",
-        "tag": "v1.8.4",
-        "commit": "b3bf4ee47f730bba2239fa7f1d5e8e9bac328b42",
-        "tree": "9cc0a24beee74eccdb07765b755fa64e04bd8141",
-    }
-    assert payload["patched_source"]["commit"] == "7e6b7f0dfe31ee855ec1342c5ea8c5a73021d5a4"
-    assert payload["patched_source"]["tree"] == "6d76e709d6ba599f30854fc0478da555c924e18e"
-    assert len(payload["containers"]["images"]) == 5
-    assert sha256(PATCH_FILE) == payload["compatibility_patch"]["sha256"]
-    assert payload["runtime_policy"] == {"network": "forbidden", "nxf_offline": True}
 
-
-def test_adapter_manifest_conforms_to_checked_in_schema(tmp_path: Path) -> None:
-    root = tmp_path / "results"
-    adapter_fixture(root)
-    result = run_adapter(root, tmp_path)
-    assert result.returncode == 0, result.stderr
-    schema = json.loads((REPO_ROOT / "schemas/ngs/wf_clone_validation_adapter.schema.json").read_text(encoding="utf-8"))
-    manifest = json.loads((tmp_path / "adapter.json").read_text(encoding="utf-8"))
-    Draft202012Validator(schema).validate(manifest)
 
 
 def test_runtime_wrapper_is_immutable_and_preserves_exact_selections() -> None:

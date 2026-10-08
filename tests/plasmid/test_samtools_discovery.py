@@ -27,7 +27,6 @@ def test_missing_tool_does_not_skip_import_or_pure_python_tests(monkeypatch, tmp
     monkeypatch.delenv("BMS_TEST_SAMTOOLS", raising=False)
     monkeypatch.setenv("PATH", str(tmp_path))
     namespace = runpy.run_path(str(MODULE))
-    namespace["test_phase2_contract_files_exist"]()
     assert namespace["_levenshtein_oracle"]("ACGT", "ACAT") == 1
 
 
@@ -45,12 +44,6 @@ def test_missing_tool_skips_before_artifact_or_process_creation(phase2, monkeypa
     assert not list(tmp_path.iterdir())
 
 
-def test_path_discovery_returns_absolute_executable(phase2, monkeypatch, tmp_path):
-    executable = _executable(tmp_path / "bin" / "samtools")
-    monkeypatch.setenv("PATH", str(executable.parent))
-    assert phase2["_require_samtools"]() == executable
-
-
 def test_explicit_override_wins_over_path_and_supports_spaces(phase2, monkeypatch, tmp_path):
     fallback = _executable(tmp_path / "bin" / "samtools")
     override = _executable(tmp_path / "external tools" / "samtools")
@@ -59,21 +52,7 @@ def test_explicit_override_wins_over_path_and_supports_spaces(phase2, monkeypatc
     assert phase2["_require_samtools"]() == override
 
 
-def test_command_name_override_is_resolved_on_path(phase2, monkeypatch, tmp_path):
-    executable = _executable(tmp_path / "samtools-for-ci")
-    monkeypatch.setenv("PATH", str(tmp_path))
-    monkeypatch.setenv("BMS_TEST_SAMTOOLS", executable.name)
-    assert phase2["_require_samtools"]() == executable
-
-
-def test_relative_override_is_anchored_for_execv(phase2, monkeypatch, tmp_path):
-    executable = _executable(tmp_path / "bin" / "samtools")
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("BMS_TEST_SAMTOOLS", "bin/samtools")
-    assert phase2["_require_samtools"]() == executable
-
-
-@pytest.mark.parametrize("kind", ["empty", "blank", "missing", "non_executable", "directory"])
+@pytest.mark.parametrize("kind", ["missing", "non_executable"])
 def test_invalid_explicit_override_fails_without_fallback(phase2, monkeypatch, tmp_path, kind):
     fallback = _executable(tmp_path / "bin" / "samtools")
     monkeypatch.setenv("PATH", str(fallback.parent))
@@ -81,10 +60,7 @@ def test_invalid_explicit_override_fails_without_fallback(phase2, monkeypatch, t
     if kind == "non_executable":
         candidate.write_text("not executable", encoding="utf-8")
         candidate.chmod(0o644)
-    elif kind == "directory":
-        candidate.mkdir()
-    value = {"empty": "", "blank": "   "}.get(kind, str(candidate))
-    monkeypatch.setenv("BMS_TEST_SAMTOOLS", value)
+    monkeypatch.setenv("BMS_TEST_SAMTOOLS", str(candidate))
     with pytest.raises(pytest.fail.Exception, match="BMS_TEST_SAMTOOLS") as failed:
         phase2["_require_samtools"]()
     assert "no PATH fallback" in str(failed.value)

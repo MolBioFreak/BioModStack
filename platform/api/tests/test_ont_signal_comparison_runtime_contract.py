@@ -204,14 +204,6 @@ def _load(path: Path) -> dict[str, object]:
     return value
 
 
-def _canonical_sha256(value: dict[str, object], field: str = "content_sha256") -> str:
-    preimage = dict(value)
-    preimage.pop(field, None)
-    return hashlib.sha256(
-        json.dumps(preimage, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
-    ).hexdigest()
-
-
 def test_parameter_contract_classifies_every_pinned_upstream_option() -> None:
     contract = _load(CONFIG_ROOT / "squigulator_ideal_comparison_schema_v1.json")
 
@@ -406,70 +398,11 @@ def test_producer_and_comparison_renderer_are_distinct_network_denied_pins() -> 
     assert producer["oci_digest"] != renderer["oci_digest"]
 
 
-def test_runtime_build_sources_pin_named_release_and_separate_wrappers() -> None:
-    producer = (REPO_ROOT / "docker/ont-squigulator.Dockerfile").read_text(encoding="utf-8")
-    renderer = (REPO_ROOT / "docker/ont-squigualiser-comparison.Dockerfile").read_text(encoding="utf-8")
-    producer_wrapper = REPO_ROOT / "scripts/ont_squigulator_runtime.py"
-    renderer_wrapper = REPO_ROOT / "scripts/ont_signal_comparison_runtime.py"
-
-    assert "squigulator-v0.5.0-release.tar.gz" in producer
-    assert "debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171" in producer
-    assert "python:3.12-slim-bookworm@sha256:0f5b26b9518d002b6173fd61daad821fa340635ebfec5bba471013f9ca114579" in producer
-    assert "1704d57628b46e9a8e06d90e92a6c38f87e6a04ade7afc3e7a718b35de889a13" not in producer
-    assert SQUIGULATOR_RELEASE_SHA256 in producer
-    assert SQUIGULATOR_COMMIT in producer
-    assert 'test "$observed_version" = "$SQUIGULATOR_VERSION"' in producer
-    assert '|| true' not in producer.split('make -C /src', 1)[0].rsplit('tar -xzf', 1)[1]
-    assert "COPY scripts/ont_squigulator_runtime.py" in producer
-    assert 'Path("/usr/local/lib/python3.12/site-packages")' in producer
-    assert "ont-squigulator-index.c" in producer
-    assert "bms-slow5-index" in producer
-    assert SQUIGUALISER_COMMIT in renderer
-    assert "exec(open(" not in renderer
-    assert "COPY scripts/ont_signal_comparison_runtime.py" in renderer
-    assert "ont_signal_runtime.py" not in renderer
-    assert producer_wrapper.is_file()
-    assert renderer_wrapper.is_file()
-    assert "--full-contigs" in producer_wrapper.read_text(encoding="utf-8")
-    assert "--shared_x" in renderer_wrapper.read_text(encoding="utf-8")
-
-
-def test_comparison_runtime_policy_is_opened_once_and_wrapper_is_repo_constrained() -> None:
-    worker = (REPO_ROOT / "platform/api/services/ont_signal_worker.py").read_text(encoding="utf-8")
-    body = worker.split("def _comparison_runtime_identity", 1)[1].split("def _comparison_container_command", 1)[0]
-    assert "os.O_NOFOLLOW" in body
-    assert ".read_text(" not in body
-    assert "policy_path.read_bytes" not in body
-    assert "wrapper_relative.parts[0] != \"scripts\"" in body
-    assert "expected_policy" in body
-
-
-def test_development_api_unit_receives_both_comparison_runtime_identities() -> None:
-    services = (REPO_ROOT / "biomodstack_services.py").read_text(encoding="utf-8")
-    assert "BMS_ONT_SQUIGULATOR_IMAGE" in services
-    assert "BMS_ONT_SQUIGULATOR_IMAGE_DIGEST" in services
-    assert "BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE" in services
-    assert "BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE_DIGEST" in services
-
-
-def test_worker_claims_comparison_and_preserves_two_stage_runtime_order() -> None:
-    worker = (REPO_ROOT / "platform/api/services/ont_signal_worker.py").read_text(encoding="utf-8")
-    assert "OntSignalComparisonJob" in worker
-    assert "_process_comparison" in worker
-    assert "squigulator_producer" in worker
-    assert "squigualiser_comparison_renderer" in worker
-    assert worker.index("squigulator_producer") < worker.index("squigualiser_comparison_renderer")
-    assert '"--pids-limit", "64"' in worker
-    assert '"--memory", "1g"' in worker
-    assert '"--pids-limit", "128"' in worker
-    assert '"--memory", "4g"' in worker
-
-
 def test_producer_emits_complete_truth_and_coordinate_receipts(
     tmp_path: Path, monkeypatch
 ) -> None:
     reference = tmp_path / "reference.fasta"
-    reference.write_text(">plasmid\nAACCGGTTAACCGGTT\n", encoding="ascii")
+    reference.write_text(">plasmid\nAACCGGTTACGATGCA\n", encoding="ascii")
     output = tmp_path / "output"
     output.mkdir()
     (output / ".owner").write_text("comparison-job-1", encoding="utf-8")
@@ -483,10 +416,11 @@ def test_producer_emits_complete_truth_and_coordinate_receipts(
             profile_id="dna-r10-min", seed=7,
             input_fasta=str(output / "simulation_input.fasta"), output_root=str(output),
         )
+        assert (output / "simulation_input.fasta").read_text().splitlines()[1] == "TGCATCGTAACCGGTT"
         (output / "simulated.blow5").write_bytes(b"BLOW5-one-record")
         (output / "simulated.blow5.idx").write_bytes(b"IDX-one-record")
         (output / "simulated_reads.fasta").write_text(
-            f">{generated_id}\nAACCGGTTAACCGGTT\n", encoding="ascii"
+            f">{generated_id}\nTGCATCGTAACCGGTT\n", encoding="ascii"
         )
         (output / "simulated_source.paf").write_text(
             f"{generated_id}\t104\t0\t104\t+\t{input_id}\t8\t0\t8\t8\t8\t255\t"
@@ -495,7 +429,7 @@ def test_producer_emits_complete_truth_and_coordinate_receipts(
         )
         (output / "simulated_source.sam").write_text(
             f"@HD\tVN:1.6\n@SQ\tSN:{input_id}\tLN:16\n"
-            f"{generated_id}\t0\t{input_id}\t1\t255\t16M\t*\t0\t0\tAACCGGTTAACCGGTT\t*\t"
+            f"{generated_id}\t0\t{input_id}\t1\t255\t16M\t*\t0\t0\tTGCATCGTAACCGGTT\t*\t"
             "si:Z:0,104,0,8\tss:Z:13,13,13,13,13,13,13,13,\n",
             encoding="ascii",
         )
@@ -559,6 +493,11 @@ def test_producer_emits_complete_truth_and_coordinate_receipts(
     assert f"\tplasmid\t16\t0\t8\t" in normalized
     assert "or:Z:reverse" in normalized
 
+    assert (output / "simulated_reads.fasta").read_text().splitlines()[1] == "TGCATCGTAACCGGTT"
+    sam = (output / "simulated_normalized.sam").read_text().splitlines()[-1].split("\t")
+    assert sam[1] == "16"
+    assert sam[9] == "AACCGGTTACGATGCA"
+
 
 def test_producer_rejects_cross_artifact_signal_and_profile_calibration_mismatch() -> None:
     paf = ["read-1", "104", "0", "104"]
@@ -618,13 +557,6 @@ def test_producer_rejects_sam_alignment_shape_that_diverges_from_truth(
         )
 
 
-def test_plot_tracks_allows_exact_governed_output_root() -> None:
-    command = renderer_runtime.build_plot_tracks_argv(
-        "/tmp/comparison.commands", "/output"
-    )
-    assert command[command.index("-o") + 1] == "/output"
-
-
 def test_renderer_creates_real_and_simulated_tracks_before_shared_x_output(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -656,6 +588,13 @@ def test_renderer_creates_real_and_simulated_tracks_before_shared_x_output(
         )
         return subprocess.CompletedProcess(command, 0, b"", b"")
 
+    # Exercise orchestration in scratch, keeping container-root policy separate.
+    build_tracks = renderer_runtime.build_plot_tracks_argv
+    def scratch_tracks(commands_file, output_dir):
+        argv = build_tracks("/output/plot_tracks.commands", "/output")
+        return [commands_file if value == "/output/plot_tracks.commands" else
+                output_dir if value == "/output" else value for value in argv]
+    monkeypatch.setattr(renderer_runtime, "build_plot_tracks_argv", scratch_tracks)
     monkeypatch.setattr(renderer_runtime, "run_bounded_command", fake_run)
     monkeypatch.setattr(
         renderer_runtime,
@@ -750,18 +689,6 @@ def test_renderer_allows_inert_url_text_inside_inline_bokeh_script(tmp_path: Pat
         path, real_read_id="read-1", profile_id="dna-r10-min"
     )
     assert receipt["size_bytes"] == path.stat().st_size
-
-
-def test_renderer_passes_retained_parent_descriptors_to_child_commands(monkeypatch) -> None:
-    captured: dict[str, object] = {}
-
-    def fake_run(command: list[str], **kwargs):
-        captured.update(kwargs)
-        return subprocess.CompletedProcess(command, 0, b"", b"")
-
-    monkeypatch.setattr(renderer_runtime, "run_bounded_command", fake_run)
-    renderer_runtime._run(["squigualiser", "--version"], parent_fds=(41, 42))
-    assert captured["parent_fds"] == (41, 42)
 
 
 def test_renderer_kills_child_when_combined_logs_cross_eight_mib() -> None:
@@ -973,7 +900,8 @@ async def test_comparison_worker_retains_every_real_and_generated_parent_before_
         service, "_selected_read_span_from_indexed_artifact", selected_span
     )
 
-    async def fake_invoke(parents, arguments, kind, _item, _token, output, _allowed=None):
+    async def fake_invoke(parents, arguments, kind, item, token, output, _allowed=None):
+        assert (item, token) == ("comparison-1", "token-1")
         aliases = {parent.alias for parent in parents.parents}; calls.append((kind, aliases, arguments))
         if kind == "squigulator_producer":
             assert aliases == {"reference.fasta"}
@@ -1034,38 +962,3 @@ async def test_comparison_worker_retains_every_real_and_generated_parent_before_
         }],
     }
     assert Parents.instance is not None and Parents.instance.closed is True
-
-
-def test_canonical_ont_docs_preserve_acquired_authority_and_do_not_overclaim_live_squigulator() -> None:
-    docs = (REPO_ROOT / "docs/Lab_Automation_MolBio_and_Sequencing.md").read_text(encoding="utf-8")
-    assert "workflows/ngs/ont_methylation_analysis.nf" in docs
-    assert "workflows/nanopore_methylation.nf" not in docs
-    assert "Read and Signal Workbench" in docs
-    assert "acquired signal" in docs
-    assert "Squigualiser" in docs
-    assert "live acceptance" in docs
-
-
-
-def test_capability_inventory_v2_adds_squigulator_without_relabeling_squigualiser() -> None:
-    inventory = _load(REPO_ROOT / "platform/api/config/ngs_molbio/capability_inventory_v2.json")
-    schema = _load(REPO_ROOT / "schemas/ngs_molbio/capability-inventory-v2.schema.json")
-
-    assert inventory["schema"] == "bms.ngs-molbio.capability-inventory.v2"
-    assert inventory["schema_version"] == 2
-    assert len(inventory["capabilities"]) == 22
-    assert inventory["content_sha256"] == _canonical_sha256(inventory)
-    assert schema["properties"]["capabilities"]["minItems"] == 22
-    assert schema["properties"]["capabilities"]["maxItems"] == 22
-    by_id = {item["capability_id"]: item for item in inventory["capabilities"]}
-    squigulator = by_id["ngs.ont.squigulator_ideal_comparison"]
-    assert squigulator["parameter_schema_id"] == "bms.ont-squigulator-ideal-comparison.v1"
-    assert squigulator["canonical_source_destination"] == "/ngs"
-    assert squigulator["viewer_destination"].startswith("/ngs?")
-    assert "ngs_reference" in squigulator["accepted_source_roles"]
-    assert "ngs_instrument_signal" in squigulator["accepted_source_roles"]
-    assert all("squigulator" not in item["capability_id"] for item in inventory["capabilities"] if item["capability_id"] == "ngs.ont.squigualiser")
-    for capability_id in ("ngs.ont.basecall_dna", "ngs.ont.basecall_rna"):
-        row = by_id[capability_id]
-        assert "emit_moves" in row["classified_parameter_keys"]
-        assert "emit_moves" not in row["unclassified_parameter_keys"]

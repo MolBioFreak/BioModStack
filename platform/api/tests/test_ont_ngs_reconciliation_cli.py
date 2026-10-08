@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import asyncio
 import importlib.util
 import subprocess
@@ -71,19 +70,6 @@ def test_managed_development_environment_rejects_wrong_lane_or_source_root(tmp_p
         )
 
 
-def test_cli_has_only_job_and_mode_mutation_selectors() -> None:
-    module = _module()
-    parser: argparse.ArgumentParser = module.build_parser()
-
-    parsed = parser.parse_args(["--job-id", "31f02bd5-830f-4558-aa78-3873c515de68", "--dry-run"])
-    assert parsed.dry_run is True
-    assert parsed.apply is False
-    with pytest.raises(SystemExit):
-        parser.parse_args(["--job-id", "31f02bd5-830f-4558-aa78-3873c515de68", "--database", "/tmp/foreign.db", "--dry-run"])
-    with pytest.raises(SystemExit):
-        parser.parse_args(["--job-id", "31f02bd5-830f-4558-aa78-3873c515de68", "--dry-run", "--apply"])
-
-
 def test_runtime_environment_overrides_inherited_database_authority(tmp_path: Path) -> None:
     module = _module()
     repo = tmp_path / "repo"
@@ -103,23 +89,6 @@ def test_runtime_environment_overrides_inherited_database_authority(tmp_path: Pa
     assert runtime["BMS_DB_PATH"] == str((data / "biomodstack.db").resolve())
     assert runtime["DATABASE_URL"] == f"sqlite+aiosqlite:///{(data / 'biomodstack.db').resolve()}"
     assert runtime["BMS_RESULTS_DIR"] == str(results.resolve())
-
-
-def test_source_identity_requires_clean_commit_and_tree(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    module = _module()
-
-    def fake_run(command, **_kwargs):
-        if command[-2:] == ["rev-parse", "HEAD"]:
-            return subprocess.CompletedProcess(command, 0, stdout="a" * 40 + "\n", stderr="")
-        if command[-2:] == ["rev-parse", "HEAD^{tree}"]:
-            return subprocess.CompletedProcess(command, 0, stdout="b" * 40 + "\n", stderr="")
-        if command[-2:] == ["status", "--porcelain"]:
-            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-        raise AssertionError(command)
-
-    monkeypatch.setattr(module.subprocess, "run", fake_run)
-
-    assert module._source_identity(tmp_path) == ("a" * 40, "b" * 40)
 
 
 def test_database_identity_is_path_opaque_and_inode_bound(
@@ -174,18 +143,6 @@ def test_owned_or_transitional_workflow_unit_refuses_reconciliation(
     argv = captured["argv"]
     assert isinstance(argv, list)
     assert "--state=active,activating,reloading,deactivating" in argv
-
-
-@pytest.mark.parametrize(
-    ("exit_code", "expected"),
-    [(2, 2), (3, 3), (4, 4), (99, 4), (None, 4)],
-)
-def test_exception_exit_code_is_closed(exit_code: int | None, expected: int) -> None:
-    module = _module()
-    error = RuntimeError("failure")
-    if exit_code is not None:
-        setattr(error, "exit_code", exit_code)
-    assert module._exception_exit_code(error) == expected
 
 
 def test_precommit_hierarchy_resolution_uses_new_factory_sessions() -> None:

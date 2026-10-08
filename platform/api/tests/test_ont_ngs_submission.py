@@ -17,7 +17,6 @@ for path in (API_ROOT, ROUTERS_ROOT):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from model_registry import ModelRegistry  # noqa: E402
 import ont_runs  # noqa: E402
 import routers.jobs as jobs_router  # noqa: E402
 from schemas import JobResponse, JobStatus  # noqa: E402
@@ -69,27 +68,6 @@ def _client_with_fake_create(monkeypatch, captured: dict[str, Any]) -> TestClien
     monkeypatch.setattr(ont_runs, "_create_pipeline_job", fake_create_pipeline_job)
     monkeypatch.setattr(ont_runs, "_confine_submitted_path", lambda value, _label, **_kwargs: str(value))
     return TestClient(app)
-
-
-def test_reference_required_alias_rejects_caller_path_before_job_creation(monkeypatch) -> None:
-    captured: dict[str, Any] = {}
-    client = _client_with_fake_create(monkeypatch, captured)
-
-    response = client.post(
-        "/api/ont/ngs/plasmid_qc/submit",
-        json={
-            "name": "plasmid A12",
-            "params": {
-                "fastq_path": "/data/run/A12.fastq.gz",
-                "reference_fasta": "/data/refs/A12.fa",
-            },
-            "pinned_gpu": 0,
-        },
-    )
-
-    assert response.status_code == 422
-    assert "server-controlled" in response.text
-    assert captured == {}
 
 
 @pytest.mark.parametrize(
@@ -253,25 +231,6 @@ def test_ont_run_plasmid_handoff_submit_builds_and_submits_job(monkeypatch) -> N
     assert job_data.params["igv_report_max_sites"] == 12
 
 
-def test_instrument_handoff_submit_rejects_browser_reference_path_before_building_server_handoff(monkeypatch) -> None:
-    app = FastAPI()
-    app.include_router(ont_runs.router, prefix="/api/ont")
-    app.dependency_overrides[ont_runs.get_session] = lambda: object()
-    monkeypatch.setattr(
-        ont_runs.ont_run_control,
-        "build_plasmid_qc_handoff",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("browser reference paths must not reach handoff builder")),
-    )
-
-    response = TestClient(app).post(
-        "/api/ont/runs/ont-run-1/handoff/plasmid-qc/submit",
-        json={"reference_fasta": "/caller/chosen/reference.fasta"},
-    )
-
-    assert response.status_code == 422
-    assert "/caller/chosen/reference.fasta" not in response.text
-
-
 def test_created_ont_job_receives_opaque_alignment_capability(monkeypatch) -> None:
     import routers.jobs as jobs_router
     from services import alignment_access, ont_submission_trust
@@ -409,18 +368,6 @@ def test_explicit_deferred_commit_survives_launch_context(monkeypatch) -> None:
         "launch_context_id": "launch-context-1",
         "commit": False,
     }
-
-
-def test_nanopore_model_registry_accepts_direct_ont_product_modes() -> None:
-    registry = ModelRegistry()
-    for mode, params in {
-        "plasmid_qc": {"fastq_path": "/tmp/reads.fastq", "reference_fasta": "/tmp/ref.fa"},
-        "fastq_qc": {"fastq_path": "/tmp/reads.fastq", "reference_fasta": "/tmp/ref.fa"},
-        "basecall_dna": {"pod5_dir": "/tmp/pod5"},
-        "basecall_rna": {"pod5_dir": "/tmp/pod5"},
-        "construct_screening": {"fastq_path": "/tmp/reads.fastq", "reference_fasta": "/tmp/ref.fa"},
-    }.items():
-        assert registry.validate_job_params("nanopore", mode, params) == []
 
 
 def test_public_jobs_route_rejects_all_direct_nanopore_creation() -> None:

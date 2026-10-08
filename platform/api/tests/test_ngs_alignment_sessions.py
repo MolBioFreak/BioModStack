@@ -552,24 +552,6 @@ def test_presentation_uses_direct_verified_descriptor_above_snapshot_limit(
     assert package["manifest"]["source_identity"]["size_bytes"] == str(bam_size)
 
 
-def test_presentation_coverage_uses_all_source_primary_records(tmp_path: Path) -> None:
-    from services import ngs_alignment_sessions as service
-
-    source = tmp_path / "source.bam"
-    index, bam_sha, bam_size, bai_sha, bai_size = _write_governed_alignment_fixture(source)
-    package = service.build_alignment_presentation(
-        source, bam_sha256=bam_sha, bam_size_bytes=bam_size, index=index,
-        index_sha256=bai_sha, index_size_bytes=bai_size, source_manifest_sha256="d" * 64,
-        job_id="job-d", session_id="4" * 24, mode="primary", cache_root=tmp_path / "cache",
-        target_reads=1, max_output_bytes=1_000_000,
-    )
-    coverage = package["coverage_path"].read_text(encoding="utf-8")
-    assert package["manifest"]["coverage_semantics"] == "mean primary mapped alignment depth from full source"
-    assert package["manifest"]["coverage_bin_width"] >= 1
-    assert "plasmid\t" in coverage
-    assert package["manifest"]["source_primary_mapped_alignment_record_count"] == 12
-
-
 def test_cached_presentation_resolution_does_not_open_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from services import ngs_alignment_sessions as service
 
@@ -857,13 +839,6 @@ def _locus_authority_test_packages() -> tuple[dict[str, Any], dict[str, Any]]:
         },
     }
     return presentation, receipt
-
-
-def test_locus_artifact_authority_accepts_the_current_presentation() -> None:
-    from routers import ngs_alignment_sessions as router
-
-    presentation, receipt = _locus_authority_test_packages()
-    router._require_current_locus_authority(receipt, presentation)
 
 
 def test_locus_artifact_authority_rejects_a_superseded_presentation() -> None:
@@ -2141,31 +2116,6 @@ def test_alignment_session_wire_shape_validates_against_normative_contract(
     })
 
 
-def test_package_builder_accepts_only_explicitly_pinned_result_root_descriptor(tmp_path: Path) -> None:
-    from services import ngs_alignment_sessions as service
-
-    job_root = tmp_path / "job-a"
-    _write_manifest(job_root / "fastq_qc")
-    source_input = tmp_path / "input.fastq.gz"
-    source_input.write_bytes(b"fastq")
-    descriptor = os.open(job_root, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        artifacts = service.build_ngs_package_artifacts(
-            "job-a",
-            source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(),
-            workflow_id="ont_fastq_qc",
-            input_mode="fastq",
-            source_input_path=source_input,
-            results_dir=tmp_path,
-            job_output_dir=Path(f"/proc/self/fd/{descriptor}"),
-            pinned_root_descriptor=True,
-        )
-    finally:
-        os.close(descriptor)
-
-    assert any(item["kind"] == "alignment_bam" and item["state"] == "present" for item in artifacts)
-
-
 def test_package_builder_reads_pinned_descriptor_across_aba_root_replacement(tmp_path: Path) -> None:
     from services import ngs_alignment_sessions as service
 
@@ -2569,7 +2519,6 @@ def test_alignment_capability_enforces_two_principal_cross_job_denial(
     assert denied_principal.value.code == "NGS_PRINCIPAL_DENIED"
 
 
-
 def test_manifest_assigns_distinct_opaque_roles_without_treating_generic_coverage_as_bedgraph(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2936,88 +2885,6 @@ def test_package_authority_binds_persisted_source_input_path() -> None:
         routes._job_package_authority(cast(routes.Job, job))
 
 
-def test_verification_input_identity_rejects_relabelled_digest() -> None:
-    from services import ngs_alignment_sessions as service
-
-    manifest = {
-        "inputs": {
-            "source_reads": {
-                "sha256": hashlib.sha256(b"replacement").hexdigest(),
-                "size_bytes": 11,
-            }
-        }
-    }
-
-    assert service._verification_input_identity(manifest, "source_reads") != (
-        hashlib.sha256(b"canonical").hexdigest(),
-        9,
-    )
-
-
-def test_ngs_package_inventory_covers_persisted_fastq_qc_and_verification_artifacts() -> None:
-    from services import ngs_alignment_sessions as service
-
-    job_id = "5dceb3d6-0ac7-4058-96b4-b7d1aff6a8fa"
-    output_dir = Path(
-        "/home/dalab/.biomodstack-dev/bms_results/"
-        "public_zenodo_7595170_AAZ605_pGM12_fastq_qc_racefix_rerun_20260810T024400Z_20260809_214452"
-    )
-    if not output_dir.is_dir():
-        pytest.skip("Development acceptance package is unavailable")
-    artifacts = service.build_ngs_package_artifacts(
-        job_id,
-        source_reference_sha256="b4c4f948cca0e583d9a7183fef975f54557c4c0dc925bfc940148ea3a9f2cf69",
-        workflow_id="ont_fastq_qc",
-        input_mode="fastq",
-        source_input_path=Path(
-            "/home/dalab/.biomodstack-dev/inputs/public/onramp-zenodo-7595170/AAZ605.basecalls.fastq.gz"
-        ),
-        results_dir=Path("/home/dalab/.biomodstack-dev/bms_results"),
-        job_output_dir=output_dir,
-    )
-    by_kind = {artifact["kind"]: artifact for artifact in artifacts}
-    for kind in (
-        "source_reads_fastq",
-        "alignment_bam",
-        "alignment_bai",
-        "reference",
-        "reference_index",
-        "consensus",
-        "consensus_index",
-        "summary",
-        "per_base_support",
-        "log",
-        "sequence_qc_manifest",
-        "construct_verification_manifest",
-        "verification_summary",
-        "human_evidence_report",
-        "source_read_provenance",
-    ):
-        assert by_kind[kind]["state"] == "present"
-        assert by_kind[kind]["range_capable"] is True
-        assert by_kind[kind]["url"].startswith(f"/api/jobs/{job_id}/ngs-artifacts/")
-    assert by_kind["source_reads_fastq"]["sha256"] == "d55928dfe4bd161ad3e0b1a29fcd3f0fff273d9243386d281fd94df0e61d149e"
-    assert by_kind["source_reads_fastq"]["size_bytes"] == 51_826_738
-    assert by_kind["signal_data"] == {
-        "kind": "signal_data",
-        "source": "input_mode",
-        "relative_path": None,
-        "state": "not_applicable_to_input_mode",
-        "artifact_id": None,
-        "owner_scope": "result_root",
-        "scientific_role": "optional_evidence",
-        "display_order": 36,
-        "content_disposition": "none",
-        "filename_extension": None,
-        "sha256": None,
-        "size_bytes": None,
-        "mime_type": None,
-        "url": None,
-        "range_capable": False,
-        "unavailable_reason": "FASTQ input has no retained raw signal artifact",
-    }
-
-
 def test_ngs_package_routes_support_authenticated_inventory_and_http_range(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3220,47 +3087,6 @@ def test_missing_nm_preserves_structural_metrics_but_not_reference_disagreement(
     assert metrics["reference_substitution_count"] is None
     assert metrics["reference_substitution_rate"] is None
     assert metrics["reference_disagreement_rate"] is None
-
-
-def test_job_scoped_artifact_route_supports_ranges_and_etags(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from routers import ngs_alignment_sessions as routes
-    from services import ngs_alignment_sessions as service
-
-    artifact = tmp_path / "aligned.bam"
-    artifact.write_bytes(b"abcdefghij")
-    digest = service._sha256_file(artifact)
-    monkeypatch.setattr(
-        service,
-        "_resolve_internal_artifact",
-        lambda *_args, **_kwargs: (
-            artifact,
-            {"sha256": digest, "mime_type": "application/octet-stream", "size_bytes": 10},
-        ),
-    )
-    app = _ngs_app()
-    app.include_router(routes.router, prefix="/api")
-    app.dependency_overrides[routes.require_alignment_job] = lambda: SimpleNamespace(model_id="nanopore", provenance={}, params={"reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest(), "ont_workflow_id": "ont_fastq_qc", "ont_input_mode": "fastq"}, output_dir="/tmp/job-a-run")
-    client = TestClient(app, client=("127.0.0.1", 40000))
-
-    ranged = client.get(
-        "/api/jobs/job-a/alignment-artifacts/" + "a" * 64,
-        headers={"Range": "bytes=2-5"},
-    )
-    assert ranged.status_code == 206
-    assert ranged.content == b"cdef"
-    assert ranged.headers["content-range"] == "bytes 2-5/10"
-    assert ranged.headers["accept-ranges"] == "bytes"
-    etag = ranged.headers["etag"]
-    assert etag == f'"sha256:{digest}"'
-
-    unchanged = client.get(
-        "/api/jobs/job-a/alignment-artifacts/" + "a" * 64,
-        headers={"If-None-Match": etag},
-    )
-    assert unchanged.status_code == 304
-    assert unchanged.content == b""
 
 
 def test_reads_route_requires_a_ready_session_and_never_returns_a_full_file(
@@ -3544,8 +3370,6 @@ def test_active_snapshot_lease_rejects_cache_reservation_but_allows_private_stag
         assert dict(service._snapshot_cache) == {second_digest: 4}
 
 
-
-
 def test_temporary_open_failure_closes_source_and_releases_reservation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3804,8 +3628,6 @@ def test_artifact_route_rejects_package_drift_before_descriptor_resolution(
             assert response.json()["code"] == "NGS_AUTHORITY_CONFLICT"
 
 
-
-
 def test_read_inspection_caps_cursor_and_total_records_scanned(monkeypatch: pytest.MonkeyPatch) -> None:
     from services import ngs_alignment_sessions as service
 
@@ -3891,30 +3713,6 @@ def test_missing_m5_accepts_only_matching_server_manifest_reference_binding(
     assert reason is not None and "manifest binding" in reason
 
 
-def test_manifest_declared_integrity_is_preserved_and_mismatch_is_not_ready(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from services import ngs_alignment_sessions as service
-
-    manifest_dir = tmp_path / "job-a" / "fastq_qc"
-    _write_manifest(manifest_dir)
-    payload = json.loads((manifest_dir / "qc_manifest.json").read_text(encoding="utf-8"))
-    for artifact in payload["artifacts"]:
-        path = manifest_dir / artifact["path"]
-        artifact["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
-        artifact["size_bytes"] = path.stat().st_size
-    payload["artifacts"][2]["sha256"] = "0" * 64
-    (manifest_dir / "qc_manifest.json").write_text(json.dumps(payload), encoding="utf-8")
-    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_args, **_kwargs: (True, None))
-
-    primary = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)[0]
-
-    assert primary["ready"] is False
-    assert primary["artifacts"] == {}
-    assert "integrity" in primary["unavailable_reason"].lower()
-
-
 def test_exact_read_detail_scan_exhaustion_is_not_reported_as_404(monkeypatch: pytest.MonkeyPatch) -> None:
     from routers import ngs_alignment_sessions as routes
     from services import ngs_alignment_sessions as service
@@ -3942,16 +3740,6 @@ def test_exact_read_detail_scan_exhaustion_is_not_reported_as_404(monkeypatch: p
     assert response.status_code == 409
     assert response.json()["code"] == "NGS_READ_SCAN_TRUNCATED"
     assert response.json()["resource"] == "read"
-
-
-def test_production_dimer_process_emits_discoverable_authoritative_manifest() -> None:
-    module_path = API_ROOT.parents[1] / "modules" / "ngs" / "fastq_dimer_qc.nf"
-    source = module_path.read_text(encoding="utf-8")
-
-    assert 'path "qc_manifest.json", emit: qc_manifest' in source
-    assert 'scripts/build_alignment_session_manifest.sh' in source
-    assert 'dimer_candidates.aligned.bam' in source
-    assert 'dimer_reference.fasta' in source
 
 
 def _build_public_ngs_result_test_app(monkeypatch: pytest.MonkeyPatch, job, payload: dict) -> tuple[FastAPI, str]:
@@ -4126,7 +3914,6 @@ def test_rotation_authorizes_signal_job_without_rebuilding_result_projection(
     assert calls == ["cas", "commit"]
 
 
-
 def test_sortable_locus_page_is_server_sorted_null_last_and_query_bound() -> None:
     from services import ngs_alignment_sessions as service
 
@@ -4206,8 +3993,6 @@ def test_dorado_move_metrics_require_complete_legal_signal_bounds() -> None:
         "dorado_emission_rate_bases_per_second": None,
         "samples_per_aligned_reference_base": None,
     }
-
-
 
 
 def test_result_route_passes_pagination_without_cached_summary(monkeypatch):

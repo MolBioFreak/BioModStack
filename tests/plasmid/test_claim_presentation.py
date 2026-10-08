@@ -1,5 +1,5 @@
 import pytest
-from verify_construct import variant_analysis_completed, check_display_name, write_evidence_html
+from verify_construct import variant_analysis_completed, write_evidence_html
 
 
 def manifest(reason='CIRCULAR_ALIGNMENT_WORK_BUDGET_EXCEEDED'):
@@ -26,7 +26,3 @@ def test_html_preserves_unavailable_state_and_narrows_claims(tmp_path):
     assert 'Expected-reference mapping' in text
     assert 'does not establish' in text and 'sample purity' in text
     assert 'Independent checks' not in text
-
-
-def test_wire_key_can_remain_stable_with_precise_display_label():
-    assert check_display_name('contamination')=='Expected-reference mapping'

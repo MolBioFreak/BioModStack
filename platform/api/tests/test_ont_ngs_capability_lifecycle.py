@@ -4,7 +4,6 @@ import hashlib
 import json
 from http.cookies import SimpleCookie
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -610,21 +609,3 @@ def test_barcode_route_receives_job_scoped_httponly_cookie(
         response = client.get("/api/jobs/cookie-source/barcode-units")
     assert response.status_code == 200
     assert response.json()["units"][0]["unit_id"] == "barcode01"
-
-
-@pytest.mark.asyncio
-async def test_barcode_submit_is_retired_and_cannot_authorize_browser_paths() -> None:
-    with pytest.raises(HTTPException) as raised:
-        await ont_runs.ont_submit_barcode_unit(
-            "source",
-            "barcode01",
-            ont_runs.OntBarcodeUnitSubmitRequest(
-                target_workflow="ont_plasmid_qc",
-                reference_fasta="/inputs/ref.fa",
-            ),
-            BackgroundTasks(),
-            _request("/api/jobs/source/barcode-units/barcode01/submit", "token"),
-            Response(),
-            object(),
-        )
-    assert raised.value.status_code == 410

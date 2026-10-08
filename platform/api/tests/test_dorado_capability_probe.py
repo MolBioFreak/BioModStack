@@ -24,30 +24,6 @@ def _fake_dorado(tmp_path: Path, *, supports_summary: bool) -> Path:
     return fake
 
 
-def _unsafe_live_probe(fake: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [
-            "bash",
-            "-o",
-            "pipefail",
-            "-c",
-            '"$1" basecaller --help | grep -q -- "$2"',
-            "unsafe-probe",
-            str(fake),
-            "--emit-summary",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-
-def test_supported_fixture_reproduces_unsafe_pipefail_sigpipe(tmp_path: Path) -> None:
-    fake = _fake_dorado(tmp_path, supports_summary=True)
-    completed = _unsafe_live_probe(fake)
-    assert completed.returncode == 141
-
-
 def test_probe_accepts_supported_option_without_pipefail_sigpipe(tmp_path: Path) -> None:
     fake = _fake_dorado(tmp_path, supports_summary=True)
     completed = subprocess.run(

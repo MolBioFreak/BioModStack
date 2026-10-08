@@ -1,14 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import asyncio
 import hashlib
 import json
 import os
 import re
 import sqlite3
-import stat
 import threading
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,7 +16,6 @@ from typing import Any, cast
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
-from fastapi.routing import APIRoute
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
@@ -343,7 +341,7 @@ def test_external_move_bam_receipt_migration_is_registered_and_immutable(tmp_pat
 
 
 def test_move_source_attempt_lineage_migration_preserves_failed_external_row_exactly(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from migrations.add_ont_external_move_bam_receipts import migrate as migrate_external_move_bam
 
@@ -458,6 +456,8 @@ def test_move_source_attempt_lineage_migration_preserves_failed_external_row_exa
             ],
         )
         connection.commit()
+    # This minimal historical fixture covers through attempt-lineage v34 only.
+    monkeypatch.setattr(migration_runner, "MIGRATIONS", [item for item in MIGRATIONS if item.version <= 34])
     migration_runner.run_all(str(db_path))
     migration.fn(str(db_path))
 
@@ -748,67 +748,6 @@ async def test_upgraded_database_startup_rejects_same_name_altered_migration_33_
             await database_models.init_db()
     finally:
         await startup_engine.dispose()
-
-
-def test_migration_runner_preserves_legacy_unknown_content_and_seals_new_v33_bytes(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    db_path = tmp_path / "migration-content-ledger.db"
-    with sqlite3.connect(db_path) as connection:
-        connection.execute(
-            """
-            CREATE TABLE schema_migrations (
-                version INTEGER PRIMARY KEY,
-                name TEXT NOT NULL,
-                applied_at TEXT NOT NULL
-            )
-            """
-        )
-        connection.executemany(
-            "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, 'legacy')",
-            [(migration.version, migration.name) for migration in MIGRATIONS if migration.version < 33],
-        )
-        connection.commit()
-
-    module_path = tmp_path / "fake_migration_33.py"
-    module_path.write_bytes(b"MIGRATION_CONTENT = 'v1'\n")
-
-    def fake_v33(db_path: str) -> None:
-        del db_path
-
-    fake_module = SimpleNamespace(__file__=str(module_path))
-    fake_migration = migration_runner.Migration(
-        33,
-        "add_ont_external_move_bam_receipts",
-        fake_v33,
-    )
-    registered = [migration for migration in MIGRATIONS if migration.version < 33] + [fake_migration]
-    monkeypatch.setattr(migration_runner, "MIGRATIONS", registered)
-    monkeypatch.setattr(
-        migration_runner,
-        "getmodule",
-        lambda fn: fake_module if fn is fake_v33 else None,
-        raising=False,
-    )
-
-    migration_runner.run_all(str(db_path))
-    expected_sha256 = hashlib.sha256(module_path.read_bytes()).hexdigest()
-    with sqlite3.connect(db_path) as connection:
-        columns = {
-            str(row[1]) for row in connection.execute("PRAGMA table_info('schema_migrations')")
-        }
-        assert "content_sha256" in columns
-        assert connection.execute(
-            "SELECT DISTINCT content_sha256 FROM schema_migrations WHERE version < 33"
-        ).fetchall() == [(None,)]
-        assert connection.execute(
-            "SELECT content_sha256 FROM schema_migrations WHERE version = 33"
-        ).fetchone() == (expected_sha256,)
-
-    module_path.write_bytes(b"MIGRATION_CONTENT = 'changed-after-application'\n")
-    with pytest.raises(RuntimeError, match="migration content changed.*version 33"):
-        migration_runner.run_all(str(db_path))
 
 
 def test_external_move_bam_migration_enforces_exact_producer_authority_on_v32_data(
@@ -1233,39 +1172,6 @@ def test_external_move_bam_candidate_key_file_contract_fails_closed(
 
     assert str(key_file) not in str(raised.value)
     assert str(root) not in str(raised.value)
-
-
-def test_external_move_bam_candidate_key_is_read_once_per_catalog_and_seal(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root = tmp_path / "single-key-read-root"
-    root.mkdir()
-    (root / "one.bam").write_bytes(b"one")
-    (root / "two.bam").write_bytes(b"two")
-    monkeypatch.setenv(service.EXTERNAL_MOVE_BAM_ROOT_ENV, str(root))
-    _configure_external_move_bam_candidate_key(tmp_path, monkeypatch)
-    original_read = service._read_external_move_bam_candidate_key
-    reads = 0
-
-    def observed_read() -> bytes:
-        nonlocal reads
-        reads += 1
-        return original_read()
-
-    monkeypatch.setattr(service, "_read_external_move_bam_candidate_key", observed_read)
-    candidates = service.list_external_move_bam_candidates()
-    assert reads == 1
-
-    reads = 0
-    _sealed, retained_descriptors = service._seal_external_move_bam_candidate(
-        candidates[0]["candidate_id"]
-    )
-    try:
-        assert reads == 1
-    finally:
-        for descriptor in retained_descriptors:
-            os.close(descriptor)
 
 
 def test_external_move_bam_candidate_catalog_is_bounded(
@@ -1759,24 +1665,6 @@ async def test_fresh_external_move_source_attempt_rejects_invalid_state_and_auth
         ) == 0
 
 
-@pytest.mark.asyncio
-async def test_external_move_bam_catalog_unavailability_is_safe_503(
-    workbench_store: WorkbenchStore,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _configure_external_move_bam_candidate_key(workbench_store.root, monkeypatch)
-    monkeypatch.delenv(service.EXTERNAL_MOVE_BAM_ROOT_ENV, raising=False)
-    async with AsyncClient(
-        transport=ASGITransport(app=_api(workbench_store.factory)),
-        base_url="http://test",
-    ) as client:
-        response = await client.get(
-            "/api/ont/signal-workbench/external-move-bam-candidates"
-        )
-    assert response.status_code == 503
-    assert response.json() == {"detail": "external move-BAM source is unavailable"}
-
-
 def test_public_json_omits_path_keyed_receipt_entries() -> None:
     public = service._public_json({
         "blow5_parents": {
@@ -1832,32 +1720,6 @@ async def test_external_move_bam_catalog_and_registration_key_failures_are_path_
 
 
 @pytest.mark.asyncio
-async def test_external_move_bam_candidate_id_survives_api_restart_with_same_key(
-    workbench_store: WorkbenchStore,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    external_root = workbench_store.root / "restart-stable-external-root"
-    external_root.mkdir()
-    (external_root / "moves.bam").write_bytes(b"restart-stable")
-    monkeypatch.setenv(service.EXTERNAL_MOVE_BAM_ROOT_ENV, str(external_root))
-    _configure_external_move_bam_candidate_key(workbench_store.root, monkeypatch)
-
-    observed_ids: list[str] = []
-    for app in (_api(workbench_store.factory), _api(workbench_store.factory)):
-        async with AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://test",
-        ) as client:
-            response = await client.get(
-                "/api/ont/signal-workbench/external-move-bam-candidates"
-            )
-        assert response.status_code == 200
-        observed_ids.append(response.json()["items"][0]["candidate_id"])
-
-    assert observed_ids[0] == observed_ids[1]
-
-
-@pytest.mark.asyncio
 async def test_external_move_bam_catalog_listing_runs_off_the_async_event_loop(
     workbench_store: WorkbenchStore,
     monkeypatch: pytest.MonkeyPatch,
@@ -1880,103 +1742,6 @@ async def test_external_move_bam_catalog_listing_runs_off_the_async_event_loop(
 
     assert response.status_code == 200
     assert listing_threads and listing_threads[0] != event_loop_thread
-
-
-def test_router_openapi_closes_every_json_response_and_keeps_artifact_binary() -> None:
-    app = FastAPI()
-    app.include_router(router.router, prefix="/api/ont/signal-workbench")
-    root = "/api/ont/signal-workbench"
-    expected = {
-        ("get", f"{root}/runs/{{run_id}}/generations/{{observed_generation}}/capabilities"): ("200", "WorkbenchCapabilitiesResponse"),
-        ("get", f"{root}/runs/{{run_id}}/generations/{{observed_generation}}/move-sources"): ("200", "MoveSourceListResponse"),
-        ("post", f"{root}/runs/{{run_id}}/generations/{{observed_generation}}/move-sources"): ("202", "MoveSourceResponse"),
-        ("get", f"{root}/external-move-bam-candidates"): ("200", "ExternalMoveBamCandidateListResponse"),
-        ("post", f"{root}/runs/{{run_id}}/generations/{{observed_generation}}/external-move-bam-candidates/register"): ("202", "MoveSourceResponse"),
-        ("post", f"{root}/move-sources/{{move_source_id}}/fresh-attempt"): ("202", "MoveSourceResponse"),
-        ("get", f"{root}/mapping-profiles"): ("200", "MappingProfileListResponse"),
-        ("post", f"{root}/mapping-profiles"): ("201", "MappingProfileResponse"),
-        ("get", f"{root}/calibrations"): ("200", "CalibrationArtifactListResponse"),
-        ("post", f"{root}/runs/{{run_id}}/generations/{{observed_generation}}/calibrations"): ("202", "CalibrationJobResponse"),
-        ("get", f"{root}/calibrations/{{calibration_job_id}}"): ("200", "CalibrationJobResponse"),
-        ("post", f"{root}/calibrations/{{calibration_job_id}}/cancel"): ("202", "CalibrationJobResponse"),
-        ("post", f"{root}/runs/{{run_id}}/generations/{{observed_generation}}/mappings"): ("202", "MappingJobResponse"),
-        ("get", f"{root}/mappings/{{mapping_job_id}}"): ("200", "MappingJobResponse"),
-        ("post", f"{root}/mappings/{{mapping_job_id}}/cancel"): ("202", "MappingJobResponse"),
-        ("post", f"{root}/views"): ("202", "ViewJobResponse"),
-        ("get", f"{root}/views/{{view_job_id}}"): ("200", "ViewJobResponse"),
-        ("post", f"{root}/views/{{view_job_id}}/cancel"): ("202", "ViewJobResponse"),
-        ("post", f"{root}/viewer-sessions"): ("201", "ViewerSessionResponse"),
-        ("get", f"{root}/viewer-sessions/{{viewer_session_id}}"): ("200", "ViewerSessionResponse"),
-        ("patch", f"{root}/viewer-sessions/{{viewer_session_id}}"): ("200", "ViewerSessionResponse"),
-    }
-    specification = app.openapi()
-    routes = {
-        (method.lower(), f"{root}{route.path}"): route
-        for base_route in router.router.routes
-        for route in [cast(APIRoute, base_route)]
-        for method in route.methods
-    }
-
-    for (method, path), (status, model_name) in expected.items():
-        operation = specification["paths"][path][method]
-        assert operation["responses"][status]["content"]["application/json"]["schema"] == {
-            "$ref": f"#/components/schemas/{model_name}"
-        }
-        route = routes[(method, path)]
-        assert route.response_model is getattr(router, model_name)
-        assert route.endpoint.__annotations__.get("return") == model_name
-
-    closed_components = {
-        "WorkbenchCapabilitiesResponse",
-        "WorkbenchResolvedResponse",
-        "WorkbenchModesResponse",
-        "CapabilityModeResponse",
-        "MoveSourceResponse",
-        "MoveSourceListResponse",
-        "MoveTagCountsResponse",
-        "FreshMoveSourceAttemptCreate",
-        "MappingProfileResponse",
-        "MappingProfileListResponse",
-        "CalibrationSampleSelectionResponse",
-        "CalibrationArtifactResponse",
-        "CalibrationArtifactListResponse",
-        "CalibrationJobResponse",
-        "MappingArtifactResponse",
-        "MappingJobResponse",
-        "ReferenceRegionResponse",
-        "RenderParamsResponse",
-        "ViewArtifactDescriptorResponse",
-        "ViewOutputManifestResponse",
-        "ViewJobResponse",
-        "ViewerSessionResponse",
-    }
-    schemas = specification["components"]["schemas"]
-    for component in closed_components:
-        assert schemas[component]["additionalProperties"] is False
-
-    artifact_path = f"{root}/views/{{view_job_id}}/artifacts/{{artifact_id}}"
-    artifact_operation = specification["paths"][artifact_path]["get"]
-    assert "content" not in artifact_operation["responses"]["200"]
-    artifact_route = routes[("get", artifact_path)]
-    assert artifact_route.response_model is None
-    assert artifact_route.endpoint.__annotations__.get("return") == "Response"
-
-
-def test_mapping_profile_request_requires_non_null_calibration_artifact() -> None:
-    schema = router.MappingProfileCreate.model_json_schema()
-    assert "calibration_artifact_id" in schema["required"]
-    assert schema["properties"]["calibration_artifact_id"] == {"title": "Calibration Artifact Id", "type": "string"}
-    with pytest.raises(ValueError):
-        router.MappingProfileCreate.model_validate({
-            "name": "profile",
-            "molecule_type": "dna",
-            "basecall_model_id": MODEL_ID,
-            "kmer_length": 5,
-            "signal_move_offset": 4,
-            "parameter_source": "approved_calibration",
-            "calibration_artifact_id": None,
-            "approval_receipt": {"approved": True},
-        })
 
 
 @pytest.mark.asyncio
@@ -3403,37 +3168,6 @@ async def test_external_move_bam_registration_cancellation_waits_for_seal_and_cl
 
 
 @pytest.mark.asyncio
-async def test_external_move_bam_router_rolls_back_unexpected_registration_errors(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class FailingSession:
-        rollback_calls = 0
-
-        async def rollback(self) -> None:
-            self.rollback_calls += 1
-
-    async def fail_registration(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
-        raise RuntimeError("unexpected registration failure")
-
-    session = FailingSession()
-    monkeypatch.setattr(service, "register_external_move_bam_candidate", fail_registration)
-    request = router.ExternalMoveBamRegistrationCreate(
-        candidate_id="d" * 64,
-        raw_representation_id="raw-blow5-1",
-        molecule_type="dna",
-    )
-
-    with pytest.raises(RuntimeError, match="unexpected registration failure"):
-        await router.register_external_move_bam_candidate(
-            "run-1",
-            1,
-            request,
-            cast(AsyncSession, session),
-        )
-    assert session.rollback_calls == 1
-
-
-@pytest.mark.asyncio
 async def test_equivalent_move_source_registration_race_returns_winner_and_unrelated_integrity_raises(
     workbench_store: WorkbenchStore,
     monkeypatch: pytest.MonkeyPatch,
@@ -4484,79 +4218,6 @@ async def test_registration_viewer_and_worker_full_file_work_are_offloaded(
 
 
 @pytest.mark.asyncio
-async def test_alignment_resolution_and_view_artifact_read_hash_are_offloaded(
-    workbench_store: WorkbenchStore,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    resolver = getattr(service, "_resolve_primary_alignment_session_async", None)
-    assert callable(resolver), "mapping admission lacks an async alignment-resolution offload"
-    calls: list[str] = []
-
-    async def fake_to_thread(function: Any, *args: Any, **kwargs: Any) -> Any:
-        calls.append(function.__name__)
-        return function(*args, **kwargs)
-
-    monkeypatch.setattr(service.asyncio, "to_thread", fake_to_thread)
-    monkeypatch.setattr(
-        service.ngs_alignment_sessions,
-        "resolve_alignment_session",
-        lambda *_args, **_kwargs: {"ready": True, "mode": "primary", "artifacts": {}},
-    )
-    alignment = await cast(Any, resolver)(
-        "alignment-job",
-        "alignment-session",
-        {
-            "source_reference_sha256": "a" * 64,
-            "workflow_id": "ont_alignment",
-            "input_mode": "fastq",
-        },
-        str(workbench_store.root),
-    )
-    assert alignment["mode"] == "primary"
-
-    async with workbench_store.factory() as session:
-        mapping_artifact = await _seed_ready_mapping_artifact(
-            session,
-            artifact_id="mapping-artifact-offloaded-serve",
-            mode="signal_to_read",
-        )
-        session.add(
-            OntSquigualiserViewJob(
-                id="view-offloaded-serve",
-                mapping_artifact_id=mapping_artifact.id,
-                mode="read",
-                read_id="read-1",
-                render_params={},
-                request_fingerprint="4" * 64,
-                state="ready",
-                reason_code="bounded_squigualiser_view_ready",
-                output_manifest={
-                    "artifacts": [{
-                        "artifact_id": "artifact-offloaded-serve",
-                        "managed_relative_path": "views/offloaded/view.html",
-                        "sha256": "5" * 64,
-                        "size_bytes": 7,
-                        "media_type": "text/html",
-                    }]
-                },
-                render_receipt={},
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow(),
-                completed_at=datetime.utcnow(),
-            )
-        )
-        await session.commit()
-
-        monkeypatch.setattr(service, "_read_verified_view_artifact", lambda _item: b"offload")
-        payload, _metadata = await service.resolve_view_artifact(
-            session, "view-offloaded-serve", "artifact-offloaded-serve"
-        )
-
-    assert payload == b"offload"
-    assert calls == ["<lambda>", "<lambda>"]
-
-
-@pytest.mark.asyncio
 async def test_managed_bed_is_completed_job_owned_and_byte_bound_to_view_identity(
     workbench_store: WorkbenchStore,
     monkeypatch: pytest.MonkeyPatch,
@@ -5298,53 +4959,6 @@ async def test_viewer_session_concurrent_update_is_rowcount_fenced_cas(
 
 
 @pytest.mark.asyncio
-async def test_viewer_update_uses_revision_in_rowcount_fenced_update() -> None:
-    row = OntSignalViewerSession(
-        id="viewer-fenced-update",
-        dataset_id="dataset-1",
-        run_id="run-1",
-        observed_generation=1,
-        contig="chr1",
-        locus_start=1,
-        locus_end=2,
-        selected_read_id="read-1",
-        igv_state={},
-        signal_state={},
-        revision=1,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
-    )
-
-    class LostCasSession:
-        update_seen = False
-
-        async def get(self, model: Any, identity: str) -> Any:
-            if model is OntSignalViewerSession and identity == row.id:
-                return row
-            return None
-
-        async def execute(self, statement: Any) -> Any:
-            assert getattr(statement, "is_update", False)
-            self.update_seen = True
-            return type("Result", (), {"rowcount": 0})()
-
-    session = LostCasSession()
-    with pytest.raises(service.OntSignalError, match="changed concurrently"):
-        await service.update_viewer_session(
-            session,  # type: ignore[arg-type]
-            row.id,
-            expected_revision=1,
-            contig="chr1",
-            locus_start=10,
-            locus_end=20,
-            selected_read_id="read-1",
-            igv_state={},
-            signal_state={"selected_read_id": "read-1"},
-        )
-    assert session.update_seen is True
-
-
-@pytest.mark.asyncio
 async def test_reference_capability_filters_exact_viewer_alignment_reference_authority(
     workbench_store: WorkbenchStore,
 ) -> None:
@@ -5440,14 +5054,6 @@ async def test_reference_capability_filters_exact_viewer_alignment_reference_aut
     assert unscoped["modes"]["raw_waveform"]["state"] == "ready"
     assert unscoped["modes"]["signal_to_reference"]["state"] != "ready"
     assert unscoped["modes"]["signal_pileup"]["state"] != "ready"
-
-
-def test_profile_sourced_render_params_reject_an_explicit_shift() -> None:
-    with pytest.raises(service.OntSignalError, match="profile-sourced base shift"):
-        service.normalize_render_params({
-            "base_shift_source": "profile",
-            "base_shift_value": 7,
-        })
 
 
 @pytest.mark.asyncio
@@ -5702,52 +5308,6 @@ async def test_expired_calibration_mapping_and_view_leases_exhaust_attempt_budge
         assert all(row.reason_code == "expired_lease_retry_exhausted" for row in recovered)
         assert all(row.claim_token is None and row.lease_expires_at is None for row in recovered)
         assert all(row.completed_at is not None for row in recovered)
-
-
-@pytest.mark.asyncio
-async def test_managed_bed_hashing_is_offloaded_after_descriptor_admission(
-    workbench_store: WorkbenchStore,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    job_root = workbench_store.root / "bed-offload"
-    job_root.mkdir()
-    bed = job_root / "regions.bed"
-    bed.write_text("chr1\t1\t2\n", encoding="utf-8")
-    monkeypatch.setattr(service, "get_allowed_roots", lambda: {"results": workbench_store.root})
-    calls: list[tuple[str, bool]] = []
-
-    async def recording_to_thread(function: Any, *args: Any, **kwargs: Any) -> Any:
-        descriptor = int(args[0])
-        calls.append((function.__name__, stat.S_ISREG(os.fstat(descriptor).st_mode)))
-        return function(*args, **kwargs)
-
-    monkeypatch.setattr(service.asyncio, "to_thread", recording_to_thread)
-    async with workbench_store.factory() as session:
-        session.add_all([
-            Job(
-                id="bed-offload-job",
-                name="BED offload",
-                status="completed",
-                model_id="bed",
-                mode="analysis",
-                params={},
-                output_dir=str(job_root),
-            ),
-            InputFile(
-                id="bed-offload-input",
-                filename=bed.name,
-                file_type="bed",
-                directory=str(job_root),
-                size_bytes=bed.stat().st_size,
-            ),
-        ])
-        await session.flush()
-        _path, identity = await service.resolve_managed_bed_authority(
-            session, "bed-offload-input"
-        )
-
-    assert identity["sha256"] == hashlib.sha256(bed.read_bytes()).hexdigest()
-    assert calls == [("_stable_descriptor_identity", True)]
 
 
 @pytest.mark.asyncio

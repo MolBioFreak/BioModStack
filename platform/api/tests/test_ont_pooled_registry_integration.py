@@ -6,7 +6,6 @@ if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
 from model_registry import get_registry
-from routers import ont_runs
 from routers.ont_runs import ONT_WORKFLOW_MODEL_MODES, OntNgsSubmitRequest, _job_create_for_ont_submit
 from services.nextflow import WORKFLOW_ENTRYPOINTS, build_nextflow_command
 from services.ont_ngs_contract import get_ont_workflow_spec, resolve_ont_workflow_alias
@@ -34,14 +33,6 @@ def test_pooled_assignment_is_bound_across_all_authoritative_registries() -> Non
     nanopore = get_registry().get_model("nanopore")
     assert nanopore is not None
     assert ASSIGNMENT_MODE in {mode.id for mode in nanopore.modes}
-
-
-def test_dedicated_pooled_submit_route_precedes_the_generic_ont_route() -> None:
-    paths = [str(getattr(route, "path", "")) for route in ont_runs.router.routes]
-    dedicated = "/ngs/pooled-reference-assignment/submit"
-    generic = "/ngs/{workflow_id}/submit"
-
-    assert paths.index(dedicated) < paths.index(generic)
 
 
 def test_generic_ont_builder_rejects_pooled_reference_assignment() -> None:

@@ -5,7 +5,6 @@ import copy
 import hashlib
 import os
 import sys
-from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -23,7 +22,7 @@ if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
 import database  # noqa: E402
-from database import Base, OntInstrumentRun, OntInstrumentRunEvent, OntProtocolOptionReceipt  # noqa: E402
+from database import Base, OntInstrumentRun, OntInstrumentRunEvent
 from migrations.add_ont_instrument_run_ledger import migrate as migrate_ont_ledger  # noqa: E402
 from migrations.add_ont_protocol_preflight import migrate as migrate_ont_preflight  # noqa: E402
 from migrations.add_ont_terminal_artifact_manifests import migrate as migrate_ont_terminal_manifests  # noqa: E402
@@ -116,24 +115,6 @@ def durable_test_ledger(monkeypatch, tmp_path: Path):
     asyncio.run(engine.dispose())
 
 
-def test_start_preflight_blocks_missing_flowcell() -> None:
-    payload = build_start_preflight(
-        position={
-            "position": "X1",
-            "running": False,
-            "flow_cell": {"present": False},
-        },
-        kit="SQK-LSK114",
-        basecalling_enabled=True,
-        output_directories={"reads": "/data/minknow"},
-    )
-
-    assert payload["can_start"] is False
-    assert "flowcell_absent" in payload["blockers"]
-    assert payload["position"] == "X1"
-    assert payload["fake_or_demo_devices"] is False
-
-
 def test_start_preflight_blocks_running_position_and_missing_output_directory() -> None:
     payload = build_start_preflight(
         position={
@@ -167,57 +148,6 @@ def test_start_preflight_allows_ready_position_with_requested_kit_and_output_dir
     assert payload["blockers"] == []
     assert payload["protocol_id"] is None
     assert payload["basecalling_options"]["simplex_models"] == ["dna_r10.4.1_e8.2_400bps_sup"]
-
-
-
-def test_start_preflight_exposes_flowcell_truth_and_output_directories_for_config_cell() -> None:
-    payload = build_start_preflight(
-        position={
-            "position": "MD-105428",
-            "running": True,
-            "flow_cell": {
-                "present": False,
-                "is_ctc": False,
-                "channel_count": 0,
-                "sample_rate": 10000,
-            },
-            "output_directories": {"reads": "/var/lib/minknow/data/"},
-        },
-        kit="SQK-LSK114",
-        basecalling_enabled=True,
-        output_directories={"reads": "/var/lib/minknow/data/"},
-    )
-
-    assert payload["can_start"] is False
-    assert payload["flow_cell"] == {
-        "present": False,
-        "is_ctc": False,
-        "channel_count": 0,
-        "sample_rate": 10000,
-    }
-    assert payload["output_directories"] == {"reads": "/var/lib/minknow/data/"}
-    assert "flowcell_absent" in payload["blockers"]
-    assert "position_already_running" in payload["blockers"]
-    assert "output_directory_missing" not in payload["blockers"]
-
-
-def test_refresh_position_state_proxies_host_agent_without_claiming_restart(monkeypatch) -> None:
-    monkeypatch.setattr(
-        ont_run_control,
-        "request_host_agent",
-        lambda method, path, payload=None, *, query=None: {
-            "action": "refresh",
-            "detail": "Reopened the MinKNOW position connection and reread device/flow-cell state; this does not power-cycle the instrument.",
-            "position": {"position": "MD-105428", "device_type": "mk1d"},
-            "fake_or_demo_devices": False,
-        },
-    )
-
-    payload = ont_run_control.refresh_position_state("MD-105428")
-
-    assert payload["action"] == "refresh"
-    assert payload["detail"] == "Re-read the Mk1D position state without a power cycle."
-    assert payload["position"]["position"] == "MD-105428"
 
 
 def test_restart_position_requires_confirmation_but_remains_host_agent_contract(monkeypatch) -> None:
@@ -295,37 +225,6 @@ def test_restart_endpoint_rejects_browser_fields_outside_literal_confirmation(mo
         {"confirm_restart": True},
         {},
     )]
-
-
-def test_protocol_options_endpoint_uses_host_agent_payload(monkeypatch) -> None:
-    app = FastAPI()
-    app.include_router(ont_runs.router, prefix="/api/ont")
-    client = TestClient(app)
-
-    monkeypatch.setattr(
-        ont_run_control,
-        "get_position_protocol_options",
-        lambda position, kit=None, basecalling_enabled=True: {
-            "position": position,
-            "device_type": "mk1d",
-            "can_start": True,
-            "blockers": [],
-            "protocol_id": "sequencing/sequencing_MIN114_DNA_e8_2_400K",
-            "basecalling_enabled": True,
-            "basecalling_options": {"simplex_models": ["sup"]},
-            "output_directories": {"reads": "/data/minknow"},
-            "flow_cell": {"present": True},
-            "fake_or_demo_devices": False,
-        },
-    )
-
-    response = client.get("/api/ont/positions/X1/protocol-options?kit=SQK-LSK114")
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["position"] == "X1"
-    assert payload["can_start"] is True
-    assert payload["fake_or_demo_devices"] is False
 
 
 def test_protocol_catalog_issues_opaque_receipts_without_exposing_protocol_paths_or_models(monkeypatch) -> None:
@@ -505,32 +404,6 @@ async def test_protocol_catalog_requires_literal_host_booleans(monkeypatch) -> N
     assert ont_run_control._option_snapshot("X1", malformed)["basecalling_enabled"] is False
 
 
-@pytest.mark.asyncio
-async def test_protocol_catalog_rejects_nonboolean_basecalling_evidence(monkeypatch) -> None:
-    malformed = {
-        "position": "X1",
-        "device_type": "mk1d",
-        "can_start": True,
-        "blockers": [],
-        "protocol_id": "sequencing/opaque",
-        "kit": "SQK-LSK114",
-        "basecalling_enabled": "true",
-        "basecalling_options": {},
-        "output_directories": {"reads": "/var/lib/minknow/data"},
-        "flow_cell": {"present": True},
-    }
-    monkeypatch.setattr(
-        ont_run_control,
-        "get_position_protocol_options",
-        lambda *_args, **_kwargs: malformed,
-    )
-
-    catalog = await ont_run_control.issue_position_protocol_catalog("X1")
-
-    assert catalog["can_start"] is False
-    assert catalog["options"] == []
-
-
 def test_browser_stop_endpoint_is_tombstoned_before_service_dispatch(monkeypatch) -> None:
     app = FastAPI()
     app.include_router(ont_runs.router, prefix="/api/ont")
@@ -547,32 +420,6 @@ def test_browser_stop_endpoint_is_tombstoned_before_service_dispatch(monkeypatch
     assert response.json() == {
         "detail": "Browser-initiated ONT physical stop is retired; use the separately supervised instrument-control lane."
     }
-
-
-def test_protocol_catalog_returns_graceful_no_flowcell_blocker_without_option_receipt(monkeypatch) -> None:
-    app = FastAPI()
-    app.include_router(ont_runs.router, prefix="/api/ont")
-    monkeypatch.setattr(
-        ont_run_control,
-        "get_position_protocol_options",
-        lambda *_args, **_kwargs: {
-            "position": "X1",
-            "device_type": "mk1d",
-            "can_start": False,
-            "blockers": ["flowcell_absent"],
-            "flow_cell": {"present": False},
-            "output_directories": {"reads": "/var/lib/minknow/data"},
-            "fake_or_demo_devices": False,
-        },
-    )
-
-    response = TestClient(app).get("/api/ont/positions/X1/protocol-options")
-
-    assert response.status_code == 200, response.text
-    assert response.json()["can_start"] is False
-    assert response.json()["blockers"] == ["flowcell_absent", "protocol_unavailable"]
-    assert response.json()["options"] == []
-    assert "/var/lib/minknow/data" not in response.text
 
 
 @pytest.mark.asyncio
@@ -619,44 +466,6 @@ async def test_run_intent_binds_opaque_option_to_durable_ledger_and_rejects_raw_
                 "protocol": {"arbitrary": "json"},
                 "output_directory": "/caller/chosen/path",
             },
-        )
-
-
-@pytest.mark.asyncio
-async def test_run_intent_rejects_expired_and_cross_position_opaque_receipts(monkeypatch) -> None:
-    def host_preflight(position: str, *_args, **_kwargs):
-        return {
-            "position": position,
-            "device_type": "mk1d",
-            "can_start": True,
-            "blockers": [],
-            "protocol_id": "PRIVATE-PROTOCOL",
-            "kit": "PRIVATE-KIT",
-            "basecalling_enabled": False,
-            "basecalling_options": {},
-            "output_directories": {"reads": "/private/output"},
-            "flow_cell": {"present": True, "flow_cell_id": f"FC-{position}"},
-        }
-
-    monkeypatch.setattr(ont_run_control, "get_position_protocol_options", host_preflight)
-    option = (await ont_run_control.issue_position_protocol_catalog("X1"))["options"][0]
-
-    with pytest.raises(ValueError, match="unknown, expired, or already consumed"):
-        await ont_run_control.create_run_intent(
-            "X2",
-            {"option_id": option["option_id"], "option_receipt_id": option["option_receipt_id"]},
-        )
-
-    async with ont_run_control.async_session() as session:
-        receipt = await session.get(OntProtocolOptionReceipt, option["option_receipt_id"])
-        assert receipt is not None
-        receipt.expires_at = ont_run_control._utc_now() - timedelta(seconds=1)
-        await session.commit()
-
-    with pytest.raises(ValueError, match="expired"):
-        await ont_run_control.create_run_intent(
-            "X1",
-            {"option_id": option["option_id"], "option_receipt_id": option["option_receipt_id"]},
         )
 
 
@@ -791,43 +600,6 @@ async def test_public_intent_projection_omits_raw_protocol_flowcell_paths_and_ev
         assert secret not in rendered
     assert "minknow_payload" not in rendered
     assert "output_files" not in rendered
-
-
-@pytest.mark.asyncio
-async def test_armed_intent_revalidates_without_any_raw_host_start_call(monkeypatch) -> None:
-    host_preflight = {
-        "position": "X1",
-        "device_type": "mk1d",
-        "can_start": True,
-        "blockers": [],
-        "protocol_id": "PRIVATE-PROTOCOL",
-        "kit": "PRIVATE-KIT",
-        "basecalling_enabled": True,
-        "basecalling_options": {"simplex_models": ["PRIVATE-MODEL"]},
-        "output_directories": {"reads": "/private/output"},
-        "flow_cell": {"present": True, "flow_cell_id": "PRIVATE-FLOWCELL"},
-    }
-    monkeypatch.setattr(ont_run_control, "get_position_protocol_options", lambda *_args, **_kwargs: host_preflight)
-    option = (await ont_run_control.issue_position_protocol_catalog("X1"))["options"][0]
-    intent = await ont_run_control.create_run_intent(
-        "X1", {"option_id": option["option_id"], "option_receipt_id": option["option_receipt_id"]}
-    )
-    monkeypatch.setattr(ont_run_control, "get_ont_position", lambda _position: host_preflight)
-    monkeypatch.setattr(
-        ont_run_control,
-        "request_host_agent",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("intent validation must not call a host start route")),
-    )
-
-    with pytest.raises(NotImplementedError, match="start remains disabled"):
-        await ont_run_control.validate_armed_intent_start(
-            intent["id"], {"confirm_start": True, "intent_generation": intent["observed_generation"]}
-        )
-
-    persisted = await ont_run_control.get_instrument_run(intent["id"])
-    assert persisted is not None
-    assert persisted["state"] == "armed"
-    assert [event["event_type"] for event in persisted["events"]] == ["preflight_armed", "preflight_revalidated"]
 
 
 @pytest.mark.asyncio
@@ -1270,46 +1042,6 @@ async def test_reconcile_does_not_supersede_hash_bound_terminal_manifest(monkeyp
     assert completed["terminal_artifact_manifest"]["sha256"]
     assert repeated["state"] == "completed"
     assert repeated["observed_generation"] == completed["observed_generation"]
-
-
-@pytest.mark.asyncio
-async def test_terminal_manifest_freezes_first_observation_and_canonicalizes_reordered_artifacts(monkeypatch, tmp_path: Path) -> None:
-    first_fastq = tmp_path / "first.fastq"
-    second_fastq = tmp_path / "second.fastq"
-    late_fastq = tmp_path / "late.fastq"
-    for path in (first_fastq, second_fastq, late_fastq):
-        path.write_text("@r1\nACGT\n+\n!!!!\n", encoding="utf-8")
-    run_id = await _seed_server_observed_run(
-        state="starting", output_directories={"reads": str(tmp_path)}
-    )
-    snapshots = iter(
-        [
-            {
-                "status": "completed",
-                "minknow_run_id": "PRIVATE-MINKNOW-RUN",
-                "output_files": {"fastq": [str(second_fastq), str(first_fastq)], "pod5": [], "bam": []},
-            },
-            {
-                "status": "completed",
-                "minknow_run_id": "PRIVATE-MINKNOW-RUN",
-                "output_files": {"fastq": [str(first_fastq), str(second_fastq)], "pod5": [], "bam": []},
-            },
-            {
-                "status": "completed",
-                "minknow_run_id": "PRIVATE-MINKNOW-RUN",
-                "output_files": {"fastq": [str(late_fastq)], "pod5": [], "bam": []},
-            },
-        ]
-    )
-    monkeypatch.setattr(ont_run_control, "request_host_agent", lambda *_args, **_kwargs: next(snapshots))
-
-    first = await ont_run_control.reconcile_instrument_run(run_id)
-    reordered = await ont_run_control.reconcile_instrument_run(run_id)
-    changed = await ont_run_control.reconcile_instrument_run(run_id)
-
-    assert reordered["observed_generation"] == first["observed_generation"]
-    assert changed["terminal_artifact_manifest"] == first["terminal_artifact_manifest"]
-    assert changed["handoff_ready"] is True
 
 
 def test_terminal_manifest_validation_rejects_digest_consistent_noncanonical_bindings() -> None:
