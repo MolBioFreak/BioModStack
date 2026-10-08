@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
+import json
 from pathlib import Path
 import sqlite3
 from types import SimpleNamespace
@@ -8,9 +10,15 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import create_engine
 
-from database import Base
+import database
+from database import Base, _attest_sqlite_migration_33, _attest_sqlite_migration_34, _attest_sqlite_migration_37, _attest_sqlite_migration_ledger
+from migrations import add_ont_external_move_bam_receipts as migration_33
+from migrations import add_ont_move_source_attempt_lineage as migration_34
 from migrations import runner
-
+from migrations.ont_sqlite_schema_contract import (
+    ensure_ont_move_source_terminal_immutability,
+    normalize_sql,
+)
 from migrations.runner import (
     MIGRATIONS,
     _ensure_migrations_table,
@@ -24,6 +32,42 @@ LEGACY_ONT_ROWS = (
     (19, "add_ont_terminal_artifact_manifests"),
     (20, "enforce_ont_terminal_artifact_manifest_immutability"),
 )
+
+
+def test_runtime_source_denominator_covers_terminal_ont_migration() -> None:
+    denominator = json.loads(
+        (Path(__file__).resolve().parents[3] / "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json").read_text()
+    )
+    assert "platform/api/migrations/seal_ont_move_source_terminal_immutability.py" in denominator["paths"]
+    assert "platform/api/migrations/seal_ont_external_move_bam_receipt_binding.py" in denominator["paths"]
+
+
+def test_init_db_does_not_synthesize_core_schema_at_startup() -> None:
+    source = inspect.getsource(database.init_db)
+    assert "Base.metadata.create_all" not in source
+    assert "_ensure_schema" not in source
+
+
+def test_startup_attests_the_complete_migration_ledger(
+    tmp_path: Path, exact_v33_database: Path
+) -> None:
+    database_path = tmp_path / "complete-ledger.db"
+    _copy_database(exact_v33_database, database_path)
+    runner.run_all(str(database_path))
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "UPDATE schema_migrations SET content_sha256 = 'bad' WHERE version = 35"
+        )
+        connection.commit()
+    with pytest.raises(RuntimeError, match="migration ledger"):
+        _attest_sqlite_migration_ledger(str(database_path))
+
+
+def test_normalize_sql_preserves_quoted_literal_whitespace() -> None:
+    assert normalize_sql("SELECT  'two  spaces'  FROM x") != normalize_sql(
+        "SELECT 'two spaces' FROM x"
+    )
+    assert normalize_sql("SELECT  x  FROM y") == normalize_sql("SELECT x FROM y")
 
 
 def _insert_rows(connection: sqlite3.Connection, rows: tuple[tuple[int, str], ...]) -> None:
@@ -55,6 +99,10 @@ def test_migration_versions_are_unique_with_md_before_ont() -> None:
         (32, "add_ont_signal_workbench"),
         (33, "add_ont_external_move_bam_receipts"),
         (34, "add_ont_move_source_attempt_lineage"),
+        (35, "add_scientific_artifact_receipts"),
+        (36, "add_frustrampnn_landscape_index_slimming"),
+        (37, "seal_ont_move_source_terminal_immutability"),
+        (38, "seal_ont_external_move_bam_receipt_binding"),
     ]
     assert len({migration.version for migration in MIGRATIONS}) == len(MIGRATIONS)
 
@@ -331,6 +379,182 @@ def _copy_database(source: Path, destination: Path) -> None:
         source_connection.backup(destination_connection)
 
 
+def _rebuild_receipt_table_without_constraint(database: Path, omission: str) -> None:
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA foreign_keys=OFF")
+        for trigger_name in migration_33.MIGRATION_33_TRIGGER_SQL:
+            connection.execute(f'DROP TRIGGER IF EXISTS "{trigger_name}"')
+        table_name = "ont_external_move_bam_registration_receipts"
+        old_table_name = f"{table_name}_old"
+        table_sql = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+            (table_name,),
+        ).fetchone()[0]
+        if omission == "unique":
+            table_sql = table_sql.replace(
+                ",\n                CONSTRAINT uq_ont_external_move_bam_registration\n"
+                "                    UNIQUE (run_id, observed_generation, raw_representation_id, candidate_id, molecule_type)\n",
+                "",
+            )
+        elif omission == "foreign_key":
+            table_sql = table_sql.replace(
+                "REFERENCES ont_instrument_runs(id) ON DELETE RESTRICT",
+                "",
+            )
+        elif omission == "check":
+            table_sql = table_sql.replace("CHECK (artifact_size_bytes > 0)", "")
+        else:
+            raise AssertionError(omission)
+        connection.execute(f"ALTER TABLE {table_name} RENAME TO {old_table_name}")
+        connection.execute(table_sql)
+        columns = [row[1] for row in connection.execute(f"PRAGMA table_info('{old_table_name}')")]
+        quoted_columns = ", ".join(f'"{column}"' for column in columns)
+        connection.execute(
+            f"INSERT INTO {table_name} ({quoted_columns}) SELECT {quoted_columns} FROM {old_table_name}"
+        )
+        connection.execute(f"DROP TABLE {old_table_name}")
+        for trigger_sql in migration_33.MIGRATION_33_TRIGGER_SQL.values():
+            connection.execute(trigger_sql)
+        connection.commit()
+
+
+def _rebuild_source_table_without_claim_token_unique(database: Path) -> None:
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA foreign_keys=OFF")
+        for trigger_name in (*migration_34.MIGRATION_34_TRIGGER_SQL, *migration_33.MIGRATION_33_TRIGGER_SQL):
+            connection.execute(f'DROP TRIGGER IF EXISTS "{trigger_name}"')
+        table_name = "ont_move_table_sources"
+        old_table_name = f"{table_name}_old"
+        table_sql = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+            (table_name,),
+        ).fetchone()[0]
+        table_sql = table_sql.replace("claim_token VARCHAR(96) UNIQUE,", "claim_token VARCHAR(96),")
+        connection.execute(f"ALTER TABLE {table_name} RENAME TO {old_table_name}")
+        connection.execute(table_sql)
+        columns = [row[1] for row in connection.execute(f"PRAGMA table_info('{old_table_name}')")]
+        quoted_columns = ", ".join(f'"{column}"' for column in columns)
+        connection.execute(
+            f"INSERT INTO {table_name} ({quoted_columns}) SELECT {quoted_columns} FROM {old_table_name}"
+        )
+        connection.execute(f"DROP TABLE {old_table_name}")
+        migration_34._create_indexes_and_triggers(connection)
+        connection.commit()
+
+
+@pytest.mark.parametrize("omission", ("unique", "foreign_key", "check"))
+def test_migration_33_attestation_rejects_missing_receipt_constraints(
+    exact_v33_database: Path,
+    tmp_path: Path,
+    omission: str,
+) -> None:
+    database = tmp_path / f"missing-v33-{omission}.db"
+    _copy_database(exact_v33_database, database)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE schema_migrations SET content_sha256=? WHERE version=33",
+            (runner._migration_content_sha256(MIGRATIONS[32]),),
+        )
+        connection.commit()
+    _rebuild_receipt_table_without_constraint(database, omission)
+
+    with pytest.raises(RuntimeError, match="migration 33 startup attestation failed"):
+        _attest_sqlite_migration_33(str(database))
+
+
+def test_migration_34_attestation_rejects_missing_terminal_immutability_trigger(
+    exact_v33_database: Path, tmp_path: Path
+) -> None:
+    database = tmp_path / "missing-terminal-immutability-trigger.db"
+    _copy_database(exact_v33_database, database)
+    runner.run_all(str(database))
+    with sqlite3.connect(database) as connection:
+        ensure_ont_move_source_terminal_immutability(connection)
+        connection.execute(
+            "DROP TRIGGER trg_ont_move_source_terminal_authority_immutable"
+        )
+        connection.commit()
+
+    with pytest.raises(RuntimeError, match="migration 34 startup attestation failed"):
+        _attest_sqlite_migration_34(str(database))
+    with sqlite3.connect(database) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name=?",
+            ("trg_ont_move_source_terminal_authority_immutable",),
+        ).fetchone() == (0,)
+
+
+def test_migration_37_attestation_requires_ledger_identity_and_trigger(
+    exact_v33_database: Path, tmp_path: Path
+) -> None:
+    database = tmp_path / "missing-v37-authority.db"
+    _copy_database(exact_v33_database, database)
+    runner.run_all(str(database))
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE schema_migrations SET name='wrong_v37_name' WHERE version=37"
+        )
+        connection.commit()
+    with pytest.raises(RuntimeError, match="migration 37 startup attestation failed"):
+        _attest_sqlite_migration_37(str(database))
+
+
+def test_migration_38_receipt_binding_trigger_rejects_cross_artifact_tuple(
+    exact_v33_database: Path, tmp_path: Path
+) -> None:
+    from migrations import seal_ont_external_move_bam_receipt_binding as migration_38
+
+    database = tmp_path / "receipt-binding.db"
+    _copy_database(exact_v33_database, database)
+    runner.run_all(str(database))
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "INSERT INTO ont_instrument_runs "
+            "(id, position_id, state, observed_at, observed_generation, output_directories, output_files, handoff_ready, created_at) "
+            "VALUES ('run-a', 'position-a', 'registered', 'now', 1, '{}', '{}', 0, 'now')"
+        )
+        connection.execute(
+            "INSERT INTO ont_raw_signal_representations "
+            "(id, run_id, observed_generation, role, source_kind, format, source_fidelity, state, reason_code, artifact_manifest, manifest_sha256, parent_representation_ids, parent_manifest_sha256s, compression, runtime_identity, validation_receipts, created_at) "
+            "VALUES ('rep-a', 'run-a', 1, 'source', 'external', 'blow5', 'native', 'ready', 'ready', '{}', ?, '[]', '[]', '{}', '{}', '{}', 'now')",
+            ("a" * 64,),
+        )
+        connection.execute(
+            "INSERT INTO ont_external_move_bam_registration_receipts "
+            "(id, candidate_id, run_id, observed_generation, raw_representation_id, server_relative_path, root_device, root_inode, file_device, file_inode, file_mtime_ns, file_ctime_ns, artifact_sha256, artifact_size_bytes, molecule_type, created_at) "
+            "VALUES ('receipt-a', 'candidate-a', 'run-a', 1, 'rep-a', 'x.bam', 1, 2, 1, 3, 4, 5, ?, 10, 'dna', 'now')",
+            ("b" * 64,),
+        )
+        connection.commit()
+    migration_38.migrate(str(database))
+    with sqlite3.connect(database) as connection:
+        with pytest.raises(sqlite3.IntegrityError, match="receipt tuple"):
+            connection.execute(
+                "INSERT INTO ont_move_table_sources "
+                "(id, run_id, observed_generation, raw_representation_id, input_file_id, external_registration_receipt_id, artifact_sha256, artifact_size_bytes, molecule_type, source_runtime_identity, validation_state, reason_code, validation_receipt, created_at, attempt_number) "
+                "VALUES ('source-a', 'run-a', 1, 'rep-a', 'input-a', 'receipt-a', ?, 10, 'dna', '{}', 'requested', 'requested', '{}', 'now', 1)",
+                ("a" * 64,),
+            )
+
+
+def test_migration_34_attestation_rejects_missing_claim_token_unique_constraint(
+    exact_v33_database: Path,
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "missing-v34-claim-token-unique.db"
+    _copy_database(exact_v33_database, database)
+    runner.run_all(str(database))
+    _rebuild_source_table_without_claim_token_unique(database)
+    with sqlite3.connect(database) as connection:
+        rebuilt_sql = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='ont_move_table_sources'"
+        ).fetchone()[0]
+    assert "claim_token VARCHAR(96) UNIQUE" not in rebuilt_sql
+
+    with pytest.raises(RuntimeError, match="migration 34 startup attestation failed"):
+        _attest_sqlite_migration_34(str(database))
+
+
 def test_runner_truthfully_transitions_exact_null_v33_before_v34(
     exact_v33_database: Path,
     tmp_path: Path,
@@ -403,6 +627,53 @@ def test_runner_rejects_null_v33_without_exact_name_schema_and_triggers(
         ).fetchone() == (0,)
 
 
+def test_migration_34_attestation_rejects_partial_and_extra_indexes(
+    exact_v33_database: Path, tmp_path: Path
+) -> None:
+    for suffix, statement in (
+        ("partial", "CREATE INDEX tampered_partial ON ont_move_table_sources(run_id) WHERE validation_state = 'ready'"),
+        ("extra", "CREATE INDEX tampered_extra ON ont_move_table_sources(reason_code)"),
+    ):
+        database = tmp_path / f"v34-{suffix}.db"
+        _copy_database(exact_v33_database, database)
+        runner.run_all(str(database))
+        with sqlite3.connect(database) as connection:
+            connection.execute(statement)
+            connection.commit()
+        with pytest.raises(RuntimeError, match="migration 34 startup attestation failed"):
+            _attest_sqlite_migration_34(str(database))
+
+
+def test_migration_34_attestation_rejects_extra_or_tampered_trigger_sql(
+    exact_v33_database: Path, tmp_path: Path
+) -> None:
+    for suffix, setup in (
+        (
+            "extra",
+            lambda connection: connection.execute(
+                "CREATE TRIGGER tampered_extra_trigger BEFORE UPDATE ON ont_move_table_sources BEGIN SELECT RAISE(ABORT, 'extra'); END"
+            ),
+        ),
+        (
+            "sql",
+            lambda connection: (
+                connection.execute("DROP TRIGGER trg_ont_move_source_terminal_no_update"),
+                connection.execute(
+                    "CREATE TRIGGER trg_ont_move_source_terminal_no_update BEFORE UPDATE ON ont_move_table_sources BEGIN SELECT RAISE(ABORT, 'tampered'); END"
+                ),
+            ),
+        ),
+    ):
+        database = tmp_path / f"v34-trigger-{suffix}.db"
+        _copy_database(exact_v33_database, database)
+        runner.run_all(str(database))
+        with sqlite3.connect(database) as connection:
+            setup(connection)
+            connection.commit()
+        with pytest.raises(RuntimeError, match="migration 34 startup attestation failed"):
+            _attest_sqlite_migration_34(str(database))
+
+
 def test_runner_still_rejects_divergent_non_null_v33_checksum(
     exact_v33_database: Path,
     tmp_path: Path,
@@ -424,3 +695,63 @@ def test_runner_still_rejects_divergent_non_null_v33_checksum(
         assert connection.execute(
             "SELECT COUNT(*) FROM schema_migrations WHERE version=34"
         ).fetchone() == (0,)
+
+
+def test_terminal_move_source_authority_fields_are_immutable() -> None:
+    with sqlite3.connect(":memory:") as connection:
+        connection.executescript(
+            """
+            CREATE TABLE ont_move_table_sources (
+                id VARCHAR(96) PRIMARY KEY,
+                run_id VARCHAR(80) NOT NULL,
+                observed_generation INTEGER NOT NULL,
+                raw_representation_id VARCHAR(96) NOT NULL,
+                input_file_id VARCHAR(36) NOT NULL,
+                source_job_id VARCHAR(36),
+                external_registration_receipt_id VARCHAR(128),
+                artifact_sha256 VARCHAR(64) NOT NULL,
+                artifact_size_bytes INTEGER NOT NULL,
+                bam_header_sha256 VARCHAR(64),
+                record_count INTEGER,
+                unique_read_count INTEGER,
+                mv_tag_count INTEGER,
+                ts_tag_count INTEGER,
+                ns_tag_count INTEGER,
+                basecall_model_id VARCHAR(255),
+                molecule_type VARCHAR(16) NOT NULL,
+                source_runtime_identity JSON NOT NULL,
+                read_inventory_sha256 VARCHAR(64),
+                validation_state VARCHAR(32) NOT NULL,
+                reason_code VARCHAR(96) NOT NULL,
+                validation_receipt JSON NOT NULL,
+                claim_token VARCHAR(96),
+                lease_expires_at VARCHAR,
+                created_at VARCHAR NOT NULL,
+                validated_at VARCHAR,
+                attempt_number INTEGER NOT NULL,
+                predecessor_move_source_id VARCHAR(96)
+            );
+            """
+        )
+        ensure_ont_move_source_terminal_immutability(connection)
+        connection.execute(
+            """
+            INSERT INTO ont_move_table_sources (
+                id, run_id, observed_generation, raw_representation_id, input_file_id,
+                external_registration_receipt_id, artifact_sha256, artifact_size_bytes,
+                molecule_type, source_runtime_identity, validation_state, reason_code,
+                validation_receipt, created_at, attempt_number
+            ) VALUES ('source-1', 'run-1', 1, 'raw-1', 'input-1', 'receipt-1',
+                      ?, 1, 'dna', '{}', 'failed', 'source_failed', '{}', 'now', 1)
+            """,
+            ("a" * 64,),
+        )
+        for field, value in (("id", "source-2"), ("reason_code", "tampered"), ("artifact_sha256", "b" * 64)):
+            with pytest.raises(sqlite3.IntegrityError, match="terminal move-source authority immutable"):
+                connection.execute(
+                    f"UPDATE ont_move_table_sources SET {field}=? WHERE id='source-1'",
+                    (value,),
+                )
+        assert connection.execute(
+            "SELECT id, reason_code, artifact_sha256 FROM ont_move_table_sources"
+        ).fetchone() == ("source-1", "source_failed", "a" * 64)

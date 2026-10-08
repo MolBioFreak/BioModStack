@@ -819,11 +819,13 @@ async def ont_register_external_pod5_candidate(
 async def ont_create_external_raw_signal_run(
     request: OntRawSignalExternalRunRequest,
     session: AsyncSession = Depends(get_session),
+    domain_session: AsyncSession = Depends(get_molbio_ngs_session),
 ) -> dict[str, Any]:
     """Create one sealed external SLOW5/BLOW5/POD5 generation without invented ancestry."""
     try:
         result = await ont_raw_signal.create_external_run_registration(
             session,
+            domain_session=domain_session,
             format=request.format,
             input_file_id=request.input_file_id,
             index_input_file_id=request.index_input_file_id,

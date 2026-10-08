@@ -33,7 +33,13 @@ from database import (
     OntSignalViewerSession,
     OntSquigualiserViewJob,
 )
-from molbio_ngs_models import MolBioNGSReferenceArtifact, MolBioNGSReferenceRevision
+from molbio_ngs_models import (
+    MolBioNGSDomainState,
+    MolBioNGSDomainStateRevision,
+    MolBioNGSGlobalBinding,
+    MolBioNGSReferenceArtifact,
+    MolBioNGSReferenceRevision,
+)
 from paths import get_allowed_roots, get_results_dir
 from services import ngs_alignment_sessions
 
@@ -271,6 +277,19 @@ def _read_bounded_descriptor(descriptor: int, *, limit: int, label: str) -> tupl
 def _derive_source_runtime_identity(source_job: Job, artifact_sha256: str) -> dict[str, Any]:
     """Seal exact producer-owned Dorado runtime/model/move evidence."""
     provenance = source_job.provenance if isinstance(source_job.provenance, dict) else {}
+    params = source_job.params if isinstance(source_job.params, dict) else {}
+    if (
+        "source_instrument_run_id" not in params
+        or "source_instrument_observed_generation" not in params
+    ):
+        return {
+            "schema": "bms.ont-move-source-producer-runtime.v1",
+            "authority_state": "legacy_unknown",
+            "source_job_id": source_job.id,
+            "source_bam_sha256": artifact_sha256,
+            "reason_code": "producer_lineage_unavailable",
+            "requires_independent_move_validation": True,
+        }
     anchor = provenance.get("ont_dorado_terminal_products")
     if anchor is None:
         return {
@@ -1177,6 +1196,19 @@ async def register_move_source(
     source_job = await session.get(Job, source_job_id)
     if source_job is None or source_job.status != "completed":
         raise OntSignalError("completed source job authority is required")
+    source_params = source_job.params if isinstance(source_job.params, dict) else {}
+    has_bound_run = "source_instrument_run_id" in source_params
+    has_bound_generation = "source_instrument_observed_generation" in source_params
+    source_generation = source_params.get("source_instrument_observed_generation")
+    if has_bound_run != has_bound_generation or (
+        has_bound_run
+        and (
+            source_params.get("source_instrument_run_id") != run_id
+            or isinstance(source_generation, bool)
+            or source_generation != observed_generation
+        )
+    ):
+        raise OntSignalError("completed source job run generation does not match requested authority")
     artifact_sha256, size_bytes = await _hash_job_owned_input_async(tracked, source_job)
     if tracked.size_bytes is not None and tracked.size_bytes != size_bytes:
         raise OntSignalError("tracked move-table input size authority diverged")
@@ -1870,6 +1902,52 @@ async def create_mapping_profile(
     return _profile_public(profile)
 
 
+async def _resolve_domain_revision_authority(
+    domain_session: AsyncSession,
+    global_domain_experiment_id: str,
+) -> dict[str, Any]:
+    state = await domain_session.get(MolBioNGSDomainState, global_domain_experiment_id)
+    if state is None or not state.current_state_revision_id or not state.current_binding_revision_id:
+        raise OntSignalError("authoritative Domain Experiment state revision is unavailable")
+    revision = await domain_session.get(
+        MolBioNGSDomainStateRevision, state.current_state_revision_id
+    )
+    binding = await domain_session.get(
+        MolBioNGSGlobalBinding, state.current_binding_revision_id
+    )
+    if (
+        revision is None
+        or binding is None
+        or revision.global_domain_experiment_id != global_domain_experiment_id
+        or binding.global_domain_experiment_id != global_domain_experiment_id
+        or revision.binding_revision_id != binding.binding_revision_id
+        or revision.global_domain_experiment_revision_id
+        != binding.global_domain_experiment_revision_id
+    ):
+        raise OntSignalError("authoritative Domain Experiment revision binding diverged")
+    digest_fields = {
+        "state_revision_sha256": revision.payload_sha256,
+        "membership_graph_sha256": revision.membership_graph_sha256,
+        "binding_revision_digest": binding.global_domain_experiment_revision_digest,
+    }
+    if any(
+        not isinstance(value, str)
+        or len(value) != 64
+        or value != value.lower()
+        or any(character not in "0123456789abcdef" for character in value)
+        for value in digest_fields.values()
+    ):
+        raise OntSignalError("authoritative Domain Experiment revision digests are invalid")
+    if isinstance(state.head_generation, bool) or not isinstance(state.head_generation, int):
+        raise OntSignalError("authoritative Domain Experiment generation is invalid")
+    return {
+        "schema": "bms.molbio.domain-revision-authority.v1",
+        "global_domain_experiment_id": global_domain_experiment_id,
+        "state_revision_id": revision.id,
+        **digest_fields,
+        "binding_revision_id": binding.binding_revision_id,
+        "head_generation": int(state.head_generation),
+    }
 async def _resolve_reference_authority(
     domain_session: AsyncSession,
     reference_revision_id: str,
@@ -2016,6 +2094,7 @@ async def create_mapping_job(
         raise OntSignalError("approved calibration profile is not exact for the selected signal and move parents")
     parent_mapping_job_id = None
     reference_identity: dict[str, Any] = {}
+    domain_revision: dict[str, Any] | None = None
     if mode == "signal_to_reference":
         if not all((reference_revision_id, alignment_job_id, alignment_session_id)):
             raise OntSignalError("reference revision and alignment-session authority are required")
@@ -2029,6 +2108,9 @@ async def create_mapping_job(
             move_source=source,
             run_id=run_id,
             observed_generation=observed_generation,
+        )
+        domain_revision = await _resolve_domain_revision_authority(
+            domain_session, revision.global_domain_experiment_id
         )
         authority = _alignment_authority(alignment_job)
         if authority["source_reference_sha256"] != revision.normalized_sequence_sha256:
@@ -2058,6 +2140,7 @@ async def create_mapping_job(
             "reference_artifact_id": reference_artifact.id,
             "reference_fasta_sha256": reference_artifact.sha256,
             "contig_inventory_sha256": revision.contig_manifest_sha256,
+            "domain_revision": domain_revision,
             "alignment_session_id": alignment_session_id,
             "alignment_artifacts": alignment.get("artifacts"),
             "alignment_input_binding": alignment_input_binding,
@@ -2086,6 +2169,7 @@ async def create_mapping_job(
         "alignment_job_id": alignment_job_id,
         "alignment_session_id": alignment_session_id,
         "parent_mapping_job_id": parent_mapping_job_id,
+        "domain_revision": domain_revision,
         "parents_sha256": _digest(parents),
     }
     fingerprint = _digest(request_identity)
@@ -2164,6 +2248,9 @@ async def get_mapping_job(session: AsyncSession, job_id: str) -> dict[str, Any]:
         "move_source_id": job.move_source_id, "mapping_profile_id": job.mapping_profile_id,
         "reference_revision_id": job.reference_revision_id, "alignment_job_id": job.alignment_job_id,
         "alignment_session_id": job.alignment_session_id, "parent_mapping_job_id": job.parent_mapping_job_id,
+        "domain_revision": _public_json(
+            ((job.resource_snapshot or {}).get("parents") or {}).get("domain_revision")
+        ),
         "request_fingerprint": job.request_fingerprint,
         "state": job.state, "reason_code": job.reason_code, "attempt": job.attempt,
         "resource_snapshot": _public_json(job.resource_snapshot), "stage_receipts": _public_json(job.stage_receipts),
