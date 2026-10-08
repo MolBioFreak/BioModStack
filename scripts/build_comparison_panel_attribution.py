@@ -110,11 +110,6 @@ def _read_fastq_records(path: Path) -> list[dict[str, str]]:
     return records
 
 
-def _fastq_read_ids(path: Path) -> list[str]:
-    """Return original QNAMEs without imposing uniqueness."""
-    return [record["read_id"] for record in _read_fastq_records(path)]
-
-
 def _is_sha256(value: object) -> bool:
     return isinstance(value, str) and bool(_SHA256.fullmatch(value))
 

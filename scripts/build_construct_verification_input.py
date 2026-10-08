@@ -83,58 +83,42 @@ def main(argv: list[str] | None = None) -> int:
         normalized_fasta_sha256(output_consensus)
         candidate_for_recomputation = source_reads_present and not forbidden_method
         state = {
-            "schema": "biomodstack.observed_sequence_state.v1",
             "state": "present",
             "reason": None if candidate_for_recomputation else "OBSERVED_EVIDENCE_NOT_RECOMPUTABLE",
-            "method": args.consensus_method,
             "source_kind": "read_derived_consensus_candidate" if candidate_for_recomputation else "untrusted_consensus",
-            "independent_from_expected": False,
-            "independence_assertion": "pending_verifier_recomputation",
             "observed_fasta": output_consensus.name,
             "observed_sha256": sha256_file(output_consensus),
-            "source_reads_path": output_source_reads.name if output_source_reads.is_file() else None,
-            "source_reads_sha256": source_reads_digest,
-            "source_read_provenance": {
-                "binding_method": "qname_and_sequence_against_primary_bam",
-                "verification_status": "pending",
-            },
-            "reference_sequence_sha256_actual": actual_reference_digest,
-            "reference_sequence_sha256_declared": declared_reference_digest or None,
-            "reference_digest_binding": (
-                "match"
-                if declared_reference_digest and declared_reference_digest == actual_reference_digest
-                else "mismatch"
-                if declared_reference_digest
-                else "unbound"
-            ),
         }
     else:
         state = {
-            "schema": "biomodstack.observed_sequence_state.v1",
             "state": "missing",
             "reason": "CONSENSUS_NOT_PRODUCED",
-            "method": args.consensus_method,
             "source_kind": "read_derived_consensus_candidate",
-            "independent_from_expected": False,
-            "independence_assertion": "pending_verifier_recomputation",
             "observed_fasta": None,
             "observed_sha256": None,
-            "source_reads_path": output_source_reads.name if output_source_reads.is_file() else None,
-            "source_reads_sha256": source_reads_digest,
-            "source_read_provenance": {
-                "binding_method": "qname_and_sequence_against_primary_bam",
-                "verification_status": "pending",
-            },
-            "reference_sequence_sha256_actual": actual_reference_digest,
-            "reference_sequence_sha256_declared": declared_reference_digest or None,
-            "reference_digest_binding": (
-                "match"
-                if declared_reference_digest and declared_reference_digest == actual_reference_digest
-                else "mismatch"
-                if declared_reference_digest
-                else "unbound"
-            ),
         }
+
+    state.update({
+        "schema": "biomodstack.observed_sequence_state.v1",
+        "method": args.consensus_method,
+        "independent_from_expected": False,
+        "independence_assertion": "pending_verifier_recomputation",
+        "source_reads_path": output_source_reads.name if output_source_reads.is_file() else None,
+        "source_reads_sha256": source_reads_digest,
+        "source_read_provenance": {
+            "binding_method": "qname_and_sequence_against_primary_bam",
+            "verification_status": "pending",
+        },
+        "reference_sequence_sha256_actual": actual_reference_digest,
+        "reference_sequence_sha256_declared": declared_reference_digest or None,
+        "reference_digest_binding": (
+            "match"
+            if declared_reference_digest and declared_reference_digest == actual_reference_digest
+            else "mismatch"
+            if declared_reference_digest
+            else "unbound"
+        ),
+    })
 
     (args.out_dir / "observed_state.json").write_text(
         json.dumps(state, indent=2, sort_keys=True, allow_nan=False) + "\n",

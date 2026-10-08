@@ -554,25 +554,25 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
         if consensus_config not in consensus_setting["enum"]:
             raise ValueError("samtools_consensus_config must be an installed samtools preset or null (unchanged)")
 
+    def setting_bool(name: str, default: bool) -> bool:
+        value = normalized.get(name, default)
+        if not isinstance(value, bool):
+            raise ValueError(f"{name} must be boolean")
+        return value
+
+    def setting_int(name: str, default: int, minimum: int, maximum: int) -> int:
+        value = normalized.get(name, default)
+        if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
+            raise ValueError(f"{name} must be an integer from {minimum} through {maximum}")
+        return value
+
     if canonical_id == "ont_fastq_qc":
-        def fastq_bool(name: str, default: bool) -> bool:
-            value = normalized.get(name, default)
-            if not isinstance(value, bool):
-                raise ValueError(f"{name} must be boolean")
-            return value
-
-        def fastq_int(name: str, default: int, minimum: int, maximum: int) -> int:
-            value = normalized.get(name, default)
-            if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
-                raise ValueError(f"{name} must be an integer from {minimum} through {maximum}")
-            return value
-
         normalized["ont_workflow_id"] = spec.workflow_id
-        normalized["enable_rotating_reference_frames"] = fastq_bool("enable_rotating_reference_frames", True)
-        normalized["rotation_scan_step_bp"] = fastq_int("rotation_scan_step_bp", 1, 1, 10_000)
-        normalized["single_ref_split_min_mapq"] = fastq_int("single_ref_split_min_mapq", 20, 0, 60)
-        normalized["single_ref_split_min_segment_bp"] = fastq_int("single_ref_split_min_segment_bp", 250, 1, 1_000_000)
-        normalized["single_ref_split_max_query_gap_bp"] = fastq_int("single_ref_split_max_query_gap_bp", 500, 0, 1_000_000)
+        normalized["enable_rotating_reference_frames"] = setting_bool("enable_rotating_reference_frames", True)
+        normalized["rotation_scan_step_bp"] = setting_int("rotation_scan_step_bp", 1, 1, 10_000)
+        normalized["single_ref_split_min_mapq"] = setting_int("single_ref_split_min_mapq", 20, 0, 60)
+        normalized["single_ref_split_min_segment_bp"] = setting_int("single_ref_split_min_segment_bp", 250, 1, 1_000_000)
+        normalized["single_ref_split_max_query_gap_bp"] = setting_int("single_ref_split_max_query_gap_bp", 500, 0, 1_000_000)
         normalized["manifest_contract"] = MANIFEST_SCHEMA
         for key in list(normalized):
             if (
@@ -716,22 +716,10 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
 
     dimer_workflows = {"ont_plasmid_qc", "ont_construct_screening", "ont_fastq_qc", "wf_clone_validation"}
     if canonical_id in dimer_workflows:
-        def dimer_bool(name: str, default: bool) -> bool:
-            value = normalized.get(name, default)
-            if not isinstance(value, bool):
-                raise ValueError(f"{name} must be boolean")
-            return value
-
-        def dimer_int(name: str, default: int, minimum: int, maximum: int) -> int:
-            value = normalized.get(name, default)
-            if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
-                raise ValueError(f"{name} must be an integer from {minimum} through {maximum}")
-            return value
-
-        normalized["enable_rotating_reference_frames"] = dimer_bool("enable_rotating_reference_frames", True)
-        normalized["rotation_scan_step_bp"] = dimer_int("rotation_scan_step_bp", 1, 1, 10_000)
-        normalized["single_ref_split_min_mapq"] = dimer_int("single_ref_split_min_mapq", 20, 0, 60)
-        normalized["single_ref_split_min_segment_bp"] = dimer_int("single_ref_split_min_segment_bp", 250, 1, 1_000_000)
-        normalized["single_ref_split_max_query_gap_bp"] = dimer_int("single_ref_split_max_query_gap_bp", 500, 0, 1_000_000)
+        normalized["enable_rotating_reference_frames"] = setting_bool("enable_rotating_reference_frames", True)
+        normalized["rotation_scan_step_bp"] = setting_int("rotation_scan_step_bp", 1, 1, 10_000)
+        normalized["single_ref_split_min_mapq"] = setting_int("single_ref_split_min_mapq", 20, 0, 60)
+        normalized["single_ref_split_min_segment_bp"] = setting_int("single_ref_split_min_segment_bp", 250, 1, 1_000_000)
+        normalized["single_ref_split_max_query_gap_bp"] = setting_int("single_ref_split_max_query_gap_bp", 500, 0, 1_000_000)
 
     return normalized

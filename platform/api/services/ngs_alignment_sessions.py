@@ -297,11 +297,6 @@ def _cached_snapshot_locked(expected_sha256: str, expected_size: int) -> BinaryI
     return cast(BinaryIO, _SnapshotLease(snapshot, expected_sha256))
 
 
-def _cached_snapshot(expected_sha256: str, expected_size: int) -> BinaryIO | None:
-    with _snapshot_cache_condition:
-        return _cached_snapshot_locked(expected_sha256, expected_size)
-
-
 def _evict_for_reservation_locked(required_size: int) -> bool:
     while (
         _snapshot_cache_bytes + _snapshot_inflight_bytes + required_size > SNAPSHOT_CACHE_MAX_BYTES
@@ -381,46 +376,6 @@ def verify_current_artifact_bytes(
         raise AlignmentSessionError("artifact integrity size mismatch")
     if digest != expected_sha256:
         raise AlignmentSessionError("artifact integrity digest mismatch")
-
-
-def _uncached_artifact_snapshot(path: Path, expected_size: int, expected_sha256: str) -> BinaryIO:
-    """An oversized artifact uses bounded-memory disk staging, not cache admission."""
-    source = _open_regular_file_no_symlinks(path)
-    snapshot = tempfile.TemporaryFile(mode="w+b")
-    try:
-        before = os.fstat(source.fileno())
-        if before.st_size != expected_size:
-            raise AlignmentSessionError("artifact integrity size mismatch")
-        # A reflink is an independent CoW snapshot and avoids copying large BAMs.
-        try:
-            fcntl.ioctl(snapshot.fileno(), 0x40049409, source.fileno())  # FICLONE
-        except OSError:
-            copied = 0
-            while copied <= expected_size:
-                chunk = source.read(min(SNAPSHOT_CHUNK_BYTES, expected_size + 1 - copied))
-                if not chunk:
-                    break
-                snapshot.write(chunk)
-                copied += len(chunk)
-        snapshot.seek(0)
-        if os.fstat(snapshot.fileno()).st_size != expected_size:
-            raise AlignmentSessionError("artifact integrity size mismatch")
-        digest = hashlib.sha256()
-        size = 0
-        while chunk := snapshot.read(SNAPSHOT_CHUNK_BYTES):
-            digest.update(chunk)
-            size += len(chunk)
-        if size != expected_size or digest.hexdigest() != expected_sha256:
-            raise AlignmentSessionError("artifact integrity digest mismatch")
-        snapshot.flush()
-        readonly = os.fdopen(os.open(f"/proc/self/fd/{snapshot.fileno()}", os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)), "rb")
-        snapshot.close()
-        return readonly
-    except BaseException:
-        snapshot.close()
-        raise
-    finally:
-        source.close()
 
 
 def _uncached_artifact_snapshot(path: Path, expected_size: int, expected_sha256: str) -> BinaryIO:
@@ -2324,14 +2279,6 @@ def _rank_read(source_sha256: str, read_id: str) -> str:
     return hashlib.sha256(f"{source_sha256}\0{read_id}".encode("utf-8")).hexdigest()
 
 
-def _record_sort_key(read: Any) -> tuple[int, int, str, int]:
-    return (
-        read.reference_id if read.reference_id >= 0 else 2**31,
-        read.reference_start if read.reference_start >= 0 else 2**31,
-        read.query_name or "", read.flag,
-    )
-
-
 _BOUNDED_BAM_WRITER = r"""
 import json
 import resource
@@ -2964,14 +2911,6 @@ def _alignment_presentation_generation_slot() -> Iterator[None]:
             yield
         finally:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-
-
-def _serialize_alignment_presentation_generation(function: Any) -> Any:
-    @wraps(function)
-    def wrapped(*args: Any, **kwargs: Any) -> Any:
-        with _alignment_presentation_generation_slot():
-            return function(*args, **kwargs)
-    return wrapped
 
 
 def _load_trusted_presentation(

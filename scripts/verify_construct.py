@@ -400,13 +400,6 @@ def _consensus_options_from_support(row: dict[str, int], reference_base: str) ->
     return options
 
 
-def _consensus_base_from_support(row: dict[str, int], reference_base: str) -> str:
-    options = _consensus_options_from_support(row, reference_base)
-    if reference_base in options:
-        return reference_base
-    return next(base for base in "ACGTN-" if base in options)
-
-
 def _insertion_consensus_options(row: dict[str, Any]) -> set[str]:
     alleles = row.get("insertion_alleles")
     if not isinstance(alleles, dict):
