@@ -1304,6 +1304,7 @@ async def test_database_rejects_correct_count_fully_populated_forged_output_grap
     "receipt_extra",
     "receipt_noncanonical",
     "operation_parameters",
+    "operation_parameters_duplicate_key",
     "operation_provenance",
     "persistence_mode",
     "input_sequence_id",
@@ -1383,27 +1384,32 @@ async def test_get_rejects_every_mutated_digest_operation_and_output_binding(
                         "id": operation_id,
                     })
                 elif mutation in {
-                    "operation_parameters", "operation_provenance", "persistence_mode",
+                    "operation_parameters", "operation_parameters_duplicate_key",
+                    "operation_provenance", "persistence_mode",
                 }:
                     await connection.execute(text(
                         "DROP TRIGGER molbio_immutable_molecular_operations_update"
                     ))
-                    column = (
-                        "parameters" if mutation != "operation_provenance" else "provenance"
-                    )
+                    column = "provenance" if mutation == "operation_provenance" else "parameters"
                     raw = (await connection.execute(text(
                         f"SELECT {column} FROM molecular_operations WHERE id=:id"
                     ), {"id": operation_id})).scalar_one()
                     document = json.loads(raw)
-                    if mutation == "operation_parameters":
+                    value = ""
+                    if mutation == "operation_parameters_duplicate_key":
+                        assert raw.startswith("{")
+                        value = '{"selected_enzyme_ids":["forged"],' + raw[1:]
+                    elif mutation == "operation_parameters":
                         document["selected_enzyme_ids"] = ["MboI"]
                     elif mutation == "operation_provenance":
                         document["catalog_sha256"] = "0" * 64
                     else:
                         document["persistence_mode"] = "operation_only"
+                    if mutation != "operation_parameters_duplicate_key":
+                        value = rfc8785.dumps(document).decode()
                     await connection.execute(text(
                         f"UPDATE molecular_operations SET {column}=:value WHERE id=:id"
-                    ), {"value": rfc8785.dumps(document).decode(), "id": operation_id})
+                    ), {"value": value, "id": operation_id})
                 elif mutation in {"input_sequence_id", "input_snapshot_name"}:
                     await connection.execute(text(
                         "DROP TRIGGER molbio_immutable_molecular_operation_inputs_update"
