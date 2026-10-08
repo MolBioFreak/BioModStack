@@ -34,6 +34,21 @@ _external_import_worker: ExternalImportWorker | None = None
 _boltz_api_job_worker: BoltzApiJobWorker | None = None
 
 
+async def _orchestrator_launch_job(job_id, model_id, mode, params, output_dir):
+    """Delegate a scheduler-owned job whose durable state is already running."""
+    from services.nextflow import launch_nextflow_job_detached
+
+    logger.info(f"[ORCHESTRATOR] Launching job {job_id} on GPU {params.get('gpu_id', 0)}")
+    launch_nextflow_job_detached(
+        job_id=job_id,
+        model_id=model_id,
+        mode=mode,
+        params=params,
+        output_dir=output_dir,
+        allow_running_job=True,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize database and GPU orchestrator on startup."""
@@ -49,30 +64,10 @@ async def lifespan(app: FastAPI):
     
     # Initialize GPU orchestrator only when this runtime is allowed to own workflow launches.
     if workflow_launches_allowed():
-        from services.nextflow import launch_nextflow_job_detached
-
-        # Wrapper to call the real Nextflow launcher with GPU assignment
-        async def orchestrator_launch_job(job_id, model_id, mode, params, output_dir):
-            """Launch a job via Nextflow with GPU assignment from orchestrator.
-
-            Uses asyncio.create_task to fire-and-forget, so multiple jobs can launch
-            in parallel without waiting for each to complete.
-            """
-            logger.info(f"[ORCHESTRATOR] Launching job {job_id} on GPU {params.get('gpu_id', 0)}")
-            # Fire-and-forget with immediate registration in the launcher so the
-            # completion reconciler knows the job is still bootstrapping.
-            launch_nextflow_job_detached(
-                job_id=job_id,
-                model_id=model_id,
-                mode=mode,
-                params=params,
-                output_dir=output_dir
-            )
-
         _orchestrator = GPUOrchestrator(
             db_session_factory=async_session,
             get_gpu_stats_fn=get_gpu_stats,
-            launch_nextflow_job_fn=orchestrator_launch_job,
+            launch_nextflow_job_fn=_orchestrator_launch_job,
             poll_interval=3.0
         )
 

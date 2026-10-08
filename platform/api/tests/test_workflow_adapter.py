@@ -158,6 +158,42 @@ def test_launch_request_translates_container_paths_for_host_adapter(monkeypatch:
     }
 
 
+@pytest.mark.asyncio
+async def test_core_scheduler_explicitly_allows_durably_prestarted_job_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import main
+
+    captured: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        nextflow,
+        "launch_nextflow_job_detached",
+        lambda **payload: captured.append(payload),
+    )
+
+    await main._orchestrator_launch_job(
+        "job-123",
+        "conformational_mapping",
+        "map",
+        {"gpu_id": 3, "cm_request_path": "/var/lib/biomodstack/bms_results/job-123/request.json"},
+        "/var/lib/biomodstack/bms_results/job-123",
+    )
+
+    assert captured == [
+        {
+            "job_id": "job-123",
+            "model_id": "conformational_mapping",
+            "mode": "map",
+            "params": {
+                "gpu_id": 3,
+                "cm_request_path": "/var/lib/biomodstack/bms_results/job-123/request.json",
+            },
+            "output_dir": "/var/lib/biomodstack/bms_results/job-123",
+            "allow_running_job": True,
+        }
+    ]
+
+
 
 def test_cancel_request_posts_expected_payload_to_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BMS_WORKFLOW_ADAPTER_URL", "http://127.0.0.1:8001")
