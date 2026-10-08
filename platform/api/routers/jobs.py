@@ -1545,6 +1545,39 @@ def _default_structure_prediction_pred_method(model_id: str) -> str:
     return "boltz"
 
 
+def _is_structure_prediction_request(
+    model_id: str,
+    mode: str,
+    params: Optional[Dict[str, Any]],
+) -> bool:
+    normalized = params if isinstance(params, dict) else {}
+    if "mutagenesis_variants" in normalized:
+        return False
+
+    normalized_model_id = str(model_id or "").strip().lower()
+    normalized_mode = str(mode or "").strip().lower()
+    template_models = {"template_structure_prediction", "template_structure_validation"}
+    predictor_models = {
+        "boltz2",
+        "boltz_cp_experimental",
+        "esmfold2",
+        "esmfold2_experimental",
+        "fold_cp",
+        "protenix",
+        "rf3",
+    }
+    launch_variant = str(normalized.get("structure_launch_variant") or "").strip().lower()
+    return (
+        normalized_model_id in template_models
+        or normalized_mode in {"structure_prediction", "structure_validation"}
+        or launch_variant == "boltz_cp_experimental"
+        or (
+            normalized_mode in {"predict", "complex", "validate"}
+            and normalized_model_id in predictor_models
+        )
+    )
+
+
 def _normalize_structure_prediction_pred_method(
     model_id: str,
     mode: str,
@@ -1557,9 +1590,7 @@ def _normalize_structure_prediction_pred_method(
     normalized_mode = str(mode or "").strip().lower()
     normalized_model_id = str(model_id or "").strip().lower()
 
-    structure_modes = {"predict", "complex", "structure_prediction", "structure_validation"}
-    structure_models = {"boltz2", "protenix", "rf3", "template_structure_prediction"}
-    if normalized_mode not in structure_modes and normalized_model_id not in structure_models:
+    if not _is_structure_prediction_request(normalized_model_id, normalized_mode, normalized):
         return normalized
 
     requested_pred_method = str(normalized.get("pred_method") or "").strip().lower()
@@ -1592,15 +1623,7 @@ def _job_has_retired_structure_predictor(job: Any) -> bool:
     params = job.params if isinstance(getattr(job, "params", None), dict) else {}
     model_id = str(getattr(job, "model_id", "") or "").strip().lower()
     mode = str(getattr(job, "mode", "") or "").strip().lower()
-    structure_context = (
-        mode in {"predict", "complex", "structure_prediction", "structure_validation"}
-        or model_id in {"template_structure_prediction", "template_structure_validation"}
-        or (
-            mode == "validate"
-            and model_id in {"boltz2", "protenix", "rf3"}
-        )
-    )
-    if not structure_context:
+    if not _is_structure_prediction_request(model_id, mode, params):
         return False
     requested = str(params.get("pred_method") or "").strip().lower()
     if requested in RETIRED_STRUCTURE_PRED_METHODS:

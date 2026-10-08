@@ -106,7 +106,7 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
     {
         workflowId: 'structure_validation',
         label: 'Structure Validation',
-        modelTopics: ['alphafold2', 'boltz2', 'rf3'],
+        modelTopics: ['alphafold2', 'boltz2'],
         sourceFiles: [
             'platform/api/config/templates/structure_validation.yaml',
             'main.nf',

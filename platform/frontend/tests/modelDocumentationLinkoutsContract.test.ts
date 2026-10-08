@@ -137,6 +137,7 @@ test('workflow model inventory is source-grounded and exposes the total unique m
   const workflowsById = new Map(WORKFLOW_MODEL_INVENTORY.map((entry) => [entry.workflowId, entry]));
   assert.deepEqual(workflowsById.get('mutagenesis')?.modelTopics, ['boltz2', 'rf3', 'esmfold2']);
   assert.deepEqual(workflowsById.get('structure_prediction')?.modelTopics, ['boltz2', 'fold_cp', 'protenix', 'esmfold2', 'frustrampnn']);
+  assert.deepEqual(workflowsById.get('structure_validation')?.modelTopics, ['alphafold2', 'boltz2']);
   assert.equal(workflowsById.has('antibody_child'), false);
   assert.deepEqual(workflowsById.get('protein_modification_experimental')?.modelTopics, ['laproteina', 'disco', 'rfdiffusion', 'fampnn', 'proteinmpnn', 'boltz2']);
   assert.equal(workflowsById.has('protein_local_redesign'), false);

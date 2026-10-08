@@ -179,6 +179,21 @@ test('keeps internal RF3 use in Protein Design outside Structure retirement', ()
     assert.deepEqual(settings.retiredPredictors, []);
 });
 
+test('keeps Mutagenesis RF3 predict jobs outside Structure retirement', () => {
+    const job = {
+        model_id: 'rf3',
+        mode: 'predict',
+        params: {
+            pred_method: 'rf3',
+            mutagenesis_variants: [{ name: 'variant_1', sequence: 'ACDEFGHIK' }],
+        },
+    };
+
+    const settings = deriveStructureReorchestrateSettings(job);
+    assert.equal(isStructureReorchestrateJob(job), false);
+    assert.deepEqual(settings.retiredPredictors, []);
+});
+
 test('the Structure retry panel has no editable RF3 controls', () => {
     const source = readFileSync(
         new URL('../src/components/dashboard/StructureReorchestratePanel.tsx', import.meta.url),

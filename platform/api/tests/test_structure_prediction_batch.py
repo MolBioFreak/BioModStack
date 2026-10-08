@@ -101,6 +101,33 @@ def test_normalize_structure_prediction_pred_method_rejects_direct_rf3_predict_l
         _normalize_structure_prediction_pred_method("rf3", "predict", {})
 
 
+def test_normalize_structure_prediction_pred_method_rejects_structure_validation_rf3() -> None:
+    with pytest.raises(HTTPException, match="retired from Structure Prediction"):
+        _normalize_structure_prediction_pred_method(
+            "template_structure_validation",
+            "validate",
+            {"pred_method": "rf3"},
+        )
+
+
+@pytest.mark.parametrize(
+    ("model_id", "pred_method"),
+    [("rf3", "rf3"), ("boltz2", "both")],
+)
+def test_normalize_structure_prediction_pred_method_preserves_mutagenesis_rf3(
+    model_id: str,
+    pred_method: str,
+) -> None:
+    params = {
+        "pred_method": pred_method,
+        "mutagenesis_variants": [{"name": "variant_1", "sequence": "ACDEFGHIK"}],
+    }
+    assert _normalize_structure_prediction_pred_method(model_id, "predict", params) == params
+    assert not _job_has_retired_structure_predictor(
+        SimpleNamespace(model_id=model_id, mode="predict", params=params)
+    )
+
+
 def test_normalize_structure_prediction_pred_method_accepts_explicit_boltz_protenix() -> None:
     params = _normalize_structure_prediction_pred_method(
         "boltz2",

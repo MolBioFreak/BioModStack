@@ -173,16 +173,25 @@ const isBoltzCpLaunch = (job: StructureRetryJob): boolean => {
 };
 
 const isStructurePredictionContext = (job: StructureRetryJob): boolean => {
+    const params = job.params || {};
+    if ('mutagenesis_variants' in params) return false;
     const modelId = String(job.model_id || '').trim().toLowerCase();
     const mode = String(job.mode || '').trim().toLowerCase();
+    const templateModels = ['template_structure_prediction', 'template_structure_validation'];
+    const predictorModels = [
+        'boltz2',
+        'boltz_cp_experimental',
+        'esmfold2',
+        'esmfold2_experimental',
+        'fold_cp',
+        'protenix',
+        'rf3',
+    ];
     return isBoltzCpLaunch(job)
-        || mode === 'predict'
-        || mode === 'complex'
+        || templateModels.includes(modelId)
         || mode === 'structure_prediction'
         || mode === 'structure_validation'
-        || modelId === 'template_structure_prediction'
-        || modelId === 'template_structure_validation'
-        || (mode === 'validate' && ['boltz2', 'protenix', 'rf3'].includes(modelId));
+        || (['predict', 'complex', 'validate'].includes(mode) && predictorModels.includes(modelId));
 };
 
 const resolveBoltzCpAutoFallbackGpuIds = (job: StructureRetryJob): string | null => {
