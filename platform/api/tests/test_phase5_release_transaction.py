@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -158,6 +159,153 @@ def test_release_plan_is_explicit_and_validation_precedes_commit() -> None:
     )
 
 
+def test_release_snapshots_operator_frontend_unit(tmp_path: Path, monkeypatch) -> None:
+    systemd_dir = tmp_path / "systemd"
+    systemd_dir.mkdir()
+    (systemd_dir / release.services.CORE_RUNTIME_SERVICE).write_text("core-old\n")
+    (systemd_dir / release.services.FRONTEND_SERVICE).write_text("frontend-old\n")
+    monkeypatch.setattr(release.services, "get_user_systemd_dir", lambda: systemd_dir)
+    monkeypatch.setattr(
+        release.services,
+        "render_user_units",
+        lambda *args, **kwargs: (
+            {release.services.FRONTEND_SERVICE: "Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:18002\n"}
+            if kwargs.get("runtime_mode") == release.services.DEV_RUNTIME_MODE
+            else {release.services.CORE_RUNTIME_SERVICE: "core-new\n"}
+        ),
+    )
+    monkeypatch.setattr(
+        release.services,
+        "runtime_api_url",
+        lambda mode, project_root=None: (
+            "http://127.0.0.1:8000" if mode == "container" else "http://127.0.0.1:18002"
+        ),
+    )
+    backend = release.ProductionReleaseBackend(repo_root=tmp_path, allow_first_install=True)
+
+    snapshot = backend._unit_snapshot()
+
+    assert set(snapshot) == {
+        release.services.CORE_RUNTIME_SERVICE,
+        release.services.FRONTEND_SERVICE,
+    }
+
+
+def test_release_installs_operator_frontend_for_managed_api(tmp_path: Path, monkeypatch) -> None:
+    systemd_dir = tmp_path / "systemd"
+    systemd_dir.mkdir()
+    calls: list[str] = []
+    monkeypatch.setattr(release.services, "get_user_systemd_dir", lambda: systemd_dir)
+    monkeypatch.setattr(
+        release.services,
+        "install_user_units",
+        lambda *args, **kwargs: calls.append("install-container"),
+    )
+    monkeypatch.setattr(
+        release.services,
+        "daemon_reload",
+        lambda *args, **kwargs: calls.append("daemon-reload"),
+    )
+    monkeypatch.setattr(
+        release.services,
+        "render_user_units",
+        lambda *args, **kwargs: {
+            release.services.FRONTEND_SERVICE: (
+                "Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:18002\n"
+                "ExecStart=/release/scripts/run_biomodstack_frontend.sh\n"
+            )
+        },
+    )
+    monkeypatch.setattr(
+        release.services,
+        "runtime_api_url",
+        lambda mode, project_root=None: (
+            "http://127.0.0.1:8000" if mode == "container" else "http://127.0.0.1:18002"
+        ),
+    )
+    backend = release.ProductionReleaseBackend(repo_root=tmp_path, allow_first_install=True)
+
+    backend.install_units()
+
+    frontend = (systemd_dir / release.services.FRONTEND_SERVICE).read_text()
+    assert "BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:8000" in frontend
+    assert "BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:18002" not in frontend
+    assert calls == ["install-container", "daemon-reload"]
+
+
+def test_release_restarts_operator_frontend_after_container_handoff(
+    tmp_path: Path, monkeypatch
+) -> None:
+    calls: list[object] = []
+    monkeypatch.setattr(
+        release.services,
+        "restart_all",
+        lambda *args, **kwargs: calls.append("restart-container"),
+    )
+    monkeypatch.setattr(
+        release.services,
+        "run_systemctl",
+        lambda *args, **kwargs: calls.append(("systemctl", args))
+        or SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    monkeypatch.setattr(
+        release.services,
+        "assert_runtime_listener_preflight",
+        lambda root, mode: calls.append(("preflight", mode)),
+    )
+    monkeypatch.setattr(
+        release.services,
+        "wait_for_http",
+        lambda url, timeout_seconds: calls.append(("wait", url)),
+    )
+    backend = release.ProductionReleaseBackend(repo_root=tmp_path, allow_first_install=True)
+
+    backend.restart_runtime()
+
+    assert calls == [
+        "restart-container",
+        ("systemctl", ("stop", release.services.FRONTEND_SERVICE)),
+        ("preflight", release.services.DEV_RUNTIME_MODE),
+        ("systemctl", ("start", release.services.FRONTEND_SERVICE)),
+        ("wait", release.OPERATOR_FRONTEND_URL),
+    ]
+
+
+def test_release_validates_operator_frontend_proxy_and_owner(tmp_path: Path, monkeypatch) -> None:
+    revision = "0123456789abcdef0123456789abcdef01234567"
+    identity = release.BuildIdentity(revision, "operator", "2026-07-26T00:00:00Z")
+    backend = release.ProductionReleaseBackend(
+        repo_root=tmp_path,
+        api_url="http://api/health",
+        browser_url="http://stable/bms/",
+        allow_first_install=True,
+    )
+    payload = (
+        '{"readiness":{"ready":true},"build":{"revision":"' + revision + '"}}'
+    ).encode()
+    responses = {
+        "http://api/health": (200, payload),
+        "http://stable/bms/": (200, b"<html>stable</html>"),
+        release.OPERATOR_FRONTEND_URL: (200, b"<html>operator</html>"),
+        release.OPERATOR_API_HEALTH_URL: (200, payload),
+    }
+    monkeypatch.setattr(backend, "_fetch", lambda url: responses[url])
+    monkeypatch.setattr(
+        release.services,
+        "runtime_listener_preflight",
+        lambda *args, **kwargs: {
+            "components": {
+                "frontend": {
+                    "ok": True,
+                    "listeners": [{"owner": "managed-dev-frontend"}],
+                }
+            }
+        },
+    )
+
+    backend.validate_runtime(identity)
+
+
 class _FailingValidationBackend:
     def __init__(self) -> None:
         self.events: list[str] = []
@@ -216,6 +364,35 @@ def test_failed_validation_restores_and_revalidates_known_good_runtime() -> None
         "validate-rollback",
     ]
     assert "commit" not in backend.events
+
+
+def test_first_install_restore_stops_partial_operator_frontend(
+    tmp_path: Path, monkeypatch
+) -> None:
+    calls: list[list[str]] = []
+    backend = release.ProductionReleaseBackend(repo_root=tmp_path, allow_first_install=True)
+    monkeypatch.setattr(release.services, "get_user_systemd_dir", lambda: tmp_path / "systemd")
+    monkeypatch.setattr(release.services, "daemon_reload", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        backend,
+        "_run",
+        lambda command, **kwargs: calls.append(command)
+        or subprocess.CompletedProcess(command, 0, "", ""),
+    )
+
+    backend.restore_known_good({"images": {}, "image_refs": {}, "units": {}})
+
+    assert calls == [
+        [
+            "systemctl",
+            "--user",
+            "stop",
+            release.services.TARGET_UNIT,
+            release.services.FRONTEND_SERVICE,
+            release.services.WORKFLOW_ADAPTER_SERVICE,
+            release.services.CORE_RUNTIME_SERVICE,
+        ]
+    ]
 
 
 class _FirstInstallBuildFailureBackend:

@@ -50,6 +50,8 @@ IMAGE_DEFAULTS = {
     "bms-cpu-power": "biomodstack/cpu-power:local",
     "bms-web": "biomodstack/web:local",
 }
+OPERATOR_FRONTEND_URL = "http://127.0.0.1:5173/bms/"
+OPERATOR_API_HEALTH_URL = "http://127.0.0.1:5173/api/health"
 
 
 def _read_runtime_env(path: Path) -> dict[str, str]:
@@ -257,6 +259,7 @@ class ProductionReleaseBackend:
             project_root=self.repo_root,
             runtime_mode=services.CONTAINER_RUNTIME_MODE,
         )
+        rendered[services.FRONTEND_SERVICE] = self._operator_frontend_unit()
         systemd_dir = services.get_user_systemd_dir()
         snapshot: dict[str, str | None] = {}
         for unit_name in rendered:
@@ -265,6 +268,31 @@ class ProductionReleaseBackend:
                 base64.b64encode(path.read_bytes()).decode("ascii") if path.exists() else None
             )
         return snapshot
+
+    def _operator_frontend_unit(self) -> str:
+        unit = services.render_user_units(
+            project_root=self.repo_root,
+            runtime_mode=services.DEV_RUNTIME_MODE,
+        )[services.FRONTEND_SERVICE]
+        dev_target = services.runtime_api_url(
+            services.DEV_RUNTIME_MODE,
+            project_root=self.repo_root,
+        )
+        managed_target = services.runtime_api_url(
+            services.CONTAINER_RUNTIME_MODE,
+            project_root=self.repo_root,
+        )
+        original = f"Environment=BMS_DEV_API_PROXY_TARGET={dev_target}"
+        if unit.count(original) != 1:
+            raise ReleaseValidationError(
+                "operator frontend unit does not contain exactly one dev API proxy target"
+            )
+        replacement = (
+            f"Environment=BMS_DEV_API_PROXY_TARGET={managed_target}\n"
+            "# The operator-facing Vite origin must proxy the managed core API.\n"
+            f"ExecStartPre=/usr/bin/sh -c 'test \"$BMS_DEV_API_PROXY_TARGET\" = \"{managed_target}\"'"
+        )
+        return unit.replace(original, replacement)
 
     def snapshot_known_good(self) -> Mapping[str, Any]:
         images = {service: self._image_id(ref) for service, ref in self.image_refs.items()}
@@ -356,12 +384,37 @@ class ProductionReleaseBackend:
             project_root=self.repo_root,
             runtime_mode=services.CONTAINER_RUNTIME_MODE,
         )
+        systemd_dir = services.get_user_systemd_dir()
+        systemd_dir.mkdir(parents=True, exist_ok=True)
+        frontend_path = systemd_dir / services.FRONTEND_SERVICE
+        temporary = frontend_path.with_name(f".{frontend_path.name}.tmp-{os.getpid()}")
+        temporary.write_text(self._operator_frontend_unit(), encoding="utf-8")
+        os.replace(temporary, frontend_path)
         services.daemon_reload(project_root=self.repo_root)
 
     def restart_runtime(self) -> None:
         services.restart_all(
             project_root=self.repo_root,
             runtime_mode=services.CONTAINER_RUNTIME_MODE,
+        )
+        services.run_systemctl(
+            "stop",
+            services.FRONTEND_SERVICE,
+            check=False,
+            project_root=self.repo_root,
+        )
+        services.assert_runtime_listener_preflight(
+            self.repo_root,
+            services.DEV_RUNTIME_MODE,
+        )
+        services.run_systemctl(
+            "start",
+            services.FRONTEND_SERVICE,
+            project_root=self.repo_root,
+        )
+        services.wait_for_http(
+            OPERATOR_FRONTEND_URL,
+            timeout_seconds=services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS,
         )
 
     @staticmethod
@@ -388,6 +441,35 @@ class ProductionReleaseBackend:
         browser_status, browser_body = self._fetch(self.browser_url)
         if browser_status != 200 or b"<html" not in browser_body.lower():
             raise ReleaseValidationError("browser health did not return the BioModStack HTML shell")
+
+        operator_status, operator_body = self._fetch(OPERATOR_FRONTEND_URL)
+        if operator_status != 200 or b"<html" not in operator_body.lower():
+            raise ReleaseValidationError("operator frontend did not return the BioModStack HTML shell")
+        proxy_status, proxy_body = self._fetch(OPERATOR_API_HEALTH_URL)
+        if proxy_status != 200:
+            raise ReleaseValidationError(f"operator API proxy returned HTTP {proxy_status}")
+        try:
+            proxy_payload = json.loads(proxy_body)
+        except (TypeError, ValueError) as exc:
+            raise ReleaseValidationError("operator API proxy did not return valid JSON") from exc
+        if not proxy_payload.get("readiness", {}).get("ready"):
+            raise ReleaseValidationError(
+                f"operator API proxy readiness failed: {proxy_payload.get('readiness')}"
+            )
+        if identity is not None and proxy_payload.get("build", {}).get("revision") != identity.revision:
+            raise ReleaseValidationError("operator API proxy revision does not match the built release")
+        ownership = services.runtime_listener_preflight(
+            project_root=self.repo_root,
+            runtime_mode=services.DEV_RUNTIME_MODE,
+        )
+        components = ownership.get("components")
+        if not isinstance(components, Mapping):
+            raise ReleaseValidationError("operator frontend ownership payload is malformed")
+        frontend_owner = components.get("frontend")
+        if not isinstance(frontend_owner, Mapping) or frontend_owner.get("ok") is not True:
+            raise ReleaseValidationError(
+                f"operator frontend listener is not owned by the release root: {frontend_owner}"
+            )
 
     def restore_known_good(self, snapshot: Mapping[str, Any]) -> None:
         image_refs = snapshot.get("image_refs", {})
@@ -428,6 +510,7 @@ class ProductionReleaseBackend:
                     "--user",
                     "stop",
                     services.TARGET_UNIT,
+                    services.FRONTEND_SERVICE,
                     services.WORKFLOW_ADAPTER_SERVICE,
                     services.CORE_RUNTIME_SERVICE,
                 ],
