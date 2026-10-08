@@ -259,6 +259,8 @@ ROBOT_LOCAL_EXPECTED_ROUTES: Dict[str, bool] = {
     "/motion/oem/programs/{program_name}": True,
     "/motion/oem/{program_name}/dry_run": True,
     "/motion/oem/machine_config": True,
+    "/motion/oem/position_table": True,
+    "/motion/oem/position_table/plan": True,
     "/motion/oem/shadow_readback": True,
     "/motion/oem/shadow_readback/capture": True,
     "/motion/range/status": True,
@@ -912,6 +914,55 @@ async def oem_homing_program_dry_run(program_name: str, request: Request):
 async def oem_machine_config():
     """Read-only proxy to robot-local OEM original-SSD machine config binding."""
     payload = await proxy_request("GET", "/motion/oem/machine_config", timeout=12.0)
+    if isinstance(payload, dict):
+        payload = dict(payload)
+        payload["bms_role"] = "thin_proxy_only"
+        payload["live_homing"] = "blocked"
+        payload["usb_motion"] = "no"
+    return payload
+
+
+@router.get("/motion/oem/position_table")
+async def oem_position_table():
+    """Read-only proxy to robot-local OEM PositionTable binding."""
+    payload = await proxy_request("GET", "/motion/oem/position_table", timeout=12.0)
+    if isinstance(payload, dict):
+        payload = dict(payload)
+        payload["bms_role"] = "thin_proxy_only"
+        payload["live_homing"] = "blocked"
+        payload["usb_motion"] = "no"
+    return payload
+
+
+@router.get("/motion/oem/position_table/plan")
+async def oem_position_table_plan(
+    location_id: str,
+    column: int = 0,
+    row: int = 0,
+    high_pos: bool = True,
+    mode: str = "moveTo",
+    positionflag: int = 0,
+    tip_location: int = -1,
+    offset_x: int = 0,
+    offset_y: int = 0,
+):
+    """Read-only proxy to robot-local OEM PositionTable coordinate planner."""
+    payload = await proxy_request(
+        "GET",
+        "/motion/oem/position_table/plan",
+        params={
+            "location_id": location_id,
+            "column": column,
+            "row": row,
+            "high_pos": high_pos,
+            "mode": mode,
+            "positionflag": positionflag,
+            "tip_location": tip_location,
+            "offset_x": offset_x,
+            "offset_y": offset_y,
+        },
+        timeout=12.0,
+    )
     if isinstance(payload, dict):
         payload = dict(payload)
         payload["bms_role"] = "thin_proxy_only"
