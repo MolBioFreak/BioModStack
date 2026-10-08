@@ -48,6 +48,8 @@ interface ExperimentalAnalyticsPaneProps {
     jobId?: string;  // For server-side data fetching
 }
 
+const MAX_ANALYTICS_DESIGNS = 1500;
+
 // Available metrics for plotting
 const NUMERIC_METRICS = [
     { key: 'plddt_overall', label: 'pLDDT (Overall)', color: '#60a5fa' },
@@ -114,6 +116,12 @@ const PRESET_ANALYSES = [
 ] as const;
 
 export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }: ExperimentalAnalyticsPaneProps) {
+    const analyticsDesigns = useMemo(
+        () => (designs.length > MAX_ANALYTICS_DESIGNS ? designs.slice(0, MAX_ANALYTICS_DESIGNS) : designs),
+        [designs],
+    );
+    const analyticsDesignIds = useMemo(() => analyticsDesigns.map((design) => design.id), [analyticsDesigns]);
+    const analyticsDesignIdsKey = useMemo(() => analyticsDesignIds.join(','), [analyticsDesignIds]);
     const [selectedPreset, setSelectedPreset] = useState<string>('plddt_vs_pae');
     const [xAxis, setXAxis] = useState<MetricKey>('plddt_overall');
     const [yAxis, setYAxis] = useState<MetricKey>('pae_overall');
@@ -181,9 +189,17 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
 
     // Flattened numeric metrics for Plotly (includes raw confidence_metrics summaries)
     const { data: plotlyMetricsData } = useQuery({
-        queryKey: ['plotly-metrics', jobId],
-        queryFn: () => jobId ? fetchDesignPlotlyMetrics(jobId, { include_children: true, limit: 50000 }).then(r => r.data) : null,
-        enabled: !!jobId,
+        queryKey: ['plotly-metrics', jobId, analyticsDesignIdsKey],
+        queryFn: () => (
+            jobId && analyticsDesignIds.length
+                ? fetchDesignPlotlyMetrics(jobId, {
+                    include_children: true,
+                    limit: Math.min(analyticsDesignIds.length, MAX_ANALYTICS_DESIGNS),
+                    design_ids: analyticsDesignIds,
+                }).then(r => r.data)
+                : null
+        ),
+        enabled: !!jobId && analyticsDesignIds.length > 0,
         staleTime: 60000,
     });
 
