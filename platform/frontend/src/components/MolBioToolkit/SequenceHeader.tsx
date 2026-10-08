@@ -93,6 +93,15 @@ export function SequenceHeader({
             return;
         }
 
+        // Firefox retargets the subsequent click when an ancestor captures a
+        // pointer that began on a button. Only empty rail space may initiate
+        // drag scrolling; interactive descendants must retain native clicks.
+        const target = event.target as HTMLElement;
+        const interactiveTarget = target.closest('button, a, input, select, textarea, [role="button"], [data-sequence-header-drag-ignore="true"]');
+        if (interactiveTarget) {
+            return;
+        }
+
         dragState.current = {
             pointerId: event.pointerId,
             startX: event.clientX,
