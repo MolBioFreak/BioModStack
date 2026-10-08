@@ -201,7 +201,7 @@ async def ingest(job, output, session, *, commit=True):
     for candidate, item in prepared.items():
         payload = item['payload']
         design_id = str(uuid.uuid4())
-        session.add(Design(id=design_id, job_id=job.id, name=candidate,
+        session.add(Design(id=design_id, job_id=job.id, name=candidate, producer_model_id='boltzgen',
             pdb_path=item['artifacts']['structure']['path'], json_path=item['artifacts']['metrics']['path'],
             confidence_metrics={**payload, 'core_protein_scientific_contract': 1,
                                 'core_protein_scientific': scalar_block(item, design_id),

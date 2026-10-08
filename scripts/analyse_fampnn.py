@@ -6,6 +6,7 @@ separate native authority. Policy v1 preserves the original producer population:
 all models, all residues and all alternate atoms; residue means have equal weight.
 """
 import argparse
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -98,6 +99,8 @@ def average_per_residue_bfactor(input_dir, chain_id, ignore_cbeta, out_dir):
             continue
         summary, sequences = profile["summary"], profile["sequences"]
         output = {"design": path.stem, "psce_policy": policy,
+                  "producer_model_id": "fampnn",
+                  "producer_structure_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                   "sequence": "|".join(f"{c}:{s}" for c, s in sequences.items()) if chain_id == "all_chains" else sequences[chain_id],
                   "chain_avg_psce": {c: round(v["avg_psce"], 2) for c, v in profile["chains"].items()},
                   "fampnn_avg_psce": round(summary["avg_psce"], 2),

@@ -18,7 +18,7 @@ from services.result_ingester import ingest_job_results
 from test_core_protein_scientific_admission import admission
 
 
-def native_fixture(tmp_path, engine, selected):
+def native_fixture(tmp_path, engine, selected, *, note="explicit inference output fixture"):
     output = tmp_path / 'results'; output.mkdir()
     unfiltered = output / 'pdb_files'; unfiltered.mkdir()
     subdir = 'fampnn_filtered' if engine == 'fampnn' else 'mpnn_filtered'
@@ -29,7 +29,7 @@ def native_fixture(tmp_path, engine, selected):
     settings = tmp_path / 'settings.json'
     settings.write_text(json.dumps({'sequence_design_engine': engine,
         'sequence_design_mode': 'design', 'mpnn_omitAAs': '', 'fampnn_repack_last': False,
-        'fampnn_psce_threshold': 0.0, 'input_note': 'explicit inference output fixture'}))
+        'fampnn_psce_threshold': 0.0, 'input_note': note}))
     for i in range(2):
         name = f'source_seq_{i}'
         structure = unfiltered / f'{name}.pdb'; structure.write_text(pdb)
@@ -65,6 +65,7 @@ async def test_shared_ingester_reads_native_membership_and_is_replay_safe(admiss
     rows = list((await admission.execute(select(Design).where(Design.job_id == job_id))).scalars())
     assert {r.name for r in rows} == {f'source_seq_{i}' for i in selected}
     for row in rows:
+        assert row.producer_model_id == engine
         assert row.artifact_class == 'sequence_designed_complex'
         assert row.review_profile_id == 'sequence_design_v1'
         assert row.provenance['result_set'] == 'sequence_designs'
