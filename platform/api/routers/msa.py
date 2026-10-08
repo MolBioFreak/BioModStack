@@ -14,6 +14,8 @@ from pathlib import Path
 import uuid
 import os
 import json as json_lib
+import hashlib
+import gzip
 
 from database import Job, NucleotideSequence, get_session
 from services.gpu_orchestrator import estimate_vram
@@ -26,7 +28,7 @@ from services.msa_server import (
     touch_query_activity,
     write_server_settings,
 )
-from paths import get_results_dir
+from paths import get_results_dir, get_msa_cache_dir
 
 
 router = APIRouter(prefix="/api/msa", tags=["msa"])
@@ -53,6 +55,92 @@ class MSAResponse(BaseModel):
     status: str
     output_dir: str
     created_at: datetime
+
+
+def _normalize_sequence_for_cache(sequence: str) -> str:
+    return "".join((sequence or "").split())
+
+
+def _cached_msa_depth(cache_path: Path) -> int | None:
+    try:
+        depth = 0
+        with gzip.open(cache_path, "rt", encoding="utf-8", errors="ignore") as fh:
+            for line in fh:
+                if line.startswith(">"):
+                    depth += 1
+        return depth
+    except Exception:
+        return None
+
+
+@router.get("/cache-info")
+async def get_msa_cache_info(sequence: str, max_entries: int = 25):
+    """
+    Inspect local MSA cache entries for a sequence.
+
+    Returns canonical single-cache status and any legacy profile-scoped entries.
+    """
+    normalized = _normalize_sequence_for_cache(sequence)
+    if not normalized:
+        raise HTTPException(status_code=400, detail="sequence is required")
+
+    if max_entries < 1:
+        max_entries = 1
+    if max_entries > 100:
+        max_entries = 100
+
+    seq_hash = hashlib.sha256(normalized.encode()).hexdigest()
+    cache_root = get_msa_cache_dir()
+    subdir = cache_root / seq_hash[:2]
+    canonical = subdir / f"{seq_hash}.a3m.gz"
+
+    candidates: list[Path] = []
+    if canonical.exists():
+        candidates.append(canonical)
+    if subdir.exists():
+        candidates.extend(
+            sorted(
+                [p for p in subdir.glob(f"{seq_hash}_*.a3m.gz") if p.is_file()],
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+        )
+
+    entries = []
+    for cache_path in candidates[:max_entries]:
+        name = cache_path.name
+        if name == f"{seq_hash}.a3m.gz":
+            profile = "single"
+        else:
+            profile = name.replace(f"{seq_hash}_", "").replace(".a3m.gz", "")
+        stat = cache_path.stat()
+        entries.append(
+            {
+                "name": name,
+                "profile": profile,
+                "path": str(cache_path),
+                "size_bytes": int(stat.st_size),
+                "modified_at": datetime.utcfromtimestamp(stat.st_mtime).isoformat() + "Z",
+                "depth": _cached_msa_depth(cache_path),
+                "canonical": cache_path == canonical,
+            }
+        )
+
+    best_depth = None
+    for entry in entries:
+        depth_val = entry.get("depth")
+        if isinstance(depth_val, int):
+            best_depth = depth_val if best_depth is None else max(best_depth, depth_val)
+
+    return {
+        "sequence_hash": seq_hash,
+        "cache_dir": str(cache_root),
+        "canonical_exists": canonical.exists(),
+        "canonical_path": str(canonical) if canonical.exists() else None,
+        "cache_entries": len(candidates),
+        "best_depth": best_depth,
+        "entries": entries,
+    }
 
 
 @router.post("", response_model=MSAResponse)

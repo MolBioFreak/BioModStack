@@ -21,6 +21,9 @@ process BatchBoltzValidation {
 
     script:
     """
+    set -euo pipefail
+    shopt -s nullglob
+
     mkdir -p yamls predictions
     
     # Generate YAML config for each PDB sequence
@@ -45,9 +48,76 @@ process BatchBoltzValidation {
         --out_dir . \\
         2>&1 | tee boltz_batch.log
         
-    # Move outputs
+    # Move and rename outputs for align_boltz.py to find them
     # Boltz outputs structure: boltz_results_yamls/predictions/{name}/{name}_model_0.pdb
-    mv boltz_results_yamls/predictions/*/* predictions/ 2>/dev/null || true
+    # align_boltz.py expects: {name}_boltzpred.pdb and {name}_boltzpred.json
+    boltz_dirs=(boltz_results_yamls/predictions/*)
+    if [ \${#boltz_dirs[@]} -eq 0 ]; then
+        echo "[BatchBoltzValidation] ERROR: No Boltz prediction directories found in boltz_results_yamls/predictions" >&2
+        exit 1
+    fi
+
+    boltz_pdb_count=0
+    boltz_json_count=0
+    for dir in "\${boltz_dirs[@]}"; do
+        [ -d "\$dir" ] || continue
+        name="\$(basename "\$dir")"
+
+        pdb_src="\$dir/\${name}_model_0.pdb"
+        if [ -f "\$pdb_src" ]; then
+            cp "\$pdb_src" "\${name}_boltzpred.pdb"
+            boltz_pdb_count=\$((boltz_pdb_count + 1))
+        fi
+
+        json_src=""
+        if [ -f "\$dir/confidence_\${name}_model_0.json" ]; then
+            json_src="\$dir/confidence_\${name}_model_0.json"
+        elif [ -f "\$dir/\${name}_model_0.json" ]; then
+            json_src="\$dir/\${name}_model_0.json"
+        fi
+
+        if [ -n "\$json_src" ]; then
+            cp "\$json_src" "\${name}_boltzpred.json"
+            boltz_json_count=\$((boltz_json_count + 1))
+        fi
+    done
+
+    if [ "\$boltz_pdb_count" -eq 0 ]; then
+        echo "[BatchBoltzValidation] ERROR: No Boltz PDB predictions were copied for RMSD alignment" >&2
+        exit 1
+    fi
+    echo "[BatchBoltzValidation] Prepared \$boltz_pdb_count Boltz PDBs and \$boltz_json_count confidence JSONs for alignment"
+
+    # We need access to the original un-repacked templates to calculate RMSD
+    # The originals are in 'pdbs' (the input chunk).
+    mkdir -p original_designs
+    cp \${pdbs} original_designs/
+    original_design_count=\$(find original_designs -maxdepth 1 -name '*.pdb' | wc -l)
+    if [ "\$original_design_count" -eq 0 ]; then
+        echo "[BatchBoltzValidation] ERROR: No original design PDBs were staged for RMSD alignment" >&2
+        exit 1
+    fi
+
+    export MAMBA_ROOT_PREFIX=/opt/conda/
+    eval "\$(micromamba shell hook --shell bash)"
+    micromamba activate pyrosetta
+
+    # Run alignment script
+    python3 ${params.code_root}/scripts/align_boltz.py \\
+        --design_dir ./original_designs \\
+        --boltz_dir ./ \\
+        --output_dir predictions \\
+        --design_type binder \\
+        --ncpus ${task.cpus} \\
+        2>&1 | tee alignment_batch.log
+
+    aligned_pdb_count=\$(find predictions -maxdepth 1 -name '*.pdb' | wc -l)
+    aligned_json_count=\$(find predictions -maxdepth 1 -name '*.json' | wc -l)
+    echo "[BatchBoltzValidation] Alignment outputs: pdb=\$aligned_pdb_count json=\$aligned_json_count"
+    if [ "\$aligned_pdb_count" -eq 0 ] || [ "\$aligned_json_count" -eq 0 ]; then
+        echo "[BatchBoltzValidation] ERROR: RMSD alignment produced no usable PDB/JSON outputs" >&2
+        exit 1
+    fi
     """
 }
 

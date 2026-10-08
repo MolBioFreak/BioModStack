@@ -1511,14 +1511,19 @@ def build_nextflow_command(
         if params.get("msa_preferred_gpus") in (None, ""):
             raw_preferred = global_cfg.get("msa_preferred_gpu_ids")
             preferred_ids = []
+            seen_preferred = set()
             if isinstance(raw_preferred, list):
                 for gpu_id in raw_preferred:
                     try:
-                        preferred_ids.append(int(gpu_id))
+                        normalized_id = int(gpu_id)
                     except (TypeError, ValueError):
                         continue
+                    if normalized_id in seen_preferred:
+                        continue
+                    seen_preferred.add(normalized_id)
+                    preferred_ids.append(normalized_id)
             if preferred_ids:
-                params["msa_preferred_gpus"] = sorted(set(preferred_ids))
+                params["msa_preferred_gpus"] = preferred_ids
                 logger.info(f"[MSA] Injected preferred GPUs from scheduler config: {params['msa_preferred_gpus']}")
 
         if params.get("msa_excluded_gpus") in (None, ""):
@@ -1615,6 +1620,11 @@ def build_nextflow_command(
         'msa_min_depth_fail': 'msa_min_depth_fail',
         'msa_allow_empty_fallback': 'msa_allow_empty_fallback',
         'msa_force_refresh': 'msa_force_refresh',
+        'msa_cache_only': 'msa_cache_only',
+        'msa_provider': 'msa_provider',
+        'colabfold_api_host': 'colabfold_api_host',
+        'colabfold_api_min_interval': 'colabfold_api_min_interval',
+        'colabfold_api_poll_interval': 'colabfold_api_poll_interval',
         'msa_gpu_server_mode': 'msa_gpu_server_mode',
         'msa_gpu_server_wait_timeout': 'msa_gpu_server_wait_timeout',
         'msa_gpu_server_db_load_mode': 'msa_gpu_server_db_load_mode',

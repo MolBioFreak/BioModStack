@@ -208,6 +208,49 @@ def _list_gpu_indices(retries: int = 3, timeout_seconds: int = 5) -> List[int]:
     return []
 
 
+def _list_gpu_inventory(retries: int = 3, timeout_seconds: int = 5) -> Dict[int, Dict[str, int]]:
+    """Return lightweight GPU inventory keyed by GPU index."""
+    attempts = max(1, int(retries))
+    for attempt in range(attempts):
+        try:
+            result = subprocess.run(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=index,memory.total,utilization.gpu",
+                    "--format=csv,noheader,nounits",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=max(1, int(timeout_seconds)),
+            )
+        except Exception:
+            result = None
+
+        if result and result.returncode == 0:
+            inventory: Dict[int, Dict[str, int]] = {}
+            for line in result.stdout.splitlines():
+                parts = [p.strip() for p in line.split(",")]
+                if len(parts) < 3:
+                    continue
+                try:
+                    gpu_id = int(parts[0])
+                    mem_total = int(parts[1])
+                    utilization = int(parts[2])
+                except ValueError:
+                    continue
+                inventory[gpu_id] = {
+                    "memory_total_mb": mem_total,
+                    "utilization": utilization,
+                }
+            if inventory:
+                return inventory
+
+        if attempt < attempts - 1:
+            time.sleep(0.2 * (attempt + 1))
+
+    return {}
+
+
 def resolve_msa_gpu_id(requested_gpu_id: Optional[int] = None) -> int:
     """
     Resolve target GPU for MSA server startup.
@@ -215,11 +258,11 @@ def resolve_msa_gpu_id(requested_gpu_id: Optional[int] = None) -> int:
     Priority:
     1) Explicit request
     2) Scheduler global.msa_preferred_gpu_ids
-    3) GPU 1 (5060 Ti on this workstation, if available)
-    4) First non-disabled GPU
+    3) Strongest available GPU by scheduler tier/capacity
     """
     available = _list_gpu_indices()
     available_set = set(available)
+    inventory = _list_gpu_inventory()
 
     scheduler_cfg = read_scheduler_config() or {}
     global_cfg = scheduler_cfg.get("global", {}) if isinstance(scheduler_cfg, dict) else {}
@@ -270,17 +313,54 @@ def resolve_msa_gpu_id(requested_gpu_id: Optional[int] = None) -> int:
             continue
         return gpu_id
 
-    if (not available_set or 1 in available_set) and 1 not in disabled:
-        return 1
+    capacity_weight = 3.0
+    if isinstance(global_cfg, dict):
+        try:
+            capacity_weight = float(global_cfg.get("capacity_weight", 3.0))
+        except (TypeError, ValueError):
+            capacity_weight = 3.0
 
+    candidates = []
     for gpu_id in available:
-        if gpu_id not in disabled:
-            return gpu_id
+        if gpu_id in disabled:
+            continue
+        override = overrides.get(str(gpu_id), {}) if isinstance(overrides, dict) else {}
+        priority_tier = override.get("priority_tier") if isinstance(override, dict) else None
+        mem_total = int(inventory.get(gpu_id, {}).get("memory_total_mb", 0))
+        utilization = int(inventory.get(gpu_id, {}).get("utilization", 100))
+        if priority_tier is not None:
+            try:
+                base_score = float(priority_tier) * 10.0
+            except (TypeError, ValueError):
+                base_score = (mem_total / 10000.0) * capacity_weight
+        else:
+            base_score = (mem_total / 10000.0) * capacity_weight
+
+        candidates.append((base_score, mem_total, -utilization, -gpu_id, gpu_id))
+
+    if candidates:
+        candidates.sort(reverse=True)
+        return candidates[0][4]
 
     # Final fallback when nvidia-smi is unavailable but scheduler config exists.
+    fallback_candidates = []
     for gpu_id in sorted(known_gpu_ids):
-        if gpu_id not in disabled:
-            return gpu_id
+        if gpu_id in disabled:
+            continue
+        override = overrides.get(str(gpu_id), {}) if isinstance(overrides, dict) else {}
+        priority_tier = override.get("priority_tier") if isinstance(override, dict) else None
+        if priority_tier is not None:
+            try:
+                base_score = float(priority_tier) * 10.0
+            except (TypeError, ValueError):
+                base_score = 0.0
+        else:
+            base_score = 0.0
+        fallback_candidates.append((base_score, -gpu_id, gpu_id))
+
+    if fallback_candidates:
+        fallback_candidates.sort(reverse=True)
+        return fallback_candidates[0][2]
 
     if available_set:
         raise RuntimeError("All detected GPUs are disabled in scheduler config")

@@ -35,8 +35,13 @@ process GenerateLocalMSA {
     def gpuServerWaitTimeout = params.msa_gpu_server_wait_timeout ?: 120
     def gpuServerDbLoadMode = params.msa_gpu_server_db_load_mode ?: 0
     def gpuServerStartupWait = params.msa_gpu_server_startup_wait ?: 1.0
+    def msaProvider = params.msa_provider ?: "local"
+    def colabfoldApiHost = params.colabfold_api_host ?: "https://api.colabfold.com"
+    def colabfoldApiMinInterval = params.colabfold_api_min_interval ?: 6.0
+    def colabfoldApiPollInterval = params.colabfold_api_poll_interval ?: 6.0
     def refSeq = params.msa_reference_sequence ? "--reference-sequence \"${params.msa_reference_sequence}\"" : ""
     def forceRefresh = params.msa_force_refresh ? "--force_refresh" : ""
+    def cacheOnly = params.msa_cache_only ? "--cache-only" : ""
     // MSA Quality Preset (Maximum/Balanced/Fast) - default: fast (quick search)
     def msaPreset = params.msa_preset ?: "fast"
     // MSA Quality Parameters (can override preset)
@@ -66,6 +71,10 @@ process GenerateLocalMSA {
         --gpu-server-wait-timeout ${gpuServerWaitTimeout} \\
         --gpu-server-db-load-mode ${gpuServerDbLoadMode} \\
         --gpu-server-startup-wait ${gpuServerStartupWait} \\
+        --msa-provider ${msaProvider} \\
+        --colabfold-api-host "${colabfoldApiHost}" \\
+        --colabfold-api-min-interval ${colabfoldApiMinInterval} \\
+        --colabfold-api-poll-interval ${colabfoldApiPollInterval} \\
         --preset ${msaPreset} \\
         --min-depth-warning ${minDepthWarning} \\
         --min-depth-fail ${minDepthFail} \\
@@ -74,6 +83,7 @@ process GenerateLocalMSA {
         ${excludedGpus} \\
         ${refSeq} \\
         ${forceRefresh} \\
+        ${cacheOnly} \\
         ${evalue} \\
         ${sensitivity} \\
         ${maxSeqs} \\
@@ -423,6 +433,7 @@ process PrepareComplexWithMSA {
     label 'CPU'
     publishDir "${params.out_dir}/run/boltz_complex", mode: 'copy', pattern: "*.log"
     publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "msa/*.a3m"
+    publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "msa/*_msa_quality.json"
 
     input:
     tuple val(complex_name), path(complex_json), path(msa_files)
@@ -430,6 +441,7 @@ process PrepareComplexWithMSA {
     output:
     tuple val(complex_name), path("yamls/${complex_name}.yaml"), path("msa"), emit: prepared
     path "msa/*.a3m", emit: msa, optional: true
+    path "msa/*_msa_quality.json", emit: quality_report, optional: true
     path "*.log"
 
     script:
@@ -438,6 +450,7 @@ process PrepareComplexWithMSA {
     def msaThreads = params.msa_threads ?: 32
     def msaUseGpuEnabled = params.msa_use_gpu != false ? "true" : "false"
     def msaForceRefresh = params.msa_force_refresh ? "true" : "false"
+    def msaCacheOnly = params.msa_cache_only ? "true" : "false"
     def useMsa = params.boltz_use_msa == null || params.boltz_use_msa.toString() == 'true'
     // MSA Quality Parameters - default: fast (quick search)
     def msaPreset = params.msa_preset ?: "fast"
@@ -462,6 +475,10 @@ process PrepareComplexWithMSA {
     def msaGpuServerWaitTimeout = params.msa_gpu_server_wait_timeout ?: 120
     def msaGpuServerDbLoadMode = params.msa_gpu_server_db_load_mode ?: 0
     def msaGpuServerStartupWait = params.msa_gpu_server_startup_wait ?: 1.0
+    def msaProvider = params.msa_provider ?: "local"
+    def colabfoldApiHost = params.colabfold_api_host ?: "https://api.colabfold.com"
+    def colabfoldApiMinInterval = params.colabfold_api_min_interval ?: 6.0
+    def colabfoldApiPollInterval = params.colabfold_api_poll_interval ?: 6.0
     def msaAllowEmptyFallback = params.msa_allow_empty_fallback != null ? params.msa_allow_empty_fallback.toString() : "false"
     // Per-chain MSA timeout in seconds for complex prep; set <=0 to disable timeout.
     def msaChainTimeoutSeconds = params.msa_chain_timeout_seconds ?: 3600
@@ -491,6 +508,7 @@ msa_threads = int("${msaThreads}")
 msa_use_gpu_enabled = "${msaUseGpuEnabled}" == "true"
 use_msa = "${useMsa}" == "true"
 force_refresh = "${msaForceRefresh}" == "true"
+cache_only = "${msaCacheOnly}" == "true"
 complex_name = "${complex_name}"
 # MSA Quality params
 msa_preset = "${msaPreset}"
@@ -513,6 +531,10 @@ msa_gpu_server_mode = "${msaGpuServerMode}"
 msa_gpu_server_wait_timeout = "${msaGpuServerWaitTimeout}"
 msa_gpu_server_db_load_mode = "${msaGpuServerDbLoadMode}"
 msa_gpu_server_startup_wait = "${msaGpuServerStartupWait}"
+msa_provider = "${msaProvider}"
+colabfold_api_host = "${colabfoldApiHost}"
+colabfold_api_min_interval = "${colabfoldApiMinInterval}"
+colabfold_api_poll_interval = "${colabfoldApiPollInterval}"
 msa_allow_empty_fallback = "${msaAllowEmptyFallback}".strip().lower() == "true"
 msa_chain_timeout_seconds = int("${msaChainTimeoutSeconds}")
 msa_fallback_path = "${msa_files}"
@@ -575,6 +597,10 @@ for comp in complex_def.get("components", []):
                         "--gpu-server-wait-timeout", msa_gpu_server_wait_timeout,
                         "--gpu-server-db-load-mode", msa_gpu_server_db_load_mode,
                         "--gpu-server-startup-wait", msa_gpu_server_startup_wait,
+                        "--msa-provider", msa_provider,
+                        "--colabfold-api-host", colabfold_api_host,
+                        "--colabfold-api-min-interval", colabfold_api_min_interval,
+                        "--colabfold-api-poll-interval", colabfold_api_poll_interval,
                     ]
                     if msa_preferred_gpus:
                         cmd.extend(["--preferred-gpus", msa_preferred_gpus])
@@ -586,6 +612,8 @@ for comp in complex_def.get("components", []):
                         cmd.extend(["--reference-sequence", ref_seq])
                     if force_refresh:
                         cmd.append("--force_refresh")
+                    if cache_only:
+                        cmd.append("--cache-only")
                     # Add MSA quality params (can override preset)
                     if msa_taxon_list:
                         cmd.extend(["--taxon-list", msa_taxon_list])
@@ -710,6 +738,10 @@ for comp in complex_def.get("components", []):
                         "--gpu-server-wait-timeout", msa_gpu_server_wait_timeout,
                         "--gpu-server-db-load-mode", msa_gpu_server_db_load_mode,
                         "--gpu-server-startup-wait", msa_gpu_server_startup_wait,
+                        "--msa-provider", msa_provider,
+                        "--colabfold-api-host", colabfold_api_host,
+                        "--colabfold-api-min-interval", colabfold_api_min_interval,
+                        "--colabfold-api-poll-interval", colabfold_api_poll_interval,
                     ]
                     if msa_preferred_gpus:
                         cmd.extend(["--preferred-gpus", msa_preferred_gpus])
@@ -717,6 +749,8 @@ for comp in complex_def.get("components", []):
                         cmd.extend(["--excluded-gpus", msa_excluded_gpus])
                     if not msa_use_gpu_enabled:
                         cmd.append("--cpu-only")
+                    if cache_only:
+                        cmd.append("--cache-only")
                     # Add quality overrides if set
                     if msa_max_seqs:
                         cmd.extend(["--max-seqs", msa_max_seqs])

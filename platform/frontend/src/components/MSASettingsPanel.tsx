@@ -14,6 +14,7 @@ export interface MSASettings {
     msa_min_depth_warning?: number;
     msa_min_depth_fail?: number;
     msa_force_refresh?: boolean;
+    msa_cache_only?: boolean;
     msa_allow_empty_fallback?: boolean;
 }
 
@@ -298,12 +299,32 @@ export function MSASettingsPanel({
                                             <input
                                                 type="checkbox"
                                                 checked={settings.msa_force_refresh ?? false}
-                                                onChange={(e) => update({ msa_force_refresh: e.target.checked })}
+                                                onChange={(e) => update({
+                                                    msa_force_refresh: e.target.checked,
+                                                    msa_cache_only: e.target.checked ? false : settings.msa_cache_only
+                                                })}
                                                 className="w-4 h-4 rounded border-slate-600 bg-slate-700"
                                             />
                                             <span className="text-sm text-slate-300">Force Refresh</span>
                                         </label>
                                         <span className="text-xs text-slate-500">Ignore cached MSA</span>
+                                    </div>
+
+                                    {/* Cache-only */}
+                                    <div className="flex items-center gap-3">
+                                        <label className="flex items-center gap-2">
+                                            <input
+                                                type="checkbox"
+                                                checked={settings.msa_cache_only ?? false}
+                                                onChange={(e) => update({
+                                                    msa_cache_only: e.target.checked,
+                                                    msa_force_refresh: e.target.checked ? false : settings.msa_force_refresh
+                                                })}
+                                                className="w-4 h-4 rounded border-slate-600 bg-slate-700"
+                                            />
+                                            <span className="text-sm text-slate-300">Use Cache Only</span>
+                                        </label>
+                                        <span className="text-xs text-slate-500">Skip MSA generation (fail on miss)</span>
                                     </div>
 
                                     {/* Empty fallback override */}
@@ -380,6 +401,9 @@ export function extractMSAParams(settings: MSASettings): Record<string, any> {
     }
     if (settings.msa_force_refresh) {
         params.msa_force_refresh = true;
+    }
+    if (settings.msa_cache_only) {
+        params.msa_cache_only = true;
     }
     if (settings.msa_allow_empty_fallback) {
         params.msa_allow_empty_fallback = true;

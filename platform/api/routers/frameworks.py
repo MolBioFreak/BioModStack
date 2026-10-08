@@ -119,6 +119,13 @@ class CDRAnnotationResponse(BaseModel):
     cdr_l1_range: Optional[List[int]] = None
     cdr_l2_range: Optional[List[int]] = None
     cdr_l3_range: Optional[List[int]] = None
+    # CDR sequence-index ranges (0-based indices into chain sequence)
+    cdr_h1_seq_range: Optional[List[int]] = None
+    cdr_h2_seq_range: Optional[List[int]] = None
+    cdr_h3_seq_range: Optional[List[int]] = None
+    cdr_l1_seq_range: Optional[List[int]] = None
+    cdr_l2_seq_range: Optional[List[int]] = None
+    cdr_l3_seq_range: Optional[List[int]] = None
 
 
 # ============================================================================
@@ -476,10 +483,15 @@ async def annotate_framework_cdrs(
             cdr_l1_range=list(annotation.cdr_l1_range) if getattr(annotation, 'cdr_l1_range', None) else None,
             cdr_l2_range=list(annotation.cdr_l2_range) if getattr(annotation, 'cdr_l2_range', None) else None,
             cdr_l3_range=list(annotation.cdr_l3_range) if getattr(annotation, 'cdr_l3_range', None) else None,
+            cdr_h1_seq_range=list(annotation.cdr_h1_seq_range) if getattr(annotation, 'cdr_h1_seq_range', None) else None,
+            cdr_h2_seq_range=list(annotation.cdr_h2_seq_range) if getattr(annotation, 'cdr_h2_seq_range', None) else None,
+            cdr_h3_seq_range=list(annotation.cdr_h3_seq_range) if getattr(annotation, 'cdr_h3_seq_range', None) else None,
+            cdr_l1_seq_range=list(annotation.cdr_l1_seq_range) if getattr(annotation, 'cdr_l1_seq_range', None) else None,
+            cdr_l2_seq_range=list(annotation.cdr_l2_seq_range) if getattr(annotation, 'cdr_l2_seq_range', None) else None,
+            cdr_l3_seq_range=list(annotation.cdr_l3_seq_range) if getattr(annotation, 'cdr_l3_seq_range', None) else None,
         )
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"[CDR Annotation] Error for {pdb_code}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-

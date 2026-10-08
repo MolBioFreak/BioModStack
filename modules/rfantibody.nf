@@ -20,8 +20,9 @@ process RFANTIBODY {
     // All params referenced directly inside closure for correct DSL2 scoping.
     containerOptions {
         def rfantibodyRepo = "${params.weights_root}/rfantibody/rfantibody_repo"
+        def repoBind = params.rfantibody_debug_repo_overlay ? "--bind ${rfantibodyRepo}:/opt/RFantibody" : ""
         def codeBind = params.code_root ? "--bind ${params.code_root}" : ""
-        return "--nv --env CUDA_DEVICE_ORDER=PCI_BUS_ID --env CUDA_VISIBLE_DEVICES=${gpu_id} ${codeBind} --bind ${rfantibodyRepo}:/opt/RFantibody --writable-tmpfs"
+        return "--nv --env CUDA_DEVICE_ORDER=PCI_BUS_ID --env CUDA_VISIBLE_DEVICES=${gpu_id} ${codeBind} ${repoBind} --writable-tmpfs"
     }
 
     publishDir "${params.out_dir}/run/rfantibody", mode: 'copy', pattern: "*.log"
@@ -61,11 +62,11 @@ process RFANTIBODY {
 
     // Start with RFantibody-specific loop spec if provided, then UI loop selection,
     // then framework defaults.
-    def rawLoops = params.rfantibody_design_loops ?: params.antibody_design_loops ?: ''
+    def rawLoops = params.rfantibody_design_loops_custom ?: params.rfantibody_design_loops ?: params.antibody_design_loops ?: ''
 
     def design_loops
-    if (rawLoops && rawLoops.contains(':')) {
-        // Already in RFantibody format with ranges: "[H1:7-10,H2:6-8,H3:5-15]"
+    if (rawLoops && rawLoops.startsWith('[') && rawLoops.endsWith(']')) {
+        // Already in native RFantibody or custom formatted struct
         design_loops = rawLoops
     }
     else if (rawLoops && rawLoops.trim()) {
@@ -126,15 +127,42 @@ process RFANTIBODY {
     # Save work directory path for absolute file references
     WORK_DIR=\$(pwd)
 
-    
+    # Run preflight guard to ensure runtime is healthy
+    python3 ${params.code_root}/scripts/check_rfantibody_runtime.py \\
+        2>&1 | tee -a rfantibody_${meta.id}.log
+
+    # End if preflight fails
+    if [ \${PIPESTATUS[0]} -ne 0 ]; then
+        echo "Preflight check failed. Aborting." >> rfantibody_${meta.id}.log
+        exit 1
+    fi
+
     # Run RFantibody RFdiffusion inference
     # Script is at /opt/RFantibody/scripts/rfdiffusion_inference.py
     # PYTHONPATH is set in container environment to include src/ and include/
-    # Config is at scripts/config/inference (verified: src/rfantibody/.../config/inference does NOT exist)
+    # Support both container layouts by resolving config path dynamically.
     cd /opt/RFantibody
 
+    RFA_CONFIG_PATH=""
+    for candidate in \\
+        /opt/RFantibody/scripts/config/inference \\
+        /opt/RFantibody/src/rfantibody/rfdiffusion/config/inference
+    do
+        if [ -d "\$candidate" ]; then
+            RFA_CONFIG_PATH="\$candidate"
+            break
+        fi
+    done
+
+    if [ -z "\$RFA_CONFIG_PATH" ]; then
+        echo "RFantibody config directory not found in known locations." | tee -a rfantibody_${meta.id}.log
+        exit 1
+    fi
+
+    echo "RFantibody config path: \$RFA_CONFIG_PATH" | tee -a rfantibody_${meta.id}.log
+
     python3 scripts/rfdiffusion_inference.py \\
-        --config-path /opt/RFantibody/src/rfantibody/rfdiffusion/config/inference \\
+        --config-path \$RFA_CONFIG_PATH \\
         --config-name antibody \\
         antibody.target_pdb=\${WORK_DIR}/${target_pdb} \\
         antibody.framework_pdb=${framework} \\

@@ -52,7 +52,7 @@ export function EpitopeSelector({
     );
 
     // Create residue key
-    const getResKey = (r: Residue) => `${r.chainId}${r.resNum}`;
+    const getResKey = (r: Residue) => `${r.chainId}${r.resNum}${r.iCode || ''}`;
 
     // Handle residue click
     const handleResidueClick = useCallback((residue: Residue, event: React.MouseEvent) => {
@@ -174,7 +174,7 @@ export function EpitopeSelector({
                                     <div key={key} className="relative group">
                                         {/* Position Marker - shows PDB residue number for every AA */}
                                         <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 text-[8px] text-slate-600 select-none whitespace-nowrap">
-                                            {residue.resNum}
+                                            {residue.resNum}{residue.iCode || ''}
                                         </div>
 
                                         <button
@@ -183,7 +183,7 @@ export function EpitopeSelector({
                                                 ? `${colors.bg} ${colors.border} ${colors.text} scale-110 shadow-lg ring-1 ring-current/50`
                                                 : 'bg-slate-800 border-transparent text-slate-400 hover:bg-slate-700 hover:border-slate-600'
                                                 }`}
-                                            title={`${chain.id}${residue.resNum} (${residue.resName})`}
+                                            title={`${chain.id}${residue.resNum}${residue.iCode || ''} (${residue.resName})`}
                                         >
                                             {residue.aa}
                                         </button>

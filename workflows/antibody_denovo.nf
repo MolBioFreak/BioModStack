@@ -107,8 +107,8 @@ process SpawnRFantibodyJobs {
         rfantibody_noise_scale_ca: params.rfantibody_noise_scale_ca ?: 1.0,
         rfantibody_noise_scale_frame: params.rfantibody_noise_scale_frame ?: 1.0,
         rfantibody_guide_scale: params.rfantibody_guide_scale ?: 10,
-        // Pass UI CDR loop selection - rfantibody.nf will convert to RFantibody format
-        antibody_design_loops: params.antibody_design_loops ?: ''
+        // Pass UI CDR loop selection - prefer custom UI index over general string flag if available
+        antibody_design_loops: params.rfantibody_design_loops_custom ?: (params.antibody_design_loops ?: '')
     ])
     """
     python3 ${params.code_root}/scripts/spawn_rfantibody_children.py \\
@@ -147,7 +147,8 @@ process SpawnFAMPNNJobs {
         fampnn_temperature: params.fampnn_temperature ?: 0.0001,
         fampnn_num_steps: params.fampnn_num_steps ?: 500,
         fampnn_psce_threshold: params.fampnn_psce_threshold ?: 0.15,
-        fampnn_constraint_mode: params.fampnn_constraint_mode
+        fampnn_constraint_mode: params.fampnn_constraint_mode,
+        rfantibody_design_loops_custom: params.rfantibody_design_loops_custom
     ])
     """
     python3 ${params.code_root}/scripts/spawn_fampnn_children.py \\
@@ -408,7 +409,8 @@ process SpawnMaturationJobs {
         fampnn_exclude_cys: params.fampnn_exclude_cys,
         fampnn_repack_last: params.fampnn_repack_last,
         fampnn_seq_only: params.fampnn_seq_only,
-        fampnn_extra_config: params.fampnn_extra_config
+        fampnn_extra_config: params.fampnn_extra_config,
+        rfantibody_design_loops_custom: params.rfantibody_design_loops_custom
     ])
     """
     python3 ${params.code_root}/scripts/spawn_maturation_children.py \\
@@ -727,7 +729,7 @@ workflow ANTIBODY_DENOVO {
     def framework_path = params.framework_pdb ? file(params.framework_pdb) : file("${params.code_root}/lib/NO_FRAMEWORK")
     framework_for_rfantibody = framework_pdb_ch
         .map { meta, pdb -> pdb }
-        .ifEmpty { framework_path }
+        .ifEmpty(framework_path)
     
     // Multi-GPU parallelism for RFantibody
     // Parse available GPUs from pinned_gpus param (e.g., "0,2" -> [0, 2])

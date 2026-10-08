@@ -78,6 +78,7 @@ export interface SelectedFramework {
     pdbCode?: string;
     sequence?: string;
     filePath?: string;
+    pdbContent?: string | null;
     cdrH3Length?: number;
     // Chain info for frameworks with antigens (from SAbDab)
     hChain?: string;      // Antibody heavy chain ID
@@ -204,7 +205,8 @@ export function FrameworkBrowser({
             setDownloadingPdb(pdbCode);
             const response = await downloadSabdabFramework(pdbCode, {
                 scheme: 'imgt',
-                convert_hlt: true
+                convert_hlt: true,
+                include_content: true
             });
             return { ...response.data, cdrH3Length };
         },
@@ -223,6 +225,7 @@ export function FrameworkBrowser({
                     name: `SAbDab: ${data.pdb_code}`,
                     pdbCode: data.pdb_code,
                     filePath: data.file_path || undefined,
+                    pdbContent: data.pdb_content ?? null,
                     cdrH3Length: data.cdrH3Length ?? undefined,
                     hChain: data.h_chain || undefined,
                     lChain: data.l_chain ?? null
@@ -245,6 +248,7 @@ export function FrameworkBrowser({
             name: `SAbDab: ${data.pdb_code}`,
             pdbCode: data.pdb_code,
             filePath: data.file_path || undefined,
+            pdbContent: data.pdb_content ?? null,
             cdrH3Length: cdrH3Length ?? undefined,
             // Pass chain info for downstream processing
             hChain: data.h_chain || undefined,

@@ -51,19 +51,64 @@ def compute_sequence_hash(sequence: str) -> str:
     return hashlib.sha256(sequence.encode()).hexdigest()
 
 
+def _cached_depth(cache_path: Path) -> Optional[int]:
+    """Count sequences in cached A3M.gz."""
+    try:
+        depth = 0
+        with gzip.open(cache_path, 'rt', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                if line.startswith(">"):
+                    depth += 1
+        return depth
+    except Exception:
+        return None
+
+
+def _cleanup_profile_caches(cache_dir: Path, seq_hash: str) -> int:
+    """Remove profile-scoped cache files for a sequence hash."""
+    cache_subdir = cache_dir / seq_hash[:2]
+    if not cache_subdir.exists():
+        return 0
+    removed = 0
+    for profile_file in cache_subdir.glob(f"{seq_hash}_*.a3m.gz"):
+        try:
+            profile_file.unlink()
+            removed += 1
+        except Exception:
+            continue
+    return removed
+
+
 def check_cache(cache_dir: Path, seq_hash: str, preset: str = "fast") -> Optional[Path]:
-    """Check if we have a cached MSA for this sequence hash + preset."""
+    """Check if we have a canonical cached MSA for this sequence hash."""
     if not cache_dir:
         return None
     cache_subdir = cache_dir / seq_hash[:2]
-    # Preset-aware cache key for consistency with run_local_msa.py
-    cache_file = cache_subdir / f"{seq_hash}_{preset}.a3m.gz"
-    if cache_file.exists():
-        return cache_file
-    # Fallback: check legacy format (no preset)
-    legacy_cache = cache_subdir / f"{seq_hash}.a3m.gz"
-    if legacy_cache.exists():
-        return legacy_cache
+    canonical_cache = cache_subdir / f"{seq_hash}.a3m.gz"
+    if canonical_cache.exists():
+        _cleanup_profile_caches(cache_dir, seq_hash)
+        return canonical_cache
+
+    _ = preset
+    if not cache_subdir.exists():
+        return None
+
+    # Legacy migration: choose deepest profile cache and promote to canonical.
+    candidates = []
+    for profile_file in cache_subdir.glob(f"{seq_hash}_*.a3m.gz"):
+        depth = _cached_depth(profile_file)
+        if depth is None:
+            continue
+        candidates.append((depth, profile_file.stat().st_mtime, profile_file))
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    best_path = candidates[0][2]
+    cache_subdir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(best_path, canonical_cache)
+    _cleanup_profile_caches(cache_dir, seq_hash)
+    return canonical_cache
     return None
 
 
@@ -76,14 +121,15 @@ def load_from_cache(cache_path: Path, out_path: Path) -> None:
 
 
 def save_to_cache(msa_path: Path, cache_dir: Path, seq_hash: str, preset: str = "fast") -> Path:
-    """Compress and save MSA to cache with preset-aware naming."""
+    """Compress and save MSA to canonical single-cache path."""
+    _ = preset
     cache_subdir = cache_dir / seq_hash[:2]
     cache_subdir.mkdir(parents=True, exist_ok=True)
-    # Preset-aware cache key for consistency with run_local_msa.py
-    cache_file = cache_subdir / f"{seq_hash}_{preset}.a3m.gz"
+    cache_file = cache_subdir / f"{seq_hash}.a3m.gz"
     with open(msa_path, 'rb') as f_in:
         with gzip.open(cache_file, 'wb') as f_out:
             f_out.write(f_in.read())
+    _cleanup_profile_caches(cache_dir, seq_hash)
     return cache_file
 
 

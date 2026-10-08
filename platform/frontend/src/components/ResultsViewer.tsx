@@ -999,29 +999,6 @@ export function ResultsViewer() {
                                                     onChange={e => setFilterText(e.target.value)}
                                                     className="bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-sm w-64"
                                                 />
-                                                {/* Show Annotate CDRs only for antibody jobs */}
-                                                {(activeJob?.model_id === 'rfantibody' ||
-                                                    activeJob?.name?.toLowerCase().includes('antibody') ||
-                                                    activeJob?.mode?.toLowerCase().includes('antibody')) && (
-                                                        <button
-                                                            onClick={async () => {
-                                                                const jobIdToUse = activeJob?.id || selectedJobId;
-                                                                if (!jobIdToUse) return;
-                                                                try {
-                                                                    const res = await fetch(`/api/jobs/${jobIdToUse}/annotate-cdr`, { method: 'POST' });
-                                                                    const data = await res.json();
-                                                                    alert(data.message || 'CDR annotation complete');
-                                                                    // Refetch designs to show updated data
-                                                                    window.location.reload();
-                                                                } catch (err) {
-                                                                    alert('CDR annotation failed: ' + err);
-                                                                }
-                                                            }}
-                                                            className="px-4 py-2 text-sm bg-violet-600 hover:bg-violet-500 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
-                                                        >
-                                                            🧬 Annotate CDRs
-                                                        </button>
-                                                    )}
                                             </div>
                                             {/* Table */}
                                             <div className="overflow-x-auto">

@@ -292,6 +292,17 @@ export function JobSubmission() {
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [clonedValues, setClonedValues] = useState<Record<string, any> | undefined>(undefined);
 
+    // Dedicated templates should not retain stale clone params once user navigates away.
+    const handleDedicatedTemplateBack = () => {
+        setSelectedTemplateId(null);
+        setClonedValues(undefined);
+    };
+
+    const handleTemplateCardSelect = (templateId: string) => {
+        setClonedValues(undefined);
+        setSelectedTemplateId(templateId);
+    };
+
     // Check for cloned job data on mount
     useEffect(() => {
         const stored = localStorage.getItem('clonedJobData');
@@ -595,7 +606,11 @@ export function JobSubmission() {
                             Workflows
                         </button>
                         <button
-                            onClick={() => { setWizardMode('manual'); setSelectedTemplateId(null); }}
+                            onClick={() => {
+                                setWizardMode('manual');
+                                setSelectedTemplateId(null);
+                                setClonedValues(undefined);
+                            }}
                             className={`px-4 py-2 rounded-lg font-medium transition-all ${wizardMode === 'manual'
                                 ? 'bg-blue-600 text-white'
                                 : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
@@ -610,7 +625,7 @@ export function JobSubmission() {
                         <div className="space-y-4">
                             {selectedTemplateId === 'mutagenesis' ? (
                                 <MutagenesisTemplate
-                                    onBack={() => setSelectedTemplateId(null)}
+                                    onBack={handleDedicatedTemplateBack}
                                     onSubmit={async (jobNamePrefix, variants, predictorConfig) => {
                                         // MUTAGENESIS BATCH: Single API call with all variants
                                         // Each variant regenerates its own MSA (no shared reference MSA)
@@ -660,39 +675,27 @@ export function JobSubmission() {
                                 />
                             ) : selectedTemplateId === 'antibody_denovo' ? (
                                 <AntibodyDenovoTemplate
-                                    onBack={() => {
-                                        setSelectedTemplateId(null);
-                                        setClonedValues(undefined);
-                                    }}
+                                    onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
                                 />
                             ) : selectedTemplateId === 'structure_prediction' ? (
                                 <StructurePredictionTemplate
-                                    onBack={() => setSelectedTemplateId(null)}
+                                    onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
                                 />
                             ) : selectedTemplateId === 'boltzgen_design' ? (
                                 <BoltzGenTemplate
-                                    onBack={() => {
-                                        setSelectedTemplateId(null);
-                                        setClonedValues(undefined);
-                                    }}
+                                    onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
                                 />
                             ) : selectedTemplateId === 'bindcraft' ? (
                                 <BindCraftTemplate
-                                    onBack={() => {
-                                        setSelectedTemplateId(null);
-                                        setClonedValues(undefined);
-                                    }}
+                                    onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
                                 />
                             ) : selectedTemplateId === 'oligo_design' ? (
                                 <OligoDesignerTemplate
-                                    onBack={() => {
-                                        setSelectedTemplateId(null);
-                                        setClonedValues(undefined);
-                                    }}
+                                    onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
                                 />
                             ) : (
@@ -788,7 +791,7 @@ export function JobSubmission() {
                                             return (
                                                 <div
                                                     key={template.id}
-                                                    onClick={() => setSelectedTemplateId(template.id)}
+                                                    onClick={() => handleTemplateCardSelect(template.id)}
                                                     className={`cursor-pointer p-4 border-2 transition-all rounded-lg
                                                         ${isSelected ? 'scale-[1.02] shadow-xl border-[var(--accent-primary)]' : 'hover:shadow-lg hover:scale-[1.01] border-[var(--border-primary)] hover:border-[var(--border-secondary)]'}
                                                         bg-[var(--card-bg)] text-[var(--text-primary)]`}
