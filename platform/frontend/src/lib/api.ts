@@ -22,6 +22,23 @@ export interface Job {
     // Batch grouping for job sets
     batch_id?: string | null;
     batch_name?: string | null;
+    // GPU and timing info
+    assigned_gpu?: number | null;
+    started_at?: string | null;
+    completed_at?: string | null;
+    vram_estimate_mb?: number | null;
+}
+
+// Log data for View Logs modal
+export interface JobLogs {
+    job_id: string;
+    job_name: string;
+    status: string;
+    command_log: string | null;
+    command_err: string | null;
+    nextflow_log: string | null;
+    exit_code: number | null;
+    parsed_error: string | null;
 }
 
 export interface GPUProcess {
@@ -138,6 +155,11 @@ export const uploadFile = async (path: string, file: File) => {
 // Start a job
 export const submitJob = (jobData: Partial<Job>) => {
     return api.post('/api/jobs', jobData);
+};
+
+// Get job logs with parsed errors
+export const fetchJobLogs = (jobId: string): Promise<{ data: JobLogs }> => {
+    return api.get<JobLogs>(`/api/jobs/${jobId}/logs`);
 };
 
 // Models API

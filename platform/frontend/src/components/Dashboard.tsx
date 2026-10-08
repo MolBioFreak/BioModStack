@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchJobs, fetchSystemStatus, cancelJob, resubmitJob, fetchPowerControl, setPowerControlManual, fetchSchedulerConfig, toggleGpuDisabled } from '../lib/api';
-import type { GPUStatus, CPUStatus, RAMStatus } from '../lib/api';
+import { fetchJobs, fetchSystemStatus, cancelJob, resubmitJob, fetchPowerControl, setPowerControlManual, fetchSchedulerConfig, toggleGpuDisabled, fetchJobLogs } from '../lib/api';
+import type { GPUStatus, CPUStatus, RAMStatus, JobLogs } from '../lib/api';
 import { JobDetailsPanel } from './JobDetailsPanel';
 import { QuickViewer } from './QuickViewer';
 import { JobQueuePanel } from './JobQueuePanel';
@@ -11,6 +11,9 @@ export function Dashboard() {
     const queryClient = useQueryClient();
     const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
     const [quickViewJobId, setQuickViewJobId] = useState<string | null>(null);
+    const [logsModalJobId, setLogsModalJobId] = useState<string | null>(null);
+    const [logsData, setLogsData] = useState<JobLogs | null>(null);
+    const [logsLoading, setLogsLoading] = useState(false);
 
     const { data: jobsData, isLoading: jobsLoading } = useQuery({
         queryKey: ['jobs'],
@@ -45,6 +48,20 @@ export function Dashboard() {
     const handleResubmit = (jobId: string, jobName: string) => {
         if (confirm(`Resubmit job "${jobName}"?`)) {
             resubmitMutation.mutate(jobId);
+        }
+    };
+
+    const handleViewLogs = async (jobId: string) => {
+        setLogsLoading(true);
+        setLogsModalJobId(jobId);
+        try {
+            const response = await fetchJobLogs(jobId);
+            setLogsData(response.data);
+        } catch (error) {
+            console.error('Failed to fetch logs:', error);
+            setLogsData(null);
+        } finally {
+            setLogsLoading(false);
         }
     };
 
@@ -166,6 +183,18 @@ export function Dashboard() {
                     )}
                 </div>
             </section>
+
+            {/* Logs Modal - Full screen popup */}
+            {logsModalJobId && (
+                <LogsModal
+                    logs={logsData}
+                    loading={logsLoading}
+                    onClose={() => {
+                        setLogsModalJobId(null);
+                        setLogsData(null);
+                    }}
+                />
+            )}
 
             {/* Quick Viewer - Compact structure preview */}
             <section className="mb-8">
@@ -393,16 +422,27 @@ export function Dashboard() {
                                                                     </button>
                                                                 )}
                                                                 {(job.status === 'failed' || job.status === 'cancelled') && (
-                                                                    <button
-                                                                        onClick={(e) => {
-                                                                            e.stopPropagation();
-                                                                            handleResubmit(job.id, job.name);
-                                                                        }}
-                                                                        disabled={resubmitMutation.isPending}
-                                                                        className="px-2 py-1 text-xs bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 hover:text-yellow-300 rounded transition-colors disabled:opacity-50"
-                                                                    >
-                                                                        {resubmitMutation.isPending ? '...' : '🔄 Retry'}
-                                                                    </button>
+                                                                    <>
+                                                                        <button
+                                                                            onClick={(e) => {
+                                                                                e.stopPropagation();
+                                                                                handleViewLogs(job.id);
+                                                                            }}
+                                                                            className="px-2 py-1 text-xs bg-slate-500/20 text-slate-400 hover:bg-slate-500/30 hover:text-slate-300 rounded transition-colors"
+                                                                        >
+                                                                            📋 Logs
+                                                                        </button>
+                                                                        <button
+                                                                            onClick={(e) => {
+                                                                                e.stopPropagation();
+                                                                                handleResubmit(job.id, job.name);
+                                                                            }}
+                                                                            disabled={resubmitMutation.isPending}
+                                                                            className="px-2 py-1 text-xs bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 hover:text-yellow-300 rounded transition-colors disabled:opacity-50"
+                                                                        >
+                                                                            {resubmitMutation.isPending ? '...' : '🔄 Retry'}
+                                                                        </button>
+                                                                    </>
                                                                 )}
                                                             </div>
                                                         </td>
@@ -725,6 +765,97 @@ function StatusBadge({ status, errorMessage }: { status: string; errorMessage?: 
                     <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-600" />
                 </div>
             )}
+        </div>
+    );
+}
+
+function LogsModal({
+    logs,
+    loading,
+    onClose
+}: {
+    logs: JobLogs | null;
+    loading: boolean;
+    onClose: () => void;
+}) {
+    const [activeTab, setActiveTab] = useState<'parsed' | 'command' | 'stderr'>('parsed');
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+            <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl w-full max-w-4xl max-h-[80vh] flex flex-col">
+                {/* Header */}
+                <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700">
+                    <div>
+                        <h2 className="text-xl font-semibold text-slate-100">Job Logs</h2>
+                        {logs && (
+                            <p className="text-sm text-slate-400 mt-1">
+                                {logs.job_name} • Exit code: {logs.exit_code ?? 'N/A'}
+                            </p>
+                        )}
+                    </div>
+                    <button
+                        onClick={onClose}
+                        className="text-slate-400 hover:text-slate-200 text-2xl font-light transition-colors"
+                    >
+                        ✕
+                    </button>
+                </div>
+
+                {/* Tabs */}
+                <div className="flex border-b border-slate-700 px-4">
+                    {[
+                        { id: 'parsed' as const, label: '🎯 Parsed Error' },
+                        { id: 'command' as const, label: '📜 Command Log' },
+                        { id: 'stderr' as const, label: '⚠️ Stderr' },
+                    ].map(tab => (
+                        <button
+                            key={tab.id}
+                            onClick={() => setActiveTab(tab.id)}
+                            className={`px-4 py-3 text-sm font-medium transition-colors ${activeTab === tab.id
+                                    ? 'text-blue-400 border-b-2 border-blue-400 -mb-px'
+                                    : 'text-slate-400 hover:text-slate-200'
+                                }`}
+                        >
+                            {tab.label}
+                        </button>
+                    ))}
+                </div>
+
+                {/* Content */}
+                <div className="flex-1 overflow-auto p-4 min-h-[300px]">
+                    {loading ? (
+                        <div className="flex items-center justify-center h-full text-slate-400">
+                            <span className="animate-spin mr-2">⟳</span> Loading logs...
+                        </div>
+                    ) : !logs ? (
+                        <div className="flex items-center justify-center h-full text-slate-400">
+                            Failed to load logs
+                        </div>
+                    ) : (
+                        <pre className="text-sm text-slate-300 font-mono whitespace-pre-wrap break-words">
+                            {activeTab === 'parsed' && (
+                                logs.parsed_error || <span className="text-slate-500 italic">No specific error extracted</span>
+                            )}
+                            {activeTab === 'command' && (
+                                logs.command_log || <span className="text-slate-500 italic">No command log available</span>
+                            )}
+                            {activeTab === 'stderr' && (
+                                logs.command_err || <span className="text-slate-500 italic">No stderr output</span>
+                            )}
+                        </pre>
+                    )}
+                </div>
+
+                {/* Footer */}
+                <div className="flex justify-end px-6 py-4 border-t border-slate-700">
+                    <button
+                        onClick={onClose}
+                        className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg transition-colors"
+                    >
+                        Close
+                    </button>
+                </div>
+            </div>
         </div>
     );
 }
