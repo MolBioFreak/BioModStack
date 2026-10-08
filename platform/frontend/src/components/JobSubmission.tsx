@@ -863,6 +863,7 @@ export function JobSubmission() {
                     setSelectedTemplateId('protein_modification_experimental');
                     setClonedValues({
                         ...data.params,
+                        pinned_gpu: data.pinned_gpu,
                         name: data.name,
                         modification_mode: 'rfd3_local_redesign',
                         template_model_id: 'protein_local_redesign',
@@ -1741,6 +1742,7 @@ export function JobSubmission() {
                                 <ProteinModificationTemplate
                                     onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
+                                    requiredPinnedGpu={launchContextQuery.data?.pinned_gpu ?? null}
                                 />
 
                             ) : selectedTemplateId === 'molecular_dynamics' ? (

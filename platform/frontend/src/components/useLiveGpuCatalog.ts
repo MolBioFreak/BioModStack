@@ -5,7 +5,7 @@ import { fetchSystemStatus } from '../lib/api';
 import { buildGpuCatalog, listGpuCatalogEntries } from './gpuCatalog';
 
 export function useLiveGpuCatalog() {
-    const { data: systemData } = useQuery({
+    const systemQuery = useQuery({
         queryKey: ['system'],
         queryFn: fetchSystemStatus,
         refetchInterval: 5000,
@@ -14,10 +14,15 @@ export function useLiveGpuCatalog() {
     });
 
     const gpuCatalog = useMemo(
-        () => buildGpuCatalog(systemData?.data.gpus ?? []),
-        [systemData?.data.gpus],
+        () => buildGpuCatalog(systemQuery.data?.data.gpus ?? []),
+        [systemQuery.data?.data.gpus],
     );
     const gpuOptions = useMemo(() => listGpuCatalogEntries(gpuCatalog), [gpuCatalog]);
 
-    return { gpuCatalog, gpuOptions };
+    return {
+        gpuCatalog,
+        gpuOptions,
+        isLoading: systemQuery.isLoading,
+        isError: systemQuery.isError,
+    };
 }

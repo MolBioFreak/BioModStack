@@ -254,6 +254,38 @@ async def _validate_hierarchy(
             )
 
 
+async def workflow_pinned_gpu(
+    session: AsyncSession,
+    context: ExperimentLaunchContext,
+) -> int | None:
+    """Resolve an immutable native RFD3 GPU pin from the bound Workflow Revision."""
+    if context.workflow_revision_id is None:
+        return None
+    revision = await session.get(ExperimentRevision, context.workflow_revision_id)
+    if revision is None or revision.subject_id != context.workflow_id:
+        raise LaunchContextError(
+            "launch_context_revision_mismatch",
+            "Workflow Revision does not belong to the Workflow.",
+            status_code=409,
+        )
+    decoded_payload = json.loads(revision.canonical_payload)
+    payload = decoded_payload if isinstance(decoded_payload, dict) else {}
+    raw_scheduler = payload.get("scheduler")
+    scheduler: dict[str, Any] = raw_scheduler if isinstance(raw_scheduler, dict) else {}
+    if scheduler.get("model_id") != "protein_local_redesign":
+        return None
+    raw_resources = scheduler.get("resources")
+    resources: dict[str, Any] = raw_resources if isinstance(raw_resources, dict) else {}
+    pinned_gpu = resources.get("pinned_gpu")
+    if isinstance(pinned_gpu, bool) or not isinstance(pinned_gpu, int) or pinned_gpu < 0:
+        raise LaunchContextError(
+            "launch_context_workflow_invalid",
+            "Native RFD3 Workflow Revision has no authoritative pinned GPU.",
+            status_code=409,
+        )
+    return pinned_gpu
+
+
 def context_document(context: ExperimentLaunchContext) -> dict[str, Any]:
     """Return the closed public launch-context-v1 document."""
     return {
@@ -469,6 +501,9 @@ async def validate_bound_job(
         expected_job_params = dict(expected_params)
         if expected_adapter is not None:
             expected_job_params["workflow_adapter"] = expected_adapter
+        raw_resources = scheduler.get("resources")
+        resources: dict[str, Any] = raw_resources if isinstance(raw_resources, dict) else {}
+        expected_pinned_gpu = resources.get("pinned_gpu")
         params_match = json.dumps(job_params, sort_keys=True, separators=(",", ":")) == json.dumps(
             expected_job_params, sort_keys=True, separators=(",", ":")
         )
@@ -477,6 +512,10 @@ async def validate_bound_job(
             or scheduler.get("mode") != job.mode
             or expected_adapter != job_adapter
             or not params_match
+            or (
+                job.model_id == "protein_local_redesign"
+                and expected_pinned_gpu != job.pinned_gpu
+            )
         ):
             raise LaunchContextError("launch_context_workflow_mismatch", "Job does not match the bound Workflow Revision.", status_code=409)
 
@@ -618,4 +657,5 @@ __all__ = [
     "resolve_launch_context",
     "resolve_launch_context_for_display",
     "validate_bound_job",
+    "workflow_pinned_gpu",
 ]
