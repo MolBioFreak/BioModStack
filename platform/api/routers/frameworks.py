@@ -30,11 +30,7 @@ from services.sabdab_client import (
     set_cache_timestamps,
     _touch_cache_file,
 )
-from services.workflow_adapter import (
-    WorkflowAdapterRequestError,
-    request_via_workflow_adapter,
-    workflow_adapter_enabled,
-)
+from services import workflow_adapter as workflow_adapter_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/frameworks", tags=["frameworks"])
@@ -118,13 +114,13 @@ def _preferred_framework_chains(entry: object | None) -> dict[str, str]:
 
 
 def _framework_proxy_enabled() -> bool:
-    return workflow_adapter_enabled()
+    return workflow_adapter_service.workflow_adapter_enabled()
 
 
 def _framework_proxy_request(method: str, path: str, payload: dict | None = None):
     try:
-        return request_via_workflow_adapter(method, path, payload)
-    except WorkflowAdapterRequestError as exc:
+        return workflow_adapter_service.request_via_workflow_adapter(method, path, payload)
+    except workflow_adapter_service.WorkflowAdapterRequestError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
