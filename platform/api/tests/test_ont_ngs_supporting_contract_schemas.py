@@ -52,6 +52,7 @@ def test_spec_package_binds_every_current_normative_byte() -> None:
         ("ont_fastq_qc_browser_evidence_manifest_v1.schema.json", "https://biomodstack.local/schemas/ngs/ont_fastq_qc_browser_evidence_manifest_v1.schema.json"),
         ("ont_fastq_qc_independent_review_receipt_v1.schema.json", "https://biomodstack.local/schemas/ngs/ont_fastq_qc_independent_review_receipt_v1.schema.json"),
         ("ont_fastq_qc_deployment_receipt_v1.schema.json", "https://biomodstack.local/schemas/ngs/ont_fastq_qc_deployment_receipt_v1.schema.json"),
+        ("ont_ngs_error_v2.schema.json", "https://biomodstack.local/schemas/ngs/ont_ngs_error_v2.schema.json"),
     ],
 )
 def test_supporting_contract_schema_is_present_closed_and_valid(name: str, schema_id: str) -> None:
@@ -65,13 +66,67 @@ def _schema(name: str) -> dict:
     return json.loads((SCHEMA_ROOT / name).read_text(encoding="utf-8"))
 
 
-def test_runtime_error_model_matches_the_normative_closed_enums() -> None:
-    from routers.ngs_alignment_sessions import OntNgsErrorV1
+@pytest.mark.parametrize("version", [1, 2])
+def test_runtime_error_model_matches_the_normative_closed_enums(version) -> None:
+    from routers import ngs_alignment_sessions as routes
 
-    normative = _schema("ont_ngs_error_v1.schema.json")
-    runtime = OntNgsErrorV1.model_json_schema(by_alias=True)
-    assert runtime["properties"]["code"]["enum"] == normative["properties"]["code"]["enum"]
-    assert runtime["properties"]["resource"]["enum"] == normative["properties"]["resource"]["enum"]
+    normative = _schema(f"ont_ngs_error_v{version}.schema.json")
+    runtime = getattr(routes, f"OntNgsErrorV{version}").model_json_schema(by_alias=True)
+    for field in ("code", "resource"):
+        assert runtime["properties"][field]["enum"] == normative["properties"][field]["enum"]
+    assert runtime["properties"]["schema"]["const"] == normative["properties"]["schema"]["const"]
+    assert runtime["additionalProperties"] is normative["additionalProperties"] is False
+    assert set(runtime["required"]) == set(normative["required"])
+    assert set(runtime["properties"]) == set(normative["properties"])
+    if version == 2:
+        assert runtime["allOf"] == normative["allOf"]
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_every_error_code_obeys_version_and_retryability(version) -> None:
+    from pydantic import ValidationError
+    from routers import ngs_alignment_sessions as routes
+
+    schema = _schema(f"ont_ngs_error_v{version}.schema.json")
+    validator = Draft202012Validator(schema, format_checker=FormatChecker())
+    model = getattr(routes, f"OntNgsErrorV{version}")
+    for code in schema["properties"]["code"]["enum"]:
+        value = {"schema": f"bms.ngs.error.v{version}", "code": code, "message": "Denied.",
+                 "job_id": "31f02bd5-830f-4558-aa78-3873c515de68", "resource": "read",
+                 "retryable": code in {"NGS_CAPABILITY_DENIED", "NGS_CAPABILITY_ROTATION_CONFLICT"}}
+        validator.validate(value)
+        model.model_validate(value)
+        if version == 2:
+            response = routes._ngs_error_response(status_code=409, code=code, message=value["message"],
+                job_id=value["job_id"], resource=value["resource"])
+            assert json.loads(bytes(response.body)) == value
+        for change in ({"retryable": not value["retryable"]}, {"schema": "bms.ngs.error.v3"},
+                       {"code": "UNKNOWN"}, {"path": "/private/result"}, {"resource": "unknown"}):
+            invalid = {**value, **change}
+            assert list(validator.iter_errors(invalid))
+            with pytest.raises(ValidationError):
+                model.model_validate(invalid)
+
+
+def test_current_error_emission_and_overlay_match_v2_without_changing_v1() -> None:
+    from routers import ngs_alignment_sessions as routes
+    from services.ngs_read_overlays import OverlayError
+
+    validator = Draft202012Validator(_schema("ont_ngs_error_v2.schema.json"), format_checker=FormatChecker())
+    old = Draft202012Validator(_schema("ont_ngs_error_v1.schema.json"))
+    job = "31f02bd5-830f-4558-aa78-3873c515de68"
+    response = routes._ngs_error_response(status_code=409, code="NGS_PRESENTATION_SOURCE_STALE",
+        message="Source changed.", job_id=job, resource="presentation")
+    value = json.loads(bytes(response.body))
+    validator.validate(value)
+    routes.OntNgsErrorV2.model_validate(value)
+    assert list(old.iter_errors(value))
+    assert list(old.iter_errors({**value, "schema": "bms.ngs.error.v1"}))
+    overlay = routes._overlay_error(OverlayError("NGS_READ_NOT_OVERLAY_ELIGIBLE", "Not eligible.", reason="unmapped"), job)
+    value = json.loads(bytes(overlay.body))
+    validator.validate(value)
+    routes.OntReadOverlayErrorV2.model_validate(value)
+    assert list(validator.iter_errors({**value, "reason": "unknown"}))
 
 
 def test_governed_error_contract_rejects_unknown_codes_and_extra_fields() -> None:

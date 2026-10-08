@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 
 import { api } from '../src/lib/api.js';
 import {
@@ -76,8 +77,8 @@ function ngsError(code: string, jobId = 'job-recovery-race', status = 403) {
         response: {
             status,
             data: {
-                schema: 'bms.ngs.error.v1', code, message: 'Denied.', job_id: jobId,
-                resource: 'rotation', retryable: true,
+                schema: 'bms.ngs.error.v2', code, message: 'Denied.', job_id: jobId,
+                resource: 'rotation', retryable: ['NGS_CAPABILITY_DENIED', 'NGS_CAPABILITY_ROTATION_CONFLICT'].includes(code),
             },
         },
     };
@@ -116,8 +117,8 @@ test('governed NGS failures retain a specific operator-visible category', () => 
         'Integrity error (NGS_ARTIFACT_INTEGRITY_CONFLICT): Denied.',
     );
     assert.equal(
-        describeNgsError(ngsError('NGS_ROTATION_CONFLICT', 'job-recovery-race', 409), 'fallback'),
-        'Access rotation error (NGS_ROTATION_CONFLICT): Denied.',
+        describeNgsError(ngsError('NGS_ROTATION_INELIGIBLE', 'job-recovery-race', 409), 'fallback'),
+        'Access rotation error (NGS_ROTATION_INELIGIBLE): Denied.',
     );
     assert.equal(
         describeNgsError(new Error('Result parser error: result.artifacts is invalid'), 'fallback'),
@@ -127,6 +128,48 @@ test('governed NGS failures retain a specific operator-visible category', () => 
         describeNgsError({ response: { status: 502, data: { detail: 'bad gateway' } } }, 'Unable to load result'),
         'Network error (HTTP 502): Unable to load result',
     );
+});
+
+test('every normative historical and current error code is recognized only at its declared version', () => {
+    for (const version of [1, 2]) {
+        const contract = JSON.parse(readFileSync(new URL(`../../../schemas/ngs/ont_ngs_error_v${version}.schema.json`, import.meta.url), 'utf8'));
+        for (const code of contract.properties.code.enum as string[]) {
+            const data = { ...ngsError(code).response.data, schema: `bms.ngs.error.v${version}` };
+            assert.match(describeNgsError({ response: { data } }, 'fallback'), new RegExp(code));
+            if (version === 2) {
+                const historical = JSON.parse(readFileSync(new URL('../../../schemas/ngs/ont_ngs_error_v1.schema.json', import.meta.url), 'utf8'));
+                if (!historical.properties.code.enum.includes(code)) {
+                    assert.equal(describeNgsError({ response: { data: { ...data, schema: 'bms.ngs.error.v1' } } }, 'fallback'), 'fallback');
+                }
+            }
+            assert.equal(describeNgsError({ response: { data: { ...data, retryable: !data.retryable } } }, 'fallback'), 'fallback');
+        }
+    }
+});
+
+test('error versions have closed code, field, resource and retryability contracts', () => {
+    for (const schema of ['bms.ngs.error.v1', 'bms.ngs.error.v2']) {
+        const error = ngsError('NGS_CAPABILITY_DENIED');
+        error.response.data.schema = schema;
+        assert.equal(isAlignmentAccessDenied(error), true);
+        for (const change of [
+            { schema: 'bms.ngs.error.v3' }, { schema: 'arbitrary' }, { code: 'NGS_UNKNOWN' },
+            { retryable: false }, { resource: 'unknown' }, { secret: 'private' }, { message: '' },
+        ]) {
+            const invalid = { response: { status: 403, data: { ...error.response.data, ...change } } };
+            assert.equal(isAlignmentAccessDenied(invalid), false);
+            assert.equal(describeNgsError(invalid, 'fallback'), 'Network error (HTTP 403): fallback');
+        }
+    }
+    const data = { ...ngsError('NGS_READ_NOT_OVERLAY_ELIGIBLE').response.data,
+        resource: 'read', reason: 'unmapped' };
+    assert.match(describeNgsError({ response: { data } }, 'fallback'), /NGS_READ_NOT_OVERLAY_ELIGIBLE/);
+    for (const change of [{ schema: 'bms.ngs.error.v1' }, { reason: 'unknown' }]) {
+        assert.equal(describeNgsError({ response: { data: { ...data, ...change } } }, 'fallback'), 'fallback');
+    }
+    const presentation = { ...ngsError('NGS_PRESENTATION_SOURCE_STALE').response.data, resource: 'presentation' };
+    assert.match(describeNgsError({ response: { data: presentation } }, 'fallback'), /NGS_PRESENTATION_SOURCE_STALE/);
+    assert.equal(describeNgsError({ response: { data: { ...presentation, schema: 'bms.ngs.error.v1' } } }, 'fallback'), 'fallback');
 });
 
 test('rotation response is a closed exact authority contract', () => {

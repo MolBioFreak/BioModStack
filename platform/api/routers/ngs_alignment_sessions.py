@@ -71,6 +71,8 @@ router = APIRouter()
 
 
 class OntNgsErrorV1(BaseModel):
+    """Historical recovery-package contract; never expand its closed enums."""
+
     model_config = ConfigDict(
         extra="forbid",
         json_schema_extra={
@@ -82,6 +84,50 @@ class OntNgsErrorV1(BaseModel):
         },
     )
     schema_version: Literal["bms.ngs.error.v1"] = Field(alias="schema")
+    code: Literal[
+        "NGS_CAPABILITY_DENIED",
+        "NGS_HIERARCHY_DENIED",
+        "NGS_PRINCIPAL_DENIED",
+        "NGS_ROTATION_ORIGIN_DENIED",
+        "NGS_RESOURCE_NOT_FOUND",
+        "NGS_AUTHORITY_CONFLICT",
+        "NGS_PACKAGE_INTEGRITY_CONFLICT",
+        "NGS_CAPABILITY_ROTATION_CONFLICT",
+        "NGS_ROTATION_INELIGIBLE",
+        "NGS_ARTIFACT_INTEGRITY_CONFLICT",
+        "NGS_READ_SCAN_TRUNCATED",
+        "NGS_RANGE_INVALID",
+        "NGS_RANGE_UNSATISFIABLE",
+    ]
+    message: str = Field(min_length=1, max_length=512)
+    job_id: str = Field(json_schema_extra={"format": "uuid"})
+    resource: Literal[
+        "result", "manifest", "session", "artifact", "range", "rotation", "read"
+    ]
+    retryable: bool
+
+    @model_validator(mode="after")
+    def _retryable_matches_code(self):
+        expected = self.code in {"NGS_CAPABILITY_DENIED", "NGS_CAPABILITY_ROTATION_CONFLICT"}
+        if self.retryable is not expected:
+            raise ValueError("retryable disagrees with governed NGS error code")
+        return self
+
+
+class OntNgsErrorV2(BaseModel):
+    """Current governed failures, including presentation and indexed-read errors."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "allOf": [{
+                "if": {"properties": {"code": {"enum": ["NGS_CAPABILITY_DENIED", "NGS_CAPABILITY_ROTATION_CONFLICT"]}}, "required": ["code"]},
+                "then": {"properties": {"retryable": {"const": True}}, "required": ["retryable"]},
+                "else": {"properties": {"retryable": {"const": False}}, "required": ["retryable"]},
+            }],
+        },
+    )
+    schema_version: Literal["bms.ngs.error.v2"] = Field(alias="schema")
     code: Literal[
         "NGS_CAPABILITY_DENIED", "NGS_HIERARCHY_DENIED", "NGS_PRINCIPAL_DENIED",
         "NGS_ROTATION_ORIGIN_DENIED", "NGS_RESOURCE_NOT_FOUND", "NGS_AUTHORITY_CONFLICT",
@@ -101,6 +147,7 @@ class OntNgsErrorV1(BaseModel):
         "result", "manifest", "session", "artifact", "range", "rotation", "read", "presentation"
     ]
     retryable: bool
+    reason: Literal["already_in_preview", "unmapped", "ambiguous_primary", "no_primary", "record_limit", "writer_unsupported", "byte_limit"] | None = None
 
     @model_validator(mode="after")
     def _retryable_matches_code(self):
@@ -638,7 +685,7 @@ class OntSortableReadPageV1(BaseModel):
 
 def _typed_errors(*statuses: int) -> dict[int | str, dict[str, Any]]:
     return {
-        status: {"model": OntNgsErrorV1, "description": "Typed governed NGS failure"}
+        status: {"model": OntNgsErrorV2, "description": "Typed governed NGS failure"}
         for status in statuses
     }
 
@@ -655,7 +702,7 @@ _BINARY_RESPONSES: dict[int | str, dict[str, Any]] = {
     304: {"description": "Not modified"},
     **_typed_errors(400, 403, 404, 409),
     416: {
-        "model": OntNgsErrorV1,
+        "model": OntNgsErrorV2,
         "description": "Typed governed NGS range failure",
         "headers": {"Content-Range": {"schema": {"type": "string"}}},
     },
@@ -740,7 +787,7 @@ def _ngs_error_response(
     return JSONResponse(
         status_code=status_code,
         content={
-            "schema": "bms.ngs.error.v1",
+            "schema": "bms.ngs.error.v2",
             "code": code,
             "message": message,
             "job_id": job_id,
@@ -3012,8 +3059,8 @@ class OntOverlayIdentityV2(BaseModel):
     policy: OntOverlayPolicyV2
 
 
-class OntReadOverlayErrorV2(OntNgsErrorV1):
-    reason: Literal["already_in_preview", "unmapped", "ambiguous_primary", "no_primary", "record_limit", "writer_unsupported", "byte_limit"] | None = None
+class OntReadOverlayErrorV2(OntNgsErrorV2):
+    pass
 
 
 class OntReadOverlayV2(BaseModel):
@@ -3036,7 +3083,7 @@ class OntReadOverlayV2(BaseModel):
 def _overlay_error(exc, job_id):
     from services.ngs_read_overlays import OverlayError
     if isinstance(exc, OverlayError):
-        payload = {"schema": "bms.ngs.error.v1", "code": exc.code, "message": str(exc),
+        payload = {"schema": "bms.ngs.error.v2", "code": exc.code, "message": str(exc),
             "job_id": job_id, "resource": "read", "retryable": False}
         if exc.reason is not None:
             payload["reason"] = exc.reason

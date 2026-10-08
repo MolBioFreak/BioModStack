@@ -186,6 +186,104 @@ export interface AlignmentAccessRotationResponse {
     expires_at: string;
 }
 
+const ngsErrorV1Codes = new Set<string>([
+    "NGS_CAPABILITY_DENIED",
+    "NGS_HIERARCHY_DENIED",
+    "NGS_PRINCIPAL_DENIED",
+    "NGS_ROTATION_ORIGIN_DENIED",
+    "NGS_RESOURCE_NOT_FOUND",
+    "NGS_AUTHORITY_CONFLICT",
+    "NGS_PACKAGE_INTEGRITY_CONFLICT",
+    "NGS_CAPABILITY_ROTATION_CONFLICT",
+    "NGS_ROTATION_INELIGIBLE",
+    "NGS_ARTIFACT_INTEGRITY_CONFLICT",
+    "NGS_READ_SCAN_TRUNCATED",
+    "NGS_RANGE_INVALID",
+    "NGS_RANGE_UNSATISFIABLE"
+]);
+
+const ngsErrorV2Codes = new Set<string>([
+    "NGS_CAPABILITY_DENIED",
+    "NGS_HIERARCHY_DENIED",
+    "NGS_PRINCIPAL_DENIED",
+    "NGS_ROTATION_ORIGIN_DENIED",
+    "NGS_RESOURCE_NOT_FOUND",
+    "NGS_AUTHORITY_CONFLICT",
+    "NGS_PACKAGE_INTEGRITY_CONFLICT",
+    "NGS_CAPABILITY_ROTATION_CONFLICT",
+    "NGS_PRESENTATION_ALREADY_READY",
+    "NGS_PRESENTATION_SOURCE_STALE",
+    "NGS_LEGACY_MUTATION_RETIRED",
+    "NGS_ROTATION_INELIGIBLE",
+    "NGS_ARTIFACT_INTEGRITY_CONFLICT",
+    "NGS_READ_SCAN_TRUNCATED",
+    "NGS_RANGE_INVALID",
+    "NGS_RANGE_UNSATISFIABLE",
+    "NGS_READ_POPULATION_INVALID",
+    "NGS_READ_POPULATION_STALE",
+    "NGS_READ_CURSOR_INVALID",
+    "NGS_READ_CURSOR_STALE",
+    "NGS_RECORD_CURSOR_INVALID",
+    "NGS_RECORD_CURSOR_STALE",
+    "NGS_CATALOG_NOT_READY",
+    "NGS_READ_ID_INVALID",
+    "NGS_READ_QUERY_INVALID",
+    "NGS_READ_CAPACITY_UNAVAILABLE",
+    "NGS_READ_ALREADY_IN_PREVIEW",
+    "NGS_READ_NOT_OVERLAY_ELIGIBLE",
+    "NGS_READ_OVERLAY_TIMEOUT"
+]);
+
+const ngsErrorV1Resources = new Set<string>([
+    "result",
+    "manifest",
+    "session",
+    "artifact",
+    "range",
+    "rotation",
+    "read"
+]);
+
+const ngsErrorV2Resources = new Set<string>([
+    "result",
+    "manifest",
+    "session",
+    "artifact",
+    "range",
+    "rotation",
+    "read",
+    "presentation"
+]);
+
+const ngsOverlayReasons = new Set<string>([
+    "already_in_preview",
+    "unmapped",
+    "ambiguous_primary",
+    "no_primary",
+    "record_limit",
+    "writer_unsupported",
+    "byte_limit"
+]);
+
+function isGovernedNgsError(record: Record<string, unknown>): boolean {
+    const v2 = record.schema === 'bms.ngs.error.v2';
+    if (!v2 && record.schema !== 'bms.ngs.error.v1') return false;
+    const required = ['code', 'job_id', 'message', 'resource', 'retryable', 'schema'];
+    if (!required.every((key) => Object.hasOwn(record, key))
+        || Object.keys(record).some((key) => !required.includes(key) && !(v2 && key === 'reason'))) return false;
+    return typeof record.code === 'string'
+        && (v2 ? ngsErrorV2Codes : ngsErrorV1Codes).has(record.code)
+        && typeof record.job_id === 'string'
+        && record.job_id.length > 0
+        && typeof record.message === 'string'
+        && record.message.length > 0 && record.message.length <= 512
+        && typeof record.resource === 'string'
+        && (v2 ? ngsErrorV2Resources : ngsErrorV1Resources).has(record.resource)
+        && record.retryable === ['NGS_CAPABILITY_DENIED', 'NGS_CAPABILITY_ROTATION_CONFLICT'].includes(record.code)
+        && (!Object.hasOwn(record, 'reason') || record.reason === null
+            || (typeof record.reason === 'string' && ngsOverlayReasons.has(record.reason)));
+}
+
 function isExactNgsError(
     reason: unknown,
     status: number,
@@ -198,18 +296,9 @@ function isExactNgsError(
     const data = response?.data;
     if (response?.status !== status || !data || typeof data !== 'object' || Array.isArray(data)) return false;
     const record = data as Record<string, unknown>;
-    const keys = Object.keys(record).sort();
-    const expectedKeys = ['code', 'job_id', 'message', 'resource', 'retryable', 'schema'];
-    return keys.length === expectedKeys.length
-        && keys.every((key, index) => key === expectedKeys[index])
-        && record.schema === 'bms.ngs.error.v1'
+    return isGovernedNgsError(record)
         && record.code === code
         && (expectedJobId === undefined || record.job_id === expectedJobId)
-        && typeof record.job_id === 'string'
-        && typeof record.message === 'string'
-        && record.message.length > 0
-        && record.message.length <= 512
-        && typeof record.resource === 'string'
         && (expectedResource === undefined || record.resource === expectedResource)
         && record.retryable === expectedRetryable;
 }
@@ -223,17 +312,7 @@ export function describeNgsError(reason: unknown, fallback: string): string {
     const data = response?.data;
     if (data && typeof data === 'object' && !Array.isArray(data)) {
         const record = data as Record<string, unknown>;
-        const keys = Object.keys(record).sort();
-        const expectedKeys = ['code', 'job_id', 'message', 'resource', 'retryable', 'schema'];
-        if (
-            keys.length === expectedKeys.length
-            && keys.every((key, index) => key === expectedKeys[index])
-            && record.schema === 'bms.ngs.error.v1'
-            && typeof record.code === 'string'
-            && typeof record.message === 'string'
-            && record.message.length > 0
-            && record.message.length <= 512
-        ) {
+        if (isGovernedNgsError(record) && typeof record.code === 'string') {
             const category = record.code.includes('INTEGRITY')
                 ? 'Integrity error'
                 : record.code.includes('CAPABILITY') || record.code.includes('AUTH') || record.code.includes('HIERARCHY')

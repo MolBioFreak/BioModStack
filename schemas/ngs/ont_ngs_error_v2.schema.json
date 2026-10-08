@@ -1,0 +1,134 @@
+{
+  "$id": "https://biomodstack.local/schemas/ngs/ont_ngs_error_v2.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "code": {
+            "enum": [
+              "NGS_CAPABILITY_DENIED",
+              "NGS_CAPABILITY_ROTATION_CONFLICT"
+            ]
+          }
+        },
+        "required": [
+          "code"
+        ]
+      },
+      "then": {
+        "properties": {
+          "retryable": {
+            "const": true
+          }
+        },
+        "required": [
+          "retryable"
+        ]
+      },
+      "else": {
+        "properties": {
+          "retryable": {
+            "const": false
+          }
+        },
+        "required": [
+          "retryable"
+        ]
+      }
+    }
+  ],
+  "properties": {
+    "code": {
+      "enum": [
+        "NGS_CAPABILITY_DENIED",
+        "NGS_HIERARCHY_DENIED",
+        "NGS_PRINCIPAL_DENIED",
+        "NGS_ROTATION_ORIGIN_DENIED",
+        "NGS_RESOURCE_NOT_FOUND",
+        "NGS_AUTHORITY_CONFLICT",
+        "NGS_PACKAGE_INTEGRITY_CONFLICT",
+        "NGS_CAPABILITY_ROTATION_CONFLICT",
+        "NGS_PRESENTATION_ALREADY_READY",
+        "NGS_PRESENTATION_SOURCE_STALE",
+        "NGS_LEGACY_MUTATION_RETIRED",
+        "NGS_ROTATION_INELIGIBLE",
+        "NGS_ARTIFACT_INTEGRITY_CONFLICT",
+        "NGS_READ_SCAN_TRUNCATED",
+        "NGS_RANGE_INVALID",
+        "NGS_RANGE_UNSATISFIABLE",
+        "NGS_READ_POPULATION_INVALID",
+        "NGS_READ_POPULATION_STALE",
+        "NGS_READ_CURSOR_INVALID",
+        "NGS_READ_CURSOR_STALE",
+        "NGS_RECORD_CURSOR_INVALID",
+        "NGS_RECORD_CURSOR_STALE",
+        "NGS_CATALOG_NOT_READY",
+        "NGS_READ_ID_INVALID",
+        "NGS_READ_QUERY_INVALID",
+        "NGS_READ_CAPACITY_UNAVAILABLE",
+        "NGS_READ_ALREADY_IN_PREVIEW",
+        "NGS_READ_NOT_OVERLAY_ELIGIBLE",
+        "NGS_READ_OVERLAY_TIMEOUT"
+      ]
+    },
+    "job_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "message": {
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
+    },
+    "resource": {
+      "enum": [
+        "result",
+        "manifest",
+        "session",
+        "artifact",
+        "range",
+        "rotation",
+        "read",
+        "presentation"
+      ]
+    },
+    "retryable": {
+      "type": "boolean"
+    },
+    "schema": {
+      "const": "bms.ngs.error.v2"
+    },
+    "reason": {
+      "anyOf": [
+        {
+          "enum": [
+            "already_in_preview",
+            "unmapped",
+            "ambiguous_primary",
+            "no_primary",
+            "record_limit",
+            "writer_unsupported",
+            "byte_limit"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "schema",
+    "code",
+    "message",
+    "job_id",
+    "resource",
+    "retryable"
+  ],
+  "title": "BioModStack governed NGS error v2",
+  "type": "object"
+}
