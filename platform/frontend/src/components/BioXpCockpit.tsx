@@ -28,6 +28,10 @@ import {
     useLedOff,
     useLedPct,
     useLedRgb,
+    useMotionHardReset,
+    useMotionPowerDiag,
+    useMotionPowerEnable,
+    useMotionPowerStatus,
     useMoveAbsolute,
     useMoveRelative,
     usePrepareInterlock,
@@ -40,7 +44,7 @@ import {
     useThermalHardReset,
     useThermalSnapshot
 } from '../lib/bioxpClient';
-import type { AxisName, CameraControlRow, ChillerBankName, ThermalBankName } from '../lib/bioxpClient';
+import type { AxisName, CameraControlRow, ChillerBankName, MotionPowerStatus, ThermalBankName } from '../lib/bioxpClient';
 
 const getErrorMessage = (error: unknown) => {
     if (error instanceof Error) {
@@ -184,6 +188,33 @@ const cameraControlSortWeight = (control: CameraControlRow) => {
     const normalizedName = normalizeCameraControlName(control.name);
     const idx = CAMERA_CONTROL_PRIORITY.indexOf(normalizedName as (typeof CAMERA_CONTROL_PRIORITY)[number]);
     return idx === -1 ? CAMERA_CONTROL_PRIORITY.length + 100 : idx;
+};
+
+const get24vStateLabel = (rail: MotionPowerStatus['rail_24v']) => {
+    if (!rail) {
+        return 'UNKNOWN';
+    }
+    if (rail.no24v == null) {
+        return 'UNKNOWN';
+    }
+    return rail.no24v ? 'NO_24V' : 'OK';
+};
+
+const getBoardAckSummary = (boardStatus: MotionPowerStatus['board_status']) => {
+    if (!boardStatus || typeof boardStatus !== 'object') {
+        return 'n/a';
+    }
+    const keys = Object.keys(boardStatus).sort();
+    if (!keys.length) {
+        return 'n/a';
+    }
+    return keys
+        .map((key) => {
+            const ack = boardStatus[key];
+            const statusText = ack?.status_str ?? (ack ? 'RESP' : 'NR');
+            return `0x${Number(key).toString(16).toUpperCase()}:${statusText}`;
+        })
+        .join('  ');
 };
 
 const AxisControls = ({
