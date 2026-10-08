@@ -19,6 +19,7 @@ import uuid
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pysam
+from services import verified_native_reads as native
 
 from services import ngs_alignment_sessions as storage
 from services import ngs_alignment_presentation_v5 as records
@@ -118,18 +119,26 @@ def _namespace(root, request, *, create):
 @contextmanager
 def _sources(inputs, source, checkpoint):
     with ExitStack() as stack:
-        handles = []
+        handles = {}
         for key, sha, size in (("alignment_path", "alignment_sha256", "alignment_size_bytes"),
                                ("index_path", "alignment_index_sha256", "alignment_index_size_bytes")):
-            handle = stack.enter_context(storage._open_regular_file_no_symlinks(inputs[key]))
-            if _hash_handle(handle, checkpoint) != (source[sha], source[size]):
-                raise Failure("source_invalid", message="accepted alignment bytes changed")
-            handles.append((handle, sha, size))
-            inputs = {**inputs, key: Path(storage._descriptor_path(handle.fileno()))}
-        yield inputs
-        for handle, sha, size in handles:
-            if _hash_handle(handle, checkpoint) != (source[sha], source[size]):
-                raise Failure("source_invalid", message="source changed during construction")
+            checkpoint()
+            if isinstance(inputs[key], storage._SnapshotLease):
+                handle = stack.enter_context(inputs[key].fork())
+                if handle._digest != source[sha] or handle._receipt.identity[2] != source[size]:
+                    raise Failure("source_invalid", message="source receipt changed")
+                handles[key] = handle
+            else:
+                handles[key] = stack.enter_context(storage.open_verified_artifact_snapshot(
+                    inputs[key], expected_sha256=source[sha], expected_size=source[size]))
+        yield {**inputs, **handles}
+        checkpoint()
+        for handle in handles.values():
+            handle._check()
+        for key, sha, size in (("alignment_path", "alignment_sha256", "alignment_size_bytes"),
+                               ("index_path", "alignment_index_sha256", "alignment_index_size_bytes")):
+            if not isinstance(inputs[key], storage._SnapshotLease):
+                storage._check_snapshot_source(inputs[key], source[sha], source[size])
 
 
 def _catalog_tables(directory, bam, checkpoint, allocation):
@@ -146,7 +155,7 @@ def _catalog_tables(directory, bam, checkpoint, allocation):
                          "offset INTEGER, kind TEXT, contig TEXT, start0 INTEGER, end0 INTEGER, "
                          "flags INTEGER, fingerprint TEXT, projection TEXT, reference_id INTEGER, raw_bytes INTEGER, "
                          "PRIMARY KEY(read_id, ordinal)) WITHOUT ROWID")
-        with pysam.AlignmentFile(bam, "rb") as source:
+        with native.alignment(bam) as source:
             source_header = overlay.header_identity(source.header)
             ordinal = 0
             while True:
@@ -332,7 +341,7 @@ def _preview_plan(directory, catalog, bam, policy, source_sha, checkpoint, alloc
                          "contig TEXT, tile INTEGER, strand TEXT, rank TEXT)")
         database.execute("CREATE TABLE sizes (ref INTEGER, start0 INTEGER, ordinal INTEGER PRIMARY KEY, "
                          "read_id TEXT, offset INTEGER, bytes INTEGER, fingerprint TEXT)")
-        with pysam.AlignmentFile(bam, "rb") as source:
+        with native.alignment(bam) as source:
             references = list(zip(source.references, source.lengths, strict=True))
             header = pysam.AlignmentHeader.from_dict({"HD": {"VN": "1.6", "SO": "coordinate"},
                 "SQ": [{"SN": name, "LN": length} for name, length in references]})
@@ -433,9 +442,7 @@ def _check_preview(directory, bam, header, metadata, retained, statistics, polic
     # Pin both derived files while the native parser checks the pair.
     with storage._open_regular_file_no_symlinks(directory / "preview.bam") as bam_handle, storage._open_regular_file_no_symlinks(
             directory / "preview.bam.bai") as index_handle:
-        with pysam.AlignmentFile(bam, "rb") as source, pysam.AlignmentFile(
-                storage._descriptor_path(bam_handle.fileno()), "rb",
-                index_filename=storage._descriptor_path(index_handle.fileno())) as preview:
+        with native.alignment(bam) as source, native.alignment(bam_handle, index_handle) as preview:
             if preview.header.to_dict() != header.to_dict() or not preview.check_index():
                 raise Failure("integrity_mismatch", message="preview header/index mismatch")
             from collections import Counter
@@ -589,12 +596,12 @@ def _build_product(request, inputs, checkpoint, *, catalog_request=None, allocat
                                          "request_sha256": request.request_sha256,
                                          "catalog_authority_sha256": request.catalog_authority_sha256, "policy": policy}
                             if existing is None:
-                                with pysam.AlignmentFile(pinned["alignment_path"], "rb") as source, pysam.AlignmentFile(
+                                with native.alignment(pinned["alignment_path"]) as source, pysam.AlignmentFile(
                                         temporary / "preview.bam", "wb6", header=header, threads=1) as output:
                                     for record in _preview_records(source, header, metadata, checkpoint):
                                         output.write(record)
                                 checkpoint()
-                                pysam.index(str(temporary / "preview.bam"))
+                                native.index_path(temporary / "preview.bam")
                                 checkpoint()
                                 _write_rows(temporary / "preview-membership.parquet",
                                     ({"read_id": name, "preview_rank": rank} for rank, name in enumerate(retained)),
@@ -654,22 +661,35 @@ def build_product(request, inputs, checkpoint, *, catalog_request=None):
     root = Path(inputs["result_root"]).resolve(strict=True)
     allocation = None
     owned = root / ".alignment-products" / request.id
-    try:
-        # Reduce dead-attempt disk reservations to the surviving owned files.
-        # A live resource owner prevents reconciliation, regardless of DB lease.
-        resources.reconcile_quiescent_storage(owned)
-        allocation = resources.reserve(owner="ngs-product:" + request.id + ":" + request.claim_token,
-                                       storage_root=root, owned_path=owned, cpu_threads=1)
-        result = _build_product(request, inputs, checkpoint, catalog_request=catalog_request,
-                                allocation=allocation)
-        # The published product remains charged after compute is released.
-        allocation.retain(disk_bytes=resources.owned_storage_bytes(owned))
-        return result
-    except resources.ResourceCapacityUnavailable as exc:
-        raise Failure("resource_limit", message=str(exc)) from exc
-    finally:
-        if allocation is not None:
-            # On error, retain the disk charge until explicit quiescent cleanup
-            # proves which attempt bytes survived. Never free unknown live data.
-            allocation.release()
+    with _sources(inputs, request.source_identity, checkpoint) as verified_inputs:
+        leave_disk = leave_ram = 0
+        if request.product == "preview":
+            policy = request.request_contract["policy"]
+            with native.alignment(verified_inputs["alignment_path"]) as source:
+                index_bound = 32 + 32 * len(source.references) + sum(
+                    8 * ((length + 16383) // 16384) for length in source.lengths) + 128 * policy["max_records"]
+            leave_disk = policy["max_bytes"] + index_bound
+            leave_ram = 8 * storage.SNAPSHOT_CHUNK_BYTES + 128 * (
+                (policy["max_bytes"] + storage.SNAPSHOT_CHUNK_BYTES - 1) // storage.SNAPSHOT_CHUNK_BYTES
+                + (index_bound + storage.SNAPSHOT_CHUNK_BYTES - 1) // storage.SNAPSHOT_CHUNK_BYTES)
+        try:
+            # Reduce dead-attempt disk reservations to the surviving owned files.
+            # A live resource owner prevents reconciliation, regardless of DB lease.
             resources.reconcile_quiescent_storage(owned)
+            allocation = resources.reserve(owner="ngs-product:" + request.id + ":" + request.claim_token,
+                                           storage_root=root, owned_path=owned, cpu_threads=1,
+                                           leave_disk_bytes=leave_disk, leave_dram_bytes=leave_ram)
+            with resources.use_compute(allocation):
+                result = _build_product(request, verified_inputs, checkpoint, catalog_request=catalog_request,
+                                        allocation=allocation)
+            # The published product remains charged after compute is released.
+            allocation.retain(disk_bytes=resources.owned_storage_bytes(owned))
+            return result
+        except resources.ResourceCapacityUnavailable as exc:
+            raise Failure("resource_limit", message=str(exc)) from exc
+        finally:
+            if allocation is not None:
+                # On error, retain the disk charge until explicit quiescent cleanup
+                # proves which attempt bytes survived. Never free unknown live data.
+                allocation.release()
+                resources.reconcile_quiescent_storage(owned)

@@ -12,6 +12,7 @@ import runpy
 import uuid
 
 import pysam
+from services import verified_native_reads as native
 
 from paths import get_inputs_dir
 from services import ngs_alignment_sessions as files
@@ -131,8 +132,8 @@ def validate_comparison(root, persisted, job):
     with ExitStack() as stack:
         handles = {name: stack.enter_context(files._open_regular_file_no_symlinks(directory / name))
                    for name in ("comparison_panel.bam", "comparison_panel.bam.bai")}
-        fd = lambda name: "/proc/self/fd/" + str(handles[name].fileno())
-        with pysam.AlignmentFile(fd("comparison_panel.bam"), "rb", index_filename=fd("comparison_panel.bam.bai"), require_index=True) as bam:
+        fd = lambda name: handles[name]
+        with native.alignment(fd("comparison_panel.bam"), fd("comparison_panel.bam.bai")) as bam:
             _require(bam.is_bam and bam.check_index() and tuple(bam.references) == tuple(sequences)
                      and tuple(bam.lengths) == tuple(len(value) for value in sequences.values()), "comparison BAM dictionary/index mismatch")
             sequential, primary, index_counts = Counter(), Counter(), Counter()

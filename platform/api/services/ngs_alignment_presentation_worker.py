@@ -8,7 +8,7 @@ import threading
 import uuid
 from typing import Any
 
-from starlette.concurrency import run_in_threadpool
+from services.verified_native_reads import run_in_threadpool
 from sqlalchemy import select
 from database import Job, NgsAlignmentDerivedProduct
 from services import ngs_alignment_derived_products as lifecycle

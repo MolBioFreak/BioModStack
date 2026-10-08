@@ -21,6 +21,7 @@ import time
 import uuid
 
 import pysam
+from services import verified_native_reads as native
 
 from services import ngs_alignment_catalog_reader as reader
 from services import ngs_alignment_product_builder as builder
@@ -188,8 +189,7 @@ def _verify(directory, key_input, row, locators, check, *, warm_only=False, retr
             return manifest
         if warm_only:
             raise _ColdOverlay()
-        with pysam.AlignmentFile(storage._descriptor_path(bam_handle.fileno()), "rb",
-                index_filename=storage._descriptor_path(index_handle.fileno())) as bam:
+        with native.alignment(bam_handle, index_handle) as bam:
             if bounds.header_identity(bam.header) != key_input["source_header"] or not bam.check_index():
                 raise storage.AlignmentSessionError("overlay header or index mismatch")
             observed = Counter()

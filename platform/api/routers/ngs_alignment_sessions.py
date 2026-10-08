@@ -20,7 +20,7 @@ from starlette.background import BackgroundTask
 from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from starlette.concurrency import run_in_threadpool
+from services.verified_native_reads import run_in_threadpool
 import rfc8785
 
 from database import Job, NgsAlignmentPresentationJob, NgsAlignmentDerivedProduct, OntRawSignalRepresentation, async_session, get_session

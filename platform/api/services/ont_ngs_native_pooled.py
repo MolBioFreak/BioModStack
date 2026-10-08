@@ -10,8 +10,9 @@ from pathlib import Path
 import runpy
 
 import pysam
+from services import verified_native_reads as guarded_native
 import rfc8785
-from starlette.concurrency import run_in_threadpool
+from services.verified_native_reads import run_in_threadpool
 
 from services import ngs_alignment_sessions
 from services.job_result_roots import resolve_persisted_job_result_root
@@ -106,8 +107,8 @@ def _validate_native(job, manifest_row, targets):
             fasta_name = expected["combined_reference"]
             _require(handles[fasta_name].read() == producer["combined_reference_bytes"](reference_set),
                      "pooled combined FASTA differs from frozen targets")
-            fdpath = lambda name: f"/proc/self/fd/{handles[name].fileno()}"
-            with pysam.FastaFile(fdpath(fasta_name), filepath_index=fdpath(expected["combined_reference_index"])) as fasta:
+            fdpath = lambda name: handles[name]
+            with guarded_native.fasta(fdpath(fasta_name), fdpath(expected["combined_reference_index"])) as fasta:
                 _require(list(fasta.references) == [entry.target_id for entry in reference_set.entries]
                          and all(fasta.fetch(entry.target_id) == entry.normalized_sequence for entry in reference_set.entries),
                          "pooled FASTA index disagrees with frozen targets")
@@ -140,8 +141,7 @@ def _validate_native(job, manifest_row, targets):
             sequential = Counter()
             index_counts = Counter()
             no_coordinate = count = 0
-            with pysam.AlignmentFile(fdpath(expected["alignment_bam"]), "rb",
-                    index_filename=fdpath(expected["alignment_bai"]), require_index=True) as bam:
+            with guarded_native.alignment(fdpath(expected["alignment_bam"]), fdpath(expected["alignment_bai"])) as bam:
                 _require(bam.is_bam and bam.check_index() and bam.header.to_dict().get("HD", {}).get("SO") == "coordinate",
                          "pooled BAM/index is invalid or not coordinate sorted")
                 sq = bam.header.to_dict().get("SQ", [])

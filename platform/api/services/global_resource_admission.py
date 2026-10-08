@@ -5,7 +5,8 @@ scientific-job lease authorizes derived work. Every acquire resolves this proces
 actual target and fresh capacity under the same SQLite write fence as workflows.
 Reservations are cooperative admission, not kernel memory/disk isolation.
 """
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import fcntl
@@ -24,6 +25,23 @@ from paths import get_experiment_db_url
 from services.ngs_molbio_quiescence import _open_fence_fd, _release_fence_fd
 
 SCHEMA = "bms.global-derived-resource-allocation.v1"
+_current_compute = ContextVar("global_derived_compute", default=None)
+
+
+def current_compute():
+    return _current_compute.get()
+
+
+@contextmanager
+def use_compute(allocation):
+    if allocation._closed or allocation.cpu_threads < 1 or allocation.dram_bytes < 1:
+        raise ResourceCapacityUnavailable("compute allocation is not active")
+    token = _current_compute.set(allocation)
+    try:
+        yield allocation
+    finally:
+        _current_compute.reset(token)
+
 ACTIVE_WORKFLOW_STATES = ("admitted", "queued")
 
 
@@ -356,7 +374,7 @@ class Allocation:
         os.close(self._descriptor)
 
 
-def reserve(*, owner, storage_root, cpu_threads=1, dram_bytes=None, disk_bytes=None, owned_path=None, adopt_quiescent=False):
+def reserve(*, owner, storage_root, cpu_threads=1, dram_bytes=None, disk_bytes=None, owned_path=None, adopt_quiescent=False, leave_dram_bytes=0, leave_disk_bytes=0):
     """Resolve current target and atomically reserve requested units.
 
     None requests the currently available remainder of that global resource,
@@ -364,6 +382,8 @@ def reserve(*, owner, storage_root, cpu_threads=1, dram_bytes=None, disk_bytes=N
     The allocation, not the source BAM's compressed size, is its work envelope.
     """
     _positive(cpu_threads, "CPU", zero=True)
+    _positive(leave_dram_bytes, "DRAM headroom", zero=True)
+    _positive(leave_disk_bytes, "disk headroom", zero=True)
     if not isinstance(owner, str) or not owner or len(owner) > 512:
         raise ResourceCapacityUnavailable("invalid derived owner")
     identifier, token = uuid.uuid4().hex, uuid.uuid4().hex
@@ -406,9 +426,10 @@ def reserve(*, owner, storage_root, cpu_threads=1, dram_bytes=None, disk_bytes=N
                 owned.relative_to(root)
             except ValueError as exc:
                 raise ResourceCapacityUnavailable("owned storage escapes allocation root") from exc
-            ram = available[1] if dram_bytes is None else _positive(dram_bytes, "DRAM", zero=True)
-            disk = available[2] if disk_bytes is None else _positive(disk_bytes, "disk", zero=True)
+            ram = available[1] - leave_dram_bytes if dram_bytes is None else _positive(dram_bytes, "DRAM", zero=True)
+            disk = available[2] - leave_disk_bytes if disk_bytes is None else _positive(disk_bytes, "disk", zero=True)
             if (cpu_threads > available[0] or ram > available[1] or disk > available[2]
+                    or ram < 0 or disk < 0
                     or dram_bytes is None and ram == 0 or disk_bytes is None and disk == 0):
                 raise ResourceCapacityUnavailable("global target allocation capacity unavailable")
             receipt = {"schema": SCHEMA, "reservation_id": identifier, "target_id": target,
@@ -435,7 +456,8 @@ def reserve(*, owner, storage_root, cpu_threads=1, dram_bytes=None, disk_bytes=N
 def derived_work(**kwargs):
     allocation = reserve(**kwargs)
     try:
-        yield allocation
+        with use_compute(allocation) if allocation.cpu_threads and allocation.dram_bytes else nullcontext(allocation):
+            yield allocation
     finally:
         allocation.release()
 

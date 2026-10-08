@@ -5,6 +5,7 @@ launches must use M5 or explicitly request the already supported realignment.
 Internal receipt-backed signal submissions retain their separate trusted owner.
 """
 import pysam
+from services import verified_native_reads as native
 
 
 def validate_bam_reference_admission(params):
@@ -21,7 +22,7 @@ def validate_bam_reference_admission(params):
     try:
         with open(reference, "rb") as handle:
             contigs, _ = _fasta_contigs_from_handle(handle)
-        with pysam.AlignmentFile(bam_path, "rb", check_sq=False) as bam:
+        with native.alignment_path(bam_path, check_sq=False) as bam:
             dictionary = {sq["SN"]: sq for sq in bam.header.to_dict().get("SQ", [])}
             mapped = set()
             minimum = params.get("bam_min_mapq", 0)

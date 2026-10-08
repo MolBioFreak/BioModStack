@@ -11,6 +11,7 @@ import math
 import re
 
 import pysam
+from services import verified_native_reads as native
 
 from services import ngs_alignment_sessions as storage
 from services import ngs_alignment_product_builder as builder
@@ -232,8 +233,6 @@ def _source(job, row, *, allocation=None):
             expected_sha256=source["alignment_sha256"], expected_size=source["alignment_size_bytes"]))
         index = stack.enter_context(storage.open_verified_artifact_snapshot(inputs["index_path"],
             expected_sha256=source["alignment_index_sha256"], expected_size=source["alignment_index_size_bytes"]))
-        bam_path = storage._descriptor_path(handle.fileno())
-        index_path = storage._descriptor_path(index.fileno())
         if allocation is None:
             from services import global_resource_admission as resources
             try:
@@ -242,7 +241,7 @@ def _source(job, row, *, allocation=None):
                     cpu_threads=1, disk_bytes=0))
             except resources.ResourceCapacityUnavailable as exc:
                 raise CatalogReadError("NGS_READ_CAPACITY_UNAVAILABLE", "Record reader capacity is unavailable.", 503) from exc
-        with pysam.AlignmentFile(bam_path, "rb", index_filename=index_path, threads=1) as bam:
+        with native.alignment(handle, index, threads=1) as bam:
             if not bam.check_index():
                 raise storage.AlignmentSessionError("catalog source index integrity mismatch")
             yield bam
