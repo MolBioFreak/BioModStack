@@ -197,7 +197,7 @@ export function JobQueuePanel() {
     // Separate running, queued, and pending_msa jobs
     const runningJobs = queue.filter(j => j.queue_status === 'running');
     const queuedJobs = queue.filter(j => j.queue_status === 'queued' || j.queue_status === 'paused');
-    // pendingMsaJobs filtered but not displayed in UI yet - to be added in future
+    const pendingMsaJobs = queue.filter(j => j.queue_status === 'pending_msa');
 
     const handleCancelAll = () => {
         if (queuedJobs.length === 0) return;
@@ -323,6 +323,30 @@ export function JobQueuePanel() {
                                     </h4>
                                     <div className="space-y-1">
                                         {runningJobs.map((job) => (
+                                            <JobRow
+                                                key={job.id}
+                                                job={job}
+                                                onPause={() => pauseMutation.mutate(job.id)}
+                                                onCancel={() => {
+                                                    if (confirm(`Cancel "${job.name}"?`)) {
+                                                        cancelMutation.mutate(job.id);
+                                                    }
+                                                }}
+                                                isPending={isPending}
+                                            />
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Pending MSA Jobs */}
+                            {pendingMsaJobs.length > 0 && (
+                                <div>
+                                    <h4 className="text-xs font-semibold text-violet-400 mb-1 uppercase tracking-wide">
+                                        Generating MSA ({pendingMsaJobs.length})
+                                    </h4>
+                                    <div className="space-y-1">
+                                        {pendingMsaJobs.map((job) => (
                                             <JobRow
                                                 key={job.id}
                                                 job={job}
