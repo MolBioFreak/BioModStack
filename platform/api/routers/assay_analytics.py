@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
 import math
@@ -11,14 +12,20 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 import numpy as np
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, Query
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from scipy import stats
 from scipy.signal import find_peaks, peak_widths, savgol_filter
 
 from services.assay_tool_integrations import assay_tool_registry, tools_by_category
-from services.assay_analytical_store import analytical_store_status
+from services.assay_analytical_store import (
+    analytical_store_status,
+    list_qpcr_imports,
+    load_qpcr_import,
+    persist_qpcr_import_response,
+)
+from services.assay_chrom_persistence import persist_empower_import
 
 router = APIRouter()
 
@@ -873,14 +880,27 @@ def _build_qpcr_upload_response(wells: List[Dict[str, Any]], filename: Optional[
         }
     )
 
-async def _qpcr_upload_common(file: UploadFile) -> Dict[str, Any]:
+async def _persist_qpcr_response_if_requested(response: Dict[str, Any], *, persist: bool, data: bytes, file: UploadFile) -> Dict[str, Any]:
+    if persist:
+        durable_ids = await persist_qpcr_import_response(
+            response,
+            source_bytes=data,
+            filename=file.filename,
+            content_type=file.content_type,
+        )
+        response.update(durable_ids)
+    return response
+
+
+async def _qpcr_upload_common(file: UploadFile, persist: bool = False) -> Dict[str, Any]:
     data = await file.read()
     try:
         text = data.decode("utf-8-sig")
     except UnicodeDecodeError:
         text = data.decode("latin-1")
     wells, instrument_format = _parse_qpcr_csv(text)
-    return _build_qpcr_upload_response(wells, file.filename, "csv", instrument_format)
+    response = _build_qpcr_upload_response(wells, file.filename, "csv", instrument_format)
+    return await _persist_qpcr_response_if_requested(response, persist=persist, data=data, file=file)
 
 
 def _row_to_qpcr_well(row: Dict[str, Any], idx: int, context: str = "qPCR workbook") -> Dict[str, Any]:
@@ -1527,12 +1547,12 @@ def _parse_quantstudio_eds_zip_xml(data: bytes, qslib_error: Optional[str] = Non
         return wells, summary, available_data
 
 @router.post("/analysis/qpcr/upload-csv")
-async def upload_qpcr_csv(file: UploadFile = File(...)) -> Dict[str, Any]:
-    return await _qpcr_upload_common(file)
+async def upload_qpcr_csv(file: UploadFile = File(...), persist: bool = Form(False)) -> Dict[str, Any]:
+    return await _qpcr_upload_common(file, persist=persist)
 
 
 @router.post("/analysis/qpcr/upload-excel")
-async def upload_qpcr_excel(file: UploadFile = File(...)) -> Dict[str, Any]:
+async def upload_qpcr_excel(file: UploadFile = File(...), persist: bool = Form(False)) -> Dict[str, Any]:
     data = await file.read()
     try:
         wells, import_engine, instrument_format = _parse_qpcr_excel(data, file.filename)
@@ -1540,11 +1560,12 @@ async def upload_qpcr_excel(file: UploadFile = File(...)) -> Dict[str, Any]:
         raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Unable to parse qPCR Excel workbook: {exc}") from exc
-    return _build_qpcr_upload_response(wells, file.filename, import_engine, instrument_format)
+    response = _build_qpcr_upload_response(wells, file.filename, import_engine, instrument_format)
+    return await _persist_qpcr_response_if_requested(response, persist=persist, data=data, file=file)
 
 
 @router.post("/analysis/qpcr/upload-eds")
-async def upload_qpcr_eds(file: UploadFile = File(...)) -> Dict[str, Any]:
+async def upload_qpcr_eds(file: UploadFile = File(...), persist: bool = Form(False)) -> Dict[str, Any]:
     data = await file.read()
     try:
         import qslib
@@ -1553,7 +1574,7 @@ async def upload_qpcr_eds(file: UploadFile = File(...)) -> Dict[str, Any]:
         response = _build_qpcr_upload_response(wells, file.filename, "quantstudio_eds_zip_xml", "QuantStudio EDS ZIP/XML")
         response["eds_summary"] = eds_summary
         response["available_data"] = available_data
-        return response
+        return await _persist_qpcr_response_if_requested(response, persist=persist, data=data, file=file)
     try:
         experiment = qslib.Experiment.from_file(io.BytesIO(data))
     except Exception as exc:
@@ -1561,7 +1582,7 @@ async def upload_qpcr_eds(file: UploadFile = File(...)) -> Dict[str, Any]:
         response = _build_qpcr_upload_response(wells, file.filename, "quantstudio_eds_zip_xml", "QuantStudio EDS ZIP/XML")
         response["eds_summary"] = eds_summary
         response["available_data"] = available_data
-        return response
+        return await _persist_qpcr_response_if_requested(response, persist=persist, data=data, file=file)
 
     wells: List[Dict[str, Any]] = []
     try:
@@ -1576,25 +1597,38 @@ async def upload_qpcr_eds(file: UploadFile = File(...)) -> Dict[str, Any]:
         response = _build_qpcr_upload_response(wells, file.filename, "quantstudio_eds_zip_xml", "QuantStudio EDS ZIP/XML")
         response["eds_summary"] = eds_summary
         response["available_data"] = available_data
-        return response
+        return await _persist_qpcr_response_if_requested(response, persist=persist, data=data, file=file)
     except Exception as exc:
         wells, eds_summary, available_data = _parse_quantstudio_eds_zip_xml(data, qslib_error=f"qslib opened the EDS file but BMS could not extract a Cq table: {exc}")
         response = _build_qpcr_upload_response(wells, file.filename, "quantstudio_eds_zip_xml", "QuantStudio EDS ZIP/XML")
         response["eds_summary"] = eds_summary
         response["available_data"] = available_data
-        return response
+        return await _persist_qpcr_response_if_requested(response, persist=persist, data=data, file=file)
 
     if not wells:
         wells, eds_summary, available_data = _parse_quantstudio_eds_zip_xml(data, qslib_error="qslib opened the EDS file but returned no plate rows")
         response = _build_qpcr_upload_response(wells, file.filename, "quantstudio_eds_zip_xml", "QuantStudio EDS ZIP/XML")
         response["eds_summary"] = eds_summary
         response["available_data"] = available_data
-        return response
+        return await _persist_qpcr_response_if_requested(response, persist=persist, data=data, file=file)
 
     response = _build_qpcr_upload_response(wells, file.filename, "qslib", "QuantStudio EDS")
     response["eds_summary"] = getattr(experiment, "summary", None)
     response["available_data"] = list(getattr(experiment, "available_data", []) or [])
-    return response
+    return await _persist_qpcr_response_if_requested(response, persist=persist, data=data, file=file)
+
+
+@router.get("/analysis/qpcr/imports")
+async def qpcr_imports(limit: int = Query(50, ge=1, le=200)) -> List[Dict[str, Any]]:
+    return _json_clean(await list_qpcr_imports(limit=limit))
+
+
+@router.get("/analysis/qpcr/imports/{analytical_import_id}")
+async def qpcr_import_detail(analytical_import_id: str) -> Dict[str, Any]:
+    payload = await load_qpcr_import(analytical_import_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="qPCR analytical import not found")
+    return _json_clean(payload)
 
 
 class ChromatographyAnalyzeRequest(BaseModel):
@@ -2532,10 +2566,20 @@ async def empower_import(
     _NEXT_IMPORT_ID += 1
     injections: List[Dict[str, Any]] = []
     errors: List[str] = []
+    source_files: List[Dict[str, Any]] = []
     loose_cdf_arw: Dict[str, Dict[str, Tuple[str, bytes]]] = {}
     for file_idx, file in enumerate(files, start=1):
         extension = _upload_extension(file.filename)
         payload = await file.read()
+        source_files.append(
+            {
+                "index": file_idx,
+                "filename": file.filename or f"upload_{file_idx}.{extension or 'dat'}",
+                "content_type": file.content_type,
+                "size_bytes": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+        )
         if extension in _EMPOWER_NATIVE_DATABASE_EXTENSIONS:
             errors.append(
                 f"{file.filename}: Native Empower database/RAW files are not currently parsed by BMS for extension .{extension}; upload Empower AIA .cdf, ARW chromatogram text, ZIP containing .cdf/.arw, or CSV/ASCII injection/peak export"
@@ -2639,6 +2683,15 @@ async def empower_import(
         **analytics,
     }
     if persist:
+        durable_ids = await persist_empower_import(
+            import_session_id=import_id,
+            source_files=source_files,
+            injections=injections,
+            analytics=response,
+        )
+        response.update(durable_ids)
+        # The in-memory object is retained only as a short-lived review session cache;
+        # durable chromatography rows are written to the analytical PostgreSQL store above.
         _EMPOWER_IMPORTS[import_id] = {
             "injections": injections,
             "errors": errors,
