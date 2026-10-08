@@ -17,7 +17,8 @@ from typing import Any, Mapping
 
 REQUEST_SCHEMA = "bms.rfd3.local-redesign.request.v1"
 RESULT_SCHEMA = "bms.rfd3.local-redesign.result.v1"
-SUPPORTED_MODES = frozenset({"partial_diffusion", "minimal_insertion", "packing_shell"})
+CONTRACT_REVISION = "fixed-scaffold-runtime-evidence-v2"
+SUPPORTED_MODES = frozenset({"partial_diffusion", "minimal_insertion"})
 SUPPORTED_PROFILES = frozenset({"generic_local_redesign_v1", "drt4_datp_gate_v1"})
 _FORBIDDEN_FREE_FORM_KEYS = frozenset(
     {
@@ -186,6 +187,150 @@ def _normalize_atom_map(value: Any, field: str) -> dict[str, list[str]]:
     return dict(sorted(normalized.items()))
 
 
+def _normalize_source_residue_identities(value: Any) -> tuple[list[dict[str, Any]], list[tuple[str, int, str]]]:
+    if not isinstance(value, list) or not value:
+        raise ContractError(
+            "partial_diffusion requires source_residue_identities from the bound source structure"
+        )
+    normalized_chains: list[dict[str, Any]] = []
+    identities: list[tuple[str, int, str]] = []
+    seen: set[tuple[str, int, str]] = set()
+    for chain_index, chain in enumerate(value):
+        if not isinstance(chain, Mapping):
+            raise ContractError(f"source_residue_identities[{chain_index}] must be an object")
+        chain_id = _text(
+            chain.get("chain_id"), f"source_residue_identities[{chain_index}].chain_id", required=True
+        )
+        assert chain_id is not None
+        residues = chain.get("residues")
+        if not isinstance(residues, list) or not residues:
+            raise ContractError(
+                f"source_residue_identities[{chain_index}].residues must be a non-empty list"
+            )
+        normalized_residues: list[dict[str, Any]] = []
+        for residue_index, residue in enumerate(residues):
+            if not isinstance(residue, Mapping):
+                raise ContractError(
+                    f"source_residue_identities[{chain_index}].residues[{residue_index}] must be an object"
+                )
+            try:
+                residue_number = int(residue.get("res_num"))
+            except (TypeError, ValueError) as exc:
+                raise ContractError(
+                    f"source_residue_identities[{chain_index}].residues[{residue_index}].res_num must be an integer"
+                ) from exc
+            insertion_code = str(residue.get("insertion_code") or "").strip()
+            if len(insertion_code) > 1:
+                raise ContractError("source residue insertion codes must contain at most one character")
+            identity = (chain_id, residue_number, insertion_code)
+            if identity in seen:
+                raise ContractError(f"duplicate source residue identity '{chain_id}{residue_number}{insertion_code}'")
+            seen.add(identity)
+            identities.append(identity)
+            normalized_residues.append(
+                {
+                    "res_num": residue_number,
+                    "insertion_code": insertion_code,
+                    "residue_name": str(residue.get("residue_name") or "").strip(),
+                }
+            )
+        normalized_chains.append({"chain_id": chain_id, "residues": normalized_residues})
+    return normalized_chains, identities
+
+
+_RESIDUE_SELECTOR_RE = re.compile(
+    r"^(?:(?P<start_chain>[^0-9,\s-]+))?(?P<start>\d+)(?P<start_icode>[A-Za-z]?)"
+    r"(?:-(?:(?P<end_chain>[^0-9,\s-]+))?(?P<end>\d+)(?P<end_icode>[A-Za-z]?))?$"
+)
+
+
+def _resolve_residue_selectors(
+    value: Any,
+    *,
+    field: str,
+    identities: list[tuple[str, int, str]],
+    default_chains: list[str],
+) -> set[tuple[str, int, str]]:
+    selectors = _string_list(value, field)
+    if not selectors:
+        raise ContractError(f"{field} must select at least one source residue")
+    resolved: set[tuple[str, int, str]] = set()
+    for selector in selectors:
+        match = _RESIDUE_SELECTOR_RE.fullmatch(selector)
+        if match is None:
+            raise ContractError(f"{field} contains unsupported residue selector '{selector}'")
+        start_chain = match.group("start_chain")
+        end_chain = match.group("end_chain")
+        if end_chain and start_chain and end_chain != start_chain:
+            raise ContractError(f"{field} cannot span chains in one residue range")
+        chains = [start_chain or end_chain] if (start_chain or end_chain) else default_chains
+        if not chains:
+            raise ContractError(f"{field} requires an explicit chain or design_chains")
+        start = int(match.group("start"))
+        end = int(match.group("end") or start)
+        start_icode = match.group("start_icode") or ""
+        end_icode = match.group("end_icode") or start_icode
+        if end < start:
+            raise ContractError(f"{field} contains a descending residue range '{selector}'")
+        if end != start and (start_icode or end_icode):
+            raise ContractError(f"{field} requires single-residue selectors for insertion codes")
+        matches = {
+            identity
+            for identity in identities
+            if identity[0] in chains
+            and start <= identity[1] <= end
+            and (end != start or identity[2] == start_icode)
+        }
+        if not matches:
+            raise ContractError(f"{field} selector '{selector}' does not match the source structure")
+        resolved.update(matches)
+    return resolved
+
+
+def _complete_partial_fixed_atom_map(
+    params: Mapping[str, Any],
+    source_identities: list[tuple[str, int, str]],
+) -> dict[str, list[str]]:
+    design_chains = _string_list(params.get("design_chains"), "design_chains")
+    editable = _resolve_residue_selectors(
+        params.get("redesign_ranges"),
+        field="redesign_ranges",
+        identities=source_identities,
+        default_chains=design_chains,
+    )
+    if design_chains and any(identity[0] not in design_chains for identity in editable):
+        raise ContractError("redesign_ranges must stay within design_chains")
+
+    explicit = _normalize_atom_map(params.get("select_fixed_atoms"), "select_fixed_atoms")
+    explicit_by_identity: dict[tuple[str, int, str], list[str]] = {}
+    for selector, atoms in explicit.items():
+        matched = _resolve_residue_selectors(
+            selector,
+            field="select_fixed_atoms",
+            identities=source_identities,
+            default_chains=design_chains,
+        )
+        for identity in matched:
+            if identity not in editable and atoms != ["ALL"]:
+                raise ContractError(
+                    f"select_fixed_atoms cannot unfix source residue '{identity[0]}{identity[1]}{identity[2]}' outside the editable region"
+                )
+            previous = explicit_by_identity.get(identity)
+            if previous is not None and previous != atoms:
+                raise ContractError(
+                    f"select_fixed_atoms assigns conflicting atom selections to '{identity[0]}{identity[1]}{identity[2]}'"
+                )
+            explicit_by_identity[identity] = atoms
+
+    result: dict[str, list[str]] = {}
+    for identity in source_identities:
+        key = f"{identity[0]}{identity[1]}{identity[2]}"
+        result[key] = explicit_by_identity.get(identity, [] if identity in editable else ["ALL"])
+    if all(atoms == ["ALL"] for atoms in result.values()):
+        raise ContractError("partial_diffusion must leave at least one editable residue atom unfixed")
+    return dict(sorted(result.items()))
+
+
 def _normalize_selector_map(value: Any, field: str) -> dict[str, list[str]]:
     if value is None:
         return {}
@@ -259,7 +404,12 @@ def _input_path(params: Mapping[str, Any]) -> str:
     raise ContractError("input_structure is required")
 
 
-def _build_native_spec(params: Mapping[str, Any], input_path: str, mode: str) -> dict[str, Any]:
+def _build_native_spec(
+    params: Mapping[str, Any],
+    input_path: str,
+    mode: str,
+    source_identities: list[tuple[str, int, str]],
+) -> dict[str, Any]:
     fixed_atoms = _normalize_atom_map(params.get("select_fixed_atoms"), "select_fixed_atoms")
     contig = _normalize_contig(params.get("contig"))
     unfixed_sequence = _normalize_residue_selector(
@@ -267,21 +417,21 @@ def _build_native_spec(params: Mapping[str, Any], input_path: str, mode: str) ->
     )
 
     if mode == "partial_diffusion":
-        if not fixed_atoms:
-            raise ContractError(
-                "partial_diffusion requires select_fixed_atoms with at least one selected residue"
-            )
+        fixed_atoms = _complete_partial_fixed_atom_map(params, source_identities)
         if contig is not None:
             raise ContractError("partial_diffusion uses the supplied input structure and does not accept contig")
     elif mode == "minimal_insertion":
         if not contig:
             raise ContractError("minimal_insertion requires a dialect-2 contig")
+        if fixed_atoms:
+            raise ContractError(
+                "minimal_insertion fixes all supplied source atoms by omission and does not accept select_fixed_atoms"
+            )
         if unfixed_sequence:
             raise ContractError(
                 "minimal_insertion sequence freedom must be expressed by the inserted region, not select_unfixed_sequence"
             )
-    elif mode == "packing_shell" and not unfixed_sequence:
-        raise ContractError("packing_shell requires an explicit select_unfixed_sequence set")
+
 
     native: dict[str, Any] = {
         "input": input_path,
@@ -352,7 +502,15 @@ def build_request(
     profile = get_profile(profile_id, registry)
     profile_registry_digest = profile_registry_sha256(registry)
 
-    native = _build_native_spec(params, input_path, mode)
+    residue_identities = params.get("source_residue_identities")
+    normalized_residue_identities: list[dict[str, Any]] = []
+    source_identities: list[tuple[str, int, str]] = []
+    if residue_identities is not None or mode == "partial_diffusion":
+        normalized_residue_identities, source_identities = _normalize_source_residue_identities(
+            residue_identities
+        )
+
+    native = _build_native_spec(params, input_path, mode, source_identities)
     num_designs = _positive_int(params.get("num_designs"), "num_designs", default=8)
     seed_value = params.get("seed", params.get("rfd3_seed"))
     seed = int(seed_value) if seed_value is not None else None
@@ -361,16 +519,13 @@ def build_request(
 
     sequence_policy = _text(params.get("sequence_policy"), "sequence_policy")
     if sequence_policy is None:
-        if mode == "minimal_insertion":
-            sequence_policy = "insert_only"
-        elif _normalize_residue_selector(params.get("select_unfixed_sequence"), "select_unfixed_sequence"):
-            sequence_policy = "explicit_positions"
-        else:
-            sequence_policy = "preserve"
+        sequence_policy = "skip"
     if sequence_policy not in {"preserve", "insert_only", "explicit_positions", "external", "skip"}:
         raise ContractError(f"unsupported sequence_policy '{sequence_policy}'")
     if mode == "partial_diffusion" and sequence_policy == "preserve" and "select_unfixed_sequence" in native:
         raise ContractError("preserve sequence_policy cannot include select_unfixed_sequence")
+    if sequence_policy == "skip" and "select_unfixed_sequence" in native:
+        raise ContractError("skip sequence_policy cannot include select_unfixed_sequence")
 
     selection: dict[str, Any] = {}
     for field in ("region_mode", "insertion_anchor", "redesign_ranges"):
@@ -381,11 +536,8 @@ def build_request(
         values = _string_list(params.get(field), field)
         if values:
             selection[field] = values
-    residue_identities = params.get("source_residue_identities")
-    if residue_identities is not None:
-        if not isinstance(residue_identities, list) or any(not isinstance(item, Mapping) for item in residue_identities):
-            raise ContractError("source_residue_identities must be a list of typed chain objects")
-        selection["source_residue_identities"] = [dict(item) for item in residue_identities]
+    if normalized_residue_identities:
+        selection["source_residue_identities"] = normalized_residue_identities
     insertion_min = params.get("insertion_min_length")
     insertion_max = params.get("insertion_max_length")
     if insertion_min is not None or insertion_max is not None:
@@ -399,6 +551,7 @@ def build_request(
     request: dict[str, Any] = {
         "schema": REQUEST_SCHEMA,
         "schema_version": 1,
+        "contract_revision": CONTRACT_REVISION,
         "workflow": "protein_local_redesign",
         "job_name": _text(job_name, "job_name") or "local_redesign",
         "profile_id": profile_id,

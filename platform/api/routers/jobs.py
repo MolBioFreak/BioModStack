@@ -6226,9 +6226,47 @@ async def get_rfd3_local_redesign_result(job_id: str, session: AsyncSession = De
             .order_by(RFD3LocalRedesignArtifact.relative_path)
         )
     ).scalars().all()
+    artifact_roles = {row.role for row in artifacts}
+    candidate_ids = {row.candidate_id for row in candidates}
+    trajectory_roles_by_candidate = {
+        candidate_id: {
+            row.role
+            for row in artifacts
+            if row.candidate_id == candidate_id and row.role in {"denoised_trajectory", "noisy_trajectory"}
+        }
+        for candidate_id in candidate_ids
+    }
+    request_execution = request.request_json.get("execution", {}) if isinstance(request.request_json, dict) else {}
+    trajectories_requested = isinstance(request_execution, dict) and request_execution.get("dump_trajectories") is True
+    trajectories_available = bool(candidate_ids) and all(
+        roles == {"denoised_trajectory", "noisy_trajectory"}
+        for roles in trajectory_roles_by_candidate.values()
+    )
     return {
         "schema": "bms.rfd3.local-redesign.read-model.v1",
         "job_id": str(job.id),
+        "capabilities": {
+            "source_structure": "source_structure" in artifact_roles,
+            "candidate_structures": bool(candidate_ids) and all(
+                any(row.candidate_id == candidate_id and row.role == "structure" for row in artifacts)
+                for candidate_id in candidate_ids
+            ),
+            "native_metadata": bool(candidate_ids) and all(
+                any(row.candidate_id == candidate_id and row.role == "native_prediction_metadata" for row in artifacts)
+                for candidate_id in candidate_ids
+            ),
+            "trajectories": {
+                "requested": trajectories_requested,
+                "available": trajectories_available,
+                "reason": (
+                    "produced"
+                    if trajectories_available
+                    else "not_requested"
+                    if not trajectories_requested
+                    else "requested_artifacts_unavailable"
+                ),
+            },
+        },
         "request": {
             "request_id": request.request_id,
             "schema_version": request.schema_version,

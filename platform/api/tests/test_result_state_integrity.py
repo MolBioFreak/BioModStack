@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import subprocess
 import sys
@@ -16,7 +17,14 @@ API_ROOT = Path(__file__).resolve().parents[1]
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
-from database import Base, Design, Job
+from database import (
+    Base,
+    Design,
+    Job,
+    RFD3LocalRedesignArtifact,
+    RFD3LocalRedesignCandidate,
+    RFD3LocalRedesignRequest,
+)
 from services.result_ingester import _design_lineage_fields
 from services.result_state_integrity import finalize_successful_job, job_expects_design_results, repair_result_state
 from routers.jobs import reingest_job_results
@@ -112,6 +120,7 @@ def test_design_result_expectation_is_explicit_or_known_model_only() -> None:
     assert job_expects_design_results(_job("af2-substring-collision", model_id="custom_af2_report")) is False
     assert job_expects_design_results(_job("confornets-substring-collision", model_id="custom_confornets_experimental_report")) is False
     assert job_expects_design_results(_job("unknown", model_id="custom_file_workflow", mode="run")) is False
+    assert job_expects_design_results(_job("native-rfd3", model_id="protein_local_redesign")) is False
     assert job_expects_design_results(
         _job(
             "explicit",
@@ -120,6 +129,80 @@ def test_design_result_expectation_is_explicit_or_known_model_only() -> None:
             params={"result_integrity_requires_designs": True},
         )
     ) is True
+
+
+@pytest.mark.asyncio
+async def test_native_rfd3_completion_uses_typed_candidates_without_generic_designs(tmp_path: Path) -> None:
+    factory, engine = await _session_factory(tmp_path)
+    output_dir = tmp_path / "native-rfd3"
+    structure = output_dir / "run" / "rfd3" / "candidate.cif.gz"
+    structure.parent.mkdir(parents=True)
+    structure.write_bytes(b"native-rfd3-candidate")
+    content_sha256 = hashlib.sha256(structure.read_bytes()).hexdigest()
+
+    async with factory() as session:
+        job = _job(
+            "native-rfd3",
+            model_id="protein_local_redesign",
+            output_dir=str(output_dir),
+        )
+        request = RFD3LocalRedesignRequest(
+            request_id="native-request",
+            job_id=job.id,
+            schema_version=1,
+            request_sha256="1" * 64,
+            profile_id="generic_local_redesign_v1",
+            profile_registry_sha256="2" * 64,
+            redesign_mode="partial_diffusion",
+            sequence_policy="skip",
+            status="generated",
+            request_json={"schema": "bms.rfd3.local-redesign.request.v1"},
+        )
+        session.add_all([job, request])
+        await session.commit()
+
+        async def ingest(job_id: str, _output_dir: str, ingest_session, **_kwargs) -> int:
+            assert job_id == job.id
+            ingest_session.add_all(
+                [
+                    RFD3LocalRedesignCandidate(
+                        id="native-candidate-row",
+                        request_id=request.request_id,
+                        candidate_id="candidate",
+                        result_set="rfd3_local_redesign_candidates",
+                        stage="backbone",
+                        status="generated",
+                        artifact_manifest_sha256="3" * 64,
+                        metrics_json={},
+                        metadata_json={},
+                    ),
+                    RFD3LocalRedesignArtifact(
+                        artifact_id="native-structure-artifact",
+                        request_id=request.request_id,
+                        candidate_id="candidate",
+                        role="structure",
+                        relative_path="run/rfd3/candidate.cif.gz",
+                        storage_path=str(structure),
+                        content_sha256=content_sha256,
+                        size_bytes=structure.stat().st_size,
+                        media_type="chemical/x-mmcif+gzip",
+                        metadata_json={},
+                    ),
+                ]
+            )
+            await ingest_session.flush()
+            return 1
+
+        result = await finalize_successful_job(job, str(output_dir), session, ingest_fn=ingest)
+        await session.refresh(job)
+
+        assert result.completed is True
+        assert result.design_count == 1
+        assert job.status == "completed"
+        assert job.provenance["result_integrity"]["result_kind"] == "rfd3_local_redesign_candidate"
+        assert (await session.execute(select(Design).where(Design.job_id == job.id))).scalars().all() == []
+
+    await engine.dispose()
 
 
 def test_lineage_fields_accept_artifact_override_without_duplicate_kwarg_path() -> None:
@@ -323,6 +406,8 @@ async def test_failed_ingestion_is_explicit_and_never_cleanly_completed(tmp_path
             "state": "ingestion_failed",
             "partial": False,
             "design_count": 0,
+            "result_count": 0,
+            "result_kind": "design",
             "error": "broken parser",
         }
 

@@ -62,6 +62,10 @@ def main() -> None:
         "design_id": args.design_id,
         "redesign_mode": request.get("redesign_mode"),
         "sequence_policy": request.get("sequence_policy"),
+        "sequence_design": {
+            "state": "not_requested" if request.get("sequence_policy") == "skip" else "requested",
+            "reason": "sequence_design_not_requested" if request.get("sequence_policy") == "skip" else None,
+        },
         "native_rfd3": runtime_native,
     }
     Path(args.output_receipt).write_text(canonical_json(receipt) + "\n", encoding="utf-8")

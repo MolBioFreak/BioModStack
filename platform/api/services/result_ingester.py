@@ -2921,8 +2921,35 @@ async def _ingest_rfd3_local_redesign_manifest(
         descriptor_by_path[relative_path] = descriptor
 
     roles = {str(descriptor.get("role") or "") for descriptor in descriptor_by_path.values()}
-    if not {"source_structure", "native_request"}.issubset(roles):
-        raise RuntimeError("RFD3 local-redesign result lacks source or native request artifact")
+    required_roles = {
+        "source_structure",
+        "native_request",
+        "preparation_receipt",
+        "producer_log",
+        "producer_metadata_index",
+    }
+    if not required_roles.issubset(roles):
+        raise RuntimeError("RFD3 local-redesign result lacks required source or runtime evidence")
+
+    execution = request_payload.get("execution")
+    execution_evidence = manifest.get("execution_evidence")
+    if not isinstance(execution, dict) or not isinstance(execution_evidence, dict):
+        raise RuntimeError("RFD3 local-redesign result lacks execution evidence")
+    requested_num_designs = execution.get("num_designs")
+    if (
+        not isinstance(requested_num_designs, int)
+        or execution_evidence.get("requested_num_designs") != requested_num_designs
+        or execution_evidence.get("observed_num_designs") != len(candidates)
+        or execution_evidence.get("candidate_count_integrity") != "exact"
+        or len(candidates) != requested_num_designs
+    ):
+        raise RuntimeError("RFD3 local-redesign candidate count integrity is invalid")
+    trajectories_requested = execution.get("dump_trajectories") is True
+    expected_trajectory_state = "produced" if trajectories_requested else "not_requested"
+    if execution_evidence.get("trajectories") != expected_trajectory_state:
+        raise RuntimeError("RFD3 local-redesign trajectory evidence is invalid")
+    if request_payload.get("sequence_policy") == "skip" and execution_evidence.get("sequence_design") != "not_requested":
+        raise RuntimeError("RFD3 local-redesign sequence skip evidence is invalid")
 
     seen_candidates: set[str] = set()
     seen_artifacts: set[str] = set()
@@ -2941,6 +2968,11 @@ async def _ingest_rfd3_local_redesign_manifest(
         candidate_roles = {str(item.get("role") or "") for item in candidate_artifacts if isinstance(item, dict)}
         if "structure" not in candidate_roles or "native_prediction_metadata" not in candidate_roles:
             raise RuntimeError(f"RFD3 local-redesign candidate lacks native structure metadata: {candidate_id}")
+        trajectory_roles = {"denoised_trajectory", "noisy_trajectory"}
+        if trajectories_requested and not trajectory_roles.issubset(candidate_roles):
+            raise RuntimeError(f"RFD3 local-redesign candidate lacks requested trajectories: {candidate_id}")
+        if not trajectories_requested and candidate_roles.intersection(trajectory_roles):
+            raise RuntimeError(f"RFD3 local-redesign candidate has unrequested trajectories: {candidate_id}")
         for descriptor in candidate_artifacts:
             if not isinstance(descriptor, dict):
                 raise RuntimeError(f"RFD3 local-redesign candidate artifact is malformed: {candidate_id}")
