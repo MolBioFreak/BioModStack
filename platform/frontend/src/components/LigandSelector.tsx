@@ -294,18 +294,18 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false, 
                 </div>
 
                 {/* Protein Chain Input */}
-                <div className="p-3 bg-slate-800/50 rounded-lg border border-orange-500/20 space-y-2">
+                <div className="p-3 bg-surface-tertiary rounded-lg border border-accent-secondary/20 space-y-2">
                     <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                            <span className="text-xs text-orange-400 font-semibold">🧬 Additional Protein Chain</span>
-                            <span className="text-xs text-slate-500">(for protein-protein complex prediction)</span>
+                            <span className="text-xs text-accent-secondary font-semibold">Additional Protein Chain</span>
+                            <span className="text-xs text-content-muted">(for protein-protein complex prediction)</span>
                         </div>
                         {onImportProtein && (
                             <button
                                 onClick={onImportProtein}
-                                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-300 text-xs rounded-lg transition-colors flex items-center gap-1.5"
+                                className="px-3 py-1.5 bg-surface-secondary hover:bg-surface-tertiary border border-accent/20 text-content text-xs rounded-lg transition-colors flex items-center gap-1.5"
                             >
-                                <span>📂</span> Select Input / Import
+                                Select Input / Import
                             </button>
                         )}
                     </div>
@@ -315,37 +315,45 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false, 
                             value={proteinName}
                             onChange={(e) => setProteinName(e.target.value)}
                             placeholder="Chain name (optional)"
-                            className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm w-40"
+                            className="bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm w-40"
                         />
                         <textarea
                             value={proteinSequence}
                             onChange={(e) => setProteinSequence(e.target.value.toUpperCase().replace(/[^ACDEFGHIKLMNPQRSTVWY]/g, ''))}
                             placeholder="Additional protein sequence (16+ AA)..."
-                            className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm flex-1 font-mono resize-y min-h-[60px]"
+                            className="bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm flex-1 font-mono resize-y min-h-[60px]"
                             rows={2}
                         />
                         <button
                             onClick={addProtein}
                             disabled={proteinSequence.length < 16}
-                            className="px-3 py-2 bg-orange-500/20 text-orange-400 rounded-lg text-sm hover:bg-orange-500/30 transition-colors disabled:opacity-50 whitespace-nowrap"
+                            className="px-3 py-2 bg-accent-secondary/20 text-accent-secondary rounded-lg text-sm hover:bg-accent-secondary/30 transition-colors disabled:opacity-50 whitespace-nowrap"
                         >
                             + Add Protein
                         </button>
                     </div>
                     {proteinSequence.length > 0 && (
-                        <div className="text-xs text-slate-500">
-                            {proteinSequence.length} aa {proteinSequence.length < 16 && <span className="text-amber-400">(min 16 required)</span>}
+                        <div className="text-xs text-content-muted">
+                            {proteinSequence.length} aa {proteinSequence.length < 16 && <span className="text-[var(--warning)]">(min 16 required)</span>}
                         </div>
                     )}
                 </div>
 
-                {/* Advanced Oligo Builder Button */}
-                <button
-                    onClick={() => setShowOligoBuilder(true)}
-                    className="w-full py-2 border border-dashed border-slate-600 rounded-lg text-slate-400 hover:text-blue-400 hover:border-blue-500 transition-colors text-sm"
-                >
-                    🧬 Advanced Oligo Builder (custom overhangs, mismatches, gaps)
-                </button>
+                {/* Advanced Oligo Builder Section */}
+                <div className="p-3 bg-surface-tertiary rounded-lg border border-accent/20 space-y-2">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                            <span className="text-xs text-accent font-semibold">Advanced Oligo Builder</span>
+                            <span className="text-xs text-content-muted">(custom overhangs, mismatches, gaps)</span>
+                        </div>
+                        <button
+                            onClick={() => setShowOligoBuilder(true)}
+                            className="px-3 py-1.5 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors"
+                        >
+                            Open Builder
+                        </button>
+                    </div>
+                </div>
             </div>
 
             {/* Oligo Builder Modal */}
@@ -359,7 +367,6 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false, 
                 ligandCount={ligands.length}
             />
 
-
             {/* Selected Ligands Pills */}
             {ligands.length > 0 && (
                 <div className="flex flex-wrap gap-2 mt-3">
@@ -367,13 +374,13 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false, 
                         <div
                             key={idx}
                             className={`px-3 py-1.5 rounded-full text-sm flex items-center gap-2 ${lig.type === 'dna'
-                                ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                                ? 'bg-accent/20 text-accent border border-accent/30'
                                 : lig.type === 'rna'
-                                    ? 'bg-accent/20 text-accent border border-accent/30'
+                                    ? 'bg-accent-secondary/20 text-accent-secondary border border-accent-secondary/30'
                                     : lig.type === 'ion'
                                         ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
                                         : lig.type === 'protein'
-                                            ? 'bg-blue-600/20 text-blue-300 border border-blue-600/30'
+                                            ? 'bg-accent/20 text-accent border border-accent/30'
                                             : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                                 }`}
                         >
@@ -383,23 +390,23 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false, 
                             {lig.sequence && <span className="text-xs opacity-60">({lig.sequence.length}nt)</span>}
                             <button
                                 onClick={() => removeLigand(idx)}
-                                className="hover:text-red-400 transition-colors"
+                                className="hover:text-[var(--error)] transition-colors"
                             >×</button>
                         </div>
                     ))}
                     {ligands.length > 0 && (
                         <button
                             onClick={() => setLigands([])}
-                            className="text-xs text-slate-500 hover:text-red-400 transition-colors"
+                            className="text-xs text-content-muted hover:text-[var(--error)] transition-colors"
                         >
                             Clear All
                         </button>
                     )}
                 </div>
-            )
-            }
-        </section >
+            )}
+        </section>
     );
+
 }
 
 export { AVAILABLE_LIGANDS };
