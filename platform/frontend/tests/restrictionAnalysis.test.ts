@@ -90,6 +90,28 @@ describe('restriction API boundary', () => {
         ['duplicate event ordinal', () => { const value = clone(ANALYSIS); const event = clone(value.analysis.occurrences[0].double_strand_events[0]); event.contributor_group_id = 'cut:duplicate'; value.analysis.occurrences[0].double_strand_events.push(event); value.analysis.counts.double_strand_break_count = 2; value.analysis.enzyme_summaries[0].double_strand_break_count = 2; const group = clone(value.analysis.grouped_cleavages[0]); group.contributor_group_id = 'cut:duplicate'; value.analysis.grouped_cleavages.push(group); return value; }],
         ['duplicate contributor identity', () => { const value = clone(ANALYSIS); value.analysis.grouped_cleavages[0].contributors.push(clone(value.analysis.grouped_cleavages[0].contributors[0])); return value; }],
         ['unresolved contributor event', () => { const value = clone(ANALYSIS); value.analysis.grouped_cleavages[0].contributors[0].event_ordinal = 99; return value; }],
+        ['per-enzyme counts swapped while global totals match', () => {
+            const value = clone(ANALYSIS);
+            const other = clone(value.analysis.occurrences[0]);
+            other.occurrence_id = 'occ:2';
+            other.occurrence_ordinal = 1;
+            other.enzyme_id = 'Other';
+            other.canonical_name = 'Other';
+            other.certainty = 'possible';
+            other.double_strand_events = [];
+            other.nicks = [{ enzyme_id: 'Other', occurrence_id: 'occ:2', event_ordinal: 0, orientation: 'forward', strand: 'top', status: 'complete', boundary: 9, boundary_unwrapped: 9, winding: 0, contributor_group_id: 'nick:2', activity_assessment: 'not_evaluated' }];
+            value.analysis.occurrences.push(other);
+            value.analysis.counts.recognition_site_count_possible = 1;
+            value.analysis.counts.nick_count = 1;
+            value.analysis.enzyme_summaries[0].recognition_site_count_definite = 0;
+            value.analysis.enzyme_summaries[0].recognition_site_count_possible = 1;
+            value.analysis.enzyme_summaries[0].double_strand_break_count = 0;
+            value.analysis.enzyme_summaries[0].nick_count = 1;
+            value.analysis.enzyme_summaries.push({ ...clone(value.analysis.enzyme_summaries[0]), enzyme_id: 'Other', canonical_name: 'Other', recognition_site_count_definite: 1, recognition_site_count_possible: 0, double_strand_break_count: 1, nick_count: 0 });
+            return value;
+        }],
+        ['event orientation differs from owning occurrence', () => { const value = clone(ANALYSIS); value.analysis.occurrences[0].double_strand_events[0].orientation = 'reverse'; value.analysis.grouped_cleavages[0].contributors[0].orientation = 'reverse'; return value; }],
+        ['same occurrence repeats event ordinal under opposite orientations', () => { const value = clone(ANALYSIS); const event = clone(value.analysis.occurrences[0].double_strand_events[0]); event.orientation = 'reverse'; event.contributor_group_id = 'cut:opposite'; value.analysis.occurrences[0].double_strand_events.push(event); value.analysis.counts.double_strand_break_count = 2; value.analysis.enzyme_summaries[0].double_strand_break_count = 2; const group = clone(value.analysis.grouped_cleavages[0]); group.contributor_group_id = 'cut:opposite'; group.contributors[0].orientation = 'reverse'; value.analysis.grouped_cleavages.push(group); return value; }],
     ])('rejects relational analysis contradiction: %s', (_label, mutate) => expect(() => parseRestrictionAnalysis(mutate())).toThrow());
 
     it.each([
@@ -99,6 +121,10 @@ describe('restriction API boundary', () => {
         ['unresolved cleavage contributor event', () => { const value = clone(DIGEST); value.cleavages[0].contributors[0].event_ordinal = 99; return value; }],
         ['unresolved fragment lineage', () => { const value = clone(DIGEST); value.fragments[0].lineage_cleavage_group_ids = ['cut:missing']; return value; }],
         ['duplicate fragment lineage', () => { const value = clone(DIGEST); value.fragments[0].lineage_cleavage_group_ids.push('cut:1'); return value; }],
+        ['digest occurrence canonical name differs from selected record', () => { const value = clone(DIGEST); value.occurrences[0].canonical_name = 'EcoRI-inconsistent'; return value; }],
+        ['fragment end contributor belongs to a different contributor group', () => { const value = clone(DIGEST); const cleavage = clone(value.cleavages[0]); cleavage.cleavage_index = 1; cleavage.contributor_group_id = 'cut:2'; cleavage.contributing_enzyme_ids = []; cleavage.contributors = []; value.cleavages.push(cleavage); value.fragments[0].right_end.contributor_group_id = 'cut:2'; return value; }],
+        ['fragment end enzyme IDs omit a resolved contributor enzyme', () => { const value = clone(DIGEST); value.fragments[0].right_end.contributing_enzyme_ids = []; return value; }],
+        ['fragment end enzyme IDs add a selected non-contributor enzyme', () => { const value = clone(DIGEST); const other = clone(value.selected_enzymes[0]); other.enzyme_id = 'Other'; other.canonical_name = 'Other'; value.selected_enzyme_ids.push('Other'); value.selected_enzymes.push(other); value.fragments[0].right_end.contributing_enzyme_ids.push('Other'); return value; }],
     ])('rejects relational digest contradiction: %s', (_label, mutate) => expect(() => parseRestrictionDigestSimulation(mutate())).toThrow());
 
     it.each([
@@ -116,6 +142,7 @@ describe('restriction API boundary', () => {
         ['selected enzyme maximum', () => { const value = clone(DIGEST); value.resource_policy.selected_enzyme_maximum = 0; return value; }],
         ['physical cut maximum', () => { const value = clone(DIGEST); value.resource_policy.physical_cut_maximum = 0; return value; }],
         ['fragment maximum', () => { const value = clone(DIGEST); value.resource_policy.fragment_maximum = 0; return value; }],
+        ['saved output maximum', () => { const value = clone(DIGEST); value.resource_policy.saved_output_maximum = 0; return value; }],
         ['total fragment bases maximum', () => { const value = clone(DIGEST); value.resource_policy.total_fragment_bases_maximum = 2; return value; }],
         ['digest response byte maximum', () => { const value = clone(DIGEST); value.resource_policy.simulation_response_maximum_bytes = 1; return value; }],
         ['fragment source segment outside source', () => { const value = clone(DIGEST); value.fragments[0].source_segments = [[0, 11]]; return value; }],

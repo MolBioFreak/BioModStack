@@ -60,6 +60,7 @@ export function restrictionBoundaryPositions(
     selectedEnzymes: string[],
     sequenceLength: number,
     reverseCoordinates = false,
+    circular = false,
 ): number[] {
     if (sequenceLength <= 0) return [];
     const selected = new Set(selectedEnzymes);
@@ -70,18 +71,20 @@ export function restrictionBoundaryPositions(
         for (const event of occurrence.double_strand_events) {
             if (event.status !== 'complete' || seenDsbGroups.has(event.contributor_group_id)) continue;
             const boundary = event.top_boundary;
-            if (boundary === null || !Number.isInteger(boundary) || boundary < 0 || boundary >= sequenceLength) continue;
+            if (boundary === null || !Number.isInteger(boundary) || boundary < 0 || boundary > sequenceLength || (circular && boundary === sequenceLength)) continue;
             seenDsbGroups.add(event.contributor_group_id);
             positions.push(boundary);
         }
         for (const event of occurrence.nicks) {
             const boundary = event.boundary;
-            if (event.status !== 'complete' || boundary === null || !Number.isInteger(boundary) || boundary < 0 || boundary >= sequenceLength) continue;
+            if (event.status !== 'complete' || boundary === null || !Number.isInteger(boundary) || boundary < 0 || boundary > sequenceLength || (circular && boundary === sequenceLength)) continue;
             positions.push(boundary);
         }
     }
-    const displayed = positions.map((position) => reverseCoordinates ? sequenceLength - 1 - position : position);
-    return Array.from(new Set(displayed)).sort((left, right) => left - right);
+    const displayed = positions.map((position) => reverseCoordinates
+        ? (circular ? (sequenceLength - position) % sequenceLength : sequenceLength - position)
+        : position);
+    return displayed.sort((left, right) => left - right);
 }
 
 const CANONICAL_BASES = new Set(['A', 'C', 'G', 'T']);
@@ -226,10 +229,10 @@ function smoothValues(values: number[]): number[] {
     });
 }
 
-function countPositionsInRange(positions: number[], start: number, end: number): number {
+function countPositionsInRange(positions: number[], start: number, end: number, includeEnd = false): number {
     let count = 0;
     for (const position of positions) {
-        if (position >= start && position < end) {
+        if (position >= start && (position < end || (includeEnd && position === end))) {
             count += 1;
         }
     }
@@ -255,7 +258,7 @@ function computeMetricValue(
             return calculateHomopolymerBurden(windowSeq);
         case 'restriction_density': {
             const windowLengthKb = Math.max(1, end - start) / 1000;
-            return countPositionsInRange(restrictionPositions, start, end) / windowLengthKb;
+            return countPositionsInRange(restrictionPositions, start, end, end === sequence.length) / windowLengthKb;
         }
         default:
             return 0;
@@ -273,7 +276,7 @@ function computeSelectionMetricValue(
 
     if (metric === 'restriction_density') {
         const cutCount = ranges.reduce(
-            (total, range) => total + countPositionsInRange(restrictionPositions, range.start, range.end),
+            (total, range) => total + countPositionsInRange(restrictionPositions, range.start, range.end, range.end === sequence.length),
             0,
         );
         return cutCount / (totalLength / 1000);
@@ -367,8 +370,9 @@ export function GCContentTrack({
             selectedEnzymes,
             normalizedSequence.length,
             reverseCoordinates,
+            circular,
         );
-    }, [metricId, normalizedSequence.length, restrictionOccurrences, reverseCoordinates, selectedEnzymes]);
+    }, [circular, metricId, normalizedSequence.length, restrictionOccurrences, reverseCoordinates, selectedEnzymes]);
 
     const analyticsData = useMemo<AnalyticsPoint[]>(() => {
         if (!normalizedSequence || normalizedSequence.length < 10) return [];
