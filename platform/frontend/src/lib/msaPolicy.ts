@@ -15,6 +15,12 @@ export function hydrateColabfoldMsaSettings(values: Partial<ColabfoldMsaSettings
     return fields as unknown as ColabfoldMsaSettings;
 }
 export type MsaSearchProvider = 'colabfold_api' | 'neurosnap_api';
+/** Complete persisted hosted settings; defaults come only from the inventory. */
+export type HostedMsaSettings = ColabfoldMsaSettings & NeurosnapMsaSettings & { msa_provider: SavedMsaProvider };
+export function hydrateHostedMsaSettings(values: Partial<HostedMsaSettings> = {}): HostedMsaSettings {
+    return { ...hydrateColabfoldMsaSettings(values), ...hydrateNeurosnapMsaSettings(values),
+        msa_provider: hydrateMsaProvider(values.msa_provider) };
+}
 export type SavedMsaProvider = MsaSearchProvider | 'auto' | 'local';
 export interface NeurosnapMsaSettings {
     msa_neurosnap_coverage_percent: number;

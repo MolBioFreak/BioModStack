@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:bms:hosted-msa-settings:v2",
+  "title": "Hosted MSA settings (bms.msa-search-policy.v2)",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "msa_provider": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "colabfold_api",
+        "neurosnap_api"
+      ],
+      "description": "Explicit hosted provider. Legacy auto resolves to the global ColabFold policy; no local or alternate-provider fallback."
+    },
+    "colabfold_use_env": {
+      "$ref": "urn:bms:msa-search-policy:v2#/colabfold_settings/colabfold_use_env"
+    },
+    "colabfold_use_filter": {
+      "$ref": "urn:bms:msa-search-policy:v2#/colabfold_settings/colabfold_use_filter"
+    },
+    "colabfold_use_templates": {
+      "$ref": "urn:bms:msa-search-policy:v2#/colabfold_settings/colabfold_use_templates"
+    },
+    "colabfold_pairing_mode": {
+      "$ref": "urn:bms:msa-search-policy:v2#/colabfold_settings/colabfold_pairing_mode"
+    },
+    "colabfold_pairing_strategy": {
+      "$ref": "urn:bms:msa-search-policy:v2#/colabfold_settings/colabfold_pairing_strategy"
+    },
+    "msa_neurosnap_coverage_percent": {
+      "$ref": "urn:bms:msa-search-policy:v2#/neurosnap_settings/msa_neurosnap_coverage_percent"
+    },
+    "msa_neurosnap_identity_percent": {
+      "$ref": "urn:bms:msa-search-policy:v2#/neurosnap_settings/msa_neurosnap_identity_percent"
+    },
+    "msa_neurosnap_max_sequences": {
+      "$ref": "urn:bms:msa-search-policy:v2#/neurosnap_settings/msa_neurosnap_max_sequences"
+    },
+    "msa_neurosnap_force_uppercase": {
+      "$ref": "urn:bms:msa-search-policy:v2#/neurosnap_settings/msa_neurosnap_force_uppercase"
+    },
+    "msa_neurosnap_pad_sequences": {
+      "$ref": "urn:bms:msa-search-policy:v2#/neurosnap_settings/msa_neurosnap_pad_sequences"
+    }
+  }
+}
