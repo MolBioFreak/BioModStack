@@ -19,6 +19,7 @@ from .contracts import (
     validate_seed_sources,
 )
 from .clash import CLASH_DETECTOR_ID, CLASH_DETECTOR_VERSION
+from .state_landscape_analysis import MAX_STATE_LANDSCAPE_COMPARISONS
 
 
 BACKENDS = frozenset({"protenix_v2_ensemble", "confornets", "external_import"})
@@ -436,6 +437,13 @@ def _validate_state_landscape_comparison_plan(
             raise ConformationalMappingRequestError(
                 "pairwise state landscape comparison requires at least two planned coordinates"
             )
+        comparison_count = len(selected) * (len(selected) - 1) // 2
+        if comparison_count > MAX_STATE_LANDSCAPE_COMPARISONS:
+            raise ConformationalMappingRequestError(
+                "state landscape comparison resolves "
+                f"{comparison_count} comparisons, exceeding configured maximum "
+                f"{MAX_STATE_LANDSCAPE_COMPARISONS}"
+            )
         return
     if mode != "reference":
         return
@@ -458,6 +466,13 @@ def _validate_state_landscape_comparison_plan(
     if not any(coordinate != reference for coordinate in selected):
         raise ConformationalMappingRequestError(
             "reference state landscape comparison requires another planned coordinate"
+        )
+    comparison_count = len(selected) - 1
+    if comparison_count > MAX_STATE_LANDSCAPE_COMPARISONS:
+        raise ConformationalMappingRequestError(
+            "state landscape comparison resolves "
+            f"{comparison_count} comparisons, exceeding configured maximum "
+            f"{MAX_STATE_LANDSCAPE_COMPARISONS}"
         )
 
 

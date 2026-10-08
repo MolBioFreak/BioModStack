@@ -12,6 +12,9 @@ class StateLandscapeAnalysisError(ValueError):
     """Canonical state landscapes cannot be compared under the supplied policy."""
 
 
+MAX_STATE_LANDSCAPE_COMPARISONS = 10_000
+
+
 _FORMULA = {
     "version": "cm_state_landscape_analysis_v1",
     "native_score": "native_score_b - native_score_a",
@@ -65,6 +68,13 @@ def resolve_state_landscape_comparison(
             raise StateLandscapeAnalysisError("pairwise state comparison scope must be all_within_target")
         if len(candidates) < 2:
             raise StateLandscapeAnalysisError("pairwise state comparison resolved fewer than two candidates")
+        comparison_count = len(candidates) * (len(candidates) - 1) // 2
+        if comparison_count > MAX_STATE_LANDSCAPE_COMPARISONS:
+            raise StateLandscapeAnalysisError(
+                "state landscape comparison resolves "
+                f"{comparison_count} comparisons, exceeding configured maximum "
+                f"{MAX_STATE_LANDSCAPE_COMPARISONS}"
+            )
         return {
             "mode": "pairwise",
             "comparison_target_id": target_id,
@@ -102,6 +112,13 @@ def resolve_state_landscape_comparison(
     candidate_ids = [candidate_id for candidate_id, _ in candidates if candidate_id != reference_candidate_id]
     if not candidate_ids:
         raise StateLandscapeAnalysisError("reference state comparison resolved no other candidates")
+    comparison_count = len(candidate_ids)
+    if comparison_count > MAX_STATE_LANDSCAPE_COMPARISONS:
+        raise StateLandscapeAnalysisError(
+            "state landscape comparison resolves "
+            f"{comparison_count} comparisons, exceeding configured maximum "
+            f"{MAX_STATE_LANDSCAPE_COMPARISONS}"
+        )
     return {
         "mode": "reference",
         "comparison_target_id": target_id,
