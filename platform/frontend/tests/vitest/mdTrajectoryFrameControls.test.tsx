@@ -11,6 +11,7 @@ vi.mock('../../src/components/MolstarViewer', () => ({
     ),
 }));
 
+import * as api from '../../src/lib/api';
 import MDResultsPane from '../../src/components/MDResultsPane';
 
 const response = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config: {} });
@@ -61,6 +62,54 @@ const seedPlayback = (client: QueryClient, jobId: string) => {
 afterEach(() => document.body.replaceChildren());
 
 describe('governed MD trajectory frame controls', () => {
+    it('survives a cold lifecycle rejection and recovers without granting stale commands', async () => {
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+        const jobId = 'cold-lifecycle';
+        const fixture = new QueryClient();
+        seedPlayback(fixture, jobId);
+        const run = fixture.getQueryData<{ data: Awaited<ReturnType<typeof api.fetchMDRun>>['data'] }>(['md-run', jobId])!;
+        const read = vi.spyOn(api, 'fetchMDRun').mockRejectedValue(new Error('lifecycle unavailable'));
+        const summaryRead = vi.spyOn(api, 'fetchMDSummary').mockResolvedValue(fixture.getQueryData(['md-summary', jobId])!);
+        const artifactsRead = vi.spyOn(api, 'fetchMDArtifacts').mockResolvedValue(fixture.getQueryData(['md-artifacts', jobId])!);
+        const analysisRead = vi.spyOn(api, 'fetchMDAnalysis').mockResolvedValue(fixture.getQueryData(['md-analysis', jobId])!);
+        client.setQueryData(['md-trajectory-frame-map', jobId, 'map'], fixture.getQueryData(['md-trajectory-frame-map', jobId, 'map']));
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        const settle = async () => { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); }); };
+        await act(async () => { root.render(<MemoryRouter><QueryClientProvider client={client}><MDResultsPane jobId={jobId} /></QueryClientProvider></MemoryRouter>); });
+        await settle();
+        await settle();
+        expect(container.textContent).toContain('Dynamics lifecycle is unavailable');
+        expect(container.querySelector('[data-testid="molstar-scene"]')).toBeTruthy();
+        expect(container.querySelector('[data-bms-md-lifecycle]')).toBeNull();
+        read.mockResolvedValue({ ...response(run.data), data: { ...run.data, allowed_actions: ['pause'] } } as Awaited<ReturnType<typeof api.fetchMDRun>>);
+        await act(async () => { Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Retry lifecycle read')!.click(); });
+        await settle();
+        expect(container.querySelector('[data-bms-md-lifecycle]')).toBeTruthy();
+        expect(container.textContent).not.toContain('Dynamics lifecycle is unavailable');
+        const pause = container.querySelector<HTMLButtonElement>('[data-bms-md-lifecycle] button')!;
+        expect(pause.disabled).toBe(false);
+        const command = vi.spyOn(api, 'pauseMDRun');
+        let rejectRead!: (reason: Error) => void;
+        read.mockReturnValue(new Promise((_resolve, reject) => { rejectRead = reject; }));
+        let refetch!: Promise<void>;
+        await act(async () => { refetch = client.refetchQueries({ queryKey: ['md-run', jobId] }); });
+        await settle();
+        expect(pause.disabled).toBe(true);
+        await act(async () => pause.click());
+        expect(command).not.toHaveBeenCalled();
+        await act(async () => { rejectRead(new Error('warm failure')); await refetch; });
+        command.mockRestore();
+        await settle();
+        expect(container.querySelector('[data-bms-md-lifecycle]')).toBeNull();
+        expect(container.querySelector('[data-testid="molstar-scene"]')).toBeTruthy();
+        await act(async () => root.unmount());
+        read.mockRestore(); summaryRead.mockRestore(); artifactsRead.mockRestore(); analysisRead.mockRestore();
+        client.clear(); fixture.clear();
+    });
+
+
     it('plays, pauses, and loops the governed display-frame sequence', async () => {
         vi.useFakeTimers();
         const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });

@@ -10,6 +10,7 @@ import { useState } from 'react';
 import MolstarViewer from './MolstarViewer';
 import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
 import type { Job } from '../lib/api';
+import { isRFD3GenerationResultJob } from './rfd3GenerationResultsView';
 import { isNgsJob, ngsResultHref } from '../lib/ngsResultRouting';
 import { jobPollingInterval } from '../lib/queryPolling';
 import { RemoteResultsPrompt } from './RemoteResultsPrompt';
@@ -69,6 +70,7 @@ export function JobDetailPage() {
         job?.mode === 'md';
     const isConformationalMappingJob = job?.model_id === 'conformational_mapping' ||
         job?.model_id === 'confornets_experimental';
+    const isRFD3GenerationJob = isRFD3GenerationResultJob(job);
     const isNgsResultJob = job ? isNgsJob(job) : false;
 
     // Fetch docking results
@@ -90,7 +92,7 @@ export function JobDetailPage() {
             if (!res.ok) throw new Error('Failed to fetch structure files');
             return res.json();
         },
-        enabled: job?.status === 'completed' && !isDockingJob && !isMolecularDynamicsJob && !isConformationalMappingJob && !isNgsResultJob,
+        enabled: job?.status === 'completed' && !isDockingJob && !isMolecularDynamicsJob && !isConformationalMappingJob && !isNgsResultJob && !isRFD3GenerationJob,
     });
 
     const poses = dockingData?.sdfs || [];
@@ -116,6 +118,10 @@ export function JobDetailPage() {
                 </div>
             </div>
         );
+    }
+
+    if (isRFD3GenerationJob) {
+        return <Navigate replace to={`/designs/${job.id}${location.search}`} />;
     }
 
     if (isNgsResultJob) {
