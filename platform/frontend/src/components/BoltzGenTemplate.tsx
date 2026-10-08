@@ -28,7 +28,8 @@ const NTP_TEMPLATES = [
 
 type DesignMode = 'ligand_binder' | 'ntp_binder' | 'scaffold_around_ligand' | 'backbone_docking' | 'peptide_binder';
 type DockingMethod = 'none' | 'diffdock' | 'unidock' | 'both';
-type Protocol = 'protein-anything' | 'peptide-anything' | 'protein-small_molecule' | 'nanobody-anything';
+type Protocol = 'protein-anything' | 'peptide-anything' | 'protein-small_molecule' | 'nanobody-anything' | 'antibody-anything';
+type CheckpointMode = 'both' | 'diverse' | 'adherence';
 
 interface BoltzGenTemplateProps {
     onBack: () => void;
@@ -93,6 +94,11 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
     // Secondary structure and protocol
     const [secondaryStructure, setSecondaryStructure] = useState(initialValues?.boltzgen_secondary_structure || '');
     const [protocol, setProtocol] = useState<Protocol>(initialValues?.boltzgen_protocol || 'protein-anything');
+
+    // Additional advanced options (new)
+    const [checkpointMode, setCheckpointMode] = useState<CheckpointMode>(initialValues?.boltzgen_checkpoint_mode || 'both');
+    const [skipInverseFolding, setSkipInverseFolding] = useState(initialValues?.boltzgen_skip_inverse_folding || false);
+    const [reuseExisting, setReuseExisting] = useState(initialValues?.boltzgen_reuse || false);
 
     // Derived state
     const effectiveSmiles = useMemo(() => {
@@ -194,6 +200,17 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
             params.boltzgen_secondary_structure = secondaryStructure;
         }
         params.boltzgen_protocol = protocol;
+
+        // Additional advanced options
+        if (checkpointMode !== 'both') {
+            params.boltzgen_checkpoint_mode = checkpointMode;
+        }
+        if (skipInverseFolding) {
+            params.boltzgen_skip_inverse_folding = true;
+        }
+        if (reuseExisting) {
+            params.boltzgen_reuse = true;
+        }
 
         submitMutation.mutate({
             name: jobName,
@@ -505,8 +522,66 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
                                 <option value="peptide-anything">Peptide (short binders)</option>
                                 <option value="protein-small_molecule">Protein + Small Molecule</option>
                                 <option value="nanobody-anything">Nanobody</option>
+                                <option value="antibody-anything">Antibody (Fab/scFv)</option>
                             </select>
                             <p className="text-xs text-slate-500 mt-1">BoltzGen protocol - affects filtering and defaults</p>
+                        </div>
+
+                        {/* Checkpoint Mode Selection */}
+                        <div>
+                            <label className="block text-sm font-medium text-slate-300 mb-2">Checkpoint Mode</label>
+                            <div className="grid grid-cols-3 gap-2">
+                                {[
+                                    { id: 'both', name: 'Both', desc: 'Diverse + Adherence (default)' },
+                                    { id: 'diverse', name: 'Diverse', desc: 'Higher structural variety' },
+                                    { id: 'adherence', name: 'Adherence', desc: 'Closer to target' },
+                                ].map(m => (
+                                    <button
+                                        key={m.id}
+                                        type="button"
+                                        onClick={() => setCheckpointMode(m.id as CheckpointMode)}
+                                        className={`p-3 rounded-lg border text-center transition-all ${checkpointMode === m.id
+                                            ? 'bg-amber-500/20 border-amber-500 text-amber-300'
+                                            : 'bg-slate-900/50 border-slate-700 text-slate-300 hover:border-slate-600'
+                                            }`}
+                                    >
+                                        <div className="font-medium text-sm">{m.name}</div>
+                                        <div className="text-xs text-slate-500">{m.desc}</div>
+                                    </button>
+                                ))}
+                            </div>
+                            <p className="text-xs text-slate-500 mt-1">
+                                {checkpointMode === 'both'
+                                    ? 'Uses both checkpoints for balanced design diversity'
+                                    : checkpointMode === 'diverse'
+                                        ? 'boltzgen1_diverse checkpoint - more structural variation'
+                                        : 'boltzgen1_adherence checkpoint - better target adherence'}
+                            </p>
+                        </div>
+
+                        {/* Pipeline Options */}
+                        <div className="flex gap-6 mt-4">
+                            <label className="flex items-center gap-3 cursor-pointer">
+                                <div className={`w-10 h-6 rounded-full p-1 transition-colors ${skipInverseFolding ? 'bg-amber-500' : 'bg-slate-700'}`}>
+                                    <div className={`w-4 h-4 bg-white rounded-full shadow transition-transform ${skipInverseFolding ? 'translate-x-4' : ''}`} />
+                                </div>
+                                <input type="checkbox" className="hidden" checked={skipInverseFolding} onChange={e => setSkipInverseFolding(e.target.checked)} />
+                                <div>
+                                    <span className="text-sm text-slate-300">Skip Inverse Folding</span>
+                                    <p className="text-xs text-slate-500">Use designed backbones only</p>
+                                </div>
+                            </label>
+
+                            <label className="flex items-center gap-3 cursor-pointer">
+                                <div className={`w-10 h-6 rounded-full p-1 transition-colors ${reuseExisting ? 'bg-amber-500' : 'bg-slate-700'}`}>
+                                    <div className={`w-4 h-4 bg-white rounded-full shadow transition-transform ${reuseExisting ? 'translate-x-4' : ''}`} />
+                                </div>
+                                <input type="checkbox" className="hidden" checked={reuseExisting} onChange={e => setReuseExisting(e.target.checked)} />
+                                <div>
+                                    <span className="text-sm text-slate-300">Reuse Existing</span>
+                                    <p className="text-xs text-slate-500">Resume interrupted run</p>
+                                </div>
+                            </label>
                         </div>
 
                         {/* Docking Method Selection */}

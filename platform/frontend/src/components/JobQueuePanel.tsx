@@ -141,6 +141,35 @@ function ElapsedTimeBadge({ startedAt }: { startedAt: string | null }) {
     );
 }
 
+// Stage badge - shows current workflow step and progress for running jobs
+function StageBadge({ stage, progress }: { stage: string | null; progress?: string | null }) {
+    if (!stage) return null;
+
+    // Map stage names to display-friendly versions
+    const stageDisplayNames: Record<string, string> = {
+        'rfantibody': 'RFAntibody',
+        'rfdiffusion': 'RFdiffusion',
+        'fampnn': 'FA-MPNN',
+        'proteinmpnn': 'ProteinMPNN',
+        'thermompnn': 'ThermoMPNN',
+        'boltz2': 'Boltz-2',
+        'af2': 'AlphaFold2',
+        'unidock': 'UniDock',
+        'msa': 'MSA Gen',
+        'prepfampnn': 'Prep FAMPNN',
+        'complete': 'Complete',
+    };
+
+    const displayName = stageDisplayNames[stage.toLowerCase()] || stage;
+    const displayProgress = progress ? ` (${progress})` : '';
+
+    return (
+        <span className="px-2 py-0.5 rounded text-xs font-medium bg-cyan-500/20 text-cyan-400 animate-pulse">
+            🔄 {displayName}{displayProgress}
+        </span>
+    );
+}
+
 export function JobQueuePanel() {
     const queryClient = useQueryClient();
     const [expanded, setExpanded] = useState(true);
@@ -478,7 +507,10 @@ function JobRow({
                             )}
                             {/* Elapsed time for running jobs */}
                             {job.queue_status === 'running' && (
-                                <ElapsedTimeBadge startedAt={job.started_at} />
+                                <>
+                                    <StageBadge stage={job.current_stage} progress={job.stage_progress} />
+                                    <ElapsedTimeBadge startedAt={job.started_at} />
+                                </>
                             )}
                         </div>
                     </div>

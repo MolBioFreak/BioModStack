@@ -574,6 +574,8 @@ export interface QueuedJob {
     max_retries: number;
     created_at: string;
     started_at: string | null;
+    current_stage: string | null;  // Current workflow step (e.g., 'rfantibody', 'fampnn', 'boltz2')
+    stage_progress: string | null;  // Granular progress (e.g., '5/30', 'step 500/1000')
 }
 
 export interface QueueStats {

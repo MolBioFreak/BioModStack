@@ -422,6 +422,8 @@ class GPUOrchestrator:
         while self._running:
             try:
                 await self._process_cycle()
+                # Poll progress for running jobs (updates stage_progress in DB)
+                await self.update_running_job_progress()
             except Exception as e:
                 logger.error(f"[ORCHESTRATOR] Error in cycle: {e}", exc_info=True)
             
@@ -579,6 +581,53 @@ class GPUOrchestrator:
         """Handle OOM failures based on job's oom_tolerance setting."""
         # TODO: Implement by parsing Nextflow logs for OOM errors
         pass
+    
+    async def update_running_job_progress(self):
+        """
+        Poll stage progress for all running jobs.
+        
+        Reads work directory logs to extract granular progress (e.g., "5/30 designs").
+        This runs every orchestrator cycle (~3 seconds) to provide live progress updates.
+        """
+        from services.nextflow import parse_stage_progress
+        
+        try:
+            async with self.db_session_factory() as session:
+                from sqlalchemy import select
+                from database import Job
+                
+                # Get jobs that are currently running and have a work directory
+                result = await session.execute(
+                    select(Job).where(
+                        Job.queue_status == "running",
+                        Job.stage_work_dir.isnot(None)
+                    )
+                )
+                running_jobs = result.scalars().all()
+                
+                for job in running_jobs:
+                    if not job.current_stage or not job.stage_work_dir:
+                        continue
+                    
+                    # Parse progress from work directory log
+                    total_designs = None
+                    if job.params:
+                        total_designs = job.params.get('rfantibody_num_designs') or job.params.get('num_designs')
+                    
+                    progress = parse_stage_progress(
+                        job.stage_work_dir,
+                        job.current_stage,
+                        total_designs
+                    )
+                    
+                    if progress and progress != job.stage_progress:
+                        job.stage_progress = progress
+                        logger.debug(f"[ORCHESTRATOR] Job {job.name} progress: {progress}")
+                
+                await session.commit()
+                
+        except Exception as e:
+            logger.debug(f"[ORCHESTRATOR] Error updating progress: {e}")
     
     async def handle_msa_job_completion(self, msa_job_id: str, manifest_path: str):
         """

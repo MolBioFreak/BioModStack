@@ -21,6 +21,95 @@ _running_processes: Dict[str, subprocess.Popen] = {}
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 
 
+def parse_stage_progress(work_dir: str, stage: str, total_designs: int = None) -> Optional[str]:
+    """
+    Parse progress from a Nextflow work directory's .command.log.
+    
+    Returns a string like "5/30" or None if progress can't be determined.
+    
+    Each stage has different log patterns:
+    - RFAntibody: "Making design antibody_job_X" / "Finished design"
+    - FAMPNN/RunFAMPNN: "Processing design X" / pdb file counts
+    - Boltz2: "[step X/1000]" or completed sample counts
+    - RFdiffusion: "[step X/50]" diffusion steps
+    """
+    import re
+    
+    if not work_dir:
+        return None
+    
+    log_path = Path(work_dir) / ".command.log"
+    if not log_path.exists():
+        return None
+    
+    try:
+        # Read last 200 lines (progress is usually near the end)
+        with open(log_path, 'r', errors='replace') as f:
+            lines = f.readlines()[-200:]
+        content = ''.join(lines)
+        
+        stage_lower = stage.lower() if stage else ""
+        
+        # RFAntibody: Count "Making design" or "Finished design"
+        if 'rfantibody' in stage_lower:
+            # Count completed designs
+            finished = len(re.findall(r'Finished design in', content))
+            # Try to get total from params or estimate from log
+            if total_designs:
+                return f"{finished}/{total_designs}"
+            # Look for "Making design antibody_job_X" to estimate
+            making = re.findall(r'Making design.*antibody_job_(\d+)', content)
+            if making:
+                max_idx = max(int(m) for m in making) + 1  # 0-indexed
+                return f"{finished}/{max_idx}"
+            return f"{finished}/?" if finished else None
+        
+        # FAMPNN: Check for tqdm progress bar or completed designs
+        elif 'fampnn' in stage_lower:
+            # Check for tqdm progress bar: "Sampling...:  13%|█▎ | 67/500"
+            tqdm_match = re.findall(r'\|\s*(\d+)/(\d+)\s*\[', content)
+            if tqdm_match:
+                last_progress = tqdm_match[-1]
+                return f"step {last_progress[0]}/{last_progress[1]}"
+            # Fallback: count completed designs
+            completed = len(re.findall(r'Saved design', content, re.IGNORECASE))
+            if completed and total_designs:
+                return f"{completed}/{total_designs}"
+            return None
+        
+        # Boltz2: Look for step counters or sample completion
+        elif 'boltz' in stage_lower:
+            # Check for diffusion steps [500/1000]
+            step_match = re.findall(r'\[(\d+)/(\d+)\]', content)
+            if step_match:
+                last_step = step_match[-1]
+                return f"step {last_step[0]}/{last_step[1]}"
+            # Count completed samples
+            samples = len(re.findall(r'Saved prediction|Completed sample', content, re.IGNORECASE))
+            if samples and total_designs:
+                return f"{samples}/{total_designs}"
+            return None
+        
+        # RFdiffusion: Diffusion steps
+        elif 'rfdiffusion' in stage_lower:
+            step_match = re.findall(r'step.*?(\d+)/(\d+)', content, re.IGNORECASE)
+            if step_match:
+                last_step = step_match[-1]
+                return f"step {last_step[0]}/{last_step[1]}"
+            return None
+        
+        # ThermoMPNN: Per-residue scoring
+        elif 'thermo' in stage_lower:
+            residues = len(re.findall(r'residue|position', content, re.IGNORECASE))
+            return f"{residues} residues" if residues else None
+        
+        return None
+        
+    except Exception as e:
+        logger.debug(f"Error parsing progress from {work_dir}: {e}")
+        return None
+
+
 def sanitize_filename(name: str) -> str:
     """
     Sanitize a string for use as a filename in shell commands.
@@ -332,9 +421,36 @@ async def launch_nextflow_job(
                                 j = j_stats.scalar_one_or_none()
                                 if j:
                                     j.current_stage = stage
+                                    j.stage_progress = None  # Reset progress on new stage
                                     await update_session.commit()
                         except Exception as db_err:
                             logger.warning(f"Failed to update stage for {job_id}: {db_err}")
+                
+                # Check for work directory in TaskHandler output
+                # Example: "workDir: /home/.../work/91/0cd0da..."
+                import re
+                workdir_match = re.search(r'workDir:\s*(/[^\s\]]+)', line_str)
+                if workdir_match:
+                    current_work_dir = workdir_match.group(1)
+                    
+                    # Update work dir and parse progress
+                    try:
+                        async with async_session() as update_session:
+                            j_stats = await update_session.execute(select(Job).where(Job.id == job_id))
+                            j = j_stats.scalar_one_or_none()
+                            if j:
+                                j.stage_work_dir = current_work_dir
+                                # Parse progress from the work dir log
+                                progress = parse_stage_progress(
+                                    current_work_dir, 
+                                    j.current_stage,
+                                    j.params.get('rfantibody_num_designs') if j.params else None
+                                )
+                                if progress:
+                                    j.stage_progress = progress
+                                await update_session.commit()
+                    except Exception as db_err:
+                        logger.debug(f"Failed to update work dir for {job_id}: {db_err}")
 
             # Wait for process to fully exit
             exit_code = await process.wait()

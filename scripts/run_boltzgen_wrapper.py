@@ -130,6 +130,15 @@ def main():
     parser.add_argument("--inverse_fold_num_sequences", type=int, default=None,
                         help="Number of sequences per backbone")
     
+    # Checkpoint and pipeline control parameters (new)
+    parser.add_argument("--checkpoint_mode", type=str, default=None,
+                        choices=['diverse', 'adherence'],
+                        help="Use single checkpoint (diverse or adherence) instead of both")
+    parser.add_argument("--skip_inverse_folding", action="store_true",
+                        help="Skip inverse folding step")
+    parser.add_argument("--reuse", action="store_true",
+                        help="Reuse existing results (resume interrupted run)")
+    
     args, unknown = parser.parse_known_args()
     
     # Collect config files (support both single and batch modes)
@@ -177,6 +186,23 @@ def main():
             cmd += f" --inverse_fold_avoid '{args.inverse_fold_avoid}'"
         if args.inverse_fold_num_sequences:
             cmd += f" --inverse_fold_num_sequences {args.inverse_fold_num_sequences}"
+        
+        # Add checkpoint mode if using single checkpoint
+        if args.checkpoint_mode:
+            # Map our mode names to checkpoint paths
+            checkpoint_map = {
+                'diverse': 'huggingface:boltzgen/boltzgen1_diverse:boltzgen1_diverse.ckpt',
+                'adherence': 'huggingface:boltzgen/boltzgen1_adherence:boltzgen1_adherence.ckpt'
+            }
+            cmd += f" --design_checkpoints {checkpoint_map[args.checkpoint_mode]}"
+        
+        # Skip inverse folding if requested
+        if args.skip_inverse_folding:
+            cmd += " --skip_inverse_folding"
+        
+        # Reuse existing results (resume)
+        if args.reuse:
+            cmd += " --reuse"
         
         # Add any extra args passed through
         if unknown:

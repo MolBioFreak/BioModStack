@@ -1,7 +1,13 @@
 import React, { useState } from 'react';
 
 export interface QualitySettings {
-    // Boltz-2 settings
+    // RFantibody settings (backbone diffusion)
+    rfantibody_diffusion_steps: number;
+    rfantibody_noise_scale_ca: number;
+    rfantibody_noise_scale_frame: number;
+    rfantibody_guide_scale: number;
+
+    // Boltz-2 settings (structure validation)
     boltz_sampling_steps: number;
     boltz_recycling_steps: number;
     boltz_num_samples: number;
@@ -9,7 +15,7 @@ export interface QualitySettings {
     boltz_use_msa: boolean;
     boltz_step_scale: number | null;
 
-    // FAMPNN settings
+    // FAMPNN settings (sequence design)
     fampnn_temperature: number;
     fampnn_num_steps: number;
     fampnn_psce_threshold: number;
@@ -19,45 +25,73 @@ export type QualityPreset = 'speed' | 'balanced' | 'quality' | 'maximum';
 
 const PRESETS: Record<QualityPreset, QualitySettings> = {
     speed: {
+        // RFantibody: Fast screening
+        rfantibody_diffusion_steps: 20,
+        rfantibody_noise_scale_ca: 1.0,
+        rfantibody_noise_scale_frame: 1.0,
+        rfantibody_guide_scale: 10,
+        // Boltz-2
         boltz_sampling_steps: 50,
         boltz_recycling_steps: 1,
         boltz_num_samples: 1,
         boltz_use_potentials: false,
         boltz_use_msa: false,
         boltz_step_scale: null,
+        // FAMPNN
         fampnn_temperature: 0.2,
         fampnn_num_steps: 50,
         fampnn_psce_threshold: 0.4,
     },
     balanced: {
+        // RFantibody: Default quality
+        rfantibody_diffusion_steps: 50,
+        rfantibody_noise_scale_ca: 1.0,
+        rfantibody_noise_scale_frame: 1.0,
+        rfantibody_guide_scale: 10,
+        // Boltz-2
         boltz_sampling_steps: 200,
         boltz_recycling_steps: 3,
         boltz_num_samples: 1,
         boltz_use_potentials: false,
         boltz_use_msa: false,
         boltz_step_scale: null,
+        // FAMPNN
         fampnn_temperature: 0.1,
         fampnn_num_steps: 100,
         fampnn_psce_threshold: 0.3,
     },
     quality: {
+        // RFantibody: Higher quality designs
+        rfantibody_diffusion_steps: 100,
+        rfantibody_noise_scale_ca: 0.8,
+        rfantibody_noise_scale_frame: 0.8,
+        rfantibody_guide_scale: 15,
+        // Boltz-2
         boltz_sampling_steps: 500,
         boltz_recycling_steps: 5,
         boltz_num_samples: 3,
         boltz_use_potentials: true,
         boltz_use_msa: true,
         boltz_step_scale: null,
+        // FAMPNN
         fampnn_temperature: 0.01,
         fampnn_num_steps: 200,
         fampnn_psce_threshold: 0.2,
     },
     maximum: {
+        // RFantibody: Best possible quality
+        rfantibody_diffusion_steps: 200,
+        rfantibody_noise_scale_ca: 0.7,
+        rfantibody_noise_scale_frame: 0.7,
+        rfantibody_guide_scale: 20,
+        // Boltz-2
         boltz_sampling_steps: 1000,
         boltz_recycling_steps: 10,
         boltz_num_samples: 5,
         boltz_use_potentials: true,
         boltz_use_msa: true,
         boltz_step_scale: null,
+        // FAMPNN
         fampnn_temperature: 0.0001,
         fampnn_num_steps: 500,
         fampnn_psce_threshold: 0.15,
@@ -161,8 +195,100 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                         </div>
                     </div>
 
-                    {/* Boltz-2 Settings */}
+                    {/* RFantibody Settings */}
                     <div className="space-y-3">
+                        <div className="flex items-center gap-2 text-sm font-medium text-pink-400">
+                            <span>💉</span>
+                            Backbone Design (RFantibody)
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-xs text-slate-500 mb-1">
+                                    Diffusion Steps <span className="text-slate-600">({settings.rfantibody_diffusion_steps})</span>
+                                </label>
+                                <input
+                                    type="range"
+                                    min={20}
+                                    max={200}
+                                    step={10}
+                                    value={settings.rfantibody_diffusion_steps}
+                                    onChange={(e) => updateSetting('rfantibody_diffusion_steps', parseInt(e.target.value))}
+                                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-pink-500"
+                                />
+                                <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                                    <span>20 (fast)</span>
+                                    <span>100</span>
+                                    <span>200 (quality)</span>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs text-slate-500 mb-1">
+                                    Guide Scale <span className="text-slate-600">({settings.rfantibody_guide_scale})</span>
+                                </label>
+                                <input
+                                    type="range"
+                                    min={1}
+                                    max={50}
+                                    step={1}
+                                    value={settings.rfantibody_guide_scale}
+                                    onChange={(e) => updateSetting('rfantibody_guide_scale', parseInt(e.target.value))}
+                                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-pink-500"
+                                />
+                                <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                                    <span>1 (weak)</span>
+                                    <span>25</span>
+                                    <span>50 (strong)</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-xs text-slate-500 mb-1">
+                                    Noise Scale (CA) <span className="text-slate-600">({settings.rfantibody_noise_scale_ca.toFixed(1)})</span>
+                                </label>
+                                <input
+                                    type="range"
+                                    min={0.5}
+                                    max={2.0}
+                                    step={0.1}
+                                    value={settings.rfantibody_noise_scale_ca}
+                                    onChange={(e) => updateSetting('rfantibody_noise_scale_ca', parseFloat(e.target.value))}
+                                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-pink-500"
+                                />
+                                <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                                    <span>0.5 (consistent)</span>
+                                    <span>1.0</span>
+                                    <span>2.0 (diverse)</span>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs text-slate-500 mb-1">
+                                    Noise Scale (Frame) <span className="text-slate-600">({settings.rfantibody_noise_scale_frame.toFixed(1)})</span>
+                                </label>
+                                <input
+                                    type="range"
+                                    min={0.5}
+                                    max={2.0}
+                                    step={0.1}
+                                    value={settings.rfantibody_noise_scale_frame}
+                                    onChange={(e) => updateSetting('rfantibody_noise_scale_frame', parseFloat(e.target.value))}
+                                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-pink-500"
+                                />
+                                <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                                    <span>0.5 (consistent)</span>
+                                    <span>1.0</span>
+                                    <span>2.0 (diverse)</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Boltz-2 Settings */}
+                    <div className="space-y-3 pt-3 border-t border-slate-700/50">
                         <div className="flex items-center gap-2 text-sm font-medium text-purple-400">
                             <span>🧬</span>
                             Structure Prediction (Boltz-2)

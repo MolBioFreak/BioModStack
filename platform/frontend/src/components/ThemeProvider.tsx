@@ -5,7 +5,7 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
 
-export type ThemeId = 'midnight' | 'light' | 'desert' | 'retro' | 'cyberpunk' | 'ocean';
+export type ThemeId = 'midnight' | 'light' | 'desert' | 'solarized' | 'nord' | 'dracula' | 'forest' | 'ember' | 'retro' | 'cyberpunk' | 'ocean';
 
 export interface ThemeConfig {
     id: ThemeId;
@@ -33,9 +33,39 @@ export const THEMES: ThemeConfig[] = [
     },
     {
         id: 'desert',
-        name: 'Desert Sand',
-        description: 'Warm sandy earth tones',
-        preview: { bg: '#2a1f1a', accent: '#e8a849', text: '#f5e6d3' }
+        name: 'Desert',
+        description: 'Warm sandy dunes',
+        preview: { bg: '#3b3022', accent: '#f0a030', text: '#fff8e7' }
+    },
+    {
+        id: 'solarized',
+        name: 'Solarized',
+        description: 'Classic developer scheme',
+        preview: { bg: '#002b36', accent: '#268bd2', text: '#fdf6e3' }
+    },
+    {
+        id: 'nord',
+        name: 'Nord',
+        description: 'Arctic blue-gray',
+        preview: { bg: '#2e3440', accent: '#88c0d0', text: '#eceff4' }
+    },
+    {
+        id: 'dracula',
+        name: 'Dracula',
+        description: 'Gothic purple & pink',
+        preview: { bg: '#282a36', accent: '#bd93f9', text: '#f8f8f2' }
+    },
+    {
+        id: 'forest',
+        name: 'Forest',
+        description: 'Deep woodland greens',
+        preview: { bg: '#1a2418', accent: '#4caf50', text: '#e8f4e5' }
+    },
+    {
+        id: 'ember',
+        name: 'Ember',
+        description: 'Warm sunset oranges',
+        preview: { bg: '#1f1410', accent: '#ff6b35', text: '#fff4e8' }
     },
     {
         id: 'retro',
