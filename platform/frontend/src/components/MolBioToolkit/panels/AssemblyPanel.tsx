@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useInputOwnership } from './useInputOwnership';
 import {
     fetchGoldenGateAssemblyOptions,
@@ -16,8 +17,6 @@ import {
     type AssemblyOperationResponse,
     type DnaWeaverPlanRequest,
     type DnaWeaverPlanResponse,
-    type GoldenGateAssemblyOptionsResponse,
-    type SavedGibsonWorkupListItem,
 } from '../../../lib/api';
 import { buildAssemblyReloadOperationParams, buildGoldenGateAssemblyRequest } from '../../../lib/goldenGateAuthority';
 import type { SequenceData, SelectionInfo } from '../types';
@@ -182,21 +181,30 @@ function workupText(value: unknown, fallback = '—'): string {
     return typeof value === 'string' || typeof value === 'number' ? String(value) : fallback;
 }
 
-function SavedGibsonWorkupLibrary({
-    records,
-    loading,
-    error,
-    onRefresh,
-    onLoad,
-}: {
-    records: SavedGibsonWorkupListItem[];
-    loading: boolean;
-    error: string | null;
-    onRefresh: () => void;
+const savedWorkupsKey = ['molbio-saved-gibson-workups'] as const;
+const goldenGateOptionsKey = ['molbio-golden-gate-options'] as const;
+
+function SavedGibsonWorkupLibrary({ onLoad }: {
     onLoad: (savedSequenceId: string) => Promise<void> | void;
 }) {
     const [open, setOpen] = useState(false);
     const [loadingId, setLoadingId] = useState<string | null>(null);
+    const workups = useInfiniteQuery({
+        queryKey: savedWorkupsKey,
+        queryFn: async ({ pageParam, signal }) => (await fetchSavedGibsonWorkups({ limit: 50, offset: pageParam }, signal)).data,
+        initialPageParam: 0,
+        getNextPageParam: (lastPage, pages) => lastPage.length === 50
+            ? pages.reduce((count, page) => count + page.length, 0) : undefined,
+        enabled: open,
+        staleTime: Infinity,
+        gcTime: 30 * 60_000,
+        refetchOnWindowFocus: false,
+        refetchOnReconnect: false,
+    });
+    const records = workups.data?.pages.flat() ?? [];
+    const loading = workups.isFetching;
+    const error = workups.error?.message;
+    const onRefresh = () => { void workups.refetch(); };
 
     const load = async (id: string) => {
         setLoadingId(id);
@@ -217,7 +225,7 @@ function SavedGibsonWorkupLibrary({
                 </div>
                 <div className="flex gap-2">
                     <button type="button" onClick={onRefresh} disabled={loading} className="rounded border border-violet-400/50 px-2 py-1 text-xs text-violet-100 disabled:opacity-50">Refresh</button>
-                    <button type="button" onClick={() => setOpen(true)} className="rounded bg-violet-600 px-3 py-1.5 text-xs font-medium text-white">Saved workups ({records.length})</button>
+                    <button type="button" onClick={() => setOpen(true)} className="rounded bg-violet-600 px-3 py-1.5 text-xs font-medium text-white">Saved workups{workups.data ? ` (${records.length} loaded)` : ' (not loaded)'}</button>
                 </div>
             </div>
             {error && <p className="mt-2 text-xs text-red-300">Could not load saved workups: {error}</p>}
@@ -229,13 +237,16 @@ function SavedGibsonWorkupLibrary({
                             <button type="button" onClick={() => setOpen(false)} className="rounded px-2 py-1 text-sm text-slate-300 hover:bg-slate-800" aria-label="Close saved workups">Close</button>
                         </div>
                         <div className="mt-4 space-y-2">
-                            {records.length === 0 && <p className="rounded border border-dashed border-slate-700 p-3 text-sm text-slate-400">No saved Gibson workups yet.</p>}
+                            {loading && <p role="status">Loading saved workups…</p>}
+                            {workups.data && !loading && !error && records.length === 0 && <p className="rounded border border-dashed border-slate-700 p-3 text-sm text-slate-400">No saved Gibson workups yet.</p>}
                             {records.map((record) => <article key={record.id} className="rounded-lg border border-slate-700 bg-slate-950/40 p-3">
                                 <div className="flex flex-wrap items-start justify-between gap-3">
                                     <div className="min-w-0"><h5 className="font-medium text-slate-100">{record.name}</h5><p className="mt-1 text-xs text-slate-400">{record.length.toLocaleString()} bp • {record.topology} • {record.engine || 'Gibson'} {record.engine_version || ''}</p><p className="mt-1 text-xs text-slate-500">{record.fragment_count} fragments • {record.primer_count} primers</p></div>
                                     <button type="button" onClick={() => void load(record.id)} disabled={loadingId === record.id} className="rounded bg-violet-600 px-3 py-2 text-xs font-medium text-white disabled:opacity-50">{loadingId === record.id ? 'Loading…' : 'Load workup'}</button>
                                 </div>
                             </article>)}
+                            {workups.hasNextPage && <button type="button" disabled={loading} onClick={() => void workups.fetchNextPage()}>Load more workups</button>}
+                            {workups.data && !workups.hasNextPage && !loading && !error && <p className="text-xs text-slate-400">All saved workups loaded.</p>}
                         </div>
                     </div>
                 </div>
@@ -343,7 +354,35 @@ export function AssemblyPanel({
     const [gibsonPreparations, setGibsonPreparations] = useState<Record<string, 'pcr' | 'ready_linear'>>({});
     const [saveName, setSaveName] = useState('');
     const [saveDescription, setSaveDescription] = useState('');
-    const [goldenGateOptions, setGoldenGateOptions] = useState<GoldenGateAssemblyOptionsResponse | null>(null);
+    const queryClient = useQueryClient();
+    const optionsQuery = useQuery({
+        queryKey: goldenGateOptionsKey,
+        queryFn: async ({ signal }) => (await fetchGoldenGateAssemblyOptions(signal)).data,
+        enabled: mode === 'golden_gate',
+        staleTime: 300_000,
+        refetchOnWindowFocus: false,
+        refetchOnReconnect: false,
+    });
+    const goldenGateOptions = optionsQuery.data ?? null;
+    // Catalog/release refreshes invalidate discovery, without fetching either
+    // resource merely because Assembly mounted.
+    useEffect(() => {
+        const resources = ['molbio-restriction-catalog', 'molbio-restriction-product-release'];
+        const optionsUpdatedAt = queryClient.getQueryState(goldenGateOptionsKey)?.dataUpdatedAt ?? 0;
+        // Also notice a release refresh that happened while Assembly was absent.
+        if (resources.some(key => (queryClient.getQueryState([key])?.dataUpdatedAt ?? 0) > optionsUpdatedAt)) {
+            void queryClient.invalidateQueries({ queryKey: goldenGateOptionsKey });
+        }
+        return queryClient.getQueryCache().subscribe((event) => {
+            if (event.type === 'updated' && resources.includes(String(event.query.queryKey[0]))
+                && (event.action.type === 'success' || event.action.type === 'invalidate')) {
+                void queryClient.invalidateQueries({ queryKey: goldenGateOptionsKey });
+            }
+        });
+    }, [queryClient]);
+    useEffect(() => {
+        if (mode !== 'golden_gate') void queryClient.cancelQueries({ queryKey: goldenGateOptionsKey });
+    }, [mode, queryClient]);
     const [goldenGateEnzyme, setGoldenGateEnzyme] = useState('');
     const [gibsonMinOverlap, setGibsonMinOverlap] = useState(20);
     const [gibsonPreferredOverlap, setGibsonPreferredOverlap] = useState(28);
@@ -361,9 +400,7 @@ export function AssemblyPanel({
     const [plannerPricePerBp, setPlannerPricePerBp] = useState(0.08);
     const [plannerLeadTimeDays, setPlannerLeadTimeDays] = useState(10);
     const [error, setError] = useState<string | null>(null);
-    const [savedWorkups, setSavedWorkups] = useState<SavedGibsonWorkupListItem[]>([]);
-    const [savedWorkupsLoading, setSavedWorkupsLoading] = useState(false);
-    const [savedWorkupsError, setSavedWorkupsError] = useState<string | null>(null);
+
     const plannerScopeRef = useRef('');
     const planOwner = useInputOwnership([selectedSequenceId, sequenceData.sequence, sequenceData.circular, mode, gibsonWorkflow, plannerMinFragmentLength, plannerMaxFragmentLength, plannerOverlapLength, plannerVendorName, plannerPricePerBp, plannerLeadTimeDays]);
     const dnaWeaverPlan = planState?.token === planOwner.token ? planState.value : null;
@@ -388,47 +425,21 @@ export function AssemblyPanel({
         }
     }, [selectedSequenceId, sequenceData.operationParams]);
 
-    const refreshSavedWorkups = async () => {
-        setSavedWorkupsLoading(true);
-        setSavedWorkupsError(null);
-        try {
-            const response = await fetchSavedGibsonWorkups();
-            setSavedWorkups(response.data);
-        } catch (loadError) {
-            setSavedWorkupsError(loadError instanceof Error ? loadError.message : 'Request failed');
-        } finally {
-            setSavedWorkupsLoading(false);
-        }
-    };
-
+    const refreshSavedWorkups = () => queryClient.invalidateQueries({ queryKey: savedWorkupsKey });
     const activeSelection = useMemo(() => selectionSequence(sequenceData, selection), [sequenceData, selection]);
 
     useEffect(() => {
-        void refreshSavedWorkups();
-    }, []);
+        // Only initialize an empty choice: late discovery must not replace a
+        // restored historical enzyme or an operator's current selection.
+        if (mode === 'golden_gate' && goldenGateOptions) {
+            setGoldenGateEnzyme(current => current || goldenGateOptions.enzymes[0]?.enzyme_id || '');
+        }
+    }, [mode, goldenGateOptions]);
 
-    useEffect(() => {
-        let cancelled = false;
-        const loadOptions = async () => {
-            try {
-                const response = await fetchGoldenGateAssemblyOptions();
-                if (!cancelled) {
-                    setGoldenGateOptions(response.data);
-                    setGoldenGateEnzyme((current) => (
-                        response.data.enzymes.some((enzyme) => enzyme.enzyme_id === current)
-                            ? current
-                            : (response.data.enzymes[0]?.enzyme_id ?? '')
-                    ));
-                }
-            } catch (loadError) {
-                console.error('Failed to load Golden Gate options:', loadError);
-            }
-        };
-        loadOptions();
-        return () => {
-            cancelled = true;
-        };
-    }, []);
+    const previewRef = useRef<AbortController | null>(null);
+    const planRef = useRef<AbortController | null>(null);
+    useEffect(() => () => previewRef.current?.abort(), [owner.token]);
+    useEffect(() => () => planRef.current?.abort(), [planOwner.token]);
 
     const addWholeConstruct = () => {
         setDnaWeaverPlan(null);
@@ -550,9 +561,12 @@ export function AssemblyPanel({
         setError(null);
         setDnaWeaverPlan(null);
         const scope = plannerScope;
+        planRef.current?.abort();
+        const controller = new AbortController();
+        planRef.current = controller;
         try {
-            const response = await planDnaWeaverGibsonAssembly(request);
-            if (plannerScopeRef.current !== scope || !owner.isCurrent() || !planOwner.isCurrent()) return;
+            const response = await planDnaWeaverGibsonAssembly(request, controller.signal);
+            if (controller.signal.aborted || plannerScopeRef.current !== scope || !owner.isCurrent() || !planOwner.isCurrent()) return;
             const ordered = response.data.ordered_fragments;
             setDnaWeaverPlan(response.data);
             setFragments(ordered);
@@ -566,11 +580,11 @@ export function AssemblyPanel({
                 message: response.data.message,
             });
         } catch (planError: UntypedApiValue) {
-            if (plannerScopeRef.current === scope && owner.isCurrent() && planOwner.isCurrent()) {
+            if (!controller.signal.aborted && plannerScopeRef.current === scope && owner.isCurrent() && planOwner.isCurrent()) {
                 setError(planError?.response?.data?.detail || planError?.message || 'DNA Weaver planning failed');
             }
         } finally {
-            if (plannerScopeRef.current === scope && owner.isCurrent() && planOwner.isCurrent()) setPlanning(false);
+            if (!controller.signal.aborted && plannerScopeRef.current === scope && owner.isCurrent() && planOwner.isCurrent()) setPlanning(false);
         }
     };
 
@@ -606,6 +620,9 @@ export function AssemblyPanel({
             setError('Create an order-ready DNA Weaver plan before saving. Resolve every blocker and re-plan.');
             return;
         }
+        previewRef.current?.abort();
+        const controller = action === 'simulate' ? new AbortController() : null;
+        previewRef.current = controller;
         setLoading(action);
         setError(null);
         try {
@@ -618,6 +635,7 @@ export function AssemblyPanel({
                     new_name: saveName || undefined,
                     save_description: saveDescription || undefined,
                 });
+                void refreshSavedWorkups();
                 if (plannerScopeRef.current !== scope || !owner.isCurrent() || !planOwner.isCurrent()) return;
                 setDnaWeaverPlan(response.data);
                 setResult({
@@ -625,7 +643,6 @@ export function AssemblyPanel({
                     saved_sequence: response.data.saved_sequence || undefined,
                     message: response.data.message,
                 });
-                await refreshSavedWorkups();
                 return;
             }
             let response;
@@ -638,7 +655,7 @@ export function AssemblyPanel({
                 };
                 response = action === 'save'
                     ? await saveLigationAssembly(payload)
-                    : await simulateLigationAssembly(payload);
+                    : await simulateLigationAssembly(payload, controller?.signal);
             } else if (mode === 'gibson') {
                 const payload = {
                     fragments,
@@ -651,7 +668,7 @@ export function AssemblyPanel({
                 };
                 response = action === 'save'
                     ? await saveGibsonAssembly(payload)
-                    : await simulateGibsonAssembly(payload);
+                    : await simulateGibsonAssembly(payload, controller?.signal);
             } else {
                 const payload = buildGoldenGateAssemblyRequest({
                     fragments,
@@ -663,13 +680,14 @@ export function AssemblyPanel({
                 });
                 response = action === 'save'
                     ? await saveGoldenGateAssembly(payload)
-                    : await simulateGoldenGateAssembly(payload);
+                    : await simulateGoldenGateAssembly(payload, controller?.signal);
             }
-            if (owner.isCurrent()) setResult(response.data);
+            if (action === 'save') void refreshSavedWorkups();
+            if (owner.isCurrent() && !controller?.signal.aborted) setResult(response.data);
         } catch (runError: UntypedApiValue) {
-            if (owner.isCurrent()) setError(runError?.response?.data?.detail || runError?.message || 'Assembly failed');
+            if (owner.isCurrent() && !controller?.signal.aborted) setError(runError?.response?.data?.detail || runError?.message || 'Assembly failed');
         } finally {
-            if (owner.isCurrent()) setLoading(null);
+            if (owner.isCurrent() && !controller?.signal.aborted) setLoading(null);
         }
     };
 
@@ -703,13 +721,7 @@ export function AssemblyPanel({
                 </p>
             </div>
 
-            <SavedGibsonWorkupLibrary
-                records={savedWorkups}
-                loading={savedWorkupsLoading}
-                error={savedWorkupsError}
-                onRefresh={() => void refreshSavedWorkups()}
-                onLoad={onLoadSavedWorkup}
-            />
+            <SavedGibsonWorkupLibrary onLoad={onLoadSavedWorkup} />
 
             <SavedGibsonWorkup operationParams={sequenceData.operationParams} />
 
@@ -1041,6 +1053,7 @@ export function AssemblyPanel({
                     saveDescription={saveDescription}
                     sequenceName={sequenceData.name}
                     initialCircular={sequenceData.circular}
+                    onSaved={() => void refreshSavedWorkups()}
                     onLoadProduct={onLoadProduct}
                 />
             )}

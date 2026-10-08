@@ -3684,8 +3684,8 @@ export const previewMolBioSequenceImport = (payload: MolBioSequenceImportPayload
 export const commitMolBioSequenceImport = (payload: MolBioSequenceImportPayload) =>
     api.post<MolBioSequenceImportCommitResponse>('/api/molbio/sequences/import/commit', payload);
 
-export const fetchSavedGibsonWorkups = () =>
-    api.get<SavedGibsonWorkupListItem[]>('/api/sequences/assembly-workups');
+export const fetchSavedGibsonWorkups = (params?: { limit?: number; offset?: number }, signal?: AbortSignal) =>
+    api.get<SavedGibsonWorkupListItem[]>('/api/sequences/assembly-workups', { params, signal });
 
 export const fetchNucleotideSequence = (id: string) =>
     api.get<NucleotideSequence>(`/api/sequences/${id}`);
@@ -3978,35 +3978,35 @@ export const alignMolBioSequences = (data: {
     settings?: Partial<SequenceAlignmentSettings>;
 }) => api.post<SequenceAlignmentResult>('/api/molbio/alignment', data);
 
-export const simulateLigationAssembly = (data: LigationAssemblyRequest) =>
-    api.post<AssemblyOperationResponse>('/api/molbio/assembly/ligation/simulate', data);
+export const simulateLigationAssembly = (data: LigationAssemblyRequest, signal?: AbortSignal) =>
+    api.post<AssemblyOperationResponse>('/api/molbio/assembly/ligation/simulate', data, { signal });
 
 export const saveLigationAssembly = (data: LigationAssemblyRequest) =>
     api.post<AssemblyOperationResponse>('/api/molbio/assembly/ligation/save', data);
 
-export const simulateGibsonAssembly = (data: GibsonAssemblyRequest) =>
-    api.post<AssemblyOperationResponse>('/api/molbio/assembly/gibson/simulate', data);
+export const simulateGibsonAssembly = (data: GibsonAssemblyRequest, signal?: AbortSignal) =>
+    api.post<AssemblyOperationResponse>('/api/molbio/assembly/gibson/simulate', data, { signal });
 
 export const saveGibsonAssembly = (data: GibsonAssemblyRequest) =>
     api.post<AssemblyOperationResponse>('/api/molbio/assembly/gibson/save', data);
 
-export const planDnaWeaverGibsonAssembly = (data: DnaWeaverPlanRequest) =>
-    api.post<DnaWeaverPlanResponse>('/api/molbio/assembly/gibson/dnaweaver/plan', data);
+export const planDnaWeaverGibsonAssembly = (data: DnaWeaverPlanRequest, signal?: AbortSignal) =>
+    api.post<DnaWeaverPlanResponse>('/api/molbio/assembly/gibson/dnaweaver/plan', data, { signal });
 
 export const saveDnaWeaverGibsonAssembly = (data: DnaWeaverPlanSaveRequest) =>
     api.post<DnaWeaverPlanResponse>('/api/molbio/assembly/gibson/dnaweaver/save', data);
 
-export const designGibsonAssembly = (data: GibsonDesignRequest) =>
-    api.post<GibsonDesignResponse>('/api/molbio/assembly/gibson/design', data);
+export const designGibsonAssembly = (data: GibsonDesignRequest, signal?: AbortSignal) =>
+    api.post<GibsonDesignResponse>('/api/molbio/assembly/gibson/design', data, { signal });
 
 export const saveDesignedGibsonAssembly = (data: GibsonDesignRequest) =>
     api.post<GibsonDesignResponse>('/api/molbio/assembly/gibson/design/save', data);
 
-export const fetchGoldenGateAssemblyOptions = () =>
-    api.get<GoldenGateAssemblyOptionsResponse>('/api/molbio/assembly/golden-gate/options');
+export const fetchGoldenGateAssemblyOptions = (signal?: AbortSignal) =>
+    api.get<GoldenGateAssemblyOptionsResponse>('/api/molbio/assembly/golden-gate/options', { signal });
 
-export const simulateGoldenGateAssembly = (data: GoldenGateAssemblyRequest) =>
-    api.post<AssemblyOperationResponse>('/api/molbio/assembly/golden-gate/simulate', data).then((response) => {
+export const simulateGoldenGateAssembly = (data: GoldenGateAssemblyRequest, signal?: AbortSignal) =>
+    api.post<AssemblyOperationResponse>('/api/molbio/assembly/golden-gate/simulate', data, { signal }).then((response) => {
         requireGoldenGateAssemblyResponse(response.data);
         return response;
     });
@@ -4533,13 +4533,13 @@ export interface PrimerUpdate {
     tm_settings?: PrimerTmSettings;
 }
 
-export const fetchPrimerTmOptions = () =>
-    api.get<PrimerTmOptionsResponse>('/api/molbio/primer-tm/options');
+export const fetchPrimerTmOptions = (signal?: AbortSignal) =>
+    api.get<PrimerTmOptionsResponse>('/api/molbio/primer-tm/options', { signal });
 
 export const calculatePrimerTm = (data: {
     primers: PrimerTmInput[];
     settings?: PrimerTmSettings;
-}) => api.post<PrimerTmResult[]>('/api/molbio/primer-tm/calculate', data);
+}, signal?: AbortSignal) => api.post<PrimerTmResult[]>('/api/molbio/primer-tm/calculate', data, { signal });
 
 export const calculatePrimerQc = (data: {
     primers: Array<{
@@ -4552,10 +4552,10 @@ export const calculatePrimerQc = (data: {
     template_sequence_type?: 'dna' | 'rna';
     template_is_circular?: boolean;
     include_pairwise?: boolean;
-}) => api.post<PrimerQcResponse>('/api/molbio/primer-qc', data);
+}, signal?: AbortSignal) => api.post<PrimerQcResponse>('/api/molbio/primer-qc', data, { signal });
 
-export const designPrimers = (data: PrimerDesignRequest) =>
-    api.post<PrimerDesignResponse>('/api/molbio/primer-design', data);
+export const designPrimers = (data: PrimerDesignRequest, signal?: AbortSignal) =>
+    api.post<PrimerDesignResponse>('/api/molbio/primer-design', data, { signal });
 
 export const fetchPrimers = (params?: {
     search?: string;
@@ -5412,8 +5412,8 @@ export interface PcrOperationResponse {
     reused: boolean;
 }
 
-export const runPcrOperation = (payload: PcrOperationRequest) =>
-    apiData(api.post<PcrOperationResponse>('/api/molbio/pcr', payload));
+export const runPcrOperation = (payload: PcrOperationRequest, signal?: AbortSignal) =>
+    apiData(api.post<PcrOperationResponse>('/api/molbio/pcr', payload, { signal }));
 
 export const fetchPcrExperiments = (limit = 100) =>
     apiData(api.get<{ items: PcrExperimentListItem[]; count: number; limit: number }>(
