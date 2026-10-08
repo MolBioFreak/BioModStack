@@ -5,11 +5,11 @@ nextflow.enable.dsl = 2
 // POD5 → BAM via Dorado basecaller with RNA model selection, optional alignment.
 //
 // Input: POD5 only
-//   POD5: DoradoBasecall (RNA model) → DoradoAlign (if ref) / BamPrepare (if no ref)
+//   POD5: DoradoBasecall (RNA model) → optional DoradoAlign; unreferenced output remains unaligned.
 
-include { DoradoBasecall } from '../../modules/ngs/dorado_basecall.nf'
+include { DoradoPreflight; DoradoBasecall } from '../../modules/ngs/dorado_basecall.nf'
 include { DoradoAlign } from '../../modules/ngs/dorado_align.nf'
-include { PrepareBamForAnalysis } from '../../modules/ngs/bam_prepare.nf'
+
 
 def reportStage(params, stageName, files) {
     def jobId = params.containsKey('job_id') ? params.job_id : null
@@ -19,9 +19,10 @@ def reportStage(params, stageName, files) {
         if (reportFiles.isEmpty()) return
         def args = [jobId.toString(), stageName, "complete"] + reportFiles.collect { it.toString() }
         def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
-        proc.waitFor()
+        def rc = proc.waitFor()
+        if (rc != 0) throw new IllegalStateException("Stage reporting failed for ${stageName} (exit ${rc})")
     } catch (Exception e) {
-        println "Warning: Failed to report stage ${stageName}: ${e.message}"
+        throw new IllegalStateException("Stage reporting failed for ${stageName}", e)
     }
 }
 
@@ -30,7 +31,7 @@ workflow ONT_BASECALL_RNA {
     println("Running ONT RNA basecalling workflow")
     println("  POD5 dir:    ${params.pod5_dir ?: '(none)'}")
     println("  Reference:   ${params.reference_fasta ?: '(none)'}")
-    println("  Dorado model:${params.dorado_model ?: 'rna004_sup'}")
+    println("  Dorado quality:${params.dorado_quality_mode ?: 'sup'}")
 
     // --- Input validation ---
     def has_pod5 = params.pod5_dir && params.pod5_dir.toString().trim()
@@ -52,12 +53,19 @@ workflow ONT_BASECALL_RNA {
         }
     }
 
+    if (params.barcode_kit && params.barcode_kit.toString().trim()) {
+        error("barcoded POD5 must be demultiplexed by ont_basecall_dna before downstream per-barcode submission")
+    }
     // --- Dorado basecalling (RNA model) ---
-    DoradoBasecall(Channel.of(pod5_input))
+    def pod5_channel = Channel.value(pod5_input)
+    DoradoPreflight(pod5_channel)
+    DoradoBasecall(pod5_channel, DoradoPreflight.out.manifest)
     DoradoBasecall.out.bam.subscribe { ignoredValue ->
         reportStage(params, "dorado_basecall", [
             "${params.out_dir}/basecall/calls.bam",
             "${params.out_dir}/basecall/basecall.log",
+            "${params.out_dir}/basecall/dorado_preflight.json",
+            "${params.out_dir}/basecall/dorado_runtime_provenance.json",
         ])
     }
 
@@ -71,15 +79,6 @@ workflow ONT_BASECALL_RNA {
                 "${params.out_dir}/align/reference.fasta",
                 "${params.out_dir}/align/reference.fasta.fai",
                 "${params.out_dir}/align/align.log",
-            ])
-        }
-    } else {
-        PrepareBamForAnalysis(DoradoBasecall.out.bam)
-        PrepareBamForAnalysis.out.aligned.subscribe { bam, bai ->
-            reportStage(params, "bam_prepare", [
-                "${params.out_dir}/align/aligned.bam",
-                "${params.out_dir}/align/aligned.bam.bai",
-                "${params.out_dir}/align/bam_prepare.log",
             ])
         }
     }

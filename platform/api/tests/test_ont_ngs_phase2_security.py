@@ -5,11 +5,17 @@ from pathlib import Path
 
 import pytest
 
+import routers.ont_runs as ont_runs
 from routers.ont_runs import OntNgsSubmitRequest, _job_create_for_ont_submit
 
 
 def request_for(params: dict[str, object]) -> OntNgsSubmitRequest:
     return OntNgsSubmitRequest(params=params)
+
+
+@pytest.fixture(autouse=True)
+def _unit_contract_paths_are_prevalidated(monkeypatch):
+    monkeypatch.setattr(ont_runs, "_confine_submitted_path", lambda value, _label, **_kwargs: str(value))
 
 
 def test_reference_digest_is_server_controlled() -> None:

@@ -47,9 +47,8 @@ quality_modes:
     - cpu
   modified_base_models:
     - none
-    - 5mC
+    - 5mC_5hmC
     - 6mA
-    - 6mA 4mC_5mC
   barcode_fields:
     - barcode_kit
     - sample_sheet
@@ -258,10 +257,47 @@ params:
 
   - name: dorado_model
     type: string
-    description: Dorado concrete model identifier or reviewed preset
+    description: Server-resolved exact Dorado model identifier
     required: false
     default: sup
     pattern: '^[A-Za-z0-9][A-Za-z0-9._@+-]{0,127}$'
+
+  - name: dorado_quality_mode
+    type: string
+    description: Locked quality selector resolved server-side to an exact model identity
+    required: false
+    default: sup
+    enum: [fast, hac, sup]
+
+  - name: dorado_basecall_mode
+    type: string
+    description: Locked Dorado execution mode
+    required: false
+    default: simplex
+    enum: [simplex, duplex]
+
+  - name: ont_molecule_type
+    type: string
+    description: Molecule family used for chemistry/model qualification
+    required: false
+    default: dna
+    enum: [dna, rna]
+
+  - name: duplex_pairs
+    type: file
+    description: Confined explicit Dorado duplex read-pairs file
+    required: false
+
+  - name: barcode_kit
+    type: string
+    description: Locked inline barcode-classification kit
+    required: false
+    enum: [SQK-RBK114-96]
+
+  - name: sample_sheet
+    type: file
+    description: Optional confined barcode sample sheet
+    required: false
 
   - name: dorado_device
     type: string
@@ -272,19 +308,12 @@ params:
 
   - name: modified_bases
     type: string
-    description: Modified-base model selection
+    description: Explicit compatible modified-base model selection; none is the safe default
     required: false
-    default: 6mA 4mC_5mC
+    default: none
     enum:
-      - 6mA 4mC_5mC
-      - 6mA 5mC
       - 6mA
-      - 5mC
       - 5mC_5hmC
-      - 4mC_5mC
-      - 5mCG_5hmCG
-      - 5mCG
-      - 5hmCG
       - none
 
   - name: min_qscore
@@ -309,16 +338,16 @@ params:
 
   - name: dorado_batch_size
     type: integer
-    description: Optional Dorado batch size override for GPU memory tuning
+    description: Explicit bounded Dorado batch size; automatic sizing is forbidden
     required: false
     minimum: 1
-    maximum: 4096
+    maximum: 256
 
   - name: run_modkit
     type: boolean
     description: Run modkit pileup and summary outputs
     required: false
-    default: true
+    default: false
 
   - name: modkit_filter_threshold
     type: number

@@ -5,11 +5,11 @@ nextflow.enable.dsl = 2
 // POD5 → BAM via Dorado basecaller, optional alignment.
 //
 // Input: POD5 only
-//   POD5: DoradoBasecall → DoradoAlign (if ref) / BamPrepare (if no ref)
+//   POD5: DoradoBasecall → optional DoradoAlign; unreferenced output remains an unaligned BAM.
 
-include { DoradoBasecall } from '../../modules/ngs/dorado_basecall.nf'
+include { DoradoPreflight; DoradoBasecall; DoradoDemux } from '../../modules/ngs/dorado_basecall.nf'
 include { DoradoAlign } from '../../modules/ngs/dorado_align.nf'
-include { PrepareBamForAnalysis } from '../../modules/ngs/bam_prepare.nf'
+
 
 def reportStage(params, stageName, files) {
     def jobId = params.containsKey('job_id') ? params.job_id : null
@@ -19,9 +19,10 @@ def reportStage(params, stageName, files) {
         if (reportFiles.isEmpty()) return
         def args = [jobId.toString(), stageName, "complete"] + reportFiles.collect { it.toString() }
         def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
-        proc.waitFor()
+        def rc = proc.waitFor()
+        if (rc != 0) throw new IllegalStateException("Stage reporting failed for ${stageName} (exit ${rc})")
     } catch (Exception e) {
-        println "Warning: Failed to report stage ${stageName}: ${e.message}"
+        throw new IllegalStateException("Stage reporting failed for ${stageName}", e)
     }
 }
 
@@ -30,7 +31,7 @@ workflow ONT_BASECALL_DNA {
     println("Running ONT DNA basecalling workflow")
     println("  POD5 dir:    ${params.pod5_dir ?: '(none)'}")
     println("  Reference:   ${params.reference_fasta ?: '(none)'}")
-    println("  Dorado model:${params.dorado_model ?: 'sup'}")
+    println("  Dorado quality:${params.dorado_quality_mode ?: 'sup'}")
 
     // --- Input validation ---
     def has_pod5 = params.pod5_dir && params.pod5_dir.toString().trim()
@@ -53,16 +54,23 @@ workflow ONT_BASECALL_DNA {
     }
 
     // --- Dorado basecalling ---
-    DoradoBasecall(Channel.of(pod5_input))
+    def pod5_channel = Channel.value(pod5_input)
+    DoradoPreflight(pod5_channel)
+    DoradoBasecall(pod5_channel, DoradoPreflight.out.manifest)
     DoradoBasecall.out.bam.subscribe { ignoredValue ->
         reportStage(params, "dorado_basecall", [
             "${params.out_dir}/basecall/calls.bam",
             "${params.out_dir}/basecall/basecall.log",
+            "${params.out_dir}/basecall/dorado_preflight.json",
+            "${params.out_dir}/basecall/dorado_runtime_provenance.json",
         ])
     }
 
-    // --- Optional: align or prepare ---
-    if (has_reference) {
+    // --- Optional: demultiplex classified reads, or align/prepare unbarcoded reads ---
+    def is_barcoded = params.barcode_kit && params.barcode_kit.toString().trim()
+    if (is_barcoded) {
+        DoradoDemux(DoradoBasecall.out.bam, DoradoBasecall.out.preflight)
+    } else if (has_reference) {
         DoradoAlign(DoradoBasecall.out.bam, Channel.of(reference_file))
         DoradoAlign.out.aligned.subscribe { bam, bai ->
             reportStage(params, "dorado_align", [
@@ -73,19 +81,23 @@ workflow ONT_BASECALL_DNA {
                 "${params.out_dir}/align/align.log",
             ])
         }
-    } else {
-        PrepareBamForAnalysis(DoradoBasecall.out.bam)
-        PrepareBamForAnalysis.out.aligned.subscribe { bam, bai ->
-            reportStage(params, "bam_prepare", [
-                "${params.out_dir}/align/aligned.bam",
-                "${params.out_dir}/align/aligned.bam.bai",
-                "${params.out_dir}/align/bam_prepare.log",
-            ])
-        }
     }
 }
 
 // Entry point for standalone Ont Basecall Dna workflow
 workflow {
     ONT_BASECALL_DNA()
+}
+
+// publishDir is asynchronous with respect to process-output subscriptions.
+// Anchor terminal demux products only after Nextflow has completed publication.
+workflow.onComplete {
+    def is_barcoded = params.barcode_kit && params.barcode_kit.toString().trim()
+    if (workflow.success && is_barcoded) {
+        reportStage(params, "dorado_demux", [
+            "${params.out_dir}/demux/demux_manifest.json",
+            "${params.out_dir}/demux/per_barcode_units.json",
+            "${params.out_dir}/demux/demux/units",
+        ])
+    }
 }

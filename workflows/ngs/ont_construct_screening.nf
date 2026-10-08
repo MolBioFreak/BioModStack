@@ -9,7 +9,7 @@ nextflow.enable.dsl = 2
 //   BAM:  BamPrepare → CloneValidation
 //   FASTQ: FastqAlign → CloneValidation + FastqPlasmidQC
 
-include { DoradoBasecall } from '../../modules/ngs/dorado_basecall.nf'
+include { DoradoPreflight; DoradoBasecall } from '../../modules/ngs/dorado_basecall.nf'
 include { DoradoAlign } from '../../modules/ngs/dorado_align.nf'
 include { PrepareBamForAnalysis; ValidateMappedBam } from '../../modules/ngs/bam_prepare.nf'
 include { FastqAlign } from '../../modules/ngs/fastq_align.nf'
@@ -26,9 +26,10 @@ def reportStage(params, stageName, files) {
         if (reportFiles.isEmpty()) return
         def args = [jobId.toString(), stageName, "complete"] + reportFiles.collect { it.toString() }
         def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
-        proc.waitFor()
+        def rc = proc.waitFor()
+        if (rc != 0) throw new IllegalStateException("Stage reporting failed for ${stageName} (exit ${rc})")
     } catch (Exception e) {
-        println "Warning: Failed to report stage ${stageName}: ${e.message}"
+        throw new IllegalStateException("Stage reporting failed for ${stageName}", e)
     }
 }
 
@@ -44,7 +45,7 @@ workflow ONT_CONSTRUCT_SCREENING {
     println("  Reference:   ${params.reference_fasta ?: '(none)'}")
     println("  Run QC:      ${runFastqQc}")
     println("  Approx size: ${params.wf_clone_approx_size ?: 7000}")
-    println("  Dorado model:${params.dorado_model ?: 'sup'}")
+    println("  Dorado quality:${params.dorado_quality_mode ?: 'sup'}")
 
     // --- Input validation ---
     def has_pod5 = params.pod5_dir && params.pod5_dir.toString().trim()
@@ -90,11 +91,18 @@ workflow ONT_CONSTRUCT_SCREENING {
             error("POD5 directory not found: ${params.pod5_dir}")
         }
 
-        DoradoBasecall(Channel.of(pod5_input))
+        if (params.barcode_kit && params.barcode_kit.toString().trim()) {
+            error("barcoded POD5 must be demultiplexed by ont_basecall_dna before downstream per-barcode submission")
+        }
+        def pod5_channel = Channel.value(pod5_input)
+        DoradoPreflight(pod5_channel)
+        DoradoBasecall(pod5_channel, DoradoPreflight.out.manifest)
         DoradoBasecall.out.bam.subscribe { _ignored ->
             reportStage(params, "dorado_basecall", [
                 "${params.out_dir}/basecall/calls.bam",
                 "${params.out_dir}/basecall/basecall.log",
+                "${params.out_dir}/basecall/dorado_preflight.json",
+                "${params.out_dir}/basecall/dorado_runtime_provenance.json",
             ])
         }
 

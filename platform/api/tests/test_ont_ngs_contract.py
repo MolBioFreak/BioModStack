@@ -117,7 +117,7 @@ class TestCanonicalWorkflows:
             encoding="utf-8"
         )
         assert "scripts/dorado_supports_option.sh" in dorado_module
-        assert "supports --emit-summary" in dorado_module
+        assert "--emit-summary" in dorado_module
         assert "basecaller --help 2>&1 | grep" not in dorado_module
 
         for relative_path in (

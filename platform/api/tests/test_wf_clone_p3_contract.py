@@ -4,8 +4,14 @@ from pathlib import Path
 
 import pytest
 
+import routers.ont_runs as ont_runs
 from routers.ont_runs import OntNgsSubmitRequest, _job_create_for_ont_submit
 from services.ont_ngs_contract import CANONICAL_ONT_WORKFLOWS
+
+
+@pytest.fixture(autouse=True)
+def _unit_contract_paths_are_prevalidated(monkeypatch):
+    monkeypatch.setattr(ont_runs, "_confine_submitted_path", lambda value, _label, **_kwargs: str(value))
 
 
 @pytest.mark.parametrize(

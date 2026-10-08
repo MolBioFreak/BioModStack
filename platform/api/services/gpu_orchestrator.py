@@ -119,6 +119,7 @@ VRAM_PROFILES = {
     'esmfold2_experimental': {'base': 22000, 'scale': 35},  # Compatibility alias
 
     'oligo_design': {'base': 7000, 'scale': 20},     # Oligo Designer (RFDpoly + NA-MPNN)
+    'nanopore': {'base': 15360, 'scale': 0},        # Dorado P4 lock: total VRAM floor, runtime also requires 8192 MiB free
     'default': {'base': 6000, 'scale': 25},     # Conservative fallback
 }
 

@@ -19,6 +19,8 @@ from datetime import datetime
 from typing import Deque, Dict, Any, Iterable, Iterator, Optional, List, Tuple, Set
 import logging
 
+from services import stage_reporting
+
 logger = logging.getLogger(__name__)
 
 CPU_RESERVED_THREADS = 4
@@ -2055,6 +2057,12 @@ async def launch_nextflow_job(
 
             # Build environment with GPU pinning
             env = {**os.environ, "NXF_ANSI_LOG": "false"}
+            stage_report_token, stage_report_digest = stage_reporting.issue_stage_report_token()
+            provenance = dict(job.provenance or {})
+            provenance[stage_reporting.PROVENANCE_DIGEST_KEY] = stage_report_digest
+            job.provenance = provenance
+            await session.commit()
+            env[stage_reporting.ENV_TOKEN_KEY] = stage_report_token
             env, java_notes = resolve_nextflow_java_env(env)
             java_ok, java_message = preflight_nextflow_java(env)
             for note in java_notes:

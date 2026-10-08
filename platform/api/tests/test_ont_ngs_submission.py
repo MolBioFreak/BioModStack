@@ -44,6 +44,7 @@ def _client_with_fake_create(monkeypatch, captured: dict[str, Any]) -> TestClien
         )
 
     monkeypatch.setattr(ont_runs, "_create_pipeline_job", fake_create_pipeline_job)
+    monkeypatch.setattr(ont_runs, "_confine_submitted_path", lambda value, _label, **_kwargs: str(value))
     return TestClient(app)
 
 

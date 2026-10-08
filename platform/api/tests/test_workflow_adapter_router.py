@@ -70,3 +70,18 @@ def test_workflow_adapter_runtime_control_rejects_nonlocal_clients() -> None:
 
     assert exc_info.value.status_code == 403
     assert "local-only" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_workflow_adapter_launch_rejects_nonlocal_clients() -> None:
+    request = SimpleNamespace(client=SimpleNamespace(host="172.17.0.2"))
+    payload = workflow_adapter.WorkflowAdapterLaunchRequest(
+        job_id="job-1",
+        model_id="nanopore",
+        mode="basecall_dna",
+        params={},
+        output_dir="/tmp/job-1",
+    )
+    with pytest.raises(workflow_adapter.HTTPException) as exc_info:
+        await workflow_adapter.workflow_adapter_launch(payload, request)  # type: ignore[arg-type]
+    assert exc_info.value.status_code == 403

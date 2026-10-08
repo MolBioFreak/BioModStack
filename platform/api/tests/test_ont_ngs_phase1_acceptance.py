@@ -48,6 +48,11 @@ def _request(params: dict[str, object]) -> OntNgsSubmitRequest:
     return OntNgsSubmitRequest(name="acceptance", params=params)
 
 
+@pytest.fixture(autouse=True)
+def _unit_contract_paths_are_prevalidated(monkeypatch):
+    monkeypatch.setattr(ont_runs, "_confine_submitted_path", lambda value, _label, **_kwargs: str(value))
+
+
 def test_explicit_canonical_model_mapping_is_complete_and_registered() -> None:
     canonical_ids = set(CANONICAL_ONT_WORKFLOWS)
     assert set(ONT_WORKFLOW_MODEL_MODES) == canonical_ids
@@ -83,13 +88,13 @@ def test_real_registry_rejects_shell_syntax_in_dorado_model() -> None:
     ) == []
 
     module = (ROOT / "modules/ngs/dorado_basecall.nf").read_text(encoding="utf-8")
-    assert "def allowedModifiedBases" in module
-    assert "allowedModifiedBases.contains(normalizedModifiedBases)" in module
     assert "def doradoShellQuote(value)" in module
-    assert "split(/\\s+/)?.collect { value -> doradoShellQuote(value) }?.join(' ')" in module
-    assert 'def model = doradoShellQuote(params.dorado_model' in module
-    assert 'def device = doradoShellQuote(doradoDevice)' in module
-    assert '        "${pod5_dir}" \\\\' in module
+    assert "process DoradoPreflight" in module
+    assert "biomodstack.dorado_preflight.v1" in module
+    assert 'base_model="\\$PWD/sealed_models/\\${model_id}"' in module
+    assert "--modified-bases-models" in module
+    assert "command=(dorado)" in module
+    assert "eval " not in module
 
 
 @pytest.mark.parametrize(
@@ -110,24 +115,26 @@ def test_dorado_direct_nextflow_rejects_noninteger_command_fragments(
 
     pod5_dir = tmp_path / "pod5"
     pod5_dir.mkdir()
+    proof = Path(payload.rsplit(" ", 1)[-1])
+    proof.unlink(missing_ok=True)
     harness = tmp_path / "dorado-validation-harness.nf"
     harness.write_text(
         "nextflow.enable.dsl=2\n"
-        f"include {{ DoradoBasecall }} from '{(ROOT / 'modules/ngs/dorado_basecall.nf').as_posix()}'\n"
-        "params.pod5_dir=null; params.out_dir=null; params.dorado_model='sup'\n"
-        "workflow { DoradoBasecall(Channel.of(file(params.pod5_dir))) }\n",
+        f"include {{ DoradoPreflight }} from '{(ROOT / 'modules/ngs/dorado_basecall.nf').as_posix()}'\n"
+        f"params.pod5_dir=null; params.out_dir=null; params.code_root='{ROOT.as_posix()}'; params.weights_root='/mnt/BioModStack/models'; params.container_dir='/home/dalab/biomodstack/biomodstack/apptainer'; params.pod5_python='{Path(sys.executable).as_posix()}'\n"
+        "workflow { DoradoPreflight(Channel.of(file(params.pod5_dir))) }\n",
         encoding="utf-8",
     )
     config = tmp_path / "local.config"
     config.write_text(
         "process {\n"
         "  executor = 'local'\n"
-        "  withLabel: gpu { container = null; cpus = 1; memory = '1 GB' }\n"
-        "  withLabel: dorado_gpu { container = null; cpus = 1; memory = '1 GB' }\n"
+        "  withLabel: local_cpu { container = null; cpus = 1; memory = '1 GB' }\n"
         "}\n",
         encoding="utf-8",
     )
     env = os.environ.copy()
+    env["NXF_OFFLINE"] = "true"
     for key in ("SSL_CERT_FILE", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE"):
         env.pop(key, None)
     completed = subprocess.run(
@@ -141,6 +148,20 @@ def test_dorado_direct_nextflow_rejects_noninteger_command_fragments(
             str(tmp_path / "work"),
             "--pod5_dir",
             str(pod5_dir),
+            "--code_root",
+            str(ROOT),
+            "--weights_root",
+            "/mnt/BioModStack/models",
+            "--container_dir",
+            "/home/dalab/biomodstack/biomodstack/apptainer",
+            "--dorado_lock_manifest",
+            str(ROOT / "config/ngs/dorado_v1.3.1.lock.json"),
+            "--dorado_model_root",
+            "/mnt/BioModStack/models/dorado/1.3.1",
+            "--dorado_runtime_sif",
+            "/home/dalab/biomodstack/biomodstack/apptainer/dorado.sif",
+            "--pod5_python",
+            sys.executable,
             f"--{param_name}",
             payload,
             "--out_dir",
@@ -157,7 +178,8 @@ def test_dorado_direct_nextflow_rejects_noninteger_command_fragments(
     )
     assert completed.returncode != 0
     combined = completed.stdout + completed.stderr
-    assert f"{param_name} must be an integer" in combined
+    assert "invalid int value" in combined or f"{param_name} must be an integer" in combined
+    assert not proof.exists()
 
 
 def test_methylation_pod5_is_reference_aligned_before_modkit() -> None:

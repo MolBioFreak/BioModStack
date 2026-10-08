@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import get_session
+from database import Job, get_session
+from paths import get_allowed_roots, resolve_allowed_path
 from schemas import JobCreate, JobResponse
 from services import alignment_access, ont_run_control, ont_submission_trust
 from services.host_agent_client import HostAgentRequestError
+from services.ont_barcode_units import load_barcode_unit, load_barcode_units
 from services.ont_ngs_contract import (
     get_ont_workflow_spec,
     normalize_ont_launch_params,
@@ -21,6 +25,7 @@ from services.ont_ngs_contract import (
 )
 
 router = APIRouter()
+barcode_router = APIRouter()
 
 # Canonical API workflow IDs and model-registry modes are distinct contracts.
 # Keep this mapping explicit; prefix stripping does not work for wf_clone_validation.
@@ -76,6 +81,78 @@ class OntNgsSubmitRequest(BaseModel):
     source_instrument_run_id: str | None = Field(default=None)
 
 
+class OntBarcodeUnitSubmitRequest(BaseModel):
+    """Exact per-barcode BAM resubmission; arbitrary parameter overrides are forbidden."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_workflow: str = Field(pattern="^(ont_plasmid_qc|ont_construct_screening)$")
+    reference_fasta: str = Field(min_length=1)
+    name: str | None = None
+    pinned_gpu: int | None = None
+
+
+async def _authorized_barcode_source(job_id: str, request: Request, session: AsyncSession) -> tuple[Job, Path, str]:
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    if job is None or job.model_id != "nanopore":
+        raise HTTPException(status_code=404, detail="Nanopore source job not found")
+    if job.mode != "basecall_dna":
+        raise HTTPException(status_code=422, detail="Source job is not a DNA barcode-basecalling job")
+    if str((job.params or {}).get("barcode_kit") or "").strip() != "SQK-RBK114-96":
+        raise HTTPException(status_code=422, detail="Source job is not bound to the locked barcode kit")
+    if job.status != "completed":
+        raise HTTPException(status_code=409, detail="Source barcode job is not complete")
+    completed_stages = list(job.completed_stages or [])
+    stage_outputs = dict(job.stage_outputs or {})
+    demux_outputs = stage_outputs.get("dorado_demux")
+    if "dorado_demux" not in completed_stages or not isinstance(demux_outputs, list) or not any(
+        str(value).replace("\\", "/").endswith("/demux/demux_manifest.json") for value in demux_outputs
+    ):
+        raise HTTPException(status_code=409, detail="Source job has no recorded terminal dorado_demux product")
+    terminal = (job.provenance or {}).get("ont_dorado_terminal_products")
+    products = terminal.get("products") if isinstance(terminal, dict) else None
+    required_products = {
+        "demux_manifest",
+        "barcode_units_manifest",
+        "dorado_preflight",
+        "dorado_runtime_provenance",
+    }
+    product_digests = {
+        key: str(value.get("sha256") or "")
+        for key, value in products.items()
+        if isinstance(products, dict) and isinstance(value, dict)
+    } if isinstance(products, dict) else {}
+    manifest_sha256 = product_digests.get("demux_manifest", "")
+    if (
+        not isinstance(terminal, dict)
+        or terminal.get("schema") != "biomodstack.ont_dorado_terminal_products.v1"
+        or not required_products <= set(product_digests)
+        or any(not re.fullmatch(r"[0-9a-f]{64}", product_digests[key]) for key in required_products)
+    ):
+        raise HTTPException(status_code=409, detail="Source job terminal Dorado product anchor is missing or malformed")
+    if not alignment_access.request_is_authorized(request, job.id, job.provenance):
+        raise HTTPException(status_code=403, detail="alignment access denied")
+    output_dir = Path(str(job.output_dir or "")).expanduser()
+    if not output_dir.is_dir():
+        raise HTTPException(status_code=409, detail="authoritative source result root is unavailable")
+    return job, output_dir, manifest_sha256
+
+
+async def _authorized_barcode_unit(job_id: str, unit_id: str, request: Request, session: AsyncSession) -> tuple[Job, dict[str, Any]]:
+    job, output_dir, manifest_sha256 = await _authorized_barcode_source(job_id, request, session)
+    try:
+        unit = load_barcode_unit(
+            output_dir / "demux" / "demux_manifest.json",
+            output_dir,
+            unit_id,
+            expected_manifest_sha256=manifest_sha256,
+        )
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return job, unit
+
+
 def _mode_for_ont_workflow(workflow_id: str) -> str:
     canonical = resolve_ont_workflow_alias(workflow_id)
     return ONT_WORKFLOW_MODEL_MODES[canonical]
@@ -109,11 +186,67 @@ def _validate_ont_input_contract(canonical_id: str, params: dict[str, Any]) -> t
     return input_mode, input_path
 
 
+def _confine_submitted_path(value: Any, label: str, *, directory: bool, allow_results: bool = False) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError(f"{label} is empty")
+    candidate = Path(raw).expanduser()
+    if candidate.is_absolute():
+        lexical = candidate.absolute()
+    else:
+        lexical = resolve_allowed_path(raw)
+    try:
+        resolved = lexical.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError(f"{label} must be an existing allowed path") from exc
+    matched_root: Path | None = None
+    relative: Path | None = None
+    roots = get_allowed_roots()
+    result_keys = tuple(key for key in ("bms_results", "results") if key in roots)
+    if not allow_results:
+        for key in result_keys:
+            try:
+                resolved.relative_to(roots[key].resolve())
+            except ValueError:
+                continue
+            raise ValueError(f"{label} points into protected job results and requires source authorization")
+    root_keys = ("inputs", "uploads", "downloads", "data") + (result_keys if allow_results else ())
+    for root in (roots[key] for key in root_keys if key in roots):
+        root_resolved = root.resolve()
+        try:
+            relative = lexical.relative_to(root_resolved)
+            resolved.relative_to(root_resolved)
+        except ValueError:
+            continue
+        matched_root = root_resolved
+        break
+    if matched_root is None or relative is None:
+        raise ValueError(f"{label} must be confined beneath an allowed data root")
+    cursor = matched_root
+    for part in relative.parts:
+        cursor = cursor / part
+        if cursor.is_symlink():
+            raise ValueError(f"{label} may not traverse symlinks")
+    if directory and not resolved.is_dir():
+        raise ValueError(f"{label} must be an existing directory")
+    if not directory and not resolved.is_file():
+        raise ValueError(f"{label} must be an existing regular file")
+    return str(resolved)
+
+
+def _safe_ont_job_name(value: Any, fallback: str) -> str:
+    name = str(value or fallback).strip()
+    if not name or len(name) > 128 or ".." in name or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._ -]*", name):
+        raise ValueError("ONT job name must be 1-128 safe filename characters without traversal components")
+    return name
+
+
 def _job_create_for_ont_submit(
     workflow_id: str,
     request: OntNgsSubmitRequest,
     *,
     trusted_server_params: frozenset[str] = frozenset(),
+    trusted_result_paths: frozenset[str] = frozenset(),
 ) -> JobCreate:
     submitted_params = dict(request.params)
     reserved_params = ONT_SERVER_CONTROLLED_PROVENANCE_PARAMS | ONT_SERVER_CONTROLLED_RUNTIME_PARAMS
@@ -129,6 +262,19 @@ def _job_create_for_ont_submit(
     canonical_id = resolve_ont_workflow_alias(workflow_id)
     spec = get_ont_workflow_spec(canonical_id)
     params = normalize_ont_launch_params(canonical_id, submitted_params)
+    path_contract = {
+        "pod5_dir": True,
+        "bam_path": False,
+        "fastq_path": False,
+        "reference_fasta": False,
+        "sample_sheet": False,
+        "duplex_pairs": False,
+    }
+    for key, is_directory in path_contract.items():
+        if str(params.get(key) or "").strip():
+            params[key] = _confine_submitted_path(
+                params[key], key, directory=is_directory, allow_results=key in trusted_result_paths
+            )
     input_mode, input_path = _validate_ont_input_contract(canonical_id, params)
     reference_raw = str(params.get("reference_fasta") or "").strip()
     if reference_raw:
@@ -149,7 +295,7 @@ def _job_create_for_ont_submit(
         params["source_instrument_run_id"] = request.source_instrument_run_id
 
     return JobCreate(
-        name=(request.name or f"{spec.display_name} analysis").strip(),
+        name=_safe_ont_job_name(request.name, f"{spec.display_name} analysis"),
         model_id="nanopore",
         mode=model_mode,
         params=params,
@@ -271,6 +417,77 @@ async def ont_submit_ngs_workflow(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    return await _create_pipeline_job(job, background_tasks, session, response, http_request)
+
+
+@barcode_router.get("/{job_id}/barcode-units")
+async def ont_list_barcode_units(
+    job_id: str,
+    http_request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """List every digest-verified unit from a completed authorized source job."""
+    _, output_dir, manifest_sha256 = await _authorized_barcode_source(job_id, http_request, session)
+    try:
+        units = load_barcode_units(
+            output_dir / "demux" / "demux_manifest.json",
+            output_dir,
+            expected_manifest_sha256=manifest_sha256,
+        )
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"job_id": job_id, "units": units}
+
+
+@barcode_router.get("/{job_id}/barcode-units/{unit_id}")
+async def ont_get_barcode_unit(
+    job_id: str,
+    unit_id: str,
+    http_request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Return one exact digest-bound barcode unit after source-job authorization."""
+    _, unit = await _authorized_barcode_unit(job_id, unit_id, http_request, session)
+    return unit
+
+
+@barcode_router.post("/{job_id}/barcode-units/{unit_id}/submit", response_model=JobResponse, status_code=201)
+async def ont_submit_barcode_unit(
+    job_id: str,
+    unit_id: str,
+    request: OntBarcodeUnitSubmitRequest,
+    background_tasks: BackgroundTasks,
+    http_request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+) -> JobResponse:
+    """Submit one isolated barcode BAM with exact source lineage and no override map."""
+    source_job, unit = await _authorized_barcode_unit(job_id, unit_id, http_request, session)
+    trusted = {
+        "bam_source_sha256": unit["bam_sha256"],
+        "source_ont_job_id": source_job.id,
+        "source_barcode_unit": unit["unit_id"],
+        "source_barcode_manifest_sha256": unit["manifest_sha256"],
+    }
+    submit = OntNgsSubmitRequest(
+        name=request.name or f"{source_job.name} {unit_id}",
+        params={
+            "bam_path": unit["bam_path"],
+            "reference_fasta": request.reference_fasta,
+            "bam_force_realign": True,
+            **trusted,
+        },
+        pinned_gpu=request.pinned_gpu,
+    )
+    try:
+        job = _job_create_for_ont_submit(
+            request.target_workflow,
+            submit,
+            trusted_server_params=frozenset(trusted),
+            trusted_result_paths=frozenset({"bam_path"}),
+        )
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return await _create_pipeline_job(job, background_tasks, session, response, http_request)
 
 

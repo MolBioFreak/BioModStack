@@ -108,8 +108,10 @@ class TestDefaultParameters:
     def test_dorado_basecall_preflights_model_directory(self, root):
         """Dorado basecalling should fail cleanly when bound model weights are missing."""
         content = (root / "modules/ngs/dorado_basecall.nf").read_text()
-        assert "DORADO_MODELS_DIR" in content
-        assert "Dorado model directory is empty" in content
+        assert "/weights/dorado/1.3.1" in content
+        assert "DoradoPreflight" in content
+        assert "verify_model_identity" in (root / "scripts/dorado_p4_preflight.py").read_text()
+        assert "model identity directory is unavailable or unsafe" in (root / "scripts/dorado_p4_preflight.py").read_text()
 
 
 class TestModuleIncludes:

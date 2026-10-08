@@ -4,7 +4,7 @@ Jobs API router - Create, list, cancel pipeline jobs.
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, Body, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 from sqlalchemy.exc import OperationalError
 from typing import Optional, List, Dict, Any, NoReturn
 from types import SimpleNamespace
@@ -51,7 +51,8 @@ from paths import (
 from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
 from schemas import JobCreate, JobResponse, JobList, JobStatus
 from services.job_control import cancel_job_lineage
-from services import alignment_access, ont_submission_trust
+from services import alignment_access, ont_submission_trust, stage_reporting, ont_ngs_contract
+from services.ont_barcode_units import load_barcode_units
 from services.md.chemistry_catalog import ChemistryCatalogError, ChemistryProfileSelectionError
 from services.md.feature_gate import require_molecular_dynamics_feature
 from services.md.launch_contract import MDLaunchError, materialize_md_job_spec, normalize_md_job_spec
@@ -6332,9 +6333,191 @@ async def annotate_cdr_regions(
 # STAGE CHECKPOINTING ENDPOINTS
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
+def _anchor_dorado_demux_products(job: Job) -> dict[str, Any]:
+    """Build the immutable server-side anchor for one terminal Dorado demux stage."""
+    if job.model_id != "nanopore" or job.mode != "basecall_dna" or str((job.params or {}).get("barcode_kit") or "") != "SQK-RBK114-96":
+        raise HTTPException(status_code=422, detail="dorado_demux is valid only for locked barcoded DNA jobs")
+    root = Path(str(job.output_dir or "")).expanduser()
+    if root.is_symlink():
+        raise HTTPException(status_code=409, detail="Dorado result root symlink is forbidden")
+    try:
+        root = root.resolve(strict=True)
+    except OSError as exc:
+        raise HTTPException(status_code=409, detail="Dorado result root is unavailable") from exc
+    expected = {
+        "demux_manifest": root / "demux" / "demux_manifest.json",
+        "barcode_units_manifest": root / "demux" / "per_barcode_units.json",
+        "dorado_preflight": root / "basecall" / "dorado_preflight.json",
+        "dorado_runtime_provenance": root / "basecall" / "dorado_runtime_provenance.json",
+    }
+    for label, path in expected.items():
+        if path.is_symlink() or not path.is_file():
+            raise HTTPException(status_code=409, detail=f"terminal Dorado product is unavailable or unsafe: {label}")
+        try:
+            resolved_product = path.resolve(strict=True)
+            relative_product = resolved_product.relative_to(root)
+            cursor = root
+            for part in relative_product.parts:
+                cursor = cursor / part
+                if cursor.is_symlink():
+                    raise ValueError(f"terminal Dorado product contains a symlink: {label}")
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=f"terminal Dorado product escapes result root: {label}") from exc
+    try:
+        product_bytes = {label: path.read_bytes() for label, path in expected.items()}
+        product_digests = {
+            label: hashlib.sha256(payload).hexdigest() for label, payload in product_bytes.items()
+        }
+        demux = json.loads(product_bytes["demux_manifest"].decode("utf-8"))
+        preflight = json.loads(product_bytes["dorado_preflight"].decode("utf-8"))
+        runtime = json.loads(product_bytes["dorado_runtime_provenance"].decode("utf-8"))
+        unit_catalog = json.loads(product_bytes["barcode_units_manifest"].decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=409, detail="terminal Dorado product is unreadable or malformed") from exc
+    if not all(isinstance(payload, dict) for payload in (demux, preflight, runtime, unit_catalog)):
+        raise HTTPException(status_code=409, detail="terminal Dorado product documents must be JSON objects")
+    # Narrow JSON values for both runtime safety and static analysis.
+    demux = dict(demux)
+    preflight = dict(preflight)
+    runtime = dict(runtime)
+    unit_catalog = dict(unit_catalog)
+    preflight_sha256 = product_digests["dorado_preflight"]
+    params = dict(job.params or {})
+    expected_lock_sha256 = str(params.get("dorado_lock_sha256") or "").strip().lower()
+    expected_model_id = str(params.get("dorado_resolved_model_id") or "").strip()
+    expected_mode = str(params.get("dorado_basecall_mode") or "").strip().lower()
+    try:
+        approved_lock_bytes = ont_ngs_contract.DORADO_LOCK_PATH.read_bytes()
+        approved_lock = json.loads(approved_lock_bytes.decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=409, detail="approved Dorado lock is unavailable or malformed") from exc
+    if not isinstance(approved_lock, dict) or hashlib.sha256(approved_lock_bytes).hexdigest() != expected_lock_sha256:
+        raise HTTPException(status_code=409, detail="terminal Dorado job lock is not the approved lock")
+    approved_dorado = approved_lock.get("dorado")
+    approved_models = approved_lock.get("models")
+    if not isinstance(approved_dorado, dict) or not isinstance(approved_models, dict):
+        raise HTTPException(status_code=409, detail="approved Dorado lock has invalid runtime/model sections")
+    approved_dna_models = approved_models.get("dna")
+    if not isinstance(approved_dna_models, dict):
+        raise HTTPException(status_code=409, detail="approved Dorado lock has no DNA model section")
+    approved_model = next(
+        (entry for entry in approved_dna_models.values() if isinstance(entry, dict) and entry.get("id") == expected_model_id),
+        None,
+    )
+    if not isinstance(approved_model, dict):
+        raise HTTPException(status_code=409, detail="terminal Dorado model is not retained by the approved lock")
+    preflight_lock = preflight.get("lock")
+    if not isinstance(preflight_lock, dict):
+        preflight_lock = {}
+    preflight_lock_sha256 = str(preflight_lock.get("sha256") or "").lower()
+    preflight_selection = preflight.get("selection")
+    if not isinstance(preflight_selection, dict):
+        preflight_selection = {}
+    preflight_runtime = preflight.get("runtime")
+    if not isinstance(preflight_runtime, dict):
+        preflight_runtime = {}
+    runtime_assets = preflight_runtime.get("assets")
+    if not isinstance(runtime_assets, dict):
+        runtime_assets = {}
+    runtime_sif = runtime_assets.get("runtime_sif")
+    if not isinstance(runtime_sif, dict):
+        runtime_sif = {}
+    runtime_calls = runtime.get("calls_bam")
+    if not isinstance(runtime_calls, dict):
+        runtime_calls = {}
+    demux_source = demux.get("source_calls")
+    if not isinstance(demux_source, dict):
+        demux_source = {}
+    anchored_read_count = runtime_calls.get("read_count")
+    if isinstance(anchored_read_count, bool) or not isinstance(anchored_read_count, int) or anchored_read_count < 0:
+        raise HTTPException(status_code=409, detail="terminal Dorado calls read count is invalid")
+    preflight_barcoding = preflight.get("barcoding")
+    if not isinstance(preflight_barcoding, dict):
+        preflight_barcoding = {}
+    demux_units = demux.get("units")
+    catalog_units = unit_catalog.get("units")
+    if (
+        demux.get("schema") != "biomodstack.dorado_demux.v1"
+        or preflight.get("schema") != "biomodstack.dorado_preflight.v1"
+        or runtime.get("schema") != "biomodstack.dorado_runtime_provenance.v1"
+        or unit_catalog.get("schema") != "biomodstack.dorado_barcode_units.v1"
+        or demux.get("preflight_sha256") != preflight_sha256
+        or runtime.get("preflight_sha256") != preflight_sha256
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_lock_sha256)
+        or preflight_lock_sha256 != expected_lock_sha256
+        or not expected_model_id
+        or preflight_selection.get("model_id") != expected_model_id
+        or preflight_selection.get("molecule") != "dna"
+        or preflight_selection.get("model_aggregate_sha256") != approved_model.get("aggregate_sha256")
+        or preflight_selection.get("quality") != params.get("dorado_quality_mode")
+        or preflight_selection.get("modified_bases") != "none"
+        or preflight_selection.get("modified_bases_model_id") is not None
+        or preflight_selection.get("stereo_model_id") is not None
+        or runtime.get("model_id") != expected_model_id
+        or expected_mode != "simplex"
+        or preflight_selection.get("mode") != expected_mode
+        or runtime.get("mode") != expected_mode
+        or preflight_barcoding.get("kit") != params.get("barcode_kit")
+        or preflight_runtime.get("version") != approved_dorado.get("version")
+        or runtime.get("runtime_sha256") != approved_dorado.get("sif_sha256")
+        or runtime_sif.get("sha256") != runtime.get("runtime_sha256")
+        or preflight_runtime.get("sif_sha256") != runtime.get("runtime_sha256")
+        or runtime_calls.get("sha256") != demux_source.get("sha256")
+        or runtime_calls.get("read_count") != demux_source.get("read_count")
+        or runtime_calls.get("read_count") != demux.get("total_reads")
+        or not isinstance(demux_units, list)
+        or demux_units != catalog_units
+    ):
+        raise HTTPException(status_code=409, detail="terminal Dorado product identities are inconsistent")
+    try:
+        anchored_units = load_barcode_units(
+            expected["demux_manifest"],
+            root,
+            expected_manifest_sha256=product_digests["demux_manifest"],
+            expected_source_calls_sha256=str(runtime_calls.get("sha256") or ""),
+            expected_preflight_sha256=preflight_sha256,
+        )
+        catalog_verified_units = load_barcode_units(
+            expected["barcode_units_manifest"],
+            root,
+            expected_manifest_sha256=product_digests["barcode_units_manifest"],
+            expected_source_calls_sha256=str(runtime_calls.get("sha256") or ""),
+            expected_preflight_sha256=preflight_sha256,
+        )
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail="terminal Dorado barcode units are inconsistent") from exc
+    identity_fields = (
+        "unit_id", "bam_sha256", "read_count", "unit_manifest_sha256",
+        "source_calls_sha256", "preflight_sha256",
+    )
+    if [tuple(unit[field] for field in identity_fields) for unit in anchored_units] != [
+        tuple(unit[field] for field in identity_fields) for unit in catalog_verified_units
+    ]:
+        raise HTTPException(status_code=409, detail="terminal Dorado unit catalog does not match demux products")
+    return {
+        "schema": "biomodstack.ont_dorado_terminal_products.v1",
+        "stage": "dorado_demux",
+        "identities": {
+            "lock_sha256": expected_lock_sha256,
+            "model_id": expected_model_id,
+            "mode": expected_mode,
+            "runtime_sha256": str(runtime.get("runtime_sha256")),
+            "calls_bam_sha256": str(runtime_calls.get("sha256")),
+            "read_count": anchored_read_count,
+            "unit_count": len(anchored_units),
+        },
+        "products": {
+            label: {"path": path.relative_to(root).as_posix(), "sha256": product_digests[label]}
+            for label, path in expected.items()
+        },
+    }
+
+
 @router.post("/{job_id}/stage-complete")
 async def report_stage_complete(
     job_id: str,
+    request: Request,
     stage: str,
     outputs: List[str] = [],
     session: AsyncSession = Depends(get_session)
@@ -6343,11 +6526,59 @@ async def report_stage_complete(
     Report that a workflow stage has completed.
     Called by Nextflow workflows after each stage finishes.
     """
-    result = await session.execute(select(Job).where(Job.id == job_id))
+    result = await session.execute(select(Job).where(Job.id == job_id).with_for_update())
     job = result.scalar_one_or_none()
     
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    authorization = str(request.headers.get("authorization") or "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not stage_reporting.token_is_authorized(job.provenance, token):
+        raise HTTPException(status_code=403, detail="invalid workflow stage credential")
+
+    if stage == "dorado_demux":
+        provenance = dict(job.provenance or {})
+        callback_digest = str(provenance.get(stage_reporting.PROVENANCE_DIGEST_KEY) or "")
+        existing = provenance.get("ont_dorado_terminal_products")
+        if existing is None and job.status != "running":
+            raise HTTPException(status_code=409, detail="terminal Dorado products can be anchored only by an active workflow")
+        anchor = _anchor_dorado_demux_products(job)
+        if existing is not None and existing != anchor:
+            raise HTTPException(status_code=409, detail="terminal Dorado product anchor is immutable")
+        provenance["ont_dorado_terminal_products"] = anchor
+        # The demux callback is the terminal trust transition for a barcoded
+        # basecall job. Revoke its launch-scoped credential in the same commit
+        # that persists the immutable anchor so the transition is single-use.
+        provenance.pop(stage_reporting.PROVENANCE_DIGEST_KEY, None)
+        completed = list(job.completed_stages or [])
+        if stage not in completed:
+            completed.append(stage)
+        stage_outputs = dict(job.stage_outputs or {})
+        stage_outputs[stage] = outputs
+        published = await session.execute(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.status == JobStatus.RUNNING.value,
+                Job.provenance[stage_reporting.PROVENANCE_DIGEST_KEY].as_string() == callback_digest,
+            )
+            .values(
+                provenance=provenance,
+                completed_stages=completed,
+                stage_outputs=stage_outputs,
+                current_stage=None,
+            )
+        )
+        await session.commit()
+        if published.rowcount != 1:
+            raise HTTPException(status_code=409, detail="terminal Dorado anchor transition was already consumed")
+        logger.info(f"Job {job_id}: Stage '{stage}' completed with {len(outputs)} outputs")
+        return {
+            "message": f"Stage '{stage}' marked complete",
+            "job_id": job_id,
+            "completed_stages": completed,
+            "outputs_count": len(outputs),
+        }
     
     # Update completed stages
     completed = job.completed_stages or []
@@ -6710,6 +6941,7 @@ async def mark_children_aggregated(
 @router.post("/{job_id}/stage-start")
 async def report_stage_start(
     job_id: str,
+    request: Request,
     stage: str,
     session: AsyncSession = Depends(get_session)
 ):
@@ -6717,11 +6949,15 @@ async def report_stage_start(
     Report that a workflow stage has started.
     Called by Nextflow workflows when entering a new stage.
     """
-    result = await session.execute(select(Job).where(Job.id == job_id))
+    result = await session.execute(select(Job).where(Job.id == job_id).with_for_update())
     job = result.scalar_one_or_none()
     
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    authorization = str(request.headers.get("authorization") or "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not stage_reporting.token_is_authorized(job.provenance, token):
+        raise HTTPException(status_code=403, detail="invalid workflow stage credential")
     
     job.current_stage = stage
     await session.commit()

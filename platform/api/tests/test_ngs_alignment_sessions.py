@@ -558,6 +558,6 @@ def test_production_dimer_process_emits_discoverable_authoritative_manifest() ->
     source = module_path.read_text(encoding="utf-8")
 
     assert 'path "qc_manifest.json", emit: qc_manifest' in source
-    assert 'scripts/build_alignment_session_manifest.py' in source
+    assert 'scripts/build_alignment_session_manifest.sh' in source
     assert 'dimer_candidates.aligned.bam' in source
     assert 'dimer_reference.fasta' in source
