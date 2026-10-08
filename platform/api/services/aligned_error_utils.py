@@ -298,6 +298,7 @@ def detect_aligned_error_artifact(
     parents = [structure.parent]
     if summary is not None and summary.parent not in parents:
         parents.insert(0, summary.parent)
+    aligned_error_parents = [parent / "aligned_error" for parent in parents]
 
     structure_stem = structure.stem
     summary_stem = summary.stem if summary is not None else ""
@@ -330,17 +331,37 @@ def detect_aligned_error_artifact(
                     return candidate, BOLTZ_PAE_NPZ_FORMAT, "pae"
 
     if summary is not None and summary.exists():
+        try:
+            payload = json.loads(summary.read_text())
+        except Exception:
+            payload = None
+
+        if isinstance(payload, dict):
+            raw_artifact_ref = str(payload.get("aligned_error_artifact") or "").strip()
+            if raw_artifact_ref:
+                candidate = Path(raw_artifact_ref)
+                if not candidate.is_absolute():
+                    candidate = summary.parent / candidate
+                candidate = candidate.expanduser().resolve()
+                if candidate.exists():
+                    artifact_format = str(payload.get("aligned_error_format") or "").strip() or PROTENIX_FULL_JSON_FORMAT
+                    matrix_key = str(payload.get("aligned_error_key") or "").strip()
+                    if not matrix_key:
+                        matrix_key = "pae" if artifact_format == CONFIDENCE_JSON_FORMAT else "token_pair_pae"
+                    return candidate, artifact_format, matrix_key
+
         protenix_candidates = []
         if "_summary_confidence_sample_" in summary.name:
             protenix_candidates.append(summary.with_name(summary.name.replace("_summary_confidence_sample_", "_full_data_sample_")))
         for stem in clean_stems:
-            protenix_candidates.extend(
-                [
-                    summary.parent / f"{stem}_full_data.json",
-                    summary.parent / f"{stem}_full_data_sample_0.json",
-                    summary.parent / f"full_data_{stem}.json",
-                ]
-            )
+            for parent in [summary.parent, *aligned_error_parents]:
+                protenix_candidates.extend(
+                    [
+                        parent / f"{stem}_full_data.json",
+                        parent / f"{stem}_full_data_sample_0.json",
+                        parent / f"full_data_{stem}.json",
+                    ]
+                )
         seen_candidates: set[str] = set()
         for candidate in protenix_candidates:
             candidate_str = str(candidate)
@@ -350,10 +371,6 @@ def detect_aligned_error_artifact(
             if candidate.exists():
                 return candidate, PROTENIX_FULL_JSON_FORMAT, "token_pair_pae"
 
-        try:
-            payload = json.loads(summary.read_text())
-        except Exception:
-            payload = None
         if isinstance(payload, dict) and "pae" in payload:
             return summary, CONFIDENCE_JSON_FORMAT, "pae"
 

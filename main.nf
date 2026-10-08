@@ -1,8 +1,6 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl = 2
 
-import groovy.json.JsonSlurper
-
 params.sequence_batch_json_path = params.sequence_batch_json_path ?: null
 params.complex_batch_dir = params.complex_batch_dir ?: null
 params.target_geometry_mode = params.target_geometry_mode ?: null
@@ -111,25 +109,6 @@ workflow {
         println("* Run FASTQ plasmid QC: ${runFastqQc}")
         println("* Run assembly: ${params.run_assembly ?: false}")
 
-        def reportNanoporeStage = { String stageName, List outputs ->
-            if (!params.job_id) {
-                return
-            }
-            try {
-                def reportFiles = outputs
-                    .findAll { it != null }
-                    .collect { it.toString() }
-                if (reportFiles.isEmpty()) {
-                    return
-                }
-                def args = [params.job_id.toString(), stageName, "complete"] + reportFiles
-                def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
-                proc.waitFor()
-            } catch (Exception e) {
-                println "Warning: Failed to report stage ${stageName}: ${e.message}"
-            }
-        }
-
         def has_pod5 = params.pod5_dir && params.pod5_dir.toString().trim()
         def has_bam = params.bam_path && params.bam_path.toString().trim()
         def has_fastq = params.fastq_path && params.fastq_path.toString().trim()
@@ -163,8 +142,8 @@ workflow {
             }
 
             DoradoBasecall(Channel.of(pod5_input))
-            DoradoBasecall.out.bam.subscribe { _ ->
-                reportNanoporeStage("dorado_basecall", [
+            DoradoBasecall.out.bam.subscribe { ignoredBam ->
+                reportNanoporeStage(params, "dorado_basecall", [
                     "${params.out_dir}/basecall/calls.bam",
                     "${params.out_dir}/basecall/basecall.log",
                     "${params.out_dir}/basecall/sequencing_summary.tsv",
@@ -176,8 +155,8 @@ workflow {
                     DoradoBasecall.out.bam,
                     Channel.of(reference_file)
                 )
-                DoradoAlign.out.aligned.subscribe { _bam, _bai ->
-                    reportNanoporeStage("dorado_align", [
+                DoradoAlign.out.aligned.subscribe { alignedBam, alignedBai ->
+                    reportNanoporeStage(params, "dorado_align", [
                         "${params.out_dir}/align/aligned.bam",
                         "${params.out_dir}/align/aligned.bam.bai",
                         "${params.out_dir}/align/reference.fasta",
@@ -188,8 +167,8 @@ workflow {
                 analysis_bam = DoradoAlign.out.aligned
             } else {
                 PrepareBamForAnalysis(DoradoBasecall.out.bam)
-                PrepareBamForAnalysis.out.aligned.subscribe { _bam, _bai ->
-                    reportNanoporeStage("bam_prepare", [
+                PrepareBamForAnalysis.out.aligned.subscribe { preparedBam, preparedBai ->
+                    reportNanoporeStage(params, "bam_prepare", [
                         "${params.out_dir}/align/aligned.bam",
                         "${params.out_dir}/align/aligned.bam.bai",
                         "${params.out_dir}/align/bam_prepare.log",
@@ -210,8 +189,8 @@ workflow {
                     Channel.of(bam_input),
                     Channel.of(reference_file)
                 )
-                DoradoAlign.out.aligned.subscribe { _bam, _bai ->
-                    reportNanoporeStage("dorado_align", [
+                DoradoAlign.out.aligned.subscribe { alignedBam, alignedBai ->
+                    reportNanoporeStage(params, "dorado_align", [
                         "${params.out_dir}/align/aligned.bam",
                         "${params.out_dir}/align/aligned.bam.bai",
                         "${params.out_dir}/align/reference.fasta",
@@ -222,8 +201,8 @@ workflow {
                 analysis_bam = DoradoAlign.out.aligned
             } else {
                 PrepareBamForAnalysis(Channel.of(bam_input))
-                PrepareBamForAnalysis.out.aligned.subscribe { _bam, _bai ->
-                    reportNanoporeStage("bam_prepare", [
+                PrepareBamForAnalysis.out.aligned.subscribe { preparedBam, preparedBai ->
+                    reportNanoporeStage(params, "bam_prepare", [
                         "${params.out_dir}/align/aligned.bam",
                         "${params.out_dir}/align/aligned.bam.bai",
                         "${params.out_dir}/align/bam_prepare.log",
@@ -237,7 +216,7 @@ workflow {
 
                 if (has_reference) {
                     PrepareReferenceForIGV(Channel.of(reference_file))
-                    PrepareReferenceForIGV.out.log.subscribe { _ -> }
+                    PrepareReferenceForIGV.out.log.subscribe { ignoredLog -> }
                 }
 
                 if (params.run_modkit != false || params.run_assembly) {
@@ -257,8 +236,8 @@ workflow {
                 Channel.of(fastq_input),
                 Channel.of(reference_file)
             )
-            FastqAlign.out.aligned.subscribe { _bam, _bai ->
-                reportNanoporeStage("fastq_align", [
+            FastqAlign.out.aligned.subscribe { alignedBam, alignedBai ->
+                reportNanoporeStage(params, "fastq_align", [
                     "${params.out_dir}/align/aligned.bam",
                     "${params.out_dir}/align/aligned.bam.bai",
                     "${params.out_dir}/align/reference.fasta",
@@ -274,8 +253,8 @@ workflow {
                     Channel.of(reference_file),
                     Channel.of(fastq_input)
                 )
-                FastqPlasmidQC.out.summary.subscribe { _ ->
-                    reportNanoporeStage("fastq_qc", [
+                FastqPlasmidQC.out.summary.subscribe { qcSummary ->
+                    reportNanoporeStage(params, "fastq_qc", [
                         "${params.out_dir}/fastq_qc/read_lengths.tsv",
                         "${params.out_dir}/fastq_qc/fastq_qc_summary.tsv",
                         "${params.out_dir}/fastq_qc/fastq_alignment_stats.tsv",
@@ -314,8 +293,8 @@ workflow {
             }
 
             ModkitSummary(analysis_bam)
-            ModkitSummary.out.summary.subscribe { _ ->
-                reportNanoporeStage("modkit", [
+            ModkitSummary.out.summary.subscribe { summaryFile ->
+                reportNanoporeStage(params, "modkit", [
                     has_reference ? "${params.out_dir}/methylation/methylation.bed" : null,
                     has_reference ? "${params.out_dir}/methylation/pileup.log" : null,
                     "${params.out_dir}/methylation/modkit_summary.tsv",
@@ -333,8 +312,8 @@ workflow {
             println("Running wf-clone-validation assembly stage")
             def clone_input = analysis_bam.map { bam, _bai -> [bam, (params.reference_fasta ?: "").toString()] }
             RunCloneValidation(clone_input)
-            RunCloneValidation.out.out.subscribe { _ ->
-                reportNanoporeStage("wf_clone_validation", [
+            RunCloneValidation.out.out.subscribe { cloneValidationOutput ->
+                reportNanoporeStage(params, "wf_clone_validation", [
                     "${params.out_dir}/assembly/wf_clone_out",
                     "${params.out_dir}/assembly/wf_clone.log",
                     "${params.out_dir}/assembly/wf_clone_out/wf-clone-validation-report.html",
@@ -592,7 +571,7 @@ workflow {
     /////////////////////////////
     // ANTIBODY DESIGN STACK   //
     /////////////////////////////
-    if (params.rfd_mode in ['structure_prediction', 'inverse_folding', 'stability_prediction', 'de_novo', 'antibody_denovo_pipeline']) {
+    if (params.rfd_mode in ['structure_prediction', 'inverse_folding', 'stability_prediction', 'de_novo', 'antibody_denovo_pipeline', 'antibody_refinement_pipeline']) {
         println("Running Antibody Design Toolkit")
         println("* Mode: ${params.rfd_mode}")
 
@@ -627,11 +606,15 @@ workflow {
             def antigenChains = params.antigen_chains ?: "A"
             input_ch = channel.of(tuple(meta, file(params.target_pdb), antigenChains))
         }
-        else if (params.rfd_mode == 'antibody_denovo_pipeline') {
+        else if (params.rfd_mode in ['antibody_denovo_pipeline', 'antibody_refinement_pipeline']) {
             // Full de novo antibody design pipeline 
             // RFantibody -> FAMPNN/AntiFold -> Boltz2 -> AntiBERTy -> IgGM
             if (!params.target_pdb) {
-                error("Antigen PDB required for antibody_denovo_pipeline")
+                error("Antigen PDB required for ${params.rfd_mode}")
+            }
+            def selectedInputDir = params.selected_input_dir ?: params.rfantibody_input_pdbs ?: params.fampnn_collected_pdbs
+            if (params.rfd_mode == 'antibody_refinement_pipeline' && !selectedInputDir) {
+                error("Selected input directory required for antibody_refinement_pipeline")
             }
             def epitope = params.epitope_residues ?: ""
             input_ch = channel.of(tuple(meta, file(params.target_pdb)))
@@ -682,7 +665,7 @@ workflow {
         def complex_ch
 
         if (params.sequence_batch_json_path && params.complex_batch_dir) {
-            def batchEntries = new JsonSlurper().parse(file(params.sequence_batch_json_path)) as List
+            def batchEntries = parseJsonFile(params.sequence_batch_json_path) as List
             println("* Batch variants: ${batchEntries.size()}")
             if ((params.pred_method ?: 'boltz') == 'protenix') {
                 println("* Protenix complex batch mode: one model bootstrap for ${batchEntries.size()} variants")
@@ -815,7 +798,7 @@ workflow {
         def parallel_jobs_ch
 
         if (params.sequence_batch_json_path) {
-            def batchEntries = new JsonSlurper().parse(file(params.sequence_batch_json_path)) as List
+            def batchEntries = parseJsonFile(params.sequence_batch_json_path) as List
             println("* Batch sequences: ${batchEntries.size()}")
             parallel_jobs_ch = Channel
                 .from(batchEntries)
@@ -907,8 +890,7 @@ workflow {
             RunRFD3.out.structures_metadata.set { rfd_pdbs_jsons }
 
             // Batch for CPU filtering
-            Utils
-                .rebatchTuples(rfd_pdbs_jsons, 200)
+            rebatchTuples(rfd_pdbs_jsons, 200)
                 .set { rfd_tuples }
 
             // Filter RFD3 outputs
@@ -928,8 +910,7 @@ workflow {
         else {
             // Legacy RFdiffusion path (DEPRECATED - use rfd3 instead)
             log.warn("DEPRECATION WARNING: diffusion_method='rfd' is deprecated. Consider using 'rfd3' (RFdiffusion3) instead.")
-            def rfdParams = new RFDiffusionParams(params)
-            def rfdCommand = rfdParams.generateCommandString()
+            def rfdCommand = buildLegacyRfdCommand(params)
             log.info("RFdiffusion command: ${rfdCommand} inference.num_designs=${batch_size}")
 
             def inputFiles = collectInputFiles(params)
@@ -948,8 +929,7 @@ workflow {
             RFDiffusionWorkflow.out.pdbs_jsons.set { rfd_pdbs_jsons }
             CompressRFD("rfd", rfd_pdbs_jsons.flatten().collect())
 
-            Utils
-                .rebatchTuples(rfd_pdbs_jsons, 200)
+            rebatchTuples(rfd_pdbs_jsons, 200)
                 .set { rfd_tuples }
             FilterRFD(rfd_tuples)
 
@@ -1022,6 +1002,7 @@ workflow {
             WaitForBoltzGenChildren(
                 params.job_id ?: 'unknown',
                 SpawnBoltzGenJobs.out.result,
+                params.name ?: 'boltzgen_campaign',
             )
 
             // Collect outputs from children
@@ -1129,8 +1110,7 @@ workflow {
             .of([previous_pdbs, previous_jsons])
             .set { rfd_pdbs_jsons }
         // Batch RFD PDBs and JSONS for CPU tasks
-        Utils
-            .rebatchTuples(rfd_pdbs_jsons, 200)
+        rebatchTuples(rfd_pdbs_jsons, 200)
             .set { filt_rfd_pdbs_jsons }
     }
     else {
@@ -1175,8 +1155,7 @@ workflow {
             CompressMPNN("mpnn", RunMPNN.out.pdbs_jsons.flatten().collect())
 
             // Rebatch sequence assignment files for CPU Filtering Step
-            Utils
-                .rebatchTuples(RunMPNN.out.pdbs_jsons, 200)
+            rebatchTuples(RunMPNN.out.pdbs_jsons, 200)
                 .set { seq_tuple }
 
             // Filter designs by sequence score
@@ -1189,8 +1168,7 @@ workflow {
         else if (params.seq_method == "fampnn") {
             // FAMPNN path
             // Rebatch files for Prep Step
-            Utils
-                .rebatchTuples(filt_rfd_pdbs_jsons, 10)
+            rebatchTuples(filt_rfd_pdbs_jsons, 10)
                 .set { fampnn_prep_input_tuple }
 
             // Restore side-chains to RFD output and prepare CSV file with fixed residues
@@ -1200,9 +1178,12 @@ workflow {
                 .set { mega_csv }
 
             // GPU-aware batching for RunFAMPNN
-            // rebatchGPU returns [batch_id, files] tuples
-            Utils
-                .rebatchGPU(PrepFAMPNN.out.pdbs, params.gpus)
+            // partitionGpuBatches returns [batch_id, files] tuples
+            PrepFAMPNN.out.pdbs
+                .collect()
+                .map { allPdbs -> partitionGpuBatches(allPdbs, params.gpus) }
+                .flatten()
+                .groupTuple()
                 .set { fampnn_pdbs }
 
             // Add CSV path and GPU ID to PDB channel
@@ -1226,8 +1207,7 @@ workflow {
             CompressFAMPNN("fampnn", RunFAMPNN.out.pdbs_jsons.flatten().collect())
 
             // Rebatch sequence assignment files for CPU Filtering Step
-            Utils
-                .rebatchTuples(RunFAMPNN.out.pdbs_jsons, 200)
+            rebatchTuples(RunFAMPNN.out.pdbs_jsons, 200)
                 .set { seq_tuple }
 
             // Filter designs by sequence score
@@ -1317,8 +1297,11 @@ workflow {
         if (params.pred_method == "af2") {
 
             // reallocate batching for GPU
-            Utils
-                .rebatchGPUByNumRes(pred_input_pdbs, params.gpus)
+            pred_input_pdbs
+                .collect()
+                .map { allPdbs -> partitionGpuBatchesByNumRes(allPdbs, params.gpus) }
+                .flatten()
+                .groupTuple()
                 .set { pred_input_tuple }
 
             // AlphaFold2-Initial Guess
@@ -1328,8 +1311,7 @@ workflow {
             CompressAF2("af2", RunAF2.out.pdbs_jsons.flatten().collect())
 
             // Batch files for CPUs
-            Utils
-                .rebatchTuples(RunAF2.out.pdbs_jsons, 200)
+            rebatchTuples(RunAF2.out.pdbs_jsons, 200)
                 .set { af2_tuple }
 
             // Filtering of AF2 results
@@ -1355,16 +1337,18 @@ workflow {
             PrepBoltz(pred_input_pdbs)
 
             // reallocate batching for GPU
-            Utils
-                .rebatchGPU(PrepBoltz.out.yamls, params.gpus)
+            PrepBoltz.out.yamls
+                .collect()
+                .map { allPdbs -> partitionGpuBatches(allPdbs, params.gpus) }
+                .flatten()
+                .groupTuple()
                 .set { pred_input_tuple }
 
             // Perform prediction of designs using Boltz-2
             RunBoltz(pred_input_tuple)
 
             // Batch files for CPUs
-            Utils
-                .rebatchTuples(RunBoltz.out.pdbs_jsons, 200)
+            rebatchTuples(RunBoltz.out.pdbs_jsons, 200)
                 .set { boltz_tuple }
 
             // Align Boltz Predictions to FAMPNN output and calculate RMSD
@@ -1389,16 +1373,18 @@ workflow {
             println("Using RosettaFold3 (Foundry) for structure prediction")
 
             // reallocate batching for GPU
-            Utils
-                .rebatchGPU(pred_input_pdbs, params.gpus)
+            pred_input_pdbs
+                .collect()
+                .map { allPdbs -> partitionGpuBatches(allPdbs, params.gpus) }
+                .flatten()
+                .groupTuple()
                 .set { pred_input_tuple }
 
             // Run RF3 prediction
             RunRF3(pred_input_tuple)
 
             // Batch files for CPUs
-            Utils
-                .rebatchTuples(RunRF3.out.structures_metadata, 200)
+            rebatchTuples(RunRF3.out.structures_metadata, 200)
                 .set { rf3_tuple }
 
             // Filter RF3 predictions
@@ -1531,8 +1517,8 @@ workflow {
 
     // Count outputs
     if (params.run_rfd_only) {
-        Utils.countPdbFiles(rfd_tuples).set { rfd_count }
-        Utils.countPdbFiles(final_pdbs).set { filter_rfd_count }
+        countPdbFiles(rfd_tuples).set { rfd_count }
+        countPdbFiles(final_pdbs).set { filter_rfd_count }
         seq_count = 0
         filter_seq_count = 0
         filter_pred_count = 0
@@ -1549,21 +1535,21 @@ workflow {
         filter_rfd_count = 0
         seq_count = 0
         filter_seq_count = 0
-        Utils.countPdbFiles(analysis_input_pdbs).set { filter_pred_count }
+        countPdbFiles(analysis_input_pdbs).set { filter_pred_count }
     }
     else if (params.skip_rfd) {
         rfd_count = 0
         filter_rfd_count = 0
-        Utils.countPdbFiles(seq_tuple).set { seq_count }
-        Utils.countPdbFiles(filt_seq_pdbs).set { filter_seq_count }
-        Utils.countPdbFiles(analysis_input_pdbs).set { filter_pred_count }
+        countPdbFiles(seq_tuple).set { seq_count }
+        countPdbFiles(filt_seq_pdbs).set { filter_seq_count }
+        countPdbFiles(analysis_input_pdbs).set { filter_pred_count }
     }
     else {
-        Utils.countPdbFiles(rfd_tuples).set { rfd_count }
-        Utils.countPdbFiles(filt_rfd_pdbs_jsons).set { filter_rfd_count }
-        Utils.countPdbFiles(seq_tuple).set { seq_count }
-        Utils.countPdbFiles(filt_seq_pdbs).set { filter_seq_count }
-        Utils.countPdbFiles(analysis_input_pdbs).set { filter_pred_count }
+        countPdbFiles(rfd_tuples).set { rfd_count }
+        countPdbFiles(filt_rfd_pdbs_jsons).set { filter_rfd_count }
+        countPdbFiles(seq_tuple).set { seq_count }
+        countPdbFiles(filt_seq_pdbs).set { filter_seq_count }
+        countPdbFiles(analysis_input_pdbs).set { filter_pred_count }
     }
 
     // Generate report and statistics of run
@@ -1624,4 +1610,98 @@ def collectInputFiles(params) {
     }
 
     return inputs
+}
+
+def parseJsonFile(rawPath) {
+    return new groovy.json.JsonSlurper().parse(file(rawPath))
+}
+
+def reportNanoporeStage(params, stageName, outputs) {
+    if (!params.job_id) {
+        return
+    }
+    try {
+        def reportFiles = outputs
+            .findAll { output -> output != null }
+            .collect { output -> output.toString() }
+        if (reportFiles.isEmpty()) {
+            return
+        }
+        def args = [params.job_id.toString(), stageName, "complete"] + reportFiles
+        def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
+        proc.waitFor()
+    }
+    catch (Exception error) {
+        println "Warning: Failed to report stage ${stageName}: ${error.message}"
+    }
+}
+
+def rebatchTuples(inputChannel, batchSize = 50) {
+    return inputChannel
+        .transpose()
+        .buffer(size: batchSize, remainder: true)
+        .map { pairs ->
+            def firstElements = pairs.collect { pair -> pair[0] }
+            def secondElements = pairs.collect { pair -> pair[1] }
+            [firstElements, secondElements]
+        }
+}
+
+def partitionGpuBatches(allPdbs, gpus) {
+    def totalSize = allPdbs.size()
+    if (totalSize == 0) {
+        return []
+    }
+    def batchCount = Math.max(1, Math.min((gpus ?: 1) as int, totalSize))
+    def batchSize = (totalSize / batchCount).doubleValue()
+    def index = 0
+    def batches = allPdbs.collect { pdb ->
+        def position = index
+        index = index + 1
+        def batchId = (position / batchSize).intValue()
+        [batchId, pdb]
+    }
+    return batches
+}
+
+def countResidues(pdbFile) {
+    def residueSet = new HashSet()
+
+    pdbFile.eachLine { line ->
+        if (line.startsWith("ATOM  ") || line.startsWith("HETATM")) {
+            if (line.length() >= 26) {
+                def chainId = line.substring(21, 22)
+                def residueNumber = line.substring(22, 26).trim()
+                def residueName = line.substring(17, 20).trim()
+                residueSet.add("${chainId}_${residueNumber}_${residueName}")
+            }
+        }
+    }
+
+    return residueSet.size()
+}
+
+def partitionGpuBatchesByNumRes(allPdbs, gpus) {
+    def sortedPdbs = allPdbs.sort { pdb -> countResidues(pdb) }
+    return partitionGpuBatches(sortedPdbs, gpus)
+}
+
+def countPdbFiles(inputChannel) {
+    return inputChannel
+        .flatten()
+        .collect()
+        .map { files ->
+            files.findAll { fileObj ->
+                def name = fileObj.toString()
+                name.endsWith('.pdb') || name.endsWith('.cif.gz') || name.endsWith('.cif')
+            }.size()
+        }
+        .ifEmpty(0)
+}
+
+def buildLegacyRfdCommand(params) {
+    def loader = new groovy.lang.GroovyClassLoader()
+    def paramsClass = loader.parseClass(new File("${params.code_root}/lib/RFDiffusionParams.groovy"))
+    def instance = paramsClass.getConstructor(Map).newInstance(params as Map)
+    return instance.generateCommandString()
 }

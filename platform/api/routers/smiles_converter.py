@@ -262,7 +262,7 @@ async def generate_3d_conformer(request: Generate3DRequest):
     except ImportError:
         raise HTTPException(
             status_code=503,
-            detail="RDKit not available. Please install rdkit: pip install rdkit"
+            detail="RDKit not available. Please install rdkit: uv pip install rdkit"
         )
     
     import os

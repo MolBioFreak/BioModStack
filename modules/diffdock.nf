@@ -1,3 +1,14 @@
+def formatFilterParams(params, paramPrefix, paramNames) {
+    return paramNames.collect { name ->
+        def paramValue = params["${paramPrefix}_${name}"]
+        if (paramValue != null) {
+            def cmdParam = name.replaceAll('_', '-')
+            return "--${paramPrefix}-${cmdParam} ${paramValue}"
+        }
+        return ""
+    }.findAll { value -> value != "" }.join(' ')
+}
+
 process PrepDiffDock {
     label 'pyrosetta_tools'
 
@@ -73,7 +84,7 @@ process FilterDiffDock {
     path "*.log"
 
     script:
-    def paramString = Utils.formatFilterParams(
+    def paramString = formatFilterParams(
         params,
         "diffdock",
         ["confidence_threshold"]
@@ -91,4 +102,3 @@ process FilterDiffDock {
         2>&1 | tee filter_diffdock.log
     """
 }
-

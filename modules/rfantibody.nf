@@ -1,3 +1,11 @@
+def clampIntValue(value, minValue, maxValue) {
+    Math.max(minValue, Math.min(value as int, maxValue))
+}
+
+def clampDoubleValue(value, minValue, maxValue) {
+    Math.max(minValue, Math.min(value as double, maxValue))
+}
+
 process RFANTIBODY {
     /*
      * RFantibody - De novo antibody backbone design
@@ -141,16 +149,10 @@ process RFANTIBODY {
 
     // Quality parameters — honor the UI contract while still guarding against
     // pathological values arriving from stale clients or direct API callers.
-    def clampInt = { value, minValue, maxValue ->
-        Math.max(minValue, Math.min(value as int, maxValue))
-    }
-    def clampDouble = { value, minValue, maxValue ->
-        Math.max(minValue, Math.min(value as double, maxValue))
-    }
-    def diffusion_steps = clampInt(params.rfantibody_diffusion_steps ?: 50, 20, 200)
-    def noise_scale_ca = clampDouble(params.rfantibody_noise_scale_ca ?: 1.0, 0.5d, 2.0d)
-    def noise_scale_frame = clampDouble(params.rfantibody_noise_scale_frame ?: 1.0, 0.5d, 2.0d)
-    def guide_scale = clampInt(params.rfantibody_guide_scale ?: 10, 1, 50)
+    def diffusion_steps = clampIntValue(params.rfantibody_diffusion_steps ?: 50, 20, 200)
+    def noise_scale_ca = clampDoubleValue(params.rfantibody_noise_scale_ca ?: 1.0, 0.5d, 2.0d)
+    def noise_scale_frame = clampDoubleValue(params.rfantibody_noise_scale_frame ?: 1.0, 0.5d, 2.0d)
+    def guide_scale = clampIntValue(params.rfantibody_guide_scale ?: 10, 1, 50)
 
     def presetFrameworks = [
         'standard-fv': '/opt/RFantibody/scripts/examples/example_inputs/hu-4D5-8_Fv.pdb',
@@ -214,7 +216,7 @@ process RFANTIBODY {
         fi
         if [ "\$EXISTING_DESIGNS" -gt 0 ]; then
             REMAINING_DESIGNS=\$(( ${num_designs} - EXISTING_DESIGNS ))
-            DESIGN_STARTNUM=-1
+            DESIGN_STARTNUM=\${EXISTING_DESIGNS}
             echo "Resuming RFantibody from design index \$EXISTING_DESIGNS with \$REMAINING_DESIGNS remaining" | tee -a "\${LOG_FILE}"
         fi
     fi

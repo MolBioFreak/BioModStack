@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 CODE_ROOT = Path(__file__).resolve().parents[3]
 
+from antibody_pipeline_contract import is_antibody_pipeline_mode
 from services.gpu_config import read_scheduler_config, write_scheduler_config
 from services.gpu_metadata import GPU_CAPABILITIES
 from services.gpu_stage_activity import job_uses_assigned_gpu
@@ -396,7 +397,7 @@ def _recover_rfantibody_parent_after_child_wait(job: Any, child_wait_success: Di
     output_dir = getattr(job, "output_dir", None)
     if not isinstance(params, dict) or not output_dir:
         return None
-    if str(getattr(job, "mode", "")).strip() != "antibody_denovo_pipeline":
+    if not is_antibody_pipeline_mode(getattr(job, "mode", "")):
         return None
     if "rfantibody" in [str(stage) for stage in (getattr(job, "completed_stages", None) or [])]:
         return None

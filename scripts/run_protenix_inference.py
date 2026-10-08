@@ -92,6 +92,7 @@ def _apply_default_params(args: argparse.Namespace) -> None:
     if args.model_name in {
         "protenix_base_default_v0.5.0",
         "protenix_base_constraint_v0.5.0",
+        "protenix-v2",
         "protenix_base_default_v1.0.0",
         "protenix_base_20250630_v1.0.0",
     }:
@@ -120,7 +121,7 @@ def main() -> None:
     parser.add_argument("--step", type=int, default=200, help="Diffusion steps.")
     parser.add_argument("--sample", type=int, default=5, help="Number of samples.")
     parser.add_argument("--dtype", default="bf16", help="Inference dtype.")
-    parser.add_argument("--model_name", default="protenix_base_default_v1.0.0", help="Model checkpoint name.")
+    parser.add_argument("--model_name", default="protenix_base_20250630_v1.0.0", help="Model checkpoint name.")
     parser.add_argument("--use_msa", type=_parse_bool, default=True, help="Whether to use MSA for inference.")
     parser.add_argument("--use_default_params", type=_parse_bool, default=False, help="Use recommended default parameters.")
     parser.add_argument("--trimul_kernel", default="cuequivariance", help="Triangle multiplicative update kernel.")

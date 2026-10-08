@@ -56,6 +56,77 @@ export interface AxisStatusBatchResponse {
     rows: Partial<Record<AxisName, AxisStatus>>;
 }
 
+export interface MotionTruth {
+    evidence_level?: string;
+    controller_reported_position?: boolean;
+    controller_reported_switches?: boolean;
+    physical_motion_confirmed?: boolean;
+    independent_evidence_required?: boolean;
+    summary?: string;
+    recommended_next_evidence?: string[];
+}
+
+export interface MotionPrepPolicy {
+    axis?: AxisName | string;
+    reuse_requested?: boolean;
+    armed_and_live?: boolean;
+    debug_flag_required?: boolean;
+    debug_flag_enabled?: boolean;
+    reuse_allowed?: boolean;
+    reuse_used?: boolean;
+    interlock_reused?: boolean;
+    board_activation_skipped?: boolean;
+    axis_prep_skipped?: boolean;
+    note?: string;
+}
+
+export interface MotionArtifactBundle {
+    schema_version?: string;
+    bundle_kind?: string;
+    bundle_id?: string;
+    created_at?: string;
+    command?: string;
+    axis?: AxisName | string;
+    dry_run?: boolean;
+    root?: string;
+    bundle_dir?: string;
+    metadata_path?: string;
+    request_path?: string;
+    response_path?: string;
+    operator_note?: string | null;
+    snapshot_refs?: string[];
+}
+
+export interface AxisMotionResult {
+    axis: AxisName | string;
+    board_status?: Record<string, any> | null;
+    interlock?: Record<string, any> | null;
+    prep?: Record<string, any> | null;
+    prep_policy?: MotionPrepPolicy | null;
+    motion_truth?: MotionTruth | null;
+    artifact_bundle?: MotionArtifactBundle | null;
+    motion_profile?: Record<string, any> | null;
+    position_before?: { position?: number | null; ok?: boolean } | null;
+    position_after?: { position?: number | null; ok?: boolean } | null;
+    position_delta?: number | null;
+    target_position?: number | null;
+    switch_activity_before?: Record<string, any> | null;
+    switch_activity_after?: Record<string, any> | null;
+    move?: Record<string, any> | null;
+    wait?: Record<string, any> | null;
+    home?: Record<string, any> | null;
+    dry_run?: boolean;
+    skipped_hardware_io?: boolean;
+    message?: string | null;
+}
+
+export interface MotionArtifactOptions {
+    capture_bundle?: boolean;
+    dry_run_bundle?: boolean;
+    operator_note?: string;
+    snapshot_refs?: string[];
+}
+
 export interface MotionPowerStatus {
     hardware_connected?: boolean;
     board_status?: Record<string, any> | null;
@@ -143,6 +214,49 @@ export interface DaemonStatus {
         status_code?: number;
         detail?: unknown;
     } | null;
+}
+
+export interface ProtocolCompilePayload {
+    source_type?: 'native' | 'oem_xml';
+    document?: Record<string, any>;
+    xml_path?: string;
+}
+
+export interface ProtocolJobSummary {
+    job_id: string;
+    status: string;
+    dry_run?: boolean;
+    protocol_id?: string;
+    source_type?: string;
+    created_at?: string;
+    updated_at?: string;
+    pending_review?: Record<string, any> | null;
+}
+
+export interface ProtocolJobBundle {
+    schema_version: string;
+    job_id: string;
+    created_at?: string;
+    updated_at?: string;
+    status: string;
+    protocol: {
+        source_type: string;
+        source_path?: string | null;
+        coverage?: Record<string, any>;
+        experiment?: Record<string, any>;
+        inventory?: Record<string, any>;
+        document: Record<string, any>;
+    };
+    execution: {
+        dry_run: boolean;
+        runtime_state: Record<string, any>;
+    };
+    operator?: {
+        manual_review_required?: boolean;
+        pending_review?: Record<string, any> | null;
+        reviews?: Array<Record<string, any>>;
+    };
+    artifacts?: Record<string, any>;
 }
 
 const invalidateBioXp = (queryClient: ReturnType<typeof useQueryClient>) => {
@@ -236,6 +350,64 @@ export const useReconnectRuntime = () => {
             return res.data;
         },
         onSuccess: () => invalidateBioXp(queryClient)
+    });
+};
+
+export const useProtocolJobs = (enabled = true, refetchIntervalMs: number | false = 10000) =>
+    useQuery<{ rows: ProtocolJobSummary[] }, Error>({
+        queryKey: ['bioxp', 'protocol', 'jobs'],
+        queryFn: async () => {
+            const res = await api.get('/api/bioxp/protocol/jobs');
+            return res.data;
+        },
+        enabled,
+        refetchInterval: enabled ? refetchIntervalMs : false,
+        retry: false,
+    });
+
+export const useProtocolJob = (jobId: string | null, enabled = true) =>
+    useQuery<ProtocolJobBundle, Error>({
+        queryKey: ['bioxp', 'protocol', 'job', jobId],
+        queryFn: async () => {
+            const res = await api.get(`/api/bioxp/protocol/jobs/${jobId}`);
+            return res.data;
+        },
+        enabled: enabled && !!jobId,
+        retry: false,
+    });
+
+export const useCompileProtocol = () =>
+    useMutation<ProtocolJobBundle['protocol'], Error, ProtocolCompilePayload>({
+        mutationFn: async (payload) => {
+            const res = await api.post('/api/bioxp/protocol/compile', payload);
+            return res.data;
+        },
+    });
+
+export const useExecuteProtocol = () => {
+    const queryClient = useQueryClient();
+    return useMutation<ProtocolJobBundle, Error, ProtocolCompilePayload & { dry_run?: boolean }>({
+        mutationKey: bioxpHardwareMutationKey('protocol', 'execute'),
+        mutationFn: async (payload) => {
+            const res = await api.post('/api/bioxp/protocol/execute', payload);
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient),
+    });
+};
+
+export const useReviewProtocolJob = () => {
+    const queryClient = useQueryClient();
+    return useMutation<ProtocolJobBundle, Error, { job_id: string; reviewer?: string; note?: string | null }>({
+        mutationKey: bioxpHardwareMutationKey('protocol', 'review'),
+        mutationFn: async ({ job_id, reviewer = 'operator', note = null }) => {
+            const res = await api.post(`/api/bioxp/protocol/jobs/${job_id}/review`, { reviewer, note });
+            return res.data;
+        },
+        onSuccess: (_, variables) => {
+            invalidateBioXp(queryClient);
+            queryClient.invalidateQueries({ queryKey: ['bioxp', 'protocol', 'job', variables.job_id] });
+        },
     });
 };
 
@@ -351,20 +523,37 @@ export const useClearLock = () => {
 
 export const useMoveRelative = () => {
     const queryClient = useQueryClient();
-    return useMutation({
+    return useMutation<AxisMotionResult, Error, {
+        axis: AxisName;
+        steps: number;
+        wait_timeout_s?: number;
+        reuse_prepared?: boolean;
+        capture_bundle?: boolean;
+        dry_run_bundle?: boolean;
+        operator_note?: string;
+        snapshot_refs?: string[];
+    }>({
         mutationKey: bioxpHardwareMutationKey('motion', 'relative'),
         mutationFn: async ({
             axis,
             steps,
             wait_timeout_s = 15.0,
             reuse_prepared = false,
-        }: {
-            axis: AxisName;
-            steps: number;
-            wait_timeout_s?: number;
-            reuse_prepared?: boolean;
+            capture_bundle = false,
+            dry_run_bundle = false,
+            operator_note,
+            snapshot_refs = [],
         }) => {
-            const res = await api.post('/api/bioxp/motion/axis/relative', { axis, steps, wait_timeout_s, reuse_prepared });
+            const res = await api.post('/api/bioxp/motion/axis/relative', {
+                axis,
+                steps,
+                wait_timeout_s,
+                reuse_prepared,
+                capture_bundle,
+                dry_run_bundle,
+                operator_note,
+                snapshot_refs,
+            });
             return res.data;
         },
         onSuccess: (_, variables) => {
@@ -377,10 +566,18 @@ export const useMoveRelative = () => {
 
 export const useMoveAbsolute = () => {
     const queryClient = useQueryClient();
-    return useMutation({
+    return useMutation<AxisMotionResult, Error, { axis: AxisName; position_steps: number } & MotionArtifactOptions>({
         mutationKey: bioxpHardwareMutationKey('motion', 'absolute'),
-        mutationFn: async ({ axis, position_steps }: { axis: AxisName; position_steps: number }) => {
-            const res = await api.post('/api/bioxp/motion/axis/absolute', { axis, position_steps, wait_timeout_s: 60.0 });
+        mutationFn: async ({ axis, position_steps, capture_bundle = false, dry_run_bundle = false, operator_note, snapshot_refs = [] }) => {
+            const res = await api.post('/api/bioxp/motion/axis/absolute', {
+                axis,
+                position_steps,
+                wait_timeout_s: 60.0,
+                capture_bundle,
+                dry_run_bundle,
+                operator_note,
+                snapshot_refs,
+            });
             return res.data;
         },
         onSuccess: (_, variables) => {
@@ -393,10 +590,17 @@ export const useMoveAbsolute = () => {
 
 export const useHomeAxis = () => {
     const queryClient = useQueryClient();
-    return useMutation({
+    return useMutation<AxisMotionResult, Error, { axis: AxisName } & MotionArtifactOptions>({
         mutationKey: bioxpHardwareMutationKey('motion', 'home'),
-        mutationFn: async ({ axis }: { axis: AxisName }) => {
-            const res = await api.post('/api/bioxp/motion/axis/home', { axis, timeout_s: 20.0 });
+        mutationFn: async ({ axis, capture_bundle = false, dry_run_bundle = false, operator_note, snapshot_refs = [] }) => {
+            const res = await api.post('/api/bioxp/motion/axis/home', {
+                axis,
+                timeout_s: 20.0,
+                capture_bundle,
+                dry_run_bundle,
+                operator_note,
+                snapshot_refs,
+            });
             return res.data;
         },
         onSuccess: (_, variables) => {

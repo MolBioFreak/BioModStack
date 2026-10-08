@@ -30,6 +30,26 @@ AA_3TO1 = {
 }
 
 
+def _read_protein_residues(pdb_path: str):
+    residues = {}
+    with open(pdb_path, 'r') as f:
+        for line in f:
+            if line.startswith('ATOM') or line.startswith('HETATM'):
+                resname = line[17:20].strip()
+                if resname not in AA_3TO1:
+                    continue
+                chain = line[21]
+                try:
+                    resnum = int(line[22:26].strip())
+                except ValueError:
+                    continue
+                residues[(chain, resnum)] = resname
+    return [
+        (chain, resnum, residues[(chain, resnum)])
+        for chain, resnum in sorted(residues.keys(), key=lambda item: (item[0], item[1]))
+    ]
+
+
 def extract_sequence_from_pdb(pdb_path: str, chain_id: str = None) -> str:
     """Extract protein sequence from a PDB file.
     
@@ -41,40 +61,38 @@ def extract_sequence_from_pdb(pdb_path: str, chain_id: str = None) -> str:
         One-letter amino acid sequence string, or empty string on failure
     """
     try:
-        residues = {}  # (chain, resnum) -> resname
-        with open(pdb_path, 'r') as f:
-            for line in f:
-                if line.startswith('ATOM') or line.startswith('HETATM'):
-                    resname = line[17:20].strip()
-                    if resname not in AA_3TO1:
-                        continue  # Skip non-protein residues
-                    chain = line[21]
-                    if chain_id and chain != chain_id:
-                        continue
-                    try:
-                        resnum = int(line[22:26].strip())
-                    except ValueError:
-                        continue
-                    residues[(chain, resnum)] = resname
-        
+        residues = _read_protein_residues(pdb_path)
         if not residues:
             return ''
-        
-        # Sort by chain, then residue number
-        sorted_res = sorted(residues.items(), key=lambda x: (x[0][0], x[0][1]))
-        
-        # If no chain specified, use all residues (typical for single-chain files)
+
         if chain_id:
-            seq = ''.join(AA_3TO1.get(r[1], 'X') for r in sorted_res)
+            seq = ''.join(AA_3TO1.get(resname, 'X') for chain, _, resname in residues if chain == chain_id)
         else:
-            # Just get the first chain
-            first_chain = sorted_res[0][0][0]
-            seq = ''.join(AA_3TO1.get(r[1], 'X') for r in sorted_res if r[0][0] == first_chain)
-        
+            first_chain = residues[0][0]
+            seq = ''.join(AA_3TO1.get(resname, 'X') for chain, _, resname in residues if chain == first_chain)
+
         return seq
     except Exception as e:
         print(f"Warning: Failed to extract sequence from {pdb_path}: {e}")
         return ''
+
+
+def extract_sequence_and_position_map_from_pdb(pdb_path: str, chain_id: str = None):
+    """Return sequence plus a PDB-residue-number -> 1-indexed-sequence-position map."""
+    try:
+        residues = _read_protein_residues(pdb_path)
+        if not residues:
+            return '', None, {}
+
+        available_chains = [chain for chain, _, _ in residues]
+        chosen_chain = chain_id if chain_id and chain_id in available_chains else available_chains[0]
+        chain_residues = [(resnum, resname) for chain, resnum, resname in residues if chain == chosen_chain]
+        sequence = ''.join(AA_3TO1.get(resname, 'X') for resnum, resname in chain_residues)
+        position_map = {resnum: idx + 1 for idx, (resnum, _) in enumerate(chain_residues)}
+        return sequence, chosen_chain, position_map
+    except Exception as e:
+        print(f"Warning: Failed to map residues from {pdb_path}: {e}")
+        return '', None, {}
 
 
 def parse_binding_site(binding_site_str):
@@ -117,6 +135,64 @@ def parse_binding_site(binding_site_str):
     return sites
 
 
+def _format_position_ranges(positions):
+    if not positions:
+        return ''
+
+    merged = []
+    sorted_positions = sorted(set(int(pos) for pos in positions))
+    start = prev = sorted_positions[0]
+
+    for pos in sorted_positions[1:]:
+        if pos == prev + 1:
+            prev = pos
+            continue
+        merged.append(str(start) if start == prev else f"{start}..{prev}")
+        start = prev = pos
+
+    merged.append(str(start) if start == prev else f"{start}..{prev}")
+    return ",".join(merged)
+
+
+def _map_binding_sites_to_sequence_positions(binding_sites, position_map, chain_id):
+    positions = []
+    for site_chain, start, end in binding_sites:
+        if chain_id and site_chain != chain_id:
+            continue
+        for residue_number in range(start, end + 1):
+            sequence_position = position_map.get(residue_number)
+            if sequence_position is not None:
+                positions.append(sequence_position)
+    return _format_position_ranges(positions)
+
+
+def _load_nanobody_scaffold_specs(raw_value):
+    if not raw_value:
+        return []
+    try:
+        parsed = json.loads(raw_value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid nanobody scaffold spec payload: {exc}") from exc
+    if not isinstance(parsed, list):
+        raise ValueError("Nanobody scaffold specs must be a JSON list")
+    return parsed
+
+
+def _write_scaffold_yaml_files(output_yaml_path: Path, scaffold_specs):
+    scaffold_yaml_names = []
+    for index, scaffold in enumerate(scaffold_specs, start=1):
+        spec_payload = scaffold.get("spec") if isinstance(scaffold, dict) else None
+        if not isinstance(spec_payload, dict):
+            continue
+        display_name = str(scaffold.get("name") or f"scaffold_{index}").strip() or f"scaffold_{index}"
+        safe_name = "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in display_name).strip("_") or f"scaffold_{index}"
+        scaffold_yaml = output_yaml_path.with_name(f"{safe_name}_{index}.yaml")
+        with scaffold_yaml.open("w", encoding="utf-8") as handle:
+            yaml.safe_dump(spec_payload, handle, sort_keys=False)
+        scaffold_yaml_names.append(scaffold_yaml.name)
+    return scaffold_yaml_names
+
+
 def main():
     parser = argparse.ArgumentParser(description="Prepare BoltzGen YAML design spec")
     parser.add_argument("--ligand_smiles", type=str, help="Target ligand SMILES")
@@ -139,6 +215,7 @@ def main():
     
     # Nanobody-specific arguments
     parser.add_argument("--nanobody_framework", type=str, help="VHH framework sequence template (X marks CDR positions)")
+    parser.add_argument("--nanobody_scaffold_specs", type=str, help="JSON scaffold spec list for file-backed nanobody mode")
     parser.add_argument("--cdr_h1_length", type=str, default="5-8", help="CDR-H1 length range (e.g., '5-8')")
     parser.add_argument("--cdr_h2_length", type=str, default="6-10", help="CDR-H2 length range (e.g., '6-10')")
     parser.add_argument("--cdr_h3_length", type=str, default="12-18", help="CDR-H3 length range (e.g., '12-18')")
@@ -175,12 +252,24 @@ def main():
     smiles = args.ligand_smiles
     if not smiles and args.ntp_type:
         smiles = NTP_TEMPLATES.get(args.ntp_type)
+
+    binding_sites = parse_binding_site(args.binding_site_residues)
+    unique_binding_site_chains = sorted({chain for chain, _, _ in binding_sites})
+    if len(unique_binding_site_chains) > 1:
+        print(
+            "Warning: Multi-chain binding-site conditioning is not yet scaffold-aware in this prep path; "
+            f"using only the mapped target chain context ({', '.join(unique_binding_site_chains)} requested)"
+        )
     
     # Convert scaffold length format: "80-120" -> "80..120" (BoltzGen uses ..)
     scaffold_length = args.scaffold_length.replace('-', '..')
-    
+    nanobody_scaffold_specs = _load_nanobody_scaffold_specs(args.nanobody_scaffold_specs)
+
     entities = []
     constraints = []
+    target_entity = None
+    target_position_map = {}
+    target_position_chain = None
     
     # Mode 4: DNA-Protein Complex Prediction
     if args.protein_sequence and args.dna_template_seq:
@@ -252,115 +341,54 @@ def main():
     elif args.nanobody_framework or args.protocol == 'nanobody-anything':
         print(f"Mode: Nanobody (VHH) design")
         
-        # Protein entity - use framework if provided, else scaffold length range
-        if args.nanobody_framework:
-            # BoltzGen proper scaffold-constrained design:
-            # Replace CDR regions with length ranges (e.g., "6..10") in the sequence
-            # This tells BoltzGen to design those positions while keeping framework fixed
-            # 
-            # IMGT VHH CDR positions (approximate, 0-indexed):
-            # CDR-H1: positions 26-35 (10 residues typical)
-            # CDR-H2: positions 50-65 (16 residues typical)  
-            # CDR-H3: positions 95-115 (variable, 8-25 residues)
-            
-            framework_seq = args.nanobody_framework
-            
-            # Parse CDR length ranges
-            cdr_h1_range = args.cdr_h1_length if args.cdr_h1_length else "6..10"
-            cdr_h2_range = args.cdr_h2_length if args.cdr_h2_length else "8..12"
-            cdr_h3_range = args.cdr_h3_length if args.cdr_h3_length else "10..20"
-            
-            # Convert "6-10" to "6..10" (BoltzGen format)
-            cdr_h1_range = cdr_h1_range.replace('-', '..')
-            cdr_h2_range = cdr_h2_range.replace('-', '..')
-            cdr_h3_range = cdr_h3_range.replace('-', '..')
-            
-            # If framework contains X markers, use those positions
-            if 'X' in framework_seq:
-                # Count X runs and replace with length ranges
-                import re
-                x_runs = list(re.finditer(r'X+', framework_seq))
-                
-                if len(x_runs) >= 3:
-                    # 3 CDR regions marked
-                    new_seq = framework_seq
-                    # Replace from end to preserve indices
-                    for i, cdr_range in enumerate(reversed([cdr_h1_range, cdr_h2_range, cdr_h3_range])):
-                        if i < len(x_runs):
-                            match = x_runs[-(i+1)]
-                            new_seq = new_seq[:match.start()] + cdr_range + new_seq[match.end():]
-                    framework_seq = new_seq
-                    print(f"  Masked CDRs with length ranges: CDR1={cdr_h1_range}, CDR2={cdr_h2_range}, CDR3={cdr_h3_range}")
-                else:
-                    # Replace all X with single length range
-                    framework_seq = re.sub(r'X+', cdr_h3_range, framework_seq)
-                    print(f"  Replaced X markers with length range: {cdr_h3_range}")
-            else:
-                # Full sequence provided - need to insert CDR length ranges at IMGT positions
-                # This is scaffold redesign mode - replace CDR positions with length ranges
-                # 
-                # Typical VHH positions (IMGT):
-                # FR1: 1-26, CDR1: 27-38, FR2: 39-55, CDR2: 56-65, FR3: 66-104, CDR3: 105-117, FR4: 118-128
-                # Converting to 0-indexed: FR1: 0-25, CDR1: 26-37, FR2: 38-54, CDR2: 55-64, FR3: 65-103, CDR3: 104-116, FR4: 117+
-                
-                seq_len = len(framework_seq)
-                if seq_len >= 110:  # Typical VHH length
-                    # Extract framework regions and insert CDR length ranges
-                    fr1 = framework_seq[:26]      # FR1 (fixed)
-                    fr2 = framework_seq[38:55]    # FR2 (fixed) 
-                    fr3 = framework_seq[65:104]   # FR3 (fixed)
-                    fr4 = framework_seq[117:]     # FR4 (fixed)
-                    
-                    # Construct hybrid sequence: FR1 + CDR1_range + FR2 + CDR2_range + FR3 + CDR3_range + FR4
-                    framework_seq = f"{fr1}{cdr_h1_range}{fr2}{cdr_h2_range}{fr3}{cdr_h3_range}{fr4}"
-                    print(f"  Scaffold redesign: Inserted CDR length ranges at IMGT positions")
-                    print(f"    CDR1={cdr_h1_range}, CDR2={cdr_h2_range}, CDR3={cdr_h3_range}")
-                else:
-                    # Sequence too short - use as-is but warn
-                    print(f"  Warning: Framework sequence ({seq_len} AA) shorter than typical VHH - using de novo mode")
-                    framework_seq = '110..130'  # Fall back to de novo
-            
-            entities.append({
-                'protein': {
-                    'id': 'H',  # Heavy chain / VHH
-                    'sequence': framework_seq
-                }
-            })
-            print(f"  Final VHH sequence spec: {framework_seq[:50]}..." if len(framework_seq) > 50 else f"  Final VHH sequence spec: {framework_seq}")
-        else:
-            # De novo - use VHH-typical length range
-            entities.append({
-                'protein': {
-                    'id': 'H',
-                    # Keep minimum length above the default CDR-H3 upper bound (115)
-                    # so optional loop constraints remain valid.
-                    'sequence': '120..130'
-                }
-            })
-        
         # Target antigen entity (if provided)
         if args.target_pdb and Path(args.target_pdb).exists():
             print(f"  Target antigen: {args.target_pdb}")
-            # BoltzGen requires BOTH path AND sequence for PDB-loaded entities
-            target_seq = extract_sequence_from_pdb(args.target_pdb)
-            if target_seq:
-                entities.append({
+            target_chain_hint = unique_binding_site_chains[0] if len(unique_binding_site_chains) == 1 else None
+            target_seq, target_position_chain, target_position_map = extract_sequence_and_position_map_from_pdb(
+                args.target_pdb,
+                target_chain_hint,
+            )
+
+            if nanobody_scaffold_specs:
+                target_file = {
+                    'path': args.target_pdb,
+                    'include': [{'chain': {'id': target_position_chain or target_chain_hint or 'all'}}],
+                }
+                mapped_binding_positions = _map_binding_sites_to_sequence_positions(
+                    binding_sites,
+                    target_position_map,
+                    target_position_chain,
+                ) if binding_sites and target_position_map else ''
+                if mapped_binding_positions and (target_position_chain or target_chain_hint):
+                    target_file['binding_types'] = [
+                        {'chain': {'id': target_position_chain or target_chain_hint, 'binding': mapped_binding_positions}}
+                    ]
+                    print(f"  Applied target binding conditioning via file spec: {mapped_binding_positions}")
+                target_entity = {'file': target_file}
+                entities.append(target_entity)
+            elif target_seq:
+                target_entity = {
                     'protein': {
                         'id': 'T',  # Target
                         'path': args.target_pdb,
                         'sequence': target_seq  # Required by BoltzGen schema
                     }
-                })
+                }
+                entities.append(target_entity)
                 print(f"  Target sequence: {len(target_seq)} AA")
+                if target_position_chain:
+                    print(f"  Target conditioning chain: {target_position_chain}")
             else:
                 # Fallback: just use path and hope BoltzGen handles it
                 print("  Warning: Could not extract sequence from target PDB")
-                entities.append({
+                target_entity = {
                     'protein': {
                         'id': 'T',
                         'path': args.target_pdb
                     }
-                })
+                }
+                entities.append(target_entity)
         elif smiles:
             # Small molecule target
             print(f"  Small molecule target: {smiles[:50]}...")
@@ -370,14 +398,69 @@ def main():
                     'smiles': smiles
                 }
             })
-        
-        # When using framework scaffolds we skip auto secondary-structure constraints.
-        # For de novo nanobody mode we also avoid injecting static IMGT loop indices:
-        # those can become invalid when the sampled designed length is shorter.
-        if args.nanobody_framework:
-            # When using a framework sequence, we don't add secondary structure constraints
-            # The framework already defines the structure
-            print(f"  Using full framework - skipping secondary structure constraints")
+
+        if nanobody_scaffold_specs:
+            scaffold_yaml_names = _write_scaffold_yaml_files(Path(args.output_yaml), nanobody_scaffold_specs)
+            if scaffold_yaml_names:
+                scaffold_paths = scaffold_yaml_names if len(scaffold_yaml_names) > 1 else scaffold_yaml_names[0]
+                entities.append({'file': {'path': scaffold_paths}})
+                print(f"  Scaffold-backed nanobody mode with {len(scaffold_yaml_names)} scaffold spec(s)")
+        elif args.nanobody_framework:
+            # Protein entity - use framework if provided, else scaffold length range
+            framework_seq = args.nanobody_framework
+
+            cdr_h1_range = (args.cdr_h1_length or "6..10").replace('-', '..')
+            cdr_h2_range = (args.cdr_h2_length or "8..12").replace('-', '..')
+            cdr_h3_range = (args.cdr_h3_length or "10..20").replace('-', '..')
+
+            if 'X' in framework_seq:
+                import re
+                x_runs = list(re.finditer(r'X+', framework_seq))
+
+                if len(x_runs) >= 3:
+                    new_seq = framework_seq
+                    for i, cdr_range in enumerate(reversed([cdr_h1_range, cdr_h2_range, cdr_h3_range])):
+                        if i < len(x_runs):
+                            match = x_runs[-(i + 1)]
+                            new_seq = new_seq[:match.start()] + cdr_range + new_seq[match.end():]
+                    framework_seq = new_seq
+                    print(f"  Masked CDRs with length ranges: CDR1={cdr_h1_range}, CDR2={cdr_h2_range}, CDR3={cdr_h3_range}")
+                else:
+                    framework_seq = re.sub(r'X+', cdr_h3_range, framework_seq)
+                    print(f"  Replaced X markers with length range: {cdr_h3_range}")
+            else:
+                seq_len = len(framework_seq)
+                if seq_len >= 110:
+                    fr1 = framework_seq[:26]
+                    fr2 = framework_seq[38:55]
+                    fr3 = framework_seq[65:104]
+                    fr4 = framework_seq[117:]
+                    framework_seq = f"{fr1}{cdr_h1_range}{fr2}{cdr_h2_range}{fr3}{cdr_h3_range}{fr4}"
+                    print("  Scaffold redesign: Inserted CDR length ranges at IMGT positions")
+                    print(f"    CDR1={cdr_h1_range}, CDR2={cdr_h2_range}, CDR3={cdr_h3_range}")
+                else:
+                    print(f"  Warning: Framework sequence ({seq_len} AA) shorter than typical VHH - using de novo mode")
+                    framework_seq = '110..130'
+
+            entities.append({
+                'protein': {
+                    'id': 'H',
+                    'sequence': framework_seq
+                }
+            })
+            print(
+                f"  Final VHH sequence spec: {framework_seq[:50]}..."
+                if len(framework_seq) > 50
+                else f"  Final VHH sequence spec: {framework_seq}"
+            )
+            print("  Using sequence-template nanobody mode - skipping auto secondary structure constraints")
+        else:
+            entities.append({
+                'protein': {
+                    'id': 'H',
+                    'sequence': '120..130'
+                }
+            })
             
     # Mode 3: Standard de-novo design with SMILES
     else:
@@ -407,23 +490,26 @@ def main():
         })
     
     # Parse binding site constraints
-    if args.binding_site_residues:
-        sites = parse_binding_site(args.binding_site_residues)
-        if sites:
-            print(f"Binding site constraints: {sites}")
-            # Set include_proximity on the binder entity to bias towards these residues
-            # Format: include_proximity on the target entity with binder as reference
-            # Note: BoltzGen uses entity-level include_proximity or design-level constraints
-            # For now, we'll use include_proximity format on the binder entity
-            for entity in entities:
-                if 'protein' in entity and entity['protein'].get('id') in ['A', 'H']:  # Binder
-                    # Add include_proximity to binder to encourage contacts with target residues
-                    entity['protein']['include_proximity'] = {
-                        'chain': sites[0][0],  # Reference chain (target)
-                        'res_index': sites[0][1],  # Reference residue
-                        'radius': 10  # 10 angstroms
-                    }
-                    break
+    if binding_sites:
+        print(f"Binding site constraints: {binding_sites}")
+        if target_entity and 'protein' in target_entity and target_position_map:
+            mapped_binding_positions = _map_binding_sites_to_sequence_positions(
+                binding_sites,
+                target_position_map,
+                target_position_chain,
+            )
+            if mapped_binding_positions:
+                target_entity['protein']['binding_types'] = {
+                    'binding': mapped_binding_positions
+                }
+                print(
+                    "  Applied target binding conditioning "
+                    f"({target_position_chain or 'entity'} -> {mapped_binding_positions})"
+                )
+            else:
+                print("  Warning: Binding-site residues did not map onto the target sequence; skipping conditioning")
+        else:
+            print("  Warning: Binding-site residues were provided without a protein target context; skipping conditioning")
     
     # Parse covalent bond constraints (disulfides, WHL staples, custom)
     if args.covalent_bonds:

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { submitJob, uploadFile, extractChain, annotateFrameworkCdrs, downloadSabdabFramework, launchAntibodyIteration, launchManualMutagenesis, type CDRAnnotationResponse, type RfScreeningScope } from '../lib/api';
+import { submitJob, uploadFile, extractChain, annotateFrameworkCdrs, downloadSabdabFramework, launchAntibodyIteration, launchManualMutagenesis, previewBoltzGenDesignSpec, type BoltzGenPreviewResponse, type CDRAnnotationResponse, type RfScreeningScope } from '../lib/api';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { getModelByNumber, parsePDBFile, type Chain, type ParsedPDB } from '../utils/pdbUtils';
 import { EpitopeSelector } from './EpitopeSelector';
@@ -28,6 +28,10 @@ import {
     saveAntibodyRefinementLaunchState,
     type AntibodyRefinementLaunchState,
 } from '../lib/refinementLaunchState';
+import {
+    ANTIBODY_DENOVO_PIPELINE_MODE,
+    ANTIBODY_REFINEMENT_PIPELINE_MODE,
+} from '../lib/antibodyModes';
 
 interface AntibodyDenovoTemplateProps {
     onBack: () => void;
@@ -42,6 +46,10 @@ type SeqDesigner = 'none' | 'fampnn' | 'antifold' | 'proteinmpnn';
 type RefinementPreset = 'full_loop' | 'fampnn_only' | 'validation_only' | 'ppiflow_only' | 'manual_mutagenesis' | 'custom';
 type MutagenesisMethod = 'explicit_substitutions' | 'cdr_indels';
 type MutagenesisLaunchMode = 'seeded_refinement' | 'exact_evaluation';
+type DeNovoGenerator = 'rfantibody' | 'boltzgen';
+type DeNovoOrchestrationStage = 'sequence_design' | 'ppiflow' | 'validation' | 'qc';
+type BoltzgenScaffoldSource = 'default_ensemble' | 'selected_scaffold' | 'sequence_template';
+type BoltzgenCheckpointMode = 'both' | 'diverse' | 'adherence';
 
 const normalizeRfScreeningScope = (value: unknown): RfScreeningScope =>
     value === 'whole_antibody' ? 'whole_antibody' : 'cdr_loops';
@@ -54,6 +62,9 @@ const DEFAULT_RFA_LOOP_LENGTH_RANGES: Record<string, LoopLengthRange> = {
     L2: { min: 7, max: 7 },
     L3: { min: 9, max: 11 },
 };
+
+const DEFAULT_BOLTZGEN_VHH_FRAMEWORK = `QVQLVESGGGLVQPGGSLRLSCAASGGSEYSYSTFSLGWFRQAPGQGLEAVAAIASMGGLTYYADSVKGRFTISRDNSKNTLYLQMNSLRAEDTAVYYCAAVRGYFMRLPSSHNFRYWGQGTLVTVS`;
+const DEFAULT_BOLTZGEN_ENSEMBLE = ['3DWT', '5U64', '7EOW', '8Z8M'];
 
 const cloneDefaultLoopRanges = (): Record<string, LoopLengthRange> =>
     Object.fromEntries(
@@ -246,6 +257,19 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         if (Number.isNaN(parsed.getTime())) return refinementSavedFilterSetCreatedAt;
         return parsed.toLocaleString();
     }, [refinementSavedFilterSetCreatedAt]);
+    const [deNovoGenerator, setDeNovoGenerator] = useState<DeNovoGenerator>(() => {
+        const explicit = String(initialValues?.denovo_generator || initialValues?.generator || '').trim().toLowerCase();
+        if (explicit === 'boltzgen') return 'boltzgen';
+        const boltzMode = String(initialValues?.boltzgen_mode || initialValues?.mode || '').trim().toLowerCase();
+        if (boltzMode === 'nanobody_binder') return 'boltzgen';
+        return 'rfantibody';
+    });
+    const [deNovoStageSelection, setDeNovoStageSelection] = useState<Record<DeNovoOrchestrationStage, boolean>>(() => ({
+        sequence_design: initialValues?.initial_orchestration_sequence_design === true,
+        ppiflow: initialValues?.initial_orchestration_ppiflow === true,
+        validation: initialValues?.initial_orchestration_validation === true,
+        qc: initialValues?.initial_orchestration_qc === true,
+    }));
 
     useEffect(() => {
         if (refinementState?.refinementMode) {
@@ -328,20 +352,20 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [seqDesigner, setSeqDesigner] = useState<SeqDesigner>('fampnn');
     const [fampnnConstraintMode, setFampnnConstraintMode] = useState<'generic' | 'antibody'>('antibody');
     const [useAntiberty, setUseAntiberty] = useState(false);  // Disabled by default, planned for removal
-    const [useThermoMPNN, setUseThermoMPNN] = useState(true);  // Controlled via qualitySettings.run_thermompnn
+    const [, setUseThermoMPNN] = useState(true);  // Legacy setter retained for template/state hydration
     const [runFrustrampnn, setRunFrustrampnn] = useState(false);
     const [runStructureValidation, setRunStructureValidation] = useState(initialValues?.run_structure_validation !== false);
     const [runAnarciiPost, setRunAnarciiPost] = useState(false);
     const [anarciiIncludeChildren, setAnarciiIncludeChildren] = useState(true);
     const [interactiveWorkflow, setInteractiveWorkflow] = useState(
-        initialValues?.interactive_swa ?? initialValues?.interactive_gating ?? false
+        initialValues?.interactive_swa ?? initialValues?.interactive_gating ?? true
     );
     const [interactiveGateStage, setInteractiveGateStage] = useState<InteractiveGateStage>(
         initialValues?.interactive_gate_stage === 'post_structure_validation'
             ? 'post_structure_validation'
-            : initialValues?.interactive_gate_stage === 'post_rfantibody'
-                ? 'post_rfantibody'
-                : 'post_fampnn'
+            : initialValues?.interactive_gate_stage === 'post_fampnn'
+                ? 'post_fampnn'
+                : 'post_rfantibody'
     );
     const [structureValidator, setStructureValidator] = useState<'boltz2' | 'protenix'>(
         initialValues?.structure_validator === 'protenix' ? 'protenix' : 'boltz2'
@@ -418,19 +442,54 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
     // Quality settings
     const [qualitySettings, setQualitySettings] = useState<QualitySettings>(() => mergeQualitySettingsFromParams(initialValues));
+    const [physicsSettings, setPhysicsSettings] = useState<PhysicsRefinementSettings>(PHYSICS_DEFAULTS);
     const resolvedFampnnCheckpoint = qualitySettings.fampnn_checkpoint.trim() || PRESETS.balanced.fampnn_checkpoint;
     const resolvedPpiFlowCheckpoint = qualitySettings.ppiflow_checkpoint.trim() || PRESETS.balanced.ppiflow_checkpoint;
     const selectedLoopList = Array.from(selectedCDRLoops).sort();
     const ppiflowStageMode = (qualitySettings.ppiflow_stage_mode || (qualitySettings.run_maturation ? 'post_fampnn' : 'off')) as PPIFlowStageMode;
-    const runPpiFlowBackboneRefine = ppiflowStageMode === 'post_rfantibody' || ppiflowStageMode === 'post_ppiflow' || ppiflowStageMode === 'both';
-    const runPpiFlowMaturation = ppiflowStageMode === 'post_fampnn' || ppiflowStageMode === 'both';
+    const hasEnabledDeNovoDownstreamStages = Object.values(deNovoStageSelection).some(Boolean);
+    const showOnlyCoreGeneratorStep = !isRefinementMode && !hasEnabledDeNovoDownstreamStages;
+    const boltzgenGeneratorSelected = !isRefinementMode && deNovoGenerator === 'boltzgen';
+    const deNovoDownstreamLocked = boltzgenGeneratorSelected;
+    const effectiveSeqDesigner = !isRefinementMode && !deNovoStageSelection.sequence_design ? 'none' : seqDesigner;
+    const effectivePpiFlowStageMode = (!isRefinementMode && (!deNovoStageSelection.ppiflow || deNovoDownstreamLocked))
+        ? 'off'
+        : ppiflowStageMode;
+    const runPpiFlowBackboneRefine = effectivePpiFlowStageMode === 'post_rfantibody' || effectivePpiFlowStageMode === 'post_ppiflow' || effectivePpiFlowStageMode === 'both';
+    const runPpiFlowMaturation = effectivePpiFlowStageMode === 'post_fampnn' || effectivePpiFlowStageMode === 'both';
     const anyPpiFlowStageEnabled = runPpiFlowBackboneRefine || runPpiFlowMaturation;
-    const showRfQualitySettings = !isRefinementMode;
-    const showStructureValidationQualitySettings = runStructureValidation;
-    const showFampnnQualitySettings = seqDesigner === 'fampnn' || (anyPpiFlowStageEnabled && qualitySettings.maturation_redesign_enabled !== false);
+    const effectiveRunStructureValidation = (!isRefinementMode && (!deNovoStageSelection.validation || deNovoDownstreamLocked))
+        ? false
+        : runStructureValidation;
+    const effectiveUseAntiberty = (!isRefinementMode && (!deNovoStageSelection.qc || deNovoDownstreamLocked))
+        ? false
+        : useAntiberty;
+    const effectiveUseThermoMPNN = (!isRefinementMode && (!deNovoStageSelection.qc || deNovoDownstreamLocked))
+        ? false
+        : Boolean(qualitySettings.run_thermompnn);
+    const effectiveRunFrustrampnn = (!isRefinementMode && (!deNovoStageSelection.qc || deNovoDownstreamLocked))
+        ? false
+        : runFrustrampnn;
+    const effectiveRunAnarciiPost = (!isRefinementMode && (!deNovoStageSelection.qc || deNovoDownstreamLocked))
+        ? false
+        : runAnarciiPost;
+    const effectivePhysicsEnabled = (!isRefinementMode && (!deNovoStageSelection.qc || deNovoDownstreamLocked))
+        ? false
+        : physicsSettings.enabled;
+    const showExecutionModePanel = true;
+    const showStructureValidatorPanel = isRefinementMode || (!deNovoDownstreamLocked && deNovoStageSelection.validation);
+    const showQualitySettingsPanel = isRefinementMode || (!deNovoDownstreamLocked && hasEnabledDeNovoDownstreamStages);
+    const showSequenceDesignerPanel = isRefinementMode || (!deNovoDownstreamLocked && deNovoStageSelection.sequence_design);
+    const showQcPanels = isRefinementMode || (!deNovoDownstreamLocked && deNovoStageSelection.qc);
+    const showRfQualitySettings = !isRefinementMode && deNovoGenerator === 'rfantibody';
+    const showStructureValidationQualitySettings = effectiveRunStructureValidation;
+    const showFampnnQualitySettings = effectiveSeqDesigner === 'fampnn' || (anyPpiFlowStageEnabled && qualitySettings.maturation_redesign_enabled !== false);
+    const showOrchestratorPanel = true;
+    const showDebugPanel = true;
     const refinementSourceIsPpiFlow = isRefinementMode && refinementSourceOutputSourceFilter === 'ppiflow';
     const refinementBlocksImmediatePpiFlowBackbone = isRefinementMode && (
-        refinementSourceOutputSourceFilter === 'fampnn'
+        refinementSourceOutputSourceFilter === 'boltzgen'
+        || refinementSourceOutputSourceFilter === 'fampnn'
         || refinementSourceOutputSourceFilter === 'validation'
     );
     const ppiflowBackboneRegionMode = normalizePpiFlowRegionMode(qualitySettings.ppiflow_backbone_region_mode);
@@ -469,9 +528,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         });
     }, [ppiflowStageMode, refinementBlocksImmediatePpiFlowBackbone, refinementSourceIsPpiFlow]);
 
-    // Physics refinement settings (OpenMM)
-    const [physicsSettings, setPhysicsSettings] = useState<PhysicsRefinementSettings>(PHYSICS_DEFAULTS);
-
     // Framework selection - preset, custom, or SAbDab
     type FrameworkType = 'standard-fv' | 'nanobody' | 'custom' | 'sabdab';
     const [frameworkType, setFrameworkType] = useState<FrameworkType>('standard-fv');
@@ -507,6 +563,48 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [isParsing, setIsParsing] = useState(false);
     const [pdbBlobUrl, setPdbBlobUrl] = useState<string | null>(null);
     const [show3DViewer, setShow3DViewer] = useState(false);  // 3D viewer toggle, off by default
+    const [boltzgenUseFrameworkTemplate, setBoltzgenUseFrameworkTemplate] = useState(
+        initialValues?.boltzgen_use_framework_template !== false
+    );
+    const [boltzgenScaffoldSource, setBoltzgenScaffoldSource] = useState<BoltzgenScaffoldSource>(
+        (initialValues?.boltzgen_scaffold_source as BoltzgenScaffoldSource) || 'default_ensemble'
+    );
+    const [boltzgenNanobodyFramework, setBoltzgenNanobodyFramework] = useState(
+        initialValues?.boltzgen_nanobody_framework || DEFAULT_BOLTZGEN_VHH_FRAMEWORK
+    );
+    const [boltzgenScaffoldLength, setBoltzgenScaffoldLength] = useState(
+        initialValues?.boltzgen_scaffold_length || '100-135'
+    );
+    const [boltzgenBatchSize, setBoltzgenBatchSize] = useState(initialValues?.batch_size || initialValues?.boltzgen_batch_size || 1);
+    const [boltzgenParallelMode, setBoltzgenParallelMode] = useState(Boolean(initialValues?.boltzgen_parallel_mode));
+    const [boltzgenDesignsPerJob, setBoltzgenDesignsPerJob] = useState(initialValues?.boltzgen_designs_per_job || 100);
+    const [boltzgenReuseExisting, setBoltzgenReuseExisting] = useState(Boolean(initialValues?.boltzgen_reuse));
+    const [boltzgenCdrH1Length, setBoltzgenCdrH1Length] = useState(initialValues?.boltzgen_cdr_h1_length || '5-8');
+    const [boltzgenCdrH2Length, setBoltzgenCdrH2Length] = useState(initialValues?.boltzgen_cdr_h2_length || '6-10');
+    const [boltzgenCdrH3Length, setBoltzgenCdrH3Length] = useState(initialValues?.boltzgen_cdr_h3_length || '12-18');
+    const [showBoltzgenFrameworkBrowser, setShowBoltzgenFrameworkBrowser] = useState(false);
+    const [boltzgenCheckpointMode, setBoltzgenCheckpointMode] = useState<BoltzgenCheckpointMode>(
+        (initialValues?.boltzgen_checkpoint_mode as BoltzgenCheckpointMode) || 'both'
+    );
+    const [boltzgenSkipInverseFolding, setBoltzgenSkipInverseFolding] = useState(Boolean(initialValues?.boltzgen_skip_inverse_folding));
+    const [boltzgenInverseFoldAvoid, setBoltzgenInverseFoldAvoid] = useState<string>(initialValues?.boltzgen_inverse_fold_avoid || '');
+    const [boltzgenInverseFoldNumSequences, setBoltzgenInverseFoldNumSequences] = useState(initialValues?.boltzgen_inverse_fold_num_sequences || 1);
+    const [boltzgenAvoidCysteine, setBoltzgenAvoidCysteine] = useState(
+        initialValues?.boltzgen_avoid_cysteine ?? true
+    );
+    const [boltzgenStepScale, setBoltzgenStepScale] = useState<number | ''>(initialValues?.boltzgen_step_scale || 1.8);
+    const [boltzgenNoiseScale, setBoltzgenNoiseScale] = useState<number | ''>(initialValues?.boltzgen_noise_scale || 0.98);
+    const [boltzgenBudget, setBoltzgenBudget] = useState<number | ''>(initialValues?.boltzgen_budget || 50);
+    const [boltzgenAlpha, setBoltzgenAlpha] = useState(initialValues?.boltzgen_alpha || 0.01);
+    const [boltzgenMaxRmsd, setBoltzgenMaxRmsd] = useState<number | ''>(initialValues?.boltzgen_max_rmsd || 2.0);
+    const [boltzgenMinPlddt, setBoltzgenMinPlddt] = useState<number | ''>(initialValues?.boltzgen_min_plddt || 70);
+    const [boltzgenMinConfScore, setBoltzgenMinConfScore] = useState<number | ''>(initialValues?.boltzgen_min_conf_score || '');
+    const [boltzgenFilterBiased, setBoltzgenFilterBiased] = useState(initialValues?.boltzgen_filter_biased !== false);
+    const [boltzgenMetricsOverride, setBoltzgenMetricsOverride] = useState(initialValues?.boltzgen_metrics_override || '');
+    const [boltzgenAdditionalFilters, setBoltzgenAdditionalFilters] = useState(initialValues?.boltzgen_additional_filters || '');
+    const [boltzgenSizeBuckets, setBoltzgenSizeBuckets] = useState(initialValues?.boltzgen_size_buckets || '');
+    const [showBoltzgenPreview, setShowBoltzgenPreview] = useState(false);
+    const [boltzgenPreview, setBoltzgenPreview] = useState<BoltzGenPreviewResponse | null>(null);
 
     // Viewer mode - toggle between target and framework preview
     type ViewerMode = 'target' | 'framework';
@@ -523,7 +621,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [rfantibodyInputPdbs, setRfantibodyInputPdbs] = useState<string>('');
     const [skipFampnn, setSkipFampnn] = useState(false);
     const [fampnnCollectedPdbs, setFampnnCollectedPdbs] = useState<string>('');
-    const [customOutputDir, setCustomOutputDir] = useState<string>('');
+    const [customOutputDir, setCustomOutputDir] = useState<string>(initialValues?.out_dir || '');
     const [refinementPreset, setRefinementPreset] = useState<RefinementPreset>(isRefinementMode ? 'full_loop' : 'custom');
     const [useManualMutagenesis, setUseManualMutagenesis] = useState(false);
     const [mutagenesisMethod, setMutagenesisMethod] = useState<MutagenesisMethod>('explicit_substitutions');
@@ -768,6 +866,19 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         }
     });
 
+    const boltzgenPreviewMutation = useMutation({
+        mutationFn: async (payload: { params: Record<string, any>; validate?: boolean }) => previewBoltzGenDesignSpec(payload),
+        onSuccess: (response) => {
+            setBoltzgenPreview(response.data);
+            setShowBoltzgenPreview(true);
+        },
+        onError: (error: any) => {
+            const detail = error.response?.data?.detail;
+            const message = typeof detail === 'object' ? JSON.stringify(detail, null, 2) : (detail || error.message);
+            window.alert('BoltzGen preview failed:\n' + message);
+        },
+    });
+
     const launchMutagenesisMutation = useMutation({
         mutationFn: async (data: any) => launchManualMutagenesis(data),
         onSuccess: () => {
@@ -776,6 +887,149 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             navigate('/');
         },
     });
+
+    const serializeSabdabFramework = () => (
+        sabdabFramework ? {
+            type: sabdabFramework.type,
+            id: sabdabFramework.id,
+            name: sabdabFramework.name,
+            pdbCode: sabdabFramework.pdbCode,
+            sequence: sabdabFramework.sequence,
+            filePath: sabdabFramework.filePath,
+            cdrH3Length: sabdabFramework.cdrH3Length,
+            hChain: sabdabFramework.hChain,
+            lChain: sabdabFramework.lChain,
+            antigenChain: sabdabFramework.antigenChain,
+        } : null
+    );
+
+    const resolveTargetPdbPathForLaunch = async (allowSkipFallback: boolean = false) => {
+        let pdbPath = targetSource?.path || uploadedPath;
+        if (!pdbPath && targetPdb) {
+            pdbPath = await handleFileUpload(targetPdb);
+        }
+        if (!pdbPath && allowSkipFallback) {
+            pdbPath = isRefinementMode ? 'refinement_mode' : skipRFantibody ? rfantibodyInputPdbs : fampnnCollectedPdbs;
+        }
+        if (!pdbPath) {
+            throw new Error('Failed to determine PDB file path');
+        }
+
+        if (selectedChain && parsedChains.length > 1) {
+            const extractResult = await extractChain(
+                pdbPath,
+                selectedChain,
+                undefined,
+                selectedTargetModel ?? undefined
+            );
+            pdbPath = extractResult.data.output_path;
+        }
+
+        return pdbPath;
+    };
+
+    const buildBoltzgenInverseFoldAvoid = () => {
+        if (boltzgenAvoidCysteine) {
+            const avoidSet = new Set(
+                boltzgenInverseFoldAvoid
+                    .split('')
+                    .map((value) => value.trim().toUpperCase())
+                    .filter((value) => value.match(/[A-Z]/))
+            );
+            avoidSet.add('C');
+            return Array.from(avoidSet).join('');
+        }
+        return boltzgenInverseFoldAvoid.trim() || undefined;
+    };
+
+    const buildStandaloneBoltzgenParams = (pdbPath: string, epitopeString: string) => {
+        const boltzgenParams: Record<string, any> = {
+            diffusion_method: 'boltzgen',
+            run_boltzgen_only: true,
+            run_docking: false,
+            run_diffdock: false,
+            run_unidock: false,
+            boltzgen_mode: 'nanobody_binder',
+            boltzgen_protocol: 'nanobody-anything',
+            boltzgen_num_designs: numDesigns,
+            boltzgen_batch_size: Math.max(1, Number(boltzgenBatchSize) || 1),
+            boltzgen_scaffold_length: boltzgenScaffoldLength,
+            boltzgen_target_pdb_path: pdbPath,
+            boltzgen_cdr_h1_length: boltzgenCdrH1Length,
+            boltzgen_cdr_h2_length: boltzgenCdrH2Length,
+            boltzgen_cdr_h3_length: boltzgenCdrH3Length,
+            boltzgen_use_framework_template: boltzgenUseFrameworkTemplate,
+            boltzgen_scaffold_source: boltzgenUseFrameworkTemplate ? boltzgenScaffoldSource : undefined,
+            framework_type: 'nanobody',
+            antibody_format: 'vhh',
+            antibody_chains: 'H',
+            binder_chains: 'H',
+            antigen_chains: selectedChain || undefined,
+            target_chains: selectedChain || undefined,
+            boltzgen_binding_site_residues: epitopeString || undefined,
+            epitope_residues: epitopeString || undefined,
+            selected_residues: epitopeString || undefined,
+            pinned_gpus: pinnedGpus.length > 0 ? pinnedGpus : undefined,
+            lock_gpus: lockGpus && pinnedGpus.length > 0,
+            interactive_swa: interactiveWorkflow,
+            interactive_gating: interactiveWorkflow,
+            interactive_gate_stage: interactiveWorkflow ? 'post_rfantibody' : undefined,
+            stage_family: 'boltzgen',
+            stage_mode: 'nanobody_binder',
+            out_dir: customOutputDir.trim() || undefined,
+            sabdab_framework: serializeSabdabFramework(),
+            custom_framework_path: customFrameworkPath || undefined,
+            boltzgen_checkpoint_mode: boltzgenCheckpointMode !== 'both' ? boltzgenCheckpointMode : undefined,
+            boltzgen_skip_inverse_folding: boltzgenSkipInverseFolding || undefined,
+            boltzgen_inverse_fold_num_sequences: boltzgenInverseFoldNumSequences > 1 ? boltzgenInverseFoldNumSequences : undefined,
+            boltzgen_inverse_fold_avoid: buildBoltzgenInverseFoldAvoid(),
+            boltzgen_avoid_cysteine: boltzgenAvoidCysteine,
+            boltzgen_step_scale: boltzgenStepScale || undefined,
+            boltzgen_noise_scale: boltzgenNoiseScale || undefined,
+            boltzgen_budget: boltzgenBudget || undefined,
+            boltzgen_alpha: boltzgenAlpha,
+            boltzgen_max_rmsd: boltzgenMaxRmsd || undefined,
+            boltzgen_min_plddt: boltzgenMinPlddt || undefined,
+            boltzgen_min_conf_score: boltzgenMinConfScore || undefined,
+            boltzgen_filter_biased: boltzgenFilterBiased,
+            boltzgen_metrics_override: boltzgenMetricsOverride.trim() || undefined,
+            boltzgen_additional_filters: boltzgenAdditionalFilters.trim() || undefined,
+            boltzgen_size_buckets: boltzgenSizeBuckets.trim() || undefined,
+        };
+
+        if (boltzgenUseFrameworkTemplate && boltzgenScaffoldSource === 'sequence_template' && boltzgenNanobodyFramework.trim()) {
+            boltzgenParams.boltzgen_nanobody_framework = boltzgenNanobodyFramework.trim();
+        }
+        if (boltzgenParallelMode) {
+            boltzgenParams.boltzgen_parallel_mode = true;
+            boltzgenParams.boltzgen_designs_per_job = Math.max(1, Number(boltzgenDesignsPerJob) || 1);
+        }
+        if (boltzgenReuseExisting) {
+            boltzgenParams.boltzgen_reuse = true;
+        }
+
+        return boltzgenParams;
+    };
+
+    const handleBoltzgenPreview = async () => {
+        if (!targetPdb && !targetSource?.path && !uploadedPath) {
+            window.alert('Choose a target structure before previewing the BoltzGen design spec.');
+            return;
+        }
+        if (boltzgenUseFrameworkTemplate && boltzgenScaffoldSource === 'selected_scaffold' && !sabdabFramework?.pdbCode && !customFrameworkPath) {
+            window.alert('Select a SAbDab framework or switch the scaffold source before previewing the BoltzGen design spec.');
+            return;
+        }
+
+        try {
+            const pdbPath = await resolveTargetPdbPathForLaunch(false);
+            const epitopeString = Array.from(selectedResidues).sort().join(',');
+            const params = buildStandaloneBoltzgenParams(pdbPath, epitopeString);
+            await boltzgenPreviewMutation.mutateAsync({ params, validate: true });
+        } catch (error: any) {
+            window.alert(`BoltzGen preview failed:\n${error?.message || error}`);
+        }
+    };
 
     const applyRefinementPreset = (preset: RefinementPreset) => {
         setRefinementPreset(preset);
@@ -868,6 +1122,33 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             if (initialValues.designs_per_job) setDesignsPerJob(initialValues.designs_per_job);
             if (initialValues.pdbs_per_job) setPdBsPerJob(initialValues.pdbs_per_job);
             else if (initialValues.seqs_per_job) setPdBsPerJob(initialValues.seqs_per_job);
+            if (initialValues.boltzgen_batch_size) setBoltzgenBatchSize(initialValues.boltzgen_batch_size);
+            else if (initialValues.batch_size) setBoltzgenBatchSize(initialValues.batch_size);
+            if (typeof initialValues.boltzgen_parallel_mode === 'boolean') setBoltzgenParallelMode(initialValues.boltzgen_parallel_mode);
+            if (initialValues.boltzgen_designs_per_job) setBoltzgenDesignsPerJob(initialValues.boltzgen_designs_per_job);
+            if (typeof initialValues.boltzgen_reuse === 'boolean') setBoltzgenReuseExisting(initialValues.boltzgen_reuse);
+            if (initialValues.boltzgen_scaffold_source === 'default_ensemble' || initialValues.boltzgen_scaffold_source === 'selected_scaffold' || initialValues.boltzgen_scaffold_source === 'sequence_template') {
+                setBoltzgenScaffoldSource(initialValues.boltzgen_scaffold_source);
+            }
+            if (initialValues.boltzgen_checkpoint_mode === 'both' || initialValues.boltzgen_checkpoint_mode === 'diverse' || initialValues.boltzgen_checkpoint_mode === 'adherence') {
+                setBoltzgenCheckpointMode(initialValues.boltzgen_checkpoint_mode);
+            }
+            if (typeof initialValues.boltzgen_skip_inverse_folding === 'boolean') setBoltzgenSkipInverseFolding(initialValues.boltzgen_skip_inverse_folding);
+            if (typeof initialValues.boltzgen_inverse_fold_avoid === 'string') setBoltzgenInverseFoldAvoid(initialValues.boltzgen_inverse_fold_avoid);
+            if (typeof initialValues.boltzgen_inverse_fold_num_sequences === 'number') setBoltzgenInverseFoldNumSequences(initialValues.boltzgen_inverse_fold_num_sequences);
+            if (typeof initialValues.boltzgen_avoid_cysteine === 'boolean') setBoltzgenAvoidCysteine(initialValues.boltzgen_avoid_cysteine);
+            if (typeof initialValues.boltzgen_step_scale === 'number') setBoltzgenStepScale(initialValues.boltzgen_step_scale);
+            if (typeof initialValues.boltzgen_noise_scale === 'number') setBoltzgenNoiseScale(initialValues.boltzgen_noise_scale);
+            if (typeof initialValues.boltzgen_budget === 'number') setBoltzgenBudget(initialValues.boltzgen_budget);
+            if (typeof initialValues.boltzgen_alpha === 'number') setBoltzgenAlpha(initialValues.boltzgen_alpha);
+            if (typeof initialValues.boltzgen_max_rmsd === 'number') setBoltzgenMaxRmsd(initialValues.boltzgen_max_rmsd);
+            if (typeof initialValues.boltzgen_min_plddt === 'number') setBoltzgenMinPlddt(initialValues.boltzgen_min_plddt);
+            if (typeof initialValues.boltzgen_min_conf_score === 'number') setBoltzgenMinConfScore(initialValues.boltzgen_min_conf_score);
+            if (typeof initialValues.boltzgen_filter_biased === 'boolean') setBoltzgenFilterBiased(initialValues.boltzgen_filter_biased);
+            if (typeof initialValues.boltzgen_metrics_override === 'string') setBoltzgenMetricsOverride(initialValues.boltzgen_metrics_override);
+            if (typeof initialValues.boltzgen_additional_filters === 'string') setBoltzgenAdditionalFilters(initialValues.boltzgen_additional_filters);
+            if (typeof initialValues.boltzgen_size_buckets === 'string') setBoltzgenSizeBuckets(initialValues.boltzgen_size_buckets);
+            if (typeof initialValues.out_dir === 'string') setCustomOutputDir(initialValues.out_dir);
             if (initialValues.target_dna_seq) {
                 setTargetDnaSeq(initialValues.target_dna_seq);
                 setShowDnaInput(true);
@@ -1149,8 +1430,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
     const handleSubmit = async () => {
         // When skipping early steps, target PDB and epitope are not required
-        const skippingEarlySteps = skipRFantibody || skipFampnn;
-        const runSequenceDesign = seqDesigner !== 'none';
+        const skippingEarlySteps = deNovoGenerator === 'rfantibody' && (skipRFantibody || skipFampnn);
+        const runSequenceDesign = effectiveSeqDesigner !== 'none';
 
         if (!skippingEarlySteps && !targetPdb) {
             alert('Please upload a target PDB file');
@@ -1180,76 +1461,57 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             qualitySettings.fampnn_checkpoint_path.trim() || resolvedFampnnCheckpoint.trim()
         );
         const needsFampnnCheckpoint =
-            seqDesigner === 'fampnn' ||
+            effectiveSeqDesigner === 'fampnn' ||
             (runPpiFlowMaturation && qualitySettings.maturation_redesign_enabled !== false);
         if (needsFampnnCheckpoint && !fampnnCheckpointSpecified) {
             alert('Please choose FAMPNN weights or provide a checkpoint path before submitting.');
             return;
         }
 
-        if (isRefinementMode && !useManualMutagenesis && !runSequenceDesign && !anyPpiFlowStageEnabled && !runStructureValidation && !runFrustrampnn) {
+        if (isRefinementMode && !useManualMutagenesis && !runSequenceDesign && !anyPpiFlowStageEnabled && !effectiveRunStructureValidation && !effectiveRunFrustrampnn) {
             alert('Enable at least one refinement stage before launching.');
             return;
         }
 
         // Validate that a SAbDab framework was actually selected
-        if (frameworkType === 'sabdab' && !sabdabFramework?.pdbCode) {
+        if (deNovoGenerator === 'rfantibody' && frameworkType === 'sabdab' && !sabdabFramework?.pdbCode) {
             alert('Please select a specific framework from the SAbDab database before submitting, or select a different framework preset.');
             return;
         }
 
         try {
-            // Step 1: Determine PDB path based on source
-            // - targetSource.path: file from previous run, preset, or RCSB PDB  
-            // - uploadedPath: manually uploaded file (already on server)
-            // - handleFileUpload: new file upload (needs to be uploaded first)
-            // - When skipping, use a placeholder or the input dir path
-            let pdbPath = targetSource?.path || uploadedPath;
-            if (!pdbPath && targetPdb) {
-                pdbPath = await handleFileUpload(targetPdb);
-            }
-            // When skipping or in refinement mode, don't require a target PDB
-            if (!pdbPath && (skippingEarlySteps || isRefinementMode)) {
-                pdbPath = isRefinementMode ? 'refinement_mode' : skipRFantibody ? rfantibodyInputPdbs : fampnnCollectedPdbs;
-            }
-
-            if (!pdbPath) {
-                alert('Failed to determine PDB file path');
-                return;
-            }
-
-            // Step 1b: Extract selected chain if multi-chain PDB with specific chain selected
-            // This ensures only the target chain is sent to design pipelines
-            if (selectedChain && parsedChains.length > 1) {
-                console.log(`[ANTIBODY_DENOVO] Extracting chain ${selectedChain} from multi-chain PDB`);
-                try {
-                    const extractResult = await extractChain(
-                        pdbPath,
-                        selectedChain,
-                        undefined,
-                        selectedTargetModel ?? undefined
-                    );
-                    pdbPath = extractResult.data.output_path;
-                    console.log(`[ANTIBODY_DENOVO] Extracted chain to: ${pdbPath}`);
-                } catch (err) {
-                    console.error('[ANTIBODY_DENOVO] Chain extraction failed:', err);
-                    alert(`Failed to extract chain ${selectedChain}: ${err}`);
-                    return;
-                }
-            }
+            const pdbPath = await resolveTargetPdbPathForLaunch(skippingEarlySteps || isRefinementMode);
 
             // Format selected residues for backend
             const epitopeString = Array.from(selectedResidues).sort().join(',');
 
+            if (!isRefinementMode && deNovoGenerator === 'boltzgen') {
+                if (boltzgenUseFrameworkTemplate && boltzgenScaffoldSource === 'selected_scaffold' && !sabdabFramework?.pdbCode && !customFrameworkPath) {
+                    alert('Select a SAbDab framework or switch the scaffold source before launching BoltzGen.');
+                    return;
+                }
+
+                const boltzgenParams = buildStandaloneBoltzgenParams(pdbPath, epitopeString);
+
+                await submitMutation.mutateAsync({
+                    name: jobName,
+                    model_id: 'boltzgen',
+                    mode: 'nanobody_binder',
+                    params: boltzgenParams,
+                    pinned_gpu: pinnedGpus.length === 1 ? pinnedGpus[0] : null,
+                });
+                return;
+            }
+
             // Determine pipeline steps
             const pipelineSteps = [isRefinementMode ? 'selected_inputs' : 'rfantibody'];
-            if (runSequenceDesign) pipelineSteps.push(seqDesigner);
+            if (runSequenceDesign) pipelineSteps.push(effectiveSeqDesigner);
             if (runPpiFlowBackboneRefine) pipelineSteps.push('ppiflow_backbone_refine');
             if (runPpiFlowMaturation) pipelineSteps.push('ppiflow_maturation');
-            if (useAntiberty) pipelineSteps.push('antiberty');
-            if (useThermoMPNN) pipelineSteps.push('thermompnn');
-            if (runStructureValidation) pipelineSteps.push(structureValidator === 'protenix' ? 'protenix' : 'boltz2');
-            if (runFrustrampnn) pipelineSteps.push('frustrampnn');
+            if (effectiveUseAntiberty) pipelineSteps.push('antiberty');
+            if (effectiveUseThermoMPNN) pipelineSteps.push('thermompnn');
+            if (effectiveRunStructureValidation) pipelineSteps.push(structureValidator === 'protenix' ? 'protenix' : 'boltz2');
+            if (effectiveRunFrustrampnn) pipelineSteps.push('frustrampnn');
 
             // Step 2: Upload custom framework if provided
             let frameworkPath = frameworkType === 'sabdab'
@@ -1322,10 +1584,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 }
             }
 
+            const antibodyPipelineMode = isRefinementMode
+                ? ANTIBODY_REFINEMENT_PIPELINE_MODE
+                : ANTIBODY_DENOVO_PIPELINE_MODE;
+
             const jobData = {
                 name: jobName,
                 model_id: 'template_antibody_denovo',
-                mode: 'antibody_denovo_pipeline', // Matches main.nf logic
+                mode: antibodyPipelineMode,
                 pinned_gpu: pinnedGpus.length === 1 ? pinnedGpus[0] : null,
                 params: {
                     target_pdb: isRefinementMode ? undefined : pdbPath,
@@ -1339,18 +1605,18 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     framework_type: effectiveFrameworkType,
                     framework_pdb: frameworkPath || undefined, // Only if custom or sabdab
                     // Pipeline configuration
-                    rfd_mode: 'antibody_denovo_pipeline', // Explicitly set for backend mapping
+                    rfd_mode: antibodyPipelineMode,
                     antibody_pipeline_steps: pipelineSteps,
                     rfantibody_num_designs: numDesigns,
-                    seq_design_fampnn: seqDesigner === 'fampnn',
-                    seq_design_antifold: seqDesigner === 'antifold',
-                    seq_design_proteinmpnn: seqDesigner === 'proteinmpnn',
-                    run_immunogenicity_scoring: useAntiberty,
-                    run_stability_scoring: qualitySettings.run_thermompnn,
-                    run_structure_validation: runStructureValidation,
+                    seq_design_fampnn: effectiveSeqDesigner === 'fampnn',
+                    seq_design_antifold: effectiveSeqDesigner === 'antifold',
+                    seq_design_proteinmpnn: effectiveSeqDesigner === 'proteinmpnn',
+                    run_immunogenicity_scoring: effectiveUseAntiberty,
+                    run_stability_scoring: effectiveUseThermoMPNN,
+                    run_structure_validation: effectiveRunStructureValidation,
                     structure_validator: structureValidator,
-                    run_frustrampnn: runFrustrampnn,
-                    run_anarcii_post: runAnarciiPost,
+                    run_frustrampnn: effectiveRunFrustrampnn,
+                    run_anarcii_post: effectiveRunAnarciiPost,
                     anarcii_include_children: anarciiIncludeChildren,
                     interactive_swa: interactiveWorkflow,
                     interactive_gating: interactiveWorkflow,
@@ -1431,7 +1697,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     fampnn_psce_threshold: qualitySettings.fampnn_psce_threshold,
                     lock_target_chains: qualitySettings.lock_target_chains,
                     lock_antibody_framework: qualitySettings.lock_antibody_framework,
-                    fampnn_constraint_mode: seqDesigner === 'fampnn' ? fampnnConstraintMode : undefined,
+                    fampnn_constraint_mode: effectiveSeqDesigner === 'fampnn' ? fampnnConstraintMode : undefined,
                     // PPIFlow settings
                     run_ppiflow_backbone_refine: runPpiFlowBackboneRefine,
                     run_ppiflow_maturation: runPpiFlowMaturation,
@@ -1479,7 +1745,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     fampnn_max_psce: qualitySettings.fampnn_max_psce,
                     fampnn_max_residue_psce: qualitySettings.fampnn_max_residue_psce,
                     // ThermoMPNN stability scoring (before Boltz when enabled)
-                    run_thermompnn: qualitySettings.run_thermompnn,
+                    run_thermompnn: effectiveUseThermoMPNN,
                     thermompnn_max_ddg: qualitySettings.thermompnn_max_ddg,
                     // AF2 Backprop CDR refinement (after ThermoMPNN, before Boltz)
                     run_af2_backprop: qualitySettings.run_af2_backprop,
@@ -1509,7 +1775,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     // Debug: Custom output directory
                     out_dir: customOutputDir.trim() || undefined,
                     // Physics refinement (OpenMM)
-                    openmm_enabled: physicsSettings.enabled,
+                    openmm_enabled: effectivePhysicsEnabled,
                     openmm_compute_tier: physicsSettings.computeTier,
                     openmm_cdr_only: physicsSettings.cdrOnly,
                     openmm_restraint_mode: physicsSettings.restraintMode,
@@ -1656,6 +1922,112 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const availableTargetModels = parsedTargetStructure?.models ?? [];
     const activeTargetModel = parsedTargetStructure ? getModelByNumber(parsedTargetStructure, selectedTargetModel) : null;
     const activeTargetResidues = buildAvailableResidueKeySet(parsedChains);
+    const deNovoGeneratorSelector = !isRefinementMode ? (
+        <div className="mb-6 space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
+            <div>
+                <div className="text-sm font-medium text-[var(--text-primary)]">Generation Engine</div>
+                <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                    Keep the existing workflow shell, but swap the core de novo generator between RFantibody and BoltzGen nanobody mode.
+                </p>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+                <button
+                    type="button"
+                    onClick={() => {
+                        setDeNovoGenerator('rfantibody');
+                        setShowBoltzgenFrameworkBrowser(false);
+                        setDeNovoStageSelection({
+                            sequence_design: false,
+                            ppiflow: false,
+                            validation: false,
+                            qc: false,
+                        });
+                    }}
+                    className="rounded-xl border p-4 text-left transition-colors"
+                    style={deNovoGenerator === 'rfantibody' ? themedSelectedStyle('var(--accent-primary)') : themedInsetStyle}
+                >
+                    <div className="text-sm font-medium text-[var(--text-primary)]">RFantibody Stack</div>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                        Diffusion backbones, screening, and review-first nanobody generation in the original workflow structure.
+                    </p>
+                </button>
+                <button
+                    type="button"
+                    onClick={() => {
+                        setDeNovoGenerator('boltzgen');
+                        setDeNovoStageSelection({
+                            sequence_design: false,
+                            ppiflow: false,
+                            validation: false,
+                            qc: false,
+                        });
+                    }}
+                    className="rounded-xl border p-4 text-left transition-colors"
+                    style={deNovoGenerator === 'boltzgen' ? themedSelectedStyle('#f59e0b') : themedInsetStyle}
+                >
+                    <div className="text-sm font-medium text-[var(--text-primary)]">BoltzGen Nanobody</div>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                        All-atom nanobody generation with the same target-selection workflow, then Antibody Refinement for downstream redesign.
+                    </p>
+                </button>
+            </div>
+
+            <div className="rounded-xl border p-4" style={themedInsetStyle}>
+                <div className="flex items-center justify-between gap-3">
+                    <div>
+                        <div className="text-sm font-medium text-[var(--text-primary)]">Initial Orchestration Menu</div>
+                        <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                            Default keeps only the core generator active. Expose downstream modules only when you want them in the initial batch run.
+                        </p>
+                    </div>
+                    {showOnlyCoreGeneratorStep && (
+                        <span className="rounded-full border px-2.5 py-1 text-[11px]" style={themedTagStyle('var(--success)')}>
+                            Generator Only
+                        </span>
+                    )}
+                </div>
+                <div className="mt-3 grid gap-3 md:grid-cols-4">
+                    {([
+                        ['sequence_design', 'Sequence Design', 'FAMPNN / AntiFold / ProteinMPNN'],
+                        ['ppiflow', 'PPIFlow', 'Backbone refine or maturation'],
+                        ['validation', 'Validation', 'Boltz2 / Protenix'],
+                        ['qc', 'QC + Physics', 'ThermoMPNN / OpenMM / Frustra'],
+                    ] as Array<[DeNovoOrchestrationStage, string, string]>).map(([stageKey, label, detail]) => {
+                        const disabled = deNovoDownstreamLocked;
+                        const enabled = deNovoStageSelection[stageKey];
+                        return (
+                            <button
+                                key={stageKey}
+                                type="button"
+                                disabled={disabled}
+                                onClick={() => {
+                                    if (disabled) return;
+                                    setDeNovoStageSelection((current) => ({
+                                        ...current,
+                                        [stageKey]: !current[stageKey],
+                                    }));
+                                }}
+                                className="rounded-lg border p-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                                style={enabled ? themedSelectedStyle('var(--accent-secondary)') : themedMutedInsetStyle}
+                            >
+                                <div className="text-sm font-medium text-[var(--text-primary)]">{label}</div>
+                                <div className="mt-1 text-[11px] text-[var(--text-secondary)]">{detail}</div>
+                            </button>
+                        );
+                    })}
+                </div>
+                {deNovoDownstreamLocked ? (
+                    <p className="mt-3 text-[11px] text-[var(--text-secondary)]">
+                        Initial BoltzGen runs stay generator-only here. Select the top candidates from that batch, then open <span className="font-medium text-[var(--text-primary)]">Antibody Refinement</span> to expose redesign, PPIFlow, and validation.
+                    </p>
+                ) : (
+                    <p className="mt-3 text-[11px] text-[var(--text-secondary)]">
+                        This keeps the initial run in a batch-run-filter loop. Most campaigns should start generator-only, then push the top subset into refinement for heavier downstream work.
+                    </p>
+                )}
+            </div>
+        </div>
+    ) : null;
 
     return (
         <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -1669,15 +2041,25 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         ← Back
                     </button>
                     <div>
-                        <h2 className="text-lg font-semibold text-[var(--text-primary)]">
-                            {isRefinementMode ? 'Pipeline Re-orchestration' : 'De Novo Antibody Design'}
-                        </h2>
+                        <div className="flex items-center gap-2">
+                            <h2 className="text-lg font-semibold text-[var(--text-primary)]">
+                                {isRefinementMode ? 'Antibody Refinement' : 'De Novo Nanobody Toolkit'}
+                            </h2>
+                            <span
+                                className="rounded-full border px-2.5 py-0.5 text-[11px] font-medium uppercase tracking-[0.12em]"
+                                style={isRefinementMode ? themedTagStyle('var(--accent-primary)') : themedMutedInsetStyle}
+                            >
+                                {isRefinementMode ? 'Refinement Mode' : 'De Novo Mode'}
+                            </span>
+                        </div>
                         <p className="text-sm text-[var(--text-secondary)]">
-                            {isRefinementMode ? `Configuring a downstream orchestrator run for ${refinementInputCount} locked outputs.` : 'Generate novel antibodies targeting an antigen'}
+                            {isRefinementMode ? `Configuring a modular downstream run for ${refinementInputCount} locked outputs.` : 'Generate de novo nanobody binders and carry selected outputs into modular downstream refinement.'}
                         </p>
                     </div>
                 </div>
             </div>
+
+            {deNovoGeneratorSelector}
 
             {isRefinementMode && (
                 <div
@@ -1691,7 +2073,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         <h3 className="text-sm font-semibold text-[var(--text-primary)]">Pipeline source set locked</h3>
                     </div>
                     <p className="max-w-3xl text-xs leading-relaxed text-[var(--text-secondary)]">
-                        You arrived here from an active interactive job (<code>{refinementParentJobId}</code>). The pipeline input set is locked to {refinementSavedFilterSetName ? `saved dataset '${refinementSavedFilterSetName}'` : 'the selected structures'}. Configure exactly how you want these {refinementInputCount} outputs to be re-orchestrated below.
+                        You arrived here from an active interactive job (<code>{refinementParentJobId}</code>). The pipeline input set is locked to {refinementSavedFilterSetName ? `saved dataset '${refinementSavedFilterSetName}'` : 'the selected structures'}. Configure exactly how you want these {refinementInputCount} outputs to move through antibody refinement below.
                     </p>
                     <p className="mt-2 text-xs leading-relaxed text-[var(--text-secondary)]">
                         Source set: <span className="font-medium text-[var(--text-primary)]">{refinementSourceLabel}</span>
@@ -1711,8 +2093,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         <h3 className="text-sm font-medium text-[var(--text-primary)]">Workflow Pipeline</h3>
                         <p className="mt-1 text-xs text-[var(--text-secondary)]">
                             {isRefinementMode
-                                ? 'Selected outputs are re-queued through the workflow UI. Choose which stages to rerun below.'
-                                : 'Backbone generation, sequence design, optional maturation, structural validation, then optional review/QC.'}
+                                ? 'Selected outputs are re-queued through antibody refinement. Choose which stages to rerun below.'
+                                : deNovoGenerator === 'boltzgen'
+                                    ? 'Initial BoltzGen nanobody generation runs in the same shell. Downstream redesign stays hidden until you explicitly enable it or launch Antibody Refinement from selected outputs.'
+                                    : 'Initial de novo runs start generator-only by default. Turn on downstream stages above when you want them in the first batch run.'}
                         </p>
                     </div>
                     <div className="flex flex-wrap justify-end gap-2 text-[11px]">
@@ -1734,25 +2118,29 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     {(() => {
                         const steps: Array<{ title: string; detail: string; accent?: string; muted?: boolean; optional?: boolean }> = [
                             {
-                                title: isRefinementMode ? 'Selected Inputs' : 'RFantibody',
-                                detail: isRefinementMode ? 'Reuse selected backbones or re-screen inputs' : 'Generate backbone ensemble',
+                                title: isRefinementMode ? 'Selected Inputs' : (deNovoGenerator === 'boltzgen' ? 'BoltzGen' : 'RFantibody'),
+                                detail: isRefinementMode
+                                    ? 'Reuse selected backbones or re-screen inputs'
+                                    : deNovoGenerator === 'boltzgen'
+                                        ? 'All-atom nanobody generation'
+                                        : 'Generate backbone ensemble',
                                 accent: 'var(--success)',
                             },
                             {
-                                title: seqDesigner === 'none' ? 'Sequence Design' : seqDesigner.toUpperCase(),
-                                detail: seqDesigner === 'none' ? 'Skipped in this round' : 'Sequence redesign + filter',
-                                accent: seqDesigner === 'none' ? undefined : 'var(--link)',
-                                muted: seqDesigner === 'none',
+                                title: effectiveSeqDesigner === 'none' ? 'Sequence Design' : effectiveSeqDesigner.toUpperCase(),
+                                detail: effectiveSeqDesigner === 'none' ? 'Hidden for the initial generator pass' : 'Sequence redesign + filter',
+                                accent: effectiveSeqDesigner === 'none' ? undefined : 'var(--link)',
+                                muted: effectiveSeqDesigner === 'none',
                                 optional: true,
                             },
                             {
                                 title: 'PPIFlow',
                                 detail: !anyPpiFlowStageEnabled
-                                    ? 'Optional backbone refinement or maturation'
+                                    ? 'Hidden until enabled'
                                     : runPpiFlowBackboneRefine && runPpiFlowMaturation
                                         ? 'Backbone refinement + post-FA-MPNN maturation'
                                         : runPpiFlowBackboneRefine
-                                            ? (ppiflowStageMode === 'post_ppiflow' ? 'Backbone reattempt from PPIFlow outputs' : 'Backbone refinement after RFantibody')
+                                            ? (effectivePpiFlowStageMode === 'post_ppiflow' ? 'Backbone reattempt from PPIFlow outputs' : 'Backbone refinement after RFantibody')
                                             : 'Maturation after FA-MPNN',
                                 accent: anyPpiFlowStageEnabled ? 'var(--accent-secondary)' : undefined,
                                 muted: !anyPpiFlowStageEnabled,
@@ -1760,9 +2148,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             },
                             {
                                 title: structureValidator === 'protenix' ? 'Protenix' : 'Boltz2',
-                                detail: runStructureValidation ? 'Structure validation' : 'Skipped in this round',
-                                accent: runStructureValidation ? 'var(--accent-primary)' : undefined,
-                                muted: !runStructureValidation,
+                                detail: effectiveRunStructureValidation ? 'Structure validation' : 'Hidden until enabled',
+                                accent: effectiveRunStructureValidation ? 'var(--accent-primary)' : undefined,
+                                muted: !effectiveRunStructureValidation,
                                 optional: true,
                             },
                         ];
@@ -1797,7 +2185,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             Interactive review enabled
                         </span>
                     )}
-                    {runFrustrampnn && (
+                    {effectiveRunFrustrampnn && (
                         <span className="rounded-full border px-2.5 py-1" style={themedTagStyle('var(--error)')}>
                             FrustraMPNN QC
                         </span>
@@ -1807,17 +2195,17 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             Manual mutation sets
                         </span>
                     )}
-                    {useAntiberty && (
+                    {effectiveUseAntiberty && (
                         <span className="rounded-full border px-2.5 py-1" style={themedTagStyle('var(--warning)')}>
                             AntiBERTy scoring
                         </span>
                     )}
-                    {useThermoMPNN && (
+                    {effectiveUseThermoMPNN && (
                         <span className="rounded-full border px-2.5 py-1" style={themedTagStyle('var(--accent-primary)')}>
                             ThermoMPNN stability
                         </span>
                     )}
-                    {!runFrustrampnn && !useAntiberty && !useThermoMPNN && (
+                    {!effectiveRunFrustrampnn && !effectiveUseAntiberty && !effectiveUseThermoMPNN && (
                         <span className="rounded-full border border-slate-700 bg-slate-800/60 px-2.5 py-1 text-slate-400">
                             No optional QC stages enabled
                         </span>
@@ -2429,6 +2817,398 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         />
                     )}
 
+                    {!isRefinementMode && deNovoGenerator === 'boltzgen' ? (
+                        <div className="space-y-5">
+                            <div className="rounded-lg border border-slate-700/50 bg-slate-900/30 p-4">
+                                <div className="flex items-center justify-between mb-3">
+                                    <div>
+                                        <h3 className="text-sm font-semibold text-slate-200">Antibody Framework</h3>
+                                        <p className="text-xs text-slate-500 mt-1">
+                                            Keep the same antibody shell as RFantibody, but drive the generator with native BoltzGen nanobody scaffold or sequence-template inputs.
+                                        </p>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={handleBoltzgenPreview}
+                                            disabled={boltzgenPreviewMutation.isPending}
+                                            className="rounded-lg border px-2.5 py-1 text-[11px] transition-colors disabled:opacity-50"
+                                            style={themedInsetStyle}
+                                        >
+                                            {boltzgenPreviewMutation.isPending ? 'Previewing...' : 'Preview Spec'}
+                                        </button>
+                                        <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[11px] text-amber-200">
+                                            Core Step
+                                        </span>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-3 mb-4">
+                                    <button
+                                        type="button"
+                                        onClick={() => setBoltzgenUseFrameworkTemplate(true)}
+                                        className="rounded-lg border px-3 py-2 text-sm transition-colors"
+                                        style={boltzgenUseFrameworkTemplate ? themedSelectedStyle('var(--warning)') : themedInsetStyle}
+                                    >
+                                        Scaffold / Template
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setBoltzgenUseFrameworkTemplate(false)}
+                                        className="rounded-lg border px-3 py-2 text-sm transition-colors"
+                                        style={!boltzgenUseFrameworkTemplate ? themedSelectedStyle('var(--accent-secondary)') : themedInsetStyle}
+                                    >
+                                        Full De Novo
+                                    </button>
+                                </div>
+
+                                {boltzgenUseFrameworkTemplate && (
+                                    <div className="mb-4 space-y-3">
+                                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                                            {[
+                                                ['default_ensemble', 'Default Ensemble', `${DEFAULT_BOLTZGEN_ENSEMBLE.join(', ')}`],
+                                                ['selected_scaffold', 'Selected Scaffold', 'One SAbDab/custom framework'],
+                                                ['sequence_template', 'Sequence Template', 'Legacy editable VHH sequence'],
+                                            ].map(([id, label, detail]) => (
+                                                <button
+                                                    key={id}
+                                                    type="button"
+                                                    onClick={() => setBoltzgenScaffoldSource(id as BoltzgenScaffoldSource)}
+                                                    className="rounded-lg border px-3 py-2 text-left text-sm transition-colors"
+                                                    style={boltzgenScaffoldSource === id ? themedSelectedStyle('var(--warning)') : themedInsetStyle}
+                                                >
+                                                    <div className="font-medium text-slate-200">{label}</div>
+                                                    <div className="text-[11px] text-slate-500">{detail}</div>
+                                                </button>
+                                            ))}
+                                        </div>
+
+                                        {boltzgenScaffoldSource === 'default_ensemble' && (
+                                            <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-[11px] text-slate-400">
+                                                Curated nanobody ensemble. The backend hydrates scaffold-backed specs from {DEFAULT_BOLTZGEN_ENSEMBLE.join(', ')} and preserves their framework geometry while replacing the CDR loops.
+                                            </div>
+                                        )}
+
+                                        {boltzgenScaffoldSource === 'selected_scaffold' && (
+                                            <div>
+                                                <div className="mb-2 flex items-center justify-between gap-3">
+                                                    <div className="text-xs text-slate-500">SAbDab scaffold source</div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setShowBoltzgenFrameworkBrowser((current) => !current)}
+                                                        className="rounded-lg border px-2.5 py-1 text-[11px] transition-colors"
+                                                        style={showBoltzgenFrameworkBrowser ? themedSelectedStyle('var(--warning)') : themedInsetStyle}
+                                                    >
+                                                        {showBoltzgenFrameworkBrowser ? 'Hide SAbDab Browser' : 'Browse SAbDab'}
+                                                    </button>
+                                                </div>
+
+                                                {sabdabFramework?.pdbCode && (
+                                                    <div className="mb-3 flex items-center gap-2 text-xs">
+                                                        <span className="rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-200">
+                                                            {sabdabFramework.pdbCode}
+                                                        </span>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => {
+                                                                setSabdabFramework(null);
+                                                                setBoltzgenNanobodyFramework(DEFAULT_BOLTZGEN_VHH_FRAMEWORK);
+                                                            }}
+                                                            className="text-slate-400 hover:text-red-400"
+                                                        >
+                                                            Clear
+                                                        </button>
+                                                    </div>
+                                                )}
+
+                                                {showBoltzgenFrameworkBrowser && (
+                                                    <div className="mb-3 rounded-lg border border-slate-700 bg-slate-900/60 p-3">
+                                                        <FrameworkBrowser
+                                                            onSelect={(framework) => {
+                                                                setSabdabFramework(framework);
+                                                                if (framework?.sequence) {
+                                                                    setBoltzgenNanobodyFramework(framework.sequence);
+                                                                }
+                                                                if (framework?.cdrH3Length) {
+                                                                    const min = Math.max(8, framework.cdrH3Length - 3);
+                                                                    const max = framework.cdrH3Length + 3;
+                                                                    setBoltzgenCdrH3Length(`${min}-${max}`);
+                                                                }
+                                                                setShowBoltzgenFrameworkBrowser(false);
+                                                            }}
+                                                            selectedFramework={sabdabFramework}
+                                                            showCustomUpload={false}
+                                                        />
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+
+                                        {boltzgenScaffoldSource === 'sequence_template' && (
+                                            <label className="block text-xs text-slate-500">
+                                                VHH framework sequence
+                                                <textarea
+                                                    value={boltzgenNanobodyFramework}
+                                                    onChange={(e) => setBoltzgenNanobodyFramework(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
+                                                    rows={3}
+                                                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-amber-500 outline-none"
+                                                />
+                                            </label>
+                                        )}
+                                    </div>
+                                )}
+                                <p className="mt-2 text-[11px] text-slate-500">
+                                    The target chain and selected epitope residues above feed the same batch-run-filter loop, but BoltzGen now owns the initial generator spec, filtering, and checkpoint settings in this section.
+                                </p>
+                            </div>
+
+                            <div className="rounded-lg border border-slate-700/50 bg-slate-900/30 p-4">
+                                <div className="mb-3">
+                                    <h3 className="text-sm font-semibold text-slate-200">CDR Loop Length Variability</h3>
+                                    <p className="text-xs text-slate-500 mt-1">
+                                        Configure the BoltzGen nanobody loop search space for the initial batch generation.
+                                    </p>
+                                </div>
+                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                                    {([
+                                        ['CDR-H1', boltzgenCdrH1Length, setBoltzgenCdrH1Length],
+                                        ['CDR-H2', boltzgenCdrH2Length, setBoltzgenCdrH2Length],
+                                        ['CDR-H3', boltzgenCdrH3Length, setBoltzgenCdrH3Length],
+                                    ] as Array<[string, string, React.Dispatch<React.SetStateAction<string>>]>).map(([label, value, setter]) => (
+                                        <label key={label} className="text-xs text-slate-500">
+                                            {label}
+                                            <input
+                                                type="text"
+                                                value={value}
+                                                onChange={(e) => setter(e.target.value)}
+                                                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-amber-500 outline-none"
+                                                placeholder="e.g. 5-8"
+                                            />
+                                        </label>
+                                    ))}
+                                </div>
+                                <div className="mt-4">
+                                    <label className="text-xs text-slate-500">
+                                        Nanobody size envelope
+                                        <input
+                                            type="text"
+                                            value={boltzgenScaffoldLength}
+                                            onChange={(e) => setBoltzgenScaffoldLength(e.target.value)}
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-amber-500 outline-none"
+                                            placeholder="e.g. 100-135"
+                                        />
+                                    </label>
+                                </div>
+                                <p className="mt-2 text-[11px] text-slate-500">
+                                    Keep the initial batch broad enough to seed a useful refinement set. Most campaigns should leave downstream modules off here, rank the batch outputs, then continue with the selected subset.
+                                </p>
+                            </div>
+
+                            <div className="rounded-lg border border-slate-700/50 bg-slate-900/30 p-4">
+                                <div className="mb-3">
+                                    <h3 className="text-sm font-semibold text-slate-200">BoltzGen Controls</h3>
+                                    <p className="text-xs text-slate-500 mt-1">
+                                        Late-alpha runtime controls wired directly into the BoltzGen launcher and filter pass.
+                                    </p>
+                                </div>
+                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                    <label className="text-xs text-slate-500">
+                                        Checkpoint mode
+                                        <select
+                                            value={boltzgenCheckpointMode}
+                                            onChange={(e) => setBoltzgenCheckpointMode(e.target.value as BoltzgenCheckpointMode)}
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        >
+                                            <option value="both">Both checkpoints</option>
+                                            <option value="diverse">Diverse only</option>
+                                            <option value="adherence">Adherence only</option>
+                                        </select>
+                                    </label>
+                                    <label className="text-xs text-slate-500">
+                                        Inverse-fold sequences
+                                        <input
+                                            type="number"
+                                            min={1}
+                                            value={boltzgenInverseFoldNumSequences}
+                                            onChange={(e) => setBoltzgenInverseFoldNumSequences(Math.max(1, Number(e.target.value) || 1))}
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-slate-500">
+                                        Inverse-fold avoid AA set
+                                        <input
+                                            type="text"
+                                            value={boltzgenInverseFoldAvoid}
+                                            onChange={(e) => setBoltzgenInverseFoldAvoid(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
+                                            placeholder="e.g. CM"
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-slate-500">
+                                        Diversity budget
+                                        <input
+                                            type="number"
+                                            min={1}
+                                            value={boltzgenBudget}
+                                            onChange={(e) => setBoltzgenBudget(e.target.value ? Math.max(1, Number(e.target.value) || 1) : '')}
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-slate-500">
+                                        Step scale
+                                        <input
+                                            type="number"
+                                            min={0}
+                                            step={0.01}
+                                            value={boltzgenStepScale}
+                                            onChange={(e) => setBoltzgenStepScale(e.target.value ? Number(e.target.value) : '')}
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-slate-500">
+                                        Noise scale
+                                        <input
+                                            type="number"
+                                            min={0}
+                                            step={0.01}
+                                            value={boltzgenNoiseScale}
+                                            onChange={(e) => setBoltzgenNoiseScale(e.target.value ? Number(e.target.value) : '')}
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-slate-500">
+                                        Min pLDDT
+                                        <input
+                                            type="number"
+                                            min={0}
+                                            max={100}
+                                            step={1}
+                                            value={boltzgenMinPlddt}
+                                            onChange={(e) => setBoltzgenMinPlddt(e.target.value ? Number(e.target.value) : '')}
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-slate-500">
+                                        Max refold RMSD
+                                        <input
+                                            type="number"
+                                            min={0}
+                                            step={0.1}
+                                            value={boltzgenMaxRmsd}
+                                            onChange={(e) => setBoltzgenMaxRmsd(e.target.value ? Number(e.target.value) : '')}
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-slate-500">
+                                        Min confidence score
+                                        <input
+                                            type="number"
+                                            min={0}
+                                            max={1}
+                                            step={0.01}
+                                            value={boltzgenMinConfScore}
+                                            onChange={(e) => setBoltzgenMinConfScore(e.target.value ? Number(e.target.value) : '')}
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-slate-500">
+                                        Metrics override
+                                        <input
+                                            type="text"
+                                            value={boltzgenMetricsOverride}
+                                            onChange={(e) => setBoltzgenMetricsOverride(e.target.value)}
+                                            placeholder="plddt=none filter_rmsd=none"
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-slate-500 sm:col-span-2">
+                                        Additional filters
+                                        <input
+                                            type="text"
+                                            value={boltzgenAdditionalFilters}
+                                            onChange={(e) => setBoltzgenAdditionalFilters(e.target.value)}
+                                            placeholder="affinity_probability>0.8 design_ptm>=0.75"
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-slate-500 sm:col-span-2">
+                                        Size buckets
+                                        <input
+                                            type="text"
+                                            value={boltzgenSizeBuckets}
+                                            onChange={(e) => setBoltzgenSizeBuckets(e.target.value)}
+                                            placeholder="1-5:4 6-10:8 11-18:8"
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        />
+                                    </label>
+                                </div>
+                                <div className="mt-4 flex flex-wrap gap-4">
+                                    <label className="flex items-center gap-2 text-sm text-slate-300">
+                                        <input
+                                            type="checkbox"
+                                            checked={boltzgenSkipInverseFolding}
+                                            onChange={(e) => setBoltzgenSkipInverseFolding(e.target.checked)}
+                                            className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-amber-500 focus:ring-amber-500"
+                                        />
+                                        Skip inverse folding
+                                    </label>
+                                    <label className="flex items-center gap-2 text-sm text-slate-300">
+                                        <input
+                                            type="checkbox"
+                                            checked={boltzgenAvoidCysteine}
+                                            onChange={(e) => setBoltzgenAvoidCysteine(e.target.checked)}
+                                            className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-amber-500 focus:ring-amber-500"
+                                        />
+                                        Avoid cysteine
+                                    </label>
+                                    <label className="flex items-center gap-2 text-sm text-slate-300">
+                                        <input
+                                            type="checkbox"
+                                            checked={boltzgenFilterBiased}
+                                            onChange={(e) => setBoltzgenFilterBiased(e.target.checked)}
+                                            className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-amber-500 focus:ring-amber-500"
+                                        />
+                                        Filter biased compositions
+                                    </label>
+                                </div>
+                            </div>
+
+                            {showBoltzgenPreview && boltzgenPreview && (
+                                <div className="rounded-lg border border-slate-700/50 bg-slate-900/30 p-4">
+                                    <div className="mb-3 flex items-center justify-between gap-3">
+                                        <div>
+                                            <h3 className="text-sm font-semibold text-slate-200">BoltzGen Preflight</h3>
+                                            <p className="text-xs text-slate-500 mt-1">
+                                                Generated design spec plus `boltzgen check` status from the current nanobody settings.
+                                            </p>
+                                        </div>
+                                        <span className={`rounded-full px-2.5 py-1 text-[11px] ${boltzgenPreview.check_ok ? 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-200' : 'border border-amber-500/30 bg-amber-500/10 text-amber-200'}`}>
+                                            {boltzgenPreview.check_ok ? 'Check Passed' : 'Check Pending / Warn'}
+                                        </span>
+                                    </div>
+                                    {boltzgenPreview.notes?.length > 0 && (
+                                        <div className="mb-3 rounded-lg border border-slate-700 bg-slate-950/60 p-3 text-[11px] text-slate-400">
+                                            {boltzgenPreview.notes.join(' | ')}
+                                        </div>
+                                    )}
+                                    {boltzgenPreview.scaffold_specs?.length > 0 && (
+                                        <div className="mb-3 flex flex-wrap gap-2 text-[11px]">
+                                            {boltzgenPreview.scaffold_specs.map((spec, index) => (
+                                                <span key={`${spec.name || spec.path || index}`} className="rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-200">
+                                                    {spec.name || spec.path || `scaffold_${index + 1}`}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    )}
+                                    <pre className="max-h-80 overflow-auto rounded-lg border border-slate-700 bg-slate-950/80 p-3 text-[11px] text-slate-200">{boltzgenPreview.yaml_text}</pre>
+                                    {(boltzgenPreview.check_stdout || boltzgenPreview.check_stderr) && (
+                                        <pre className="mt-3 max-h-48 overflow-auto rounded-lg border border-slate-700 bg-slate-950/80 p-3 text-[11px] text-slate-400">{[boltzgenPreview.check_stdout, boltzgenPreview.check_stderr].filter(Boolean).join('\n\n')}</pre>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    ) : (
+                        <>
                     {/* Framework Selection */}
                     {!isRefinementMode && (
                         <div>
@@ -3291,16 +4071,31 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             </p>
                         </div>
                     )}
+                        </>
+                    )}
 
                 </div> {/* End LEFT COLUMN */}
 
                 {/* RIGHT COLUMN: Quality Settings & Debug */}
                 <div className="space-y-5">
+                    {!isRefinementMode && showOnlyCoreGeneratorStep && (
+                        <div className="rounded-lg border p-4" style={themedInsetStyle}>
+                            <div className="text-sm font-semibold text-[var(--text-primary)]">Generator-Only Batch</div>
+                            <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                                Downstream redesign, validation, and QC controls stay hidden until you enable them in the orchestration menu above. The default path is intentionally lighter for batch generation and filtering.
+                            </p>
+                        </div>
+                    )}
+                    {showExecutionModePanel && (
                     <div className="space-y-4 rounded-lg border p-4" style={themedPanelStyle}>
                         <div>
                             <h3 className="text-sm font-semibold text-[var(--text-primary)]">Execution Mode</h3>
                             <p className="mt-1 text-xs text-[var(--text-secondary)]">
-                                Choose whether the workflow pauses for manual review or runs through without intervention.
+                                {isRefinementMode
+                                    ? 'Choose whether the refinement loop pauses for manual review or runs through without intervention.'
+                                    : deNovoGenerator === 'boltzgen'
+                                        ? 'Choose whether the BoltzGen batch is a straight generation run or a review-first batch before you reopen selected outputs in Antibody Refinement.'
+                                        : 'Choose whether the workflow pauses for manual review or runs through without intervention.'}
                             </p>
                         </div>
 
@@ -3329,7 +4124,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             </button>
                         </div>
 
-                        {interactiveWorkflow && (
+                        {interactiveWorkflow && deNovoGenerator === 'boltzgen' && !isRefinementMode ? (
+                            <div className="space-y-2 rounded-lg border p-3" style={themedInsetStyle}>
+                                <div className="text-xs font-medium text-[var(--text-primary)]">BoltzGen Review Loop</div>
+                                <p className="text-xs text-[var(--text-secondary)]">
+                                    The initial BoltzGen run still completes as a generator batch. Interactive mode keeps the campaign in a review-first loop operationally: rank the batch outputs, then reopen the selected subset in <span className="font-medium text-[var(--text-primary)]">Antibody Refinement</span> for sequence redesign, PPIFlow, and validation.
+                                </p>
+                            </div>
+                        ) : interactiveWorkflow && (
                             <div className="space-y-2 rounded-lg border p-3" style={themedInsetStyle}>
                                 <label className="block text-xs text-[var(--text-secondary)]">Pause After</label>
                                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -3377,7 +4179,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             </div>
                         )}
                     </div>
+                    )}
 
+                    {showStructureValidatorPanel && (
                     <div className="space-y-4 rounded-lg border p-4" style={themedPanelStyle}>
                         <div>
                             <h3 className="text-sm font-semibold text-[var(--text-primary)]">Structure Validator</h3>
@@ -3410,8 +4214,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 : 'Boltz-2 controls and post-validation filters live inside Quality Settings. Flexible co-fold remains the default; anchored-target mode injects templates only on the target chains.'}
                         </p>
                     </div>
+                    )}
 
                     {/* Quality Settings Panel */}
+                    {showQualitySettingsPanel && (
                     <QualitySettingsPanel
                         settings={qualitySettings}
                         onSettingsChange={setQualitySettings}
@@ -3420,18 +4226,22 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         showRfantibodySettings={showRfQualitySettings}
                         showStructureValidationSettings={showStructureValidationQualitySettings}
                         showFampnnSettings={showFampnnQualitySettings}
-                        showPreValidationFiltering={seqDesigner === 'fampnn' && runStructureValidation}
-                        showPostValidationFiltering={runStructureValidation}
+                        showPreValidationFiltering={effectiveSeqDesigner === 'fampnn' && effectiveRunStructureValidation}
+                        showPostValidationFiltering={effectiveRunStructureValidation}
                     />
+                    )}
 
                     {/* Physics Refinement Panel (OpenMM) */}
+                    {showQcPanels && (
                     <PhysicsRefinementPanel
                         settings={physicsSettings}
                         onSettingsChange={setPhysicsSettings}
                         isAntibody={true}
                     />
+                    )}
 
                     {/* ANARCII Polishing */}
+                    {showQcPanels && (
                     <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4">
                         <div className="flex items-center justify-between">
                             <div>
@@ -3464,8 +4274,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             </div>
                         )}
                     </div>
+                    )}
 
                     {/* FrustraMPNN QC */}
+                    {showQcPanels && (
                     <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4">
                         <div className="flex items-center justify-between">
                             <div>
@@ -3485,11 +4297,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             </label>
                         </div>
                     </div>
+                    )}
 
                     {/* Number of Backbones */}
                     {!isRefinementMode && (
                         <div>
-                            <label className="block text-sm font-medium text-slate-400 mb-2">Number of Backbones</label>
+                            <label className="block text-sm font-medium text-slate-400 mb-2">
+                                {deNovoGenerator === 'boltzgen' ? 'Number of Designs' : 'Number of Backbones'}
+                            </label>
                             <input
                                 type="number"
                                 value={numDesigns}
@@ -3502,59 +4317,63 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     )}
 
                     {/* Sequences per Design */}
-                    <div>
-                        <label className="block text-sm font-medium text-slate-400 mb-2">
-                            Sequences per Design
-                            <span className="ml-2 text-xs text-slate-500 font-normal">({seqsPerDesign})</span>
-                        </label>
-                        <div className="flex items-center gap-4">
-                            <input
-                                type="range"
-                                value={seqsPerDesign}
-                                onChange={(e) => setSeqsPerDesign(parseInt(e.target.value))}
-                                min={1}
-                                max={64}
-                                step={1}
-                                className="flex-1 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                            />
-                            <input
-                                type="number"
-                                value={seqsPerDesign}
-                                onChange={(e) => setSeqsPerDesign(Math.max(1, Math.min(64, parseInt(e.target.value) || 8)))}
-                                min={1}
-                                max={64}
-                                className="w-16 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white text-center"
-                            />
+                    {showSequenceDesignerPanel && (
+                    <>
+                        <div>
+                            <label className="block text-sm font-medium text-slate-400 mb-2">
+                                Sequences per Design
+                                <span className="ml-2 text-xs text-slate-500 font-normal">({seqsPerDesign})</span>
+                            </label>
+                            <div className="flex items-center gap-4">
+                                <input
+                                    type="range"
+                                    value={seqsPerDesign}
+                                    onChange={(e) => setSeqsPerDesign(parseInt(e.target.value))}
+                                    min={1}
+                                    max={64}
+                                    step={1}
+                                    className="flex-1 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                                />
+                                <input
+                                    type="number"
+                                    value={seqsPerDesign}
+                                    onChange={(e) => setSeqsPerDesign(Math.max(1, Math.min(64, parseInt(e.target.value) || 8)))}
+                                    min={1}
+                                    max={64}
+                                    className="w-16 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white text-center"
+                                />
+                            </div>
+                            <p className="mt-1 text-xs text-slate-500">Number of sequence variants to generate per backbone design</p>
                         </div>
-                        <p className="mt-1 text-xs text-slate-500">Number of sequence variants to generate per backbone design</p>
-                    </div>
 
-                    {/* Sequence Designer */}
-                    <div>
-                        <label className="block text-sm font-medium text-slate-400 mb-2">Sequence Designer</label>
-                        <div className="flex gap-3">
-                            {([...(isRefinementMode ? (['none'] as const) : []), 'fampnn', 'antifold', 'proteinmpnn'] as const).map((designer) => (
-                                <button
-                                    key={designer}
-                                    onClick={() => {
-                                        setSeqDesigner(designer);
-                                        if (isRefinementMode) {
-                                            setRefinementPreset('custom');
-                                            setUseManualMutagenesis(false);
-                                        }
-                                    }}
-                                    className={`px-4 py-2 rounded-lg font-medium transition-all ${seqDesigner === designer
-                                        ? 'bg-blue-600 text-white'
-                                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-                                        }`}
-                                >
-                                    {designer === 'none' ? 'SKIP' : designer.toUpperCase()}
-                                </button>
-                            ))}
+                        {/* Sequence Designer */}
+                        <div>
+                            <label className="block text-sm font-medium text-slate-400 mb-2">Sequence Designer</label>
+                            <div className="flex gap-3">
+                                {([...(isRefinementMode ? (['none'] as const) : []), 'fampnn', 'antifold', 'proteinmpnn'] as const).map((designer) => (
+                                    <button
+                                        key={designer}
+                                        onClick={() => {
+                                            setSeqDesigner(designer);
+                                            if (isRefinementMode) {
+                                                setRefinementPreset('custom');
+                                                setUseManualMutagenesis(false);
+                                            }
+                                        }}
+                                        className={`px-4 py-2 rounded-lg font-medium transition-all ${seqDesigner === designer
+                                            ? 'bg-blue-600 text-white'
+                                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                            }`}
+                                    >
+                                        {designer === 'none' ? 'SKIP' : designer.toUpperCase()}
+                                    </button>
+                                ))}
+                            </div>
                         </div>
-                    </div>
+                    </>
+                    )}
 
-                    {seqDesigner === 'fampnn' && (
+                    {showSequenceDesignerPanel && effectiveSeqDesigner === 'fampnn' && (
                         <div>
                             <label className="block text-sm font-medium text-slate-400 mb-2">FAMPNN Constraints</label>
                             <div className="flex gap-3">
@@ -3580,110 +4399,212 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     {/* Validation Options - removed, now controlled via QualitySettingsPanel */}
 
                     {/* Orchestrator Parallelism Settings */}
-                    <div>
-                        <label className="block text-sm font-medium text-slate-400 mb-2">Orchestrator Mode</label>
-                        <div className="flex gap-3 mb-3">
-                            <button
-                                onClick={() => setParallelMode('standard')}
-                                className={`px-4 py-2 rounded-lg font-medium transition-all ${parallelMode === 'standard'
-                                    ? 'bg-blue-600 text-white'
-                                    : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-                                    }`}
-                            >
-                                Nextflow Split
-                            </button>
-                            <button
-                                onClick={() => setParallelMode('full_orchestrator')}
-                                className={`px-4 py-2 rounded-lg font-medium transition-all ${parallelMode === 'full_orchestrator'
-                                    ? 'bg-orange-600 text-white'
-                                    : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-                                    }`}
-                            >
-                                Orchestrator Jobs
-                            </button>
-                        </div>
-                        <p className="text-xs text-slate-500 mb-3">
-                            {parallelMode === 'standard'
-                                ? "Standard: Split work across pinned GPUs within Nextflow"
-                                : "Orchestrator: Spawn child jobs that go through GPU queue"}
-                        </p>
+                    {showOrchestratorPanel && (
+                    <div className="space-y-4 rounded-lg border p-4" style={themedPanelStyle}>
+                        {!isRefinementMode && deNovoGenerator === 'boltzgen' ? (
+                            <>
+                                <div>
+                                    <h3 className="text-sm font-semibold text-[var(--text-primary)]">Batch &amp; Parallelization</h3>
+                                    <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                                        Tune how the initial BoltzGen nanobody batch is chunked. These controls apply to the generator pass only; downstream refinement still happens after you reopen selected outputs.
+                                    </p>
+                                </div>
 
-                        {anyPpiFlowStageEnabled && (
-                            <div className="mb-4 rounded-lg border border-teal-500/20 bg-teal-500/5 p-4">
-                                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                                    <div>
-                                        <div className="text-sm font-medium text-teal-200">PPIFlow Child-Job Chunking</div>
-                                        <p className="mt-1 text-xs text-slate-400">
-                                            Both PPIFlow backbone refinement and PPIFlow maturation run through orchestrated child jobs, independent of the RFantibody/FAMPNN parallel mode above.
-                                            This setting controls how many input PDBs each PPIFlow child processes serially on its assigned GPU.
+                                <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                                    <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                        <label className="block text-sm font-medium text-[var(--text-primary)]">BoltzGen Batch Size</label>
+                                        <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                                            Number of designs sampled per BoltzGen generator batch before the job moves to the next batch.
                                         </p>
+                                        <div className="mt-3 flex items-center gap-3">
+                                            <input
+                                                type="range"
+                                                min="1"
+                                                max="16"
+                                                value={boltzgenBatchSize}
+                                                onChange={(e) => setBoltzgenBatchSize(Math.max(1, parseInt(e.target.value) || 1))}
+                                                className="flex-1 accent-amber-500"
+                                            />
+                                            <input
+                                                type="number"
+                                                min="1"
+                                                max="64"
+                                                value={boltzgenBatchSize}
+                                                onChange={(e) => setBoltzgenBatchSize(Math.max(1, parseInt(e.target.value) || 1))}
+                                                className="w-20 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-white"
+                                            />
+                                        </div>
                                     </div>
-                                    <div className="min-w-[260px] lg:max-w-sm">
-                                        <label className="text-xs text-slate-500">PDBs per PPIFlow job</label>
-                                        <input
-                                            type="range"
-                                            min="1"
-                                            max="1000"
-                                            value={qualitySettings.maturation_designs_per_job}
-                                            onChange={(e) => setQualitySettings((current) => ({
-                                                ...current,
-                                                maturation_designs_per_job: parseInt(e.target.value),
-                                            }))}
-                                            className="mt-2 w-full accent-teal-500"
-                                        />
-                                        <div className="mt-1 flex items-center justify-between text-xs text-slate-400">
-                                            <span>1</span>
-                                            <span className="font-medium text-teal-200">{qualitySettings.maturation_designs_per_job}</span>
-                                            <span>1000</span>
+
+                                    <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                        <label className="block text-sm font-medium text-[var(--text-primary)]">Campaign Execution</label>
+                                        <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                                            Choose whether the full batch runs as one BoltzGen campaign or is split into queue-managed child jobs for larger screens.
+                                        </p>
+                                        <div className="mt-3 flex gap-3">
+                                            <button
+                                                type="button"
+                                                onClick={() => setBoltzgenParallelMode(false)}
+                                                className="rounded-lg border px-4 py-2 text-sm transition-colors"
+                                                style={!boltzgenParallelMode ? themedSelectedStyle('var(--success)') : themedInsetStyle}
+                                            >
+                                                Single Job
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setBoltzgenParallelMode(true)}
+                                                className="rounded-lg border px-4 py-2 text-sm transition-colors"
+                                                style={boltzgenParallelMode ? themedSelectedStyle('var(--warning)') : themedInsetStyle}
+                                            >
+                                                Child Jobs
+                                            </button>
                                         </div>
                                     </div>
                                 </div>
-                            </div>
-                        )}
 
-                        {parallelMode === 'full_orchestrator' && (
-                            <div className="grid grid-cols-2 gap-4 mt-3">
+                                {boltzgenParallelMode && (
+                                    <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4">
+                                        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                                            <div>
+                                                <div className="text-sm font-medium text-amber-200">BoltzGen Child-Job Chunking</div>
+                                                <p className="mt-1 text-xs text-slate-400">
+                                                    Split large campaigns into queue-managed child jobs. Each child generates this many designs before the outputs are collected into the parent campaign.
+                                                </p>
+                                            </div>
+                                            <div className="min-w-[260px] lg:max-w-sm">
+                                                <label className="text-xs text-slate-500">Designs per child job</label>
+                                                <input
+                                                    type="range"
+                                                    min="1"
+                                                    max="1000"
+                                                    value={boltzgenDesignsPerJob}
+                                                    onChange={(e) => setBoltzgenDesignsPerJob(Math.max(1, parseInt(e.target.value) || 1))}
+                                                    className="mt-2 w-full accent-amber-500"
+                                                />
+                                                <div className="mt-1 flex items-center justify-between text-xs text-slate-400">
+                                                    <span>1</span>
+                                                    <span className="font-medium text-amber-200">{boltzgenDesignsPerJob}</span>
+                                                    <span>1000</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </>
+                        ) : (
+                            <>
                                 <div>
-                                    <label className="text-xs text-slate-500">Backbones per job</label>
-                                    <input
-                                        type="range"
-                                        min="1"
-                                        max="1000"
-                                        value={designsPerJob}
-                                        onChange={(e) => setDesignsPerJob(parseInt(e.target.value))}
-                                        className="w-full accent-orange-500"
-                                    />
-                                    <span className="text-sm text-slate-300">{designsPerJob}</span>
+                                    <h3 className="text-sm font-semibold text-[var(--text-primary)]">Orchestrator Mode</h3>
+                                    <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                                        Control how the de novo or refinement workflow fans work out across GPUs and child jobs.
+                                    </p>
                                 </div>
-                                <div>
-                                    <label className="text-xs text-slate-500">PDBs per FAMPNN job</label>
-                                    <input
-                                        type="range"
-                                        min="1"
-                                        max="1000"
-                                        value={pdBsPerJob}
-                                        onChange={(e) => setPdBsPerJob(parseInt(e.target.value))}
-                                        className="w-full accent-orange-500"
-                                    />
-                                    <span className="text-sm text-slate-300">{pdBsPerJob}</span>
+                                <div className="flex gap-3">
+                                    <button
+                                        onClick={() => setParallelMode('standard')}
+                                        className={`px-4 py-2 rounded-lg font-medium transition-all ${parallelMode === 'standard'
+                                            ? 'bg-blue-600 text-white'
+                                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                            }`}
+                                    >
+                                        Nextflow Split
+                                    </button>
+                                    <button
+                                        onClick={() => setParallelMode('full_orchestrator')}
+                                        className={`px-4 py-2 rounded-lg font-medium transition-all ${parallelMode === 'full_orchestrator'
+                                            ? 'bg-orange-600 text-white'
+                                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                            }`}
+                                    >
+                                        Orchestrator Jobs
+                                    </button>
                                 </div>
-                                <div>
-                                    <label className="text-xs text-slate-500">Sequences per validation job</label>
-                                    <input
-                                        type="range"
-                                        min="1"
-                                        max="1000"
-                                        value={seqsPerBoltzJob}
-                                        onChange={(e) => setSeqsPerBoltzJob(parseInt(e.target.value))}
-                                        className="w-full accent-orange-500"
-                                    />
-                                    <span className="text-sm text-slate-300">{seqsPerBoltzJob}</span>
-                                </div>
-                            </div>
+                                <p className="text-xs text-slate-500">
+                                    {parallelMode === 'standard'
+                                        ? 'Standard: split work across pinned GPUs within Nextflow.'
+                                        : 'Orchestrator: spawn child jobs that move through the GPU queue independently.'}
+                                </p>
+
+                                {anyPpiFlowStageEnabled && (
+                                    <div className="rounded-lg border border-teal-500/20 bg-teal-500/5 p-4">
+                                        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                                            <div>
+                                                <div className="text-sm font-medium text-teal-200">PPIFlow Child-Job Chunking</div>
+                                                <p className="mt-1 text-xs text-slate-400">
+                                                    Both PPIFlow backbone refinement and PPIFlow maturation run through orchestrated child jobs, independent of the RFantibody/FAMPNN parallel mode above.
+                                                    This setting controls how many input PDBs each PPIFlow child processes serially on its assigned GPU.
+                                                </p>
+                                            </div>
+                                            <div className="min-w-[260px] lg:max-w-sm">
+                                                <label className="text-xs text-slate-500">PDBs per PPIFlow job</label>
+                                                <input
+                                                    type="range"
+                                                    min="1"
+                                                    max="1000"
+                                                    value={qualitySettings.maturation_designs_per_job}
+                                                    onChange={(e) => setQualitySettings((current) => ({
+                                                        ...current,
+                                                        maturation_designs_per_job: parseInt(e.target.value),
+                                                    }))}
+                                                    className="mt-2 w-full accent-teal-500"
+                                                />
+                                                <div className="mt-1 flex items-center justify-between text-xs text-slate-400">
+                                                    <span>1</span>
+                                                    <span className="font-medium text-teal-200">{qualitySettings.maturation_designs_per_job}</span>
+                                                    <span>1000</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {parallelMode === 'full_orchestrator' && (
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="text-xs text-slate-500">Backbones per job</label>
+                                            <input
+                                                type="range"
+                                                min="1"
+                                                max="1000"
+                                                value={designsPerJob}
+                                                onChange={(e) => setDesignsPerJob(parseInt(e.target.value))}
+                                                className="w-full accent-orange-500"
+                                            />
+                                            <span className="text-sm text-slate-300">{designsPerJob}</span>
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-slate-500">PDBs per FAMPNN job</label>
+                                            <input
+                                                type="range"
+                                                min="1"
+                                                max="1000"
+                                                value={pdBsPerJob}
+                                                onChange={(e) => setPdBsPerJob(parseInt(e.target.value))}
+                                                className="w-full accent-orange-500"
+                                            />
+                                            <span className="text-sm text-slate-300">{pdBsPerJob}</span>
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-slate-500">Sequences per validation job</label>
+                                            <input
+                                                type="range"
+                                                min="1"
+                                                max="1000"
+                                                value={seqsPerBoltzJob}
+                                                onChange={(e) => setSeqsPerBoltzJob(parseInt(e.target.value))}
+                                                className="w-full accent-orange-500"
+                                            />
+                                            <span className="text-sm text-slate-300">{seqsPerBoltzJob}</span>
+                                        </div>
+                                    </div>
+                                )}
+                            </>
                         )}
                     </div>
+                    )}
 
                     {/* Debug Settings Panel - Hidden by default */}
+                    {showDebugPanel && (
                     <div className="mt-6 border border-amber-600/30 rounded-lg overflow-hidden">
                         <button
                             onClick={() => setShowDebugSettings(!showDebugSettings)}
@@ -3693,8 +4614,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 }`}
                         >
                             <div className="flex items-center gap-2">
-                                <span className="font-medium">Debug Settings</span>
-                                {(skipRFantibody || skipFampnn || customOutputDir) && (
+                                <span className="font-medium">Debug &amp; Overrides</span>
+                                {(skipRFantibody || skipFampnn || customOutputDir || boltzgenReuseExisting) && (
                                     <span className="px-2 py-0.5 text-xs bg-amber-600 text-white rounded">ACTIVE</span>
                                 )}
                             </div>
@@ -3704,58 +4625,77 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         {showDebugSettings && (
                             <div className="p-4 bg-slate-900/30 space-y-4">
                                 <div className="text-xs text-amber-500/80 mb-3">
-                                    Warning: Debug settings allow skipping workflow steps. Use with caution.
+                                    Override paths, reuse behaviors, or skip stages for recovery runs. Some options are generator-specific.
                                 </div>
 
-                                {/* Skip RFantibody */}
-                                <div className="space-y-2">
-                                    <label className="flex items-center gap-2 cursor-pointer">
-                                        <input
-                                            type="checkbox"
-                                            checked={skipRFantibody}
-                                            onChange={e => {
-                                                setSkipRFantibody(e.target.checked);
-                                                if (!e.target.checked) setRfantibodyInputPdbs('');
-                                            }}
-                                            className="w-4 h-4 rounded border-amber-600 bg-slate-800 text-amber-500 focus:ring-amber-500"
-                                        />
-                                        <span className="text-sm text-slate-300">Skip RFantibody (use pre-existing backbone PDBs)</span>
-                                    </label>
-                                    {skipRFantibody && (
-                                        <input
-                                            type="text"
-                                            value={rfantibodyInputPdbs}
-                                            onChange={e => setRfantibodyInputPdbs(e.target.value)}
-                                            placeholder="/path/to/backbone/pdbs"
-                                            className="w-full bg-slate-900 border border-amber-600/50 rounded-lg px-4 py-2 text-white text-sm focus:ring-2 focus:ring-amber-500 outline-none font-mono"
-                                        />
-                                    )}
-                                </div>
+                                {(isRefinementMode || deNovoGenerator === 'rfantibody') && (
+                                    <>
+                                        <div className="space-y-2">
+                                            <label className="flex items-center gap-2 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={skipRFantibody}
+                                                    onChange={e => {
+                                                        setSkipRFantibody(e.target.checked);
+                                                        if (!e.target.checked) setRfantibodyInputPdbs('');
+                                                    }}
+                                                    className="w-4 h-4 rounded border-amber-600 bg-slate-800 text-amber-500 focus:ring-amber-500"
+                                                />
+                                                <span className="text-sm text-slate-300">Skip RFantibody (use pre-existing backbone PDBs)</span>
+                                            </label>
+                                            {skipRFantibody && (
+                                                <input
+                                                    type="text"
+                                                    value={rfantibodyInputPdbs}
+                                                    onChange={e => setRfantibodyInputPdbs(e.target.value)}
+                                                    placeholder="/path/to/backbone/pdbs"
+                                                    className="w-full bg-slate-900 border border-amber-600/50 rounded-lg px-4 py-2 text-white text-sm focus:ring-2 focus:ring-amber-500 outline-none font-mono"
+                                                />
+                                            )}
+                                        </div>
 
-                                {/* Skip FAMPNN */}
-                                <div className="space-y-2">
-                                    <label className="flex items-center gap-2 cursor-pointer">
-                                        <input
-                                            type="checkbox"
-                                            checked={skipFampnn}
-                                            onChange={e => {
-                                                setSkipFampnn(e.target.checked);
-                                                if (!e.target.checked) setFampnnCollectedPdbs('');
-                                            }}
-                                            className="w-4 h-4 rounded border-amber-600 bg-slate-800 text-amber-500 focus:ring-amber-500"
-                                        />
-                                        <span className="text-sm text-slate-300">Skip FAMPNN (use pre-existing sequenced PDBs)</span>
-                                    </label>
-                                    {skipFampnn && (
-                                        <input
-                                            type="text"
-                                            value={fampnnCollectedPdbs}
-                                            onChange={e => setFampnnCollectedPdbs(e.target.value)}
-                                            placeholder="/path/to/fampnn/output/pdbs"
-                                            className="w-full bg-slate-900 border border-amber-600/50 rounded-lg px-4 py-2 text-white text-sm focus:ring-2 focus:ring-amber-500 outline-none font-mono"
-                                        />
-                                    )}
-                                </div>
+                                        <div className="space-y-2">
+                                            <label className="flex items-center gap-2 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={skipFampnn}
+                                                    onChange={e => {
+                                                        setSkipFampnn(e.target.checked);
+                                                        if (!e.target.checked) setFampnnCollectedPdbs('');
+                                                    }}
+                                                    className="w-4 h-4 rounded border-amber-600 bg-slate-800 text-amber-500 focus:ring-amber-500"
+                                                />
+                                                <span className="text-sm text-slate-300">Skip FAMPNN (use pre-existing sequenced PDBs)</span>
+                                            </label>
+                                            {skipFampnn && (
+                                                <input
+                                                    type="text"
+                                                    value={fampnnCollectedPdbs}
+                                                    onChange={e => setFampnnCollectedPdbs(e.target.value)}
+                                                    placeholder="/path/to/fampnn/output/pdbs"
+                                                    className="w-full bg-slate-900 border border-amber-600/50 rounded-lg px-4 py-2 text-white text-sm focus:ring-2 focus:ring-amber-500 outline-none font-mono"
+                                                />
+                                            )}
+                                        </div>
+                                    </>
+                                )}
+
+                                {!isRefinementMode && deNovoGenerator === 'boltzgen' && (
+                                    <div className="space-y-2 rounded-lg border border-amber-600/20 bg-amber-500/5 p-3">
+                                        <label className="flex items-center gap-2 cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                checked={boltzgenReuseExisting}
+                                                onChange={e => setBoltzgenReuseExisting(e.target.checked)}
+                                                className="w-4 h-4 rounded border-amber-600 bg-slate-800 text-amber-500 focus:ring-amber-500"
+                                            />
+                                            <span className="text-sm text-slate-300">Reuse existing BoltzGen outputs when the output directory already contains a matching campaign</span>
+                                        </label>
+                                        <p className="text-xs text-slate-500">
+                                            Useful for recovery or repeated review passes against the same batch directory.
+                                        </p>
+                                    </div>
+                                )}
 
                                 {/* Custom Output Directory */}
                                 <div className="space-y-2">
@@ -3771,6 +4711,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             </div>
                         )}
                     </div>
+                    )}
                 </div> {/* End RIGHT COLUMN */}
             </div > {/* End grid */}
 
@@ -3792,11 +4733,11 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         isUploading ||
                         (isRefinementMode && !refinementHasLaunchSource) ||
                         // Refinement mode and skip modes don't require target PDB or hotspots
-                        (!(isRefinementMode || skipRFantibody || skipFampnn) && (!targetPdb || selectedResidues.size === 0)) ||
+                        (!(isRefinementMode || (deNovoGenerator === 'rfantibody' && (skipRFantibody || skipFampnn))) && (!targetPdb || selectedResidues.size === 0)) ||
                         // When skipping, require the skip paths
-                        (!isRefinementMode && skipRFantibody && !rfantibodyInputPdbs.trim()) ||
-                        (!isRefinementMode && skipFampnn && !fampnnCollectedPdbs.trim()) ||
-                        (isRefinementMode && !useManualMutagenesis && seqDesigner === 'none' && !anyPpiFlowStageEnabled && !runStructureValidation && !runFrustrampnn)
+                        (!isRefinementMode && deNovoGenerator === 'rfantibody' && skipRFantibody && !rfantibodyInputPdbs.trim()) ||
+                        (!isRefinementMode && deNovoGenerator === 'rfantibody' && skipFampnn && !fampnnCollectedPdbs.trim()) ||
+                        (isRefinementMode && !useManualMutagenesis && effectiveSeqDesigner === 'none' && !anyPpiFlowStageEnabled && !effectiveRunStructureValidation && !effectiveRunFrustrampnn)
                     }
                     className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-medium rounded-lg transition-colors flex items-center gap-2"
                 >
@@ -3811,16 +4752,24 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     ) : isRefinementMode ? (
                         <>
                             {useManualMutagenesis
-                                ? (mutagenesisLaunchMode === 'seeded_refinement' ? 'Launch Mutation-Seeded Re-orchestration' : 'Launch Exact Mutant Evaluation')
-                                : 'Launch Pipeline Re-orchestration'} ({refinementInputCount} outputs)
+                                ? (mutagenesisLaunchMode === 'seeded_refinement' ? 'Launch Mutation-Seeded Refinement' : 'Launch Exact Mutant Evaluation')
+                                : 'Launch Antibody Refinement'} ({refinementInputCount} outputs)
                         </>
-                    ) : (skipRFantibody || skipFampnn) ? (
+                    ) : (deNovoGenerator === 'rfantibody' && (skipRFantibody || skipFampnn)) ? (
                         <>
                             Run Skipped Workflow
                         </>
+                    ) : deNovoGenerator === 'boltzgen' ? (
+                        <>
+                            Launch BoltzGen Nanobody Batch
+                        </>
+                    ) : showOnlyCoreGeneratorStep ? (
+                        <>
+                            Launch RFantibody Batch ({selectedResidues.size} hotspots)
+                        </>
                     ) : (
                         <>
-                            Generate Antibodies ({selectedResidues.size} hotspots)
+                            Launch De Novo Nanobody Pipeline ({selectedResidues.size} hotspots)
                         </>
                     )}
                 </button>
@@ -3845,6 +4794,33 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
                         // Core settings (check both new and old field names for backward compatibility)
                         if (p.job_name) { setJobName(p.job_name); loaded.push('job_name'); } else { skipped.push('job_name'); }
+                        if (!isRefinementMode) {
+                            const restoringBoltzgenGenerator =
+                                p.denovo_generator === 'boltzgen' ||
+                                p.generator === 'boltzgen' ||
+                                p.boltzgen_mode === 'nanobody_binder';
+                            if (p.denovo_generator === 'boltzgen' || p.generator === 'boltzgen' || p.boltzgen_mode === 'nanobody_binder') {
+                                setDeNovoGenerator('boltzgen');
+                                loaded.push('denovo_generator');
+                            } else if (p.denovo_generator === 'rfantibody' || p.generator === 'rfantibody') {
+                                setDeNovoGenerator('rfantibody');
+                                loaded.push('denovo_generator');
+                            }
+                            setDeNovoStageSelection({
+                                sequence_design: restoringBoltzgenGenerator ? false : p.initial_orchestration_sequence_design === true,
+                                ppiflow: restoringBoltzgenGenerator ? false : p.initial_orchestration_ppiflow === true,
+                                validation: restoringBoltzgenGenerator ? false : p.initial_orchestration_validation === true,
+                                qc: restoringBoltzgenGenerator ? false : p.initial_orchestration_qc === true,
+                            });
+                            if (
+                                p.initial_orchestration_sequence_design !== undefined ||
+                                p.initial_orchestration_ppiflow !== undefined ||
+                                p.initial_orchestration_validation !== undefined ||
+                                p.initial_orchestration_qc !== undefined
+                            ) {
+                                loaded.push('initial_orchestration_*');
+                            }
+                        }
                         if (p.framework_type) { setFrameworkType(p.framework_type); loaded.push('framework_type'); } else { skipped.push('framework_type'); }
                         if (p.seq_designer) { setSeqDesigner(p.seq_designer); loaded.push('seq_designer'); }
                         else if (p.seq_design_fampnn === false && p.seq_design_antifold === false && p.seq_design_proteinmpnn === false) { setSeqDesigner('none'); loaded.push('seq_designer:none'); }
@@ -3858,6 +4834,63 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         if (typeof p.run_structure_validation === 'boolean') { setRunStructureValidation(p.run_structure_validation); loaded.push('run_structure_validation'); }
                         if (typeof p.run_anarcii_post === 'boolean') { setRunAnarciiPost(p.run_anarcii_post); loaded.push('run_anarcii_post'); }
                         if (typeof p.anarcii_include_children === 'boolean') { setAnarciiIncludeChildren(p.anarcii_include_children); loaded.push('anarcii_include_children'); }
+                        if (typeof p.boltzgen_use_framework_template === 'boolean') {
+                            setBoltzgenUseFrameworkTemplate(p.boltzgen_use_framework_template);
+                            loaded.push('boltzgen_use_framework_template');
+                        }
+                        if (typeof p.boltzgen_batch_size === 'number') {
+                            setBoltzgenBatchSize(p.boltzgen_batch_size);
+                            loaded.push('boltzgen_batch_size');
+                        } else if (typeof p.batch_size === 'number') {
+                            setBoltzgenBatchSize(p.batch_size);
+                            loaded.push('batch_size');
+                        }
+                        if (typeof p.boltzgen_parallel_mode === 'boolean') {
+                            setBoltzgenParallelMode(p.boltzgen_parallel_mode);
+                            loaded.push('boltzgen_parallel_mode');
+                        }
+                        if (typeof p.boltzgen_designs_per_job === 'number') {
+                            setBoltzgenDesignsPerJob(p.boltzgen_designs_per_job);
+                            loaded.push('boltzgen_designs_per_job');
+                        }
+                        if (typeof p.boltzgen_reuse === 'boolean') {
+                            setBoltzgenReuseExisting(p.boltzgen_reuse);
+                            loaded.push('boltzgen_reuse');
+                        }
+                        if (typeof p.boltzgen_nanobody_framework === 'string') {
+                            setBoltzgenNanobodyFramework(p.boltzgen_nanobody_framework);
+                            loaded.push('boltzgen_nanobody_framework');
+                        }
+                        if (p.boltzgen_scaffold_source === 'default_ensemble' || p.boltzgen_scaffold_source === 'selected_scaffold' || p.boltzgen_scaffold_source === 'sequence_template') {
+                            setBoltzgenScaffoldSource(p.boltzgen_scaffold_source);
+                            loaded.push('boltzgen_scaffold_source');
+                        }
+                        if (typeof p.boltzgen_scaffold_length === 'string') {
+                            setBoltzgenScaffoldLength(p.boltzgen_scaffold_length);
+                            loaded.push('boltzgen_scaffold_length');
+                        }
+                        if (typeof p.boltzgen_cdr_h1_length === 'string') { setBoltzgenCdrH1Length(p.boltzgen_cdr_h1_length); loaded.push('boltzgen_cdr_h1_length'); }
+                        if (typeof p.boltzgen_cdr_h2_length === 'string') { setBoltzgenCdrH2Length(p.boltzgen_cdr_h2_length); loaded.push('boltzgen_cdr_h2_length'); }
+                        if (typeof p.boltzgen_cdr_h3_length === 'string') { setBoltzgenCdrH3Length(p.boltzgen_cdr_h3_length); loaded.push('boltzgen_cdr_h3_length'); }
+                        if (p.boltzgen_checkpoint_mode === 'both' || p.boltzgen_checkpoint_mode === 'diverse' || p.boltzgen_checkpoint_mode === 'adherence') {
+                            setBoltzgenCheckpointMode(p.boltzgen_checkpoint_mode);
+                            loaded.push('boltzgen_checkpoint_mode');
+                        }
+                        if (typeof p.boltzgen_skip_inverse_folding === 'boolean') { setBoltzgenSkipInverseFolding(p.boltzgen_skip_inverse_folding); loaded.push('boltzgen_skip_inverse_folding'); }
+                        if (typeof p.boltzgen_inverse_fold_avoid === 'string') { setBoltzgenInverseFoldAvoid(p.boltzgen_inverse_fold_avoid); loaded.push('boltzgen_inverse_fold_avoid'); }
+                        if (typeof p.boltzgen_inverse_fold_num_sequences === 'number') { setBoltzgenInverseFoldNumSequences(p.boltzgen_inverse_fold_num_sequences); loaded.push('boltzgen_inverse_fold_num_sequences'); }
+                        if (typeof p.boltzgen_avoid_cysteine === 'boolean') { setBoltzgenAvoidCysteine(p.boltzgen_avoid_cysteine); loaded.push('boltzgen_avoid_cysteine'); }
+                        if (typeof p.boltzgen_step_scale === 'number') { setBoltzgenStepScale(p.boltzgen_step_scale); loaded.push('boltzgen_step_scale'); }
+                        if (typeof p.boltzgen_noise_scale === 'number') { setBoltzgenNoiseScale(p.boltzgen_noise_scale); loaded.push('boltzgen_noise_scale'); }
+                        if (typeof p.boltzgen_budget === 'number') { setBoltzgenBudget(p.boltzgen_budget); loaded.push('boltzgen_budget'); }
+                        if (typeof p.boltzgen_alpha === 'number') { setBoltzgenAlpha(p.boltzgen_alpha); loaded.push('boltzgen_alpha'); }
+                        if (typeof p.boltzgen_max_rmsd === 'number') { setBoltzgenMaxRmsd(p.boltzgen_max_rmsd); loaded.push('boltzgen_max_rmsd'); }
+                        if (typeof p.boltzgen_min_plddt === 'number') { setBoltzgenMinPlddt(p.boltzgen_min_plddt); loaded.push('boltzgen_min_plddt'); }
+                        if (typeof p.boltzgen_min_conf_score === 'number') { setBoltzgenMinConfScore(p.boltzgen_min_conf_score); loaded.push('boltzgen_min_conf_score'); }
+                        if (typeof p.boltzgen_filter_biased === 'boolean') { setBoltzgenFilterBiased(p.boltzgen_filter_biased); loaded.push('boltzgen_filter_biased'); }
+                        if (typeof p.boltzgen_metrics_override === 'string') { setBoltzgenMetricsOverride(p.boltzgen_metrics_override); loaded.push('boltzgen_metrics_override'); }
+                        if (typeof p.boltzgen_additional_filters === 'string') { setBoltzgenAdditionalFilters(p.boltzgen_additional_filters); loaded.push('boltzgen_additional_filters'); }
+                        if (typeof p.boltzgen_size_buckets === 'string') { setBoltzgenSizeBuckets(p.boltzgen_size_buckets); loaded.push('boltzgen_size_buckets'); }
                         if (typeof p.interactive_swa === 'boolean') { setInteractiveWorkflow(p.interactive_swa); loaded.push('interactive_swa'); }
                         else if (typeof p.interactive_gating === 'boolean') { setInteractiveWorkflow(p.interactive_gating); loaded.push('interactive_gating'); }
                         if (
@@ -3877,6 +4910,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         else if (p.seqs_per_boltz_job) { setSeqsPerBoltzJob(p.seqs_per_boltz_job); loaded.push('seqs_per_boltz_job'); }
                         if (Array.isArray(p.pinned_gpus)) { setPinnedGpus(p.pinned_gpus); loaded.push('pinned_gpus'); }
                         if (typeof p.lock_gpus === 'boolean') { setLockGpus(p.lock_gpus); loaded.push('lock_gpus'); }
+                        if (typeof p.out_dir === 'string') { setCustomOutputDir(p.out_dir); loaded.push('out_dir'); }
                         // Design mode
                         if (p.design_mode) { setDesignMode(p.design_mode); loaded.push('design_mode'); } else { skipped.push('design_mode'); }
                         if (Array.isArray(p.selected_cdr_loops)) { setSelectedCDRLoops(new Set(p.selected_cdr_loops)); loaded.push('selected_cdr_loops'); }
@@ -3977,7 +5011,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 currentParams={{
                     // Core settings
                     job_name: jobName,
-                    framework_type: frameworkType,
+                    denovo_generator: deNovoGenerator,
+                    generator: deNovoGenerator,
+                    initial_orchestration_sequence_design: deNovoStageSelection.sequence_design,
+                    initial_orchestration_ppiflow: deNovoStageSelection.ppiflow,
+                    initial_orchestration_validation: deNovoStageSelection.validation,
+                    initial_orchestration_qc: deNovoStageSelection.qc,
+                    framework_type: deNovoGenerator === 'boltzgen' ? 'nanobody' : frameworkType,
                     framework_pdb: frameworkType === 'sabdab'
                         ? (sabdabFramework?.filePath || customFrameworkPath || undefined)
                         : (customFrameworkPath || undefined),
@@ -4077,6 +5117,34 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     rfantibody_target_contact_distance_threshold: rfantibodyTargetContactDistanceThreshold,
                     protect_tetrad: protectTetrad,
                     protect_vhh_tetrad: protectTetrad,
+                    boltzgen_mode: 'nanobody_binder',
+                    boltzgen_use_framework_template: boltzgenUseFrameworkTemplate,
+                    boltzgen_scaffold_source: boltzgenScaffoldSource,
+                    boltzgen_batch_size: boltzgenBatchSize,
+                    boltzgen_parallel_mode: boltzgenParallelMode,
+                    boltzgen_designs_per_job: boltzgenDesignsPerJob,
+                    boltzgen_reuse: boltzgenReuseExisting,
+                    boltzgen_scaffold_length: boltzgenScaffoldLength,
+                    boltzgen_nanobody_framework: boltzgenUseFrameworkTemplate ? boltzgenNanobodyFramework : undefined,
+                    boltzgen_cdr_h1_length: boltzgenCdrH1Length,
+                    boltzgen_cdr_h2_length: boltzgenCdrH2Length,
+                    boltzgen_cdr_h3_length: boltzgenCdrH3Length,
+                    boltzgen_checkpoint_mode: boltzgenCheckpointMode,
+                    boltzgen_skip_inverse_folding: boltzgenSkipInverseFolding,
+                    boltzgen_inverse_fold_avoid: boltzgenInverseFoldAvoid,
+                    boltzgen_inverse_fold_num_sequences: boltzgenInverseFoldNumSequences,
+                    boltzgen_avoid_cysteine: boltzgenAvoidCysteine,
+                    boltzgen_step_scale: boltzgenStepScale,
+                    boltzgen_noise_scale: boltzgenNoiseScale,
+                    boltzgen_budget: boltzgenBudget,
+                    boltzgen_alpha: boltzgenAlpha,
+                    boltzgen_max_rmsd: boltzgenMaxRmsd,
+                    boltzgen_min_plddt: boltzgenMinPlddt,
+                    boltzgen_min_conf_score: boltzgenMinConfScore,
+                    boltzgen_filter_biased: boltzgenFilterBiased,
+                    boltzgen_metrics_override: boltzgenMetricsOverride.trim() || undefined,
+                    boltzgen_additional_filters: boltzgenAdditionalFilters.trim() || undefined,
+                    boltzgen_size_buckets: boltzgenSizeBuckets.trim() || undefined,
                     // Framework protection (for framework_allowed and full_design modes)
                     protected_positions: frameworkProtection.protectedPositions.join(','),
                     protect_disulfides: frameworkProtection.protectDisulfides,
@@ -4093,6 +5161,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     target_dna_seq: targetDnaSeq.trim() || undefined,
                     pinned_gpus: pinnedGpus,
                     lock_gpus: lockGpus,
+                    out_dir: customOutputDir.trim() || undefined,
                     // Quality settings
                     quality_settings: qualitySettings,
                     sabdab_framework: sabdabFramework ? {
@@ -4117,7 +5186,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     })),
                 }}
                 currentModelId="template_antibody_denovo"
-                currentMode="antibody_denovo_pipeline"
+                currentMode={isRefinementMode ? ANTIBODY_REFINEMENT_PIPELINE_MODE : ANTIBODY_DENOVO_PIPELINE_MODE}
                 baseTemplateId="antibody_denovo"
             />
         </div >

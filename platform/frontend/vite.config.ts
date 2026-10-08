@@ -15,8 +15,6 @@ export default defineConfig(({ mode }) => ({
   optimizeDeps: {
     include: [
       '@blueprintjs/icons',
-      '@blueprintjs/icons/lib/esm/paths/16px',
-      '@blueprintjs/icons/lib/esm/paths/20px',
       'buffer',
       'string_decoder',
       'events',

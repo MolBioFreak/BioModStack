@@ -13,6 +13,20 @@
  * Output: mmCIF structures + confidence.json (13+ metrics)
  */
 
+def normalizeGpuCsvValue(raw) {
+    if (raw == null) {
+        return ''
+    }
+    if (raw instanceof Collection) {
+        return raw.collect { value -> value?.toString()?.trim() }.findAll { value -> value }.join(',')
+    }
+    def text = raw.toString().trim()
+    if (text.startsWith('[') && text.endsWith(']') && text.length() >= 2) {
+        text = text.substring(1, text.length() - 1)
+    }
+    return text
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // PROTENIX PREDICT — Single-chain protein structure prediction
 // ─────────────────────────────────────────────────────────────────────────────
@@ -21,7 +35,7 @@ process ProtenixPredict {
     label 'Protenix'
     label 'gpu'
     publishDir "${params.out_dir}/run/protenix", mode: 'copy', pattern: "*.log"
-    publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "msa_prepared/msa_report.json", saveAs: { _ -> "protenix_msa_report.json" }
+    publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "msa_prepared/msa_report.json", saveAs: { ignoredFilename -> "protenix_msa_report.json" }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*.cif", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*confidence*.json", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*full_data*.json", saveAs: { filename -> filename.split('/')[-1] }
@@ -47,19 +61,8 @@ process ProtenixPredict {
     def enable_fusion = (params.protenix_enable_fusion == true || params.protenix_enable_fusion == 'true' || params.protenix_enable_fusion == null)
     def msa_backend = params.protenix_msa_backend ?: 'auto'
     def msa_allow_cpu_fallback = (params.protenix_allow_cpu_msa_fallback == true || params.protenix_allow_cpu_msa_fallback == 'true')
-    def normalizeGpuCsv = { raw ->
-        if (raw == null) return ''
-        if (raw instanceof Collection) {
-            return raw.collect { it?.toString()?.trim() }.findAll { it }.join(',')
-        }
-        def text = raw.toString().trim()
-        if (text.startsWith('[') && text.endsWith(']') && text.length() >= 2) {
-            text = text.substring(1, text.length() - 1)
-        }
-        return text
-    }
-    def msa_preferred_gpu_csv = normalizeGpuCsv(params.msa_preferred_gpus)
-    def msa_excluded_gpu_csv = normalizeGpuCsv(params.msa_excluded_gpus)
+    def msa_preferred_gpu_csv = normalizeGpuCsvValue(params.msa_preferred_gpus)
+    def msa_excluded_gpu_csv = normalizeGpuCsvValue(params.msa_excluded_gpus)
     def msa_cpu_only_flag = (params.msa_use_gpu == false || params.msa_use_gpu == 'false') ? '--cpu-only' : ''
     def msa_cache_only_flag = (params.msa_cache_only == true || params.msa_cache_only == 'true') ? '--cache-only' : ''
     def msa_allow_cpu_fallback_flag = msa_allow_cpu_fallback ? '--allow-cpu-fallback' : ''
@@ -378,7 +381,7 @@ process ProtenixFromComplex {
     label 'Protenix'
     label 'gpu'
     publishDir "${params.out_dir}/run/protenix_complex", mode: 'copy', pattern: "*.log"
-    publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "msa_prepared/msa_report.json", saveAs: { _ -> "protenix_complex_msa_report.json" }
+    publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "msa_prepared/msa_report.json", saveAs: { ignoredFilename -> "protenix_complex_msa_report.json" }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*.cif", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*confidence*.json", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*full_data*.json", saveAs: { filename -> filename.split('/')[-1] }
@@ -407,19 +410,8 @@ process ProtenixFromComplex {
     def enable_fusion = (params.protenix_enable_fusion == true || params.protenix_enable_fusion == 'true' || params.protenix_enable_fusion == null)
     def msa_backend = params.protenix_msa_backend ?: 'auto'
     def msa_allow_cpu_fallback = (params.protenix_allow_cpu_msa_fallback == true || params.protenix_allow_cpu_msa_fallback == 'true')
-    def normalizeGpuCsv = { raw ->
-        if (raw == null) return ''
-        if (raw instanceof Collection) {
-            return raw.collect { it?.toString()?.trim() }.findAll { it }.join(',')
-        }
-        def text = raw.toString().trim()
-        if (text.startsWith('[') && text.endsWith(']') && text.length() >= 2) {
-            text = text.substring(1, text.length() - 1)
-        }
-        return text
-    }
-    def msa_preferred_gpu_csv = normalizeGpuCsv(params.msa_preferred_gpus)
-    def msa_excluded_gpu_csv = normalizeGpuCsv(params.msa_excluded_gpus)
+    def msa_preferred_gpu_csv = normalizeGpuCsvValue(params.msa_preferred_gpus)
+    def msa_excluded_gpu_csv = normalizeGpuCsvValue(params.msa_excluded_gpus)
     def msa_cpu_only_flag = (params.msa_use_gpu == false || params.msa_use_gpu == 'false') ? '--cpu-only' : ''
     def msa_cache_only_flag = (params.msa_cache_only == true || params.msa_cache_only == 'true') ? '--cache-only' : ''
     def msa_allow_cpu_fallback_flag = msa_allow_cpu_fallback ? '--allow-cpu-fallback' : ''

@@ -10,6 +10,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 import uuid
 
+from antibody_pipeline_contract import is_antibody_pipeline_mode
 from database import get_session, UserTemplate
 
 
@@ -64,7 +65,7 @@ def _is_antibody_template(template: UserTemplate) -> bool:
     return (
         model_id == "template_antibody_denovo"
         or base_template_id == "antibody_denovo"
-        or mode == "antibody_denovo_pipeline"
+        or is_antibody_pipeline_mode(mode)
     )
 
 
@@ -183,7 +184,7 @@ async def create_user_template(
         raise HTTPException(status_code=400, detail=f"Template with name '{data.name}' already exists")
     
     params = data.params
-    if data.model_id == "template_antibody_denovo" or data.base_template_id == "antibody_denovo" or data.mode == "antibody_denovo_pipeline":
+    if data.model_id == "template_antibody_denovo" or data.base_template_id == "antibody_denovo" or is_antibody_pipeline_mode(data.mode):
         params, _ = _normalize_antibody_template_params(params)
 
     template = UserTemplate(

@@ -5,14 +5,22 @@
  */
 
 import { useState, useCallback } from 'react';
+import { isAxiosError } from 'axios';
 import type {
     NucleotideSequenceResponse,
     NucleotideSequenceListItem,
     DigestFragment,
     PCRProduct,
-    Feature,
-    Primer
 } from '../types';
+import {
+    fetchNucleotideSequences,
+    fetchNucleotideSequence,
+    createNucleotideSequence,
+    updateNucleotideSequence,
+    deleteNucleotideSequence,
+    type FetchNucleotideSequencesParams,
+    type NucleotideSequenceCreate,
+} from '../../../lib/api';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SEQUENCE CRUD
@@ -22,19 +30,27 @@ export function useSequenceOperations() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
+    const getErrorMessage = (value: unknown): string => {
+        if (isAxiosError(value)) {
+            return value.response?.data?.detail || value.message;
+        }
+        if (value instanceof Error) {
+            return value.message;
+        }
+        return 'Unknown error';
+    };
+
     // List all sequences
     const listSequences = useCallback(async (
-        limit = 100,
-        offset = 0
+        params: FetchNucleotideSequencesParams = {}
     ): Promise<NucleotideSequenceListItem[]> => {
         setLoading(true);
         setError(null);
         try {
-            const res = await fetch(`/api/sequences?limit=${limit}&offset=${offset}`);
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            return await res.json();
+            const res = await fetchNucleotideSequences(params);
+            return res.data;
         } catch (e) {
-            setError(e instanceof Error ? e.message : 'Unknown error');
+            setError(getErrorMessage(e));
             return [];
         } finally {
             setLoading(false);
@@ -48,11 +64,10 @@ export function useSequenceOperations() {
         setLoading(true);
         setError(null);
         try {
-            const res = await fetch(`/api/sequences/${id}`);
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            return await res.json();
+            const res = await fetchNucleotideSequence(id);
+            return res.data as NucleotideSequenceResponse;
         } catch (e) {
-            setError(e instanceof Error ? e.message : 'Unknown error');
+            setError(getErrorMessage(e));
             return null;
         } finally {
             setLoading(false);
@@ -60,27 +75,14 @@ export function useSequenceOperations() {
     }, []);
 
     // Create new sequence
-    const createSequence = useCallback(async (data: {
-        name: string;
-        sequence: string;
-        description?: string;
-        sequence_type?: 'dna' | 'rna';
-        is_circular?: boolean;
-        features?: Feature[];
-        primers?: Primer[];
-    }): Promise<NucleotideSequenceResponse | null> => {
+    const createSequence = useCallback(async (data: NucleotideSequenceCreate): Promise<NucleotideSequenceResponse | null> => {
         setLoading(true);
         setError(null);
         try {
-            const res = await fetch('/api/sequences', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(data)
-            });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            return await res.json();
+            const res = await createNucleotideSequence(data);
+            return res.data as NucleotideSequenceResponse;
         } catch (e) {
-            setError(e instanceof Error ? e.message : 'Unknown error');
+            setError(getErrorMessage(e));
             return null;
         } finally {
             setLoading(false);
@@ -90,28 +92,15 @@ export function useSequenceOperations() {
     // Update sequence
     const updateSequence = useCallback(async (
         id: string,
-        data: Partial<{
-            name: string;
-            sequence: string;
-            description: string;
-            sequence_type: 'dna' | 'rna';
-            is_circular: boolean;
-            features: Feature[];
-            primers: Primer[];
-        }>
+        data: Partial<NucleotideSequenceCreate>
     ): Promise<NucleotideSequenceResponse | null> => {
         setLoading(true);
         setError(null);
         try {
-            const res = await fetch(`/api/sequences/${id}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(data)
-            });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            return await res.json();
+            const res = await updateNucleotideSequence(id, data);
+            return res.data as NucleotideSequenceResponse;
         } catch (e) {
-            setError(e instanceof Error ? e.message : 'Unknown error');
+            setError(getErrorMessage(e));
             return null;
         } finally {
             setLoading(false);
@@ -123,11 +112,10 @@ export function useSequenceOperations() {
         setLoading(true);
         setError(null);
         try {
-            const res = await fetch(`/api/sequences/${id}`, { method: 'DELETE' });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            await deleteNucleotideSequence(id);
             return true;
         } catch (e) {
-            setError(e instanceof Error ? e.message : 'Unknown error');
+            setError(getErrorMessage(e));
             return false;
         } finally {
             setLoading(false);

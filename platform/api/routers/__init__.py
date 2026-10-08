@@ -1,3 +1,3 @@
 """Routers package."""
 
-from . import jobs, gpu, files, models, templates, inputs, designs, analytics, user_sequences, user_templates, smiles_converter, queue, rcsb, nucleotide_sequences, system, frameworks, molbio_ops, msa, ribocentre, analyses
+from . import analyses, analytics, bioxp, boltzgen, designs, files, frameworks, frustrampnn, gpu, inputs, jobs, models, molbio_ops, msa, nucleotide_sequences, queue, rcsb, ribocentre, rna_structure, smiles_converter, system, templates, user_sequences, user_templates

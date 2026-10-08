@@ -23,7 +23,10 @@ from routers.jobs import (
     _build_antibody_iteration_job,
     _build_selection_manifest_item,
     _child_job_has_reusable_outputs,
+    _derive_job_stage_tags,
     _derive_source_stage_payload,
+    _iter_saved_review_filter_sets,
+    _looks_like_antibody_job,
     _merge_preserved_gate_payload,
     _normalize_antibody_job_params,
     _prune_iteration_params,
@@ -36,7 +39,9 @@ from services.result_ingester import (
     _coalesce_cdr_lengths,
     _discover_collected_ppiflow_structures,
     _extract_fampnn_metrics,
+    _infer_antibody_type_from_job_params,
     _inherit_source_design_metrics,
+    _job_has_explicit_binder_target_roles,
     _parse_ppiflow_sample_index,
     parse_backbone_id,
 )
@@ -135,6 +140,76 @@ def test_repair_job_for_response_marks_ok_history_job_completed_without_gate(tmp
     assert job.stage_progress is None
     assert job.error_message is None
     assert job.completed_at is not None
+
+
+def test_looks_like_antibody_job_accepts_boltzgen_nanobody_runs() -> None:
+    job = SimpleNamespace(
+        model_id="boltzgen",
+        mode="nanobody_binder",
+        params={
+            "boltzgen_mode": "nanobody_binder",
+            "framework_type": "nanobody",
+            "antibody_chains": "H",
+            "antigen_chains": "A",
+        },
+    )
+
+    assert _looks_like_antibody_job(job) is True
+
+
+def test_derive_job_stage_tags_marks_boltzgen_nanobody_runs_as_boltzgen() -> None:
+    family, mode = _derive_job_stage_tags(
+        "boltzgen",
+        "nanobody_binder",
+        {
+            "boltzgen_mode": "nanobody_binder",
+            "framework_type": "nanobody",
+        },
+        None,
+    )
+
+    assert family == "boltzgen"
+    assert mode == "nanobody_binder"
+
+
+def test_iter_saved_review_filter_sets_reads_persisted_selection_sets() -> None:
+    job = SimpleNamespace(
+        saved_selection_sets=[
+            {
+                "id": "saved-1",
+                "name": "Boltz shortlist",
+                "created_at": "2026-04-13T00:00:00Z",
+                "design_ids": ["d1", "d2"],
+                "filter_state": {"output_source_filter": "boltzgen"},
+            }
+        ],
+        awaiting_payload={},
+    )
+
+    saved_sets = _iter_saved_review_filter_sets(job)
+
+    assert [entry.name for entry in saved_sets] == ["Boltz shortlist"]
+    assert saved_sets[0].filter_state["output_source_filter"] == "boltzgen"
+
+
+def test_job_has_explicit_binder_target_roles_accepts_boltzgen_nanobody_jobs() -> None:
+    job = SimpleNamespace(
+        model_id="boltzgen",
+        mode="nanobody_binder",
+        params={
+            "boltzgen_mode": "nanobody_binder",
+            "framework_type": "nanobody",
+        },
+    )
+
+    assert _job_has_explicit_binder_target_roles(job) is True
+
+
+def test_infer_antibody_type_from_job_params_maps_boltzgen_nanobody_mode_to_vhh() -> None:
+    assert _infer_antibody_type_from_job_params({
+        "boltzgen_mode": "nanobody_binder",
+        "framework_type": "nanobody",
+    }) == "vhh"
 
 
 @pytest.mark.asyncio
@@ -634,6 +709,19 @@ def test_normalize_antibody_job_params_disables_stage_optimized_profile_for_both
     assert normalized["ppiflow_tuning_profile"] == "manual"
 
 
+def test_normalize_antibody_job_params_infers_selected_input_artifact_class_from_legacy_paths() -> None:
+    normalized = _normalize_antibody_job_params(
+        {
+            "rfantibody_input_pdbs": "/tmp/backbones",
+            "source_stage_family": "rfantibody",
+            "source_stage_mode": "post_rfantibody",
+        }
+    )
+
+    assert normalized["selected_input_artifact_class"] == "backbone_complex"
+    assert normalized["selected_input_schema_version"] == 1
+
+
 def test_build_antibody_iteration_job_accepts_saved_review_dataset(tmp_path: Path) -> None:
     selection_dir = tmp_path / "selection"
     selection_dir.mkdir()
@@ -675,6 +763,8 @@ def test_build_antibody_iteration_job_accepts_saved_review_dataset(tmp_path: Pat
     assert launch_request.params["run_ppiflow_backbone_refine"] is True
     assert launch_request.params["ppiflow_stage_mode"] == "post_rfantibody"
     assert launch_request.params["selected_input_manifest"].endswith("selection_manifest.json")
+    assert launch_request.params["selected_input_artifact_class"] == "backbone_complex"
+    assert launch_request.params["selected_input_schema_version"] == 1
     assert launch_request.params["source_stage_job_id"] == "source-job"
     assert launch_request.params["source_selection_count"] == 2
 
@@ -701,6 +791,8 @@ def test_derive_source_stage_payload_prefers_selected_design_stage_metadata(tmp_
     assert payload["source_stage_job_id"] == "ppiflow-child-1"
     assert payload["source_stage_family"] == "ppiflow"
     assert payload["source_stage_mode"] == "backbone_refine"
+    assert payload["selected_input_artifact_class"] == "backbone_complex"
+    assert payload["selected_input_schema_version"] == 1
     assert payload["source_selection_count"] == 2
     assert payload["selected_input_manifest"].endswith("selection_manifest.json")
 
@@ -733,6 +825,7 @@ def test_derive_source_stage_payload_falls_back_to_review_stage_metadata(tmp_pat
     assert payload["source_stage_job_id"] == "rf-review-child-1"
     assert payload["source_stage_family"] == "rfantibody"
     assert payload["source_stage_mode"] == "post_rfantibody"
+    assert payload["selected_input_artifact_class"] == "backbone_complex"
 
 
 def test_build_selection_manifest_item_uses_canonical_source_keys(tmp_path: Path) -> None:
@@ -764,6 +857,8 @@ def test_build_selection_manifest_item_uses_canonical_source_keys(tmp_path: Path
     assert item["source_design_name"] == "001_example"
     assert item["selection_entry_mode"] == "symlink"
     assert item["source_stage_family"] == "ppiflow"
+    assert item["design_artifact_class"] == "backbone_complex"
+    assert item["design_artifact_schema_version"] == 1
 
 
 def test_build_selection_manifest_item_falls_back_to_review_stage_metadata(tmp_path: Path) -> None:
@@ -794,6 +889,7 @@ def test_build_selection_manifest_item_falls_back_to_review_stage_metadata(tmp_p
 
     assert item["design_stage_family"] == "rfantibody"
     assert item["design_stage_mode"] == "post_rfantibody"
+    assert item["design_artifact_class"] == "backbone_complex"
 
 
 def test_prune_iteration_params_strips_resume_and_batch_identity() -> None:
@@ -894,7 +990,7 @@ def test_build_antibody_iteration_job_rejects_recursive_ppiflow_backbone_refine(
         )
 
     assert getattr(excinfo.value, "status_code", None) == 422
-    assert "RFantibody backbone inputs" in getattr(excinfo.value, "detail", "")
+    assert "recursive PPIFlow backbone-refine inputs" in getattr(excinfo.value, "detail", "")
     assert "ppiflow/backbone_refine" in getattr(excinfo.value, "detail", "")
 
 
@@ -948,6 +1044,7 @@ def test_build_antibody_iteration_job_allows_ppiflow_backbone_outputs_to_feed_fa
     assert launch_request.params.get("run_ppiflow_backbone_refine") is not True
     assert launch_request.params["run_ppiflow_maturation"] is True
     assert launch_request.params["run_maturation"] is True
+    assert launch_request.params["selected_input_artifact_class"] == "backbone_complex"
     assert launch_request.params["rfantibody_input_pdbs"] == str(selection_dir)
     assert launch_request.params.get("fampnn_collected_pdbs") is None
 
@@ -995,7 +1092,7 @@ def test_build_antibody_iteration_job_rejects_direct_ppiflow_maturation_from_ppi
         )
 
     assert getattr(excinfo.value, "status_code", None) == 422
-    assert "requires FA-MPNN-designed inputs" in getattr(excinfo.value, "detail", "")
+    assert "requires sequence-designed complex inputs" in getattr(excinfo.value, "detail", "")
 
 
 def test_build_antibody_iteration_job_accepts_rfantibody_review_rows_with_source_stage_only(tmp_path: Path) -> None:
@@ -1054,6 +1151,9 @@ def test_build_antibody_iteration_job_accepts_rfantibody_review_rows_with_source
 
     assert launch_request.params["selected_input_stage_family"] == "rfantibody"
     assert launch_request.params["selected_input_stage_mode"] == "post_rfantibody"
+    assert launch_request.params["selected_input_artifact_class"] == "backbone_complex"
+    assert launch_request.mode == "antibody_refinement_pipeline"
+    assert launch_request.params["rfd_mode"] == "antibody_refinement_pipeline"
     assert launch_request.params["rfantibody_input_pdbs"] == str(selection_dir)
 
 
@@ -1105,6 +1205,7 @@ def test_build_antibody_iteration_job_allows_post_ppiflow_backbone_reattempt(tmp
     assert launch_request.params["ppiflow_stage_mode"] == "post_ppiflow"
     assert launch_request.params["run_ppiflow_backbone_refine"] is True
     assert launch_request.params["ppiflow_require_anchors"] is False
+    assert launch_request.params["selected_input_artifact_class"] == "backbone_complex"
     assert launch_request.params["rfantibody_input_pdbs"] == str(selection_dir)
     assert launch_request.params.get("fampnn_collected_pdbs") is None
 
@@ -1154,7 +1255,59 @@ def test_build_antibody_iteration_job_rejects_post_ppiflow_backbone_reattempt_fo
         )
 
     assert getattr(excinfo.value, "status_code", None) == 422
-    assert "post-PPIFlow reattempt mode only accepts PPIFlow-derived inputs" in getattr(excinfo.value, "detail", "")
+    assert "post-PPIFlow reattempt mode only accepts PPIFlow-derived backbone-complex inputs" in getattr(excinfo.value, "detail", "")
+
+
+def test_build_antibody_iteration_job_accepts_explicit_sequence_designed_artifact_class(tmp_path: Path) -> None:
+    selection_dir = tmp_path / "selection"
+    selection_dir.mkdir()
+
+    root_job = SimpleNamespace(
+        id="root-job",
+        name="RBX1 modular refinement",
+        params={"epitope_residues": "A45,A53"},
+        pinned_gpu=None,
+    )
+    source_job = SimpleNamespace(
+        id="source-job",
+        model_id="template_antibody_denovo",
+        mode="template_antibody_denovo",
+        params={},
+        child_stage=None,
+        stage_family=None,
+        stage_mode=None,
+    )
+    selected_designs = [
+        SimpleNamespace(
+            job_id="external-seq-1",
+            stage_family=None,
+            stage_mode=None,
+            artifact_class="sequence_designed_complex",
+        ),
+    ]
+
+    launch_request = _build_antibody_iteration_job(
+        root_job=root_job,
+        source_job=source_job,
+        action="ui_refinement",
+        selection_dir=selection_dir,
+        design_ids=["design-1"],
+        name_suffix=None,
+        param_overrides={
+            "seq_design_fampnn": False,
+            "seq_design_antifold": False,
+            "seq_design_proteinmpnn": False,
+            "run_ppiflow_maturation": True,
+            "run_maturation": True,
+            "ppiflow_stage_mode": "post_fampnn",
+            "run_structure_validation": False,
+        },
+        selected_designs=selected_designs,
+    )
+
+    assert launch_request.params["selected_input_artifact_class"] == "sequence_designed_complex"
+    assert launch_request.params["fampnn_collected_pdbs"] == str(selection_dir)
+    assert launch_request.params.get("rfantibody_input_pdbs") is None
 
 
 def test_get_per_chain_fampnn_psce_extracts_sidechain_profiles(tmp_path: Path) -> None:

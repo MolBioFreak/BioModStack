@@ -1,3 +1,17 @@
+def normalizeGpuCsvValue(raw) {
+    if (raw == null) {
+        return ''
+    }
+    if (raw instanceof Collection) {
+        return raw.collect { value -> value?.toString()?.trim() }.findAll { value -> value }.join(',')
+    }
+    def text = raw.toString().trim()
+    if (text.startsWith('[') && text.endsWith(']') && text.length() >= 2) {
+        text = text.substring(1, text.length() - 1)
+    }
+    return text
+}
+
 process BatchBoltzValidation {
     label 'Boltz'
     label 'gpu'
@@ -22,11 +36,13 @@ process BatchBoltzValidation {
     path "boltz_batch.log"
 
     script:
+    def resolvedBinderChains = params.antibody_chains ?: params.binder_chains ?: 'H,L'
+    def resolvedTargetChains = params.antigen_chains ?: params.target_chains ?: 'T'
     def anchor_target = (params.boltz_anchor_target == true || params.boltz_anchor_target == 'true')
     def geometryMode = params.boltz_target_geometry_mode ?: (anchor_target ? 'conditioned' : 'flexible')
     def anchor_strict = (params.boltz_anchor_strict == true || params.boltz_anchor_strict == 'true')
     def anchor_target_rmsd = params.boltz_anchor_target_max_rmsd ?: 1.5
-    def boltzAnchorArgs = anchor_target ? "--anchor_target --target_chains \"${params.antigen_chains ?: 'T'}\" --template_manifest target_templates/manifest.json" : ""
+    def boltzAnchorArgs = anchor_target ? "--anchor_target --target_chains \"${resolvedTargetChains}\" --template_manifest target_templates/manifest.json" : ""
     def boltzStrictArgs = (anchor_target && anchor_strict) ? "--strict_target_rmsd ${anchor_target_rmsd}" : ""
     """
     set -euo pipefail
@@ -37,7 +53,7 @@ process BatchBoltzValidation {
     if [ "${anchor_target}" = "true" ]; then
         python3 ${params.code_root}/scripts/extract_target_templates.py \\
             --pdb_files ${pdbs} \\
-            --target_chains "${params.antigen_chains ?: 'T'}" \\
+            --target_chains "${resolvedTargetChains}" \\
             --out_dir target_templates/mmcif \\
             --manifest target_templates/manifest.json
     fi
@@ -47,7 +63,7 @@ process BatchBoltzValidation {
         --pdb_files ${pdbs} \\
         --msa_path ${msa} \\
         --out_dir yamls \\
-        --binder_chains "${params.antibody_chains ?: 'H,L'}" \\
+        --binder_chains "${resolvedBinderChains}" \\
         --template_threshold ${params.target_template_threshold_angstrom ?: 2.0} \\
         ${params.epitope_residues ? '--epitope_residues "' + params.epitope_residues + '"' : ''} \\
         ${boltzAnchorArgs}
@@ -139,8 +155,8 @@ process BatchBoltzValidation {
         --boltz_dir ./ \\
         --output_dir predictions \\
         --design_type binder \\
-        --binder_chains "${params.antibody_chains ?: 'H,L'}" \\
-        --target_chains "${params.antigen_chains ?: 'T'}" \\
+        --binder_chains "${resolvedBinderChains}" \\
+        --target_chains "${resolvedTargetChains}" \\
         --geometry_mode "${geometryMode}" ${boltzStrictArgs} \\
         --ncpus ${task.cpus} \\
         2>&1 | tee alignment_batch.log
@@ -163,6 +179,7 @@ process BatchProtenixValidation {
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "predictions/*.pdb"
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "predictions/*.cif"
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "predictions/*.json"
+    publishDir "${params.out_dir}/pdb_files/aligned_error", mode: 'copy', pattern: "predictions/aligned_error/*.json"
     publishDir "${params.out_dir}/run/protenix", mode: 'copy', pattern: "*.log"
 
     input:
@@ -173,6 +190,7 @@ process BatchProtenixValidation {
     path "predictions/*.pdb", emit: pdbs
     path "predictions/*.json", emit: scores
     path "predictions/*.cif", emit: cifs, optional: true
+    path "predictions/aligned_error/*.json", emit: aligned_error, optional: true
     path "protenix_batch.log"
 
     script:
@@ -199,22 +217,12 @@ process BatchProtenixValidation {
         params.protenix_external_target_as_target == 'true' ||
         (params.protenix_external_target_as_target == null && params.target_pdb)
     )
-    def binderSourceChains = params.protenix_binder_source_chains ?: ''
-    def alignmentBinderChains = externalTargetAsTarget ? (binderSourceChains ?: 'A') : (params.antibody_chains ?: 'H,L')
-    def alignmentTargetChains = externalTargetAsTarget ? 'B' : (params.antigen_chains ?: 'T')
-    def normalizeGpuCsv = { raw ->
-        if (raw == null) return ''
-        if (raw instanceof Collection) {
-            return raw.collect { it?.toString()?.trim() }.findAll { it }.join(',')
-        }
-        def text = raw.toString().trim()
-        if (text.startsWith('[') && text.endsWith(']') && text.length() >= 2) {
-            text = text.substring(1, text.length() - 1)
-        }
-        return text
-    }
-    def msa_preferred_gpu_csv = normalizeGpuCsv(params.msa_preferred_gpus)
-    def msa_excluded_gpu_csv = normalizeGpuCsv(params.msa_excluded_gpus)
+    def explicitBinderSourceChains = params.protenix_binder_source_chains ?: ''
+    def defaultBinderChains = params.antibody_chains ?: params.binder_chains ?: ''
+    def fallbackAlignmentBinderChains = externalTargetAsTarget ? (defaultBinderChains ?: explicitBinderSourceChains ?: 'A') : (defaultBinderChains ?: 'H,L')
+    def fallbackAlignmentTargetChains = params.antigen_chains ?: params.target_chains ?: 'T'
+    def msa_preferred_gpu_csv = normalizeGpuCsvValue(params.msa_preferred_gpus)
+    def msa_excluded_gpu_csv = normalizeGpuCsvValue(params.msa_excluded_gpus)
     def msa_cpu_only_flag = (params.msa_use_gpu == false || params.msa_use_gpu == 'false') ? '--cpu-only' : ''
     def msa_allow_cpu_fallback_flag = msa_allow_cpu_fallback ? '--allow-cpu-fallback' : ''
     def msa_cache_only_flag = (params.msa_cache_only == true || params.msa_cache_only == 'true') ? '--cache-only' : ''
@@ -236,7 +244,7 @@ process BatchProtenixValidation {
 
     SHARED_PROTENIX_ROOT="${params.code_root}/.protenix_cache"
     if [ "${anchor_target}" = "true" ]; then
-        export PROTENIX_ROOT_DIR="$PWD/.protenix_anchor_root"
+        export PROTENIX_ROOT_DIR="\$PWD/.protenix_anchor_root"
         mkdir -p "\$PROTENIX_ROOT_DIR"
         if [ -d "\$SHARED_PROTENIX_ROOT/checkpoint" ] && [ ! -e "\$PROTENIX_ROOT_DIR/checkpoint" ]; then
             ln -s "\$SHARED_PROTENIX_ROOT/checkpoint" "\$PROTENIX_ROOT_DIR/checkpoint"
@@ -259,22 +267,54 @@ process BatchProtenixValidation {
     python3 ${params.code_root}/scripts/prep_protenix_batch.py \\
         --pdb_files ${pdbs} \\
         --out_json input.json \\
+        --chain_roles_json chain_roles.json \\
         --out_pdb_dir validation_designs \\
         --seeds "${seeds}" \\
         --target_pdb "${params.target_pdb}" \\
-        --target_chains "${params.antigen_chains ?: ''}" \\
+        --target_chains "${params.antigen_chains ?: params.target_chains ?: ''}" \\
         ${params.epitope_residues ? '--epitope_residues "' + params.epitope_residues + '"' : ''} \\
         --auto_pocket_if_missing \\
         --auto_pocket_max_residues ${params.protenix_auto_pocket_residue_count ?: 24} \\
         --pocket_max_distance ${params.protenix_pocket_max_distance ?: 8.0} \\
         ${externalTargetAsTarget ? '--external-target-as-target' : ''} \\
-        ${binderSourceChains ? '--binder_source_chains "' + binderSourceChains + '"' : ''} \\
+        ${explicitBinderSourceChains ? '--binder_source_chains "' + explicitBinderSourceChains + '"' : ''} \\
+        ${defaultBinderChains ? '--default_binder_chains "' + defaultBinderChains + '"' : ''} \\
         ${params.target_model_number ? '--target_model_number ' + params.target_model_number : ''}
 
+    if [ ! -s chain_roles.json ]; then
+        echo "[BatchProtenixValidation] ERROR: prep_protenix_batch.py did not emit chain role metadata" >&2
+        exit 1
+    fi
+
+    PROTENIX_BINDER_CHAINS="\$(python3 - <<'PY'
+import json
+from pathlib import Path
+payload = json.loads(Path('chain_roles.json').read_text())
+print(",".join(payload.get('all_binder_chain_ids') or []))
+PY
+)"
+    PROTENIX_TARGET_CHAINS="\$(python3 - <<'PY'
+import json
+from pathlib import Path
+payload = json.loads(Path('chain_roles.json').read_text())
+print(",".join(payload.get('all_target_chain_ids') or []))
+PY
+)"
+    if [ -z "\$PROTENIX_BINDER_CHAINS" ]; then
+        PROTENIX_BINDER_CHAINS="${fallbackAlignmentBinderChains}"
+    fi
+    if [ -z "\$PROTENIX_TARGET_CHAINS" ]; then
+        PROTENIX_TARGET_CHAINS="${fallbackAlignmentTargetChains}"
+    fi
+
     if [ "${anchor_target}" = "true" ]; then
+        if [ -z "\$PROTENIX_TARGET_CHAINS" ]; then
+            echo "[BatchProtenixValidation] ERROR: no resolved target chains available for anchored template extraction" >&2
+            exit 1
+        fi
         python3 ${params.code_root}/scripts/extract_target_templates.py \\
             --pdb_files validation_designs/*.pdb \\
-            --target_chains "${externalTargetAsTarget ? 'B' : (params.antigen_chains ?: 'T')}" \\
+            --target_chains "\$PROTENIX_TARGET_CHAINS" \\
             --out_dir "\$PROTENIX_ROOT_DIR/mmcif" \\
             --manifest target_template_manifest.json
         echo "[BatchProtenixValidation] Antibody validator mode: target-anchored co-fold. A task-local Protenix template DB was staged from the experimental target chains." | tee -a protenix_batch.log
@@ -304,7 +344,7 @@ process BatchProtenixValidation {
             --output_json prepared_input.json \\
             --out_dir msa_prepared \\
             --backend "${msa_backend}" \\
-            --binder-chain-ids "${alignmentBinderChains}" \\
+            --binder-chain-ids "\$PROTENIX_BINDER_CHAINS" \\
             --binder-max-unpaired-msa-rows ${params.protenix_binder_max_unpaired_msa_rows ?: 256} \\
             --binder-min-residue-coverage ${params.protenix_binder_min_residue_coverage ?: 0.5} \\
             --colabfold-api-host "${params.colabfold_api_host ?: 'https://api.colabfold.com'}" \\
@@ -354,8 +394,9 @@ process BatchProtenixValidation {
         --protenix_dir ./raw_predictions \\
         --output_dir predictions \\
         --design_type binder \\
-        --binder_chains "${alignmentBinderChains}" \\
-        --target_chains "${alignmentTargetChains}" \\
+        --binder_chains "\$PROTENIX_BINDER_CHAINS" \\
+        --target_chains "\$PROTENIX_TARGET_CHAINS" \\
+        --chain_roles_json chain_roles.json \\
         --geometry_mode "${geometryMode}" ${protenixStrictArgs} \\
         --ncpus ${task.cpus} \\
         2>&1 | tee alignment_protenix.log
@@ -384,6 +425,7 @@ process BatchImmunogenicity {
     # Run AntiBERTy on all PDBs at once
     python3 ${params.code_root}/scripts/batch_antiberty.py \\
         --pdb_files ${pdbs} \\
+        ${((params.antibody_chains ?: params.binder_chains) ? '--chain_ids "' + (params.antibody_chains ?: params.binder_chains) + '"' : '')} \\
         --out_csv immunogenicity_scores.csv
     """
 }

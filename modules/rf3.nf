@@ -1,3 +1,14 @@
+def formatFilterParams(params, paramPrefix, paramNames) {
+    return paramNames.collect { name ->
+        def paramValue = params["${paramPrefix}_${name}"]
+        if (paramValue != null) {
+            def cmdParam = name.replaceAll('_', '-')
+            return "--${paramPrefix}-${cmdParam} ${paramValue}"
+        }
+        return ""
+    }.findAll { value -> value != "" }.join(' ')
+}
+
 process RunRF3 {
     /*
      * Run RosettaFold3 for protein structure prediction.
@@ -77,7 +88,7 @@ process FilterRF3 {
 
     script:
     // Filter parameters similar to AF2/Boltz
-    def paramString = Utils.formatFilterParams(
+    def paramString = formatFilterParams(
         params,
         "rf3",
         [
@@ -99,4 +110,3 @@ process FilterRF3 {
         2>&1 | tee filter_rf3_${task.index}.log
     """
 }
-

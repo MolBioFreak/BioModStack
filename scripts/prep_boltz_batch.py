@@ -84,6 +84,7 @@ def main():
         # Already a list of files
         pdb_files = raw_input
     msa_abs_path = os.path.abspath(args.msa_path)
+    use_shared_msa = "NO_MSA" not in msa_abs_path
     target_chains = {token.strip() for token in (args.target_chains or '').split(',') if token.strip()}
     binder_chains = [token.strip() for token in (args.binder_chains or '').split(',') if token.strip()]
     epitope_contacts = []
@@ -144,9 +145,13 @@ def main():
                     "sequence": sequence
                 }
             }
-            if "NO_MSA" not in msa_abs_path and chain_id in shared_msa_chain_ids:
+            if use_shared_msa and chain_id in shared_msa_chain_ids:
                 entry["protein"]["msa"] = msa_abs_path
                 shared_msa_bound = True
+            elif not use_shared_msa:
+                # Be explicit about single-sequence mode so Boltz does not try
+                # to auto-generate MSAs for only a subset of chains.
+                entry["protein"]["msa"] = "empty"
             elif chain_id in target_chains:
                 entry["protein"]["msa"] = "empty"
 
@@ -164,7 +169,7 @@ def main():
             
             yaml_data["sequences"].append(entry)
 
-        if not shared_msa_bound and "NO_MSA" not in msa_abs_path and yaml_data["sequences"]:
+        if not shared_msa_bound and use_shared_msa and yaml_data["sequences"]:
             yaml_data["sequences"][0]["protein"]["msa"] = msa_abs_path
 
         if epitope_contacts and shared_msa_chain_ids:

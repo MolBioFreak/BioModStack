@@ -20,6 +20,7 @@ fed back into Protenix.
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import string
 from collections import OrderedDict
@@ -193,6 +194,67 @@ def _choose_target_aliases(
     return aliases
 
 
+def _ordered_unique(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        ordered.append(item)
+    return ordered
+
+
+def _best_sequence_similarity(sequence: str, candidates: list[str]) -> float:
+    best = 0.0
+    for candidate in candidates:
+        if not candidate:
+            continue
+        best = max(best, difflib.SequenceMatcher(a=sequence, b=candidate).ratio())
+    return best
+
+
+def _resolve_binder_source_chains(
+    source_chain_sequences: list[tuple[str, str]],
+    *,
+    explicit_binder_source_chains: list[str],
+    default_binder_chains: list[str],
+    external_target_sequences: list[tuple[str, str]],
+) -> list[str]:
+    source_chain_ids = [chain_id for chain_id, _sequence in source_chain_sequences]
+    if explicit_binder_source_chains:
+        resolved = [chain_id for chain_id in source_chain_ids if chain_id in explicit_binder_source_chains]
+        if not resolved:
+            raise ValueError(
+                f"Requested binder_source_chains {explicit_binder_source_chains} were not present; found {source_chain_ids}"
+            )
+        return resolved
+
+    if default_binder_chains:
+        resolved = [chain_id for chain_id in source_chain_ids if chain_id in default_binder_chains]
+        if resolved:
+            return resolved
+
+    target_sequences = [sequence for _chain_id, sequence in external_target_sequences if sequence]
+    target_like_chain_ids = [
+        chain_id
+        for chain_id, sequence in source_chain_sequences
+        if _best_sequence_similarity(sequence, target_sequences) >= 0.90
+    ]
+    if target_like_chain_ids:
+        resolved = [chain_id for chain_id in source_chain_ids if chain_id not in set(target_like_chain_ids)]
+        if resolved:
+            return resolved
+
+    if len(source_chain_ids) > len(external_target_sequences) + 1:
+        inferred_count = len(source_chain_ids) - len(external_target_sequences)
+        resolved = source_chain_ids[:max(1, inferred_count)]
+        if resolved:
+            return resolved
+
+    return source_chain_ids
+
+
 def write_reference_pdb(
     out_path: Path,
     *,
@@ -338,6 +400,24 @@ def build_entry(
     return entry
 
 
+def infer_internal_chain_roles(
+    chain_sequences: list[tuple[str, str]],
+    *,
+    default_binder_chains: list[str],
+    configured_target_chains: set[str],
+) -> tuple[list[str], list[str]]:
+    entry_chain_ids = [chain_id for chain_id, _sequence in chain_sequences]
+    target_chain_ids = [chain_id for chain_id in entry_chain_ids if chain_id in configured_target_chains]
+    binder_chain_ids = [chain_id for chain_id in entry_chain_ids if chain_id in default_binder_chains]
+
+    if not binder_chain_ids and target_chain_ids:
+        binder_chain_ids = [chain_id for chain_id in entry_chain_ids if chain_id not in target_chain_ids]
+    if not binder_chain_ids:
+        binder_chain_ids = list(entry_chain_ids)
+
+    return _ordered_unique(binder_chain_ids), _ordered_unique(target_chain_ids)
+
+
 def parse_seeds(raw: str) -> list[int]:
     seeds: list[int] = []
     for token in (raw or "").split(","):
@@ -367,10 +447,16 @@ def main() -> None:
         default="",
         help="Optional comma-separated chain IDs to take as binder chains from each source PDB when --external-target-as-target is enabled",
     )
+    parser.add_argument(
+        "--default_binder_chains",
+        default="",
+        help="Optional comma-separated binder chain IDs to use when explicit binder source chains are unavailable",
+    )
     parser.add_argument("--epitope_residues", default="", help="Optional comma-separated residues like B:12,B:15 for soft pocket constraints")
     parser.add_argument("--auto_pocket_if_missing", action="store_true", help="Infer target pocket residues when no epitope residues are supplied")
     parser.add_argument("--auto_pocket_max_residues", type=int, default=24, help="Maximum number of auto-inferred target pocket residues")
     parser.add_argument("--pocket_max_distance", type=float, default=8.0, help="Pocket constraint max distance in angstroms")
+    parser.add_argument("--chain_roles_json", default="", help="Optional output JSON describing resolved binder/target chain roles")
     args = parser.parse_args()
 
     pdb_files = [Path(path).expanduser().resolve() for path in args.pdb_files]
@@ -378,6 +464,7 @@ def main() -> None:
     target_pdb = Path(args.target_pdb).expanduser().resolve() if args.target_pdb else None
     target_chains = {token.strip() for token in args.target_chains.split(",") if token.strip()}
     binder_source_chains = [token.strip() for token in args.binder_source_chains.split(",") if token.strip()]
+    default_binder_chains = [token.strip() for token in args.default_binder_chains.split(",") if token.strip()]
     epitope_residues: list[tuple[str, int]] = []
     for token in args.epitope_residues.split(","):
         raw = token.strip()
@@ -408,6 +495,9 @@ def main() -> None:
     out_pdb_dir = Path(args.out_pdb_dir).expanduser().resolve() if args.out_pdb_dir else None
 
     entries = []
+    chain_role_entries = []
+    all_binder_chain_ids: list[str] = []
+    all_target_chain_ids: list[str] = []
     for pdb_path in pdb_files:
         if args.external_target_as_target:
             if target_pdb is None:
@@ -416,20 +506,6 @@ def main() -> None:
             if not source_chain_sequences:
                 raise ValueError(f"No amino-acid binder chains found in {pdb_path}")
             source_chain_ids = [chain_id for chain_id, _seq in source_chain_sequences]
-            if binder_source_chains:
-                binder_chain_ids = [chain_id for chain_id in source_chain_ids if chain_id in binder_source_chains]
-                if not binder_chain_ids:
-                    raise ValueError(
-                        f"Requested binder_source_chains {binder_source_chains} were not present in {pdb_path.name}; found {source_chain_ids}"
-                    )
-            else:
-                binder_chain_ids = [source_chain_ids[0]]
-            binder_sequences = [
-                (chain_id, sequence)
-                for chain_id, sequence in source_chain_sequences
-                if chain_id in binder_chain_ids
-            ]
-
             external_target_sequences = extract_chain_sequences(
                 target_pdb,
                 chain_filter=target_chains or None,
@@ -439,6 +515,17 @@ def main() -> None:
                 raise ValueError(
                     f"No external target chains found in {target_pdb} for chains={sorted(target_chains) if target_chains else 'ALL'}"
                 )
+            binder_chain_ids = _resolve_binder_source_chains(
+                source_chain_sequences,
+                explicit_binder_source_chains=binder_source_chains,
+                default_binder_chains=default_binder_chains,
+                external_target_sequences=external_target_sequences,
+            )
+            binder_sequences = [
+                (chain_id, sequence)
+                for chain_id, sequence in source_chain_sequences
+                if chain_id in binder_chain_ids
+            ]
             target_source_chain_ids = [chain_id for chain_id, _seq in external_target_sequences]
             target_alias_ids = _choose_target_aliases(
                 source_chain_ids=source_chain_ids,
@@ -451,8 +538,9 @@ def main() -> None:
                 for chain_id, sequence in external_target_sequences
             ]
             entry_sequences = binder_sequences + target_sequences
-            binder_chain_id = binder_sequences[0][0] if binder_sequences else None
-            target_chain_ids_for_entry = {alias for alias, _sequence in target_sequences}
+            binder_chain_ids_for_entry = [chain_id for chain_id, _sequence in binder_sequences]
+            binder_chain_id = binder_chain_ids_for_entry[0] if binder_chain_ids_for_entry else None
+            target_chain_ids_for_entry = [alias for alias, _sequence in target_sequences]
             mapped_epitope_residues = list(epitope_residues)
             if auto_source_epitope_residues:
                 mapped_epitope_residues = [
@@ -471,8 +559,12 @@ def main() -> None:
                 )
         else:
             entry_sequences = extract_chain_sequences(pdb_path, model_number=1)
-            binder_chain_id = entry_sequences[0][0] if entry_sequences else None
-            target_chain_ids_for_entry = target_chains or set()
+            binder_chain_ids_for_entry, target_chain_ids_for_entry = infer_internal_chain_roles(
+                entry_sequences,
+                default_binder_chains=default_binder_chains,
+                configured_target_chains=target_chains,
+            )
+            binder_chain_id = binder_chain_ids_for_entry[0] if binder_chain_ids_for_entry else (entry_sequences[0][0] if entry_sequences else None)
             mapped_epitope_residues = list(epitope_residues or auto_source_epitope_residues)
             if out_pdb_dir is not None:
                 out_pdb_dir.mkdir(parents=True, exist_ok=True)
@@ -486,16 +578,36 @@ def main() -> None:
                 seeds,
                 target_ion_counts=target_ion_counts,
                 binder_chain_id=binder_chain_id,
-                target_chain_ids=target_chain_ids_for_entry,
+                target_chain_ids=set(target_chain_ids_for_entry),
                 epitope_residues=mapped_epitope_residues,
                 pocket_max_distance=args.pocket_max_distance,
             )
         )
+        chain_role_entries.append(
+            {
+                "name": pdb_path.stem,
+                "binder_chain_ids": list(binder_chain_ids_for_entry),
+                "target_chain_ids": list(target_chain_ids_for_entry),
+            }
+        )
+        all_binder_chain_ids.extend(binder_chain_ids_for_entry)
+        all_target_chain_ids.extend(target_chain_ids_for_entry)
 
     out_path = Path(args.out_json).expanduser().resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w") as handle:
         json.dump(entries, handle, indent=2)
+
+    if args.chain_roles_json:
+        chain_roles_path = Path(args.chain_roles_json).expanduser().resolve()
+        chain_roles_path.parent.mkdir(parents=True, exist_ok=True)
+        chain_roles_payload = {
+            "entries": chain_role_entries,
+            "all_binder_chain_ids": _ordered_unique(all_binder_chain_ids),
+            "all_target_chain_ids": _ordered_unique(all_target_chain_ids),
+        }
+        with chain_roles_path.open("w") as handle:
+            json.dump(chain_roles_payload, handle, indent=2)
 
     ion_note = f" with ions {dict(target_ion_counts)}" if target_ion_counts else ""
     target_note = " using external target chains" if args.external_target_as_target else ""

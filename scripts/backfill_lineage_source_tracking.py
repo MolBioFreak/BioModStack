@@ -17,6 +17,13 @@ API_ROOT = REPO_ROOT / "platform" / "api"
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
+from antibody_pipeline_contract import (  # noqa: E402
+    ANTIBODY_PIPELINE_CONTRACT_VERSION,
+    infer_antibody_artifact_class_from_stage,
+    infer_selected_input_artifact_class,
+    normalize_antibody_artifact_class,
+    normalize_antibody_pipeline_contract_version,
+)
 from database import async_session, Job, Design  # noqa: E402
 
 
@@ -187,6 +194,26 @@ def _extract_job_source_fields(job: Job) -> Dict[str, Any]:
         or params.get("selected_loop_scope")
         or provenance.get("selected_loop_scope")
     )
+    selected_input_artifact_class = normalize_antibody_artifact_class(
+        getattr(job, "selected_input_artifact_class", None)
+        or params.get("selected_input_artifact_class")
+        or provenance.get("selected_input_artifact_class")
+        or manifest.get("selected_input_artifact_class")
+        or infer_selected_input_artifact_class(
+            selected_input_stage_family=source_stage_family,
+            selected_input_stage_mode=source_stage_mode,
+            rfantibody_input_pdbs=params.get("rfantibody_input_pdbs"),
+            fampnn_collected_pdbs=params.get("fampnn_collected_pdbs"),
+        )
+    )
+    selected_input_schema_version = normalize_antibody_pipeline_contract_version(
+        getattr(job, "selected_input_schema_version", None)
+        or params.get("selected_input_schema_version")
+        or provenance.get("selected_input_schema_version")
+        or manifest.get("selected_input_schema_version")
+    )
+    if selected_input_artifact_class and selected_input_schema_version is None:
+        selected_input_schema_version = ANTIBODY_PIPELINE_CONTRACT_VERSION
 
     return {
         "source_stage_job_id": source_stage_job_id,
@@ -194,6 +221,8 @@ def _extract_job_source_fields(job: Job) -> Dict[str, Any]:
         "source_stage_mode": source_stage_mode,
         "source_selection_manifest_path": manifest_path,
         "source_selection_count": selection_count,
+        "selected_input_artifact_class": selected_input_artifact_class,
+        "selected_input_schema_version": selected_input_schema_version,
         "selection_source_type": selection_source_type,
         "selection_source_job_id": selection_source_job_id,
         "selection_dataset_name": selection_dataset_name,
@@ -251,6 +280,20 @@ def _extract_design_source_fields(design: Design, job: Job, jobs_by_id: Dict[str
         _text(getattr(design, "origin_job_id", None))
         or _text(getattr(source_design, "job_id", None) if source_design else None)
     )
+    artifact_class = normalize_antibody_artifact_class(
+        getattr(design, "artifact_class", None)
+        or provenance.get("artifact_class")
+        or infer_antibody_artifact_class_from_stage(
+            getattr(design, "stage_family", None) or getattr(job, "stage_family", None),
+            getattr(design, "stage_mode", None) or getattr(job, "stage_mode", None),
+        )
+    )
+    artifact_schema_version = normalize_antibody_pipeline_contract_version(
+        getattr(design, "artifact_schema_version", None)
+        or provenance.get("artifact_schema_version")
+    )
+    if artifact_class and artifact_schema_version is None:
+        artifact_schema_version = ANTIBODY_PIPELINE_CONTRACT_VERSION
 
     return {
         "lineage_root_job_id": lineage_root_job_id,
@@ -260,6 +303,8 @@ def _extract_design_source_fields(design: Design, job: Job, jobs_by_id: Dict[str
         "source_stage_mode": source_stage_mode,
         "source_pdb_path": source_pdb_path,
         "source_design_name": source_design_name,
+        "artifact_class": artifact_class,
+        "artifact_schema_version": artifact_schema_version,
     }
 
 

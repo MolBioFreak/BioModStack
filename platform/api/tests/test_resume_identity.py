@@ -61,22 +61,23 @@ class DummyChild:
 
 
 def test_ensure_job_resume_identity_preserves_root_batch_name() -> None:
-    params = {
-        "parallel_mode": "full_orchestrator",
-        "resume_root_job_id": "root-job-123",
-    }
+    for mode in ("antibody_denovo_pipeline", "antibody_refinement_pipeline"):
+        params = {
+            "parallel_mode": "full_orchestrator",
+            "resume_root_job_id": "root-job-123",
+        }
 
-    normalized = _ensure_job_resume_identity(
-        job_name="RBX1 beta large",
-        job_id="new-job-456",
-        model_id="template_antibody_denovo",
-        mode="antibody_denovo_pipeline",
-        params=params,
-    )
+        normalized = _ensure_job_resume_identity(
+            job_name="RBX1 beta large",
+            job_id="new-job-456",
+            model_id="template_antibody_denovo",
+            mode=mode,
+            params=params,
+        )
 
-    assert normalized["job_name"] == "RBX1 beta large"
-    assert normalized["resume_root_job_id"] == "root-job-123"
-    assert normalized["batch_name"] == "RBX1 beta large_root-job-123"
+        assert normalized["job_name"] == "RBX1 beta large"
+        assert normalized["resume_root_job_id"] == "root-job-123"
+        assert normalized["batch_name"] == "RBX1 beta large_root-job-123"
 
 
 def test_dedupe_child_attempts_keeps_latest_attempt_per_slot() -> None:

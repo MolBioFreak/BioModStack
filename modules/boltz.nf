@@ -1,3 +1,14 @@
+def formatFilterParams(params, paramPrefix, paramNames) {
+    return paramNames.collect { name ->
+        def paramValue = params["${paramPrefix}_${name}"]
+        if (paramValue != null) {
+            def cmdParam = name.replaceAll('_', '-')
+            return "--${paramPrefix}-${cmdParam} ${paramValue}"
+        }
+        return ""
+    }.findAll { value -> value != "" }.join(' ')
+}
+
 process PrepBoltz {
     label 'pyrosetta_tools'
 
@@ -175,7 +186,7 @@ process FilterBoltz {
     path ("filtered.jsonl"), emit: jsonl, optional: true
 
     script:
-    def paramString = Utils.formatFilterParams(
+    def paramString = formatFilterParams(
         params,
         "boltz",
         [

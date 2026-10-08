@@ -89,11 +89,14 @@ class JobResponse(BaseModel):
     source_stage_mode: Optional[str] = None
     source_selection_manifest_path: Optional[str] = None
     source_selection_count: Optional[int] = None
+    selected_input_artifact_class: Optional[str] = None
+    selected_input_schema_version: Optional[int] = None
     selection_source_type: Optional[str] = None
     selection_source_job_id: Optional[str] = None
     selection_dataset_name: Optional[str] = None
     selected_loop_scope: Optional[dict] = None
     provenance: Optional[dict] = None
+    saved_selection_sets: Optional[List[dict]] = None
     # GPU assignment
     assigned_gpu: Optional[int] = None
     vram_estimate_mb: Optional[int] = None
@@ -183,6 +186,8 @@ class DesignResponse(BaseModel):
     source_stage_mode: Optional[str] = None
     source_pdb_path: Optional[str] = None
     source_design_name: Optional[str] = None
+    artifact_class: Optional[str] = None
+    artifact_schema_version: Optional[int] = None
     selected_loop_scope: Optional[Any] = None
     provenance: Optional[Any] = None
     
