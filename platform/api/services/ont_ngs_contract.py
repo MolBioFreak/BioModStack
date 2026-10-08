@@ -585,7 +585,8 @@ def validate_ont_operator_params(
         allowed.difference_update(key for key in definitions if key.startswith("bam_"))
     else:
         allowed.update({"bam_force_realign", "bam_min_mapq"})
-    if fastq:
+    qc_from_bam = canonical_id == "ont_plasmid_qc" and params.get("run_fastq_qc", True) is True
+    if fastq or qc_from_bam:
         fastq_mode = next(mode for mode in model.modes if mode.id == "fastq_qc")
         allowed.update(fastq_mode.params)
         allowed.add("expected_plasmid_size")
@@ -653,6 +654,27 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     spec = get_ont_workflow_spec(canonical_id)
     normalized: dict[str, Any] = dict(WORKFLOW_DEFAULTS.get(canonical_id, {}))
     normalized.update(dict(params or {}))
+    # Read effective defaults from the global parameter owner, not emitter Elvis
+    # fallbacks. Only active stage/input controls are expanded here.
+    from model_registry import get_registry
+    model = get_registry().get_model("nanopore")
+    if model is None:
+        raise ValueError("nanopore global parameter registry is unavailable")
+    default_keys = set()
+    if normalized.get("pod5_dir"):
+        default_keys.update({"trim_adapters", "emit_summary"})
+    if normalized.get("bam_path"):
+        default_keys.update({"bam_force_realign", "bam_min_mapq"})
+    if normalized.get("fastq_path") or (canonical_id == "ont_plasmid_qc" and normalized.get("run_fastq_qc") is True):
+        default_keys.update({"expected_plasmid_size", "min_fastq_read_length",
+                             "fastq_minimap2_preset", "fastq_minimap2_allow_secondary"})
+    if canonical_id in {"ont_plasmid_qc", "ont_construct_screening", "ont_fastq_qc", "wf_clone_validation"}:
+        default_keys.update({"igv_track_window_bp", "igv_report_max_sites", "igv_report_flanking_bp"})
+    if normalized.get("run_modkit") is True:
+        default_keys.add("modkit_filter_threshold")
+    for definition in model.params:
+        if definition.name in default_keys and definition.default is not None:
+            normalized.setdefault(definition.name, definition.default)
 
     if canonical_id == "ont_fastq_qc":
         validate_ont_fixed_stages(canonical_id, normalized)
@@ -687,6 +709,8 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
                 }
             ):
                 normalized.pop(key, None)
+        from services.ont_ngs_native_settings import validate_launch_settings
+        validate_launch_settings(normalized)
         return normalized
 
     lock_bytes = DORADO_LOCK_PATH.read_bytes()
@@ -837,4 +861,6 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
         normalized["single_ref_split_min_segment_bp"] = dimer_int("single_ref_split_min_segment_bp", 250, 1, 1_000_000)
         normalized["single_ref_split_max_query_gap_bp"] = dimer_int("single_ref_split_max_query_gap_bp", 500, 0, 1_000_000)
 
+    from services.ont_ngs_native_settings import validate_launch_settings
+    validate_launch_settings(normalized)
     return normalized

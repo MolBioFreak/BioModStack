@@ -290,18 +290,34 @@ async def test_actual_submit_binds_only_server_consumed_receipt(monkeypatch) -> 
         return receipt
 
     def build(_workflow, request):
+        from schemas import JobCreate
         seen["submitted"] = request.params
-        return SimpleNamespace(params={})
+        return JobCreate(name="reviewed", model_id="nanopore", mode="fastq_qc", params=dict(request.params))
 
-    async def create(_job, *_args):
+    async def create(_job, *_args, **_kwargs):
         return SimpleNamespace(id="job-1")
+
+    async def validate(_session, *, receipt_id):
+        return receipt
+
+    async def molecular(_receipt):
+        return {"topology": "circular"}
+
+    from services import molbio_ngs_receipts
+    monkeypatch.setattr(molbio_ngs_receipts, "resolve_molbio_receipt_reference", molecular)
+    monkeypatch.setattr(ont_runs, "validate_molbio_ngs_receipt", validate)
 
     monkeypatch.setattr(ont_runs, "consume_molbio_ngs_receipt", consume)
     monkeypatch.setattr(ont_runs, "_job_create_for_ont_submit", build)
     monkeypatch.setattr(ont_runs, "_create_pipeline_job", create)
     session = SimpleNamespace(commit=lambda: _async_none(), flush=lambda: _async_none())
+    request = ont_runs.OntNgsSubmitRequest(params={"fastq_path": "/inputs/reads.fastq", "molbio_ngs_receipt_id": "receipt-1"})
+    preview = await ont_runs.ont_preview_ngs_workflow(
+        "ont_fastq_qc", request, SimpleNamespace(), SimpleNamespace(), Response(), session,
+    )
+    assert "receipt_id" not in seen
     result = await ont_runs.ont_submit_ngs_workflow(
-        "ont_fastq_qc", ont_runs.OntNgsSubmitRequest(params={"molbio_ngs_receipt_id": "receipt-1", "molbio_sequence_id": ""}),
+        "ont_fastq_qc", request.model_copy(update={"preview_digest": preview["preview_digest"]}),
         SimpleNamespace(), SimpleNamespace(), Response(), session,
     )
     assert result.id == "job-1"

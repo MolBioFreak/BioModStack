@@ -8,7 +8,7 @@
  */
 
 import { readNanoporeNativeCloneBinding } from '../lib/nanoporeCloneState';
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { rotateAlignmentAccess } from '../lib/ngsAlignmentSession';
 import { useNavigate } from 'react-router-dom';
@@ -25,6 +25,10 @@ import {
     issueMolBioNgsReceipt,
     previewMolBioSequenceImport,
     submitOntNgsJob,
+    previewOntNgsJob,
+    fetchOntNgsSettingsContract,
+    type OntNgsSubmitRequest,
+    type OntNgsLaunchPreview,
     fetchJobs,
     restorePooledReferenceSet,
     submitPooledReferenceAssignment,
@@ -882,6 +886,21 @@ function NanoporeLaunchForm({ onBack, initialValues }: NanoporeTemplateProps) {
     // State: Core Configuration
     // ============================================================================
     const [jobName, setJobName] = useState(initialValues?.jobName as string || '');
+    const previewEpoch = useRef(0);
+    const [launchPreview, setLaunchPreview] = useState<{
+        workflowId: string; request: OntNgsSubmitRequest; preview: OntNgsLaunchPreview; epoch: number;
+    } | null>(null);
+    const invalidateLaunchPreview = () => {
+        previewEpoch.current += 1;
+        setLaunchPreview(null);
+    };
+    const settingsContract = useQuery({
+        queryKey: ['ont-ngs-settings-contract'],
+        queryFn: async () => (await fetchOntNgsSettingsContract()).data,
+        retry: false,
+    });
+    const fixedCloneModel = settingsContract.data?.profile_fixed.wf_clone_basecaller_model;
+    const savedCloneModel = initialValues?.wfCloneBasecallerModel as string | undefined;
     const carriedReferencePath = initialValues?.genericHandoffParams && typeof initialValues.referenceFasta === 'string' ? initialValues.referenceFasta : '';
     const [carriedReferenceImported, setCarriedReferenceImported] = useState(false);
     const carriedReferencePending = Boolean(carriedReferencePath && !carriedReferenceImported);
@@ -1248,6 +1267,7 @@ function NanoporeLaunchForm({ onBack, initialValues }: NanoporeTemplateProps) {
         || ((selectedWorkflow === 'clone' || selectedWorkflow === 'constructScreening') && inputSource === 'fastq');
     const cloneValidationControlsActive = selectedWorkflow === 'clone'
         || (selectedWorkflow === 'constructScreening' && runAssembly);
+    const qcControlsActive = fastqQcSettingAvailable && (selectedWorkflow === 'fastqQc' || runFastqQc);
     const reviewInputReady = inputSource === 'pod5'
         ? Boolean(pod5Dir.trim())
         : inputSource === 'bam'
@@ -1272,11 +1292,17 @@ function NanoporeLaunchForm({ onBack, initialValues }: NanoporeTemplateProps) {
         if (inputSource === 'fastq' && !['clone', 'plasmidQc', 'constructScreening', 'fastqQc', 'pooledAssignment'].includes(selectedWorkflow)) blockers.push('The selected workflow does not accept FASTQ input.');
         if (molbioRevisionPairError) blockers.push(molbioRevisionPairError);
         if (managedReferenceBlocker) blockers.push(managedReferenceBlocker);
-        if (inputSource === 'fastq' && !hasValidFastqNumericControls) blockers.push('FASTQ QC numeric controls must be finite integers within the displayed bounds.');
+        if ((inputSource === 'fastq' || qcControlsActive) && !hasValidFastqNumericControls) blockers.push('QC numeric controls must be finite integers within the displayed bounds.');
+        if (cloneValidationControlsActive && (!fixedCloneModel || (savedCloneModel && savedCloneModel !== fixedCloneModel.value))) blockers.push('The exact profile-fixed clone model is unavailable or differs from the saved model.');
         return [...new Set(blockers)];
     };
     const submissionBlockers = getSubmissionBlockers();
     const canSubmit = submissionBlockers.length === 0;
+    useEffect(() => {
+        previewEpoch.current += 1;
+        setLaunchPreview(null);
+    }, [exactDomainExperimentId, exactStateRevisionId, selectedManagedReference?.revision.id,
+        selectedMolbioSequenceId, selectedMolbioRevisionId, fixedCloneModel?.value]);
     const reviewBlocker = submissionBlockers[0] ?? null;
     const selectedLegacyReference = useMemo(
         () => legacyReferenceHints.find((entry) => entry.id === selectedLegacyReferenceId) ?? null,
@@ -1374,6 +1400,7 @@ function NanoporeLaunchForm({ onBack, initialValues }: NanoporeTemplateProps) {
     // ============================================================================
     const submitMutation = useMutation({
         mutationFn: async () => {
+            const epoch = previewEpoch.current;
             let molbioNgsReceiptId = '';
             let comparisonPanelReceiptId = '';
 
@@ -1423,6 +1450,9 @@ function NanoporeLaunchForm({ onBack, initialValues }: NanoporeTemplateProps) {
                         : selectedWorkflow === 'modified'
                             ? 'ont_methylation_analysis'
                             : 'ont_basecall_dna';
+            if (cloneValidationControlsActive && (!fixedCloneModel || (savedCloneModel && savedCloneModel !== fixedCloneModel.value))) {
+                throw new Error('The exact profile-fixed clone model is unavailable or differs from the saved model. No replacement was selected.');
+            }
             const jobPayload = {
                 name: jobName || `nanopore_${Date.now()}`,
                 pinned_gpu: inputSource !== 'fastq' && pinnedGpus.length === 1 ? pinnedGpus[0] : null,
@@ -1456,8 +1486,8 @@ function NanoporeLaunchForm({ onBack, initialValues }: NanoporeTemplateProps) {
                         bam_force_realign: bamForceRealign,
                         bam_min_mapq: bamMinMapq,
                     }),
-                    ...(inputSource === 'fastq' && {
-                        fastq_path: fastqPath,
+                    ...(inputSource === 'fastq' && { fastq_path: fastqPath }),
+                    ...((inputSource === 'fastq' || qcControlsActive) && {
                         expected_plasmid_size: expectedPlasmidSize,
                         min_fastq_read_length: minFastqReadLength,
                         fastq_minimap2_preset: fastqMinimap2Preset,
@@ -1468,6 +1498,7 @@ function NanoporeLaunchForm({ onBack, initialValues }: NanoporeTemplateProps) {
                     }),
                     ...((selectedWorkflow === 'clone' || (selectedWorkflow === 'constructScreening' && runAssembly)) && {
                         ...Object.fromEntries(Object.entries(cloneAuxiliaryPaths).filter(([, value]) => value !== '')),
+                        wf_clone_basecaller_model: savedCloneModel ?? fixedCloneModel?.value,
                         wf_clone_assembly_tool: assemblyTool,
                         wf_clone_approx_size: assemblyApproxSize,
                         wf_clone_assm_coverage: assemblyCoverage,
@@ -1492,6 +1523,10 @@ function NanoporeLaunchForm({ onBack, initialValues }: NanoporeTemplateProps) {
                     }),
                     ...(runModkit && canRunModkit && modkitFilterThreshold != null && { modkit_filter_threshold: modkitFilterThreshold }),
                 },
+                experiment_context: {
+                    global_domain_experiment_id: exactDomainExperimentId as string,
+                    molbio_ngs_state_revision_id: exactStateRevisionId as string,
+                },
                 ...(usesReference && !molbioNgsReceiptId && exactDomainExperimentId && exactStateRevisionId && selectedManagedReference && {
                     managed_reference: {
                         global_domain_experiment_id: exactDomainExperimentId,
@@ -1500,7 +1535,20 @@ function NanoporeLaunchForm({ onBack, initialValues }: NanoporeTemplateProps) {
                     },
                 }),
             };
-            return submitOntNgsJob(workflowId, jobPayload);
+            const preview = (await previewOntNgsJob(workflowId, jobPayload)).data;
+            return { workflowId, request: jobPayload, preview, epoch };
+        },
+        onSuccess: (compiled) => {
+            if (compiled.epoch === previewEpoch.current) setLaunchPreview(compiled);
+        },
+        onError: (err: unknown) => { setError(extractApiErrorMessage(err)); },
+    });
+    const confirmLaunchMutation = useMutation({
+        mutationFn: async () => {
+            if (!launchPreview || launchPreview.epoch !== previewEpoch.current) throw new Error('Review a fresh launch preview.');
+            return submitOntNgsJob(launchPreview.workflowId, {
+                ...launchPreview.request, preview_digest: launchPreview.preview.preview_digest,
+            });
         },
         onSuccess: (response) => {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
@@ -1675,7 +1723,9 @@ function NanoporeLaunchForm({ onBack, initialValues }: NanoporeTemplateProps) {
     // Render
     // ============================================================================
     return (
-        <div className="nanopore-template mx-auto max-w-[1480px] space-y-6 rounded-2xl border border-[var(--border-primary)] bg-[color-mix(in_srgb,var(--bg-secondary)_25%,#000)] p-4 shadow-[0_28px_90px_rgba(0,0,0,0.38)] lg:p-6">
+        <div onChangeCapture={invalidateLaunchPreview} onClickCapture={(event) => {
+            if (!(event.target as HTMLElement).closest('[data-launch-preview]')) invalidateLaunchPreview();
+        }} className="nanopore-template mx-auto max-w-[1480px] space-y-6 rounded-2xl border border-[var(--border-primary)] bg-[color-mix(in_srgb,var(--bg-secondary)_25%,#000)] p-4 shadow-[0_28px_90px_rgba(0,0,0,0.38)] lg:p-6">
             {/* Header */}
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -2254,7 +2304,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                     </label>
                 )}
 
-                {inputSource === 'fastq' && (selectedWorkflow === 'fastqQc' || runFastqQc) && (
+                {qcControlsActive && (
                     <div className="space-y-3 border-t border-[var(--border-primary)] pt-3">
                         <div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">FASTQ QC core controls</div>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -2431,7 +2481,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                 </div>
                             </div>
                         )}
-                        {inputSource === 'fastq' && (selectedWorkflow === 'fastqQc' || runFastqQc) && (
+                        {qcControlsActive && (
                             <div className="space-y-3 border-t border-[var(--border-primary)] pt-3">
                                 <div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">IGV track/report tuning</div>
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -2486,7 +2536,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                 </div>
                             </div>
                         )}
-                        {(selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'bamQc') && (
+                        {(qcControlsActive || selectedWorkflow === 'clone') && (
                             <div className="space-y-3 border-t border-[var(--border-primary)] pt-3">
                                 <div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Plasmid dimer QC</div>
                                 <label className="flex items-center gap-2 cursor-pointer">
@@ -2509,9 +2559,15 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                 </div>
                             </div>
                         )}
-                        {runAssembly && !barcodeKit && (
+                        {cloneValidationControlsActive && !barcodeKit && (
                             <div className="space-y-3 border-t border-[var(--border-primary)] pt-3">
                                 <div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">wf-clone-validation</div>
+                                <label className="block text-xs text-[var(--text-secondary)]">
+                                    Profile-fixed basecaller model
+                                    <input readOnly value={savedCloneModel ?? fixedCloneModel?.value ?? ''} className="mt-1 w-full rounded border bg-[var(--bg-tertiary)] p-2" />
+                                    <span>{fixedCloneModel?.reason ?? 'Loading the server-owned profile; launch is blocked until it is available.'}</span>
+                                    {savedCloneModel && fixedCloneModel && savedCloneModel !== fixedCloneModel.value && <span role="alert">Saved model differs from the active profile. Exact reuse is blocked.</span>}
+                                </label>
                                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
                                     {CLONE_AUXILIARY_FILES.map(({ field, label }) => (
                                         <div key={field} data-testid={field} className="text-xs text-[var(--text-secondary)]">
@@ -2654,17 +2710,31 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                         <button
                             type="button"
                             onClick={handleSubmit}
-                            disabled={!canSubmit || submitMutation.isPending}
+                            disabled={!canSubmit || submitMutation.isPending || confirmLaunchMutation.isPending}
                             title={reviewBlocker || undefined}
                             className={`rounded-lg px-4 py-2 text-xs font-semibold transition-all ${canSubmit && !submitMutation.isPending ? 'text-[var(--text-primary)] shadow-lg' : 'cursor-not-allowed bg-[var(--bg-secondary)] text-[var(--text-secondary)]'}`}
                             style={canSubmit && !submitMutation.isPending ? { backgroundColor: 'var(--accent-secondary)', boxShadow: '0 10px 20px color-mix(in srgb, var(--accent-secondary) 30%, transparent)' } : undefined}
                         >
-                            {submitMutation.isPending ? 'Submitting…' : 'Review and submit'}
+                            {submitMutation.isPending ? 'Compiling preview…' : 'Review and submit'}
                         </button>
                     )}
                 </div>
             </div>
 
+            {launchPreview && (
+                <section data-launch-preview role="region" aria-label="Compiled launch review" className="space-y-3 rounded-lg border p-4">
+                    <h3 className="font-semibold">Server-compiled effective request</h3>
+                    <p className="break-all text-xs">Preview digest: {launchPreview.preview.preview_digest}</p>
+                    <p className="text-xs">Review the resolved settings below. Editing any control discards this preview. Runtime snapshot paths and physical placement are server-owned.</p>
+                    {launchPreview.preview.blockers.map((item) => <p role="alert" key={item}>{item}</p>)}
+                    {launchPreview.preview.warnings.map((item) => <p key={item}>{item}</p>)}
+                    <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(launchPreview.preview.effective_request, null, 2)}</pre>
+                    <button type="button" disabled={confirmLaunchMutation.isPending || launchPreview.preview.blockers.length > 0} onClick={() => confirmLaunchMutation.mutate()} className="rounded bg-blue-600 px-4 py-2 text-white disabled:opacity-40">
+                        {confirmLaunchMutation.isPending ? 'Submitting reviewed request…' : 'Confirm reviewed launch'}
+                    </button>
+                    <button type="button" disabled={confirmLaunchMutation.isPending} onClick={invalidateLaunchPreview} className="ml-3 rounded border px-4 py-2">Discard preview</button>
+                </section>
+            )}
             {/* Error Display */}
             {error && (
                 <div role="alert" className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-sm text-red-400">

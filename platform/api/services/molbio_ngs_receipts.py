@@ -130,6 +130,41 @@ async def validate_molbio_ngs_receipt(
     return receipt
 
 
+async def resolve_molbio_receipt_reference(receipt: MolBioNgsReceipt) -> dict[str, Any]:
+    """Resolve topology from the immutable revision, never the mutable sequence.
+
+    Receipt liveness is an admission concern. Reopen uses the same exact revision
+    after consumption/expiry and independently checks the consumed job owner.
+    """
+    import rfc8785
+    from molbio_database import molbio_session
+    from molbio_models import MolecularRevision
+
+    async with molbio_session() as molecular:
+        revision = await molecular.get(MolecularRevision, receipt.revision_id)
+        if revision is None or revision.document_id != receipt.sequence_id:
+            raise ValueError("molecular receipt revision ownership mismatch")
+        sequence = _snapshot_sequence(revision)
+        if revision.content_sha256 != receipt.revision_sha256:
+            raise ValueError("molecular receipt revision digest mismatch")
+        circular = revision.snapshot.get("is_circular")
+        if type(circular) is not bool:
+            raise ValueError("immutable molecular revision has no exact topology")
+        fasta = f">molbio_revision_{revision.id}\n{sequence}\n".encode("ascii")
+        if hashlib.sha256(fasta).hexdigest() != receipt.reference_snapshot_sha256:
+            raise ValueError("molecular receipt FASTA does not match its immutable revision")
+        return {
+            "schema": "bms.ngs.molecular-reference.v1",
+            "sequence_id": receipt.sequence_id, "revision_id": revision.id,
+            "receipt_id": receipt.id,
+            "revision_snapshot_sha256": hashlib.sha256(rfc8785.dumps(revision.snapshot)).hexdigest(),
+            "normalized_sequence_sha256": hashlib.sha256(sequence.upper().encode("ascii")).hexdigest(),
+            "topology": "circular" if circular else "linear",
+            "fasta_sha256": receipt.reference_snapshot_sha256,
+            "fasta_size_bytes": len(fasta),
+        }
+
+
 async def consume_molbio_ngs_receipt(session: AsyncSession, *, receipt_id: str) -> MolBioNgsReceipt:
     await validate_molbio_ngs_receipt(session, receipt_id=receipt_id)
     now = datetime.utcnow()

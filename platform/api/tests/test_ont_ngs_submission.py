@@ -23,6 +23,17 @@ import routers.jobs as jobs_router  # noqa: E402
 from schemas import JobResponse, JobStatus  # noqa: E402
 
 
+def _post_with_preview(client, url, **kwargs):
+    """Exercise the public two-step protocol for existing launch regressions."""
+    if "/ngs/" in url and url.endswith("/submit") and "pooled-reference-assignment" not in url:
+        payload = kwargs.get("json", {})
+        preview = client.post(url.removesuffix("/submit") + "/preview", json=payload)
+        if preview.status_code != 200:
+            return preview
+        kwargs["json"] = {**payload, "preview_digest": preview.json()["preview_digest"]}
+    return client.post(url, **kwargs)
+
+
 def _client_with_fake_create(monkeypatch, captured: dict[str, Any]) -> TestClient:
     app = FastAPI()
     app.include_router(ont_runs.router, prefix="/api/ont")
@@ -68,7 +79,170 @@ def _client_with_fake_create(monkeypatch, captured: dict[str, Any]) -> TestClien
 
     monkeypatch.setattr(ont_runs, "_create_pipeline_job", fake_create_pipeline_job)
     monkeypatch.setattr(ont_runs, "_confine_submitted_path", lambda value, _label, **_kwargs: str(value))
+    from services import molbio_ngs_receipts, ont_ngs_launch_admission
+
+    async def fake_molecular_reference(receipt):
+        return {"topology": "circular", "receipt_id": receipt.id}
+
+    monkeypatch.setattr(molbio_ngs_receipts, "resolve_molbio_receipt_reference", fake_molecular_reference)
+    monkeypatch.setattr(ont_ngs_launch_admission, "validate_bam_reference_admission", lambda params: None)
     return TestClient(app)
+
+
+@pytest.mark.asyncio
+async def test_prepared_preview_reuses_global_authority_and_binds_receipt_before_commit(monkeypatch):
+    from fastapi import BackgroundTasks, Response
+    from services.global_experiments import launch_contexts
+    captured = {}
+    _client_with_fake_create(monkeypatch, captured)
+    receipt = SimpleNamespace(id="receipt", sequence_id="seq", revision_id="rev", revision_sha256="a" * 64,
+        reference_snapshot_path="/server/ref.fasta", reference_snapshot_sha256="b" * 64,
+        consumed_at=None, consumed_job_id=None)
+    calls = []
+
+    async def validate_receipt(_session, **_kwargs):
+        return receipt
+
+    async def consume(_session, **_kwargs):
+        calls.append("consume")
+        return receipt
+
+    async def resolve(_session, _context_id):
+        return SimpleNamespace(run_attempt_id="attempt")
+
+    async def global_compile(_session, _context, **kwargs):
+        calls.append("global_compile")
+        return {**kwargs["params"], "global_test_resource_authority": {"job": "reserved-job"}}
+
+    async def create(job, *_args, **kwargs):
+        assert kwargs["commit"] is True
+        assert receipt.consumed_job_id == "reserved-job"
+        assert "global_test_resource_authority" not in job.params
+        calls.append("create")
+        return SimpleNamespace(id="reserved-job")
+
+    class Session:
+        async def get(self, *_args):
+            return SimpleNamespace(scheduler_job_id="reserved-job")
+        async def commit(self): pass
+        async def rollback(self): pass
+
+    monkeypatch.setattr(ont_runs, "validate_molbio_ngs_receipt", validate_receipt)
+    monkeypatch.setattr(ont_runs, "consume_molbio_ngs_receipt", consume)
+    monkeypatch.setattr(ont_runs, "_create_pipeline_job", create)
+    monkeypatch.setattr(launch_contexts, "resolve_launch_context", resolve)
+    monkeypatch.setattr(launch_contexts, "validate_bound_job_request", global_compile)
+    request = ont_runs.OntNgsSubmitRequest(params={"pod5_dir": "/data/pod5", "molbio_ngs_receipt_id": "receipt"})
+    token = ont_runs.current_launch_context_id.set("prepared-context")
+    try:
+        session = Session()
+        preview = await ont_runs.ont_preview_ngs_workflow("ont_basecall_dna", request,
+            BackgroundTasks(), SimpleNamespace(), Response(), session, session, session)
+        assert calls == ["global_compile"]
+        assert preview["prepared_job_id"] == "reserved-job"
+        assert preview["effective_request"]["params"]["global_test_resource_authority"] == {"job": "reserved-job"}
+        await ont_runs.ont_submit_ngs_workflow("ont_basecall_dna",
+            request.model_copy(update={"preview_digest": preview["preview_digest"]}),
+            BackgroundTasks(), SimpleNamespace(), Response(), session, session, session)
+        assert calls == ["global_compile", "global_compile", "consume", "create"]
+    finally:
+        ont_runs.current_launch_context_id.reset(token)
+
+
+@pytest.mark.parametrize("with_receipt", [False, True])
+def test_compiled_preview_preserves_independent_context_and_binds_mutation(monkeypatch, with_receipt):
+    captured = {}
+    client = _client_with_fake_create(monkeypatch, captured)
+    context_calls, consumed = [], []
+
+    async def context(_session, **kwargs):
+        context_calls.append(kwargs)
+        return {}
+
+    receipt = SimpleNamespace(id="native-receipt", sequence_id="seq", revision_id="rev",
+        revision_sha256="a" * 64, reference_snapshot_sha256="b" * 64,
+        reference_snapshot_path="/data/reference.fa", consumed_at=None, consumed_job_id=None)
+
+    async def validate(_session, **kwargs):
+        return receipt
+
+    async def consume(_session, **kwargs):
+        consumed.append(kwargs)
+        return receipt
+
+    monkeypatch.setattr(ont_runs, "resolve_state_analysis_context", context)
+    monkeypatch.setattr(ont_runs, "validate_molbio_ngs_receipt", validate)
+    monkeypatch.setattr(ont_runs, "consume_molbio_ngs_receipt", consume)
+    url = "/api/ont/ngs/ont_basecall_dna"
+    payload = {"name": "reviewed", "params": {"pod5_dir": "/data/pod5", "min_qscore": 11},
+        "experiment_context": {"global_domain_experiment_id": "domain", "molbio_ngs_state_revision_id": "state"}}
+    if with_receipt:
+        payload["params"]["molbio_ngs_receipt_id"] = receipt.id
+    preview = client.post(url + "/preview", json=payload)
+    assert preview.status_code == 200, preview.text
+    assert not captured and not consumed
+    effective = preview.json()["effective_request"]["params"]
+    assert effective["global_domain_experiment_id"] == "domain"
+    assert effective["molbio_ngs_state_revision_id"] == "state"
+    assert context_calls[0]["canonical_workflow_id"] == "ont_basecall_dna"
+    if not with_receipt:
+        assert "reference_fasta" not in effective
+    digest = preview.json()["preview_digest"]
+    changed = {**payload, "params": {**payload["params"], "min_qscore": 12}, "preview_digest": digest}
+    assert client.post(url + "/submit", json=changed).status_code == 409
+    assert not captured and not consumed
+    missing = client.post(url + "/submit", json=payload)
+    assert missing.status_code == 409
+    assert not captured and not consumed
+    accepted = client.post(url + "/submit", json={**payload, "preview_digest": digest})
+    assert accepted.status_code == 201, accepted.text
+    assert captured["job_data"].params["ont_launch_receipt"]["preview_digest"] == digest
+    assert len(consumed) == int(with_receipt)
+
+
+def test_context_and_managed_reference_cannot_cross_bind():
+    with pytest.raises(ValueError, match="same exact state"):
+        ont_runs.OntNgsSubmitRequest(params={},
+            experiment_context={"global_domain_experiment_id": "d", "molbio_ngs_state_revision_id": "s1"},
+            managed_reference={"global_domain_experiment_id": "d", "molbio_ngs_state_revision_id": "s2", "ngs_reference_revision_id": "r"})
+
+
+@pytest.mark.parametrize("m5,realign,workflow,accepted", [
+    (True, False, "ont_plasmid_qc", True),
+    (False, False, "ont_plasmid_qc", False),
+    (False, True, "ont_plasmid_qc", True),
+    (False, True, "wf_clone_validation", True),
+    (False, False, "ont_methylation_analysis", False),
+    (False, True, "ont_methylation_analysis", False),
+])
+def test_real_bam_prequeue_reference_proof_and_explicit_alternative(tmp_path, m5, realign, workflow, accepted):
+    import hashlib
+    import pysam
+    from services.ont_ngs_launch_admission import validate_bam_reference_admission
+    reference = tmp_path / "ref.fasta"
+    reference.write_text(">ref\nACGTACGT\n")
+    sq = {"SN": "ref", "LN": 8}
+    if m5:
+        sq["M5"] = hashlib.md5(b"ACGTACGT", usedforsecurity=False).hexdigest()
+    bam_path = tmp_path / "input.bam"
+    with pysam.AlignmentFile(str(bam_path), "wb", header={"HD": {"VN": "1.6"}, "SQ": [sq]}) as bam:
+        read = pysam.AlignedSegment(bam.header)
+        read.query_name = "read1"
+        read.query_sequence = "ACGT"
+        read.flag = 0
+        read.reference_id = 0
+        read.reference_start = 0
+        read.mapping_quality = 60
+        read.cigarstring = "4M"
+        bam.write(read)
+    params = {"bam_path": str(bam_path), "reference_fasta": str(reference),
+        "bam_force_realign": realign, "ont_workflow_id": workflow}
+    if accepted:
+        validate_bam_reference_admission(params)
+    else:
+        with pytest.raises(ValueError, match="M5|realignment"):
+            validate_bam_reference_admission(params)
+    assert "bam_source_sha256" not in params and "bam_reference_sha256" not in params
 
 
 @pytest.mark.parametrize("qc_params", [{"run_fastq_qc": False}, {"run_fastq_qc": True}, {}])
@@ -92,7 +266,7 @@ def test_named_fastq_qc_rejects_disabled_qc_before_receipt_consumption(monkeypat
 
     monkeypatch.setattr(ont_runs, "validate_molbio_ngs_receipt", validate)
     monkeypatch.setattr(ont_runs, "consume_molbio_ngs_receipt", consume)
-    response = client.post("/api/ont/ngs/ont_fastq_qc/submit", json={
+    response = _post_with_preview(client, "/api/ont/ngs/ont_fastq_qc/submit", json={
         "name": "disabled-named-qc",
         "params": {"fastq_path": "/data/reads.fastq", "molbio_ngs_receipt_id": "receipt-qc", **qc_params},
     })
@@ -157,7 +331,7 @@ def test_reference_independent_contract_rejected_before_authority(monkeypatch, a
             "global_domain_experiment_id": "experiment", "molbio_ngs_state_revision_id": "state",
             "ngs_reference_revision_id": "reference",
         }
-    response = client.post(f"/api/ont/ngs/{workflow_id}/submit", json=payload)
+    response = _post_with_preview(client, f"/api/ont/ngs/{workflow_id}/submit", json=payload)
     assert response.status_code == 422, response.text
     assert error in response.text
     assert captured == {}
@@ -188,11 +362,11 @@ def test_reference_independent_contract_preserves_valid_barcoding_and_placeholde
 
     monkeypatch.setattr(ont_runs, "validate_molbio_ngs_receipt", validate)
     monkeypatch.setattr(ont_runs, "consume_molbio_ngs_receipt", consume)
-    response = client.post(f"/api/ont/ngs/{workflow_id}/submit", json={
+    response = _post_with_preview(client, f"/api/ont/ngs/{workflow_id}/submit", json={
         "params": {"pod5_dir": "/data/pod5", "molbio_ngs_receipt_id": receipt.id, **barcoding},
     })
     assert response.status_code == 201, response.text
-    assert calls == [("validate", receipt.id), ("consume", receipt.id)]
+    assert calls == [("validate", receipt.id), ("validate", receipt.id), ("consume", receipt.id)]
     effective = captured["job_data"].params
     assert effective["dorado_basecall_mode"] == "simplex"
     assert effective["modified_bases"] == "none"
@@ -237,7 +411,7 @@ def test_operator_settings_rejected_before_receipt_or_queue(monkeypatch, bad_par
 
     monkeypatch.setattr(ont_runs, "validate_molbio_ngs_receipt", validate)
     monkeypatch.setattr(ont_runs, "consume_molbio_ngs_receipt", consume)
-    response = client.post("/api/ont/ngs/ont_plasmid_qc/submit", json={
+    response = _post_with_preview(client, "/api/ont/ngs/ont_plasmid_qc/submit", json={
         "params": {"bam_path": "/data/reads.bam", "molbio_ngs_receipt_id": "receipt-typed", **bad_params},
     })
     assert response.status_code == 422, response.text
@@ -284,12 +458,16 @@ def test_ui_shaped_operator_payloads_preserve_effective_values(monkeypatch, work
                       modified_bases="none", min_qscore=12, trim_adapters=True,
                       emit_summary=False, emit_moves=True, dorado_batch_size=32)
     elif input_mode == "bam":
-        params.update(bam_path="/data/reads.bam", bam_force_realign=True, bam_min_mapq=17)
+        params.update(bam_path="/data/reads.bam", bam_force_realign=workflow_id != "ont_methylation_analysis", bam_min_mapq=17)
     else:
         params.update(fastq_path="/data/reads.fastq", expected_plasmid_size=8000,
                       min_fastq_read_length=25, fastq_minimap2_preset="map-ont",
                       fastq_minimap2_allow_secondary=False, igv_track_window_bp=150,
                       igv_report_max_sites=12, igv_report_flanking_bp=300, run_fastq_qc=True)
+    if workflow_id == "ont_plasmid_qc" and input_mode != "fastq":
+        params.update(run_fastq_qc=True, expected_plasmid_size=9123, min_fastq_read_length=17,
+            fastq_minimap2_preset="map-ont", fastq_minimap2_allow_secondary=False,
+            igv_track_window_bp=135, igv_report_max_sites=25, igv_report_flanking_bp=0)
     if workflow_id in {"ont_construct_screening", "wf_clone_validation"}:
         params.update(run_assembly=True, wf_clone_approx_size=8100,
                       wf_clone_expected_identity=98.5, wf_clone_primers="/data/primers.fa",
@@ -299,7 +477,7 @@ def test_ui_shaped_operator_payloads_preserve_effective_values(monkeypatch, work
         params["wf_clone_basecaller_model"] = WF_CLONE_DEFAULTS["wf_clone_basecaller_model"]
     if workflow_id in ont_runs.ONT_REFERENCE_REQUIRED_WORKFLOWS:
         params["molbio_ngs_receipt_id"] = receipt.id
-    response = client.post(f"/api/ont/ngs/{workflow_id}/submit", json={"params": params})
+    response = _post_with_preview(client, f"/api/ont/ngs/{workflow_id}/submit", json={"params": params})
     assert response.status_code == 201, response.text
     effective = captured["job_data"].params
     for key, value in params.items():
@@ -317,7 +495,7 @@ def test_ui_shaped_operator_payloads_preserve_effective_values(monkeypatch, work
 def test_basecall_profile_rejects_inactive_qc_stage(monkeypatch, workflow_id, params):
     captured = {}
     client = _client_with_fake_create(monkeypatch, captured)
-    response = client.post(f"/api/ont/ngs/{workflow_id}/submit", json={"params": params})
+    response = _post_with_preview(client, f"/api/ont/ngs/{workflow_id}/submit", json={"params": params})
     assert response.status_code == 422, response.text
     assert "run_fastq_qc" in response.text
     assert captured == {}
@@ -341,7 +519,7 @@ def test_pooled_profile_keeps_its_closed_typed_public_contract(monkeypatch, over
             {"target_id": "b", "label": "B", "molbio_ngs_receipt_id": "receipt-b"},
         ], "min_mapq": 17, "min_alignment_score_margin": 12, **override,
     }
-    response = client.post("/api/ont/ngs/pooled-reference-assignment/submit", json=payload)
+    response = _post_with_preview(client, "/api/ont/ngs/pooled-reference-assignment/submit", json=payload)
     if override:
         assert response.status_code == 422, response.text
         assert reached == []
@@ -377,7 +555,7 @@ def test_cross_workflow_scalar_and_inactive_settings_fail_before_authority(monke
     monkeypatch.setattr(ont_runs, "consume_molbio_ngs_receipt", forbidden)
     if workflow_id in ont_runs.ONT_REFERENCE_REQUIRED_WORKFLOWS:
         params = {**params, "molbio_ngs_receipt_id": "unconsumed"}
-    response = client.post(f"/api/ont/ngs/{workflow_id}/submit", json={"params": params})
+    response = _post_with_preview(client, f"/api/ont/ngs/{workflow_id}/submit", json={"params": params})
     assert response.status_code == 422, response.text
     assert expected in response.text
     assert captured == {}
@@ -386,7 +564,7 @@ def test_cross_workflow_scalar_and_inactive_settings_fail_before_authority(monke
 def test_basecalling_keeps_optional_reference_and_registry_keeps_server_enrichment(monkeypatch):
     captured = {}
     client = _client_with_fake_create(monkeypatch, captured)
-    response = client.post("/api/ont/ngs/ont_basecall_dna/submit", json={"params": {
+    response = _post_with_preview(client, "/api/ont/ngs/ont_basecall_dna/submit", json={"params": {
         "pod5_dir": "/data/pod5", "reference_fasta": "/data/optional.fa", "run_fastq_qc": False,
     }})
     assert response.status_code == 201, response.text
@@ -421,7 +599,7 @@ def test_external_bam_lane_remains_closed_and_server_owned(monkeypatch, tmp_path
     monkeypatch.setattr(signal_router.service, "resolve_external_alignment_launch_authority", authority)
     monkeypatch.setattr(canonical_ont_runs, "_confine_submitted_path", lambda value, _label, **kwargs: str(value))
     monkeypatch.setattr(signal_router, "_create_pipeline_job", ont_runs._create_pipeline_job)
-    response = client.post("/api/ont/signal-workbench/external-alignment-jobs", json={
+    response = _post_with_preview(client, "/api/ont/signal-workbench/external-alignment-jobs", json={
         "move_source_id": "move-test", "reference_revision_id": "reference-test",
         "global_domain_experiment_id": "experiment-test", "molbio_ngs_state_revision_id": "state-test",
         "name": "external-test", **extra,
@@ -448,7 +626,7 @@ def test_external_bam_lane_remains_closed_and_server_owned(monkeypatch, tmp_path
 def test_existing_basecalling_alias_remains_typed_without_conflicting_choices(monkeypatch, params, accepted):
     captured = {}
     client = _client_with_fake_create(monkeypatch, captured)
-    response = client.post("/api/ont/ngs/ont_basecall_dna/submit", json={"params": {
+    response = _post_with_preview(client, "/api/ont/ngs/ont_basecall_dna/submit", json={"params": {
         "pod5_dir": "/data/pod5", **params,
     }})
     if accepted:
@@ -463,7 +641,7 @@ def test_existing_basecalling_alias_remains_typed_without_conflicting_choices(mo
 def test_named_fastq_qc_rejects_missing_reference(monkeypatch) -> None:
     captured: dict[str, Any] = {}
     client = _client_with_fake_create(monkeypatch, captured)
-    response = client.post("/api/ont/ngs/ont_fastq_qc/submit", json={
+    response = _post_with_preview(client, "/api/ont/ngs/ont_fastq_qc/submit", json={
         "name": "qc-without-reference", "params": {"fastq_path": "/data/reads.fastq"},
     })
     assert response.status_code == 422
@@ -486,7 +664,7 @@ def test_reference_required_alias_rejects_caller_path_before_job_creation(monkey
     captured: dict[str, Any] = {}
     client = _client_with_fake_create(monkeypatch, captured)
 
-    response = client.post(
+    response = _post_with_preview(client,
         "/api/ont/ngs/plasmid_qc/submit",
         json={
             "name": "plasmid A12",
@@ -514,7 +692,7 @@ def test_each_canonical_ont_workflow_has_a_typed_prelaunch_route(monkeypatch, wo
     captured: dict[str, Any] = {}
     client = _client_with_fake_create(monkeypatch, captured)
 
-    response = client.post(f"/api/ont/ngs/{workflow_id}/submit", json={"name": workflow_id, "params": params})
+    response = _post_with_preview(client, f"/api/ont/ngs/{workflow_id}/submit", json={"name": workflow_id, "params": params})
 
     assert response.status_code == 201, response.text
     job_data = captured["job_data"]
@@ -534,7 +712,7 @@ def test_typed_ont_submit_rejects_legacy_multimer_qc_for_fresh_jobs(monkeypatch,
     captured: dict[str, Any] = {}
     client = _client_with_fake_create(monkeypatch, captured)
 
-    response = client.post(
+    response = _post_with_preview(client,
         "/api/ont/ngs/ont_basecall_dna/submit",
         json={
             "name": "fresh-legacy-alias",
@@ -560,7 +738,7 @@ def test_typed_ont_submit_rejects_legacy_multimer_qc_for_fresh_jobs(monkeypatch,
 def test_reference_required_routes_reject_mutable_reference_paths(monkeypatch, workflow_id: str) -> None:
     captured: dict[str, Any] = {}
     client = _client_with_fake_create(monkeypatch, captured)
-    response = client.post(
+    response = _post_with_preview(client,
         f"/api/ont/ngs/{workflow_id}/submit",
         json={
             "name": workflow_id,
@@ -586,7 +764,7 @@ def test_dna_duplex_and_rbk114_demux_remain_typed_basecall_modes(monkeypatch, pa
     captured: dict[str, Any] = {}
     client = _client_with_fake_create(monkeypatch, captured)
 
-    response = client.post("/api/ont/ngs/ont_basecall_dna/submit", json={"name": "dna mode", "params": params})
+    response = _post_with_preview(client, "/api/ont/ngs/ont_basecall_dna/submit", json={"name": "dna mode", "params": params})
 
     assert response.status_code == 201, response.text
     assert captured["job_data"].params["ont_workflow_id"] == "ont_basecall_dna"
@@ -642,7 +820,7 @@ def test_ont_run_plasmid_handoff_submit_builds_and_submits_job(monkeypatch) -> N
     monkeypatch.setattr(ont_runs, "consume_molbio_ngs_receipt", fake_consume_receipt)
     monkeypatch.setattr(ont_runs, "attach_instrument_run_evidence", fake_attach_instrument_run_evidence)
 
-    response = client.post(
+    response = _post_with_preview(client,
         "/api/ont/runs/ont-run-1/handoff/plasmid-qc/submit",
         json={
             "name": "live run plasmid QC",
@@ -841,7 +1019,7 @@ def test_public_jobs_route_rejects_all_direct_nanopore_creation() -> None:
     client = TestClient(app)
 
     for key in sorted(ont_runs.ONT_SERVER_CONTROLLED_PROVENANCE_PARAMS | ont_runs.ONT_SERVER_CONTROLLED_RUNTIME_PARAMS):
-        response = client.post(
+        response = _post_with_preview(client,
             "/api/jobs",
             json={
                 "name": "untrusted nanopore job",

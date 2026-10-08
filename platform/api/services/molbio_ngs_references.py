@@ -688,6 +688,7 @@ async def resolve_managed_reference_for_launch(
     global_domain_experiment_id: str,
     molbio_ngs_state_revision_id: str,
     ngs_reference_revision_id: str,
+    materialize: bool = True,
 ) -> ManagedReferenceLaunch:
     """Resolve one state-member reference to a verified server-managed FASTA path."""
 
@@ -768,6 +769,8 @@ async def resolve_managed_reference_for_launch(
                 source_path,
                 expected_sha256=revision.canonical_fasta_sha256,
                 expected_size_bytes=revision.canonical_fasta_size_bytes,
+            ) if materialize else (
+                source_path, revision.canonical_fasta_sha256, revision.canonical_fasta_size_bytes
             )
         )
     except OSError as exc:

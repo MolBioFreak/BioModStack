@@ -14,6 +14,9 @@ from paths import get_inputs_dir
 
 ONT_SERVER_CONTROLLED_PROVENANCE_PARAMS = frozenset(
     {
+        "ont_launch_receipt",
+        "molbio_reference_authority",
+        "reference_topology",
         "bam_reference_sha256",
         "bam_source_sha256",
         "expected_reference_fasta_sha256",

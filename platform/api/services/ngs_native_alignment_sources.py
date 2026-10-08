@@ -152,7 +152,7 @@ async def prepare_intents(job, session):
     def resolve():
         with result_root(job) as root:
             return [source for source, _inputs in sources(job, root)]
-    reference = await reference_binding(job)
+    reference = await reference_binding(job, session)
     if reference is not None:
         job.provenance["result_integrity"]["catalog_reference_authority"] = reference
     current = await run_in_threadpool(resolve)
@@ -164,13 +164,43 @@ async def prepare_intents(job, session):
     return receipts
 
 
-async def reference_binding(job):
+async def reference_binding(job, session):
     """Resolve existing immutable reference authority; never follow current head."""
     from molbio_ngs_database import molbio_ngs_session_factory
     from molbio_ngs_models import MolBioNGSReferenceRevision
     from services.molbio_ngs_references import get_reference_revision
     params = job.params
     revision_id = params.get("ngs_reference_revision_id")
+    molecular_binding = params.get("molbio_revision_binding")
+    if molecular_binding is not None:
+        from database import MolBioNgsReceipt
+        from services.molbio_ngs_receipts import build_molbio_revision_binding, resolve_molbio_receipt_reference
+        if revision_id or not isinstance(molecular_binding, dict):
+            raise storage.AlignmentSessionError("native reference authority is ambiguous")
+        consumed = await session.get(MolBioNgsReceipt, molecular_binding.get("receipt_id"))
+        if (consumed is None or consumed.consumed_at is None
+                or consumed.consumed_job_id != str(job.id)
+                or build_molbio_revision_binding(consumed) != molecular_binding):
+            raise storage.AlignmentSessionError("native molecular receipt is not owned by this job")
+        try:
+            molecular = await resolve_molbio_receipt_reference(consumed)
+        except ValueError as exc:
+            raise storage.AlignmentSessionError(str(exc)) from exc
+        if (molecular["normalized_sequence_sha256"] != params.get("reference_sequence_sha256")
+                or (params.get("molbio_reference_authority") is not None
+                    and molecular != params["molbio_reference_authority"])):
+            raise storage.AlignmentSessionError("native molecular reference authority changed")
+        receipt, artifacts = accepted_artifacts(job)
+        fasta = artifacts.get(ARTIFACTS["reference"])
+        if fasta is None:
+            return None
+        if fasta["sha256"] != molecular["fasta_sha256"] or fasta["size_bytes"] != molecular["fasta_size_bytes"]:
+            raise storage.AlignmentSessionError("native alignment reference differs from molecular receipt")
+        return {"schema": "bms.ngs.native-catalog-reference.v1", "owner": "molecular_revision_receipt",
+            "authority_id": consumed.id, "authority_sha256": identity_sha256(molecular),
+            "topology": molecular["topology"],
+            "normalized_sequence_sha256": molecular["normalized_sequence_sha256"],
+            "fasta_sha256": fasta["sha256"], "fasta_size_bytes": fasta["size_bytes"]}
     if not revision_id:
         receipt = job.provenance["result_integrity"]
         manifests = [item for item in receipt.get("artifacts", [])

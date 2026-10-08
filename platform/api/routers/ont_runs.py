@@ -28,6 +28,7 @@ from molbio_ngs_services import (
     DomainStateNotFound,
     MolBioNGSServiceError,
     resolve_state_analysis_launch_policy,
+    resolve_state_analysis_context,
 )
 from services.molbio_ngs_evidence import attach_instrument_run_evidence
 from services.molbio_ngs_receipts import (
@@ -191,7 +192,22 @@ def _instrument_handoff_tuning_params(raw_params: Any) -> dict[str, Any]:
     return normalized
 
 
-class OntManagedReferenceRequest(BaseModel):
+class OntExperimentContext(BaseModel):
+    """Exact context independent of the scientific reference selection."""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+    global_domain_experiment_id: str = Field(min_length=1, max_length=128)
+    molbio_ngs_state_revision_id: str = Field(min_length=1, max_length=128)
+
+    @field_validator("*")
+    @classmethod
+    def nonempty_identity(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Experiment identities must be nonempty")
+        return value.strip()
+
+
+class OntManagedReferenceRequest(OntExperimentContext):
     """Opaque immutable identities; the server alone resolves the FASTA path."""
 
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
@@ -219,6 +235,8 @@ class OntNgsSubmitRequest(BaseModel):
     pinned_gpu: int | None = Field(default=None)
     source_instrument_run_id: str | None = Field(default=None)
     managed_reference: OntManagedReferenceRequest | None = None
+    experiment_context: OntExperimentContext | None = None
+    preview_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
     def validate_managed_reference_exclusivity(self) -> "OntNgsSubmitRequest":
@@ -229,6 +247,11 @@ class OntNgsSubmitRequest(BaseModel):
             raise ValueError("managed_reference is accepted only as the typed top-level object")
         if self.managed_reference is None:
             return self
+        if self.experiment_context is not None and any(
+            getattr(self.experiment_context, key) != getattr(self.managed_reference, key)
+            for key in ("global_domain_experiment_id", "molbio_ngs_state_revision_id")
+        ):
+            raise ValueError("reference and Experiment context must bind the same exact state")
         conflicting = sorted(
             {
                 "molbio_ngs_receipt_id",
@@ -998,8 +1021,7 @@ async def ont_submit_pooled_reference_assignment(
         ) from exc
 
 
-@router.post("/ngs/{workflow_id}/submit", response_model=JobResponse, status_code=201)
-async def ont_submit_ngs_workflow(
+async def _compile_ngs_launch(
     workflow_id: str,
     request: OntNgsSubmitRequest,
     background_tasks: BackgroundTasks,
@@ -1008,8 +1030,8 @@ async def ont_submit_ngs_workflow(
     session: AsyncSession = Depends(get_session),
     experiment_session: AsyncSession = Depends(get_experiment_session),
     molbio_ngs_session: AsyncSession = Depends(get_molbio_ngs_session),
-) -> JobResponse:
-    """Submit a canonical ONT/NGS Nextflow analysis job.
+) -> tuple[JobCreate, Any, str, str, dict[str, Any] | None]:
+    """Compile a canonical ONT/NGS Nextflow analysis job without consuming claims.
 
     This is the typed ONT product-family launch seam. It normalizes workflow
     aliases/defaults through the ONT registry, then delegates to the canonical
@@ -1052,8 +1074,21 @@ async def ont_submit_ngs_workflow(
         if canonical_id == "ont_methylation_analysis" and submitted.get("bam_force_realign") is True:
             raise ValueError("methylation BAM input prepares existing alignments; forced realignment is not implemented by this workflow")
 
+        context = request.experiment_context or request.managed_reference
+        context_params = {}
+        if context is not None:
+            await resolve_state_analysis_context(
+                molbio_ngs_session,
+                global_domain_experiment_id=context.global_domain_experiment_id,
+                state_revision_id=context.molbio_ngs_state_revision_id,
+                canonical_workflow_id=workflow_spec.workflow_id,
+            )
+            context_params = {
+                "global_domain_experiment_id": context.global_domain_experiment_id,
+                "molbio_ngs_state_revision_id": context.molbio_ngs_state_revision_id,
+            }
         if request.managed_reference is not None:
-            expected_result_manifest_schema = await resolve_state_analysis_launch_policy(
+            context_params["expected_result_manifest_schema"] = await resolve_state_analysis_launch_policy(
                 molbio_ngs_session,
                 global_domain_experiment_id=request.managed_reference.global_domain_experiment_id,
                 state_revision_id=request.managed_reference.molbio_ngs_state_revision_id,
@@ -1064,6 +1099,7 @@ async def ont_submit_ngs_workflow(
                 global_domain_experiment_id=request.managed_reference.global_domain_experiment_id,
                 molbio_ngs_state_revision_id=request.managed_reference.molbio_ngs_state_revision_id,
                 ngs_reference_revision_id=request.managed_reference.ngs_reference_revision_id,
+                materialize=False,
             )
             submitted.update(
                 {
@@ -1078,7 +1114,7 @@ async def ont_submit_ngs_workflow(
                     "expected_reference_fasta_sha256": managed_launch.expected_reference_fasta_sha256,
                     "managed_reference_snapshot_sha256": managed_launch.launch_snapshot_sha256,
                     "managed_reference_snapshot_size_bytes": managed_launch.launch_snapshot_size_bytes,
-                    "expected_result_manifest_schema": expected_result_manifest_schema,
+                    "expected_result_manifest_schema": context_params["expected_result_manifest_schema"],
                 }
             )
         receipt_authority = None
@@ -1094,12 +1130,8 @@ async def ont_submit_ngs_workflow(
             panel_receipt_authority = await validate_comparison_panel_receipt(
                 session, receipt_id=panel_receipt_id, expected_receipt_id=receipt_id
             )
-            staged = materialize_comparison_launch(
-                expected_fasta=receipt_authority.reference_snapshot_path,
-                expected_sha256=receipt_authority.reference_snapshot_sha256,
-                panel_receipt=panel_receipt_authority,
-            )
-            submitted["reference_fasta"] = staged["reference_fasta"]
+            # Stage only after digest binding. Preview binds immutable receipt
+            # identities, not a random task directory created during each compile.
         submit_request = request.model_copy(update={"params": submitted})
         if managed_launch is not None:
             job = _job_create_for_ont_submit(
@@ -1110,18 +1142,22 @@ async def ont_submit_ngs_workflow(
             )
         else:
             job = _job_create_for_ont_submit(workflow_id, submit_request)
+        job.params.update(context_params)
         if receipt_authority is not None:
-            job.params["molbio_revision_binding"] = build_molbio_revision_binding(
-                receipt_authority
-            )
+            job.params["molbio_revision_binding"] = build_molbio_revision_binding(receipt_authority)
+            from services.molbio_ngs_receipts import resolve_molbio_receipt_reference
+            molecular_reference = await resolve_molbio_receipt_reference(receipt_authority)
+            job.params["reference_topology"] = molecular_reference["topology"]
+            job.params["molbio_reference_authority"] = molecular_reference
+        from services.ont_ngs_launch_admission import validate_bam_reference_admission
+        from starlette.concurrency import run_in_threadpool
+        await run_in_threadpool(validate_bam_reference_admission, job.params)
         if panel_receipt_authority is not None:
-            job.params["comparison_panel_snapshot"] = staged["comparison_panel_snapshot"]
             job.params["comparison_panel_binding"] = {
                 "panel_id": panel_receipt_authority.panel_id,
                 "panel_version": panel_receipt_authority.panel_version,
                 "panel_snapshot_sha256": panel_receipt_authority.panel_snapshot_sha256,
                 "receipt_id": panel_receipt_authority.id,
-                "task_input_root": staged["input_root"],
                 "binding_source": "server_approved_panel_receipt",
             }
     except KeyError as exc:
@@ -1133,6 +1169,127 @@ async def ont_submit_ngs_workflow(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    prepared = None
+    launch_context_id = current_launch_context_id.get()
+    if launch_context_id:
+        from experiment_models import ExperimentRunAttempt
+        from services.global_experiments.launch_contexts import (
+            LaunchContextError, resolve_launch_context, validate_bound_job_request,
+        )
+        try:
+            context = await resolve_launch_context(experiment_session, launch_context_id)
+            # Reuse the global read-only workflow/resource compiler. Do not attach
+            # its internal fields to the submission input: create_job owns that
+            # attachment and intentionally rejects caller-supplied copies.
+            effective_params = await validate_bound_job_request(
+                experiment_session, context, job_name=job.name, model_id=job.model_id,
+                mode=job.mode, params=dict(job.params), pinned_gpu=job.pinned_gpu,
+            )
+            attempt = await experiment_session.get(ExperimentRunAttempt, context.run_attempt_id)
+            if attempt is None or not attempt.scheduler_job_id:
+                raise LaunchContextError("launch_context_binding_invalid", "Reserved job identity is unavailable.", status_code=409)
+            prepared = {"job_id": attempt.scheduler_job_id, "effective_params": effective_params}
+        except LaunchContextError as exc:
+            raise HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": str(exc)}) from exc
+    return job, managed_launch, receipt_id, panel_receipt_id, prepared
+
+
+def _ngs_launch_preview(workflow_id, request, job, prepared=None):
+    from copy import deepcopy
+    import hashlib
+    import rfc8785
+    # The ONT registry/normalizer owns compilation. Canonical Job creation still
+    # owns runtime policy and scheduling; physical leases are not preview input.
+    requested = request.model_dump(mode="json", exclude={"preview_digest"})
+    effective = job.model_dump(mode="json")
+    if prepared is not None:
+        effective["params"] = deepcopy(prepared["effective_params"])
+        effective["launch_context_id"] = current_launch_context_id.get()
+    document = {
+        "schema": "bms.ont.launch-preview.v1",
+        "workflow_id": resolve_ont_workflow_alias(workflow_id),
+        "requested_settings": requested,
+        "effective_request": effective,
+        "launch_context_id": current_launch_context_id.get(),
+        "prepared_job_id": prepared["job_id"] if prepared is not None else None,
+        "profile_fixed": ({
+            "wf_clone_basecaller_model": {
+                "value": job.params["wf_clone_basecaller_model"],
+                "reason": "Pinned wf-clone-validation profile requires this exact basecaller identity.",
+            }
+        } if job.params.get("run_assembly") is True else {}),
+        "blockers": [], "warnings": [],
+    }
+    return {**document, "preview_digest": hashlib.sha256(rfc8785.dumps(document)).hexdigest()}
+
+
+@router.get("/ngs/settings-contract")
+async def ont_ngs_settings_contract() -> dict[str, Any]:
+    from services.ont_ngs_contract import WF_CLONE_DEFAULTS
+    return {"schema": "bms.ont.settings-contract.v1", "profile_fixed": {
+        "wf_clone_basecaller_model": {"value": WF_CLONE_DEFAULTS["wf_clone_basecaller_model"],
+            "reason": "Pinned wf-clone-validation profile requires this exact basecaller identity."},
+    }}
+
+
+@router.post("/ngs/{workflow_id}/preview")
+async def ont_preview_ngs_workflow(
+    workflow_id: str, request: OntNgsSubmitRequest, background_tasks: BackgroundTasks,
+    http_request: Request, response: Response,
+    session: AsyncSession = Depends(get_session),
+    experiment_session: AsyncSession = Depends(get_experiment_session),
+    molbio_ngs_session: AsyncSession = Depends(get_molbio_ngs_session),
+) -> dict[str, Any]:
+    job, _, _, _, prepared = await _compile_ngs_launch(
+        workflow_id, request, background_tasks, http_request, response,
+        session, experiment_session, molbio_ngs_session,
+    )
+    return _ngs_launch_preview(workflow_id, request, job, prepared)
+
+
+@router.post("/ngs/{workflow_id}/submit", response_model=JobResponse, status_code=201)
+async def ont_submit_ngs_workflow(
+    workflow_id: str, request: OntNgsSubmitRequest, background_tasks: BackgroundTasks,
+    http_request: Request, response: Response,
+    session: AsyncSession = Depends(get_session),
+    experiment_session: AsyncSession = Depends(get_experiment_session),
+    molbio_ngs_session: AsyncSession = Depends(get_molbio_ngs_session),
+) -> JobResponse:
+    import hmac
+    job, managed_launch, receipt_id, panel_receipt_id, prepared = await _compile_ngs_launch(
+        workflow_id, request, background_tasks, http_request, response,
+        session, experiment_session, molbio_ngs_session,
+    )
+    preview = _ngs_launch_preview(workflow_id, request, job, prepared)
+    if not request.preview_digest or not hmac.compare_digest(request.preview_digest, preview["preview_digest"]):
+        raise HTTPException(status_code=409, detail={
+            "code": "ONT_LAUNCH_PREVIEW_STALE",
+            "message": "Review a fresh compiled preview before submitting; no receipt was consumed or job queued.",
+        })
+    job.params["ont_launch_receipt"] = preview
+    # Materialization is the existing reference owner's operation, after review.
+    # Only system-owned runtime paths change; source digests remain preview-bound.
+    if managed_launch is not None:
+        materialized = await resolve_managed_reference_for_launch(
+            molbio_ngs_session,
+            global_domain_experiment_id=managed_launch.global_domain_experiment_id,
+            molbio_ngs_state_revision_id=managed_launch.molbio_ngs_state_revision_id,
+            ngs_reference_revision_id=managed_launch.ngs_reference_revision_id,
+        )
+        if (materialized.launch_snapshot_sha256 != managed_launch.launch_snapshot_sha256
+                or materialized.launch_snapshot_size_bytes != managed_launch.launch_snapshot_size_bytes):
+            raise HTTPException(status_code=409, detail="Reference changed after launch preview")
+        job.params["reference_fasta"] = str(materialized.reference_fasta_path)
+    if panel_receipt_id:
+        expected = await validate_molbio_ngs_receipt(session, receipt_id=receipt_id)
+        panel = await validate_comparison_panel_receipt(session, receipt_id=panel_receipt_id, expected_receipt_id=receipt_id)
+        staged = materialize_comparison_launch(
+            expected_fasta=expected.reference_snapshot_path,
+            expected_sha256=expected.reference_snapshot_sha256, panel_receipt=panel,
+        )
+        job.params["reference_fasta"] = staged["reference_fasta"]
+        job.params["comparison_panel_snapshot"] = staged["comparison_panel_snapshot"]
+        job.params["comparison_panel_binding"]["task_input_root"] = staged["input_root"]
     try:
         receipt = None
         panel_receipt = None
@@ -1148,6 +1305,14 @@ async def ont_submit_ngs_workflow(
                 receipt_id=panel_receipt_id,
                 expected_receipt_id=receipt_id,
             )
+        if prepared is not None:
+            # The global prepared launch commits the canonical Job itself. Bind
+            # claims to its already reserved job ID BEFORE that same core commit,
+            # so a crash cannot leave a consumed receipt without its job owner.
+            if receipt is not None:
+                receipt.consumed_job_id = prepared["job_id"]
+            if panel_receipt is not None:
+                panel_receipt.consumed_job_id = prepared["job_id"]
         created = await _create_pipeline_job(
             job,
             background_tasks,
@@ -1155,7 +1320,7 @@ async def ont_submit_ngs_workflow(
             experiment_session,
             response,
             http_request,
-            commit=not receipt_id and not panel_receipt_id,
+            commit=prepared is not None or (not receipt_id and not panel_receipt_id),
         )
     except Exception:
         await session.rollback()
@@ -1171,6 +1336,8 @@ async def ont_submit_ngs_workflow(
         public_params.pop("reference_fasta", None)
         created = created.model_copy(update={"params": public_params})
     return created
+
+
 @barcode_router.get("/{assignment_job_id}/pooled-assignment/manifest")
 async def ont_get_pooled_assignment_manifest(
     assignment_job_id: str,

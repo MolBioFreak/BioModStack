@@ -1053,7 +1053,26 @@ export interface OntNgsSubmitRequest {
     pinned_gpu?: number | null;
     source_instrument_run_id?: string | null;
     managed_reference?: OntManagedReferenceRequest | null;
+    experiment_context?: Pick<OntManagedReferenceRequest, 'global_domain_experiment_id' | 'molbio_ngs_state_revision_id'>;
+    preview_digest?: string;
 }
+
+export interface OntNgsLaunchPreview {
+    schema: 'bms.ont.launch-preview.v1';
+    workflow_id: string;
+    requested_settings: Record<string, unknown>;
+    effective_request: Record<string, unknown>;
+    blockers: string[];
+    warnings: string[];
+    preview_digest: string;
+}
+
+export const previewOntNgsJob = (workflowId: string, request: OntNgsSubmitRequest) =>
+    api.post<OntNgsLaunchPreview>(`/api/ont/ngs/${workflowId}/preview`, request);
+
+export const fetchOntNgsSettingsContract = () => api.get<{
+    profile_fixed: { wf_clone_basecaller_model: { value: string; reason: string } };
+}>('/api/ont/ngs/settings-contract');
 
 export const submitOntNgsJob = (workflowId: string, request: OntNgsSubmitRequest) => {
     assertLocalOnlySubmission('ONT/NGS');

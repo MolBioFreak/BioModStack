@@ -21,6 +21,80 @@ from services.ont_ngs_completion import (  # noqa: E402
 )
 
 
+def test_reviewed_launch_settings_survive_materialization_but_not_scientific_drift():
+    from services.ont_ngs_native_settings import seal_native_settings, accepted_native_settings
+    from routers.ont_runs import OntNgsSubmitRequest, _ngs_launch_preview
+    from schemas import JobCreate
+    request = OntNgsSubmitRequest(params={"fastq_path": "/input/reads.fastq"})
+    job = JobCreate(name="reviewed", model_id="nanopore", mode="fastq_qc", params={
+        "fastq_path": "/input/reads.fastq", "reference_fasta": "/owner/reference.fasta",
+        "reference_sequence_sha256": "a" * 64, "igv_report_flanking_bp": 0,
+    })
+    preview = _ngs_launch_preview("ont_fastq_qc", request, job)
+    params = {**job.params, "reference_fasta": "/materialized/reference.fasta", "ont_launch_receipt": preview}
+    sealed = seal_native_settings(params)
+    assert accepted_native_settings(params, sealed) == params
+    with pytest.raises(ValueError, match="setting changed"):
+        seal_native_settings({**params, "igv_report_flanking_bp": 200})
+    with pytest.raises(ValueError, match="digest changed"):
+        seal_native_settings({**params, "ont_launch_receipt": {**preview, "preview_digest": "0" * 64}})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("circular", [True, False])
+async def test_native_molecular_receipt_resolves_immutable_topology_without_qc(monkeypatch, circular):
+    from contextlib import asynccontextmanager
+    from datetime import datetime
+    import molbio_database
+    from molbio_models import MolecularRevision
+    from services import molbio_ngs_receipts as owner, ngs_native_alignment_sources as sources
+    sequence = "ACGTACGT"
+    fasta = f">molbio_revision_rev\n{sequence}\n".encode("ascii")
+    revision = SimpleNamespace(id="rev", document_id="seq", content_sha256=hashlib.sha256(sequence.encode()).hexdigest(),
+        snapshot={"sequence": sequence, "sequence_type": "dna", "is_circular": circular})
+    consumed = SimpleNamespace(id="receipt", sequence_id="seq", revision_id="rev",
+        revision_sha256=revision.content_sha256, reference_snapshot_sha256=hashlib.sha256(fasta).hexdigest(),
+        consumed_at=datetime(2020, 1, 1), consumed_job_id="job")
+
+    class MolecularSession:
+        async def get(self, model, key):
+            assert model is MolecularRevision and key == "rev"  # never reads current sequence/head
+            return revision
+
+    @asynccontextmanager
+    async def molecular_session():
+        yield MolecularSession()
+
+    monkeypatch.setattr(molbio_database, "molbio_session", molecular_session)
+    reference = await owner.resolve_molbio_receipt_reference(consumed)
+    assert reference["topology"] == ("circular" if circular else "linear")
+    job = SimpleNamespace(id="job", params={
+        "molbio_revision_binding": owner.build_molbio_revision_binding(consumed),
+        "molbio_reference_authority": reference,
+        "reference_sequence_sha256": revision.content_sha256,
+    })
+    # Accepted artifact inventory deliberately has no QC/verification manifest.
+    monkeypatch.setattr(sources, "accepted_artifacts", lambda _: ({}, {
+        "align/reference.fasta": {"sha256": consumed.reference_snapshot_sha256, "size_bytes": len(fasta)},
+    }))
+
+    class CoreSession:
+        async def get(self, model, key):
+            assert key == "receipt"
+            return consumed
+
+    binding = await sources.reference_binding(job, CoreSession())
+    assert binding["owner"] == "molecular_revision_receipt"
+    assert binding["topology"] == reference["topology"]
+    consumed.consumed_job_id = "another-job"
+    with pytest.raises(sources.storage.AlignmentSessionError, match="owned by this job"):
+        await sources.reference_binding(job, CoreSession())
+    consumed.consumed_job_id = "job"
+    revision.snapshot["is_circular"] = not circular
+    with pytest.raises(sources.storage.AlignmentSessionError, match="authority changed"):
+        await sources.reference_binding(job, CoreSession())
+
+
 def test_production_completion_entry_pins_result_root_across_aba_replacement(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

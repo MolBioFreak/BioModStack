@@ -19,6 +19,8 @@ const apiMocks = vi.hoisted(() => ({
     issueMolBioNgsReceipt: vi.fn(),
     previewMolBioSequenceImport: vi.fn(),
     submitOntNgsJob: vi.fn(),
+    previewOntNgsJob: vi.fn(),
+    fetchOntNgsSettingsContract: vi.fn(),
     restorePooledReferenceSet: vi.fn(),
     submitPooledReferenceAssignment: vi.fn(),
 }));
@@ -67,6 +69,14 @@ beforeEach(() => {
     });
     apiMocks.fetchMolBioSequenceRevisions.mockResolvedValue({ data: [] });
     apiMocks.submitOntNgsJob.mockResolvedValue({ data: { id: 'job-1' } });
+    apiMocks.previewOntNgsJob.mockImplementation(async (workflowId, request) => ({ data: {
+        schema: 'bms.ont.launch-preview.v1', workflow_id: workflowId,
+        requested_settings: request, effective_request: { params: request.params },
+        blockers: [], warnings: [], preview_digest: 'c'.repeat(64),
+    } }));
+    apiMocks.fetchOntNgsSettingsContract.mockResolvedValue({ data: { profile_fixed: {
+        wf_clone_basecaller_model: { value: 'dna_r10.4.1_e8.2_400bps_hac@v5.0.0', reason: 'Pinned clone profile.' },
+    } } });
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -116,6 +126,42 @@ function buttonWithText(text: string) {
     return Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.trim() === text) ?? null;
 }
 
+it('binds final launch to the reviewed preview and independent reference-free context', async () => {
+    await renderTemplate({ selectedWorkflow: 'dna', inputSource: 'pod5', pod5Dir: '/inputs/pod5', jobName: 'review' });
+    await act(async () => buttonWithText('Review and submit')!.click()); await flush();
+    expect(apiMocks.submitOntNgsJob).not.toHaveBeenCalled();
+    expect(apiMocks.previewOntNgsJob.mock.calls[0][1].experiment_context).toEqual({
+        global_domain_experiment_id: 'domain-1', molbio_ngs_state_revision_id: 'state-1',
+    });
+    expect(container.textContent).toContain('c'.repeat(64));
+    await act(async () => buttonWithText('Confirm reviewed launch')!.click()); await flush();
+    expect(apiMocks.submitOntNgsJob.mock.calls[0][1].preview_digest).toBe('c'.repeat(64));
+});
+
+it('discards a preview when an operator changes a control', async () => {
+    await renderTemplate();
+    await act(async () => buttonWithText('Review and submit')!.click()); await flush();
+    expect(buttonWithText('Confirm reviewed launch')).not.toBeNull();
+    await act(async () => checkboxContaining('Evaluate circular-reference rotations')!.click());
+    expect(buttonWithText('Confirm reviewed launch')).toBeNull();
+    expect(apiMocks.submitOntNgsJob).not.toHaveBeenCalled();
+});
+
+it.each(['pod5', 'bam'])('preserves the full active plasmid QC settings for %s', async (inputSource) => {
+    await renderTemplate({ selectedWorkflow: 'plasmidQc', inputSource, jobName: 'qc', pod5Dir: '/inputs/pod5',
+        bamPath: '/inputs/reads.bam', runFastqQc: true, ngsReferenceRevisionId: 'reference-revision-1',
+        expectedPlasmidSize: 8123, minFastqReadLength: 37, fastqMinimap2Preset: 'map-pb',
+        fastqMinimap2AllowSecondary: false, igvTrackWindowBp: 145, igvReportMaxSites: 22, igvReportFlankingBp: 0,
+    });
+    expect(container.textContent).toContain('IGV track/report tuning');
+    await act(async () => buttonWithText('Review and submit')!.click()); await flush();
+    expect(apiMocks.previewOntNgsJob.mock.calls[0][1].params).toMatchObject({
+        expected_plasmid_size: 8123, min_fastq_read_length: 37, fastq_minimap2_preset: 'map-pb',
+        fastq_minimap2_allow_secondary: false, igv_track_window_bp: 145,
+        igv_report_max_sites: 22, igv_report_flanking_bp: 0,
+    });
+});
+
 it.each(['alias', 'canonical', 'matching', 'conflict'])('preserves basecalling alias parity through native handoff (%s)', async (variant) => {
     const params = {
         pod5_dir: '/inputs/pod5', duplex_pairs: '/inputs/pairs.tsv',
@@ -131,7 +177,7 @@ it.each(['alias', 'canonical', 'matching', 'conflict'])('preserves basecalling a
     }
     expect([...container.querySelectorAll('select')].some((select) => select.value === 'duplex')).toBe(true);
     await act(async () => buttonWithText('Review and submit')!.click()); await flush();
-    expect(apiMocks.submitOntNgsJob.mock.calls[0][1].params).toMatchObject({ dorado_basecall_mode: 'duplex', duplex_pairs: '/inputs/pairs.tsv' });
+    expect(apiMocks.previewOntNgsJob.mock.calls[0][1].params).toMatchObject({ dorado_basecall_mode: 'duplex', duplex_pairs: '/inputs/pairs.tsv' });
 });
 
 it.each([true, false])('preserves BAM modkit intent independently of Dorado modifications (%s)', async (enabled) => {
@@ -145,7 +191,7 @@ it.each([true, false])('preserves BAM modkit intent independently of Dorado modi
     expect(buttonWithText('Review and submit')?.disabled).toBe(false);
     await act(async () => buttonWithText('Review and submit')!.click());
     await flush();
-    const params = apiMocks.submitOntNgsJob.mock.calls[0][1].params;
+    const params = apiMocks.previewOntNgsJob.mock.calls[0][1].params;
     expect(params.run_modkit).toBe(enabled);
     if (enabled) expect(params.modkit_filter_threshold).toBe(0);
     else expect(params).not.toHaveProperty('modkit_filter_threshold');
@@ -309,8 +355,8 @@ describe('native-bound clones', () => {
             await act(async () => buttonWithText('Review and submit')?.click());
             await flush();
             expect(apiMocks.issueMolBioNgsReceipt).toHaveBeenCalledWith('saved-sequence', { revision_id: 'saved-revision' });
-            expect(apiMocks.submitOntNgsJob).toHaveBeenCalledTimes(1);
-            const request = apiMocks.submitOntNgsJob.mock.calls[0][1];
+            expect(apiMocks.previewOntNgsJob).toHaveBeenCalledTimes(1);
+            const request = apiMocks.previewOntNgsJob.mock.calls[0][1];
             expect(request.params.molbio_ngs_receipt_id).toBe('fresh-receipt');
             expect(request.managed_reference).toBeUndefined();
             expect(request.params).not.toHaveProperty('molbio_revision_binding');
@@ -385,8 +431,8 @@ describe('mounted clone round trips', () => {
             await act(async () => buttonWithText('Review and submit')?.click());
             await flush();
             expect(apiMocks.issueMolBioNgsReceipt).not.toHaveBeenCalled();
-            expect(apiMocks.submitOntNgsJob).toHaveBeenCalledTimes(1);
-            expect(apiMocks.submitOntNgsJob.mock.calls[0][1].managed_reference.ngs_reference_revision_id).toBe('reference-revision-1');
+            expect(apiMocks.previewOntNgsJob).toHaveBeenCalledTimes(1);
+            expect(apiMocks.previewOntNgsJob.mock.calls[0][1].managed_reference.ngs_reference_revision_id).toBe('reference-revision-1');
         } finally {
             window.history.replaceState({}, '', '/');
         }
@@ -414,8 +460,8 @@ describe('mounted clone round trips', () => {
         expect(buttonWithText('Review and submit')?.disabled).toBe(false);
         await act(async () => buttonWithText('Review and submit')?.click());
         await flush();
-        expect(apiMocks.submitOntNgsJob).toHaveBeenCalledTimes(1);
-        const [actualWorkflow, request] = apiMocks.submitOntNgsJob.mock.calls[0];
+        expect(apiMocks.previewOntNgsJob).toHaveBeenCalledTimes(1);
+        const [actualWorkflow, request] = apiMocks.previewOntNgsJob.mock.calls[0];
         expect(actualWorkflow).toBe(workflow);
         expect(request.params[inputKey]).toBe(path);
         expect(request.managed_reference).toEqual({ global_domain_experiment_id: 'domain-1', molbio_ngs_state_revision_id: 'state-1', ngs_reference_revision_id: 'reference-revision-1' });
@@ -434,7 +480,7 @@ describe('mounted clone round trips', () => {
         }
         await act(async () => buttonWithText('Review and submit')?.click());
         await flush();
-        expect(apiMocks.submitOntNgsJob.mock.calls[0]?.[1].params).toMatchObject(auxiliaryPaths);
+        expect(apiMocks.previewOntNgsJob.mock.calls[0]?.[1].params).toMatchObject(auxiliaryPaths);
     });
 
     it('uses the existing confined file browser to replace each auxiliary value and clears without resubmitting it', async () => {
@@ -457,9 +503,9 @@ describe('mounted clone round trips', () => {
         delete replacements.wf_clone_primers;
         await act(async () => buttonWithText('Review and submit')?.click());
         await flush();
-        expect(apiMocks.submitOntNgsJob).toHaveBeenCalledTimes(1);
-        expect(apiMocks.submitOntNgsJob.mock.calls[0][1].params).toMatchObject(replacements);
-        expect(apiMocks.submitOntNgsJob.mock.calls[0][1].params).not.toHaveProperty('wf_clone_primers');
+        expect(apiMocks.previewOntNgsJob).toHaveBeenCalledTimes(1);
+        expect(apiMocks.previewOntNgsJob.mock.calls[0][1].params).toMatchObject(replacements);
+        expect(apiMocks.previewOntNgsJob.mock.calls[0][1].params).not.toHaveProperty('wf_clone_primers');
     });
 
     it.each(['ont_construct_screening', 'ont_plasmid_qc'])('omits inactive auxiliary paths for %s', async (workflow) => {
@@ -468,7 +514,7 @@ describe('mounted clone round trips', () => {
         for (const key of Object.keys(auxiliaryPaths)) expect(container.querySelector(`[data-testid="${key}"]`)).toBeNull();
         await act(async () => buttonWithText('Review and submit')?.click());
         await flush();
-        for (const key of Object.keys(auxiliaryPaths)) expect(apiMocks.submitOntNgsJob.mock.calls[0]?.[1].params).not.toHaveProperty(key);
+        for (const key of Object.keys(auxiliaryPaths)) expect(apiMocks.previewOntNgsJob.mock.calls[0]?.[1].params).not.toHaveProperty(key);
     });
 });
 
@@ -483,8 +529,8 @@ describe('mounted NGS settings to submit payload', () => {
         expect(buttonWithText('Review and submit')?.disabled).toBe(false);
         await act(async () => buttonWithText('Review and submit')?.click());
         await flush();
-        expect(apiMocks.submitOntNgsJob).toHaveBeenCalledTimes(1);
-        const [workflow, request] = apiMocks.submitOntNgsJob.mock.calls[0];
+        expect(apiMocks.previewOntNgsJob).toHaveBeenCalledTimes(1);
+        const [workflow, request] = apiMocks.previewOntNgsJob.mock.calls[0];
         expect(workflow).toBe(settings.selectedWorkflow === 'rna' ? 'ont_basecall_rna' : 'ont_basecall_dna');
         expect(request.params.pod5_dir).toBe('/data/pod5');
         expect(request).not.toHaveProperty('managed_reference');
@@ -500,8 +546,8 @@ describe('mounted NGS settings to submit payload', () => {
         expect(buttonWithText('Review and submit')?.disabled).toBe(false);
         await act(async () => buttonWithText('Review and submit')?.click());
         await flush();
-        expect(apiMocks.submitOntNgsJob).toHaveBeenCalledTimes(1);
-        expect(apiMocks.submitOntNgsJob.mock.calls[0][1]).not.toHaveProperty('managed_reference');
+        expect(apiMocks.previewOntNgsJob).toHaveBeenCalledTimes(1);
+        expect(apiMocks.previewOntNgsJob.mock.calls[0][1]).not.toHaveProperty('managed_reference');
     });
 
     it.each(['empty', 'unavailable'])('launches basecalling with an %s reference library', async (library) => {
@@ -511,8 +557,8 @@ describe('mounted NGS settings to submit payload', () => {
         expect(buttonWithText('Review and submit')?.disabled).toBe(false);
         await act(async () => buttonWithText('Review and submit')?.click());
         await flush();
-        expect(apiMocks.submitOntNgsJob).toHaveBeenCalledTimes(1);
-        expect(apiMocks.submitOntNgsJob.mock.calls[0][1]).not.toHaveProperty('managed_reference');
+        expect(apiMocks.previewOntNgsJob).toHaveBeenCalledTimes(1);
+        expect(apiMocks.previewOntNgsJob.mock.calls[0][1]).not.toHaveProperty('managed_reference');
     });
 
     it.each(['domain', 'state', 'permission'])('retains %s ownership gating for reference-free basecalling', async (missing) => {
@@ -532,7 +578,7 @@ describe('mounted NGS settings to submit payload', () => {
         if (member) {
             await act(async () => buttonWithText('Review and submit')?.click());
             await flush();
-            expect(apiMocks.submitOntNgsJob.mock.calls[0][1].managed_reference.ngs_reference_revision_id).toBe('reference-revision-1');
+            expect(apiMocks.previewOntNgsJob.mock.calls[0][1].managed_reference.ngs_reference_revision_id).toBe('reference-revision-1');
         } else expect(apiMocks.submitOntNgsJob).not.toHaveBeenCalled();
     });
 
@@ -544,8 +590,8 @@ describe('mounted NGS settings to submit payload', () => {
         await act(async () => qc?.click());
         await act(async () => buttonWithText('Review and submit')?.click());
         await flush();
-        expect(apiMocks.submitOntNgsJob).toHaveBeenCalledTimes(1);
-        const [workflow, request] = apiMocks.submitOntNgsJob.mock.calls[0];
+        expect(apiMocks.previewOntNgsJob).toHaveBeenCalledTimes(1);
+        const [workflow, request] = apiMocks.previewOntNgsJob.mock.calls[0];
         expect(workflow).toBe('ont_fastq_qc');
         expect(request.params.run_fastq_qc).toBe(true);
         expect(request.managed_reference.ngs_reference_revision_id).toBe('reference-revision-1');
@@ -593,8 +639,8 @@ describe('mounted NGS settings to submit payload', () => {
         await act(async () => updatedSubmit?.click());
         await flush();
 
-        expect(apiMocks.submitOntNgsJob).toHaveBeenCalledTimes(1);
-        const [workflowId, request] = apiMocks.submitOntNgsJob.mock.calls[0] as [string, { pinned_gpu: number | null; params: Record<string, unknown> }];
+        expect(apiMocks.previewOntNgsJob).toHaveBeenCalledTimes(1);
+        const [workflowId, request] = apiMocks.previewOntNgsJob.mock.calls[0] as [string, { pinned_gpu: number | null; params: Record<string, unknown> }];
         expect(workflowId).toBe('ont_construct_screening');
         expect(request.pinned_gpu).toBe(2);
         expect(request.params).toMatchObject({
@@ -626,8 +672,8 @@ describe('mounted NGS settings to submit payload', () => {
 
         await act(async () => buttonWithText('Review and submit')?.click());
         await flush();
-        expect(apiMocks.submitOntNgsJob).toHaveBeenCalledTimes(1);
-        const [, request] = apiMocks.submitOntNgsJob.mock.calls[0] as [string, { pinned_gpu: number | null; params: Record<string, unknown> }];
+        expect(apiMocks.previewOntNgsJob).toHaveBeenCalledTimes(1);
+        const [, request] = apiMocks.previewOntNgsJob.mock.calls[0] as [string, { pinned_gpu: number | null; params: Record<string, unknown> }];
         expect(request.pinned_gpu).toBeNull();
         expect(request.params.run_fastq_qc).toBe(false);
     });

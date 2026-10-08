@@ -103,6 +103,7 @@ export function normalizeNanoporeCloneState(job: Job | null): Record<string, unk
         igvReportMaxSites: p.igv_report_max_sites ?? 40,
         igvReportFlankingBp: p.igv_report_flanking_bp ?? 200,
         runAssembly: p.run_assembly === true && !p.barcode_kit,
+        wfCloneBasecallerModel: p.wf_clone_basecaller_model,
         assemblyTool: p.wf_clone_assembly_tool || 'flye',
         assemblyApproxSize: p.wf_clone_approx_size ?? 7000,
         assemblyCoverage: p.wf_clone_assm_coverage ?? 60,

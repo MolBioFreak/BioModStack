@@ -877,6 +877,23 @@ def _validate_server_owned_policy_registries(payload: Mapping[str, Any]) -> None
         raise StateValidationError("analysis policy manifest schema is incompatible with its assessment rule")
 
 
+async def resolve_state_analysis_context(
+    session: AsyncSession, *, global_domain_experiment_id: str,
+    state_revision_id: str, canonical_workflow_id: str,
+) -> dict[str, Any]:
+    """Validate exact state/workflow context without requiring reference-QC evidence."""
+    from services.ont_ngs_contract import get_ont_workflow_spec
+    workflow = get_ont_workflow_spec(canonical_workflow_id)
+    if workflow.workflow_id != canonical_workflow_id:
+        raise StateValidationError("managed launch workflow must already be canonical")
+    revision = await get_state_revision(session, global_domain_experiment_id, state_revision_id)
+    payload, _membership = await verify_state_revision_integrity(session, revision)
+    _validate_server_owned_policy_registries(payload)
+    if canonical_workflow_id not in payload["analysis_policy"]["allowed_workflow_ids"]:
+        raise StateValidationError("workflow is not authorized by the exact state revision")
+    return payload
+
+
 async def resolve_state_analysis_launch_policy(
     session: AsyncSession,
     *,
@@ -887,19 +904,12 @@ async def resolve_state_analysis_launch_policy(
     """Resolve one exact workflow/schema launch authorization from immutable state."""
 
     from services.molbio_ngs_evidence import ASSESSMENT_RULE_REGISTRY  # noqa: PLC0415
-    from services.ont_ngs_contract import get_ont_workflow_spec  # noqa: PLC0415
 
-    workflow = get_ont_workflow_spec(canonical_workflow_id)
-    if workflow.workflow_id != canonical_workflow_id:
-        raise StateValidationError("managed launch workflow must already be canonical")
-    revision = await get_state_revision(
-        session, global_domain_experiment_id, state_revision_id
+    payload = await resolve_state_analysis_context(
+        session, global_domain_experiment_id=global_domain_experiment_id,
+        state_revision_id=state_revision_id, canonical_workflow_id=canonical_workflow_id,
     )
-    payload, _membership = await verify_state_revision_integrity(session, revision)
-    _validate_server_owned_policy_registries(payload)
     analysis_policy = payload["analysis_policy"]
-    if canonical_workflow_id not in analysis_policy["allowed_workflow_ids"]:
-        raise StateValidationError("workflow is not authorized by the exact state revision")
     rule = ASSESSMENT_RULE_REGISTRY[payload["assessment_policy"]["rule_id"]]
     eligible_schemas = [
         schema

@@ -356,18 +356,15 @@ async def test_phase2b_sample_reference_state_survive_restart_and_reopen(
         monkeypatch.setattr(ont_runs, "_confine_submitted_path", confine_launch_path)
         monkeypatch.setattr(ont_runs, "_create_pipeline_job", create_managed_launch)
         async with core_factory() as launch_core_session:
-            launch_response = await ont_runs.ont_submit_ngs_workflow(
-                "ont_fastq_qc",
-                ont_runs.OntNgsSubmitRequest(
+            launch_request = ont_runs.OntNgsSubmitRequest(
                     params={"fastq_path": str(reads_path)},
                     managed_reference=ont_runs.OntManagedReferenceRequest(
                         global_domain_experiment_id=domain_spec["id"],
                         molbio_ngs_state_revision_id=state_revision.id,
                         ngs_reference_revision_id=reference_revision_1.id,
                     ),
-                ),
-                BackgroundTasks(),
-                Request(
+                )
+            http_request = Request(
                     {
                         "type": "http",
                         "method": "POST",
@@ -375,10 +372,15 @@ async def test_phase2b_sample_reference_state_survive_restart_and_reopen(
                         "path": "/api/ont/ngs/ont_fastq_qc/submit",
                         "headers": [],
                     }
-                ),
-                Response(),
-                launch_core_session,
-                domain_session,
+                )
+            preview = await ont_runs.ont_preview_ngs_workflow(
+                "ont_fastq_qc", launch_request, BackgroundTasks(), http_request, Response(),
+                launch_core_session, domain_session, domain_session,
+            )
+            assert captured_launch == {}  # Preview never inserts or stages a job.
+            launch_response = await ont_runs.ont_submit_ngs_workflow(
+                "ont_fastq_qc", launch_request.model_copy(update={"preview_digest": preview["preview_digest"]}),
+                BackgroundTasks(), http_request, Response(), launch_core_session, domain_session, domain_session,
             )
         launched_job = cast(JobCreate, captured_launch["job"])
         assert captured_launch["commit"] is True
