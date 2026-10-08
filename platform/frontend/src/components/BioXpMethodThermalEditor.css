@@ -32,6 +32,14 @@
 .bioxp-method-thermal .bioxp-thermal-stages { position: relative; display: flex; list-style: none; padding: var(--heading-height) 0 0; margin: 0; }
 .bioxp-method-thermal .bioxp-thermal-stages > li { position: relative; flex: 1 1 0; min-width: 0; min-height: 302px; border: 1px solid transparent; border-radius: 8px; }
 .bioxp-method-thermal .bioxp-thermal-stages > li.range-selected { box-shadow: inset 0 0 0 2px var(--accent-primary); }
+.bioxp-method-thermal .bioxp-thermal-stages > li.scope-selected { border-color: var(--accent-primary); border-style: dashed; }
+.bioxp-method-thermal [aria-label="Plotted range repeat"] { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; padding: 12px; margin: 10px 0; }
+.bioxp-method-thermal [aria-label="Plotted range repeat"] > p { flex-basis: 100%; }
+/* The plotted selection supersedes, but does not reset, the legacy local builder. */
+.bioxp-method-thermal:has(> .bioxp-thermal-program > [aria-label="Plotted range repeat"]) > .bioxp-thermal-repeat-builder { display: none; }
+.bioxp-method-thermal [draggable="true"] { cursor: grab; }
+.bioxp-method-thermal .bioxp-thermal-track-inner:has(.bioxp-thermal-repeat-menu[open], .bioxp-thermal-step-menu[open]) { padding-bottom: var(--options-space, 160px); }
+.bioxp-method-thermal .bioxp-thermal-repeat-heading:has(.bioxp-thermal-repeat-menu[open]) { z-index: 8; }
 .bioxp-method-thermal .bioxp-thermal-stages > li.selected { background: color-mix(in srgb, var(--accent-primary) 5%, transparent); }
 .bioxp-method-thermal .bioxp-thermal-step-name { position: absolute; z-index: 3; top: 8px; left: 12px; right: 8px; display: flex; gap: 6px; align-items: center; font-size: 11px; color: var(--text-secondary); }
 .bioxp-method-thermal .bioxp-thermal-step-name small { border: 1px solid var(--border-primary); border-radius: 4px; padding: 1px 4px; font-size: 10px; }
@@ -61,8 +69,9 @@
 .bioxp-method-thermal .bioxp-thermal-step-options[open] > :last-child { border-bottom: 1px solid var(--border-primary); border-radius: 0 0 10px 10px; }
 .bioxp-method-thermal [data-program-view="expanded"] .bioxp-thermal-track-inner:has(.bioxp-thermal-step-options[open]) { padding-bottom: var(--options-space, 350px); }
 .bioxp-method-thermal [data-program-view="expanded"] .bioxp-thermal-track-inner:has(.bioxp-thermal-step-options details[open]) { padding-bottom: var(--options-space, 650px); }
-.bioxp-method-thermal .bioxp-thermal-repeat-frame { position: absolute; height: calc(var(--heading-height) + 302px - var(--frame-offset)); border: 1.5px solid color-mix(in srgb, var(--accent-primary) 55%, var(--border-primary)); border-radius: 10px; background: color-mix(in srgb, var(--accent-primary) 5%, transparent); pointer-events: none; }
-.bioxp-method-thermal .bioxp-thermal-repeat-frame.selected { border-color: var(--accent-primary); }
+.bioxp-method-thermal .bioxp-thermal-repeat-frame, .bioxp-method-thermal .bioxp-thermal-scope-frame { position: absolute; height: calc(var(--heading-height) + 302px - var(--frame-offset)); border: 1.5px solid color-mix(in srgb, var(--accent-primary) 55%, var(--border-primary)); border-radius: 10px; background: color-mix(in srgb, var(--accent-primary) 5%, transparent); pointer-events: none; }
+.bioxp-method-thermal .bioxp-thermal-scope-frame { border-style: dashed; background: transparent; }
+.bioxp-method-thermal .bioxp-thermal-repeat-frame.selected, .bioxp-method-thermal .bioxp-thermal-scope-frame.selected { border-color: var(--accent-primary); }
 .bioxp-method-thermal .bioxp-thermal-repeat-heading { position: absolute; z-index: 6; top: 5px; left: 10px; right: 10px; display: flex; align-items: center; justify-content: space-between; gap: 5px; min-height: 26px; font-size: 11px; pointer-events: auto; color: var(--accent-primary); }
 .bioxp-method-thermal .bioxp-thermal-repeat-heading > span { font-weight: 650; }
 .bioxp-method-thermal .bioxp-thermal-repeat-heading label { display: flex; flex-direction: row; align-items: center; gap: 4px; white-space: nowrap; }
@@ -71,7 +80,7 @@
 .bioxp-method-thermal .bioxp-thermal-empty { padding: 40px 20px; text-align: center; border: 1px dashed var(--border-primary); border-radius: 12px; }
 .bioxp-method-thermal .bioxp-thermal-empty strong { font-size: 20px; font-weight: 550; }
 .bioxp-method-thermal [data-program-view="compact"] .bioxp-thermal-target-line, .bioxp-method-thermal [data-program-view="compact"] .bioxp-thermal-step-options, .bioxp-method-thermal [data-program-view="compact"] .bioxp-thermal-step-menu { display: none; }
-.bioxp-method-thermal [data-program-view="compact"] .bioxp-thermal-repeat-frame { height: calc(var(--heading-height) + 105px - var(--frame-offset)); }
+.bioxp-method-thermal [data-program-view="compact"] :is(.bioxp-thermal-repeat-frame, .bioxp-thermal-scope-frame) { height: calc(var(--heading-height) + 105px - var(--frame-offset)); }
 .bioxp-method-thermal [data-program-view="compact"] .bioxp-thermal-stages > li { min-height: 105px; }
 .bioxp-method-thermal [data-program-view="compact"] .bioxp-thermal-step-name { top: 4px; left: 4px; right: 4px; justify-content: center; font-size: 9px; }
 .bioxp-method-thermal [data-program-view="compact"] .bioxp-thermal-exact .bioxp-thermal-value-target_temp_c { top: 24px; background: transparent; }
