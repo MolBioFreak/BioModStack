@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -38,9 +39,24 @@ def test_cm_analysis_plane_omits_state_artifact_index_member_without_comparison_
     snapshots.write_text("[]")
     checkpoint = tmp_path / "checkpoint.bin"
     checkpoint.write_bytes(b"checkpoint")
-    tool = tmp_path / "frustrampnn"
+    container = tmp_path / "frustrampnn.sif"
+    container.write_bytes(b"container")
+    runtime_registry = tmp_path / "runtime-registry.json"
+    runtime_registry.write_text(json.dumps({
+        "analysis_runtime": {
+            "container_name": container.name,
+            "container_sha256": "a" * 64,
+        }
+    }))
+    tool = tmp_path / "apptainer"
     tool.write_bytes(b"tool")
     monkeypatch.setattr(module.shutil, "which", lambda _name: str(tool))
+    monkeypatch.setattr(
+        module,
+        "_open_verified_container",
+        lambda *_args: (os.open(container, os.O_RDONLY), "a" * 64),
+    )
+    monkeypatch.setattr(module, "_container_sha256", lambda *_args, **_kwargs: "b" * 64)
     monkeypatch.setattr(
         module,
         "analyze_landscapes",
@@ -56,9 +72,10 @@ def test_cm_analysis_plane_omits_state_artifact_index_member_without_comparison_
         "argv",
         [
             "run_conformational_mapping_analysis_plane.py",
-            "--request", str(request), "--snapshots", str(snapshots),
-            "--canonical", str(canonical), "--checkpoint", str(checkpoint),
-            "--checkpoint-id", "test", "--out", str(output),
+            "--request", str(request), "--runtime-registry", str(runtime_registry),
+            "--snapshots", str(snapshots), "--canonical", str(canonical),
+            "--checkpoint", str(checkpoint), "--checkpoint-id", "test",
+            "--frustrampnn-container", str(container), "--gpu-id", "0", "--out", str(output),
         ],
     )
 
