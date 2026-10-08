@@ -540,26 +540,12 @@ export function hasExplicitNucleotideStrandednessMetadata(
     parsed: ParsedSequenceMetadata | null | undefined,
 ): boolean {
     if (!parsed) return false;
-    if (
-        parsed.isSingleStranded === true
-        || parsed.isDoubleStranded === true
-        || parsed.isSingleStrandedDNA === true
-        || parsed.isDoubleStrandedDNA === true
-        || parsed.isSingleStrandedRNA === true
-        || parsed.isDoubleStrandedRNA === true
-    ) {
-        return true;
-    }
-    const candidates = [
-        parsed.moleculeStrandedness,
-        parsed.molecule_strandedness,
-        parsed.strandedness,
-        parsed.sequenceTypeFromLocus,
-        ...metadataValuesFor(parsed, STRANDEDNESS_METADATA_KEYS),
-    ];
-    return candidates.some((value) => (
-        metadataTextLooksSingleStranded(value) || metadataTextLooksDoubleStranded(value)
-    ));
+    // Parser convenience flags such as isDoubleStrandedDNA are normalized defaults:
+    // GenBank LOCUS "DNA" sets them true even though the source never declared dsDNA.
+    // Only the preserved LOCUS molecule token is authoritative enough to enable
+    // reverse-complement annotation transfer.
+    return metadataTextLooksSingleStranded(parsed.sequenceTypeFromLocus)
+        || metadataTextLooksDoubleStranded(parsed.sequenceTypeFromLocus);
 }
 
 export function inferSequenceTypeFromParsedRecord(parsed: ParsedSequenceMetadata | null | undefined): SequenceType {
