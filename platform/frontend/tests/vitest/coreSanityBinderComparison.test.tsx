@@ -6,7 +6,8 @@ import { BinderResultComparison } from '../../src/components/BinderResultCompari
 import { api } from '../../src/lib/api';
 
 vi.mock('../../src/components/MetricCharts', () => ({ DesignMultiLineChart: (props: unknown) => <pre data-chart>{JSON.stringify(props)}</pre> }));
-vi.mock('../../src/components/CohortAnalytics', () => ({ CohortAnalytics: () => <div>Shared plot boundary</div> }));
+import { plots } from './analyticsPlotHarness';
+vi.mock('react-plotly.js', () => import('./analyticsPlotHarness'));
 const oldAdapter = api.defaults.adapter;
 let root: Root | undefined;
 let client: QueryClient;
@@ -53,9 +54,13 @@ it('demand-mounts real batch comparison for all native families and explicit pre
     await vi.waitFor(async () => { await settle(); expect(requests.find(r => r.url === '/api/analytics/batch')?.data).toEqual(models); });
     expect(requests.filter(r => r.url?.startsWith('/api/analytics/job/')).every(r => (r.params as {include_children: boolean}).include_children === false)).toBe(true);
     expect(requests.find(r => r.url === '/api/jobs')?.params).toMatchObject({ include_children: true, limit: 500 });
-    for (const job of models) expect(container.textContent).toContain(`v1:${job}:${job}`);
+    for (const job of models) expect(container.textContent).not.toContain(`v1:${job}:${job}`);
+    const charts = plots(container).filter(plot => plot.data[0]?.type === 'scatter' && plot.data[0]?.mode === 'markers');
+    expect(charts.map(plot => plot.data[0].customdata[0]).sort()).toEqual(models.filter(job => job !== 'ppiflow').map(job => `${job}-design`).sort());
+    expect(charts.every(plot => plot.data[0].x[0] === 0.8)).toBe(true);
+    expect(container.querySelectorAll('[aria-label="Plotly Lab"]')).toHaveLength(4);
     expect(container.textContent).toContain('unavailable: not_reported');
-    expect(container.textContent).toContain('a'.repeat(64));
+    expect(container.textContent).not.toContain('a'.repeat(64));
     expect(container.textContent).not.toContain('Success Rate');
     await click('Native observations · boltzgen');
     expect(requests.find(r => r.url === '/api/jobs/boltzgen/generation-results')?.params).toEqual({ offset: 0, limit: 1000 });

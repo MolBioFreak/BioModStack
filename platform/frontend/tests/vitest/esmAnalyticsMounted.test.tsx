@@ -6,7 +6,8 @@ import {QueryClient, QueryClientProvider} from '@tanstack/react-query';
 import {api, type Design} from '../../src/lib/api';
 import {AnalyticsDashboard} from '../../src/components/AnalyticsDashboard';
 import {validateScientificEnvelope} from '../../src/lib/scientificAnalytics';
-vi.mock('react-plotly.js',()=>({default:()=>null}));
+import { change, plots, scatter, settled } from './analyticsPlotHarness';
+vi.mock('react-plotly.js',()=>import('./analyticsPlotHarness'));
 
 const path=process.env.BMS_ESM_ANALYTICS_WIRE;
 const wire=path?JSON.parse(readFileSync(path,'utf8')):null;
@@ -22,14 +23,23 @@ test('published ESMFold2 scalars reach the dashboard with missingness and zero i
     const client=new QueryClient({defaultOptions:{queries:{retry:false}}});
     const host=document.createElement('div');document.body.append(host);root=createRoot(host);
     await act(async()=>root!.render(<QueryClientProvider client={client}><AnalyticsDashboard designs={wire.points as Design[]} jobId="job" jobName="Published ESMFold2"/></QueryClientProvider>));
-    await act(async()=>{await new Promise(resolve=>setTimeout(resolve,30));});
+    await settled(host);
     expect(requests).toContain('/api/designs/by-job/job/plotly-metrics');
     expect(host.textContent).toContain('plddt / model_token_mean / fraction');
     expect(host.textContent).toContain('ptm / model / dimensionless');
     expect(host.textContent).toContain('missing_native_scalar');
-    expect(host.querySelectorAll('circle')).toHaveLength(2);
-    for(const mark of host.querySelectorAll('circle'))expect(mark.getAttribute('data-x')).toBe('0');
-    expect(Array.from(host.querySelectorAll('circle')).map(mark=>mark.getAttribute('data-y')).sort()).toEqual(['0.005','0.7']);
+    expect(host.querySelector('[aria-label="Plotly Lab"]')).not.toBeNull();
+    await change(host, '2D X metric', 'iptm');
+    for (const metric of ['plddt', 'ptm']) {
+        await change(host, '2D Y metric', metric);
+        expect(scatter(host).data[0].x).toEqual([0]);
+        expect(scatter(host).data[0].y).toEqual([metric === 'plddt' ? 0.005 : 0.7]);
+        expect(host.textContent).toContain('1 plotted · 1 omitted');
+    }
+    await change(host, '2D X metric', 'plddt');
+    expect(scatter(host)).toBeUndefined();
+    expect(host.textContent).toContain('No complete finite pairs');
+    expect(plots(host).some(plot => plot.data[0].type === 'histogram')).toBe(true);
 });
 
 test('a missing ESMFold2 value requires its stored reason',()=>{

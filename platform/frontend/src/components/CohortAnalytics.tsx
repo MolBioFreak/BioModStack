@@ -17,6 +17,7 @@ interface Props {
     getMetricLabel?: (key: string) => string;
     getMetricDescription?: (key: string) => string;
     renderMetricPicker?: (props: MetricPickerProps) => ReactNode;
+    inspectionHint?: string;
 }
 const CONFIG: Partial<Config> = {
     responsive: true, displayModeBar: true, displaylogo: false,
@@ -68,7 +69,7 @@ export function CohortPlot({ label, data, layout, onClick, onSelected, height = 
     </div>;
 }
 
-export function CohortAnalytics({ rows, selectedIds, activeId, onInspect, onSelect, mode, initialMetrics, getMetricLabel = metricLabel, getMetricDescription, renderMetricPicker }: Props): JSX.Element {
+export function CohortAnalytics({ rows, selectedIds, activeId, onInspect, onSelect, mode, initialMetrics, getMetricLabel = metricLabel, getMetricDescription, renderMetricPicker, inspectionHint = 'click a point to inspect its exact native document' }: Props): JSX.Element {
     const caption = getMetricLabel;
     const description = (key: string) => getMetricDescription?.(key) || `${caption(key)}: recorded value; missing values are omitted.`;
     const [palette, setPalette] = useState('Viridis');
@@ -194,7 +195,7 @@ export function CohortAnalytics({ rows, selectedIds, activeId, onInspect, onSele
                         zaxis: { title: { text: escape(getMetricLabel(zKey)) }, color: theme.text, gridcolor: theme.grid },
                         bgcolor: theme.background }, uirevision: JSON.stringify([xKey, yKey, zKey, rows.map(row => row.id)]) }} onClick={inspect} />
                     : <p role="status" className="py-6 text-sm">No records have complete finite coordinates for these three metrics.</p>}
-                <p className="pt-2 text-xs text-[var(--text-secondary)]">Rotate to explore; click a point to inspect its exact native document. Missing color observations remain gray, not zero.</p>
+                <p className="pt-2 text-xs text-[var(--text-secondary)]">Rotate to explore; {inspectionHint}. Missing color observations remain gray, not zero.</p>
             </article>} />}
             <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-2">
                 {mode === 'dashboard' && <>

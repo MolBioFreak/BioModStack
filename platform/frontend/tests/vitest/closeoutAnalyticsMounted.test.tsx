@@ -5,7 +5,8 @@ import {afterEach,expect,test,vi} from 'vitest';
 import {QueryClient,QueryClientProvider} from '@tanstack/react-query';
 import {api,type Design} from '../../src/lib/api';
 import {AnalyticsDashboard} from '../../src/components/AnalyticsDashboard';
-vi.mock('react-plotly.js',()=>({default:()=>null}));
+import { plots, settled } from './analyticsPlotHarness';
+vi.mock('react-plotly.js',()=>import('./analyticsPlotHarness'));
 const load=(env:string)=>{const path=process.env[env];if(!path)throw new Error(`${env} actual ASGI wire required`);return JSON.parse(readFileSync(path,'utf8'));};
 const sortWire=load('BMS_SORT_ANALYTICS_WIRE'), unavailableWire=load('BMS_UNSUPPORTED_ANALYTICS_WIRE');
 let root:ReturnType<typeof createRoot>;
@@ -16,7 +17,7 @@ async function mount(wire:any){
     const host=document.createElement('div');document.body.append(host);root=createRoot(host);
     const client=new QueryClient({defaultOptions:{queries:{retry:false}}});
     await act(async()=>root.render(<QueryClientProvider client={client}><AnalyticsDashboard designs={wire.points as Design[]} jobId="job" jobName="closeout"/></QueryClientProvider>));
-    await act(async()=>{await new Promise(resolve=>setTimeout(resolve,40));});
+    await settled(host);
     return host;
 }
 test('actual API points sort native filter_rmsd zero, five, missing without aliasing overall RMSD',async()=>{
@@ -24,7 +25,7 @@ test('actual API points sort native filter_rmsd zero, five, missing without alia
     const wire=structuredClone(sortWire);
     wire.points.sort((a:any,b:any)=>(b.metrics.filter_rmsd??Infinity)-(a.metrics.filter_rmsd??Infinity));
     const host=await mount(wire);
-    const select=host.querySelector('select[aria-label^="Sort metric for"]') as HTMLSelectElement;
+    const select=host.querySelector('select[aria-label="Sort measurements"]') as HTMLSelectElement;
     expect(select).not.toBeNull();
     expect([...select.options].map(o=>o.value)).toContain('filter_rmsd');
     expect([...select.options].map(o=>o.value)).not.toContain('rmsd_overall');
@@ -34,6 +35,8 @@ test('actual API points sort native filter_rmsd zero, five, missing without alia
 });
 test('unsupported marked owner shows the API missing-publication reason',async()=>{
     const host=await mount(unavailableWire);
-    expect(host.textContent).toContain('unavailable: missing_canonical_publication');
-    expect(host.querySelectorAll('circle')).toHaveLength(0);
+    expect(host.textContent).toContain('missing_canonical_publication');
+    expect(host.querySelector('[aria-label="Sort measurements"]')?.closest('details')?.open).toBe(false);
+    expect(plots(host)).toHaveLength(0);
+    expect(host.textContent).toContain('No finite numeric observations');
 });

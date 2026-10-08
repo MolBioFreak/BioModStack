@@ -5,7 +5,8 @@ import {expect, test, afterEach, vi} from 'vitest';
 import {QueryClient, QueryClientProvider} from '@tanstack/react-query';
 import {api, type Design} from '../../src/lib/api';
 import {AnalyticsDashboard} from '../../src/components/AnalyticsDashboard';
-vi.mock('react-plotly.js',()=>({default:()=>null}));
+import { change, plots, scatter, settled } from './analyticsPlotHarness';
+vi.mock('react-plotly.js',()=>import('./analyticsPlotHarness'));
 import {parseMetricPoints, parseScientificCohorts, validateScientificEnvelope, type ScientificPoint} from '../../src/lib/scientificAnalytics';
 
 
@@ -14,7 +15,7 @@ const wire = path ? JSON.parse(readFileSync(path,'utf8')) : null;
 let root: ReturnType<typeof createRoot> | undefined;
 afterEach(async () => {if (root) await act(async()=>root!.unmount()); document.body.innerHTML='';});
 
-test('published SQLite API bytes reach mounted native scalar table and paired plot', async () => {
+test('published SQLite API bytes reach the existing Plotly Lab and distributions', async () => {
     expect(wire, 'BMS_ANALYTICS_WIRE must be produced by the API fixture').not.toBeNull();
     validateScientificEnvelope(wire);
     const points = parseMetricPoints(wire.points) as ScientificPoint[];
@@ -24,16 +25,18 @@ test('published SQLite API bytes reach mounted native scalar table and paired pl
     const client=new QueryClient({defaultOptions:{queries:{retry:false}}});
     const host=document.createElement('div');document.body.append(host);root=createRoot(host);
     await act(async()=>root!.render(<QueryClientProvider client={client}><AnalyticsDashboard designs={points as unknown as Design[]} jobId="job" jobName="Published native fixture"/></QueryClientProvider>));
-    await act(async()=>{await new Promise(resolve=>setTimeout(resolve,30));});
+    await settled(host);
     expect(requests).toContain('/api/designs/by-job/job/plotly-metrics');
     expect(host.textContent).toContain('complex_plddt / complex / fraction');
     expect(host.textContent).toContain('ptm / overall / dimensionless');
-    expect(host.querySelectorAll('circle').length).toBe(points.length);
-    for (const point of points) {
-        const mark=host.querySelector(`circle[data-candidate-id="${point.id}"]`);
-        expect(mark?.getAttribute('data-x')).toBe(String(point.metrics.complex_plddt));
-        expect(mark?.getAttribute('data-y')).toBe(String(point.metrics.ptm));
-    }
+    expect(host.querySelector('[aria-label="Plotly Lab"]')).not.toBeNull();
+    await change(host, '2D X metric', 'complex_plddt');
+    await change(host, '2D Y metric', 'ptm');
+    expect(scatter(host).data[0].x).toEqual(points.map(point => point.metrics.complex_plddt));
+    expect(scatter(host).data[0].y).toEqual(points.map(point => point.metrics.ptm));
+    expect(scatter(host).data[0].customdata).toEqual(points.map(point => point.id));
+    expect(scatter(host).layout.xaxis.title.text).toContain('(fraction)');
+    expect(plots(host).some(plot => plot.data[0].type === 'histogram')).toBe(true);
 });
 
 test('raw metric transport rejects a downgraded canonical marker', () => {

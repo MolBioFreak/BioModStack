@@ -452,6 +452,9 @@ function GovernedAnalyticsDashboard(props: AnalyticsDashboardProps) {
     if (!scientific.length) return <LegacyAnalyticsDashboard {...props} />;
     const legacyIds = new Set(data.points.filter(point => point.contract_revision == null).map(point => point.id));
     return <>
+        {props.loadedDesignCount != null && designs.length < props.loadedDesignCount && <p role="status" className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-secondary)] p-3 text-sm text-[var(--text-secondary)]">
+            Charts show {designs.length} of {props.loadedDesignCount} loaded results. Statistics describe this chart selection.
+        </p>}
         <ScientificAnalytics points={scientific} cohorts={data.scientific_cohorts ?? []} />
         {legacyIds.size > 0 && <section aria-label="Historical analytics"><h2>Historical analytics — legacy interpretation</h2><LegacyAnalyticsDashboard {...props} designs={designs.filter(design => legacyIds.has(design.id))} /></section>}
     </>;

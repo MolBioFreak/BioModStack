@@ -275,7 +275,7 @@ it('projects BoltzGen verified native scalars without turning disposition criter
     expect(scatter().props.data[0].customdata).toEqual(['selected-cif']);
     expect(scatter().props.data[0].x).toEqual([0.8]);
     expect(scatter().props.data[0].y).toEqual([0]);
-    expect(text(control('Candidate data table'))).toContain('Filter rmsd (angstrom)');
+    expect(text(control('Candidate data table'))).toContain('Filter RMSD (angstrom)');
     expect(tableRows()[0].findAllByType('td')[2].props.title).toBe('0 · fraction');
     expect(tableRows()[1].findAllByType('td')[1].props.title).toBe('Not reported · fraction · unavailable · missing_native_metric');
     expect(tableRows()[1].findAllByType('td')[2].props.title).toBe('Not reported · fraction · invalid · nonfinite');
@@ -285,7 +285,7 @@ it('projects BoltzGen verified native scalars without turning disposition criter
     expect(JSON.parse(await exported('Native JSON'))).toEqual(rows);
     await click('selected-cif');
     expect(tree.root.findByType(StructureWorkbench).props).toMatchObject({ structureUrl: '/api/files/selected-cif.cif', structureDocumentId: 'native-cif', structureContentSha256: 'c'.repeat(64), format: 'cif' });
-    expect(text(control('Candidate structure inspector'))).toContain('Filter rmsd (angstrom)');
+    expect(text(control('Candidate structure inspector'))).toContain('Filter RMSD (angstrom)');
     expect(changes).not.toHaveBeenCalled();
 });
 

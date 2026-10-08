@@ -67,6 +67,7 @@ export default defineConfig({
             ...(process.env.BMS_BOLTZGEN_ANALYTICS_WIRES ? ['./tests/vitest/boltzgenAnalyticsMounted.test.tsx'] : []),
             ...(process.env.BMS_ESM_ANALYTICS_WIRE ? ['./tests/vitest/esmAnalyticsMounted.test.tsx'] : []),
             ...(process.env.BMS_ANALYTICS_WIRE ? ['./tests/vitest/canonicalAnalyticsMounted.test.tsx'] : []),
+            ...(process.env.BMS_SORT_ANALYTICS_WIRE && process.env.BMS_UNSUPPORTED_ANALYTICS_WIRE ? ['./tests/vitest/closeoutAnalyticsMounted.test.tsx'] : []),
             './tests/vitest/boltzgenRankControls.test.tsx',
             ...(process.env.BMS_TEST_ACCOUNTING_WIRE ? ['./tests/vitest/candidateAccountingMounted.test.tsx'] : []),
             ...(process.env.BMS_WP06_WIRE ? ['./tests/vitest/wp06ExecutionSettingsMounted.test.tsx'] : []),
