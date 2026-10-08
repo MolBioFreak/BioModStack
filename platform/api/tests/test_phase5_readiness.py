@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 
 import pytest
+from sqlalchemy.ext.asyncio import create_async_engine
 
 
 @pytest.mark.asyncio
@@ -12,6 +13,7 @@ async def test_native_readiness_does_not_require_workflow_adapter(monkeypatch) -
     monkeypatch.delenv("BMS_WORKFLOW_ADAPTER_URL", raising=False)
     monkeypatch.setenv("BMS_FRONTEND_HEALTH_URL", "http://frontend.test/bms/")
     monkeypatch.setattr(readiness, "core_database_readiness", lambda: _async_result(True, "ready"))
+    monkeypatch.setattr(readiness, "core_migration_readiness", lambda: _async_migration_result(True, "at_head"))
     monkeypatch.setattr(readiness, "http_readiness", lambda _url: _async_result(True, "ready"))
 
     result = await readiness.collect_runtime_readiness(
@@ -35,6 +37,7 @@ async def test_container_readiness_requires_reachable_adapter(monkeypatch) -> No
     monkeypatch.setenv("BMS_WORKFLOW_ADAPTER_URL", "http://adapter.test")
     monkeypatch.setenv("BMS_FRONTEND_HEALTH_URL", "http://frontend.test/bms/")
     monkeypatch.setattr(readiness, "core_database_readiness", lambda: _async_result(True, "ready"))
+    monkeypatch.setattr(readiness, "core_migration_readiness", lambda: _async_migration_result(True, "at_head"))
 
     async def fake_http(url: str):
         if "adapter.test" in url:
@@ -80,3 +83,49 @@ def test_api_route_signatures_are_unique() -> None:
 
 async def _async_result(ready: bool, status: str):
     return ready, status
+
+
+async def _async_migration_result(ready: bool, status: str):
+    return ready, status, {
+        "expected_version": 27, "expected_name": "add_frustrampnn_reviews",
+        "applied_version": 27 if ready else 26,
+        "applied_name": "add_frustrampnn_reviews" if ready else "add_frustrampnn_statistics",
+    }
+
+
+@pytest.mark.asyncio
+async def test_runtime_readiness_degrades_when_core_migrations_are_behind(monkeypatch) -> None:
+    readiness = importlib.import_module("readiness")
+    monkeypatch.setenv("BMS_CORE_RUNTIME_MODE", "0")
+    monkeypatch.delenv("BMS_WORKFLOW_ADAPTER_URL", raising=False)
+    monkeypatch.delenv("BMS_FRONTEND_HEALTH_URL", raising=False)
+    monkeypatch.setattr(readiness, "core_database_readiness", lambda: _async_result(True, "ready"))
+    monkeypatch.setattr(readiness, "core_migration_readiness", lambda: _async_migration_result(False, "behind"))
+
+    result = await readiness.collect_runtime_readiness(molbio={"status": "healthy", "ready": True})
+
+    assert result["ready"] is False
+    assert result["checks"]["core_database"]["ready"] is True
+    assert result["checks"]["core_schema_migrations"]["status"] == "behind"
+    assert result["checks"]["core_schema_migrations"]["expected_version"] == 27
+
+
+@pytest.mark.asyncio
+async def test_migration_readiness_rejects_head_ledger_without_required_schema_objects(tmp_path, monkeypatch) -> None:
+    readiness = importlib.import_module("readiness")
+    candidate_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'forged-head.db'}")
+    async with candidate_engine.begin() as connection:
+        await connection.exec_driver_sql("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+        for migration in readiness.MIGRATIONS:
+            await connection.exec_driver_sql(
+                "INSERT INTO schema_migrations(version, name) VALUES (?, ?)",
+                (migration.version, migration.name),
+            )
+    monkeypatch.setattr(readiness, "engine", candidate_engine)
+
+    ready, status, metadata = await readiness.core_migration_readiness()
+
+    assert ready is False
+    assert status == "schema_objects_missing"
+    assert "frustrampnn_reviews" in metadata["missing_schema_objects"]
+    await candidate_engine.dispose()

@@ -10,6 +10,7 @@ import {
     uploadFile,
 } from '../lib/api';
 import type { ExternalImportPreview, Job } from '../lib/api';
+import FrustraMpnnUploadAnalysisPanel from './FrustraMpnnUploadAnalysisPanel';
 
 type RequestedFormat = 'auto' | 'proteinbase_jsonl' | 'tabular_csv' | 'jsonl_records' | 'boltz_api_run';
 type ResolvedFormat = 'proteinbase_jsonl' | 'tabular_csv' | 'jsonl_records' | 'unknown';
@@ -972,6 +973,9 @@ export function DataViewerLanding({
                     </div>
                 </div>
             </section>
+            <div className="mt-6">
+                <FrustraMpnnUploadAnalysisPanel onOpenJob={onSelectJob} />
+            </div>
         </div>
     );
 }

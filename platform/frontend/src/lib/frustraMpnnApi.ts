@@ -987,6 +987,7 @@ export interface FrustraMpnnResultListItem {
     runtime_identity_sha256: string | null;
     gpu_provenance: FrustraMpnnGpuProvenance | null;
     failure_class: FrustraMpnnFailureClass | null;
+    reopen_destination: { surface: 'frustrampnn-workbench'; params: { job_id: string; invocation_id: string } };
 }
 
 export interface FrustraMpnnResultDetail extends FrustraMpnnResultListItem {
@@ -2023,7 +2024,7 @@ const RESULT_ITEM_KEYS = [
     'statistics_available', 'missing_fields', 'settings_sha256', 'effective_settings_sha256',
     'effective_settings_json', 'capability_inventory_sha256', 'statistics_sha256',
     'statistics_json', 'comparison_compatibility_id', 'status', 'component_contract_version',
-    'runtime_identity', 'runtime_identity_sha256', 'gpu_provenance', 'failure_class',
+    'runtime_identity', 'runtime_identity_sha256', 'gpu_provenance', 'failure_class', 'reopen_destination',
 ] as const;
 const RESULT_DETAIL_KEYS = [...RESULT_ITEM_KEYS, 'summary', 'terminal_result', 'execution_receipt'] as const;
 const MISSING_FIELDS = new Set<FrustraMpnnMissingField>([
@@ -2046,6 +2047,9 @@ const parseResultItem = (value: unknown, detail: boolean): FrustraMpnnResultList
         return field as FrustraMpnnMissingField;
     });
     const statistics = payload.statistics_json === null ? null : parseFrustraMpnnStatistics(payload.statistics_json);
+    const reopen = fmClosedProjection(payload.reopen_destination, 'result.reopen_destination', ['surface', 'params'], ['surface', 'params']);
+    if (reopen.surface !== 'frustrampnn-workbench') throw new Error('result reopen surface is invalid');
+    const reopenParams = fmClosedProjection(reopen.params, 'result.reopen_destination.params', ['job_id', 'invocation_id'], ['job_id', 'invocation_id']);
     return {
         invocation_id: fmString(payload.invocation_id, 'result.invocation_id'),
         parent_job_id: fmString(payload.parent_job_id, 'result.parent_job_id'),
@@ -2076,6 +2080,13 @@ const parseResultItem = (value: unknown, detail: boolean): FrustraMpnnResultList
         runtime_identity_sha256: fmOptionalSha256(payload.runtime_identity_sha256, 'result.runtime_identity_sha256'),
         gpu_provenance: payload.gpu_provenance === null ? null : fmGpuProvenanceProjection(payload.gpu_provenance),
         failure_class: payload.failure_class === null ? null : fmString(payload.failure_class, 'result.failure_class') as FrustraMpnnFailureClass,
+        reopen_destination: {
+            surface: 'frustrampnn-workbench',
+            params: {
+                job_id: fmString(reopenParams.job_id, 'result.reopen_destination.params.job_id'),
+                invocation_id: fmString(reopenParams.invocation_id, 'result.reopen_destination.params.invocation_id'),
+            },
+        },
     };
 };
 
@@ -3794,3 +3805,192 @@ export const fetchFrustraMpnnMultidimensionalPoints = async (
     if (page.level !== 'result') throw new Error('FrustraMPNN result analytics endpoint returned a cross-level contract');
     return page;
 };
+
+export interface FrustraMpnnSavedReviewWrite {
+    title: string;
+    notes: string;
+    result_references: Array<{ parent_job_id: string; invocation_id: string }>;
+    selected_residues: Array<{ auth_asym_id: string; auth_seq_id: string; insertion_code: string }>;
+    filters: Record<string, string | number | boolean | null>;
+    viewer_state: Record<string, string | number | boolean | null>;
+    tags: string[];
+}
+
+export interface FrustraMpnnSavedReview extends FrustraMpnnSavedReviewWrite {
+    schema_name: 'frustrampnn_saved_review';
+    schema_version: 1;
+    review_id: string;
+    parent_job_id: string;
+    created_at: string;
+    updated_at: string;
+}
+
+const parseReviewScalarRecord = (value: unknown, label: string): Record<string, string | number | boolean | null> => {
+    const record = fmRecord(value, label);
+    for (const [key, item] of Object.entries(record)) {
+        if (item !== null && typeof item !== 'string' && typeof item !== 'boolean'
+            && (typeof item !== 'number' || !Number.isFinite(item))) {
+            throw new Error(`${label}.${key} must be a finite scalar`);
+        }
+    }
+    return record as Record<string, string | number | boolean | null>;
+};
+
+export const parseFrustraMpnnSavedReview = (value: unknown): FrustraMpnnSavedReview => {
+    const label = 'FrustraMPNN saved review';
+    const keys = ['schema_name', 'schema_version', 'review_id', 'parent_job_id', 'title', 'notes', 'result_references', 'selected_residues', 'filters', 'viewer_state', 'tags', 'created_at', 'updated_at'] as const;
+    const payload = fmClosedProjection(value, label, keys, keys);
+    if (payload.schema_name !== 'frustrampnn_saved_review' || payload.schema_version !== 1) {
+        throw new Error(`${label} identity is invalid`);
+    }
+    if (!Array.isArray(payload.result_references) || payload.result_references.length < 1) throw new Error(`${label}.result_references is invalid`);
+    if (!Array.isArray(payload.selected_residues)) throw new Error(`${label}.selected_residues is invalid`);
+    const references = payload.result_references.map((item, index) => {
+        const row = fmClosedProjection(item, `${label}.result_references[${index}]`, ['parent_job_id', 'invocation_id'], ['parent_job_id', 'invocation_id']);
+        return { parent_job_id: fmString(row.parent_job_id, `${label}.result_references[${index}].parent_job_id`), invocation_id: fmString(row.invocation_id, `${label}.result_references[${index}].invocation_id`) };
+    });
+    const residues = payload.selected_residues.map((item, index) => {
+        const row = fmClosedProjection(item, `${label}.selected_residues[${index}]`, ['auth_asym_id', 'auth_seq_id', 'insertion_code'], ['auth_asym_id', 'auth_seq_id', 'insertion_code']);
+        return { auth_asym_id: fmString(row.auth_asym_id, `${label}.selected_residues[${index}].auth_asym_id`), auth_seq_id: fmString(row.auth_seq_id, `${label}.selected_residues[${index}].auth_seq_id`), insertion_code: fmString(row.insertion_code, `${label}.selected_residues[${index}].insertion_code`, true) };
+    });
+    return {
+        schema_name: 'frustrampnn_saved_review', schema_version: 1,
+        review_id: fmString(payload.review_id, `${label}.review_id`),
+        parent_job_id: fmString(payload.parent_job_id, `${label}.parent_job_id`),
+        title: fmString(payload.title, `${label}.title`),
+        notes: fmString(payload.notes, `${label}.notes`, true),
+        result_references: references,
+        selected_residues: residues,
+        filters: parseReviewScalarRecord(payload.filters, `${label}.filters`),
+        viewer_state: parseReviewScalarRecord(payload.viewer_state, `${label}.viewer_state`),
+        tags: fmStringArray(payload.tags, `${label}.tags`),
+        created_at: fmString(payload.created_at, `${label}.created_at`),
+        updated_at: fmString(payload.updated_at, `${label}.updated_at`),
+    };
+};
+
+export interface FrustraMpnnSavedReviewList {
+    items: FrustraMpnnSavedReview[];
+    next_offset: number | null;
+}
+
+export const listFrustraMpnnSavedReviewPage = async (
+    jobId: string,
+    offset = 0,
+    signal?: AbortSignal,
+): Promise<FrustraMpnnSavedReviewList> => {
+    const value = (await api.get<unknown>(
+        `/api/frustrampnn/jobs/${encodeURIComponent(jobId)}/reviews`,
+        { params: { limit: 100, offset }, signal },
+    )).data;
+    const payload = fmClosedProjection(value, 'FrustraMPNN saved review list', ['schema_name', 'schema_version', 'items', 'next_offset'], ['schema_name', 'schema_version', 'items', 'next_offset']);
+    if (payload.schema_name !== 'frustrampnn_saved_review_list' || payload.schema_version !== 1 || !Array.isArray(payload.items)) throw new Error('FrustraMPNN saved review list identity is invalid');
+    const nextOffset = payload.next_offset === null ? null : fmInteger(payload.next_offset, 'FrustraMPNN saved review list.next_offset', 0);
+    return { items: payload.items.map(parseFrustraMpnnSavedReview), next_offset: nextOffset };
+};
+
+export const listFrustraMpnnSavedReviews = async (
+    jobId: string,
+    signal?: AbortSignal,
+): Promise<FrustraMpnnSavedReview[]> => {
+    const reviews: FrustraMpnnSavedReview[] = [];
+    let offset = 0;
+    for (;;) {
+        const page = await listFrustraMpnnSavedReviewPage(jobId, offset, signal);
+        reviews.push(...page.items);
+        if (page.next_offset === null) return reviews;
+        if (page.next_offset <= offset || reviews.length > 10_000) throw new Error('FrustraMPNN saved review pagination is invalid');
+        offset = page.next_offset;
+    }
+};
+
+export const createFrustraMpnnSavedReview = async (
+    jobId: string,
+    payload: FrustraMpnnSavedReviewWrite,
+): Promise<FrustraMpnnSavedReview> => parseFrustraMpnnSavedReview((
+    await api.post<unknown>(
+        `/api/frustrampnn/jobs/${encodeURIComponent(jobId)}/reviews`,
+        payload,
+    )
+).data);
+
+export const updateFrustraMpnnSavedReview = async (
+    jobId: string,
+    reviewId: string,
+    payload: FrustraMpnnSavedReviewWrite,
+): Promise<FrustraMpnnSavedReview> => parseFrustraMpnnSavedReview((
+    await api.put<unknown>(
+        `/api/frustrampnn/jobs/${encodeURIComponent(jobId)}/reviews/${encodeURIComponent(reviewId)}`,
+        payload,
+    )
+).data);
+
+export const deleteFrustraMpnnSavedReview = async (
+    jobId: string,
+    reviewId: string,
+): Promise<void> => {
+    await api.delete(`/api/frustrampnn/jobs/${encodeURIComponent(jobId)}/reviews/${encodeURIComponent(reviewId)}`);
+};
+
+export interface FrustraMpnnCaptureReceipt {
+    schema_name: 'frustrampnn_review_capture_receipt';
+    schema_version: 1;
+    artifact_id: string;
+    review_id: string;
+    parent_job_id: string;
+    role: 'structure_view_capture';
+    media_type: 'image/png';
+    content_sha256: string;
+    size_bytes: number;
+    download_url: string;
+}
+
+export const persistFrustraMpnnReviewCapture = async (
+    jobId: string,
+    reviewId: string,
+    png: Blob,
+): Promise<FrustraMpnnCaptureReceipt> => {
+    const digestBytes = await crypto.subtle.digest('SHA-256', await png.arrayBuffer());
+    const expectedSha256 = Array.from(new Uint8Array(digestBytes), (byte) => byte.toString(16).padStart(2, '0')).join('');
+    const response = await api.post<FrustraMpnnCaptureReceipt>(
+        `/api/frustrampnn/jobs/${encodeURIComponent(jobId)}/reviews/${encodeURIComponent(reviewId)}/captures`,
+        png,
+        { params: { expected_sha256: expectedSha256 }, headers: { 'Content-Type': 'image/png' } },
+    );
+    const receipt = response.data;
+    if (
+        receipt.schema_name !== 'frustrampnn_review_capture_receipt'
+        || receipt.schema_version !== 1
+        || receipt.review_id !== reviewId
+        || receipt.parent_job_id !== jobId
+        || receipt.role !== 'structure_view_capture'
+        || receipt.media_type !== 'image/png'
+        || receipt.content_sha256 !== expectedSha256
+        || !Number.isInteger(receipt.size_bytes)
+        || receipt.size_bytes !== png.size
+        || typeof receipt.artifact_id !== 'string'
+        || typeof receipt.download_url !== 'string'
+    ) throw new Error('FrustraMPNN review capture receipt is invalid');
+    return receipt;
+};
+
+export interface FrustraMpnnExportReceipt {
+    schema_name: 'frustrampnn_export_receipt';
+    schema_version: 1;
+    export_id: string;
+    parent_job_id: string;
+    invocation_id: string;
+    format: 'json' | 'csv';
+    content_sha256: string;
+    row_count: number;
+    total_matching_rows: number;
+    complete: boolean;
+    download_url: string;
+}
+
+export const createFrustraMpnnGovernedExport = async (
+    jobId: string,
+    payload: { invocation_id: string; format: 'json' | 'csv'; limit?: number; auth_asym_id?: string; mutation_aa?: string; status?: string },
+): Promise<FrustraMpnnExportReceipt> => (
+    await api.post<FrustraMpnnExportReceipt>(`/api/frustrampnn/jobs/${encodeURIComponent(jobId)}/exports`, payload)
+).data;

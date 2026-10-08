@@ -60,8 +60,9 @@ test('CM result shell uses the shared workbench with an explicit fullscreen canv
     assert.match(viewer, /data-cm-viewer-fullscreen/);
     assert.match(viewer, /requestFullscreen\(\)/);
     assert.match(viewer, /height="100%"/);
-    assert.match(viewer, /showMetricWorkbench=\{metricWorkbenchOpen\}/);
-    assert.match(viewer, /showSequenceTrack=\{metricWorkbenchOpen\}/);
+    assert.match(viewer, /showMetricWorkbench=\{false\}/);
+    assert.match(viewer, /showSequenceTrack=\{false\}/);
+    assert.match(viewer, /<FrustraWorkbench/);
     assert.match(viewer, /Structural hypotheses in API order/);
     assert.match(viewer, /Compare as structural overlay/);
     assert.match(viewer, /firstAlternative/);
