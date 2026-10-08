@@ -141,6 +141,18 @@ export function Layout({ children }: LayoutProps) {
                                 <span className="inline 2xl:hidden">NGS Toolkit</span>
                                 <span className="hidden 2xl:inline">NGS Data Visualization Toolkit</span>
                             </Link>
+                            <Link
+                                to="/assay"
+                                className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap shrink-0"
+                                style={{
+                                    backgroundColor: isActive('/assay') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
+                                    color: isActive('/assay') ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                                }}
+                                title="Assay Analytics"
+                            >
+                                <span className="inline 2xl:hidden">Assay</span>
+                                <span className="hidden 2xl:inline">Assay Analytics</span>
+                            </Link>
                             {showSystemAnalyticsTab && (
                                 <Link
                                     to="/infra"

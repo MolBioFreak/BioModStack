@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
     fetchQueue,
+    fetchSystemStatus,
     pauseQueueJob,
     resumeQueueJob,
     cancelQueueJob,
@@ -14,7 +15,8 @@ import {
     forceLaunchQueueJob,
     type QueuedJob,
 } from '../lib/api';
-import { GPU_NAMES, formatGpuList, resolveQueueGpuDisplay } from './jobQueueGpuDisplay';
+import { buildGpuCatalog, formatGpuLabel, listGpuCatalogEntries, type GpuCatalogEntry, type GpuCatalogLike } from './gpuCatalog';
+import { formatGpuList, resolveQueueGpuDisplay } from './jobQueueGpuDisplay';
 
 // Model display names and icons
 // Model display names removed - using text badges instead
@@ -163,19 +165,48 @@ function VramBadge({ vramMb, label = 'VRAM', tone = 'accent' }: { vramMb: number
     );
 }
 
+function uniqueGpuIds(values: Array<number | null | undefined>): number[] {
+    const ids = new Set<number>();
+    for (const value of values) {
+        const gpuId = Number(value);
+        if (Number.isInteger(gpuId) && gpuId >= 0) {
+            ids.add(gpuId);
+        }
+    }
+    return Array.from(ids).sort((a, b) => a - b);
+}
+
+function fallbackGpuEntriesForJob(job: QueuedJob, gpuCatalog: GpuCatalogLike): GpuCatalogEntry[] {
+    const ids = uniqueGpuIds([
+        ...(job.scheduler_candidate_gpus ?? []),
+        ...(job.display_gpu_ids ?? []),
+        job.pinned_gpu,
+        job.assigned_gpu,
+    ]);
+    return ids.map((gpuId) => ({
+        index: gpuId,
+        name: formatGpuLabel(gpuId, gpuCatalog),
+        label: formatGpuLabel(gpuId, gpuCatalog),
+        memoryTotalMb: null,
+    }));
+}
+
 function GPUBadge({
     displayGpuIds,
     assignedGpu,
     pinnedGpu,
+    gpuCatalog,
 }: {
     displayGpuIds: number[] | null | undefined;
     assignedGpu: number | null;
     pinnedGpu: number | null;
+    gpuCatalog: GpuCatalogLike;
 }) {
     const display = resolveQueueGpuDisplay({
         displayGpuIds,
         assignedGpu,
         pinnedGpu,
+        gpuCatalog,
     });
     if (display.gpuIds.length === 0) {
         return (
@@ -320,6 +351,19 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
         refetchOnWindowFocus: false,
         enabled: showCancelled,
     });
+
+    const { data: systemData } = useQuery({
+        queryKey: ['system'],
+        queryFn: fetchSystemStatus,
+        refetchInterval: 5000,
+        refetchIntervalInBackground: false,
+        refetchOnWindowFocus: false,
+    });
+    const gpuCatalog = useMemo(
+        () => buildGpuCatalog(systemData?.data.gpus ?? []),
+        [systemData?.data.gpus]
+    );
+    const liveGpuOptions = useMemo(() => listGpuCatalogEntries(gpuCatalog), [gpuCatalog]);
 
     // Mutations
     const pauseMutation = useMutation({
@@ -560,6 +604,8 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
                                                 }}
                                                 isPending={isPending}
                                                 elapsedTick={elapsedTick}
+                                                gpuCatalog={gpuCatalog}
+                                                liveGpuOptions={liveGpuOptions}
                                             />
                                         ))}
                                     </div>
@@ -585,6 +631,8 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
                                                 }}
                                                 isPending={isPending}
                                                 elapsedTick={elapsedTick}
+                                                gpuCatalog={gpuCatalog}
+                                                liveGpuOptions={liveGpuOptions}
                                             />
                                         ))}
                                     </div>
@@ -612,6 +660,8 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
                                                 onForceLaunch={(gpuId) => forceLaunchMutation.mutate({ jobId: job.id, gpuId })}
                                                 isPending={isPending}
                                                 elapsedTick={elapsedTick}
+                                                gpuCatalog={gpuCatalog}
+                                                liveGpuOptions={liveGpuOptions}
                                             />
                                         ))}
                                     </div>
@@ -640,6 +690,8 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
                                                 onForceLaunch={(gpuId) => forceLaunchMutation.mutate({ jobId: job.id, gpuId })}
                                                 isPending={isPending}
                                                 elapsedTick={elapsedTick}
+                                                gpuCatalog={gpuCatalog}
+                                                liveGpuOptions={liveGpuOptions}
                                             />
                                         ))}
                                     </div>
@@ -662,6 +714,8 @@ interface JobRowProps {
     onForceLaunch?: (gpuId: number) => void;
     isPending: boolean;
     elapsedTick: number;  // For elapsed time display
+    gpuCatalog: GpuCatalogLike;
+    liveGpuOptions: GpuCatalogEntry[];
 }
 
 function JobRow({
@@ -673,13 +727,16 @@ function JobRow({
     onForceLaunch,
     isPending,
     elapsedTick,
+    gpuCatalog,
+    liveGpuOptions,
 }: JobRowProps) {
     const [showPinMenu, setShowPinMenu] = useState(false);
     const [showForceMenu, setShowForceMenu] = useState(false);
     const displayName = getDisplayJobName(job);
     const displayBatchName = getDisplayBatchName(job.batch_name);
-    const candidateGpuLabel = formatGpuList(job.scheduler_candidate_gpus);
-    const launchGpuLabel = formatGpuList(job.display_gpu_ids);
+    const gpuOptions = liveGpuOptions.length > 0 ? liveGpuOptions : fallbackGpuEntriesForJob(job, gpuCatalog);
+    const candidateGpuLabel = formatGpuList(job.scheduler_candidate_gpus, gpuCatalog);
+    const launchGpuLabel = formatGpuList(job.display_gpu_ids, gpuCatalog);
 
     return (
         <div className="bg-slate-700/30 rounded-lg p-3 hover:bg-slate-700/50 transition-colors">
@@ -713,6 +770,7 @@ function JobRow({
                                 displayGpuIds={job.display_gpu_ids}
                                 assignedGpu={job.assigned_gpu}
                                 pinnedGpu={job.pinned_gpu}
+                                gpuCatalog={gpuCatalog}
                             />
                             {job.priority > 0 && (
                                 <span className="px-2 py-0.5 rounded text-xs font-medium bg-amber-500/20 text-amber-400">
@@ -784,14 +842,16 @@ function JobRow({
                                     >
                                         🔄 Auto-assign
                                     </button>
-                                    {[0, 1, 2, 3].map((gpu) => (
+                                    {gpuOptions.length === 0 ? (
+                                        <div className="px-3 py-1.5 text-sm text-slate-500">No live GPUs detected</div>
+                                    ) : gpuOptions.map((gpu) => (
                                         <button
-                                            key={gpu}
-                                            onClick={() => { onPin(gpu); setShowPinMenu(false); }}
-                                            className={`w-full text-left px-3 py-1.5 text-sm hover:bg-slate-700 ${job.pinned_gpu === gpu ? 'text-orange-400' : 'text-slate-300'
+                                            key={gpu.index}
+                                            onClick={() => { onPin(gpu.index); setShowPinMenu(false); }}
+                                            className={`w-full text-left px-3 py-1.5 text-sm hover:bg-slate-700 ${job.pinned_gpu === gpu.index ? 'text-orange-400' : 'text-slate-300'
                                                 }`}
                                         >
-                                            {job.pinned_gpu === gpu ? '✓ ' : ''}{GPU_NAMES[gpu]}
+                                            {job.pinned_gpu === gpu.index ? '✓ ' : ''}{gpu.label}
                                         </button>
                                     ))}
                                 </div>
@@ -812,13 +872,15 @@ function JobRow({
                             </button>
                             {showForceMenu && (
                                 <div className="absolute right-0 top-8 z-10 bg-slate-800 border border-slate-600 rounded-lg shadow-xl py-1 min-w-[140px]">
-                                    {[0, 1, 2, 3].map((gpu) => (
+                                    {gpuOptions.length === 0 ? (
+                                        <div className="px-3 py-1.5 text-sm text-slate-500">No live GPUs detected</div>
+                                    ) : gpuOptions.map((gpu) => (
                                         <button
-                                            key={gpu}
-                                            onClick={() => { onForceLaunch(gpu); setShowForceMenu(false); }}
+                                            key={gpu.index}
+                                            onClick={() => { onForceLaunch(gpu.index); setShowForceMenu(false); }}
                                             className="w-full text-left px-3 py-1.5 text-sm hover:bg-slate-700 text-slate-300"
                                         >
-                                            {GPU_NAMES[gpu]}
+                                            {gpu.label}
                                         </button>
                                     ))}
                                 </div>
