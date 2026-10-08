@@ -15,6 +15,7 @@ import { StructureReorchestratePanel } from './dashboard/StructureReorchestrateP
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { buildGpuCatalog, listGpuCatalogEntries } from './gpuCatalog';
 import { useLiveGpuCatalog } from './useLiveGpuCatalog';
+import { runtimeAttachedReady } from '../lib/executionTargetFacts';
 import {
     buildStructureReorchestrateOverrides,
     canChangeStructureExecutionTarget,
@@ -154,7 +155,7 @@ export function Dashboard() {
         refetchInterval: 15_000,
     });
     const selectedWorker = !targetsQuery.isError
-        ? targetsQuery.data?.data.find((target) => target.id === resumeExecutionTargetId && target.active && target.state === 'ready')
+        ? targetsQuery.data?.data.find((target) => target.id === resumeExecutionTargetId && runtimeAttachedReady(target))
         : undefined;
     const remoteSelectionBlocked = resumeExecutionTargetId !== null && !selectedWorker;
     const { gpuOptions: localGpuOptions } = useLiveGpuCatalog();

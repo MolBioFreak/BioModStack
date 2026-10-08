@@ -55,13 +55,24 @@ export function deviceCapability(target: TargetLike | null | undefined): TargetD
 }
 
 /**
+ * The worker's runtime is attached and ready. This is persistent state, not
+ * admission: it survives a provider inventory refresh, so saved placements and
+ * worker-side GPU enumeration depend on it, while new work stays gated by
+ * `newWorkReady`. Keep the two apart; conflating them is what made the UI claim
+ * readiness the API would refuse.
+ */
+export function runtimeAttachedReady(target: TargetLike | null | undefined): boolean {
+    return Boolean(target?.active && target?.state === 'ready');
+}
+
+/**
  * The API's admission predicate. When the server has published it, use it
  * verbatim; only payloads that predate it fall back to the row projection.
  */
 export function newWorkReady(target: TargetLike | null | undefined): boolean {
     const published = schedulingFacts(target)?.new_work_ready;
     if (typeof published === 'boolean') return published;
-    return Boolean(target?.active && target?.state === 'ready');
+    return runtimeAttachedReady(target);
 }
 
 /** Why the API will not accept new work, in the API's own words. */

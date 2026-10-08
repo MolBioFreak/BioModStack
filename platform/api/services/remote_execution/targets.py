@@ -112,13 +112,18 @@ def parse_readiness_devices(readiness: Any) -> list[dict[str, Any]]:
     return devices
 
 
-def scheduler_vram_envelope() -> dict[str, Any]:
-    """The fill/margin pair the scheduler itself applies; never a second policy."""
+def scheduler_vram_envelope() -> dict[str, Any] | None:
+    """The fill/margin pair the scheduler itself applies, or None.
+
+    None means the persisted scheduler config could not be read. An unreadable
+    envelope is not a default: publishing a policy the scheduler never applied
+    would be a guess dressed as an observation.
+    """
     from services import gpu_config
     try:
         return gpu_config.vram_envelope()
     except Exception:
-        return {"target_vram_fill": 0.75, "safety_margin_mb": 2048}
+        return None
 
 
 def heavy_model_per_device_range() -> dict[str, Any] | None:
@@ -137,13 +142,15 @@ def device_capability_fact(capabilities: Any, *, envelope: dict[str, Any] | None
     Readiness alone is not capability: a worker whose per-device admissible
     memory is below a heavy-model reservation must not be presented as able to
     host every request. `heavy_model_fits` is True only when this worker can
-    admit every model in HEAVY_MODELS; it is null when nothing was observed.
-    This is evidence for operators, never an admission gate.
+    admit every model in HEAVY_MODELS; it is null when nothing was observed, and
+    the envelope plus everything derived from it are null when the scheduler's
+    fill/margin cannot be read. The observed device totals are published either
+    way. This is evidence for operators, never an admission gate.
     """
     observed = capabilities if isinstance(capabilities, dict) else {}
     envelope = envelope if isinstance(envelope, dict) else scheduler_vram_envelope()
-    fill = float(envelope.get("target_vram_fill", 0.75))
-    margin_mb = max(0, int(envelope.get("safety_margin_mb", 2048)))
+    fill = float(envelope["target_vram_fill"]) if isinstance(envelope, dict) else None
+    margin_mb = max(0, int(envelope["safety_margin_mb"])) if isinstance(envelope, dict) else None
     devices = parse_readiness_devices(observed.get("readiness"))
     source = "readiness_probe"
     if not devices:
@@ -160,7 +167,7 @@ def device_capability_fact(capabilities: Any, *, envelope: dict[str, Any] | None
               if isinstance(row.get("memory_total_mb"), int) and row["memory_total_mb"] > 0]
     smallest_device_mb = min(totals) if totals else None
     admissible_mb = (max(0, int(smallest_device_mb * fill) - margin_mb)
-                     if smallest_device_mb is not None else None)
+                     if smallest_device_mb is not None and fill is not None and margin_mb is not None else None)
     heavy_range = heavy_range_mb if isinstance(heavy_range_mb, dict) else heavy_model_per_device_range()
     heaviest_mb = heavy_range.get("maximum_mb") if isinstance(heavy_range, dict) else None
     return {
@@ -168,7 +175,7 @@ def device_capability_fact(capabilities: Any, *, envelope: dict[str, Any] | None
         "source": source,
         "observed_at": datetime.utcnow().isoformat(),
         "devices": devices,
-        "vram_envelope": {"target_vram_fill": fill, "safety_margin_mb": margin_mb},
+        "vram_envelope": envelope if isinstance(envelope, dict) else None,
         "per_device_memory_total_mb": smallest_device_mb,
         "per_device_admissible_idle_mb": admissible_mb,
         "heavy_model_per_device_mb": heavy_range,

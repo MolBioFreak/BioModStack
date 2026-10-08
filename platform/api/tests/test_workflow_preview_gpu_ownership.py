@@ -245,6 +245,22 @@ def test_worker_capability_fact_publishes_observed_capacity_and_keeps_unknown_nu
     assert targets.parse_readiness_devices({'gpus': ['fixture gpu']}) == []
 
 
+def test_unreadable_scheduler_envelope_publishes_no_derived_capacity(monkeypatch):
+    """An unreadable fill/margin is absent, not defaulted to a policy."""
+    from services.remote_execution import targets
+    def unreadable():
+        raise OSError('scheduler config unavailable')
+    monkeypatch.setattr('services.gpu_config.read_scheduler_config', unreadable)
+    fact = targets.device_capability_fact(
+        {'gpu_count': 4, 'gpu_name': 'NVIDIA GeForce RTX 5060 Ti', 'gpu_vram_mb': 16311,
+         'readiness': {'gpus': list(READINESS_4X_16311)}}, heavy_range_mb=HEAVY_RANGE)
+    assert [device['index'] for device in fact['devices']] == [0, 1, 2, 3]
+    assert fact['per_device_memory_total_mb'] == 16311
+    assert fact['vram_envelope'] is None
+    assert fact['per_device_admissible_idle_mb'] is None
+    assert fact['heavy_model_fits'] is None
+
+
 @pytest.mark.asyncio
 async def test_published_capability_is_served_and_refuses_no_fitting_plan(admission, tmp_path, monkeypatch):
     """The API publishes the worker's capacity fact; admission still uses its own clauses."""

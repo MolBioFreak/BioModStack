@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { TimeSeriesPlot } from './telemetryMetricPlot';
 import { useTelemetryChartRefresh } from './useTelemetryChartRefresh';
 import {
-    deviceCapacitySummary, deviceCapabilityWarning, newWorkReady, notReadyReason,
+    deviceCapacitySummary, deviceCapabilityWarning, newWorkReady, notReadyReason, runtimeAttachedReady,
 } from '../lib/executionTargetFacts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -1417,7 +1417,7 @@ export function InfraLiveTelemetry({
         if (executionTargetsQuery.isPending) return;
         const saved = window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY);
         const ready = !executionTargetsQuery.isError && executionTargetsQuery.data?.data.some(
-            (target) => target.id === saved && target.active && target.state === 'ready',
+            (target) => target.id === saved && runtimeAttachedReady(target),
         );
         if (saved && !ready) window.sessionStorage.removeItem(EXECUTION_TARGET_STORAGE_KEY);
     }, [executionTargetsQuery.data, executionTargetsQuery.isError, executionTargetsQuery.isPending]);
