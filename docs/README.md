@@ -9,6 +9,7 @@ surface so this index can act as the single starting point.
 - [Platform Overview](Platform_Overview.md)
 - [Workstation Setup and Runtime](<Workstation Set Up and Install Guide.md>)
 - [Structure Design and Refinement](Structure_Design_and_Refinement.md)
+- [Experimental Protein CAD Workflow](Experimental_Protein_CAD_Workflow.md)
 - [Lab Automation, Mol Bio, and Sequencing](Lab_Automation_MolBio_and_Sequencing.md)
 - [Results and Analysis](Results_and_Analysis.md)
 - [Documentation Harmonization Strategy](Documentation_Harmonization_Strategy.md)
@@ -37,6 +38,7 @@ surface so this index can act as the single starting point.
 The canonical docs set covers:
 
 - structure design, validation, and refinement workflows
+- experimental non-binder protein CAD integration for La-Proteina and DISCO
 - antibody and binder-focused orchestration
 - mol bio construct editing and sequence operations
 - nanopore/NGS launch and review surfaces

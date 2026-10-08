@@ -35,6 +35,8 @@ Every model integration usually touches some subset of:
   minibinder / peptide binder design
 - `protein_local_redesign`
   constrained remodel + redesign workflow
+- `protein_cad_experimental`
+  experimental La-Proteina / DISCO non-binder design workflow
 
 ### Generic prediction / design / docking
 
@@ -51,6 +53,7 @@ Every model integration usually touches some subset of:
 - `boltzgen`
 - `oligo_design`
 - `mutagenesis`
+- `protein_cad_experimental`
 
 ### Sequencing
 
@@ -65,6 +68,8 @@ Every model integration usually touches some subset of:
 - BindCraft
 - BoltzGen
 - RFDpoly / Oligo Designer
+- La-Proteina
+- DISCO
 
 ### Sequence design and redesign
 

@@ -72,6 +72,28 @@ Purpose:
 - redesign sequence with FAMPNN or ProteinMPNN
 - optionally validate the resulting complex
 
+### Experimental protein CAD
+
+Primary workflow:
+- [workflows/protein_cad_experimental.nf](../workflows/protein_cad_experimental.nf)
+
+Purpose:
+
+- compile BMS launch inputs into native La-Proteina or DISCO requests
+- run experimental non-binder de novo generation backends
+- normalize outputs into BMS design IDs and manifests
+
+Current backend coverage:
+
+- La-Proteina:
+  unconditional generation and motif scaffolding
+- DISCO:
+  unconditional, ligand-conditioned, DNA-conditioned, RNA-conditioned, and
+  custom JSON launches
+
+See [Experimental Protein CAD Workflow](Experimental_Protein_CAD_Workflow.md)
+for the dependency matrix, current limits, and iteration plan.
+
 ### RFdiffusion / backbone generation
 
 Generic backbone-generation support exists for RFdiffusion-style workflows and
@@ -119,6 +141,8 @@ Docking support includes:
 - BindCraft
 - BoltzGen
 - RFDpoly / Oligo Designer
+- La-Proteina
+- DISCO
 
 ### Sequence design and redesign
 
