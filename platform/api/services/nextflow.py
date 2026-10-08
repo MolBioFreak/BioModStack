@@ -2044,6 +2044,22 @@ async def _persist_boltz_launch_authority(session, job, command, *, compiled_par
     return list(command) + ['--protein_science_contract_revision', '1'] + authority_transport
 
 
+async def _record_native_compilation_identity(session, job, invocation) -> str:
+    """Retain shared compiler commitments in the existing Job provenance."""
+    identity = invocation.identity_receipt
+    key = identity['invocation_sha256']
+    provenance = dict(job.provenance or {})
+    identities = dict(provenance.get('native_compilation_identities') or {})
+    if key in identities and identities[key] != identity:
+        raise ExecutionOwnershipError('Stored native compilation identity conflicts')
+    identities[key] = identity
+    provenance['native_compilation_identities'] = identities
+    provenance['native_invocation_sha256'] = key
+    job.provenance = provenance
+    await session.commit()
+    return key
+
+
 async def launch_nextflow_job(
     job_id: str,
     model_id: str,
@@ -2544,9 +2560,10 @@ async def launch_nextflow_job(
             attempt = 1
 
             while True:
-                local_parameters: Dict[str, Any] = {}
-                cmd = build_job_nextflow_command(job, launch_params, output_dir,
-                    compiled_parameters=local_parameters)
+                local_invocation = compile_job_nextflow_invocation(job, launch_params, output_dir)
+                local_invocation.materialize_inputs(Path(output_dir))
+                local_parameters = local_invocation.native_parameters
+                cmd = list(local_invocation.command)
                 if uses_native_parent_components(cmd):
                     if launch_params.get('run_frustrampnn') is True and gpu_id is None:
                         raise ExecutionOwnershipError('Native FrustraMPNN requires the parent GPU reservation')
@@ -2563,6 +2580,8 @@ async def launch_nextflow_job(
                     compiled_parameters=local_parameters)
                 from services import rf_filter_task_roster
                 await rf_filter_task_roster.begin_command(session, job, cmd)
+                native_identity_key = await _record_native_compilation_identity(
+                    session, job, local_invocation)
                 logger.info(
                     f"[JOB {job_id}] Launch attempt {attempt} "
                     f"(resume_retries={resume_lock_retries_used}/{max_resume_lock_retries}, "
@@ -2906,6 +2925,16 @@ async def launch_nextflow_job(
             if job:
                 # Refresh status to see if it was cancelled by API while we waited
                 await session.refresh(job)
+                if exit_code == 0 and job.status != JobStatus.CANCELLED.value:
+                    provenance = dict(job.provenance or {})
+                    identities = provenance.get('native_compilation_identities')
+                    if (provenance.get('native_invocation_sha256') != native_identity_key
+                            or not isinstance(identities, dict)
+                            or identities.get(native_identity_key) != local_invocation.identity_receipt):
+                        logger.error('Native compilation identity changed for job %s; '
+                                     'refusing terminal result publication', job_id)
+                        await session.rollback()
+                        return
                 terminal_snapshot = capture_terminal_job_publication_snapshot(job)
                 
                 if job.status == JobStatus.CANCELLED.value:

@@ -365,6 +365,21 @@ class NativeInvocation:
                 for item in self.generated_inputs],
         }
 
+    @property
+    def identity_receipt(self) -> dict[str, Any]:
+        """Observable identity without exporting request bodies or credentials."""
+        if self.source_identity is None or self.entrypoint is None:
+            raise ValueError('Native compilation identity is not source-bound')
+        payload = self.payload
+        fields = ('model_id', 'mode', 'entrypoint', 'source_identity',
+                  'requested_sha256', 'effective_sha256', 'native_parameters_sha256',
+                  'execution_policy_sha256', 'dispatch_context_sha256', 'model_contracts')
+        return {
+            'schema': 'bms.native-invocation-identity.v1',
+            'invocation_sha256': digest(payload),
+            **{key: payload[key] for key in fields},
+        }
+
     def materialize_inputs(self, root: Path) -> None:
         for item in self.generated_inputs:
             item.materialize(root)
@@ -399,16 +414,14 @@ def native_invocation_receipt(invocation: NativeInvocation,
     """Publish commitments, never raw request settings or credential values."""
     if invocation.source_identity is None or invocation.entrypoint is None:
         raise ValueError('receipt requires a source-bound native invocation')
+    identity = invocation.identity_receipt
+    fields = ('model_id', 'mode', 'entrypoint', 'source_identity',
+              'invocation_sha256', 'requested_sha256', 'effective_sha256',
+              'native_parameters_sha256')
     receipt = {
         'schema': 'bms.native-invocation-receipt.v1',
         'job_id': envelope['job_id'], 'attempt_id': envelope['attempt_id'],
-        'model_id': invocation.model_id, 'mode': invocation.mode,
-        'entrypoint': invocation.entrypoint,
-        'source_identity': asdict(invocation.source_identity),
-        'invocation_sha256': invocation.invocation_sha256,
-        'requested_sha256': hashlib.sha256(invocation.requested_json).hexdigest(),
-        'effective_sha256': hashlib.sha256(invocation.effective_json).hexdigest(),
-        'native_parameters_sha256': hashlib.sha256(invocation.native_parameters_json).hexdigest(),
+        **{key: identity[key] for key in fields},
         'execution_projection_sha256': execution_projection_digest(envelope),
     }
     validate_native_invocation_receipt(receipt, envelope)
