@@ -978,8 +978,8 @@ export function JobSubmission() {
                     </section>
                 )}
 
-                {/* Submit Button - Hide if Mutagenesis Template is active (it has its own) */}
-                {selectedTemplateId !== 'mutagenesis' && (
+                {/* Submit Button - Hide if Mutagenesis or Antibody De Novo Template is active (they have their own) */}
+                {selectedTemplateId !== 'mutagenesis' && selectedTemplateId !== 'antibody_denovo' && (
                     <div className="flex justify-end gap-3 pt-4 pb-12">
                         {/* Save as Template Button */}
                         {(wizardMode === 'templates' || (wizardMode === 'manual' && selectedModelId)) && (
