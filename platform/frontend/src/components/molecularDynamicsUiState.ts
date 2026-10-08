@@ -227,6 +227,11 @@ export interface MolecularDynamicsLaunchIntent {
 }
 
 export interface MolecularDynamicsLaunchPreview {
+    execution_plan?: {
+        plan_sha256: string;
+        source_identity: { revision: string; tree: string };
+        metadata: { static_components: Array<{ component_key: string }>; dynamic_templates: Array<{ component_key: string }> };
+    } | null;
     execution_target_id: string | null;
     execution_policy: ExecutionPolicy;
     schema_version: 'bms.md.launch-preview.v1';

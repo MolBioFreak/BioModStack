@@ -43,6 +43,10 @@ class ExecutionPolicy(BaseModel):
 class JobCreate(BaseModel):
     """Request schema for creating a new job."""
     execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
+    execution_plan_approval: str | None = Field(
+        None, pattern=r"^[0-9a-f]{64}$",
+        description="Explicit approval of /jobs/execution-plan/preview; required for remote admission.",
+    )
     fampnn_analysis_overrides: FampnnAnalysisOverrides | None = None
     name: str = Field(..., min_length=1, max_length=255)
     model_id: str = Field(..., description="ID of the model to use (e.g., rfdiffusion)")
