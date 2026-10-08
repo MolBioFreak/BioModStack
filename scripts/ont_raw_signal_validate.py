@@ -9,7 +9,9 @@ import hashlib
 import json
 import os
 import socket
+import stat
 import sys
+import tempfile
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -42,6 +44,33 @@ def _receive_source_descriptors(args: argparse.Namespace) -> list[int]:
         os.set_inheritable(descriptor, True)
     args.governed_root = [Path(f"/proc/self/fd/{descriptors[index]}") for index in range(0, expected, 2)]
     args.pod5 = [Path(f"/proc/self/fd/{descriptors[index]}") for index in range(1, expected, 2)]
+    return descriptors
+
+
+def _receive_external_descriptors(args: argparse.Namespace) -> list[int]:
+    expected = 4
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.connect(str(args.fd_socket))
+        _message, ancillary, _flags, _address = client.recvmsg(
+            1,
+            socket.CMSG_SPACE(expected * array.array("i").itemsize),
+        )
+    received = array.array("i")
+    for level, kind, data in ancillary:
+        if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+            usable = len(data) - (len(data) % received.itemsize)
+            received.frombytes(data[:usable])
+    descriptors = received.tolist()
+    if len(descriptors) != expected:
+        for descriptor in descriptors:
+            os.close(descriptor)
+        raise ValueError("external descriptor transfer count is invalid")
+    for descriptor in descriptors:
+        os.set_inheritable(descriptor, True)
+    args.external_root_fds = [descriptors[0], descriptors[2]]
+    args.external_file_fds = [descriptors[1], descriptors[3]]
+    args.blow5 = Path(f"/proc/self/fd/{descriptors[1]}")
+    args.index = Path(f"/proc/self/fd/{descriptors[3]}")
     return descriptors
 
 
@@ -98,15 +127,135 @@ def _pod5_records(
     return records, acquisitions, group_counts
 
 
-def _slow5_open(path: Path):
+class _SnapshotSlow5:
+    def __init__(
+        self,
+        handle: Any,
+        temporary: tempfile.TemporaryDirectory[str],
+        source_identity: dict[str, Any] | None = None,
+        index_identity: dict[str, Any] | None = None,
+    ) -> None:
+        self._handle = handle
+        self._temporary = temporary
+        self.source_identity = source_identity
+        self.index_identity = index_identity
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._handle, name)
+
+    def close(self) -> None:
+        try:
+            self._handle.close()
+        finally:
+            self._temporary.cleanup()
+
+
+def _copy_slow5_snapshot(
+    path: Path | None,
+    destination: Path,
+    *,
+    expected: dict[str, Any] | None,
+    label: str,
+    source_fd: int | None = None,
+) -> dict[str, Any]:
+    source_descriptor = destination_fd = -1
+    try:
+        if source_fd is not None:
+            source_descriptor = os.dup(source_fd)
+        elif path is not None:
+            source_descriptor = os.open(
+                path, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
+            )
+        else:
+            raise ValueError(f"{label} source is missing")
+        destination_fd = os.open(
+            destination,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        before = os.fstat(source_descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError(f"{label} must be a regular file")
+        os.lseek(source_descriptor, 0, os.SEEK_SET)
+        digest = hashlib.sha256()
+        size = 0
+        while chunk := os.read(source_descriptor, 1024 * 1024):
+            digest.update(chunk)
+            size += len(chunk)
+            view = memoryview(chunk)
+            while view:
+                written = os.write(destination_fd, view)
+                view = view[written:]
+        after = os.fstat(source_descriptor)
+        identity = {
+            "sha256": digest.hexdigest(),
+            "bytes": size,
+            "device": after.st_dev,
+            "inode": after.st_ino,
+            "mtime_ns": after.st_mtime_ns,
+            "ctime_ns": after.st_ctime_ns,
+        }
+        if (
+            expected is not None
+            and any(
+                identity[key] != expected.get(key)
+                for key in ("sha256", "bytes", "device", "inode", "mtime_ns", "ctime_ns")
+            )
+        ) or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns
+        ):
+            raise ValueError(f"{label} changed before scientific consumption")
+        os.fsync(destination_fd)
+        if os.fstat(destination_fd).st_size != size:
+            raise ValueError(f"{label} snapshot size mismatch")
+        return identity
+    finally:
+        if source_descriptor >= 0:
+            os.close(source_descriptor)
+        if destination_fd >= 0:
+            os.close(destination_fd)
+
+
+def _slow5_open(
+    path: Path | None,
+    *,
+    index_path: Path | None = None,
+    expected: dict[str, Any] | None = None,
+    expected_index: dict[str, Any] | None = None,
+    temporary_root: Path | None = None,
+    source_fd: int | None = None,
+    index_fd: int | None = None,
+):
     try:
         import pyslow5  # type: ignore
     except ImportError as exc:
         raise ValueError("pyslow5 is required by the qualified validator runtime") from exc
-    handle = pyslow5.Open(str(path), "r")
-    if handle is None:
-        raise ValueError("BLOW5 could not be opened")
-    return handle
+    index = index_path if index_path is not None else (Path(f"{path}.idx") if path is not None else None)
+    if index is None and index_fd is None:
+        raise ValueError("BLOW5 index source is missing")
+    if temporary_root is None and Path("/stage").is_dir():
+        temporary_root = Path("/stage")
+    temporary = tempfile.TemporaryDirectory(
+        prefix=".bms-slow5-",
+        dir=str(temporary_root) if temporary_root is not None else None,
+    )
+    root = Path(temporary.name)
+    try:
+        snapshot = root / "source.blow5"
+        snapshot_index = root / "source.blow5.idx"
+        source_identity = _copy_slow5_snapshot(
+            path, snapshot, expected=expected, label="BLOW5", source_fd=source_fd
+        )
+        index_identity = _copy_slow5_snapshot(
+            index, snapshot_index, expected=expected_index, label="BLOW5 index", source_fd=index_fd
+        )
+        handle = pyslow5.Open(str(snapshot), "r")
+        if handle is None:
+            raise ValueError("BLOW5 could not be opened")
+        return _SnapshotSlow5(handle, temporary, source_identity, index_identity)
+    except BaseException:
+        temporary.cleanup()
+        raise
 
 
 def _verify_inputs(args: argparse.Namespace) -> None:
@@ -258,6 +407,7 @@ def semantic_validate(args: argparse.Namespace) -> dict[str, Any]:
         "num_reads_since_mux_change", "time_since_mux_change", "open_pore_level",
     }
     groups: dict[str, dict[str, Any]] = {}
+    output_identities: dict[str, dict[str, dict[str, Any]]] = {}
     for blow5_path, index_path in zip(args.blow5, args.index, strict=True):
         if index_path != Path(f"{blow5_path}.idx") or not index_path.is_file():
             raise ValueError("BLOW5 conversion unit lacks its adjacent index")
@@ -266,7 +416,15 @@ def semantic_validate(args: argparse.Namespace) -> dict[str, Any]:
             raise ValueError("BLOW5 unit name is not a run-info fingerprint")
         if fingerprint in groups:
             raise ValueError("duplicate BLOW5 run-info partition")
-        slow5 = _slow5_open(blow5_path)
+        slow5 = _slow5_open(
+            blow5_path,
+            index_path=index_path,
+            temporary_root=args.routing.parent,
+        )
+        source_identity = getattr(slow5, "source_identity", None)
+        index_identity = getattr(slow5, "index_identity", None)
+        if not isinstance(source_identity, dict) or not isinstance(index_identity, dict):
+            raise ValueError("BLOW5 scientific reader did not retain output identity authority")
         unit_ids: list[str] = []
         try:
             for record in slow5.seq_reads(pA=False, aux="all"):
@@ -330,6 +488,10 @@ def semantic_validate(args: argparse.Namespace) -> dict[str, Any]:
             "index": index_path.name,
             "read_count": len(unit_ids),
         }
+        output_identities[fingerprint] = {
+            "blow5": dict(source_identity),
+            "index": dict(index_identity),
+        }
     duplicate_count = sum(count - 1 for count in seen.values() if count > 1)
     if duplicate_count:
         raise ValueError(f"duplicate BLOW5 read IDs: {duplicate_count}")
@@ -353,6 +515,7 @@ def semantic_validate(args: argparse.Namespace) -> dict[str, Any]:
         "acquisition_ids": sorted(acquisitions),
         "partition_count": len(groups),
         "partition_counts": dict(sorted(observed_group_counts.items())),
+        "output_identities": output_identities,
         "total_signal_samples_compared": total_samples,
         "signal_samples": "bit_exact_int16",
         "mapping_contract": "verified_signal_and_full_common_field_contract_exact",
@@ -364,8 +527,230 @@ def semantic_validate(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _open_verified_external_file(
+    path: Path,
+    *,
+    expected_sha256: str,
+    expected_size: int,
+    expected_device: int,
+    expected_inode: int,
+    expected_mtime_ns: int,
+    expected_ctime_ns: int,
+    expected_root_device: int,
+    expected_root_inode: int,
+    label: str,
+) -> tuple[int, dict[str, Any]]:
+    flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    root_fd = -1
+    try:
+        root_fd = os.open(
+            path.parent,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+        )
+        root_info = os.fstat(root_fd)
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or (root_info.st_dev, root_info.st_ino) != (expected_root_device, expected_root_inode)
+            or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+            != (expected_device, expected_inode, expected_size, expected_mtime_ns, expected_ctime_ns)
+        ):
+            raise ValueError(f"{label} descriptor identity diverged")
+        digest = hashlib.sha256()
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        while chunk := os.read(descriptor, 1024 * 1024):
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        if (
+            (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+            != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+            or digest.hexdigest() != expected_sha256
+        ):
+            raise ValueError(f"{label} bytes diverged from registration manifest")
+        return descriptor, {
+            "sha256": digest.hexdigest(), "bytes": after.st_size, "device": after.st_dev,
+            "inode": after.st_ino, "mtime_ns": after.st_mtime_ns, "ctime_ns": after.st_ctime_ns,
+            "root_device": root_info.st_dev, "root_inode": root_info.st_ino,
+        }
+    except BaseException:
+        os.close(descriptor)
+        raise
+    finally:
+        if root_fd >= 0:
+            os.close(root_fd)
+
+
+def _verified_external_descriptor_identity(
+    file_descriptor: int,
+    root_descriptor: int,
+    *,
+    expected: dict[str, Any],
+    label: str,
+) -> dict[str, Any]:
+    root_info = os.fstat(root_descriptor)
+    before = os.fstat(file_descriptor)
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or (root_info.st_dev, root_info.st_ino)
+        != (expected["root_device"], expected["root_inode"])
+        or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+        != (
+            expected["device"],
+            expected["inode"],
+            expected["bytes"],
+            expected["mtime_ns"],
+            expected["ctime_ns"],
+        )
+    ):
+        raise ValueError(f"{label} descriptor identity diverged")
+    os.lseek(file_descriptor, 0, os.SEEK_SET)
+    digest = hashlib.sha256()
+    while chunk := os.read(file_descriptor, 1024 * 1024):
+        digest.update(chunk)
+    after = os.fstat(file_descriptor)
+    identity = {
+        "sha256": digest.hexdigest(),
+        "bytes": after.st_size,
+        "device": after.st_dev,
+        "inode": after.st_ino,
+        "mtime_ns": after.st_mtime_ns,
+        "ctime_ns": after.st_ctime_ns,
+        "root_device": root_info.st_dev,
+        "root_inode": root_info.st_ino,
+    }
+    if identity != expected or (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    ) != (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    ):
+        raise ValueError(f"{label} bytes diverged from registration manifest")
+    return identity
+
+
+def _copy_attested_external_file(
+    source_fd: int, expected: dict[str, Any], destination: Path, label: str
+) -> dict[str, Any]:
+    destination_fd = os.open(
+        destination,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        before = os.fstat(source_fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError(f"{label} must be a regular file")
+        os.lseek(source_fd, 0, os.SEEK_SET)
+        digest = hashlib.sha256()
+        size = 0
+        while chunk := os.read(source_fd, 1024 * 1024):
+            digest.update(chunk)
+            size += len(chunk)
+            view = memoryview(chunk)
+            while view:
+                written = os.write(destination_fd, view)
+                view = view[written:]
+        after = os.fstat(source_fd)
+        actual = {
+            "sha256": digest.hexdigest(), "bytes": size, "device": after.st_dev,
+            "inode": after.st_ino, "mtime_ns": after.st_mtime_ns, "ctime_ns": after.st_ctime_ns,
+            "root_device": expected["root_device"], "root_inode": expected["root_inode"],
+        }
+        if actual != expected or (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+            raise ValueError(f"{label} changed during snapshot")
+        os.fsync(destination_fd)
+        if os.fstat(destination_fd).st_size != size:
+            raise ValueError(f"{label} snapshot size mismatch")
+        return actual
+    finally:
+        os.close(destination_fd)
+
+
+def _verify_external_file(path: Path, **kwargs: Any) -> dict[str, Any]:
+    descriptor, identity = _open_verified_external_file(path, **kwargs)
+    os.close(descriptor)
+    return identity
+
+
+def _external_expected(args: argparse.Namespace, prefix: str) -> dict[str, Any]:
+    return {
+        "sha256": getattr(args, f"expected_{prefix}_sha256"),
+        "bytes": getattr(args, f"expected_{prefix}_size"),
+        "device": getattr(args, f"expected_{prefix}_device"),
+        "inode": getattr(args, f"expected_{prefix}_inode"),
+        "mtime_ns": getattr(args, f"expected_{prefix}_mtime_ns"),
+        "ctime_ns": getattr(args, f"expected_{prefix}_ctime_ns"),
+        "root_device": getattr(args, f"expected_{prefix}_root_device"),
+        "root_inode": getattr(args, f"expected_{prefix}_root_inode"),
+    }
+
+
 def external_blow5_validate(args: argparse.Namespace) -> dict[str, Any]:
-    slow5 = _slow5_open(args.blow5)
+    received_files = getattr(args, "external_file_fds", [])
+    if received_files:
+        root_fds = getattr(args, "external_root_fds", [])
+        if len(received_files) != 2 or len(root_fds) != 2:
+            raise ValueError("external descriptor authority is incomplete")
+        expected_blow5 = _external_expected(args, "blow5")
+        expected_index = _external_expected(args, "index")
+        blow5_identity = _verified_external_descriptor_identity(
+            received_files[0], root_fds[0], expected=expected_blow5, label="external BLOW5 artifact"
+        )
+        index_identity = _verified_external_descriptor_identity(
+            received_files[1], root_fds[1], expected=expected_index, label="external BLOW5 index"
+        )
+        receipt_value = getattr(args, "receipt", None)
+        temporary_root = Path(str(receipt_value)).parent if receipt_value is not None else None
+        slow5 = _slow5_open(
+            args.blow5,
+            expected=blow5_identity,
+            expected_index=index_identity,
+            temporary_root=temporary_root,
+            source_fd=received_files[0],
+            index_fd=received_files[1],
+        )
+    else:
+        blow5_identity = _verify_external_file(
+            args.blow5,
+            expected_sha256=args.expected_blow5_sha256,
+            expected_size=args.expected_blow5_size,
+            expected_device=args.expected_blow5_device,
+            expected_inode=args.expected_blow5_inode,
+            expected_mtime_ns=args.expected_blow5_mtime_ns,
+            expected_ctime_ns=args.expected_blow5_ctime_ns,
+            expected_root_device=args.expected_blow5_root_device,
+            expected_root_inode=args.expected_blow5_root_inode,
+            label="external BLOW5 artifact",
+        )
+        index_identity = _verify_external_file(
+            args.index,
+            expected_sha256=args.expected_index_sha256,
+            expected_size=args.expected_index_size,
+            expected_device=args.expected_index_device,
+            expected_inode=args.expected_index_inode,
+            expected_mtime_ns=args.expected_index_mtime_ns,
+            expected_ctime_ns=args.expected_index_ctime_ns,
+            expected_root_device=args.expected_index_root_device,
+            expected_root_inode=args.expected_index_root_inode,
+            label="external BLOW5 index",
+        )
+        receipt_value = getattr(args, "receipt", None)
+        temporary_root = Path(str(receipt_value)).parent if receipt_value is not None else None
+        slow5 = _slow5_open(
+            args.blow5,
+            index_path=args.index,
+            expected=blow5_identity,
+            expected_index=index_identity,
+            temporary_root=temporary_root,
+        )
     seen: Counter[str] = Counter()
     required = {"read_id", "signal", "len_raw_signal", "digitisation", "offset", "range", "sampling_rate"}
     try:
@@ -395,6 +780,8 @@ def external_blow5_validate(args: argparse.Namespace) -> dict[str, Any]:
         "indexed_lookup_count": len(seen),
         "pod5_parity_claimed": False,
         "ancestry": "external_native_without_pod5_parent",
+        "blow5_identity": blow5_identity,
+        "blow5_index_identity": index_identity,
     }
 
 
@@ -422,6 +809,16 @@ def main() -> int:
     external = subparsers.add_parser("external-blow5")
     external.add_argument("--blow5", type=Path, required=True)
     external.add_argument("--index", type=Path, required=True)
+    for prefix in ("blow5", "index"):
+        external.add_argument(f"--expected-{prefix}-sha256", required=True)
+        external.add_argument(f"--expected-{prefix}-size", type=int, required=True)
+        external.add_argument(f"--expected-{prefix}-device", type=int, required=True)
+        external.add_argument(f"--expected-{prefix}-inode", type=int, required=True)
+        external.add_argument(f"--expected-{prefix}-mtime-ns", type=int, required=True)
+        external.add_argument(f"--expected-{prefix}-ctime-ns", type=int, required=True)
+        external.add_argument(f"--expected-{prefix}-root-device", type=int, required=True)
+        external.add_argument(f"--expected-{prefix}-root-inode", type=int, required=True)
+    external.add_argument("--fd-socket", type=Path)
     external.add_argument("--receipt", type=Path, required=True)
     partition = subparsers.add_parser("partition-pod5")
     add_source_authority(partition)
@@ -441,15 +838,19 @@ def main() -> int:
     semantic.add_argument("--receipt", type=Path, required=True)
     args = parser.parse_args()
     args.received_fds = []
+    args.external_root_fds = []
+    args.external_file_fds = []
 
     receipt = args.receipt
     try:
         if args.mode in {"source-preflight", "partition-pod5", "semantic-dataset"} and args.fd_socket:
             args.received_fds = _receive_source_descriptors(args)
+        elif args.mode == "external-blow5" and args.fd_socket:
+            args.received_fds = _receive_external_descriptors(args)
         if args.mode == "source-preflight":
             payload = source_preflight(args)
         elif args.mode == "external-blow5":
-            if not args.index.is_file():
+            if not args.external_file_fds and not args.index.is_file():
                 raise ValueError("external BLOW5 validation requires an adjacent index")
             payload = external_blow5_validate(args)
         elif args.mode == "partition-pod5":
