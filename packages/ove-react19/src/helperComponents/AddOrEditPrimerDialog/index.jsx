@@ -1,16 +1,18 @@
-import React, { useEffect, useRef, useState, useMemo } from "react";
+import React, { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import {
   AdvancedOptions,
   CheckboxField,
   DropdownButton,
   generateField,
-  RadioGroupField
+  RadioGroupField,
+  InputField
 } from "@teselagen/ui";
 import {
   filterSequenceString,
   getReverseComplementSequenceString,
   calculatePercentGC,
-  calculateEndStability
+  calculateEndStability,
+  findSequenceMatches
 } from "@teselagen/sequence-utils";
 
 import AddOrEditAnnotationDialog from "../AddOrEditAnnotationDialog";
@@ -22,10 +24,166 @@ import { flatMap } from "lodash-es";
 import CaretPositioning, {
   selectionSaveCaretPosition
 } from "./EditCaretPosition";
-import { Menu, MenuItem } from "@blueprintjs/core";
+import { Menu, MenuItem, Callout, Intent, Spinner, Tag } from "@blueprintjs/core";
 
 import MeltingTemp from "../../StatusBar/MeltingTemp";
 import { getStructuredBases } from "../../RowItem/StackedAnnotations/getStructuredBases";
+
+/**
+ * PrimerSequenceInput - A sequence input field that auto-detects binding sites
+ */
+const PrimerSequenceInput = generateField(function PrimerSequenceInput({
+  input,
+  disabled,
+  sequenceData,
+  isCircular,
+  onBindingSiteFound,
+  change
+}) {
+  const [searchResults, setSearchResults] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [selectedMatch, setSelectedMatch] = useState(0);
+  const sequence = input.value || "";
+
+  // Debounced search for binding sites
+  useEffect(() => {
+    if (!sequence || sequence.length < 6) {
+      setSearchResults([]);
+      return;
+    }
+
+    setIsSearching(true);
+    const timer = setTimeout(() => {
+      try {
+        // Search forward strand
+        const forwardMatches = findSequenceMatches(
+          sequenceData.sequence,
+          sequence,
+          {
+            isCircular,
+            isAmbiguous: true, // Allow ambiguous bases like N, R, Y etc
+            searchReverseStrand: false
+          }
+        );
+
+        // Search reverse complement
+        const reverseSeq = getReverseComplementSequenceString(sequence);
+        const reverseMatches = findSequenceMatches(
+          sequenceData.sequence,
+          reverseSeq,
+          {
+            isCircular,
+            isAmbiguous: true,
+            searchReverseStrand: false
+          }
+        ).map(m => ({ ...m, isReverse: true }));
+
+        const allMatches = [
+          ...forwardMatches.map(m => ({ ...m, isReverse: false })),
+          ...reverseMatches
+        ].sort((a, b) => a.start - b.start);
+
+        setSearchResults(allMatches);
+
+        // Auto-select first match and update form
+        if (allMatches.length > 0) {
+          const match = allMatches[0];
+          onBindingSiteFound(match);
+          setSelectedMatch(0);
+        }
+      } catch (e) {
+        console.error("Primer search error:", e);
+        setSearchResults([]);
+      }
+      setIsSearching(false);
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [sequence, sequenceData.sequence, isCircular, onBindingSiteFound]);
+
+  const handleMatchSelect = useCallback((index) => {
+    setSelectedMatch(index);
+    if (searchResults[index]) {
+      onBindingSiteFound(searchResults[index]);
+    }
+  }, [searchResults, onBindingSiteFound]);
+
+  return (
+    <div className="primer-sequence-input">
+      <div className="bp3-form-group bp3-inline">
+        <label className="bp3-label" style={{ marginRight: 10 }}>
+          Primer Sequence
+          <span className="bp3-text-muted" style={{ marginLeft: 8, fontSize: 11 }}>
+            (5' → 3')
+          </span>
+        </label>
+        <input
+          type="text"
+          className="bp3-input"
+          style={{
+            fontFamily: "monospace",
+            textTransform: "uppercase",
+            minWidth: 280
+          }}
+          placeholder="Enter primer sequence (e.g., ATGCATGCATGC)"
+          value={sequence}
+          onChange={(e) => {
+            const [filtered] = filterSequenceString(e.target.value, sequenceData);
+            input.onChange(filtered.toUpperCase());
+          }}
+          disabled={disabled}
+        />
+      </div>
+
+      {/* Results indicator */}
+      <div style={{ marginTop: 8, marginBottom: 8 }}>
+        {isSearching ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <Spinner size={14} />
+            <span className="bp3-text-muted">Searching for binding sites...</span>
+          </div>
+        ) : sequence.length >= 6 ? (
+          searchResults.length > 0 ? (
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <Tag intent={Intent.SUCCESS} minimal>
+                  {searchResults.length} binding site{searchResults.length > 1 ? "s" : ""} found
+                </Tag>
+              </div>
+              {searchResults.length > 1 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                  {searchResults.slice(0, 10).map((match, idx) => (
+                    <Tag
+                      key={idx}
+                      interactive
+                      intent={idx === selectedMatch ? Intent.PRIMARY : Intent.NONE}
+                      onClick={() => handleMatchSelect(idx)}
+                      style={{ cursor: "pointer" }}
+                    >
+                      {match.start + 1}-{match.end + 1}
+                      {match.isReverse ? " (Rev)" : ""}
+                    </Tag>
+                  ))}
+                  {searchResults.length > 10 && (
+                    <span className="bp3-text-muted">+{searchResults.length - 10} more</span>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            <Callout intent={Intent.WARNING} icon="warning-sign" style={{ padding: "6px 10px" }}>
+              No exact binding sites found. Check your sequence or try a shorter primer.
+            </Callout>
+          )
+        ) : sequence.length > 0 ? (
+          <span className="bp3-text-muted" style={{ fontSize: 12 }}>
+            Enter at least 6 bases to search for binding sites
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+});
 
 const CustomContentEditable = generateField(function CustomContentEditable({
   input,
@@ -82,13 +240,12 @@ const CustomContentEditable = generateField(function CustomContentEditable({
     allBasesWithMetaData,
     ({ b, isMatch, isAmbiguousMatch }) => {
       if (b === "&") return [];
-      return `<span class="${
-        isMatch
+      return `<span class="${isMatch
           ? ""
           : isAmbiguousMatch
             ? "tg-ambiguous-match-seq"
             : "tg-no-match-seq"
-      }">${b}</span>`;
+        }">${b}</span>`;
     }
   );
   html = html.join("");
@@ -324,11 +481,16 @@ const TextInnerWrapper = p => (
   </div>
 );
 
+/**
+ * New simplified primer dialog that takes a sequence input and auto-finds binding sites
+ */
 export default AddOrEditAnnotationDialog({
   formName: "AddOrEditPrimerDialog",
   getProps: props => ({
     upsertAnnotation: props.upsertPrimer,
     annotationTypePlural: "primers",
-    RenderBases
+    RenderBases,
+    // Override to use sequence-based binding detection
+    RenderPrimerSequenceInput: PrimerSequenceInput
   })
 });
