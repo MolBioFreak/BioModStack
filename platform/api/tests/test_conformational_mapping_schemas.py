@@ -468,6 +468,39 @@ def test_native_ensemble_bundle_is_exactly_cross_bound() -> None:
         shared_sidecar["cm_ensemble_v1"]["candidates"][0]["authoritative_structure_path"]
     ]
     adversarial_mutations.append(shared_sidecar)
+    wrong_snapshot_candidate = {
+        key: copy.deepcopy(fixtures[key])
+        for key in ("cm_complex_snapshot_v1", "cm_ensemble_v1")
+    }
+    for mapping in wrong_snapshot_candidate["cm_complex_snapshot_v1"]["instance_mappings"]:
+        mapping["candidate_id"] = "cm_ptx_target-a_11111111111111111111"
+    wrong_snapshot_candidate["cm_ensemble_v1"]["source_snapshot_sha256"] = canonical_sha256(
+        wrong_snapshot_candidate["cm_complex_snapshot_v1"]
+    )
+    adversarial_mutations.append(wrong_snapshot_candidate)
+    wrong_snapshot_target = {
+        key: copy.deepcopy(fixtures[key])
+        for key in ("cm_complex_snapshot_v1", "cm_ensemble_v1")
+    }
+    wrong_snapshot_target["cm_complex_snapshot_v1"]["target_id"] = "different-target"
+    for mapping in wrong_snapshot_target["cm_complex_snapshot_v1"]["instance_mappings"]:
+        mapping["runtime_target_id"] = "different-target"
+    wrong_snapshot_target["cm_ensemble_v1"]["source_snapshot_sha256"] = canonical_sha256(
+        wrong_snapshot_target["cm_complex_snapshot_v1"]
+    )
+    adversarial_mutations.append(wrong_snapshot_target)
+    request_snapshot_target_mismatch = {
+        key: copy.deepcopy(fixtures[key])
+        for key in ("cm_request_v1", "cm_complex_snapshot_v1")
+    }
+    request_snapshot_target_mismatch["cm_complex_snapshot_v1"]["target_id"] = (
+        "different-target"
+    )
+    for mapping in request_snapshot_target_mismatch["cm_complex_snapshot_v1"][
+        "instance_mappings"
+    ]:
+        mapping["runtime_target_id"] = "different-target"
+    adversarial_mutations.append(request_snapshot_target_mismatch)
 
     for malformed in adversarial_mutations:
         with pytest.raises(ContractValidationError):
@@ -515,6 +548,20 @@ def test_resume_descriptor_rejects_semantically_forged_values() -> None:
         "settings_runtime_policy_sha256": "2" * 64,
     }
     ResumeDescriptor.model_validate(descriptor)
+    descriptor_with_entity_hashes = copy.deepcopy(descriptor)
+    descriptor_with_entity_hashes["feature_policy"]["per_entity_hashes"] = {
+        "repeat_prot": "9" * 64
+    }
+    descriptor_with_entity_hashes["feature_policy_sha256"] = feature_policy_sha256(
+        descriptor_with_entity_hashes["feature_policy"]
+    )
+    assert ResumeDescriptor.model_validate(descriptor_with_entity_hashes).feature_policy == (
+        descriptor_with_entity_hashes["feature_policy"]
+    )
+    explicit_null_hashes = copy.deepcopy(descriptor)
+    explicit_null_hashes["feature_policy"]["per_entity_hashes"] = None
+    with pytest.raises(ValueError):
+        ResumeDescriptor.model_validate(explicit_null_hashes)
     mutations = {
         "duplicate seeds": lambda value: value.update(ordered_seeds=[101, 101]),
         "bad cardinality": lambda value: value.update(expected_candidate_cardinality=999),
