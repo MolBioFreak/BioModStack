@@ -1048,6 +1048,7 @@ export interface OntManagedReferenceRequest {
 }
 
 export interface OntNgsSubmitRequest {
+    execution_target_id?: string | null;
     name?: string;
     params: Record<string, unknown>;
     pinned_gpu?: number | null;
@@ -1075,7 +1076,6 @@ export const fetchOntNgsSettingsContract = () => api.get<{
 }>('/api/ont/ngs/settings-contract');
 
 export const submitOntNgsJob = (workflowId: string, request: OntNgsSubmitRequest) => {
-    assertLocalOnlySubmission('ONT/NGS');
     return api.post<Job>(`/api/ont/ngs/${workflowId}/submit`, request);
 };
 
@@ -1123,6 +1123,7 @@ export interface OntBarcodeBatchMapping {
 }
 
 export interface OntBarcodeBatchSubmitRequest {
+    execution_target_id?: string | null;
     idempotency_key: string;
     target_workflow: 'ont_plasmid_qc' | 'ont_construct_screening';
     name_prefix?: string;
@@ -1140,7 +1141,6 @@ export const submitOntBarcodeBatch = (
     sourceJobId: string,
     request: OntBarcodeBatchSubmitRequest,
 ) => {
-    assertLocalOnlySubmission('ONT barcode batch');
     return api.post<OntBarcodeBatchSubmitResponse>(
         `/api/jobs/${encodeURIComponent(sourceJobId)}/barcode-batches`,
         request,
@@ -1155,6 +1155,7 @@ export interface PooledReferenceAssignmentTarget {
 }
 
 export interface PooledReferenceAssignmentSubmitRequest {
+    execution_target_id?: string | null;
     idempotency_key: string;
     fastq_path: string;
     targets: PooledReferenceAssignmentTarget[];
@@ -1188,7 +1189,6 @@ export const restorePooledReferenceSet = (referenceSetManifest: string) => api.p
 export const submitPooledReferenceAssignment = (
     request: PooledReferenceAssignmentSubmitRequest,
 ) => {
-    assertLocalOnlySubmission('Pooled reference assignment');
     return api.post<PooledReferenceAssignmentSubmitResponse>(
         '/api/ont/ngs/pooled-reference-assignment/submit',
         request,
@@ -1233,6 +1233,7 @@ export interface PooledAssignmentTargetsResponse {
 }
 
 export interface PooledAssignmentReleaseRequest {
+    execution_target_id?: string | null;
     idempotency_key: string;
     target_workflow: PooledAssignmentTargetWorkflow;
     name_prefix?: string;
@@ -5980,3 +5981,8 @@ export const updateProjectHubPlasmidInfo = (
     `${projectHubRoot(projectId, experimentId, domainId)}/plasmids/${encodeURIComponent(sequenceId)}/info`,
     request,
 ));
+
+
+export const pullRemoteNgsResults = (jobId: string, attemptId: string) =>
+    api.post<{ job_id: string; attempt_id: string; state: string }>(
+        `/api/jobs/${encodeURIComponent(jobId)}/remote-results/pull`, { attempt_id: attemptId });

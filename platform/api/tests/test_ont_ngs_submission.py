@@ -1050,3 +1050,16 @@ def test_public_jobs_route_rejects_all_direct_nanopore_creation() -> None:
     )
     assert unknown.status_code == 422
     assert "typed /api/ont/ngs" in unknown.text
+
+
+def test_ngs_execution_target_is_part_of_reviewed_effective_request():
+    from schemas import JobCreate
+    local = ont_runs.OntNgsSubmitRequest(params={}, execution_target_id=None)
+    remote = ont_runs.OntNgsSubmitRequest(params={}, execution_target_id="vast:123")
+    local_job = JobCreate(name="review", model_id="nanopore", mode="basecall", params={})
+    remote_job = local_job.model_copy(update={"execution_target_id": "vast:123"})
+    a = ont_runs._ngs_launch_preview("ont_basecall_dna", local, local_job)
+    b = ont_runs._ngs_launch_preview("ont_basecall_dna", remote, remote_job)
+    assert b["requested_settings"]["execution_target_id"] == "vast:123"
+    assert b["effective_request"]["execution_target_id"] == "vast:123"
+    assert a["preview_digest"] != b["preview_digest"]

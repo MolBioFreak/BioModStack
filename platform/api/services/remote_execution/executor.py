@@ -846,14 +846,14 @@ async def _finish_remote_cancellation(session: AsyncSession, job: Job) -> bool:
     }, release_lease=True)
 
 
-async def reconcile_remote_job(session: AsyncSession, job: Job) -> bool:
+async def reconcile_remote_job(session: AsyncSession, job: Job, *, pull_results: bool = False) -> bool:
     with _controller_attempt_guard(str(job.id)) as owned:
         if not owned:
             return False
-        return await _reconcile_remote_job_owned(session, job)
+        return await _reconcile_remote_job_owned(session, job, pull_results=pull_results)
 
 
-async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
+async def _reconcile_remote_job_owned(session: AsyncSession, job: Job, *, pull_results: bool = False) -> bool:
     """Reconcile one running remote Job. Return true when local state changed."""
     job_id = str(job.id)
     if job.status in {"completed", "failed", "cancelled"}:
@@ -964,6 +964,15 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
         await _release_remote_target_lease(session, job)
         await session.commit()
         return True
+    if str(job.model_id or "").lower() == "nanopore" and not pull_results:
+        # Observation must not silently transfer scientific payloads. Keep the
+        # immutable remote attempt intact until an explicit attempt-bound pull.
+        if job.remote_state == "remote_finished_results_waiting":
+            return False
+        return await _publish_remote_transition(session, job, {
+            "remote_state": "remote_finished_results_waiting",
+            "current_stage": "Remote results awaiting explicit pull",
+        })
     if not await _acquire_remote_terminal_fence(session, job):
         return False
     manifest, incoming = await collect_remote_results(session, job, status)
@@ -1017,6 +1026,13 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
         )
         provenance["remote_execution_receipt"] = receipt
         job.provenance = provenance
+        if job.model_id == "nanopore":
+            # Delivery is durable, not scientific acceptance. Native validation
+            # may roll back staged intents without losing returned identity.
+            await session.commit()
+            await session.refresh(job)
+            if not await _acquire_remote_terminal_fence(session, job):
+                return False
         if job.model_id == "msa_batch":
             msa_manifest = local_output / "msa_manifest.json"
             if msa_manifest.is_symlink() or not msa_manifest.is_file():

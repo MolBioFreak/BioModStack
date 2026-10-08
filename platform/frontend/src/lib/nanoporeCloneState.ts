@@ -66,6 +66,7 @@ export function normalizeNanoporeCloneState(job: Job | null): Record<string, unk
                         : undefined;
     return {
         selectedWorkflow,
+        execution_target_id: job.execution_target_id ?? null,
         cloneRefusal,
         molbioRevisionBinding: nativeBinding,
         ontWorkflowId: workflowId,

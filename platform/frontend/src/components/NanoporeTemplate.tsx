@@ -1,3 +1,4 @@
+import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 /**
  * NanoporeTemplate – ONT Nanopore methylation basecalling and analysis.
  *
@@ -664,6 +665,7 @@ function PooledTargetRow({ target, sequences, onChange }: PooledTargetRowProps) 
 }
 
 interface PooledReferenceAssignmentPanelProps {
+    executionTargetId: string | null;
     fastqPath: string;
     sequences: NucleotideSequenceListItem[];
     onFastqBrowse: () => void;
@@ -672,7 +674,7 @@ interface PooledReferenceAssignmentPanelProps {
     pinnedGpus: number[];
 }
 
-function PooledReferenceAssignmentPanel({ fastqPath, sequences, onFastqBrowse, initialValues, jobName, pinnedGpus }: PooledReferenceAssignmentPanelProps) {
+function PooledReferenceAssignmentPanel({ fastqPath, sequences, onFastqBrowse, initialValues, jobName, pinnedGpus, executionTargetId }: PooledReferenceAssignmentPanelProps) {
     const queryClient = useQueryClient();
     const manifestPath = initialValues?.referenceSetManifest as string | undefined;
     const restoration = useQuery({
@@ -749,6 +751,7 @@ function PooledReferenceAssignmentPanel({ fastqPath, sequences, onFastqBrowse, i
                 idempotency_key: newIdempotencyKey('pooled-reference-assignment'),
                 fastq_path: fastqPath.trim(),
                 targets: receiptTargets,
+                execution_target_id: executionTargetId,
                 min_mapq: minMapq,
                 min_alignment_score_margin: minAlignmentScoreMargin,
                 ...(jobName ? { name: jobName } : {}),
@@ -886,6 +889,7 @@ function NanoporeLaunchForm({ onBack, initialValues }: NanoporeTemplateProps) {
     // State: Core Configuration
     // ============================================================================
     const [jobName, setJobName] = useState(initialValues?.jobName as string || '');
+    const [executionTargetId, setExecutionTargetId] = useState<string | null>((initialValues?.execution_target_id as string) || null);
     const previewEpoch = useRef(0);
     const [launchPreview, setLaunchPreview] = useState<{
         workflowId: string; request: OntNgsSubmitRequest; preview: OntNgsLaunchPreview; epoch: number;
@@ -1454,6 +1458,7 @@ function NanoporeLaunchForm({ onBack, initialValues }: NanoporeTemplateProps) {
                 throw new Error('The exact profile-fixed clone model is unavailable or differs from the saved model. No replacement was selected.');
             }
             const jobPayload = {
+                execution_target_id: executionTargetId,
                 name: jobName || `nanopore_${Date.now()}`,
                 pinned_gpu: inputSource !== 'fastq' && pinnedGpus.length === 1 ? pinnedGpus[0] : null,
                 params: {
@@ -1726,6 +1731,9 @@ function NanoporeLaunchForm({ onBack, initialValues }: NanoporeTemplateProps) {
         <div onChangeCapture={invalidateLaunchPreview} onClickCapture={(event) => {
             if (!(event.target as HTMLElement).closest('[data-launch-preview]')) invalidateLaunchPreview();
         }} className="nanopore-template mx-auto max-w-[1480px] space-y-6 rounded-2xl border border-[var(--border-primary)] bg-[color-mix(in_srgb,var(--bg-secondary)_25%,#000)] p-4 shadow-[0_28px_90px_rgba(0,0,0,0.38)] lg:p-6">
+            <ExecutionTargetPicker value={executionTargetId} onChange={(target) => {
+                invalidateLaunchPreview(); setExecutionTargetId(target);
+            }} disabled={confirmLaunchMutation.isPending} />
             {/* Header */}
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -1934,6 +1942,7 @@ function NanoporeLaunchForm({ onBack, initialValues }: NanoporeTemplateProps) {
                 <h2 id="ngs-reference-heading" className={`${TASK_FLOW_LABEL} mb-3`}>2 · Reference / sample</h2>
                 {selectedWorkflow === 'pooledAssignment' ? (
                     <PooledReferenceAssignmentPanel
+                        executionTargetId={executionTargetId}
                         initialValues={initialValues}
                         jobName={jobName}
                         pinnedGpus={pinnedGpus}

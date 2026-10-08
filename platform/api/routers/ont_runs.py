@@ -236,6 +236,7 @@ class OntNgsSubmitRequest(BaseModel):
     source_instrument_run_id: str | None = Field(default=None)
     managed_reference: OntManagedReferenceRequest | None = None
     experiment_context: OntExperimentContext | None = None
+    execution_target_id: str | None = Field(default=None, min_length=1, max_length=160)
     preview_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
@@ -619,6 +620,7 @@ def _job_create_for_ont_submit(
         mode=model_mode,
         params=params,
         pinned_gpu=request.pinned_gpu,
+        execution_target_id=request.execution_target_id,
     )
 
 

@@ -21,6 +21,8 @@ const apiMocks = vi.hoisted(() => ({
     submitOntNgsJob: vi.fn(),
     previewOntNgsJob: vi.fn(),
     fetchOntNgsSettingsContract: vi.fn(),
+    fetchExecutionTargets: vi.fn(),
+    EXECUTION_TARGET_STORAGE_KEY: "bms.jobLauncher.executionTargetId",
     restorePooledReferenceSet: vi.fn(),
     submitPooledReferenceAssignment: vi.fn(),
 }));
@@ -54,6 +56,7 @@ beforeEach(() => {
     contextMock.selectedDomainExperiment = { domain_experiment_id: 'domain-1' };
     contextMock.stateRevisionId = 'state-1';
     contextMock.availability = { canMutateDomain: true, reason: '' };
+    apiMocks.fetchExecutionTargets.mockResolvedValue({ data: [] });
     apiMocks.fetchNucleotideSequences.mockResolvedValue({ data: [] });
     apiMocks.fetchMolBioNgsReferences.mockResolvedValue([{ id: 'reference-1', name: 'Reference one' }]);
     apiMocks.fetchMolBioNgsReferenceRevisions.mockResolvedValue([{
@@ -846,4 +849,25 @@ describe('mounted NGS settings to submit payload', () => {
         expect(checkboxContaining('Consensus assembly')?.checked).toBe(true);
         expect(container.querySelector<HTMLSelectElement>('[data-testid="ngs-gpu-assignment"]')?.value).toBe('2');
     });
+});
+
+
+it('binds the selected remote target to preview and never replaces an unavailable selection with Local', async () => {
+    await renderTemplate({ selectedWorkflow: 'dna', inputSource: 'pod5', pod5Dir: '/inputs/pod5',
+        jobName: 'remote', execution_target_id: 'vast:123' });
+    expect(container.textContent).toContain('Selected worker vast:123 is unavailable');
+    await act(async () => buttonWithText('Review and submit')!.click()); await flush();
+    expect(apiMocks.previewOntNgsJob.mock.calls[0][1].execution_target_id).toBe('vast:123');
+    await act(async () => buttonWithText('Confirm reviewed launch')!.click()); await flush();
+    expect(apiMocks.submitOntNgsJob.mock.calls[0][1].execution_target_id).toBe('vast:123');
+});
+
+it('changing execution target discards the previous launch preview', async () => {
+    await renderTemplate({ selectedWorkflow: 'dna', inputSource: 'pod5', pod5Dir: '/inputs/pod5',
+        jobName: 'remote', execution_target_id: 'vast:123' });
+    await act(async () => buttonWithText('Review and submit')!.click()); await flush();
+    expect(buttonWithText('Confirm reviewed launch')).not.toBeNull();
+    await act(async () => buttonWithText('Local')!.click()); await flush();
+    expect(buttonWithText('Confirm reviewed launch')).toBeNull();
+    expect(apiMocks.submitOntNgsJob).not.toHaveBeenCalled();
 });

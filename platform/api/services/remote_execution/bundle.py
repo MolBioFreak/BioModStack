@@ -608,6 +608,7 @@ def prepare_remote_bundle(
         "BMS_API_PYTHON": f"{remote_runtime}/support-python/venv/bin/python",
         "BMS_MSA_CACHE": f"{remote_attempt}/msa-cache",
         "BMS_REMOTE_EXECUTION": "1",
+        "BMS_EXECUTION_TARGET_ID": str(target.id),
         "BMS_WORK": f"{remote_attempt}/work",
         "NXF_CACHE_DIR": f"{remote_attempt}/.nextflow",
         "NXF_HOME": f"{remote_root}/cache/nextflow",

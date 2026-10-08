@@ -558,3 +558,50 @@ async def test_wrong_cancel_receipt_is_not_confirmation(store, monkeypatch):
     monkeypatch.setattr(ex, "run_remote", run)
     async with store() as s:
         assert not await ex.cancel_remote_job(await s.get(Job, "job"))
+
+
+@pytest.mark.asyncio
+async def test_ngs_observation_retains_remote_artifacts_until_explicit_pull(store, monkeypatch):
+    async with store() as session:
+        job = await session.get(Job, "job")
+        job.model_id = "nanopore"
+        await session.commit()
+    async def status(*args):
+        return SimpleNamespace(state="succeeded", exit_code=0, result_manifest_sha256="a" * 64)
+    async def forbidden(*args, **kwargs):
+        pytest.fail("observation attempted scientific artifact transfer")
+    monkeypatch.setattr(ex, "remote_status", status)
+    monkeypatch.setattr(ex, "collect_remote_results", forbidden)
+    async with store() as session:
+        job = await session.get(Job, "job")
+        assert await ex.reconcile_remote_job(session, job)
+        await session.refresh(job)
+        assert job.remote_state == "remote_finished_results_waiting"
+        assert job.status == "running"  # not scientifically accepted from exit code alone
+        assert not await ex.reconcile_remote_job(session, job)
+        assert (await session.get(ExecutionTarget, "target")).leased_job_id == "job"
+
+
+@pytest.mark.asyncio
+async def test_remote_ngs_finalizer_uses_native_barrier_and_preserves_receipt(store, monkeypatch, tmp_path):
+    from services import nextflow, result_state_integrity
+    called = []
+    async def native(job, factory, session):
+        called.append(job.remote_attempt_id)
+        job.provenance = {**(job.provenance or {}), "result_integrity": {
+            "state": "validated", "partial": False, "result_kind": "ont_native_basecall"}}
+        job.status = job.queue_status = "completed"
+        return True
+    async def generic(*args, **kwargs):
+        pytest.fail("native ONT result was sent to generic design ingestion")
+    monkeypatch.setattr(nextflow, "_validate_ont_terminal_completion", native)
+    async with store() as session:
+        job = await session.get(Job, "job")
+        job.model_id = "nanopore"
+        await session.commit()
+        result = await result_state_integrity.finalize_successful_job(job, str(tmp_path), session, ingest_fn=generic)
+        assert result.completed and called == ["attempt"]
+        await session.refresh(job)
+        assert job.provenance["result_integrity"]["result_kind"] == "ont_native_basecall"
+        assert job.remote_state == "ingested"
+        assert (await session.get(ExecutionTarget, "target")).leased_job_id is None

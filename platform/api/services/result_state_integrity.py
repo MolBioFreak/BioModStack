@@ -395,64 +395,99 @@ async def finalize_successful_job(
     from services.core_protein_scientific_contract import revision_for_job
 
     strict_revision = None
+    native_ont = False
+    native_provenance = None
+    native_params = None
+    native_changes = {}
     try:
-        strict_revision = revision_for_job(job)
-        session.info.setdefault("core_protein_native_prevalidated", set()).discard(job_id)
-        ingested_count = await ingest_fn(
-            job_id,
-            output_dir,
-            session,
-            epitope_residues=epitope_residues,
-            commit=False,
-        )
-        from services.core_protein_execution_settings import persist_openmm_receipts
-        await persist_openmm_receipts(job, output_dir, session)
-        count = await _authoritative_result_count(session, job)
-        idempotent_prior_results = False
-        result_kind = "design"
-        if job_expects_rfd3_local_redesign_candidates(job):
-            result_kind = "rfd3_local_redesign_candidate"
-            if count == 0:
-                raise RuntimeError("workflow completed but result ingestion produced no typed RFD3 candidates")
-            if not await _rfd3_candidates_are_usable(session, job_id, output_dir):
-                raise RuntimeError("typed RFD3 candidate rows lack usable, contained, hash-valid structures")
-            idempotent_prior_results = int(ingested_count or 0) <= 0
-        elif job_expects_design_results(job):
-            from services.core_protein_result_contract import validate_persisted_publication
+        if str(job.model_id or "").lower() == "nanopore":
+            from services.nextflow import _validate_ont_terminal_completion
+            from services.resource_usage_evidence import RESOURCE_USAGE_RECEIPTS_PARAM
 
-            # Native/canonical owners prevalidate their own stronger contracts.
-            native_owner = False
-            if strict_revision == 1:
-                from services.result_ingester import _parse_job_params
+            def producer_receipt():
+                # Accept only an actual producer receipt; never synthesize local
+                # systemd evidence for execution on a remote target.
+                receipts = (job.params or {}).get(RESOURCE_USAGE_RECEIPTS_PARAM, [])
+                if not isinstance(receipts, list) or not receipts:
+                    raise RuntimeError("ONT remote completion requires returned producer resource evidence")
+                return receipts[-1]
 
-                native_owner = str(job.model_id or "").strip().lower() in {
-                    "protein_local_redesign", "conformational_mapping",
-                } or (
-                    str(job.model_id or "").strip().lower() == "protein_modification_experimental"
-                    and (str(job.mode or "").strip().lower() == "shape_blueprint" or (
-                        str(job.mode or "").strip().lower() == "de_novo_design"
-                        and str(_parse_job_params(job.params).get("generator") or "rfd3").strip().lower() == "rfd3"
-                    ))
-                )
-            canonical_prevalidated = job_id in session.info.get("core_protein_native_prevalidated", set())
-            if strict_revision == 1 and not native_owner and not canonical_prevalidated:
-                rows = list((await session.execute(select(Design).where(
-                    Design.job_id == job_id, Design.source_stage.is_(None),
-                ))).scalars())
-                validate_persisted_publication(job, rows, output_dir)
-            if count == 0:
-                raise RuntimeError("workflow completed but result ingestion produced no designs")
-            usable_results = await _existing_designs_are_usable(session, job_id, output_dir)
-            if not usable_results:
-                raise RuntimeError("workflow result rows lack usable, contained PDB artifacts")
-            if str(job.model_id or "").strip().lower() == "binder_design":
-                authoritative = await _binder_design_rows_are_authoritative(session, job_id, output_dir)
-                if not authoritative:
-                    raise RuntimeError(
-                        "binder workflow completed without authoritative PAE-derived ipSAE result rows"
+            from copy import deepcopy
+            from sqlalchemy.orm.attributes import set_committed_value
+            before_native = {column.name: deepcopy(getattr(job, column.name)) for column in Job.__table__.columns}
+            with session.no_autoflush:
+                native_ont = await _validate_ont_terminal_completion(job, producer_receipt, session)
+            if not native_ont:
+                raise RuntimeError("ONT result has no native terminal barrier")
+            native_provenance, native_params = deepcopy(job.provenance), deepcopy(job.params)
+            native_changes = {name: deepcopy(getattr(job, name)) for name, previous in before_native.items()
+                              if getattr(job, name) != previous}
+            # Native validators prepare ORM deltas, not terminal publication.
+            # Restore the loaded snapshot before refresh/autoflush; only the
+            # guarded terminal UPDATE below may publish these values.
+            for name, value in before_native.items():
+                set_committed_value(job, name, value)
+            count, ingested_count, idempotent_prior_results = 0, 0, False
+            result_kind = native_provenance["result_integrity"]["result_kind"]
+        else:
+            strict_revision = revision_for_job(job)
+            session.info.setdefault("core_protein_native_prevalidated", set()).discard(job_id)
+            ingested_count = await ingest_fn(
+                job_id,
+                output_dir,
+                session,
+                epitope_residues=epitope_residues,
+                commit=False,
+            )
+            from services.core_protein_execution_settings import persist_openmm_receipts
+            await persist_openmm_receipts(job, output_dir, session)
+            count = await _authoritative_result_count(session, job)
+            idempotent_prior_results = False
+            result_kind = "design"
+            if job_expects_rfd3_local_redesign_candidates(job):
+                result_kind = "rfd3_local_redesign_candidate"
+                if count == 0:
+                    raise RuntimeError("workflow completed but result ingestion produced no typed RFD3 candidates")
+                if not await _rfd3_candidates_are_usable(session, job_id, output_dir):
+                    raise RuntimeError("typed RFD3 candidate rows lack usable, contained, hash-valid structures")
+                idempotent_prior_results = int(ingested_count or 0) <= 0
+            elif job_expects_design_results(job):
+                from services.core_protein_result_contract import validate_persisted_publication
+
+                # Native/canonical owners prevalidate their own stronger contracts.
+                native_owner = False
+                if strict_revision == 1:
+                    from services.result_ingester import _parse_job_params
+
+                    native_owner = str(job.model_id or "").strip().lower() in {
+                        "protein_local_redesign", "conformational_mapping",
+                    } or (
+                        str(job.model_id or "").strip().lower() == "protein_modification_experimental"
+                        and (str(job.mode or "").strip().lower() == "shape_blueprint" or (
+                            str(job.mode or "").strip().lower() == "de_novo_design"
+                            and str(_parse_job_params(job.params).get("generator") or "rfd3").strip().lower() == "rfd3"
+                        ))
                     )
-            idempotent_prior_results = int(ingested_count or 0) <= 0
+                canonical_prevalidated = job_id in session.info.get("core_protein_native_prevalidated", set())
+                if strict_revision == 1 and not native_owner and not canonical_prevalidated:
+                    rows = list((await session.execute(select(Design).where(
+                        Design.job_id == job_id, Design.source_stage.is_(None),
+                    ))).scalars())
+                    validate_persisted_publication(job, rows, output_dir)
+                if count == 0:
+                    raise RuntimeError("workflow completed but result ingestion produced no designs")
+                usable_results = await _existing_designs_are_usable(session, job_id, output_dir)
+                if not usable_results:
+                    raise RuntimeError("workflow result rows lack usable, contained PDB artifacts")
+                if str(job.model_id or "").strip().lower() == "binder_design":
+                    authoritative = await _binder_design_rows_are_authoritative(session, job_id, output_dir)
+                    if not authoritative:
+                        raise RuntimeError(
+                            "binder workflow completed without authoritative PAE-derived ipSAE result rows"
+                        )
+                idempotent_prior_results = int(ingested_count or 0) <= 0
     except Exception as exc:
+        session.info.get("ngs_derived_catalog_intents", {}).pop(job_id, None)
         await session.rollback()
         job = await session.get(Job, job_id)
         if job is None:
@@ -543,6 +578,26 @@ async def finalize_successful_job(
         await session.refresh(job)
         return FinalizationResult(False, count, "no_candidates" if no_candidates else "ingestion_failed")
 
+    from services.execution_ownership import release_scheduler_gpu_assignment
+
+    if native_ont:
+        from services.nextflow import publish_terminal_job_changes_atomically
+        native_changes.update(params=release_scheduler_gpu_assignment(native_params),
+            assigned_gpu=None, completed_at=datetime.utcnow())
+        if remote_authority:
+            native_changes["remote_state"] = "ingested"
+        # Same whole-Job snapshot CAS and intent publication as local ONT.
+        published = await publish_terminal_job_changes_atomically(session, job_id=job_id,
+            snapshot=before_native, changes=native_changes)
+        if not published:
+            return FinalizationResult(False, 0, "publication_lost")
+        if job.execution_target_id:
+            from services.remote_execution.executor import _release_remote_target_lease
+            await _release_remote_target_lease(session, job)
+        await session.commit()
+        await session.refresh(job)
+        return FinalizationResult(True, 0, "validated")
+
     # Ingesters may commit internally.  Publish completion with a conditional DB
     # update: a cancellation or review gate committed after ingestion wins.
     await session.refresh(job)
@@ -580,6 +635,7 @@ async def finalize_successful_job(
         )
     )
     if completion.rowcount != 1:
+        session.info.get("ngs_derived_catalog_intents", {}).pop(job_id, None)
         await session.rollback()
         job = await session.get(Job, job_id)
         state = "cancelled" if job is not None and job.status == "cancelled" else "awaiting_input"

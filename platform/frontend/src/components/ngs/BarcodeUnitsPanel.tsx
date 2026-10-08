@@ -1,3 +1,4 @@
+import { ExecutionTargetPicker } from '../ExecutionTargetPicker';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -100,6 +101,7 @@ export function BarcodeUnitsPanel({ jobId, enabled }: BarcodeUnitsPanelProps) {
     const queryClient = useQueryClient();
     const [targetWorkflow, setTargetWorkflow] = useState<TargetWorkflow>('ont_plasmid_qc');
     const [namePrefix, setNamePrefix] = useState('');
+    const [executionTargetId, setExecutionTargetId] = useState<string | null>(null);
     const [pinnedGpu, setPinnedGpu] = useState('');
     const [message, setMessage] = useState('');
     const [mappingByUnit, setMappingByUnit] = useState<Record<string, BarcodeMappingDraft>>({});
@@ -160,6 +162,7 @@ export function BarcodeUnitsPanel({ jobId, enabled }: BarcodeUnitsPanelProps) {
             return submitOntBarcodeBatch(jobId, {
                 idempotency_key: newIdempotencyKey('ont-barcode-batch'),
                 target_workflow: targetWorkflow,
+                execution_target_id: executionTargetId,
                 ...(namePrefix.trim() ? { name_prefix: namePrefix.trim() } : {}),
                 ...(parsedPinnedGpu !== null ? { pinned_gpu: parsedPinnedGpu } : {}),
                 mappings,
@@ -244,6 +247,7 @@ export function BarcodeUnitsPanel({ jobId, enabled }: BarcodeUnitsPanelProps) {
                     </tbody>
                 </table>
             </div>
+            <ExecutionTargetPicker value={executionTargetId} onChange={setExecutionTargetId} disabled={submitMutation.isPending} />
             {unitsQuery.isSuccess && units.length === 0 && <div className="text-xs text-[var(--text-secondary)]">The manifest contains no assignable barcode units. The unclassified row remains locked.</div>}
             {message && <div className="text-xs text-[var(--text-secondary)]">{message}</div>}
         </section>

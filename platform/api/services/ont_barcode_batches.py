@@ -88,6 +88,7 @@ class BarcodeBatchRequest(BaseModel):
     target_workflow: str = Field(pattern="^(ont_plasmid_qc|ont_construct_screening)$")
     name_prefix: str | None = Field(default=None, max_length=128)
     pinned_gpu: int | None = Field(default=None, ge=0, le=15)
+    execution_target_id: str | None = Field(default=None, min_length=1, max_length=160)
     mappings: list[BarcodeBatchRequestMapping] = Field(min_length=1, max_length=96)
 
     @field_validator("idempotency_key")
@@ -198,6 +199,7 @@ def _normalized_request(request: BarcodeBatchRequest, *, source_job_id: str) -> 
         "target_workflow": request.target_workflow,
         "name_prefix": request.name_prefix,
         "pinned_gpu": request.pinned_gpu,
+        "execution_target_id": request.execution_target_id,
         "mappings": mappings,
     }
 
@@ -653,6 +655,7 @@ async def _create_one_child(
         name=_safe_child_name(prefix, str(mapping["unit_id"])),
         params=params,
         pinned_gpu=request.pinned_gpu,
+        execution_target_id=request.execution_target_id,
     )
     trusted_params = frozenset(
         {

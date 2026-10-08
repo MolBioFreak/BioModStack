@@ -10375,3 +10375,36 @@ async def get_docking_comparison(
         "comparison": comparison_data,
         "job_id": job_id
     }
+
+
+class RemoteNgsPullRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    attempt_id: str
+
+
+@router.post("/{job_id}/remote-results/pull")
+async def pull_remote_ngs_results(job_id: str, body: RemoteNgsPullRequest,
+        request: Request, session: AsyncSession = Depends(get_session)):
+    """Explicit scientific transfer, never another launch or local fallback."""
+    from services import alignment_access as access
+    from routers.ngs_alignment_sessions import _mutation_principal
+    from services.remote_execution.executor import reconcile_remote_job, RemoteCollectionPending
+    _mutation_principal(request)
+    job = await session.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not access.request_is_authorized(request, str(job.id), job.provenance):
+        raise HTTPException(status_code=403, detail="NGS result access is required")
+    if (job.model_id != "nanopore" or not job.execution_target_id
+            or job.remote_attempt_id != body.attempt_id):
+        raise HTTPException(status_code=409, detail="The remote NGS attempt changed")
+    if job.remote_state == "ingested":
+        return {"job_id": job_id, "attempt_id": body.attempt_id, "state": "ingested"}
+    if job.remote_state != "remote_finished_results_waiting":
+        raise HTTPException(status_code=409, detail="Remote results are not waiting for transfer")
+    try:
+        await reconcile_remote_job(session, job, pull_results=True)
+    except RemoteCollectionPending as exc:
+        raise HTTPException(status_code=503, detail="Remote results remain available; retry the explicit pull") from exc
+    await session.refresh(job)
+    return {"job_id": job_id, "attempt_id": body.attempt_id, "state": job.remote_state}

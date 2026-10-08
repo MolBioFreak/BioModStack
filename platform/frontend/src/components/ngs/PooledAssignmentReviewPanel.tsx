@@ -1,3 +1,4 @@
+import { ExecutionTargetPicker } from '../ExecutionTargetPicker';
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -215,6 +216,7 @@ export function PooledAssignmentReviewPanel({
     const [selectedTargetIds, setSelectedTargetIds] = useState<string[]>([]);
     const [targetWorkflow, setTargetWorkflow] = useState<PooledAssignmentTargetWorkflow>('ont_plasmid_qc');
     const [namePrefix, setNamePrefix] = useState('');
+    const [executionTargetId, setExecutionTargetId] = useState<string | null>(null);
     const [pinnedGpu, setPinnedGpu] = useState('');
     const [releaseResponse, setReleaseResponse] = useState<PooledAssignmentReleaseResponse | null>(null);
     const [idempotencyKey] = useState(newIdempotencyKey);
@@ -263,6 +265,7 @@ export function PooledAssignmentReviewPanel({
             const request: PooledAssignmentReleaseRequest = {
                 idempotency_key: idempotencyKey,
                 target_workflow: targetWorkflow,
+                execution_target_id: executionTargetId,
                 ...(namePrefix.trim() ? { name_prefix: namePrefix.trim() } : {}),
                 ...(parsedPinnedGpu === undefined ? {} : { pinned_gpu: parsedPinnedGpu }),
                 target_ids: targetIds,
@@ -283,6 +286,7 @@ export function PooledAssignmentReviewPanel({
             className="w-full min-w-0 space-y-4 rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4"
             data-testid="pooled-assignment-review-panel"
         >
+            <ExecutionTargetPicker value={executionTargetId} onChange={setExecutionTargetId} disabled={releaseMutation.isPending} />
             <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                     <h4 className="text-base font-semibold text-[var(--text-primary)]">Pooled assignment review</h4>

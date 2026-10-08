@@ -1,3 +1,4 @@
+import { RemoteNgsResults } from './ngs/RemoteNgsResults';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -4882,6 +4883,7 @@ function NativeNGSToolkit() {
                                         />
                                     </div>
                                 )}
+                                <RemoteNgsResults key={selectedJob.id} job={selectedJob} />
                                 <details open={!isCanonicalFastqQcRun} className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/30 p-3">
                                     <summary className="cursor-pointer text-xs font-medium uppercase tracking-wide text-[var(--text-secondary)]">
                                         {isCanonicalFastqQcRun ? 'Technical job details' : 'Job details'}

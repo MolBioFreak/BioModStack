@@ -120,6 +120,7 @@ class PooledReferenceAssignmentRequest(BaseModel):
     )
     name: str | None = Field(default=None, max_length=128)
     pinned_gpu: int | None = Field(default=None, ge=0, le=15)
+    execution_target_id: str | None = Field(default=None, min_length=1, max_length=160)
 
     @field_validator("idempotency_key")
     @classmethod
@@ -214,6 +215,7 @@ class PooledAssignmentReleaseRequest(BaseModel):
     target_ids: list[str] = Field(min_length=1, max_length=96)
     name_prefix: str | None = Field(default=None, max_length=128)
     pinned_gpu: int | None = Field(default=None, ge=0, le=15)
+    execution_target_id: str | None = Field(default=None, min_length=1, max_length=160)
 
     @field_validator("idempotency_key")
     @classmethod
@@ -392,6 +394,7 @@ def _normalized_submit_request(request: PooledReferenceAssignmentRequest, fastq_
         "min_alignment_score_margin": request.min_alignment_score_margin,
         "name": request.name,
         "pinned_gpu": request.pinned_gpu,
+        "execution_target_id": request.execution_target_id,
     }
 
 
@@ -411,6 +414,7 @@ def _normalized_release_request(
         "target_ids": sorted(request.target_ids),
         "name_prefix": request.name_prefix,
         "pinned_gpu": request.pinned_gpu,
+        "execution_target_id": request.execution_target_id,
         "assignment_summary_sha256": summary_sha256,
     }
 
@@ -800,6 +804,7 @@ async def submit_pooled_reference_assignment(
             mode=ASSIGNMENT_MODE,
             params=params,
             pinned_gpu=request.pinned_gpu,
+            execution_target_id=request.execution_target_id,
         )
         token, token_digest = alignment_access.issue_alignment_access_token()
         trust_tokens = ont_submission_trust.begin_trusted_ont_job_creation(token_digest)
@@ -1635,6 +1640,7 @@ async def _create_release_child(
         ),
         params=params,
         pinned_gpu=request.pinned_gpu,
+        execution_target_id=request.execution_target_id,
     )
     trusted = frozenset(params)
     job_data = _job_create_for_ont_submit(
