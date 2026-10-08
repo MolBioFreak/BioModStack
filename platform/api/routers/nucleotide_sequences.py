@@ -209,6 +209,21 @@ class NucleotideSequenceListItem(BaseModel):
     updated_at: Optional[datetime]
 
 
+class SavedGibsonWorkupListItem(BaseModel):
+    """Small read model for construct-backed, server-persisted Gibson workups."""
+    id: str
+    name: str
+    description: Optional[str]
+    length: int
+    topology: str
+    engine: Optional[str]
+    engine_version: Optional[str]
+    fragment_count: int
+    primer_count: int
+    created_at: datetime
+    updated_at: Optional[datetime]
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # HELPER FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -675,6 +690,40 @@ async def list_sequences(
         )
         for seq in paginated
     ]
+
+
+@router.get("/assembly-workups", response_model=List[SavedGibsonWorkupListItem])
+async def list_saved_gibson_workups(
+    session: AsyncSession = Depends(get_molbio_session),
+    limit: int = Query(100, ge=1, le=500),
+):
+    """List only server-persisted Gibson workups; product DNA remains loaded on demand."""
+    result = await session.execute(
+        select(NucleotideSequence)
+        .where(NucleotideSequence.operation == "gibson")
+        .order_by(NucleotideSequence.updated_at.desc(), NucleotideSequence.created_at.desc())
+        .limit(limit)
+    )
+    workups = result.scalars().all()
+    payload: list[SavedGibsonWorkupListItem] = []
+    for seq in workups:
+        params = seq.operation_params if isinstance(seq.operation_params, dict) else {}
+        fragments = params.get("source_fragments", params.get("fragments", []))
+        primers = params.get("primers", [])
+        payload.append(SavedGibsonWorkupListItem(
+            id=seq.id,
+            name=seq.name,
+            description=seq.description,
+            length=seq.length,
+            topology=topology_for(seq.is_circular),
+            engine=params.get("engine") if isinstance(params.get("engine"), str) else None,
+            engine_version=params.get("engine_version") if isinstance(params.get("engine_version"), str) else None,
+            fragment_count=len(fragments) if isinstance(fragments, list) else 0,
+            primer_count=len(primers) if isinstance(primers, list) else 0,
+            created_at=seq.created_at,
+            updated_at=seq.updated_at,
+        ))
+    return payload
 
 
 @router.post("/", response_model=NucleotideSequenceResponse)
