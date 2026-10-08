@@ -40,7 +40,8 @@ workflow STRUCTURE_PREDICTION {
                 .flatten()
                 .map { pdb -> tuple([id: pdb.baseName], pdb) }
             FrustrampnnQC(frustra_input)
-            AggregateFrustrationReports(FrustrampnnQC.out.summary.collect())
+            // Extract just the path from (meta, path) tuples before collecting
+            AggregateFrustrationReports(FrustrampnnQC.out.summary.map { meta, summary -> summary }.collect())
         }
     
     emit:
