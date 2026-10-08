@@ -80,6 +80,7 @@ def test_dnaweaver_plan_orders_preoverlapped_fragments_and_pydna_validates_targe
         for fragment in plan.product.fragments
     )
     assert len(plan.product.sequence) == len(target)
+    assert plan.product.sequence == target
     assert len(plan.target_checksum) == 64
     assert len(plan.plan_checksum) == 64
     assert plan.order_ready is True
