@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate } from 'react-router-dom';
 
-import { buildFileDownloadUrl, buildFileStreamUrl, fetchJobs, fetchJobById, fetchDesignById, fetchDesigns, fetchDesignAnalysis, triggerDesignAnalysis, fetchBackboneSummary, launchAntibodyIteration, launchManualMutagenesis, saveReviewFilterSet, deleteReviewFilterSet, continueProteinLocalReview } from '../lib/api';
+import { buildFileDownloadUrl, buildFileStreamUrl, fetchJobs, fetchJobById, fetchDesignById, fetchDesigns, fetchDesignAnalysis, triggerDesignAnalysis, fetchBackboneSummary, launchAntibodyIteration, launchManualMutagenesis, saveReviewFilterSet, deleteReviewFilterSet, continueProteinLocalReview, fetchChainPairIptm } from '../lib/api';
 import type {
     AntibodyData,
     AntibodyCdrIndelConfig,
@@ -10,6 +10,7 @@ import type {
     ChainMetric,
     ContactMapData,
     Design,
+    FampnnPsceProfile,
     IpsaeInterfaceAnalysis,
     DesignFilters,
     DesignSortField,
@@ -2383,6 +2384,13 @@ export function ResultsViewer() {
         enabled: !!selectedDesignId,
         staleTime: 30_000,
     });
+    const selectedDesign = selectedDesignDetailData ?? designs.find(d => d.id === selectedDesignId);
+    const selectedDesignLens = useMemo<AnalysisLens | null>(() => {
+        if (selectedDesign) {
+            return inferDesignAnalysisLens(selectedDesign as any);
+        }
+        return inferPreferredAnalysisLens(activeJob, designs as any) ?? null;
+    }, [activeJob, designs, selectedDesign]);
 
     // Fetch backbone summary for toggle UI
     const { data: backboneSummaryData } = useQuery({
@@ -2527,6 +2535,7 @@ export function ResultsViewer() {
     const structureAnalysisBusy = runStructureAnalysis.isPending
         || structureAnalysisRun?.status === 'queued'
         || structureAnalysisRun?.status === 'running';
+    const structureViewerAnalysisEnabled = !!selectedDesignId && (activeTab === 'overview' || activeTab === 'structure');
 
     const { data: antibodyAnalysisRun } = useQuery({
         queryKey: ['design-analysis', 'antibody_annotation_pack', selectedDesignId],
@@ -2586,7 +2595,7 @@ export function ResultsViewer() {
                 ? fetchDesignAnalysis<Record<string, ChainMetric>>(selectedDesignId, 'chain_metrics').then((response) => response.data)
                 : null
         ),
-        enabled: !!selectedDesignId && activeTab === 'overview',
+        enabled: structureViewerAnalysisEnabled,
         staleTime: 60000,
         refetchInterval: (query) => {
             const status = (query.state.data as PersistedAnalysisRun<Record<string, ChainMetric>> | null | undefined)?.status;
@@ -2612,6 +2621,39 @@ export function ResultsViewer() {
         || chainMetricsAnalysisRun?.status === 'queued'
         || chainMetricsAnalysisRun?.status === 'running';
 
+    const { data: fampnnPsceProfileAnalysisRun } = useQuery({
+        queryKey: ['design-analysis', 'fampnn_psce_profile', selectedDesignId],
+        queryFn: () => (
+            selectedDesignId
+                ? fetchDesignAnalysis<FampnnPsceProfile>(selectedDesignId, 'fampnn_psce_profile').then((response) => response.data)
+                : null
+        ),
+        enabled: structureViewerAnalysisEnabled && selectedDesignLens === 'fampnn',
+        staleTime: 60000,
+        refetchInterval: (query) => {
+            const status = (query.state.data as PersistedAnalysisRun<FampnnPsceProfile> | null | undefined)?.status;
+            return status === 'queued' || status === 'running' ? 1500 : false;
+        },
+    });
+    const fampnnPsceProfileAnalysis = fampnnPsceProfileAnalysisRun?.status === 'completed'
+        ? (fampnnPsceProfileAnalysisRun.result as FampnnPsceProfile | null)
+        : null;
+    const runFampnnPsceProfileAnalysis = useMutation({
+        mutationFn: async () => {
+            if (!selectedDesignId) {
+                throw new Error('No design selected');
+            }
+            const response = await triggerDesignAnalysis<FampnnPsceProfile>(selectedDesignId, 'fampnn_psce_profile');
+            return response.data;
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['design-analysis', 'fampnn_psce_profile', selectedDesignId] });
+        },
+    });
+    const fampnnPsceProfileAnalysisBusy = runFampnnPsceProfileAnalysis.isPending
+        || fampnnPsceProfileAnalysisRun?.status === 'queued'
+        || fampnnPsceProfileAnalysisRun?.status === 'running';
+
     const { data: ipsaeAnalysisRun } = useQuery({
         queryKey: ['design-analysis', 'ipsae_interface', selectedDesignId],
         queryFn: () => (
@@ -2619,7 +2661,7 @@ export function ResultsViewer() {
                 ? fetchDesignAnalysis<IpsaeInterfaceAnalysis>(selectedDesignId, 'ipsae_interface').then((response) => response.data)
                 : null
         ),
-        enabled: !!selectedDesignId && activeTab === 'overview',
+        enabled: structureViewerAnalysisEnabled,
         staleTime: 60000,
         refetchInterval: (query) => {
             const status = (query.state.data as PersistedAnalysisRun<IpsaeInterfaceAnalysis> | null | undefined)?.status;
@@ -2652,7 +2694,7 @@ export function ResultsViewer() {
                 ? fetchDesignAnalysis<PAEData>(selectedDesignId, 'pae_matrix', { max_size: 200 }).then((response) => response.data)
                 : null
         ),
-        enabled: !!selectedDesignId && activeTab === 'overview',
+        enabled: structureViewerAnalysisEnabled,
         staleTime: 60000,
         refetchInterval: (query) => {
             const status = (query.state.data as PersistedAnalysisRun<PAEData> | null | undefined)?.status;
@@ -2685,7 +2727,7 @@ export function ResultsViewer() {
                 ? fetchDesignAnalysis<ContactMapData>(selectedDesignId, 'contact_map', { max_size: 300 }).then((response) => response.data)
                 : null
         ),
-        enabled: !!selectedDesignId && activeTab === 'overview',
+        enabled: structureViewerAnalysisEnabled,
         staleTime: 60000,
         refetchInterval: (query) => {
             const status = (query.state.data as PersistedAnalysisRun<ContactMapData> | null | undefined)?.status;
@@ -2710,6 +2752,99 @@ export function ResultsViewer() {
     const contactMapAnalysisBusy = runContactMapAnalysis.isPending
         || contactMapAnalysisRun?.status === 'queued'
         || contactMapAnalysisRun?.status === 'running';
+
+    const { data: chainPairIptmData, isLoading: chainPairIptmLoading } = useQuery({
+        queryKey: ['design-chain-pair-iptm', selectedDesignId],
+        queryFn: () => (
+            selectedDesignId
+                ? fetchChainPairIptm(selectedDesignId).then((response) => response.data)
+                : null
+        ),
+        enabled: structureViewerAnalysisEnabled,
+        staleTime: 60000,
+    });
+
+    const onRunChainMetricsAnalysis = useCallback(() => {
+        if (!selectedDesignId || chainMetricsAnalysisBusy) return;
+        runChainMetricsAnalysis.mutate();
+    }, [chainMetricsAnalysisBusy, runChainMetricsAnalysis, selectedDesignId]);
+    const onRunFampnnPsceProfileAnalysis = useCallback(() => {
+        if (!selectedDesignId || fampnnPsceProfileAnalysisBusy) return;
+        runFampnnPsceProfileAnalysis.mutate();
+    }, [fampnnPsceProfileAnalysisBusy, runFampnnPsceProfileAnalysis, selectedDesignId]);
+    const onRunPaeMatrixAnalysis = useCallback(() => {
+        if (!selectedDesignId || paeMatrixAnalysisBusy) return;
+        runPaeMatrixAnalysis.mutate();
+    }, [paeMatrixAnalysisBusy, runPaeMatrixAnalysis, selectedDesignId]);
+    const onRunIpsaeAnalysis = useCallback(() => {
+        if (!selectedDesignId || ipsaeAnalysisBusy) return;
+        runIpsaeAnalysis.mutate();
+    }, [ipsaeAnalysisBusy, runIpsaeAnalysis, selectedDesignId]);
+    const onRunContactMapAnalysis = useCallback(() => {
+        if (!selectedDesignId || contactMapAnalysisBusy) return;
+        runContactMapAnalysis.mutate();
+    }, [contactMapAnalysisBusy, runContactMapAnalysis, selectedDesignId]);
+    const onRunStructureSummaryAnalysis = useCallback(() => {
+        if (!selectedDesignId || structureAnalysisBusy) return;
+        runStructureAnalysis.mutate();
+    }, [runStructureAnalysis, selectedDesignId, structureAnalysisBusy]);
+
+    const structureViewerAnalyses = useMemo(() => ({
+        structureAnalysisRun: structureAnalysisRun ?? null,
+        structureAnalysis: structureAnalysis ?? null,
+        onRunStructureAnalysis: selectedDesignId ? onRunStructureSummaryAnalysis : undefined,
+        structureAnalysisBusy,
+        chainMetricsRun: chainMetricsAnalysisRun ?? null,
+        chainMetrics: chainMetricsAnalysis ?? null,
+        onRunChainMetrics: selectedDesignId ? onRunChainMetricsAnalysis : undefined,
+        chainMetricsBusy: chainMetricsAnalysisBusy,
+        fampnnPsceProfileRun: fampnnPsceProfileAnalysisRun ?? null,
+        fampnnPsceProfile: fampnnPsceProfileAnalysis ?? null,
+        onRunFampnnPsceProfile: selectedDesignId ? onRunFampnnPsceProfileAnalysis : undefined,
+        fampnnPsceBusy: fampnnPsceProfileAnalysisBusy,
+        paeMatrixRun: paeMatrixAnalysisRun ?? null,
+        paeMatrixData: paeMatrixAnalysis ?? null,
+        onRunPaeMatrix: selectedDesignId ? onRunPaeMatrixAnalysis : undefined,
+        paeMatrixBusy: paeMatrixAnalysisBusy,
+        ipsaeInterfaceRun: ipsaeAnalysisRun ?? null,
+        ipsaeInterface: ipsaeAnalysis ?? null,
+        onRunIpsaeInterface: selectedDesignId ? onRunIpsaeAnalysis : undefined,
+        ipsaeInterfaceBusy: ipsaeAnalysisBusy,
+        contactMapRun: contactMapAnalysisRun ?? null,
+        contactMap: contactMapAnalysis ?? null,
+        onRunContactMap: selectedDesignId ? onRunContactMapAnalysis : undefined,
+        contactMapBusy: contactMapAnalysisBusy,
+        chainPairIptm: chainPairIptmData ?? null,
+        chainPairIptmLoading,
+    }), [
+        chainMetricsAnalysis,
+        chainMetricsAnalysisBusy,
+        chainMetricsAnalysisRun,
+        chainPairIptmData,
+        chainPairIptmLoading,
+        contactMapAnalysis,
+        contactMapAnalysisBusy,
+        contactMapAnalysisRun,
+        fampnnPsceProfileAnalysis,
+        fampnnPsceProfileAnalysisBusy,
+        fampnnPsceProfileAnalysisRun,
+        ipsaeAnalysis,
+        ipsaeAnalysisBusy,
+        ipsaeAnalysisRun,
+        onRunChainMetricsAnalysis,
+        onRunContactMapAnalysis,
+        onRunFampnnPsceProfileAnalysis,
+        onRunIpsaeAnalysis,
+        onRunPaeMatrixAnalysis,
+        onRunStructureSummaryAnalysis,
+        paeMatrixAnalysis,
+        paeMatrixAnalysisBusy,
+        paeMatrixAnalysisRun,
+        selectedDesignId,
+        structureAnalysis,
+        structureAnalysisBusy,
+        structureAnalysisRun,
+    ]);
 
     // Antibody selections for Molstar are sourced from backend-issued chain/range overlays.
     // Do not synthesize them from parent workflow hints.
@@ -3020,7 +3155,6 @@ export function ResultsViewer() {
         targetMaxDist,
     ]);
 
-    const selectedDesign = selectedDesignDetailData ?? designs.find(d => d.id === selectedDesignId);
     const preferredRfMetricScope = useMemo(
         () => getPreferredRfMetricScope(activeJob, designs[0] || null),
         [activeJob, designs],
@@ -3050,12 +3184,6 @@ export function ResultsViewer() {
         )
     );
     const hasCdrOverlay = Boolean(antibodySelections?.length);
-    const selectedDesignLens = useMemo<AnalysisLens | null>(() => {
-        if (selectedDesign) {
-            return inferDesignAnalysisLens(selectedDesign as any);
-        }
-        return inferPreferredAnalysisLens(activeJob, designs as any) ?? null;
-    }, [activeJob, designs, selectedDesign]);
     // For oligo_design jobs: default to element coloring (B-factors are design confidence, not AlphaFold pLDDT)
     const isOligoJob = (activeJob?.model_id || '').toLowerCase().includes('oligo');
     useEffect(() => {
@@ -6668,14 +6796,7 @@ export function ResultsViewer() {
                                                 structureFormat={structureFormat}
                                                 antibodySelections={antibodySelections}
                                                 antibodyStructureUrl={antibodyData?.imgt_pdb_url}
-                                                structureAnalysis={structureAnalysis}
-                                                structureAnalysisRun={structureAnalysisRun}
-                                                onRunStructureAnalysis={() => {
-                                                    if (!structureAnalysisBusy) {
-                                                        runStructureAnalysis.mutate();
-                                                    }
-                                                }}
-                                                structureAnalysisBusy={structureAnalysisBusy}
+                                                viewerAnalyses={structureViewerAnalyses}
                                                 activeJob={activeJob}
                                                 getMetricColor={getMetricColor}
                                                 rfMetricScope={rfMetricScope}
