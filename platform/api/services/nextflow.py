@@ -9,13 +9,13 @@ import subprocess
 import os
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Tuple
 import logging
 
 logger = logging.getLogger(__name__)
 
 # Track running processes
-_running_processes: Dict[str, subprocess.Popen] = {}
+_running_processes: Dict[str, asyncio.subprocess.Process] = {}
 
 from paths import (
     get_code_root,
@@ -141,6 +141,200 @@ def sanitize_filename(name: str) -> str:
     sanitized = sanitized.strip('_')
     # Ensure not empty
     return sanitized if sanitized else "unnamed"
+
+
+def _coerce_bool(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default
+
+
+def _coerce_int(value: object, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _is_protenix_job(model_id: str, params: Dict[str, Any]) -> bool:
+    if (model_id or "").lower() == "protenix":
+        return True
+    pred_method = str(params.get("pred_method", "")).strip().lower()
+    return pred_method == "protenix"
+
+
+def _is_esm_model(model_name: str) -> bool:
+    lowered = (model_name or "").lower()
+    return "esm" in lowered or "ism" in lowered
+
+
+def _normalize_msa_preset(value: object) -> str:
+    preset = str(value).strip().lower() if value is not None else "fast"
+    if preset in {"maximum", "max"}:
+        return "maximum"
+    if preset in {"balanced", "balance", "medium"}:
+        return "balanced"
+    if preset in {"fast", "quick", "default"}:
+        return "fast"
+    return "fast"
+
+
+def _estimate_protenix_token_count(params: Dict[str, Any]) -> int:
+    """
+    Approximate Protenix token count from input payload.
+
+    Protenix memory scales primarily with total tokens over protein/DNA/RNA/peptide
+    entities, not with only the longest chain.
+    """
+    components = params.get("complex_components")
+    total_tokens = 0
+    if isinstance(components, list):
+        for comp in components:
+            if not isinstance(comp, dict):
+                continue
+            comp_type = str(comp.get("type", "")).strip().lower()
+            if comp_type not in {"protein", "peptide", "dna", "rna"}:
+                continue
+            seq = comp.get("sequence")
+            if not isinstance(seq, str):
+                continue
+            count = max(1, _coerce_int(comp.get("count", 1), 1))
+            total_tokens += len(seq) * count
+
+    if total_tokens > 0:
+        return total_tokens
+
+    for key in ("sequence_input", "sequence"):
+        seq = params.get(key)
+        if isinstance(seq, str) and seq:
+            return len(seq)
+
+    return 300
+
+
+def _apply_protenix_preflight(params: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
+    """
+    Apply conservative Protenix-only launch guardrails before first run.
+
+    This avoids obvious OOM scenarios without touching non-Protenix workflows.
+    """
+    tuned = dict(params)
+    notes: List[str] = []
+
+    token_count = _estimate_protenix_token_count(tuned)
+    use_msa = _coerce_bool(tuned.get("protenix_use_msa", True), default=True)
+    msa_preset = _normalize_msa_preset(tuned.get("msa_preset", "fast"))
+
+    n_sample = max(1, _coerce_int(tuned.get("protenix_n_sample", 5), 5))
+    n_cycle = max(1, _coerce_int(tuned.get("protenix_n_cycle", 10), 10))
+
+    tier = "low"
+    if use_msa:
+        if token_count >= 1700 or (token_count >= 1400 and msa_preset in {"balanced", "maximum"}):
+            tier = "high"
+        elif token_count >= 1200 or msa_preset == "maximum":
+            tier = "medium"
+    else:
+        if token_count >= 2400:
+            tier = "high"
+        elif token_count >= 1800:
+            tier = "medium"
+
+    if tier == "medium":
+        if use_msa and msa_preset == "maximum":
+            tuned["msa_preset"] = "balanced"
+            notes.append("msa_preset: maximum -> balanced")
+        if n_sample > 3:
+            tuned["protenix_n_sample"] = 3
+            notes.append(f"protenix_n_sample: {n_sample} -> 3")
+        if n_cycle > 8:
+            tuned["protenix_n_cycle"] = 8
+            notes.append(f"protenix_n_cycle: {n_cycle} -> 8")
+
+    if tier == "high":
+        if n_sample > 1:
+            tuned["protenix_n_sample"] = 1
+            notes.append(f"protenix_n_sample: {n_sample} -> 1")
+        if n_cycle > 4:
+            tuned["protenix_n_cycle"] = 4
+            notes.append(f"protenix_n_cycle: {n_cycle} -> 4")
+        if use_msa and msa_preset != "fast":
+            tuned["msa_preset"] = "fast"
+            notes.append(f"msa_preset: {msa_preset} -> fast")
+
+    # Allow override; default to 2 OOM retries for protenix jobs.
+    if "protenix_oom_retry_attempts" not in tuned:
+        tuned["protenix_oom_retry_attempts"] = 2
+    if "protenix_auto_oom_retry" not in tuned:
+        tuned["protenix_auto_oom_retry"] = True
+
+    if notes:
+        notes.insert(0, f"tier={tier}, token_estimate={token_count}, use_msa={use_msa}")
+    return tuned, notes
+
+
+def _attempt_has_cuda_oom(lines: List[str]) -> bool:
+    oom_markers = (
+        "CUDA out of memory",
+        "torch.OutOfMemoryError",
+        "OutOfMemoryError",
+        "CUBLAS_STATUS_ALLOC_FAILED",
+    )
+    joined = "\n".join(lines)
+    return any(marker in joined for marker in oom_markers)
+
+
+def _apply_protenix_oom_retry_downshift(params: Dict[str, Any], rung: int) -> Tuple[Dict[str, Any], List[str]]:
+    """
+    OOM retry ladder for Protenix.
+
+    rung=1: reduce sample/cycle and force fast MSA.
+    rung=2: disable MSA and switch to mini ESM if needed.
+    rung=3: reduce diffusion/inference steps.
+    """
+    tuned = dict(params)
+    changes: List[str] = []
+
+    n_sample = max(1, _coerce_int(tuned.get("protenix_n_sample", 5), 5))
+    n_cycle = max(1, _coerce_int(tuned.get("protenix_n_cycle", 10), 10))
+    n_step = max(1, _coerce_int(tuned.get("protenix_n_step", 200), 200))
+    use_msa = _coerce_bool(tuned.get("protenix_use_msa", True), default=True)
+    msa_preset = _normalize_msa_preset(tuned.get("msa_preset", "fast"))
+    model_name = str(tuned.get("protenix_model_weights", "protenix_base_20250630_v1.0.0"))
+
+    if rung >= 1:
+        if n_sample > 1:
+            tuned["protenix_n_sample"] = 1
+            changes.append(f"protenix_n_sample: {n_sample} -> 1")
+        if n_cycle > 4:
+            tuned["protenix_n_cycle"] = 4
+            changes.append(f"protenix_n_cycle: {n_cycle} -> 4")
+        if use_msa and msa_preset != "fast":
+            tuned["msa_preset"] = "fast"
+            changes.append(f"msa_preset: {msa_preset} -> fast")
+
+    if rung >= 2:
+        if use_msa:
+            tuned["protenix_use_msa"] = False
+            changes.append("protenix_use_msa: true -> false")
+        if not _is_esm_model(model_name):
+            tuned["protenix_model_weights"] = "protenix_mini_esm_v0.5.0"
+            changes.append(f"protenix_model_weights: {model_name} -> protenix_mini_esm_v0.5.0")
+
+    if rung >= 3:
+        if n_step > 100:
+            tuned["protenix_n_step"] = 100
+            changes.append(f"protenix_n_step: {n_step} -> 100")
+
+    return tuned, changes
 
 
 def _is_antibody_job(job) -> bool:
@@ -576,10 +770,19 @@ async def launch_nextflow_job(
     if model_id == 'msa_batch':
         await launch_msa_batch_job(job_id, params, output_dir)
         return
-    
-    # Build Nextflow command - pass job_id for spawn-wait-collect tracking
-    cmd = build_nextflow_command(model_id, mode, params, output_dir, job_id=job_id)
-    logger.info(f"Nextflow command: {' '.join(cmd)}")
+
+    # Use a mutable launch-params copy so retries can downshift Protenix safely.
+    launch_params: Dict[str, Any] = dict(params or {})
+
+    preflight_notes: List[str] = []
+    is_protenix = _is_protenix_job(model_id, launch_params)
+    if is_protenix:
+        launch_params, preflight_notes = _apply_protenix_preflight(launch_params)
+        if preflight_notes:
+            logger.warning(
+                f"[PROTENIX-GUARDRAIL] Preflight downshift applied for job {job_id}: "
+                + " | ".join(preflight_notes)
+            )
     
     async with async_session() as session:
         # Update job to running
@@ -610,7 +813,7 @@ async def launch_nextflow_job(
             # GPU ASSIGNMENT: Set CUDA_VISIBLE_DEVICES from orchestrator
             # ═══════════════════════════════════════════════════════════════
             # Extract gpu_id from params (set by orchestrator)
-            gpu_id = params.get('gpu_id')
+            gpu_id = launch_params.get('gpu_id')
 
             # Build environment with GPU pinning
             env = {**os.environ, "NXF_ANSI_LOG": "false"}
@@ -625,11 +828,18 @@ async def launch_nextflow_job(
                 logger.info(f"[GPU] Job {job_id} pinned to GPU {gpu_id_str} via CUDA_VISIBLE_DEVICES")
             else:
                 logger.warning(f"[GPU] Job {job_id} has no valid gpu_id - using default GPU selection")
+            if is_protenix:
+                # Reduces allocator fragmentation spikes on large pair/MSA tensors.
+                env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
             
             # ═══════════════════════════════════════════════════════════════════
             # RUN NEXTFLOW + STREAM OUTPUT (with resume-lock retry hardening)
             # ═══════════════════════════════════════════════════════════════════
             full_log = []
+            if preflight_notes:
+                full_log.append(
+                    "[PROTENIX-GUARDRAIL] Preflight downshift: " + " | ".join(preflight_notes) + "\n"
+                )
             import re
             # Regex to capture process name: "[... ] process > PROCESS_NAME (tag) [ 10%]"
             # We want "PROCESS_NAME"
@@ -638,34 +848,40 @@ async def launch_nextflow_job(
 
             # Respect global retry policy: if retries are disabled, fail fast to
             # surface chokepoints instead of auto-healing them.
-            allow_retries_raw = params.get("allow_retries", False)
+            allow_retries_raw = launch_params.get("allow_retries", False)
             if isinstance(allow_retries_raw, str):
                 allow_retries = allow_retries_raw.strip().lower() in {"1", "true", "yes", "on"}
             else:
                 allow_retries = bool(allow_retries_raw)
 
             max_resume_lock_retries = 0
-            if params.get("resume_work_dir") and allow_retries:
+            if launch_params.get("resume_work_dir") and allow_retries:
                 try:
-                    max_resume_lock_retries = int(params.get("resume_lock_retry_attempts", 2))
+                    max_resume_lock_retries = int(launch_params.get("resume_lock_retry_attempts", 2))
                 except (TypeError, ValueError):
                     max_resume_lock_retries = 2
                 max_resume_lock_retries = max(0, min(5, max_resume_lock_retries))
 
+            max_protenix_oom_retries = 0
+            if is_protenix and _coerce_bool(launch_params.get("protenix_auto_oom_retry", True), default=True):
+                max_protenix_oom_retries = max(
+                    0,
+                    min(3, _coerce_int(launch_params.get("protenix_oom_retry_attempts", 2), 2)),
+                )
+
             last_stage = None
             exit_code = 1
-            total_attempts = 1 + max_resume_lock_retries
+            resume_lock_retries_used = 0
+            protenix_oom_retries_used = 0
+            attempt = 1
 
-            for attempt in range(1, total_attempts + 1):
-                if attempt > 1:
-                    sleep_s = min(20, 5 * (attempt - 1))
-                    msg = (
-                        f"[BMS] Resume lock retry {attempt - 1}/{max_resume_lock_retries}; "
-                        f"sleeping {sleep_s}s before relaunch."
-                    )
-                    logger.warning(msg)
-                    full_log.append(msg + "\n")
-                    await asyncio.sleep(sleep_s)
+            while True:
+                cmd = build_nextflow_command(model_id, mode, launch_params, output_dir, job_id=job_id)
+                logger.info(
+                    f"[JOB {job_id}] Launch attempt {attempt} "
+                    f"(resume_retries={resume_lock_retries_used}/{max_resume_lock_retries}, "
+                    f"protenix_oom_retries={protenix_oom_retries_used}/{max_protenix_oom_retries})"
+                )
 
                 # Run Nextflow with stdout piped for real-time monitoring
                 process = await asyncio.create_subprocess_exec(
@@ -673,7 +889,8 @@ async def launch_nextflow_job(
                     cwd=str(PROJECT_ROOT),
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.STDOUT,
-                    env=env
+                    env=env,
+                    close_fds=True
                 )
                 # Store process reference for potential cancellation
                 _running_processes[job_id] = process
@@ -681,7 +898,7 @@ async def launch_nextflow_job(
                 job.nextflow_run_id = str(process.pid)
                 await session.commit()
 
-                attempt_log: list[str] = []
+                attempt_log: List[str] = []
                 try:
                     # Read line by line
                     while True:
@@ -781,12 +998,50 @@ async def launch_nextflow_job(
                     exit_code != 0
                     and any(resume_lock_pattern in ln for ln in attempt_log)
                 )
-                if lock_failed and attempt < total_attempts:
+                if lock_failed and resume_lock_retries_used < max_resume_lock_retries:
+                    resume_lock_retries_used += 1
                     _running_processes.pop(job_id, None)
-                    logger.warning(
-                        f"[JOB {job_id}] Nextflow resume lock contention detected; retrying launch."
+                    sleep_s = min(20, 5 * resume_lock_retries_used)
+                    msg = (
+                        f"[BMS] Resume lock retry {resume_lock_retries_used}/{max_resume_lock_retries}; "
+                        f"sleeping {sleep_s}s before relaunch."
                     )
+                    logger.warning(msg)
+                    full_log.append(msg + "\n")
+                    await asyncio.sleep(sleep_s)
+                    attempt += 1
                     continue
+
+                protenix_oom_failed = (
+                    is_protenix
+                    and exit_code != 0
+                    and _attempt_has_cuda_oom(attempt_log)
+                )
+                if protenix_oom_failed and protenix_oom_retries_used < max_protenix_oom_retries:
+                    selected_changes: List[str] = []
+                    while protenix_oom_retries_used < max_protenix_oom_retries:
+                        next_rung = protenix_oom_retries_used + 1
+                        tuned_params, downshift_changes = _apply_protenix_oom_retry_downshift(
+                            launch_params, next_rung
+                        )
+                        protenix_oom_retries_used = next_rung
+                        if downshift_changes:
+                            launch_params = tuned_params
+                            selected_changes = downshift_changes
+                            break
+
+                    if selected_changes:
+                        _running_processes.pop(job_id, None)
+                        msg = (
+                            f"[PROTENIX-GUARDRAIL] OOM retry {protenix_oom_retries_used}/{max_protenix_oom_retries}: "
+                            + " | ".join(selected_changes)
+                        )
+                        logger.warning(msg)
+                        full_log.append(msg + "\n")
+                        await asyncio.sleep(min(20, 3 * protenix_oom_retries_used))
+                        attempt += 1
+                        continue
+
                 break
             
             # Save Nextflow execution log to output directory
@@ -859,9 +1114,18 @@ async def launch_nextflow_job(
                             (ln.strip() for ln in full_log if "Unable to acquire lock on session with ID" in ln),
                             None,
                         )
+                        oom_line = next(
+                            (ln.strip() for ln in full_log if "CUDA out of memory" in ln),
+                            None,
+                        )
                         if resume_lock_line:
                             job.error_message = (
                                 f"Nextflow resume lock contention after retries: {resume_lock_line}"
+                            )
+                        elif oom_line:
+                            stage = job.current_stage or "unknown-stage"
+                            job.error_message = (
+                                f"Nextflow {stage} failed with CUDA OOM: {oom_line[:400]}"
                             )
                         else:
                             job.error_message = f"Nextflow exited with code {exit_code}"
@@ -903,6 +1167,9 @@ def build_nextflow_command(
     
     Converts all params to --key value flags.
     """
+    # Never mutate caller params; launch retries may reuse the same dict.
+    params = dict(params or {})
+
     # DEBUG: Log all params to trace complex_components
     logger.info(f"build_nextflow_command received params keys: {list(params.keys())}")
     if 'complex_components' in params:
@@ -1168,6 +1435,9 @@ def build_nextflow_command(
         'msa_gpu_server_wait_timeout': 'msa_gpu_server_wait_timeout',
         'msa_gpu_server_db_load_mode': 'msa_gpu_server_db_load_mode',
         'msa_gpu_server_startup_wait': 'msa_gpu_server_startup_wait',
+        # NA-MPNN sequence design params (Oligo Designer)
+        'nampnn_temperature': 'nampnn_temperature',
+        'nampnn_num_seqs': 'nampnn_num_seqs',
     }
     
     # Handle complex_components specially - write JSON file for BoltzFromComplex process
@@ -1327,5 +1597,5 @@ def get_running_jobs() -> Dict[str, int]:
     return {
         job_id: proc.pid 
         for job_id, proc in _running_processes.items() 
-        if proc.poll() is None
+        if proc.returncode is None
     }

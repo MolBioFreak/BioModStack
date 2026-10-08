@@ -260,6 +260,7 @@ process NAMPNNDesign {
                 --mode "design" \\
                 --pdb_path "\$pdb" \\
                 --out_folder "\${WORKDIR}/nampnn_out" \\
+                --temperature ${params.nampnn_temperature ?: 0.2} \\
                 --number_of_batches ${params.nampnn_num_seqs ?: 1}
         fi
     done

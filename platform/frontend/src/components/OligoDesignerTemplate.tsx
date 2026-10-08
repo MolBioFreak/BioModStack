@@ -307,7 +307,7 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
 
     // NA-MPNN sequence design settings
     const [nampnnNumSeqs, setNampnnNumSeqs] = useState(4);
-    const [nampnnTemperature, setNampnnTemperature] = useState(0.1);
+    const [nampnnTemperature, setNampnnTemperature] = useState(0.2);
 
     // ============================================================================
     // State: UI
@@ -483,7 +483,7 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                     ...(seed !== null && { rfdpoly_seed: seed }),
                     // NA-MPNN sequence design
                     nampnn_num_seqs: nampnnNumSeqs,
-                    ...(nampnnTemperature !== 0.1 && { nampnn_temperature: nampnnTemperature }),
+                    nampnn_temperature: nampnnTemperature,
                 }
             };
 
