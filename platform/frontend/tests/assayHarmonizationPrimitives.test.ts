@@ -138,3 +138,24 @@ test('HPLC sample quantification is grouped as a BMS input/result workbench', ()
   assert.doesNotMatch(chromatogram, /Calibration Conc\./);
   assert.match(chromatogram, /fetch\(`\$\{API_URL\}\/analysis\/hplc\/quantify`/);
 });
+
+test('HPLC quantification renders the backend calibration plot instead of exposing implementation copy', () => {
+  const chromatogram = source('src/components/hplc/ChromatogramAnalysis.tsx');
+  const quantification = chromatogram.slice(chromatogram.indexOf('export function HplcQuantification'));
+
+  assert.match(quantification, /plotly_json\?: \{ data: Plotly\.Data\[\]; layout: Partial<Plotly\.Layout> \}/);
+  assert.match(quantification, /r\.plotly_json && \(/);
+  assert.match(quantification, /<Plot/);
+  assert.doesNotMatch(quantification, /API contract remains/);
+});
+
+test('HPLC chromatogram baseline selector labels only methods implemented by the backend', () => {
+  const chromatogram = source('src/components/hplc/ChromatogramAnalysis.tsx');
+
+  assert.match(chromatogram, /useState\('mocca2_flatfit'\)/);
+  assert.match(chromatogram, /<option value="mocca2_flatfit">MOCCA2 flatfit/);
+  assert.match(chromatogram, /<option value="mocca2_arpls">MOCCA2 arPLS/);
+  assert.match(chromatogram, /<option value="mocca2_asls">MOCCA2 asLS/);
+  assert.doesNotMatch(chromatogram, /SNIP/);
+  assert.doesNotMatch(chromatogram, /value="snip"/);
+});

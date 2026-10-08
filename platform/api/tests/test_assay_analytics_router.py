@@ -132,6 +132,32 @@ def test_frontend_payload_contracts_match_assay_router_endpoints() -> None:
     assert regression_json["scatter_plot"]["data"]
 
 
+def test_hplc_calibration_endpoint_returns_plotly_fit_payload() -> None:
+    client = TestClient(bms_api_main.app)
+
+    response = client.post(
+        "/api/assay-analytics/analysis/hplc/calibration-curve",
+        json={
+            "points": [
+                {"concentration": 10, "area": 1000},
+                {"concentration": 25, "area": 2500},
+                {"concentration": 50, "area": 5000},
+                {"concentration": 100, "area": 10000},
+            ],
+            "analyte_name": "SC plasmid",
+            "unit": "ug/mL",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["r_squared"] > 0.999
+    assert payload["plotly_json"]["data"][0]["name"] == "Calibration standards"
+    assert payload["plotly_json"]["data"][1]["name"] == "Linear fit"
+    assert payload["plotly_json"]["layout"]["xaxis"]["title"] == "Concentration (ug/mL)"
+    assert payload["plotly_json"]["layout"]["yaxis"]["title"] == "Peak area"
+
+
 def test_qpcr_and_hplc_quantification_require_real_sample_ids() -> None:
     client = TestClient(bms_api_main.app)
 
