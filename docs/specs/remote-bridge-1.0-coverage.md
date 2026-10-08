@@ -95,6 +95,30 @@ This is an implementation tracking table, not an executable catalog or acceptanc
 | rfantibody_child | antibody_backbone | Internal child mapping | parent-declared backbone settings | `workflows/rfantibody_backbone.nf` | Computational descendant; resource/identity/result joins require parent coverage |
 | frustrampnn | analyze | Embedded component mapping | canonical grouping/settings and required candidate roster | `workflows/frustrampnn_analysis.nf` | Shared grouping ledger exists; all consumer migration and behavioral acceptance remain separate |
 
+## Request-surface expansion rules
+
+The table is a rule-based denominator, not a list of arbitrary numeric settings. Registry modes and explicit native model/mode mappings above are supplemented by these existing request surfaces. They do not establish accepted worker execution:
+
+- `template_registry.py` loads `config/templates/*.yaml`; `JobSubmission.tsx` resolves template overrides, `rfd_mode`, BoltzGen versus nucleic-acid complex input, `pred_method`, and sequence-design-only selection before canonical Job submission. Each selected canonical mode retains its table row plus the template's stage/skip settings. User-saved templates must retain that same declared canonical authority, not introduce arbitrary worker commands.
+- Enabled `conformational_mapping`, `molecular_dynamics`, and `protein_cad_experimental` templates bind their explicit model/mode overrides. Their backend, engine, seed policy and conditional model controls remain parameters of the corresponding rows.
+- Enabled `dna_polymerase` binds `skip_rfd=true`, `seq_method=fampnn`, `pred_method=boltz`, with the declared nucleotide choices. Its displayed LigandMPNN stage versus preset FAMPNN authority is an unresolved source inconsistency, not permission to choose different science.
+- Enabled `structure_prediction` advertises `boltz`, `fold_cp`, `boltz_api`, `protenix`, `esmfold2`, and `boltz_protenix`, each with FrustraMPNN enabled/disabled and provider/model-compatible MSA selection. `boltz_api` is advertised by this template but has no model YAML row; P1/P6 must resolve its existing admission and native authority rather than silently drop it from coverage.
+- Enabled `structure_validation` advertises AF2, Boltz and RF3. Browser compatibility mapping and native entrypoint resolution, including the AF2 template path, require preservation or an explicit incompatibility—not inference that every validator uses the structure-prediction entrypoint.
+- Disabled `binder_design` and `confornets_experimental` templates remain historical compatibility records; their disabled state does not disable otherwise independently advertised model rows.
+- `routers/jobs.py::_mutagenesis_variant_job_params` expands variants and removes per-variant FrustraMPNN for an aggregate post-batch stage. Coverage includes variant identity/order, every selected inference model, and the aggregate required join. Do not replace this with independent per-variant analysis.
+- `services/nextflow.py::_build_msa_batch_command` is a non-model-registry command entrypoint. Its explicit external-service preparation boundary, provider selection, input delivery and cancellation belong to the MSA coverage, not a missing local-search image.
+- NGS canonical profile identities in `WORKFLOW_ENTRYPOINTS` and `services/ont_ngs_contract.py` are aliases/projections of the declared nanopore mode rules, not additional remotely inferred recipes.
+- `routers/jobs.py::_create_job` currently bypasses registry validation for template-prefixed requests and mutagenesis. This is a P1 admission boundary to connect to declared authority; arbitrary strings admitted by a historical bypass or default workflow fallback do not become an unlimited advertised capability set.
+
+## Native addition ownership classification
+
+- `component_runtime.py`: shared grouping/identity, immutable native invocation and generated-input contracts, expansion ledger and boundary guards. This is existing infrastructure to extend; it is not yet the complete coordinator.
+- `native_frustrampnn_parent.py`: native preparation/sealing adapter and consumer wiring into shared grouping/ledger/boundary functions. Canonical inference, grouped batching, settings and manifest validators remain their existing owners.
+- `native_boltzgen_campaign.py`: native input-bundle and result-collection adapter consuming shared `plan_boltzgen` expansion. Its scientific remainder/grouping and partial-result policy must survive lifecycle migration.
+- `lib/boltzgen_native.py` and `lib/filtering/native_gate.py`: native source/metric identity and scientific gate evidence; not replacement schedulers.
+- `maturation_native_adapter.py`: native correspondence/instrumentation and export adapter. It does not establish worker-local lifecycle independence by itself.
+- Their Nextflow modules/workflows are consumer wiring and task execution. No source is classified as safely removable merely because shared infrastructure exists; retirement remains subject to the existing validation/review restriction.
+
 ## Known migration blockers
 
 - Non-BoltzGen generation remote dependency closure is incomplete.
