@@ -1799,7 +1799,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             </div>
 
             {/* Advanced Options */}
-            <div className="bg-[var(--bg-secondary)] rounded-lg p-4 xl:col-span-6">
+            <div className={`bg-[var(--bg-secondary)] rounded-lg p-4 ${runAssembly && !barcodeKit ? 'xl:col-span-12' : 'xl:col-span-6'}`}>
                 <button
                     onClick={() => setShowAdvanced(!showAdvanced)}
                     className="flex items-center gap-2 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors w-full"
@@ -1957,7 +1957,7 @@ nextflow run workflows/ngs/ont_fastq_qc.nf -profile ont_fastq_qc,apptainer \\
                         {runAssembly && !barcodeKit && (
                             <div className="space-y-3 border-t border-[var(--border-primary)] pt-3">
                                 <div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">wf-clone-validation</div>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
                                     <label className="text-xs text-[var(--text-secondary)]">
                                         Assembly tool
                                         <select
