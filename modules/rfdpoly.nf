@@ -193,7 +193,8 @@ workflow OLIGO_DESIGN {
     // PyRosetta restores nucleobase sidechains and repacks for optimal placement.
     // Per paper: RFDpoly → NA-MPNN → PyRosetta rebuild
     rebuild_script = file("${params.code_root}/scripts/rebuild_sidechains.py")
-    PyRosettaRebuild(NAMPNNDesign.out.pdbs, NAMPNNDesign.out.fastas, rebuild_script, polymer_chains)
+    convert_script = file("${params.code_root}/scripts/convert_rna_residues.sh")
+    PyRosettaRebuild(NAMPNNDesign.out.pdbs, NAMPNNDesign.out.fastas, rebuild_script, polymer_chains, convert_script)
 
     // Stage 4: Prepare for Boltz-2 validation
     // Auto-enable when protein chains are present (validates protein-NA complex folding).
@@ -364,53 +365,22 @@ process PyRosettaRebuild {
     path fastas
     path rebuild_script
     val polymer_chains
+    path convert_script
 
     output:
     path "out_*.pdb", emit: pdbs
     path "rebuild_metrics.json", emit: metrics
 
-    shell:
-    // Per-chain polymer type mapping for correct residue name conversion.
-    // NA-MPNN always outputs DG/DC/DT/DA (DNA naming). For RNA chains:
-    //   DG -> G, DC -> C, DT -> U, DA -> A (ribose, with 2'-OH)
-    // For DNA chains: keep DG/DC/DT/DA as-is (deoxyribose, no 2'-OH)
-    // For protein chains: no conversion needed.
-    // Chain letters are assigned in order: A, B, C, ... matching polymer_chains order.
-    '''
+    script:
+    """
     # Pre-rebuild: per-chain residue name conversion for correct sugar chemistry
-    # Map polymer_chains ordering to PDB chain letters (A=0, B=1, C=2, ...)
-    CHAIN_LETTERS=(A B C D E F G H I J K L M N O P Q R S T U V W X Y Z)
-    IFS=',' read -ra POLYMER_TYPES <<< "!{polymer_chains}"
+    bash ${convert_script} "${polymer_chains}" "${rebuild_script}"
 
-    for pdb in *.pdb; do
-        if [ -f "$pdb" ] && [ "$pdb" != "!{rebuild_script}" ]; then
-            for i in "${!POLYMER_TYPES[@]}"; do
-                PTYPE="$(echo ${POLYMER_TYPES[$i]} | tr '[:upper:]' '[:lower:]' | xargs)"
-                CHAIN="${CHAIN_LETTERS[$i]}"
-                if [ "$PTYPE" = "rna" ]; then
-                    echo "Chain $CHAIN is RNA — converting DNA residue names to RNA"
-                    # Only convert lines matching this chain ID (PDB column 22, 1-indexed)
-                    # PDB format: columns 22 = chain ID
-                    sed -i "/^\(ATOM\|HETATM\).*\(.\{1\}\)/ {
-                        /^.\{21\}$CHAIN/ {
-                            s/ DG / G  /g
-                            s/ DC / C  /g
-                            s/ DA / A  /g
-                            s/ DT / U  /g
-                        }
-                    }" "$pdb"
-                else
-                    echo "Chain $CHAIN is $PTYPE — keeping residue names as-is"
-                fi
-            done
-        fi
-    done
-
-    python !{rebuild_script} \
-        --input_dir . \
-        --out_dir . \
-        --out_prefix out_ \
-        --nampnn_fasta_dir . \
+    python ${rebuild_script} \\
+        --input_dir . \\
+        --out_dir . \\
+        --out_prefix out_ \\
+        --nampnn_fasta_dir . \\
         --metrics_out rebuild_metrics.json
-    '''
+    """
 }

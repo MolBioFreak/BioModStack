@@ -16,21 +16,14 @@ process RFANTIBODY {
     errorStrategy 'retry'
     maxRetries 2
 
-    // Default runtime mode is weights-only bind.
-    // Host repo overlay can be re-enabled for debugging via:
-    //   --rfantibody_debug_repo_overlay true
+    // Bind the full repo - uses host repo source code + weights.
     // IMPORTANT: Must use closure { } for dynamic evaluation per task.
     def weightsRoot = params.weights_root
     def rfantibodyRepo = "${weightsRoot}/rfantibody/rfantibody_repo"
-    def rfantibodyWeights = "${rfantibodyRepo}/weights"
     def codeRoot = params.code_root
-    def debugRepoOverlay = params.rfantibody_debug_repo_overlay == true
     containerOptions {
         def codeBind = codeRoot ? "--bind ${codeRoot}" : ""
-        def bindTarget = debugRepoOverlay
-            ? "--bind ${rfantibodyRepo}:/opt/RFantibody"
-            : "--bind ${rfantibodyWeights}:/opt/RFantibody/weights"
-        return "--nv --env CUDA_DEVICE_ORDER=PCI_BUS_ID --env CUDA_VISIBLE_DEVICES=${gpu_id} ${codeBind} ${bindTarget} --writable-tmpfs"
+        return "--nv --env CUDA_DEVICE_ORDER=PCI_BUS_ID --env CUDA_VISIBLE_DEVICES=${gpu_id} ${codeBind} --bind ${rfantibodyRepo}:/opt/RFantibody --writable-tmpfs"
     }
 
     publishDir "${params.out_dir}/run/rfantibody", mode: 'copy', pattern: "*.log"
@@ -118,11 +111,6 @@ process RFANTIBODY {
         ? framework_pdb
         : presetFrameworks[frameworkType] ?: presetFrameworks['standard-fv']
 
-    def bindMode = debugRepoOverlay ? "repo-overlay (DEBUG)" : "weights-only (DEFAULT)"
-    def bindSource = debugRepoOverlay ? rfantibodyRepo : rfantibodyWeights
-    def runtimeCheckScript = params.code_root
-        ? "${params.code_root}/scripts/check_rfantibody_runtime.py"
-        : "scripts/check_rfantibody_runtime.py"
 
     """
     set -euo pipefail
@@ -133,28 +121,20 @@ process RFANTIBODY {
     echo "Hotspot residues: ${hotspots}" | tee -a rfantibody_${meta.id}.log
     echo "Design loops: ${design_loops}" | tee -a rfantibody_${meta.id}.log
     echo "Num designs: ${num_designs}" | tee -a rfantibody_${meta.id}.log
-    echo "Requested diffusion steps: ${requested_diffusion_steps}" | tee -a rfantibody_${meta.id}.log
-    echo "Effective diffusion steps: ${diffusion_steps} (backend cap=50)" | tee -a rfantibody_${meta.id}.log
-    echo "Quality params: noise_ca=${noise_scale_ca}, noise_frame=${noise_scale_frame}, guide=${guide_scale}" | tee -a rfantibody_${meta.id}.log
-    echo "Bind mode: ${bindMode}" | tee -a rfantibody_${meta.id}.log
-    echo "Bind source: ${bindSource}" | tee -a rfantibody_${meta.id}.log
+    echo "Quality params: T=${diffusion_steps}, noise_ca=${noise_scale_ca}, noise_frame=${noise_scale_frame}, guide=${guide_scale}" | tee -a rfantibody_${meta.id}.log
     
     mkdir -p output
     
     # Save work directory path for absolute file references
     WORK_DIR=\$(pwd)
 
-    # Runtime preflight: fail fast on incompatible torch/dgl/cuda stacks.
-    python3 ${runtimeCheckScript} \\
-        --output rfantibody_runtime_manifest.json \\
-        2>&1 | tee -a rfantibody_${meta.id}.log
     
     # Run RFantibody RFdiffusion inference
     # Script is at /opt/RFantibody/scripts/rfdiffusion_inference.py
     # PYTHONPATH is set in container environment to include src/ and include/
-    # Config is at scripts/config/inference inside the container
+    # Config is at scripts/config/inference (verified: src/rfantibody/.../config/inference does NOT exist)
     cd /opt/RFantibody
-    
+
     python3 scripts/rfdiffusion_inference.py \\
         --config-path /opt/RFantibody/scripts/config/inference \\
         --config-name antibody \\
