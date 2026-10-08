@@ -798,21 +798,21 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             if (inputSource === 'fastq' && !effectiveReferencePath) {
                 throw new Error('FASTQ plasmid QC requires a reference FASTA (path or pasted sequence).');
             }
-            if (inputSource !== 'fastq' && runAssembly && !effectiveReferencePath) {
+            if (runAssembly && !effectiveReferencePath) {
                 throw new Error('Consensus assembly requires a reference FASTA for construct verification.');
             }
 
-            const workflowId = inputSource !== 'fastq' && runAssembly && !barcodeKit
+            const workflowId = runAssembly && !barcodeKit
                 ? 'wf_clone_validation'
                 : inputSource === 'fastq'
                     ? 'ont_plasmid_qc'
-                : inputSource === 'bam'
-                    ? 'ont_methylation_analysis'
-                    : doradoMolecule === 'rna'
-                        ? 'ont_basecall_rna'
-                        : modifiedBases !== 'none'
-                            ? 'ont_methylation_analysis'
-                            : 'ont_basecall_dna';
+                    : inputSource === 'bam'
+                        ? 'ont_methylation_analysis'
+                        : doradoMolecule === 'rna'
+                            ? 'ont_basecall_rna'
+                            : modifiedBases !== 'none'
+                                ? 'ont_methylation_analysis'
+                                : 'ont_basecall_dna';
             const jobPayload = {
                 name: jobName || `nanopore_${Date.now()}`,
                 pinned_gpu: isCpuOnly ? null : (pinnedGpus.length === 1 ? pinnedGpus[0] : null),
@@ -820,9 +820,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     reference_fasta: effectiveReferencePath || undefined,
                     min_qscore: inputSource === 'pod5' ? minQscore : undefined,
                     run_modkit: runModkit && canRunModkit,
-                    run_fastq_qc: inputSource === 'fastq' ? runFastqQc : false,
-                    run_multimer_qc: inputSource === 'fastq' ? runFastqQc : false,
-                    run_assembly: inputSource !== 'fastq' ? runAssembly && !barcodeKit : false,
+                    run_fastq_qc: inputSource === 'fastq' && !runAssembly ? runFastqQc : false,
+                    run_multimer_qc: inputSource === 'fastq' && !runAssembly ? runFastqQc : false,
+                    run_assembly: runAssembly && !barcodeKit,
                     pinned_gpus: isCpuOnly ? undefined : (pinnedGpus.length > 0 ? pinnedGpus : undefined),
                     lock_gpus: isCpuOnly ? false : (lockGpus && pinnedGpus.length > 0),
                     ...(inputSource === 'pod5' && {
@@ -853,7 +853,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         igv_report_max_sites: igvReportMaxSites,
                         igv_report_flanking_bp: igvReportFlankingBp,
                     }),
-                    ...(inputSource !== 'fastq' && runAssembly && {
+                    ...(runAssembly && !barcodeKit && {
                         wf_clone_assembly_tool: assemblyTool,
                         wf_clone_approx_size: assemblyApproxSize,
                         wf_clone_assm_coverage: assemblyCoverage,
@@ -1569,13 +1569,17 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     </label>
                 )}
 
-                {/* Assembly — DNA POD5 or BAM */}
-                {inputSource !== 'fastq' && (inputSource === 'bam' || (doradoMolecule === 'dna' && !barcodeKit)) && (
+                {/* Assembly — vendor wf-clone-validation accepts FASTQ or BAM and BMS also accepts DNA POD5. */}
+                {(inputSource === 'fastq' || inputSource === 'bam' || (doradoMolecule === 'dna' && !barcodeKit)) && (
                     <label className="flex items-center gap-3 cursor-pointer">
                         <input
                             type="checkbox"
                             checked={runAssembly}
-                            onChange={(e) => setRunAssembly(e.target.checked)}
+                            onChange={(e) => {
+                                const value = e.target.checked;
+                                setRunAssembly(value);
+                                if (value && inputSource === 'fastq') setRunFastqQc(false);
+                            }}
                             className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
                         />
                         <div>
@@ -1584,13 +1588,17 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     </label>
                 )}
 
-                {/* FASTQ plasmid QC */}
+                {/* Standalone plasmid QC is an alternative to vendor clone validation for FASTQ inputs. */}
                 {inputSource === 'fastq' && (
                     <label className="flex items-center gap-3 cursor-pointer">
                         <input
                             type="checkbox"
                             checked={runFastqQc}
-                            onChange={(e) => setRunFastqQc(e.target.checked)}
+                            onChange={(e) => {
+                                const value = e.target.checked;
+                                setRunFastqQc(value);
+                                if (value) setRunAssembly(false);
+                            }}
                             className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
                         />
                         <div>
@@ -1821,7 +1829,7 @@ nextflow run workflows/ngs/ont_fastq_qc.nf -profile ont_fastq_qc,apptainer \\
                                 </pre>
                             </div>
                         )}
-                        {runAssembly && inputSource !== 'fastq' && (
+                        {runAssembly && !barcodeKit && (
                             <div className="space-y-3 border-t border-[var(--border-primary)] pt-3">
                                 <div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">wf-clone-validation</div>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
