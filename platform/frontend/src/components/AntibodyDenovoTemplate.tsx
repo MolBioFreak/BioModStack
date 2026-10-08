@@ -2638,6 +2638,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             >
                                 <option value="boltz2">Boltz-2</option>
                                 <option value="protenix">Protenix</option>
+                                <option value="esmfold2">ESMFold2</option>
                             </select>
                         </label>
 

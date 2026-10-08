@@ -46,7 +46,7 @@ async def get_template(template_id: str):
     registry = get_template_registry()
     template = registry.get_template(template_id)
     
-    if not template:
+    if not template or not template.enabled:
         raise HTTPException(status_code=404, detail=f"Template '{template_id}' not found")
     
     return {

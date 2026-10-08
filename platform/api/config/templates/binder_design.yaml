@@ -65,4 +65,4 @@ user_params:
     minimum: 1
     maximum: 100
 
-enabled: true
+enabled: false

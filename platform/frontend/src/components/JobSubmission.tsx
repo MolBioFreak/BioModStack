@@ -872,7 +872,7 @@ export function JobSubmission() {
                 { tool: 'RFantibody / BoltzGen / PPIFlow' },
                 { tool: 'FAMPNN' },
                 { tool: 'PPIFlow (Opt.)' },
-                { tool: 'Protenix / Boltz2' },
+                { tool: 'Protenix / Boltz2 / ESMFold2' },
                 { tool: 'Review + QC' }
             ],
         },
@@ -906,6 +906,7 @@ export function JobSubmission() {
         const templates = templatesData?.data ?? [];
         return templates.filter((t: UntypedApiValue) =>
             !['structure_validation', 'structure_prediction'].includes(t.id) &&
+            t.id !== 'binder_design' &&
             !LEGACY_PROTEIN_MODIFICATION_TEMPLATE_IDS.has(t.id) &&
             (t.id !== 'dna_polymerase' || (window as UntypedApiValue).__DEBUG_MODE__)
         );
