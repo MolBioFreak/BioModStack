@@ -46,6 +46,16 @@ _CONFIG_FIELDS = (
     "compose_project_name",
 )
 _INT_FIELDS = ("api_host_port", "dev_web_host_port", "web_host_port")
+_FEATURE_DEFAULTS = {
+    "bioxp": True,
+    "stats_tools": True,
+    "assay_db": True,
+}
+_FEATURE_ENV_NAMES = {
+    "bioxp": "BMS_FEATURE_BIOXP",
+    "stats_tools": "BMS_FEATURE_STATS_TOOLS",
+    "assay_db": "BMS_FEATURE_ASSAY_DB",
+}
 
 
 def _resolve_path(value: str) -> Path:
@@ -87,6 +97,48 @@ def _normalize_optional_bool(value: object) -> bool | None:
     if text in {"0", "false", "no", "off"}:
         return False
     raise ValueError(f"Cannot parse boolean value: {value!r}")
+
+
+def _normalize_feature_key(value: object) -> str:
+    return str(value).strip().lower().replace("-", "_")
+
+
+def _normalize_optional_features(value: object) -> dict[str, bool] | None:
+    if value is None or value == "":
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError("features must be a mapping of feature names to booleans")
+
+    normalized: dict[str, bool] = {}
+    for raw_key, raw_value in value.items():
+        key = _normalize_feature_key(raw_key)
+        if key not in _FEATURE_DEFAULTS:
+            continue
+        parsed = _normalize_optional_bool(raw_value)
+        if parsed is not None:
+            normalized[key] = parsed
+    return normalized or None
+
+
+def _resolve_features(profile: Mapping[str, object]) -> dict[str, bool]:
+    resolved = dict(_FEATURE_DEFAULTS)
+    profile_features = profile.get("features")
+    if isinstance(profile_features, Mapping):
+        for raw_key, raw_value in profile_features.items():
+            key = _normalize_feature_key(raw_key)
+            if key not in resolved:
+                continue
+            parsed = _normalize_optional_bool(raw_value)
+            if parsed is not None:
+                resolved[key] = parsed
+
+    for key, env_name in _FEATURE_ENV_NAMES.items():
+        if os.getenv(env_name) is None:
+            continue
+        parsed = _normalize_optional_bool(os.getenv(env_name))
+        if parsed is not None:
+            resolved[key] = parsed
+    return resolved
 
 
 def _normalize_cors_origins(value: object) -> list[str] | None:
@@ -195,6 +247,10 @@ def normalize_install_profile(raw: Mapping[str, object] | None) -> dict[str, obj
     core_runtime_mode = _normalize_optional_bool(raw.get("core_runtime_mode"))
     if core_runtime_mode is not None:
         normalized["core_runtime_mode"] = core_runtime_mode
+
+    features = _normalize_optional_features(raw.get("features"))
+    if features is not None:
+        normalized["features"] = features
 
     return normalized
 
@@ -328,6 +384,7 @@ def resolve_runtime_paths(
     compose_project_name = os.getenv("COMPOSE_PROJECT_NAME") or str(
         normalized_profile.get("compose_project_name") or DEFAULT_COMPOSE_PROJECT_NAME
     )
+    features = _resolve_features(normalized_profile)
 
     return {
         "project_root": str(root),
@@ -354,6 +411,7 @@ def resolve_runtime_paths(
         "cors_origins": resolved_cors_origins,
         "workflow_adapter_url": workflow_adapter_url,
         "compose_project_name": compose_project_name,
+        "features": features,
         "core_runtime_mode": _coerce_env_bool(
             "BMS_CORE_RUNTIME_MODE",
             bool(normalized_profile.get("core_runtime_mode", True)),
@@ -385,6 +443,9 @@ def _compat_env_lines(resolved: Mapping[str, object]) -> list[str]:
         f'export BMS_WEB_HOST_PORT="${{BMS_WEB_HOST_PORT:-{resolved["web_host_port"]}}}"',
         f'export CORS_ORIGINS="${{CORS_ORIGINS:-{cors_origins}}}"',
         f'export BMS_CORE_RUNTIME_MODE="${{BMS_CORE_RUNTIME_MODE:-{core_runtime_mode}}}"',
+        f'export BMS_FEATURE_BIOXP="${{BMS_FEATURE_BIOXP:-{1 if resolved["features"]["bioxp"] else 0}}}"',
+        f'export BMS_FEATURE_STATS_TOOLS="${{BMS_FEATURE_STATS_TOOLS:-{1 if resolved["features"]["stats_tools"] else 0}}}"',
+        f'export BMS_FEATURE_ASSAY_DB="${{BMS_FEATURE_ASSAY_DB:-{1 if resolved["features"]["assay_db"] else 0}}}"',
         f'export BMS_WORKFLOW_ADAPTER_URL="${{BMS_WORKFLOW_ADAPTER_URL:-{resolved["workflow_adapter_url"]}}}"',
         f'export COMPOSE_PROJECT_NAME="${{COMPOSE_PROJECT_NAME:-{resolved["compose_project_name"]}}}"',
         "",
@@ -414,6 +475,9 @@ def _core_runtime_env_lines(resolved: Mapping[str, object]) -> list[str]:
         f'BMS_WEB_HOST_PORT={resolved["web_host_port"]}',
         f'CORS_ORIGINS={cors_origins}',
         f'BMS_CORE_RUNTIME_MODE={core_runtime_mode}',
+        f'BMS_FEATURE_BIOXP={1 if resolved["features"]["bioxp"] else 0}',
+        f'BMS_FEATURE_STATS_TOOLS={1 if resolved["features"]["stats_tools"] else 0}',
+        f'BMS_FEATURE_ASSAY_DB={1 if resolved["features"]["assay_db"] else 0}',
         f'BMS_WORKFLOW_ADAPTER_URL={resolved["workflow_adapter_url"]}',
         f'COMPOSE_PROJECT_NAME={resolved["compose_project_name"]}',
         "",
@@ -461,3 +525,15 @@ def install_profile_snapshot(
         "profile": normalized_profile,
         "resolved": resolve_runtime_paths(project_root=project_root, profile=normalized_profile),
     }
+
+
+def resolve_install_features(profile: Mapping[str, object] | None = None) -> dict[str, bool]:
+    normalized_profile = normalize_install_profile(profile if profile is not None else load_install_profile())
+    return _resolve_features(normalized_profile)
+
+
+def install_feature_enabled(feature_name: str, profile: Mapping[str, object] | None = None) -> bool:
+    key = _normalize_feature_key(feature_name)
+    if key not in _FEATURE_DEFAULTS:
+        raise ValueError(f"unknown BioModStack install feature: {feature_name}")
+    return resolve_install_features(profile=profile)[key]

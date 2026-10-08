@@ -99,6 +99,57 @@ def test_resolve_runtime_paths_defaults_include_cordova_and_loopback_cors_origin
     assert resolved["web_host_port"] == 18080
 
 
+def test_install_profile_persists_and_exports_addon_feature_flags(tmp_path: Path, monkeypatch) -> None:
+    home_dir = tmp_path / "home"
+    config_home = home_dir / ".config"
+    home_dir.mkdir()
+    config_home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+    saved = runtime_profile.save_install_profile(
+        {
+            "data_root": "~/BioModStackData",
+            "features": {
+                "bioxp": False,
+                "stats_tools": True,
+                "assay_db": False,
+            },
+        }
+    )
+
+    assert saved["features"] == {"bioxp": False, "stats_tools": True, "assay_db": False}
+    snapshot = runtime_profile.install_profile_snapshot()
+    assert snapshot["resolved"]["features"] == {"bioxp": False, "stats_tools": True, "assay_db": False}
+
+    env_text = runtime_profile.get_compat_env_path().read_text(encoding="utf-8")
+    assert 'export BMS_FEATURE_BIOXP="${BMS_FEATURE_BIOXP:-0}"' in env_text
+    assert 'export BMS_FEATURE_STATS_TOOLS="${BMS_FEATURE_STATS_TOOLS:-1}"' in env_text
+    assert 'export BMS_FEATURE_ASSAY_DB="${BMS_FEATURE_ASSAY_DB:-0}"' in env_text
+
+    core_runtime_text = runtime_profile.get_core_runtime_env_path().read_text(encoding="utf-8")
+    assert "BMS_FEATURE_BIOXP=0" in core_runtime_text
+    assert "BMS_FEATURE_STATS_TOOLS=1" in core_runtime_text
+    assert "BMS_FEATURE_ASSAY_DB=0" in core_runtime_text
+
+
+def test_feature_env_override_wins_over_install_profile(tmp_path: Path, monkeypatch) -> None:
+    home_dir = tmp_path / "home"
+    config_home = home_dir / ".config"
+    home_dir.mkdir()
+    config_home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    monkeypatch.setenv("BMS_FEATURE_BIOXP", "1")
+
+    resolved = runtime_profile.resolve_runtime_paths(
+        profile={"features": {"bioxp": False, "stats_tools": False, "assay_db": False}}
+    )
+
+    assert resolved["features"] == {"bioxp": True, "stats_tools": False, "assay_db": False}
+    assert runtime_profile.install_feature_enabled("bioxp", profile={"features": {"bioxp": False}}) is True
+
+
 def test_api_paths_prefer_install_profile_when_env_is_missing(tmp_path: Path, monkeypatch) -> None:
     home_dir = tmp_path / "home"
     config_home = home_dir / ".config"
