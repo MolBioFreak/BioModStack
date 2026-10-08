@@ -1656,6 +1656,8 @@ async def reconcile_remote_job(session: AsyncSession, job: Job, *, background_ta
 
 async def _service_remote_external_inputs(session, job, status) -> None:
     """Deliver declared external-stage data; scientific execution stays on worker."""
+    from biomodstack_msa_api import ClientConfig, PendingMSA
+    from datetime import timedelta, timezone
     from .result_generation import checked, prepare_transfer, begin_transfer
     from component_runtime import canonical_bytes
     from services.model_msa_handoff import (prepare_generated_msa_on_controller,
@@ -1708,6 +1710,16 @@ async def _service_remote_external_inputs(session, job, status) -> None:
         from component_runtime import digest
         if request.get('request_id') != digest({k: v for k, v in request.items() if k != 'request_id'}):
             raise RemoteExecutionError('External service request digest conflicts')
+        receipt = dict((job.provenance or {}).get('remote_execution_receipt') or {})
+        pending = dict(receipt.get('generated_msa_pending') or {})
+        wait = pending.get(request['request_id'])
+        if wait and datetime.now(timezone.utc) < datetime.fromisoformat(wait['retry_at']):
+            # Request identity includes the attempt, source, lease and settings.
+            # Reloaded durable deadlines survive controller/session restart;
+            # ordinary worker observation and cancellation remain unfettered.
+            # Keep the existing serial service boundary: later requests must
+            # not jump ahead of this provider's pending operation either.
+            return
         staging = checked(get_data_root() / 'remote-execution' / 'staging' / ('msa-' + request['request_id']))
         staging.parent.mkdir(parents=True, exist_ok=True)
         prepare_transfer(staging)
@@ -1717,13 +1729,23 @@ async def _service_remote_external_inputs(session, job, status) -> None:
         package = staging / 'prepared'
         try:
             sha = await prepare_generated_msa_on_controller(request, package, check_fence)
+        except PendingMSA as exc:
+            await check_fence()
+            operation = exc.operation or {}
+            delay = max(1.0, operation.get('retry_after_seconds', ClientConfig().poll_seconds))
+            retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
+            receipt = dict((job.provenance or {}).get('remote_execution_receipt') or {})
+            pending = dict(receipt.get('generated_msa_pending') or {})
+            pending[request['request_id']] = {'operation': operation, 'retry_at': retry_at.isoformat()}
+            receipt['generated_msa_pending'] = pending
+            await _publish_remote_transition(session, job, {
+                'provenance': dict(job.provenance or {}, remote_execution_receipt=receipt)})
+            return  # Pending service work is not a failed worker stage.
         except Exception:
             await check_fence()
             await run_remote(connection, _worker_argv(connection, 'external-service-deliver', attempt_dir,
                 *args, '--request-id', request['request_id'], '--failed'), timeout=60)
             raise
-        if sha is None:
-            return
         await check_fence()
         destination = str(PurePosixPath(authority['artifact_root']) / 'external-services' / request['request_id'] / sha)
         await run_remote(connection, ['mkdir', '-p', destination])
@@ -1738,6 +1760,15 @@ async def _service_remote_external_inputs(session, job, status) -> None:
             *args, '--request-id', request['request_id'], '--manifest-sha256', sha), timeout=60)
         prepare_transfer(staging)
         shutil.rmtree(staging)
+        await check_fence()
+        receipt = dict((job.provenance or {}).get('remote_execution_receipt') or {})
+        pending = dict(receipt.get('generated_msa_pending') or {})
+        if request['request_id'] in pending:
+            del pending[request['request_id']]
+            receipt['generated_msa_pending'] = pending
+            if not await _publish_remote_transition(session, job, {
+                    'provenance': dict(job.provenance or {}, remote_execution_receipt=receipt)}):
+                return
 
 
 async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
