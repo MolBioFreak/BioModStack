@@ -11,6 +11,7 @@ import {
     useSaveBioXpInterlinkSettings,
 } from '../lib/bioxpClient';
 import type { BioXpInterlinkSettings } from '../lib/bioxpClient';
+import { deriveBioXpInterlinkMenuStatus } from './bioxpInterlinkStatus';
 
 const getErrorMessage = (error: unknown) => {
     if (error instanceof Error) return error.message;
@@ -68,7 +69,7 @@ const BIOXP_INTERLINK_DOC_LINKS = [
 
 export function BioXpInterlinkMenu() {
     const [isOpen, setIsOpen] = useState(false);
-    const state = useBioXpInterlinkState(false, isOpen ? 5000 : false);
+    const state = useBioXpInterlinkState(false, isOpen ? 5000 : 15000);
     const saveSettings = useSaveBioXpInterlinkSettings();
     const forgetSettings = useForgetBioXpInterlinkSettings();
     const connect = useBioXpInterlinkConnect();
@@ -100,28 +101,13 @@ export function BioXpInterlinkMenu() {
     const active = Boolean(state.data?.active);
     const configured = Boolean(state.data?.configured);
     const reachable = state.data?.reachable;
-    const indicatorClass = active
-        ? reachable === false
-            ? 'bg-amber-400'
-            : 'bg-emerald-400'
-        : configured
-            ? 'bg-sky-400'
-            : 'bg-slate-600';
-    const statusLabel = active
-        ? reachable === false
-            ? 'DEGRADED'
-            : 'LINKED'
-        : configured
-            ? 'SAVED'
-            : 'QUIET';
-    const humanStatusLabel = active
-        ? reachable === false
-            ? 'Connected, not reachable'
-            : 'Connected'
-        : configured
-            ? 'Saved, inactive'
-            : 'Not configured';
-    const reachabilityText = reachable == null ? 'reachability unknown' : reachable ? 'reachable' : 'not reachable';
+    const interlinkStatus = deriveBioXpInterlinkMenuStatus({
+        active,
+        configured,
+        reachable,
+        lastProbeAt: state.data?.last_probe_at,
+    });
+    const { indicatorClass, statusLabel, humanStatusLabel, reachabilityText } = interlinkStatus;
     const endpointForDisplay = state.data?.active
         ? state.data.robot_api_url
         : state.data?.robot_api_url || settings.robot_api_url || state.data?.recommended_url;

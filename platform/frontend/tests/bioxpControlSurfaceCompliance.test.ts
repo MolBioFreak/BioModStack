@@ -129,7 +129,7 @@ test('PrepareToRunJob UI uses the named no-motion readiness route, not the raw r
     assert.doesNotMatch(oemPanel, /recordOemAction\('PrepareToRunJob'/);
 });
 
-test('Zero and Switch Home controls are separate and raw switch telemetry does not software-block motion', () => {
+test('Zero and Switch Home controls are separate while live guardrails block risky raw motion', () => {
     const axisControls = sourceBetween(cockpitSource, 'const AxisControls = ({', 'const CameraAxisQuickControls = ({');
     const cameraAxisControls = sourceBetween(cockpitSource, 'const CameraAxisQuickControls = ({', 'type CameraHoldJogCommand = {');
     const axisDirectionHelper = sourceBetween(cockpitSource, 'const getAxisDirectionState = (', 'const hasMutationKeyPrefix =');
@@ -141,26 +141,28 @@ test('Zero and Switch Home controls are separate and raw switch telemetry does n
     assert.match(clientSource, /export const useOemHomeXY/);
     assert.match(clientSource, /export const useOemRehome/);
     assert.match(clientSource, /export const useOemInitializeMotion/);
-    assert.match(axisDirectionHelper, /blocked: false/);
-    assert.match(axisControls, /const negativeMoveBlocked = false/);
-    assert.match(axisControls, /const positiveMoveBlocked = false/);
-    assert.match(axisControls, /const zeroToControllerBlocked = false/);
-    assert.match(axisControls, /const switchHomeBlocked = false/);
+    assert.match(axisDirectionHelper, /negativeBlocked = conflictingSwitches \|\| \(leftActive && !leftMasked\)/);
+    assert.match(axisDirectionHelper, /positiveBlocked = conflictingSwitches \|\| \(rightActive && !rightMasked\)/);
+    assert.match(axisControls, /const negativeMoveBlocked = directionGuard\.negativeBlocked/);
+    assert.match(axisControls, /const positiveMoveBlocked = directionGuard\.positiveBlocked \|\| zPositiveDownBlocked/);
+    assert.match(axisControls, /const zPositiveDownBlocked = axis === 'z' && !axisReferenced/);
+    assert.match(axisControls, /const zeroToControllerBlocked = !axisReferenced \|\| !axisRangeAvailable/);
+    assert.match(axisControls, /const switchHomeBlocked = true/);
     assert.match(axisControls, /Zero → 0/);
     assert.match(axisControls, /Switch Home/);
     assert.match(axisControls, /disabled=\{!enabled \|\| zeroAxis\.isPending \|\| zeroToControllerBlocked\}/);
     assert.match(axisControls, /disabled=\{!enabled \|\| homeAxis\.isPending \|\| switchHomeBlocked\}/);
-    assert.match(axisControls, /Root-cause fix belongs in robot profile\/current\/switch semantics, not UI blocking/);
-    assert.match(axisControls, /Root-cause fix belongs in robot profile\/current\/switch semantics, not UI blocking/);
-    assert.match(cameraAxisControls, /const zeroToControllerBlocked = false/);
-    assert.match(cameraAxisControls, /Zero → 0/);
-    assert.match(cameraAxisControls, /telemetry only; no frontend motion block/);
+    assert.match(axisControls, /Switch Home requires capture_bundle=true/);
+    assert.match(cameraAxisControls, /const negativeMoveBlocked = directionGuard\.negativeBlocked/);
+    assert.match(cameraAxisControls, /const positiveMoveBlocked = directionGuard\.positiveBlocked/);
+    assert.match(cameraAxisControls, /disabled=\{!enabled \|\| moveRelative\.isPending \|\| negativeMoveBlocked\}/);
+    assert.match(cameraAxisControls, /disabled=\{!enabled \|\| moveRelative\.isPending \|\| positiveMoveBlocked\}/);
+    assert.match(cameraAxisControls, /motion buttons blocked until telemetry clears/);
     assert.match(cockpitSource, /UP\/-Z/);
     assert.match(cockpitSource, /DN\/\+Z/);
     assert.doesNotMatch(axisControls, /limitConflictBlocked/);
     assert.doesNotMatch(axisControls, /Home → 0 blocked/);
     assert.doesNotMatch(axisControls, /Raw switch conflict fault/);
-    assert.doesNotMatch(cameraAxisControls, /L\/R switch fault: motion blocked/);
 });
 
 test('stale BioXP control-surface labels are absent from active frontend surfaces', () => {

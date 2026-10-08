@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 
 const cockpitSource = readFileSync(resolve('src/components/BioXpCockpit.tsx'), 'utf8');
+const clientSource = readFileSync(resolve('src/lib/bioxpClient.ts'), 'utf8');
 
 function sourceBetween(startNeedle: string, endNeedle: string): string {
     const start = cockpitSource.indexOf(startNeedle);
@@ -128,6 +129,11 @@ test('OEM readback panel keeps new supervised OEM mode controls in one place', (
     assert.match(oemReadbackPanel, /InitializeMotion ACK/);
     assert.match(oemReadbackPanel, /recordOemAction\('oem_home_xy'/);
     assert.match(oemReadbackPanel, /recordOemAction\('oem_initialize_motion_ack'/);
+    assert.match(oemReadbackPanel, /operator_ack: 'HOMEXY'/);
+    assert.match(oemReadbackPanel, /operator_ack: 'REHOME'/);
+    assert.match(oemReadbackPanel, /operator_ack: 'INITIALIZE'/);
+    assert.match(oemReadbackPanel, /operator_ack: 'INITIALIZE_WITH_HOMING'/);
+    assert.doesNotMatch(oemReadbackPanel, /supervised_oem_home_xy|diagnostic_rehome_no_homing|supervised_oem_rehome_ack|diagnostic_initialize_motion_no_homing|supervised_initialize_motion_ack/);
 });
 
 test('service operations tab exposes named operation wrappers without acknowledgement form clutter', () => {
@@ -152,6 +158,22 @@ test('service operations tab exposes named operation wrappers without acknowledg
     assert.match(serviceTab, /\{serviceOperationsPanel\}/);
     assert.match(serviceTab, /\{motionPowerPanel\}/);
     assert.match(serviceTab, /\{referencePanel\}/);
+});
+
+
+test('raw motion current defaults stay OEM-safe and manual axis controls use live guardrails', () => {
+    const axisControls = sourceBetween('const AxisControls = ({', 'const CameraAxisQuickControls = ({');
+
+    assert.match(clientSource, /const runCurrent = payload\.run_current \?\? 10/);
+    assert.match(clientSource, /standby_current: payload\.standby_current \?\? 10/);
+    assert.match(axisControls, /useMotionReferenceStatus\(enabled, \[axis\]/);
+    assert.match(axisControls, /useMotionRangeStatus\(enabled/);
+    assert.match(axisControls, /const axisReferenced = referenceState === 'referenced'/);
+    assert.match(axisControls, /const absoluteMoveBlocked = !axisReferenced \|\| !axisRangeAvailable/);
+    assert.match(axisControls, /const switchHomeBlocked = true/);
+    assert.match(axisControls, /Switch Home requires capture_bundle=true/);
+    assert.match(axisControls, /negativeMoveBlocked = directionGuard\.negativeBlocked/);
+    assert.match(axisControls, /positiveMoveBlocked = directionGuard\.positiveBlocked/);
 });
 
 

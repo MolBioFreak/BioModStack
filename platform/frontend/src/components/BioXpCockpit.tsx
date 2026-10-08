@@ -47,7 +47,9 @@ import {
     useMarkMotionDesynced,
     useMarkMotionReferenced,
     useMotionArmStrictStartup,
+    useMotionInterlockOverrideStatus,
     usePrepareSafeOperation,
+    useSetMotionInterlockOverride,
     useMotionPowerDiag,
     useMotionPowerEnable,
     useMotionPowerStatus,
@@ -120,7 +122,6 @@ const JsonBlock = ({ title, data, fallback = 'No data yet.' }: { title: string; 
     </details>
 );
 
-const CONNECTION_STICKY_WINDOW_MS = 15000;
 const CAMERA_STREAM_MODES = [
     { key: '640x480', label: '640x480 / 30 FPS', width: 640, height: 480, maxFps: 30 },
     { key: '1280x720', label: '1280x720 / 30 FPS', width: 1280, height: 720, maxFps: 30 },
@@ -303,15 +304,77 @@ const getAxisDirectionState = (axisData: AxisStatus | undefined) => {
     const leftMasked = axisData?.preset?.disable_left === true;
     const rightMasked = axisData?.preset?.disable_right === true;
     const conflictingSwitches = leftActive && rightActive;
+    const negativeBlocked = conflictingSwitches || (leftActive && !leftMasked);
+    const positiveBlocked = conflictingSwitches || (rightActive && !rightMasked);
 
     return {
-        blocked: false,
+        blocked: negativeBlocked || positiveBlocked,
+        negativeBlocked,
+        positiveBlocked,
         conflictingSwitches,
         leftActive,
         rightActive,
         leftMasked,
         rightMasked,
     };
+};
+
+const asRecord = (value: unknown): Record<string, unknown> =>
+    value && typeof value === 'object' ? value as Record<string, unknown> : {};
+
+const firstNumber = (...values: unknown[]) => {
+    for (const value of values) {
+        if (typeof value === 'number' && Number.isFinite(value)) {
+            return value;
+        }
+        if (typeof value === 'string' && value.trim()) {
+            const parsed = Number(value);
+            if (Number.isFinite(parsed)) {
+                return parsed;
+            }
+        }
+    }
+    return null;
+};
+
+const getAxisRangeRow = (rangeStatus: Record<string, unknown> | undefined, axis: AxisName) => {
+    const payload = asRecord(rangeStatus);
+    const rows = asRecord(payload.rows);
+    const row = asRecord(rows[axis]);
+    if (Object.keys(row).length) {
+        return row;
+    }
+    const axes = asRecord(payload.axes);
+    const axisRow = asRecord(axes[axis]);
+    if (Object.keys(axisRow).length) {
+        return axisRow;
+    }
+    return asRecord(payload[axis]);
+};
+
+const getAxisRangeBounds = (rangeRow: Record<string, unknown>) => {
+    const limits = asRecord(rangeRow.limits);
+    const min = firstNumber(limits.min, limits.min_steps, limits.lower, rangeRow.min, rangeRow.min_steps, rangeRow.absolute_min, rangeRow.lower);
+    const max = firstNumber(limits.max, limits.max_steps, limits.upper, rangeRow.max, rangeRow.max_steps, rangeRow.absolute_max, rangeRow.upper);
+    return { min, max };
+};
+
+const getAxisRangePosition = (rangeRow: Record<string, unknown>) => {
+    const status = asRecord(rangeRow.status);
+    const statusPosition = asRecord(status.position);
+    return firstNumber(
+        rangeRow.position,
+        rangeRow.position_steps,
+        rangeRow.current_position,
+        rangeRow.current_position_steps,
+        statusPosition.position,
+        statusPosition.steps,
+    );
+};
+
+const getAxisReferenceState = (referenceStatus: MotionReferenceStatus | undefined, axis: AxisName) => {
+    const row = referenceStatus?.rows?.[axis];
+    return String(row?.state ?? row?.reference_state ?? (row?.referenced === true ? 'referenced' : 'unknown')).toLowerCase();
 };
 
 const hasMutationKeyPrefix = (mutationKey: unknown, prefix: readonly string[]) =>
@@ -516,28 +579,47 @@ const AxisControls = ({
         enabled,
         localMotionBusy ? 1000 : pollIntervalMs,
     );
+    const motionReferenceStatus = useMotionReferenceStatus(enabled, [axis], localMotionBusy ? false : 5000);
+    const motionRangeStatus = useMotionRangeStatus(enabled, localMotionBusy ? false : 5000);
+
+    const referenceState = getAxisReferenceState(motionReferenceStatus.data, axis);
+    const axisReferenced = referenceState === 'referenced';
+    const axisRangeRow = getAxisRangeRow(motionRangeStatus.data, axis);
+    const axisRangeBounds = getAxisRangeBounds(axisRangeRow);
+    const axisRangePosition = getAxisRangePosition(axisRangeRow);
+    const axisRangeAvailable = axisRangeBounds.min != null && axisRangeBounds.max != null;
+    const liveAbsoluteMin = axisRangeBounds.min ?? sliderProfile.absoluteMin;
+    const liveAbsoluteMax = axisRangeBounds.max ?? sliderProfile.absoluteMax;
 
     const reportedPosition = data?.status?.position?.position;
+    const displayPosition = typeof reportedPosition === 'number' ? reportedPosition : axisRangePosition;
     const reportedSpeed = data?.status?.speed?.speed;
 
     useEffect(() => {
         if (typeof reportedPosition === 'number') {
-            setAbsolutePosition(clampInteger(reportedPosition, sliderProfile.absoluteMin, sliderProfile.absoluteMax));
+            setAbsolutePosition(clampInteger(reportedPosition, liveAbsoluteMin, liveAbsoluteMax));
+        } else if (typeof axisRangePosition === 'number') {
+            setAbsolutePosition(clampInteger(axisRangePosition, liveAbsoluteMin, liveAbsoluteMax));
         }
-    }, [reportedPosition, sliderProfile.absoluteMax, sliderProfile.absoluteMin]);
+    }, [axisRangePosition, liveAbsoluteMax, liveAbsoluteMin, reportedPosition]);
 
     const moving = typeof reportedSpeed === 'number' ? reportedSpeed !== 0 : false;
-    const leftActive = data?.switch_activity?.left_active;
-    const rightActive = data?.switch_activity?.right_active;
-    const leftMasked = data?.preset?.disable_left === true;
-    const rightMasked = data?.preset?.disable_right === true;
-    const switchConflictObserved = leftActive === true && rightActive === true;
-    const negativeMoveBlocked = false;
-    const positiveMoveBlocked = false;
-    const zeroToControllerBlocked = false;
-    const switchHomeBlocked = false;
-    const zeroToControllerTitle = 'Return this axis to controller coordinate 0; this is not switch-search homing.';
-    const switchHomeTitle = 'Run the robot-local manual OEM switch-search home through the BMS proxy. This can physically move the axis; require operator/watch-camera proof before trusting the result.';
+    const directionGuard = getAxisDirectionState(data);
+    const leftActive = directionGuard.leftActive;
+    const rightActive = directionGuard.rightActive;
+    const leftMasked = directionGuard.leftMasked;
+    const rightMasked = directionGuard.rightMasked;
+    const switchConflictObserved = directionGuard.conflictingSwitches;
+    const zPositiveDownBlocked = axis === 'z' && !axisReferenced && (displayPosition ?? 0) < 0;
+    const negativeMoveBlocked = directionGuard.negativeBlocked;
+    const positiveMoveBlocked = directionGuard.positiveBlocked || zPositiveDownBlocked;
+    const absoluteMoveBlocked = !axisReferenced || !axisRangeAvailable;
+    const zeroToControllerBlocked = !axisReferenced || !axisRangeAvailable;
+    const switchHomeBlocked = true;
+    const zeroToControllerTitle = absoluteMoveBlocked
+        ? 'Controller-zero move disabled until this axis is referenced and robot-local range status is available.'
+        : 'Return this axis to controller coordinate 0; this is not switch-search homing.';
+    const switchHomeTitle = 'Switch Home requires capture_bundle=true and an operator_note with native before/after camera/operator confirmation; use supervised OEM recipes or robot-local tooling for that evidence.';
     const motionProfile = lastMotionResult?.motion_profile ?? {
         speed: data?.preset?.speed ?? 100,
         acc: data?.preset?.acc ?? 50,
@@ -555,7 +637,7 @@ const AxisControls = ({
     const boundedStepMagnitude = clampInteger(Math.abs(steps), sliderProfile.stepMin, sliderProfile.stepMax);
     const boundedSpeed = clampInteger(commandSpeed, sliderProfile.speedMin, sliderProfile.speedMax);
     const boundedAcc = clampInteger(commandAcc, sliderProfile.accMin, sliderProfile.accMax);
-    const boundedAbsolutePosition = clampInteger(absolutePosition, sliderProfile.absoluteMin, sliderProfile.absoluteMax);
+    const boundedAbsolutePosition = clampInteger(absolutePosition, liveAbsoluteMin, liveAbsoluteMax);
     const motionArtifactPayload = {
         capture_bundle: false,
         dry_run_bundle: false,
@@ -574,7 +656,7 @@ const AxisControls = ({
         if (typeof reportedPosition !== 'number') {
             return requestedDelta;
         }
-        const boundedTarget = clampInteger(reportedPosition + requestedDelta, sliderProfile.absoluteMin, sliderProfile.absoluteMax);
+        const boundedTarget = clampInteger(reportedPosition + requestedDelta, liveAbsoluteMin, liveAbsoluteMax);
         return boundedTarget - reportedPosition;
     };
 
@@ -587,9 +669,9 @@ const AxisControls = ({
         setLastMotionResult(payload);
         setCommandLabel(null);
         if (typeof payload?.position_after?.position === 'number') {
-            setAbsolutePosition(clampInteger(payload.position_after.position, sliderProfile.absoluteMin, sliderProfile.absoluteMax));
+            setAbsolutePosition(clampInteger(payload.position_after.position, liveAbsoluteMin, liveAbsoluteMax));
         } else if (typeof payload?.home?.position_after?.position === 'number') {
-            setAbsolutePosition(clampInteger(payload.home.position_after.position, sliderProfile.absoluteMin, sliderProfile.absoluteMax));
+            setAbsolutePosition(clampInteger(payload.home.position_after.position, liveAbsoluteMin, liveAbsoluteMax));
         }
     };
 
@@ -616,10 +698,12 @@ const AxisControls = ({
             {isError && <div className="text-xs text-error">{getErrorMessage(error) ?? 'Unable to read axis status.'}</div>}
 
             <div className="grid grid-cols-2 gap-2 text-[11px] font-mono text-content-muted">
-                <div>Pos: {reportedPosition ?? 'n/a'}</div>
+                <div>Pos: {displayPosition ?? 'n/a'}</div>
                 <div>Speed: {reportedSpeed ?? 'n/a'}</div>
                 <div>L sw: {leftActive == null ? 'n/a' : leftActive ? '1' : '0'}{leftMasked ? ' (masked)' : ''}</div>
                 <div>R sw: {rightActive == null ? 'n/a' : rightActive ? '1' : '0'}{rightMasked ? ' (masked)' : ''}</div>
+                <div>Ref: {referenceState}</div>
+                <div>Range: {axisRangeAvailable ? `${liveAbsoluteMin}..${liveAbsoluteMax}` : 'n/a'}</div>
                 <div>Cmd speed: {motionProfile.speed}</div>
                 <div>Cmd acc: {motionProfile.acc}</div>
                 <div>Stall abort: {motionProfile.no_delta_timeout_s}s</div>
@@ -738,8 +822,8 @@ const AxisControls = ({
             <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_auto] gap-2 items-end rounded border border-accent/10 bg-surface/30 p-2">
                 <SliderNumberControl
                     label="Absolute target"
-                    min={sliderProfile.absoluteMin}
-                    max={sliderProfile.absoluteMax}
+                    min={liveAbsoluteMin}
+                    max={liveAbsoluteMax}
                     step={sliderProfile.stepIncrement}
                     value={boundedAbsolutePosition}
                     onChange={setAbsolutePosition}
@@ -755,7 +839,8 @@ const AxisControls = ({
                             },
                         );
                     }}
-                    disabled={!enabled || moveAbsolute.isPending}
+                    disabled={!enabled || moveAbsolute.isPending || absoluteMoveBlocked}
+                    title={absoluteMoveBlocked ? 'Absolute move disabled until reference and robot-local range status are live.' : 'Move to an in-range absolute controller coordinate.'}
                     className="px-4 py-1.5 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors disabled:opacity-40"
                 >
                     Move Absolute
@@ -808,11 +893,12 @@ const AxisControls = ({
                 </div>
             )}
 
-            {(negativeMoveBlocked || positiveMoveBlocked) && (
-                <div className="text-[10px] text-warning">
-                    {negativeMoveBlocked ? 'Negative travel readback condition observed; software block disabled.' : null}
-                    {negativeMoveBlocked && positiveMoveBlocked ? ' ' : null}
-                    {positiveMoveBlocked ? 'Positive travel readback condition observed; software block disabled.' : null}
+            {(negativeMoveBlocked || positiveMoveBlocked || absoluteMoveBlocked || switchHomeBlocked) && (
+                <div className="text-[10px] text-warning space-y-0.5">
+                    {negativeMoveBlocked && <div>Negative travel blocked by live unmasked switch/conflict telemetry.</div>}
+                    {positiveMoveBlocked && <div>Positive travel blocked by live unmasked switch/conflict telemetry{zPositiveDownBlocked ? ' or unreferenced negative-Z down-travel guard.' : '.'}</div>}
+                    {absoluteMoveBlocked && <div>Absolute/zero moves require referenced axis plus robot-local range bounds.</div>}
+                    {switchHomeBlocked && <div>Switch Home requires capture_bundle=true and operator_note evidence, so this raw button stays disabled.</div>}
                 </div>
             )}
 
@@ -844,11 +930,14 @@ const CameraAxisQuickControls = ({ axis, label, enabled }: { axis: AxisName; lab
     const position = data?.status?.position?.position;
     const speed = data?.status?.speed?.speed;
     const moving = typeof speed === 'number' ? speed !== 0 : false;
-    const leftActive = data?.switch_activity?.left_active;
-    const rightActive = data?.switch_activity?.right_active;
-    const leftMasked = data?.preset?.disable_left === true;
-    const rightMasked = data?.preset?.disable_right === true;
-    const switchConflictObserved = leftActive === true && rightActive === true;
+    const directionGuard = getAxisDirectionState(data);
+    const leftActive = directionGuard.leftActive;
+    const rightActive = directionGuard.rightActive;
+    const leftMasked = directionGuard.leftMasked;
+    const rightMasked = directionGuard.rightMasked;
+    const switchConflictObserved = directionGuard.conflictingSwitches;
+    const negativeMoveBlocked = directionGuard.negativeBlocked;
+    const positiveMoveBlocked = directionGuard.positiveBlocked;
     const zeroToControllerBlocked = false;
     const liveDelta =
         commandStartPosition != null && typeof position === 'number'
@@ -887,7 +976,7 @@ const CameraAxisQuickControls = ({ axis, label, enabled }: { axis: AxisName; lab
                             { onSettled: () => setCommandLabel(null) },
                         );
                     }}
-                    disabled={!enabled || moveRelative.isPending}
+                    disabled={!enabled || moveRelative.isPending || negativeMoveBlocked}
                     className="px-2 py-1 rounded bg-white/10 hover:bg-white/15 text-content text-[11px] border border-white/10 disabled:opacity-30 transition-colors"
                 >
                     ◄
@@ -900,7 +989,7 @@ const CameraAxisQuickControls = ({ axis, label, enabled }: { axis: AxisName; lab
                             { onSettled: () => setCommandLabel(null) },
                         );
                     }}
-                    disabled={!enabled || moveRelative.isPending}
+                    disabled={!enabled || moveRelative.isPending || positiveMoveBlocked}
                     className="px-2 py-1 rounded bg-white/10 hover:bg-white/15 text-content text-[11px] border border-white/10 disabled:opacity-30 transition-colors"
                 >
                     ►
@@ -923,8 +1012,8 @@ const CameraAxisQuickControls = ({ axis, label, enabled }: { axis: AxisName; lab
             {(leftActive === true || rightActive === true) && (
                 <div className={`text-[10px] ${switchConflictObserved ? 'text-content-muted' : 'text-content-muted'} font-mono`}>
                     {switchConflictObserved
-                        ? 'L/R switch readback both active (telemetry only; no frontend motion block)'
-                        : `${leftActive === true ? (leftMasked ? 'L sw(masked)' : 'L sw') : 'L ok'} · ${rightActive === true ? (rightMasked ? 'R sw(masked)' : 'R sw') : 'R ok'}`}
+                        ? 'L/R switch readback both active (motion buttons blocked until telemetry clears)'
+                        : `${leftActive === true ? (leftMasked ? 'L sw(masked)' : 'L sw(block)') : 'L ok'} · ${rightActive === true ? (rightMasked ? 'R sw(masked)' : 'R sw(block)') : 'R ok'}`}
                 </div>
             )}
             {commandLabel && (
@@ -1564,8 +1653,6 @@ export const BioXpCockpit = () => {
     const [latestMotionInfraAction, setLatestMotionInfraAction] = useState<{ action: string; data: UntypedApiValue } | null>(null);
     const [ledRgbState, setLedRgbState] = useState({ r: 32, g: 128, b: 255 });
     const [ledPctState, setLedPctState] = useState(35);
-    const [lastHealthyAt, setLastHealthyAt] = useState<number | null>(null);
-    const [connectionNowMs, setConnectionNowMs] = useState(0);
     const [viewerFullscreen, setViewerFullscreen] = useState(false);
     const [pendingCameraControlCid, setPendingCameraControlCid] = useState<number | null>(null);
     const [liquidVolumeUl, setLiquidVolumeUl] = useState(10);
@@ -1581,6 +1668,7 @@ export const BioXpCockpit = () => {
     const [headLiftSteps, setHeadLiftSteps] = useState(500);
     const [microMoveAxis, setMicroMoveAxis] = useState<AxisName>('x');
     const [microMoveSteps, setMicroMoveSteps] = useState(100);
+    const [interlockOverrideReason, setInterlockOverrideReason] = useState('mag/latch commissioning; operator watching instrument');
     const [latestOperationReport, setLatestOperationReport] = useState<BioXpOperationReport | null>(null);
     const cameraViewerRef = useRef<HTMLDivElement | null>(null);
 
@@ -1602,10 +1690,14 @@ export const BioXpCockpit = () => {
     const motionPowerEnable = useMotionPowerEnable();
     const motionPowerDiag = useMotionPowerDiag();
     const motionArmStrictStartup = useMotionArmStrictStartup();
+    const interlockOverride = useSetMotionInterlockOverride();
     const prepareInterlock = usePrepareInterlock();
     const clearLock = useClearLock();
 
-    const hardwareReachable = interlinkActive && !!status && !statusIsError && status.hardware_connected;
+    const statusReportsHardwareConnected = !statusIsError && status?.hardware_connected === true;
+    const runtimeReportsHardwareConnected = !runtimeStatusIsError && runtimeStatus?.hardware_connected === true;
+    const interlinkReportsHardwareConnected = bioXpInterlink.data?.hardware_connected === true;
+    const hardwareReachable = interlinkActive && (statusReportsHardwareConnected || runtimeReportsHardwareConnected || interlinkReportsHardwareConnected);
     const linkageConfigured = interlinkConfigured || Boolean(status?.linkage_configured || runtimeStatus?.linkage_configured);
     const runtimeSummary = deriveRuntimeStatusSummary({
         linkageConfigured,
@@ -1622,10 +1714,6 @@ export const BioXpCockpit = () => {
             : null),
     });
     const runtimeStatusHelp = runtimeSummary.detail;
-    const hasRecentHardwareContact =
-        lastHealthyAt != null &&
-        connectionNowMs > 0 &&
-        (connectionNowMs - lastHealthyAt) < CONNECTION_STICKY_WINDOW_MS;
     const connectionPollingEnabled = activeTab === 'connection' && !hardwareBusy;
     const controlsPollingEnabled = false;
     const cameraDiscoveryEnabled = hardwareReachable && activeTab === 'camera' && !pollCamera && !motionBusy;
@@ -1695,22 +1783,6 @@ export const BioXpCockpit = () => {
         CAMERA_STREAM_MODES.find((mode) => mode.key === streamMode) ?? CAMERA_STREAM_MODES[1];
 
     useEffect(() => {
-        if (!hardwareReachable) return undefined;
-        const timer = window.setTimeout(() => {
-            const now = Date.now();
-            setLastHealthyAt(now);
-            setConnectionNowMs(now);
-        }, 0);
-        return () => window.clearTimeout(timer);
-    }, [hardwareReachable]);
-
-    useEffect(() => {
-        if (lastHealthyAt == null) return undefined;
-        const timer = window.setInterval(() => setConnectionNowMs(Date.now()), 1000);
-        return () => window.clearInterval(timer);
-    }, [lastHealthyAt]);
-
-    useEffect(() => {
         if (cameraDevices.data?.preferred_device && cameraDevice !== cameraDevices.data.preferred_device) {
             setCameraDevice(cameraDevices.data.preferred_device);
             return;
@@ -1734,27 +1806,47 @@ export const BioXpCockpit = () => {
         return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
     }, []);
 
-    const controlPlaneReachable = interlinkActive && linkageConfigured && operationCapabilities.data?.robot_openapi_reachable !== false;
-    const isConnected = interlinkActive && (hardwareReachable || controlPlaneReachable || (!!status?.linkage_configured && hasRecentHardwareContact));
-    const isRecovering = interlinkActive && !hardwareReachable && (controlPlaneReachable || (!!status?.linkage_configured && hasRecentHardwareContact));
+    const robotApiReachable =
+        bioXpInterlink.data?.reachable === true ||
+        runtimeStatus?.linked_runtime_reachable === true ||
+        operationCapabilities.data?.robot_openapi_reachable === true ||
+        hardwareReachable;
+    const robotApiExplicitlyUnreachable =
+        interlinkActive &&
+        !robotApiReachable &&
+        (statusIsError || runtimeStatusIsError || bioXpInterlink.data?.reachable === false || runtimeStatus?.linked_runtime_reachable === false);
+    const controlPlaneReachable =
+        interlinkActive &&
+        linkageConfigured &&
+        robotApiReachable &&
+        operationCapabilities.data?.robot_openapi_reachable === true;
+    const isConnected = interlinkActive && !robotApiExplicitlyUnreachable && (hardwareReachable || controlPlaneReachable);
+    const interlockOverrideStatus = useMotionInterlockOverrideStatus(isConnected && (activeTab === 'controls' || activeTab === 'service') && !hardwareBusy, hardwareBusy ? false : 8000);
+    const isRecovering = interlinkActive && !robotApiExplicitlyUnreachable && !hardwareReachable && controlPlaneReachable;
     const isDegraded = !!status && !statusIsError && (status.status === 'degraded' || isRecovering);
     const linkInactive = linkageConfigured && !interlinkActive;
-    const hardwareBadgeClassName = isConnected
-        ? (isDegraded ? 'bg-warning/10 text-warning border-warning/30' : 'bg-success/10 text-success border-success/30')
-        : linkInactive
-            ? 'bg-warning/10 text-warning border-warning/30'
-            : 'bg-error/10 text-error border-error/30';
+    const hardwareBadgeClassName = statusLoading && !status
+        ? 'bg-warning/10 text-warning border-warning/30'
+        : isConnected
+            ? (isDegraded ? 'bg-warning/10 text-warning border-warning/30' : 'bg-success/10 text-success border-success/30')
+            : linkInactive
+                ? 'bg-warning/10 text-warning border-warning/30'
+                : 'bg-error/10 text-error border-error/30';
     const hardwareBadgeLabel = linkInactive
         ? 'LINK INACTIVE'
-        : statusLoading
-            ? 'PINGING...'
-            : isConnected
-                ? (isRecovering ? 'RECOVERING' : isDegraded ? 'DEGRADED' : 'ONLINE')
-                : 'OFFLINE';
-    const unavailableTitle = linkInactive ? 'BIOXP LINK INACTIVE' : 'HARDWARE OFFLINE';
+        : statusLoading && !status
+            ? 'CHECKING...'
+            : robotApiExplicitlyUnreachable
+                ? 'ROBOT UNREACHABLE'
+                : isConnected
+                    ? (isRecovering ? 'API ONLY' : isDegraded ? 'DEGRADED' : 'ONLINE')
+                    : 'OFFLINE';
+    const unavailableTitle = linkInactive ? 'BIOXP LINK INACTIVE' : robotApiExplicitlyUnreachable ? 'BIOXP ROBOT UNREACHABLE' : 'HARDWARE OFFLINE';
     const unavailableDetail = linkInactive
         ? 'Saved robot profile is present but inactive. Press BIOXP LINK → Connect to activate the BMS proxy; no robot motion is run by connecting.'
-        : 'Configure a working runtime linkage first. Handler readback, thermal, and chiller panels stay disabled until the runtime reports actual board reachability.';
+        : robotApiExplicitlyUnreachable
+            ? 'Robot API/status probes failed or timed out. Hardware state is unknown/offline until robot-local status returns.'
+            : 'Configure a working runtime linkage first. Handler readback, thermal, and chiller panels stay disabled until the runtime reports actual board reachability.';
     const linkageHelp =
         status?.status === 'not_configured'
             ? 'No linkage is configured yet. Use the recommended runtime URL below and press Connect.'
@@ -2035,10 +2127,38 @@ export const BioXpCockpit = () => {
     const motionPowerRail = motionPowerEffectiveStatus?.rail_24v ?? null;
     const motion24vState = get24vStateLabel(motionPowerRail);
     const motionIoSnapshot = motionPowerEffectiveStatus?.deck_io_snapshot ?? null;
+    const interlockOverrideState = interlockOverrideStatus.data?.state ?? null;
+    const interlockOverrideEnabled = interlockOverrideState?.enabled === true;
+    const interlockOverrideReasonTrimmed = interlockOverrideReason.trim();
+    const setCommissioningInterlockOverride = (enabled: boolean) => {
+        const reason = enabled
+            ? interlockOverrideReasonTrimmed
+            : interlockOverrideReasonTrimmed || 'disable commissioning interlock override';
+        if (enabled && !reason) {
+            recordOemError('interlock_override_enable', 'Reason is required before enabling latch/24V interlock override.');
+            return;
+        }
+        interlockOverride.mutate(
+            {
+                enabled,
+                override_latch: true,
+                override_24v: true,
+                reason,
+                operator_ack: 'INTERLOCK_OVERRIDE',
+                operator: 'bms-cockpit',
+            },
+            {
+                onSuccess: (data) => recordOemAction(enabled ? 'interlock_override_enabled' : 'interlock_override_disabled', data),
+                onError: (error) => recordOemError(enabled ? 'interlock_override_enable' : 'interlock_override_disable', error),
+            },
+        );
+    };
     const motionActionError =
         getErrorMessage(motionPowerEnable.error) ||
         getErrorMessage(motionPowerDiag.error) ||
         getErrorMessage(motionArmStrictStartup.error) ||
+        getErrorMessage(interlockOverride.error) ||
+        getErrorMessage(interlockOverrideStatus.error) ||
         (!motionPowerApiMissing ? motionPowerApiError : null) ||
         getErrorMessage(prepareInterlock.error) ||
         getErrorMessage(clearLock.error);
@@ -2216,6 +2336,45 @@ export const BioXpCockpit = () => {
                     </button>
                 </div>
             </div>
+            <div className={`rounded-lg border p-3 space-y-3 ${interlockOverrideEnabled ? 'border-error/40 bg-error/10' : 'border-warning/20 bg-warning/5'}`}>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="space-y-1 max-w-3xl">
+                        <div className={`text-sm font-semibold ${interlockOverrideEnabled ? 'text-error' : 'text-warning'}`}>Commissioning latch + 24V interlock override</div>
+                        <div className="text-xs text-content-muted">Default off. This bypasses the latch/mag sensor and 24V sense gate for strict-startup only; it does not prove the instrument is physically safe. Operator observation is still authoritative.</div>
+                        <div className="text-[11px] font-mono text-content-muted">
+                            state {interlockOverrideEnabled ? 'ENABLED' : 'OFF'} | latch {String(interlockOverrideState?.override_latch_sensor ?? false)} | 24V {String(interlockOverrideState?.override_rail_24v ?? false)} | seq {String(interlockOverrideState?.seq ?? 0)}
+                        </div>
+                    </div>
+                    <div className={`px-3 py-1.5 rounded-sm text-xs font-mono font-semibold border ${interlockOverrideEnabled ? 'bg-error/20 text-error border-error/40' : 'bg-surface-secondary text-content-muted border-border-primary'}`}>
+                        OVERRIDE: {interlockOverrideEnabled ? 'ON' : 'OFF'}
+                    </div>
+                </div>
+                <label className="block text-xs text-content-muted space-y-1">
+                    <span>Reason required before enable</span>
+                    <input
+                        value={interlockOverrideReason}
+                        onChange={(event) => setInterlockOverrideReason(event.target.value)}
+                        className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm"
+                        placeholder="e.g. mag/latch commissioning; operator watching instrument"
+                    />
+                </label>
+                <div className="flex flex-wrap gap-2">
+                    <button
+                        onClick={() => setCommissioningInterlockOverride(true)}
+                        disabled={!isConnected || interlockOverride.isPending || interlockOverrideEnabled || !interlockOverrideReasonTrimmed}
+                        className="px-3 py-2 bg-error hover:bg-error/80 text-white text-xs rounded-lg transition-colors disabled:opacity-40"
+                    >
+                        {interlockOverride.isPending ? 'UPDATING...' : 'Enable Latch+24V Override'}
+                    </button>
+                    <button
+                        onClick={() => setCommissioningInterlockOverride(false)}
+                        disabled={!isConnected || interlockOverride.isPending || !interlockOverrideEnabled}
+                        className="px-3 py-2 bg-white/10 hover:bg-white/15 text-content text-xs rounded-lg transition-colors border border-white/10 disabled:opacity-40"
+                    >
+                        Disable Override
+                    </button>
+                </div>
+            </div>
             <div className="mt-3 grid grid-cols-1 xl:grid-cols-2 gap-4">
                 <AxisControls axis="x" label="Gantry X" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
                 <AxisControls axis="g" label="Grabber / Gripper" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
@@ -2365,7 +2524,7 @@ export const BioXpCockpit = () => {
                 <div className="flex flex-wrap gap-2">
                     <button
                         onClick={() => oemHomeXY.mutate(
-                            { operator: 'bms-cockpit', operator_ack: 'supervised_oem_home_xy', source: 'bms-oem-runtime-panel-home-xy' },
+                            { operator: 'bms-cockpit', operator_ack: 'HOMEXY', source: 'bms-oem-runtime-panel-home-xy' },
                             { onSuccess: (data) => recordOemAction('oem_home_xy', data), onError: (error) => recordOemError('oem_home_xy', error) },
                         )}
                         disabled={!isConnected || oemHomeXY.isPending}
@@ -2376,7 +2535,7 @@ export const BioXpCockpit = () => {
                     </button>
                     <button
                         onClick={() => oemRehome.mutate(
-                            { operator: 'bms-cockpit', operator_ack: 'diagnostic_rehome_no_homing', run_homing: false, dry_run: true, source: 'bms-oem-runtime-panel-rehome-diagnostic' },
+                            { operator: 'bms-cockpit', operator_ack: 'REHOME', run_homing: false, dry_run: true, source: 'bms-oem-runtime-panel-rehome-diagnostic' },
                             { onSuccess: (data) => recordOemAction('oem_rehome_diagnostic_no_homing', data), onError: (error) => recordOemError('oem_rehome_diagnostic_no_homing', error) },
                         )}
                         disabled={!isConnected || oemRehome.isPending}
@@ -2387,7 +2546,7 @@ export const BioXpCockpit = () => {
                     </button>
                     <button
                         onClick={() => oemRehome.mutate(
-                            { operator: 'bms-cockpit', operator_ack: 'supervised_oem_rehome_ack', run_homing: true, source: 'bms-oem-runtime-panel-rehome-ack' },
+                            { operator: 'bms-cockpit', operator_ack: 'REHOME', run_homing: true, source: 'bms-oem-runtime-panel-rehome-ack' },
                             { onSuccess: (data) => recordOemAction('oem_rehome_ack', data), onError: (error) => recordOemError('oem_rehome_ack', error) },
                         )}
                         disabled={!isConnected || oemRehome.isPending}
@@ -2398,7 +2557,7 @@ export const BioXpCockpit = () => {
                     </button>
                     <button
                         onClick={() => oemInitializeMotion.mutate(
-                            { operator: 'bms-cockpit', operator_ack: 'diagnostic_initialize_motion_no_homing', run_homing: false, dry_run: true, source: 'bms-oem-runtime-panel-initialize-motion-diagnostic' },
+                            { operator: 'bms-cockpit', operator_ack: 'INITIALIZE', run_homing: false, dry_run: true, source: 'bms-oem-runtime-panel-initialize-motion-diagnostic' },
                             { onSuccess: (data) => recordOemAction('oem_initialize_motion_diagnostic_no_homing', data), onError: (error) => recordOemError('oem_initialize_motion_diagnostic_no_homing', error) },
                         )}
                         disabled={!isConnected || oemInitializeMotion.isPending}
@@ -2409,7 +2568,7 @@ export const BioXpCockpit = () => {
                     </button>
                     <button
                         onClick={() => oemInitializeMotion.mutate(
-                            { operator: 'bms-cockpit', operator_ack: 'supervised_initialize_motion_ack', run_homing: true, source: 'bms-oem-runtime-panel-initialize-motion-ack' },
+                            { operator: 'bms-cockpit', operator_ack: 'INITIALIZE_WITH_HOMING', run_homing: true, source: 'bms-oem-runtime-panel-initialize-motion-ack' },
                             { onSuccess: (data) => recordOemAction('oem_initialize_motion_ack', data), onError: (error) => recordOemError('oem_initialize_motion_ack', error) },
                         )}
                         disabled={!isConnected || oemInitializeMotion.isPending}

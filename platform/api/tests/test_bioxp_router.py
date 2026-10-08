@@ -155,10 +155,12 @@ async def test_get_status_uses_targeted_power_when_aggregate_status_is_conservat
 @pytest.mark.asyncio
 async def test_daemon_status_without_linkage_reports_runtime_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(bioxp, '_GLOBAL_LINKAGE_URL', None)
+    monkeypatch.setattr(bioxp.bioxp_interlink, 'load_profile', lambda: None)
 
     response = await bioxp.daemon_status()
 
     assert response['linkage_configured'] is False
+    assert response['linkage_active'] is False
     assert response['linked_runtime_reachable'] is False
     assert response['hardware_connected'] is False
     assert response['admin_control_available'] is False
@@ -166,7 +168,29 @@ async def test_daemon_status_without_linkage_reports_runtime_unconfigured(monkey
     assert response['runtime_url'] is None
     assert response['running'] is False
     assert response['healthy'] is False
-    assert 'linkage' in response['detail'].lower()
+    assert 'profile' in response['detail'].lower()
+
+
+@pytest.mark.asyncio
+async def test_daemon_status_saved_profile_inactive_is_configured_but_not_active(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bioxp, '_GLOBAL_LINKAGE_URL', None)
+    monkeypatch.setattr(
+        bioxp.bioxp_interlink,
+        'load_profile',
+        lambda: {'robot_api_url': 'http://100.124.140.56:8123', 'robot_ssh_host': '100.124.140.56'},
+    )
+
+    response = await bioxp.daemon_status()
+
+    assert response['linkage_configured'] is True
+    assert response['linkage_active'] is False
+    assert response['linked_runtime_reachable'] is False
+    assert response['hardware_connected'] is False
+    assert response['runtime_url'] == 'http://100.124.140.56:8123'
+    assert response['running'] is False
+    assert response['healthy'] is False
+    assert 'inactive' in response['detail'].lower()
+    assert 'not configured' not in response['detail'].lower()
 
 
 @pytest.mark.asyncio
@@ -397,7 +421,13 @@ async def test_motion_reference_camera_and_vision_routes_proxy_to_robot_runtime(
         ('GET', '/motion/reference/status', None, {'axes': 'x,y,z,g,door'}, 20.0),
         ('POST', '/motion/reference/mark_referenced', {'axes': ['x'], 'reason': 'operator_verified'}, None, 30.0),
         ('POST', '/motion/reference/mark_desynced', {'axes': ['x'], 'reason': 'operator_verified'}, None, 30.0),
-        ('POST', '/motion/axes/current', {'axes': ['x'], 'reason': 'operator_verified'}, None, 35.0),
+        (
+            'POST',
+            '/motion/axes/current',
+            {'axes': ['x'], 'reason': 'operator_verified', 'run_current': 10, 'standby_current': 10},
+            None,
+            35.0,
+        ),
         ('GET', '/camera/stream_state', None, None, 20.0),
         ('POST', '/vision/inspect', {'axes': ['x'], 'reason': 'operator_verified'}, None, 45.0),
         ('POST', '/vision/barcode/read', {'axes': ['x'], 'reason': 'operator_verified'}, None, 45.0),
@@ -418,7 +448,12 @@ async def test_motion_zero_and_manual_switch_home_are_separate_proxy_routes(monk
 
     class HomeRequestStub:
         async def json(self):
-            return {'axis': 'g', 'timeout_s': 9.0, 'operator_note': 'real-home-route-test'}
+            return {
+                'axis': 'g',
+                'timeout_s': 9.0,
+                'capture_bundle': True,
+                'operator_note': 'real-home-route-test with native before/after picture proof',
+            }
 
     monkeypatch.setattr(bioxp, 'proxy_request', fake_proxy_request)
 
@@ -429,7 +464,18 @@ async def test_motion_zero_and_manual_switch_home_are_separate_proxy_routes(monk
 
     assert calls == [
         ('POST', '/motion/axis/zero', {'axis': 'z', 'wait_timeout_s': 6.0, 'operator_note': 'zero-route-test'}, None, 65.0),
-        ('POST', '/motion/axis/home', {'axis': 'g', 'timeout_s': 9.0, 'operator_note': 'real-home-route-test'}, None, 90.0),
+        (
+            'POST',
+            '/motion/axis/home',
+            {
+                'axis': 'g',
+                'timeout_s': 9.0,
+                'capture_bundle': True,
+                'operator_note': 'real-home-route-test with native before/after picture proof',
+            },
+            None,
+            90.0,
+        ),
     ]
 
 @pytest.mark.asyncio
