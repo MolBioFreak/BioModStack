@@ -1,6 +1,7 @@
 """Closed typed API for the governed ONT Read and Signal Workbench."""
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Any, Literal
 
@@ -26,6 +27,19 @@ class MoveSourceCreate(ClosedModel):
     input_file_id: str
     molecule_type: Literal["dna", "rna"]
     source_job_id: str
+
+
+class ExternalMoveBamRegistrationCreate(ClosedModel):
+    candidate_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    raw_representation_id: str
+    molecule_type: Literal["dna", "rna"]
+
+    @field_validator("raw_representation_id")
+    @classmethod
+    def opaque_raw_representation_id(cls, value: str) -> str:
+        if not OPAQUE.fullmatch(value):
+            raise ValueError("raw representation must be an opaque governed ID")
+        return value
 
 
 class MappingProfileCreate(ClosedModel):
@@ -192,6 +206,17 @@ class MoveTagCountsResponse(ClosedModel):
     mv: int | None
     ts: int | None
     ns: int | None
+
+
+class ExternalMoveBamCandidateResponse(ClosedModel):
+    candidate_id: str
+    display_name: str
+    size_bytes: int
+    modified_at_ns: int
+
+
+class ExternalMoveBamCandidateListResponse(ClosedModel):
+    items: list[ExternalMoveBamCandidateResponse]
 
 
 class MoveSourceResponse(ClosedModel):
@@ -467,6 +492,47 @@ async def move_sources(run_id: str, observed_generation: int, session: AsyncSess
     return MoveSourceListResponse.model_validate({
         "items": await service.list_move_sources(session, run_id=run_id, observed_generation=observed_generation)
     })
+
+
+@router.get("/external-move-bam-candidates", response_model=ExternalMoveBamCandidateListResponse)
+async def external_move_bam_candidates() -> ExternalMoveBamCandidateListResponse:
+    try:
+        return ExternalMoveBamCandidateListResponse.model_validate({
+            "items": await asyncio.to_thread(service.list_external_move_bam_candidates)
+        })
+    except service.OntSignalError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="external move-BAM source is unavailable",
+        ) from exc
+
+
+@router.post(
+    "/runs/{run_id}/generations/{observed_generation}/external-move-bam-candidates/register",
+    status_code=202,
+    response_model=MoveSourceResponse,
+)
+async def register_external_move_bam_candidate(
+    run_id: str,
+    observed_generation: int,
+    request: ExternalMoveBamRegistrationCreate,
+    session: AsyncSession = Depends(get_session),
+) -> MoveSourceResponse:
+    try:
+        value = await service.register_external_move_bam_candidate(
+            session,
+            run_id=run_id,
+            observed_generation=observed_generation,
+            **request.model_dump(),
+        )
+        await session.commit()
+        return MoveSourceResponse.model_validate(value)
+    except (KeyError, service.OntSignalError) as exc:
+        await session.rollback()
+        raise _error(exc) from exc
+    except BaseException:
+        await session.rollback()
+        raise
 
 
 @router.post("/runs/{run_id}/generations/{observed_generation}/move-sources", status_code=202, response_model=MoveSourceResponse)

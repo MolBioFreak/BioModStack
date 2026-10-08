@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -12,13 +13,14 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, event, or_, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import (
     InputFile,
     Job,
+    OntExternalMoveBamRegistrationReceipt,
     OntInstrumentRunEvent,
     OntMoveTableSource,
     OntRawSignalRepresentation,
@@ -49,6 +51,13 @@ MAX_PILEUP_READS = 100
 MIN_CALIBRATION_READS = 1
 MAX_CALIBRATION_READS = 100
 CALIBRATION_CANDIDATE_KMER_LENGTH = 9
+EXTERNAL_MOVE_BAM_ROOT_ENV = "BMS_ONT_EXTERNAL_MOVE_BAM_ROOT"
+EXTERNAL_MOVE_BAM_CANDIDATE_KEY_FILE_ENV = "BMS_ONT_EXTERNAL_MOVE_BAM_CANDIDATE_KEY_FILE"
+EXTERNAL_MOVE_BAM_CANDIDATE_KEY_BYTES = 32
+EXTERNAL_MOVE_BAM_SOURCE_UNAVAILABLE = "external move-BAM source is unavailable"
+MAX_EXTERNAL_MOVE_BAM_CANDIDATES = 1000
+MAX_EXTERNAL_MOVE_BAM_DEPTH = 8
+MAX_EXTERNAL_MOVE_BAM_VISITED_ENTRIES = 10_000
 
 
 class OntSignalError(ValueError):
@@ -374,6 +383,312 @@ def _stable_file_identity(path: Path) -> tuple[str, int]:
         os.close(descriptor)
 
 
+def _open_external_move_bam_root() -> tuple[Path, int, os.stat_result]:
+    configured = os.getenv(EXTERNAL_MOVE_BAM_ROOT_ENV, "").strip()
+    root = _lexical_absolute_path(configured)
+    if root is None:
+        raise OntSignalError(EXTERNAL_MOVE_BAM_SOURCE_UNAVAILABLE)
+    try:
+        descriptor = _open_absolute_directory_nofollow(root)
+    except OSError as exc:
+        raise OntSignalError(EXTERNAL_MOVE_BAM_SOURCE_UNAVAILABLE) from exc
+    info = os.fstat(descriptor)
+    if not stat.S_ISDIR(info.st_mode):
+        os.close(descriptor)
+        raise OntSignalError(EXTERNAL_MOVE_BAM_SOURCE_UNAVAILABLE)
+    return root, descriptor, info
+
+
+def _read_external_move_bam_candidate_key() -> bytes:
+    configured = os.getenv(EXTERNAL_MOVE_BAM_CANDIDATE_KEY_FILE_ENV, "").strip()
+    key_path = _lexical_absolute_path(configured)
+    if key_path is None or key_path.name in {"", ".", ".."}:
+        raise OntSignalError(EXTERNAL_MOVE_BAM_SOURCE_UNAVAILABLE)
+    parent_fd: int | None = None
+    key_fd: int | None = None
+    try:
+        parent_fd = _open_absolute_directory_nofollow(key_path.parent)
+        key_fd = os.open(
+            key_path.name,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=parent_fd,
+        )
+        info = os.fstat(key_fd)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) & 0o077
+        ):
+            raise OntSignalError(EXTERNAL_MOVE_BAM_SOURCE_UNAVAILABLE)
+        key = os.read(key_fd, EXTERNAL_MOVE_BAM_CANDIDATE_KEY_BYTES + 1)
+        if len(key) != EXTERNAL_MOVE_BAM_CANDIDATE_KEY_BYTES:
+            raise OntSignalError(EXTERNAL_MOVE_BAM_SOURCE_UNAVAILABLE)
+        return key
+    except OntSignalError:
+        raise
+    except OSError as exc:
+        raise OntSignalError(EXTERNAL_MOVE_BAM_SOURCE_UNAVAILABLE) from exc
+    finally:
+        if key_fd is not None:
+            os.close(key_fd)
+        if parent_fd is not None:
+            os.close(parent_fd)
+
+
+def _descriptor_move_bam_candidates(
+    directory_fd: int,
+    *,
+    prefix: Path = Path(),
+    depth: int = 0,
+    candidates: list[tuple[str, os.stat_result]] | None = None,
+    visited_entries: list[int] | None = None,
+) -> list[tuple[str, os.stat_result]]:
+    if depth > MAX_EXTERNAL_MOVE_BAM_DEPTH:
+        raise OntSignalError("external move-BAM candidate traversal exceeds bounded depth")
+    found = [] if candidates is None else candidates
+    visited = [0] if visited_entries is None else visited_entries
+    try:
+        with os.scandir(directory_fd) as entries:
+            for entry in entries:
+                visited[0] += 1
+                if visited[0] > MAX_EXTERNAL_MOVE_BAM_VISITED_ENTRIES:
+                    raise OntSignalError(
+                        "external move-BAM traversal exceeds bounded visited-entry policy"
+                    )
+                relative = prefix / entry.name
+                info = entry.stat(follow_symlinks=False)
+                if stat.S_ISDIR(info.st_mode):
+                    child_fd = os.open(
+                        entry.name,
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                        dir_fd=directory_fd,
+                    )
+                    try:
+                        _descriptor_move_bam_candidates(
+                            child_fd,
+                            prefix=relative,
+                            depth=depth + 1,
+                            candidates=found,
+                            visited_entries=visited,
+                        )
+                    finally:
+                        os.close(child_fd)
+                elif (
+                    stat.S_ISREG(info.st_mode)
+                    and info.st_size > 0
+                    and entry.name.lower().endswith(".bam")
+                ):
+                    found.append((relative.as_posix(), info))
+                    if len(found) > MAX_EXTERNAL_MOVE_BAM_CANDIDATES:
+                        raise OntSignalError("external move-BAM candidate catalog exceeds bounded policy")
+    except OntSignalError:
+        raise
+    except OSError as exc:
+        raise OntSignalError("external move-BAM candidate catalog could not be read safely") from exc
+    return found
+
+
+def _external_move_bam_candidate_body(
+    relative: str, root_info: os.stat_result, file_info: os.stat_result
+) -> dict[str, Any]:
+    return {
+        "schema": "bms.ont-external-move-bam-candidate.v1",
+        "server_relative_path": relative,
+        "root_device": root_info.st_dev,
+        "root_inode": root_info.st_ino,
+        "file_device": file_info.st_dev,
+        "file_inode": file_info.st_ino,
+        "file_size": file_info.st_size,
+        "file_mtime_ns": file_info.st_mtime_ns,
+        "file_ctime_ns": file_info.st_ctime_ns,
+    }
+
+
+def _external_move_bam_candidate_id(
+    relative: str,
+    root_info: os.stat_result,
+    file_info: os.stat_result,
+    candidate_key: bytes,
+) -> str:
+    return hmac.new(
+        candidate_key,
+        _canonical(_external_move_bam_candidate_body(relative, root_info, file_info)),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def list_external_move_bam_candidates() -> list[dict[str, Any]]:
+    """List external BAMs without hashing bytes or publishing server paths."""
+    _root, root_fd, root_info = _open_external_move_bam_root()
+    try:
+        candidate_key = _read_external_move_bam_candidate_key()
+        return [
+            {
+                "candidate_id": _external_move_bam_candidate_id(
+                    relative, root_info, info, candidate_key
+                ),
+                "display_name": Path(relative).name,
+                "size_bytes": info.st_size,
+                "modified_at_ns": info.st_mtime_ns,
+            }
+            for relative, info in sorted(
+                _descriptor_move_bam_candidates(root_fd), key=lambda item: item[0]
+            )
+        ]
+    finally:
+        os.close(root_fd)
+
+
+def _open_external_move_bam_candidate(
+    candidate_id: str,
+    candidate_key: bytes,
+) -> tuple[int, int, str, os.stat_result, os.stat_result]:
+    if not HEX64.fullmatch(candidate_id):
+        raise KeyError("external move-BAM candidate not found")
+    _root, root_fd, root_info = _open_external_move_bam_root()
+    file_fd: int | None = None
+    try:
+        match = next(
+            (
+                (relative, info)
+                for relative, info in _descriptor_move_bam_candidates(root_fd)
+                if hmac.compare_digest(
+                    _external_move_bam_candidate_id(
+                        relative, root_info, info, candidate_key
+                    ),
+                    candidate_id,
+                )
+            ),
+            None,
+        )
+        if match is None:
+            raise KeyError("external move-BAM candidate not found")
+        relative, _listed_info = match
+        parts = Path(relative).parts
+        parent_fd = os.dup(root_fd)
+        try:
+            for component in parts[:-1]:
+                child_fd = os.open(
+                    component,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                    dir_fd=parent_fd,
+                )
+                os.close(parent_fd)
+                parent_fd = child_fd
+            file_fd = os.open(
+                parts[-1],
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=parent_fd,
+            )
+        except OSError as exc:
+            raise OntSignalError("external move-BAM candidate cannot be reopened without following symbolic links") from exc
+        finally:
+            os.close(parent_fd)
+        observed = os.fstat(file_fd)
+        if (
+            not stat.S_ISREG(observed.st_mode)
+            or observed.st_size <= 0
+            or not hmac.compare_digest(
+                _external_move_bam_candidate_id(
+                    relative, root_info, observed, candidate_key
+                ),
+                candidate_id,
+            )
+        ):
+            os.close(file_fd)
+            file_fd = None
+            raise OntSignalError("external move-BAM candidate identity changed before registration")
+        assert file_fd is not None
+        return file_fd, root_fd, relative, root_info, observed
+    except BaseException:
+        if file_fd is not None:
+            os.close(file_fd)
+        os.close(root_fd)
+        raise
+
+
+def _seal_external_move_bam_candidate(
+    candidate_id: str,
+) -> tuple[dict[str, Any], list[int]]:
+    candidate_key = _read_external_move_bam_candidate_key()
+    descriptor, root_descriptor, relative, root_info, before = _open_external_move_bam_candidate(
+        candidate_id, candidate_key
+    )
+    try:
+        artifact_sha256, size_bytes = _stable_descriptor_identity(descriptor)
+        after = os.fstat(descriptor)
+        before_identity = (
+            before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns
+        )
+        after_identity = (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns
+        )
+        if (
+            before_identity != after_identity
+            or size_bytes != after.st_size
+            or not hmac.compare_digest(
+                _external_move_bam_candidate_id(
+                    relative, root_info, after, candidate_key
+                ),
+                candidate_id,
+            )
+        ):
+            raise OntSignalError("external move-BAM candidate identity changed during registration")
+        return {
+            "candidate_id": candidate_id,
+            "server_relative_path": relative,
+            "root_device": root_info.st_dev,
+            "root_inode": root_info.st_ino,
+            "file_device": after.st_dev,
+            "file_inode": after.st_ino,
+            "file_mtime_ns": after.st_mtime_ns,
+            "file_ctime_ns": after.st_ctime_ns,
+            "artifact_sha256": artifact_sha256,
+            "artifact_size_bytes": size_bytes,
+        }, [root_descriptor, descriptor]
+    except BaseException:
+        os.close(descriptor)
+        os.close(root_descriptor)
+        raise
+
+
+def _hold_external_move_bam_descriptors_through_transaction(
+    session: AsyncSession,
+    descriptors: list[int],
+) -> None:
+    """Close selected external source descriptors after the outer transaction ends."""
+    state = {"descriptors": list(descriptors)}
+
+    def close_descriptors(_session: Any, transaction: Any) -> None:
+        if transaction.parent is not None:
+            return
+        held = state.pop("descriptors", [])
+        for descriptor in held:
+            os.close(descriptor)
+
+    event.listen(session.sync_session, "after_transaction_end", close_descriptors)
+
+
+async def _seal_external_move_bam_candidate_async(
+    candidate_id: str,
+) -> tuple[dict[str, Any], list[int]]:
+    """Transfer descriptor ownership from a thread without a cancellation gap."""
+    worker = asyncio.create_task(
+        asyncio.to_thread(_seal_external_move_bam_candidate, candidate_id)
+    )
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        try:
+            _sealed, descriptors = await worker
+        except BaseException:
+            pass
+        else:
+            for descriptor in descriptors:
+                os.close(descriptor)
+        raise
+
+
 def _hash_job_owned_input(item: InputFile, source_job: Job) -> tuple[str, int]:
     descriptor, _admitted_path = _open_job_owned_input(item, source_job)
     try:
@@ -514,6 +829,295 @@ def _artifact_public(row: OntSignalMappingArtifact) -> dict[str, Any]:
         "validation_receipt": _public_json(row.validation_receipt),
         "created_at": _public_time(row.created_at),
     }
+
+
+def _external_move_bam_receipt_body(
+    receipt: OntExternalMoveBamRegistrationReceipt,
+) -> dict[str, Any]:
+    return {
+        "candidate_id": receipt.candidate_id,
+        "server_relative_path": receipt.server_relative_path,
+        "root_device": receipt.root_device,
+        "root_inode": receipt.root_inode,
+        "file_device": receipt.file_device,
+        "file_inode": receipt.file_inode,
+        "file_mtime_ns": receipt.file_mtime_ns,
+        "file_ctime_ns": receipt.file_ctime_ns,
+        "artifact_sha256": receipt.artifact_sha256,
+        "artifact_size_bytes": receipt.artifact_size_bytes,
+        "run_id": receipt.run_id,
+        "observed_generation": receipt.observed_generation,
+        "raw_representation_id": receipt.raw_representation_id,
+        "molecule_type": receipt.molecule_type,
+    }
+
+
+def _external_move_bam_runtime_identity(artifact_sha256: str) -> dict[str, Any]:
+    return {
+        "schema": "bms.ont-move-source-producer-runtime.v1",
+        "authority_state": "legacy_unknown",
+        "source_job_id": None,
+        "source_bam_sha256": artifact_sha256,
+        "reason_code": "producer_runtime_provenance_unavailable",
+        "requires_independent_move_validation": True,
+    }
+
+
+async def _replay_external_move_bam_registration(
+    session: AsyncSession,
+    *,
+    run_id: str,
+    observed_generation: int,
+    raw_representation_id: str,
+    candidate_id: str,
+    molecule_type: str,
+) -> dict[str, Any] | None:
+    receipt = (
+        await session.execute(
+            select(OntExternalMoveBamRegistrationReceipt).where(
+                OntExternalMoveBamRegistrationReceipt.run_id == run_id,
+                OntExternalMoveBamRegistrationReceipt.observed_generation == observed_generation,
+                OntExternalMoveBamRegistrationReceipt.raw_representation_id == raw_representation_id,
+                OntExternalMoveBamRegistrationReceipt.candidate_id == candidate_id,
+                OntExternalMoveBamRegistrationReceipt.molecule_type == molecule_type,
+            )
+        )
+    ).scalar_one_or_none()
+    if receipt is None:
+        return None
+    receipt_body = _external_move_bam_receipt_body(receipt)
+    if receipt.id != f"ont-external-move-{_digest(receipt_body)}":
+        raise OntSignalError("external move-BAM registration receipt replay authority diverged")
+    source = (
+        await session.execute(
+            select(OntMoveTableSource).where(
+                OntMoveTableSource.external_registration_receipt_id == receipt.id
+            )
+        )
+    ).scalar_one_or_none()
+    artifact_sha256 = receipt.artifact_sha256
+    expected_input_file_id = f"ont-ext-bam-{artifact_sha256[:24]}"
+    if (
+        source is None
+        or source.run_id != run_id
+        or source.observed_generation != observed_generation
+        or source.raw_representation_id != raw_representation_id
+        or source.input_file_id != expected_input_file_id
+        or source.source_job_id is not None
+        or source.artifact_sha256 != artifact_sha256
+        or source.artifact_size_bytes != receipt.artifact_size_bytes
+        or source.molecule_type != molecule_type
+        or source.source_runtime_identity != _external_move_bam_runtime_identity(artifact_sha256)
+    ):
+        raise OntSignalError("move-source replay authority diverged from retained evidence")
+    return _source_public(source)
+
+
+async def register_external_move_bam_candidate(
+    session: AsyncSession,
+    *,
+    run_id: str,
+    observed_generation: int,
+    raw_representation_id: str,
+    candidate_id: str,
+    molecule_type: str,
+) -> dict[str, Any]:
+    if molecule_type not in {"dna", "rna"}:
+        raise OntSignalError("molecule_type must be dna or rna")
+    replay = await _replay_external_move_bam_registration(
+        session,
+        run_id=run_id,
+        observed_generation=observed_generation,
+        raw_representation_id=raw_representation_id,
+        candidate_id=candidate_id,
+        molecule_type=molecule_type,
+    )
+    if replay is not None:
+        return replay
+    representation = (
+        await session.execute(
+            select(OntRawSignalRepresentation).where(
+                OntRawSignalRepresentation.id == raw_representation_id,
+                OntRawSignalRepresentation.run_id == run_id,
+                OntRawSignalRepresentation.observed_generation == observed_generation,
+            )
+        )
+    ).scalar_one_or_none()
+    if representation is None:
+        raise KeyError("raw representation not found")
+    receipts = representation.validation_receipts if isinstance(representation.validation_receipts, dict) else {}
+    if representation.format != "blow5" or representation.state != "ready" or receipts.get("adjacent_index") is not True:
+        raise OntSignalError("ready indexed BLOW5 authority is required")
+
+    sealed, retained_descriptors = await _seal_external_move_bam_candidate_async(candidate_id)
+    transaction = session.sync_session.get_transaction()
+    owns_autobegin = (
+        transaction is not None and transaction.origin.name == "AUTOBEGIN"
+    )
+    if owns_autobegin:
+        await session.rollback()
+        try:
+            await session.execute(text("BEGIN IMMEDIATE"))
+        except BaseException:
+            for descriptor in retained_descriptors:
+                os.close(descriptor)
+            raise
+    try:
+        _hold_external_move_bam_descriptors_through_transaction(
+            session, retained_descriptors
+        )
+    except BaseException:
+        for descriptor in retained_descriptors:
+            os.close(descriptor)
+        raise
+    if owns_autobegin:
+        replay = await _replay_external_move_bam_registration(
+            session,
+            run_id=run_id,
+            observed_generation=observed_generation,
+            raw_representation_id=raw_representation_id,
+            candidate_id=candidate_id,
+            molecule_type=molecule_type,
+        )
+        if replay is not None:
+            return replay
+        representation = (
+            await session.execute(
+                select(OntRawSignalRepresentation).where(
+                    OntRawSignalRepresentation.id == raw_representation_id,
+                    OntRawSignalRepresentation.run_id == run_id,
+                    OntRawSignalRepresentation.observed_generation == observed_generation,
+                )
+            )
+        ).scalar_one_or_none()
+        if representation is None:
+            raise KeyError("raw representation not found")
+        receipts = (
+            representation.validation_receipts
+            if isinstance(representation.validation_receipts, dict)
+            else {}
+        )
+        if (
+            representation.format != "blow5"
+            or representation.state != "ready"
+            or receipts.get("adjacent_index") is not True
+        ):
+            raise OntSignalError("ready indexed BLOW5 authority is required")
+    receipt_body = {
+        **sealed,
+        "run_id": run_id,
+        "observed_generation": observed_generation,
+        "raw_representation_id": raw_representation_id,
+        "molecule_type": molecule_type,
+    }
+    receipt_id = f"ont-external-move-{_digest(receipt_body)}"
+    artifact_sha256 = str(sealed["artifact_sha256"])
+    artifact_size_bytes = int(sealed["artifact_size_bytes"])
+    input_file_id = f"ont-ext-bam-{artifact_sha256[:24]}"
+    runtime_identity = _external_move_bam_runtime_identity(artifact_sha256)
+    now = _now()
+    await session.execute(
+        sqlite_insert(InputFile)
+        .values(
+            id=input_file_id,
+            filename=f"external-{artifact_sha256}.bam",
+            file_type="bam",
+            directory="",
+            size_bytes=artifact_size_bytes,
+            uploaded_at=now,
+        )
+        .on_conflict_do_nothing(index_elements=["id"])
+    )
+    tracked = await session.get(InputFile, input_file_id)
+    if (
+        tracked is None
+        or tracked.directory != ""
+        or tracked.filename != f"external-{artifact_sha256}.bam"
+        or tracked.file_type != "bam"
+        or tracked.size_bytes != artifact_size_bytes
+    ):
+        raise OntSignalError("external move-BAM opaque artifact replay authority diverged")
+    await session.execute(
+        sqlite_insert(OntExternalMoveBamRegistrationReceipt)
+        .values(id=receipt_id, **receipt_body, created_at=now)
+        .on_conflict_do_nothing(index_elements=["id"])
+    )
+    receipt = await session.get(OntExternalMoveBamRegistrationReceipt, receipt_id)
+    if receipt is None or any(
+        getattr(receipt, key) != value for key, value in receipt_body.items()
+    ):
+        raise OntSignalError("external move-BAM registration receipt replay authority diverged")
+
+    existing = (
+        await session.execute(
+            select(OntMoveTableSource).where(
+                OntMoveTableSource.run_id == run_id,
+                OntMoveTableSource.observed_generation == observed_generation,
+                OntMoveTableSource.artifact_sha256 == artifact_sha256,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        if (
+            existing.raw_representation_id != raw_representation_id
+            or existing.input_file_id != input_file_id
+            or existing.source_job_id is not None
+            or existing.external_registration_receipt_id != receipt_id
+            or existing.artifact_size_bytes != artifact_size_bytes
+            or existing.molecule_type != molecule_type
+            or existing.source_runtime_identity != runtime_identity
+        ):
+            raise OntSignalError("move-source replay authority diverged from retained evidence")
+        return _source_public(existing)
+
+    await session.execute(
+        sqlite_insert(OntMoveTableSource)
+        .values(
+            id=_id("ont-moves"),
+            run_id=run_id,
+            observed_generation=observed_generation,
+            raw_representation_id=raw_representation_id,
+            input_file_id=input_file_id,
+            source_job_id=None,
+            external_registration_receipt_id=receipt_id,
+            artifact_sha256=artifact_sha256,
+            artifact_size_bytes=artifact_size_bytes,
+            molecule_type=molecule_type,
+            source_runtime_identity=runtime_identity,
+            validation_state="requested",
+            reason_code="move_source_validation_requested",
+            validation_receipt={
+                "raw_manifest_sha256": representation.manifest_sha256,
+                "external_registration_receipt_id": receipt_id,
+            },
+            created_at=now,
+        )
+        .on_conflict_do_nothing(
+            index_elements=["run_id", "observed_generation", "artifact_sha256"]
+        )
+    )
+    winner = (
+        await session.execute(
+            select(OntMoveTableSource).where(
+                OntMoveTableSource.run_id == run_id,
+                OntMoveTableSource.observed_generation == observed_generation,
+                OntMoveTableSource.artifact_sha256 == artifact_sha256,
+            )
+        )
+    ).scalar_one_or_none()
+    if winner is None:
+        raise OntSignalError("external move-source durable registration winner is unavailable")
+    if (
+        winner.raw_representation_id != raw_representation_id
+        or winner.input_file_id != input_file_id
+        or winner.source_job_id is not None
+        or winner.external_registration_receipt_id != receipt_id
+        or winner.artifact_size_bytes != artifact_size_bytes
+        or winner.molecule_type != molecule_type
+        or winner.source_runtime_identity != runtime_identity
+    ):
+        raise OntSignalError("move-source replay authority diverged from retained evidence")
+    return _source_public(winner)
 
 
 async def register_move_source(
