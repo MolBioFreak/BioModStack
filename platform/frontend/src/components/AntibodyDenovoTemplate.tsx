@@ -624,10 +624,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         }}
                         selectedTarget={targetPdb ? { type: (targetSource?.type || 'upload') as 'upload' | 'run' | 'preset' | 'rcsb', name: targetPdb.name } : undefined}
                     />
-                </div> {/* End LEFT COLUMN */}
 
-                {/* RIGHT COLUMN: Framework & Design Settings */}
-                <div className="space-y-5">
                     {/* Framework Selection */}
                     <div>
                         <label className="block text-sm font-medium text-slate-400 mb-2">Antibody Framework</label>
@@ -851,10 +848,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         )}
                     </div>
 
-                </div> {/* End LEFT COLUMN */}
-
-                {/* RIGHT COLUMN: Design Mode & Settings */}
-                <div className="space-y-5">
                     {/* Design Mode Selector */}
                     <DesignModeSelector
                         mode={designMode}
@@ -882,6 +875,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         </div>
                     )}
 
+                </div> {/* End LEFT COLUMN */}
+
+                {/* RIGHT COLUMN: Quality Settings & Debug */}
+                <div className="space-y-5">
                     {/* Quality Settings Panel */}
                     <QualitySettingsPanel
                         settings={qualitySettings}
@@ -1319,7 +1316,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 currentModelId="template_antibody_denovo"
                 currentMode="antibody_denovo_pipeline"
             />
-        </div>
+        </div >
     );
 };
 
