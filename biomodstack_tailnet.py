@@ -47,6 +47,7 @@ PRODUCTION_TAILNET_PROXY_PORT = 18081
 PRODUCTION_TAILNET_PROXY_CONTAINER = "biomodstack-tailnet-production-proxy"
 PRODUCTION_TAILNET_PROXY_IMAGE = "nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10"
 PRODUCTION_TAILNET_PROXY_IMAGE_ID = "sha256:6769dc3a703c719c1d2756bda113659be28ae16cf0da58dd5fd823d6b9a050ea"
+_IMAGE_ID_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
 PRODUCTION_TAILNET_PROXY_CONFIG = Path("docker/tailnet-production-proxy.conf")
 PRODUCTION_TAILNET_PROXY_SHA_LABEL = "com.biomodstack.tailnet-proxy-config-sha"
 _TAILSCALE_LOGIN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9@._+\-]{0,253}$")
@@ -496,12 +497,12 @@ def _process_in_exact_container_cgroup(cgroup: object, container_id: str) -> boo
         f"/docker/{container_id}",
         f"/system.slice/docker-{container_id}.scope",
     }
-    paths = [
-        line.split(":", 2)[-1]
-        for line in str(cgroup).splitlines()
-        if line
-    ]
-    return bool(paths) and any(path in expected for path in paths) and all(
+    lines = [line for line in str(cgroup).splitlines() if line]
+    matches = [re.fullmatch(r"[0-9]+:[^:]*:(/.*)", line) for line in lines]
+    if not lines or any(match is None for match in matches):
+        return False
+    paths = [match.group(1) for match in matches if match is not None]
+    return any(path in expected for path in paths) and all(
         path == "/" or path in expected for path in paths
     )
 
@@ -512,12 +513,12 @@ def _process_in_exact_systemd_unit(cgroup: object, service: str) -> bool:
     pattern = re.compile(
         rf"^/user\.slice/user-(\d+)\.slice/user@\1\.service/app\.slice/{re.escape(service)}$"
     )
-    paths = [
-        line.split(":", 2)[-1]
-        for line in str(cgroup).splitlines()
-        if line
-    ]
-    return bool(paths) and any(pattern.fullmatch(path) for path in paths) and all(
+    lines = [line for line in str(cgroup).splitlines() if line]
+    matches = [re.fullmatch(r"[0-9]+:[^:]*:(/.*)", line) for line in lines]
+    if not lines or any(match is None for match in matches):
+        return False
+    paths = [match.group(1) for match in matches if match is not None]
+    return any(pattern.fullmatch(path) for path in paths) and all(
         path == "/" or pattern.fullmatch(path) for path in paths
     )
 
@@ -722,6 +723,7 @@ def _adapter_identity_policy_matches(
     root: Path,
     login: str,
     *,
+    runtime_revision: str,
     reports: list[dict[str, object]] | None = None,
 ) -> bool:
     addresses = _listener_bind_addresses(8001)
@@ -756,7 +758,7 @@ def _adapter_identity_policy_matches(
             and Path(argv[0]).resolve() == expected_python
             and Path(argv[1]).resolve() == expected_uvicorn
             and argv[2:] == expected_args
-            and _GIT_REVISION_PATTERN.fullmatch(str(report.get("build_revision", "")))
+            and report.get("build_revision") == runtime_revision
             and _process_in_exact_systemd_unit(report.get("cgroup", ""), WORKFLOW_ADAPTER_SERVICE)
             and _pid_environment_value(pid, "BMS_TAILNET_CONTROL_SOURCE_REVISION") == expected_revision
             and _pid_environment_value(pid, "BMS_TAILNET_CONTROL_ALLOWED_TAILSCALE_USERS") == login
@@ -789,10 +791,15 @@ def _adapter_control_policy_matches(login: str) -> bool:
     return True
 
 
-def _wait_for_adapter_policy(root: Path, login: str, timeout_seconds: float = 30.0) -> bool:
+def _wait_for_adapter_policy(
+    root: Path,
+    login: str,
+    runtime_revision: str,
+    timeout_seconds: float = 30.0,
+) -> bool:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        if _adapter_identity_policy_matches(root, login):
+        if _adapter_identity_policy_matches(root, login, runtime_revision=runtime_revision):
             return True
         time.sleep(0.25)
     return False
@@ -811,7 +818,8 @@ def _start_selected_environment(spec: EnvironmentSpec, root: Path) -> set[str]:
     # Both views use the existing managed API/DB. Selection must not rebuild or
     # restart it, nor start the unselected environment. Require the shared API
     # (and immutable production web, when selected) to be healthy first.
-    _url_probe(spec.api_health_url, expect_json=True)
+    api_probe = _url_probe(spec.api_health_url, expect_json=True)
+    runtime_revision = _api_build_identity(api_probe, source="local")["revision"]
     if spec.runtime_mode == CONTAINER_RUNTIME_MODE:
         _url_probe(spec.frontend_url)
         _validated_production_tailnet_proxy(root)
@@ -820,14 +828,16 @@ def _start_selected_environment(spec: EnvironmentSpec, root: Path) -> set[str]:
     try:
         # Everything below this boundary can mutate service files or process state.
         allowed_login = _install_adapter_control_policy(root, mutations)
-        if not _adapter_identity_policy_matches(root, allowed_login):
+        if not _adapter_identity_policy_matches(
+            root, allowed_login, runtime_revision=runtime_revision
+        ):
             adapter_unit = _host_user_systemd_dir() / WORKFLOW_ADAPTER_SERVICE
             if not adapter_unit.is_file():
                 raise TailnetEnvironmentError("managed workflow-adapter systemd unit is not installed")
             mutations.add("adapter_service")
             daemon_reload(project_root=root)
             run_systemctl("restart", WORKFLOW_ADAPTER_SERVICE, project_root=root)
-            if not _wait_for_adapter_policy(root, allowed_login):
+            if not _wait_for_adapter_policy(root, allowed_login, runtime_revision):
                 raise TailnetEnvironmentError("workflow adapter did not restart from canonical authenticated source")
         if spec.runtime_mode == DEV_RUNTIME_MODE:
             _install_operator_development_frontend(root, mutations)
@@ -1031,20 +1041,29 @@ def _host_listener_closure(port: int) -> dict[str, object]:
     raise TailnetEnvironmentError(f"listener ownership closure is unstable for port {port}")
 
 
-def _validated_workflow_adapter_listener(root: Path) -> dict[str, object]:
+def _validated_workflow_adapter_listener(
+    root: Path, runtime_revision: str
+) -> dict[str, object]:
     closure = _host_listener_closure(8001)
     reports = closure.get("listener_reports")
     if not isinstance(reports, list):
         raise TailnetEnvironmentError("listener ownership reports are unavailable")
     login = _tailnet_owner_login()
-    if not _adapter_identity_policy_matches(root, login, reports=reports):
+    if not _adapter_identity_policy_matches(
+        root, login, runtime_revision=runtime_revision, reports=reports
+    ):
         raise TailnetEnvironmentError("workflow adapter listener lost exact authenticated service ownership")
     confirmed = _host_listener_closure(8001)
     confirmed_reports = confirmed.get("listener_reports")
     if (
         confirmed != closure
         or not isinstance(confirmed_reports, list)
-        or not _adapter_identity_policy_matches(root, login, reports=confirmed_reports)
+        or not _adapter_identity_policy_matches(
+            root,
+            login,
+            runtime_revision=runtime_revision,
+            reports=confirmed_reports,
+        )
     ):
         raise TailnetEnvironmentError("workflow adapter listener changed during validation")
     closure = confirmed
@@ -1125,6 +1144,40 @@ def _container_listener_pid_map(
     ]
 
 
+def _host_owner_pid_map(
+    container_id: str, host_pids: list[int]
+) -> list[dict[str, int]]:
+    """Map every authoritative host socket owner into the container PID namespace."""
+    mapped: list[dict[str, int]] = []
+    for host_pid in sorted(host_pids):
+        if not _process_in_exact_container_cgroup(_process_cgroup(host_pid), container_id):
+            return []
+        try:
+            status_text = (Path("/proc") / str(host_pid) / "status").read_text(
+                encoding="utf-8", errors="replace"
+            )
+            namespace_line = next(
+                line for line in status_text.splitlines() if line.startswith("NSpid:")
+            )
+            namespace_pids = [int(value) for value in namespace_line.split()[1:]]
+        except (OSError, StopIteration, ValueError):
+            return []
+        if (
+            len(namespace_pids) < 2
+            or namespace_pids[0] != host_pid
+            or namespace_pids[-1] <= 0
+        ):
+            return []
+        mapped.append({"container_pid": namespace_pids[-1], "host_pid": host_pid})
+    mapped.sort(key=lambda item: item["container_pid"])
+    if (
+        len({item["container_pid"] for item in mapped}) != len(mapped)
+        or [item["host_pid"] for item in mapped] != sorted(host_pids)
+    ):
+        return []
+    return mapped
+
+
 def _container_listener_host_pids(container_id: str, container_pids: list[int]) -> list[int]:
     return sorted(
         item["host_pid"] for item in _container_listener_pid_map(container_id, container_pids)
@@ -1171,14 +1224,11 @@ def _validated_runtime_container_listener(
             f"managed listener {container_name}:{port} is not bound exactly to IPv4 loopback"
         )
 
-    container_listener_pids = _container_listener_pids(container_name, port)
+    reported_container_listener_pids = _container_listener_pids(container_name, port)
     container_listener_inodes = _container_listener_inodes(container_name, port)
-    listener_pid_map = _container_listener_pid_map(container_id, container_listener_pids)
-    host_listener_pids = sorted(item["host_pid"] for item in listener_pid_map)
     host_listener_inodes = _host_listener_inodes(port)
     if (
-        not container_listener_pids
-        or not host_listener_pids
+        not reported_container_listener_pids
         or not container_listener_inodes
         or host_listener_inodes != container_listener_inodes
     ):
@@ -1187,6 +1237,9 @@ def _validated_runtime_container_listener(
         )
     inode_owners = _host_listener_inode_owners(host_listener_inodes)
     all_owner_pids = sorted({pid for pids in inode_owners.values() for pid in pids})
+    listener_pid_map = _host_owner_pid_map(container_id, all_owner_pids)
+    container_listener_pids = [item["container_pid"] for item in listener_pid_map]
+    host_listener_pids = [item["host_pid"] for item in listener_pid_map]
     expected_host_pids = item.get("host_pids")
     expected_process_reports = item.get("process_reports")
     container_host_pids = _container_host_pids(container_name)
@@ -1197,7 +1250,10 @@ def _validated_runtime_container_listener(
     ]
     if (
         any(not inode_owners.get(inode) for inode in host_listener_inodes)
-        or not set(host_listener_pids).issubset(all_owner_pids)
+        or not listener_pid_map
+        or not set(reported_container_listener_pids).issubset(container_listener_pids)
+        or host_listener_pids != sorted(set(host_listener_pids))
+        or host_listener_pids != all_owner_pids
         or not isinstance(expected_host_pids, list)
         or container_host_pids != expected_host_pids
         or not isinstance(expected_process_reports, list)
@@ -1206,6 +1262,11 @@ def _validated_runtime_container_listener(
             for owner in container_host_pids
         ]
         or not set(all_owner_pids).issubset(container_host_pids)
+        or [
+            mapping["host_pid"]
+            for mapping in listener_pid_map
+            if mapping["container_pid"] == 1
+        ] != [runtime_init_pid]
         or (
             container_name == "biomodstack-api"
             and (
@@ -1236,6 +1297,9 @@ def _validated_runtime_container_listener(
         "listener_inodes": host_listener_inodes,
         "listener_inode_owners": inode_owners,
         "container_host_pids": container_host_pids,
+        "runtime_image_id": item.get("image_id", ""),
+        "runtime_cmdline": item.get("cmdline", ""),
+        "runtime_cwd": item.get("cwd", ""),
         "listener_reports": reports,
     }
 
@@ -1319,19 +1383,11 @@ def _validated_production_tailnet_proxy(root: Path) -> dict[str, object]:
         or not command
     ):
         raise TailnetEnvironmentError("production Tailnet proxy process provenance is incomplete")
-    listener_pids_in_container = _container_listener_pids(
+    reported_listener_pids_in_container = _container_listener_pids(
         PRODUCTION_TAILNET_PROXY_CONTAINER, PRODUCTION_TAILNET_PROXY_PORT
     )
-    if not listener_pids_in_container:
+    if not reported_listener_pids_in_container:
         raise TailnetEnvironmentError("production Tailnet proxy has no container-owned listener")
-    listener_pid_map = _container_listener_pid_map(
-        container_id, listener_pids_in_container
-    )
-    host_listener_pids = sorted(item["host_pid"] for item in listener_pid_map)
-    if not host_listener_pids:
-        raise TailnetEnvironmentError(
-            "production Tailnet proxy host listener is not owned by the validated container"
-        )
     container_listener_inodes = _container_listener_inodes(
         PRODUCTION_TAILNET_PROXY_CONTAINER, PRODUCTION_TAILNET_PROXY_PORT
     )
@@ -1342,15 +1398,26 @@ def _validated_production_tailnet_proxy(root: Path) -> dict[str, object]:
         )
     inode_owners = _host_listener_inode_owners(host_listener_inodes)
     all_owner_pids = sorted({pid for pids in inode_owners.values() for pid in pids})
+    listener_pid_map = _host_owner_pid_map(container_id, all_owner_pids)
+    listener_pids_in_container = [item["container_pid"] for item in listener_pid_map]
+    host_listener_pids = [item["host_pid"] for item in listener_pid_map]
     container_host_pids = _container_host_pids(PRODUCTION_TAILNET_PROXY_CONTAINER)
     listener_reports = [
         {"pid": owner, "cgroup": _process_cgroup(owner)} for owner in all_owner_pids
     ]
     if (
         any(not inode_owners.get(inode) for inode in host_listener_inodes)
-        or not set(host_listener_pids).issubset(all_owner_pids)
+        or not listener_pid_map
+        or not set(reported_listener_pids_in_container).issubset(listener_pids_in_container)
+        or host_listener_pids != sorted(set(host_listener_pids))
+        or host_listener_pids != all_owner_pids
         or not set(all_owner_pids).issubset(container_host_pids)
         or len(host_listener_pids) != len(listener_pids_in_container)
+        or [
+            mapping["host_pid"]
+            for mapping in listener_pid_map
+            if mapping["container_pid"] == 1
+        ] != [pid]
         or pid not in container_host_pids
         or any(
             not _process_in_exact_container_cgroup(_process_cgroup(owner), container_id)
@@ -1408,8 +1475,23 @@ def _validated_container_runtime(root: Path, *, require_web: bool) -> dict[str, 
         raise TailnetEnvironmentError("managed container revisions are missing or inconsistent")
     if len(working_dirs) != 1:
         raise TailnetEnvironmentError("managed containers do not share one canonical Compose owner")
-    if any(not str(item.get("image_id", "")).startswith("sha256:") for item in selected):
-        raise TailnetEnvironmentError("managed container image identity is missing")
+    expected_process_identity = {
+        "biomodstack-api": (
+            "/bin/sh -ec /app/platform/api/.venv/bin/python run_migrations.py && exec "
+            "/app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000",
+            "/app/platform/api",
+        ),
+        "biomodstack-web": ("/docker-entrypoint.sh nginx -g daemon off;", "/"),
+    }
+    if any(
+        not _IMAGE_ID_PATTERN.fullmatch(str(item.get("image_id", "")))
+        or (
+            str(item.get("cmdline", "")),
+            str(item.get("cwd", "")),
+        ) != expected_process_identity[str(item.get("name", ""))]
+        for item in selected
+    ):
+        raise TailnetEnvironmentError("managed container image/process identity is not pinned")
     if any(
         not isinstance(item.get("pid"), int)
         or int(item["pid"]) <= 0
@@ -1455,6 +1537,9 @@ def _validated_container_runtime(root: Path, *, require_web: bool) -> dict[str, 
             "compose_working_dir": str(compose_root),
             "pid": init_pid,
             "cgroup": item.get("cgroup", ""),
+            "image_id": item.get("image_id", ""),
+            "cmdline": item.get("cmdline", ""),
+            "cwd": item.get("cwd", ""),
             "host_pids": host_pids,
             "process_reports": [
                 {"pid": pid, "cgroup": _process_cgroup(pid)} for pid in host_pids
@@ -1506,7 +1591,9 @@ def _verify_selected_environment(
             container_name="biomodstack-web",
             port=spec.frontend_port,
         )
-    workflow_adapter_listener = _validated_workflow_adapter_listener(root)
+    workflow_adapter_listener = _validated_workflow_adapter_listener(
+        root, local_api_build["revision"]
+    )
     development_frontend_listener: dict[str, object] | None = None
     if spec.runtime_mode == DEV_RUNTIME_MODE:
         development_frontend_listener = _validated_development_frontend_listener(spec, root)

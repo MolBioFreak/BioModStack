@@ -35,6 +35,11 @@ function exactSelectionReceipt(environment) {
     compose_working_dir: '/srv/biomodstack',
     pid,
     cgroup: `0::/system.slice/docker-${marker.repeat(64)}.scope`,
+    image_id: `sha256:${marker.repeat(64)}`,
+    cmdline: name === 'biomodstack-api'
+      ? '/bin/sh -ec /app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000'
+      : '/docker-entrypoint.sh nginx -g daemon off;',
+    cwd: name === 'biomodstack-api' ? '/app/platform/api' : '/',
     host_pids: [pid],
     process_reports: [{ pid, cgroup: `0::/system.slice/docker-${marker.repeat(64)}.scope` }],
   });
@@ -59,6 +64,11 @@ function exactSelectionReceipt(environment) {
     listener_inodes: [inode],
     listener_inode_owners: { [inode]: [pid] },
     container_host_pids: [pid],
+    runtime_image_id: `sha256:${marker.repeat(64)}`,
+    runtime_cmdline: name === 'biomodstack-api'
+      ? '/bin/sh -ec /app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000'
+      : '/docker-entrypoint.sh nginx -g daemon off;',
+    runtime_cwd: name === 'biomodstack-api' ? '/app/platform/api' : '/',
     listener_reports: [{ pid, cgroup: `0::/system.slice/docker-${marker.repeat(64)}.scope` }],
   });
   const apiListener = containerListener('biomodstack-api', '1', 8000, 101, 80001);
@@ -505,6 +515,36 @@ test('selection response contract accepts exact development and production recei
     fractionalTimestamp, 'production', 'https://compute-node.taileb3a90.ts.net',
   ));
 
+  const multiWorker = receipt('production');
+  const webContainer = multiWorker.container_runtime.containers.find(
+    (item) => item.name === 'biomodstack-web',
+  );
+  const webListener = multiWorker.managed_frontend_listener;
+  const webCgroup = `0::/system.slice/docker-${'2'.repeat(64)}.scope`;
+  webContainer.host_pids = [202, 203];
+  webContainer.process_reports = [202, 203].map((pid) => ({ pid, cgroup: webCgroup }));
+  webListener.container_listener_pids = [1, 27];
+  webListener.listener_pid_map = [
+    { container_pid: 1, host_pid: 202 },
+    { container_pid: 27, host_pid: 203 },
+  ];
+  webListener.host_listener_pids = [202, 203];
+  webListener.listener_inode_owners = { 180801: [202, 203] };
+  webListener.container_host_pids = [202, 203];
+  webListener.listener_reports = [202, 203].map((pid) => ({ pid, cgroup: webCgroup }));
+  multiWorker.frontend_listeners = webListener.listener_reports;
+  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
+    multiWorker, 'production', 'https://compute-node.taileb3a90.ts.net',
+  ));
+  const swappedWorkerMap = structuredClone(multiWorker);
+  swappedWorkerMap.managed_frontend_listener.listener_pid_map = [
+    { container_pid: 1, host_pid: 203 },
+    { container_pid: 27, host_pid: 202 },
+  ];
+  assert.throws(() => prepareAssets.validateTailnetSelectionPayload(
+    swappedWorkerMap, 'production', 'https://compute-node.taileb3a90.ts.net',
+  ));
+
   for (const mutation of [
     (value) => { value.frontend_target = 'http://127.0.0.1:5173'; },
     (value) => { value.serve_root_proxy = 'http://127.0.0.1:5173'; },
@@ -579,6 +619,49 @@ test('selection response contract accepts exact development and production recei
     (value) => { value.tailnet_production_proxy.pid = 999; },
     (value) => { value.tailnet_production_proxy.config_path = '/tmp/docker/tailnet-production-proxy.conf'; },
     (value) => { value.tailnet_production_proxy.image_id = 'sha256:' + '0'.repeat(64); },
+    (value) => { value.unexpected_authority = { pid: 999 }; },
+    (value) => { value.workflow_adapter_listener.unexpected_authority = { pid: 999 }; },
+    (value) => {
+      value.managed_api_listener.container_listener_pids = [999];
+      value.managed_api_listener.listener_pid_map = [{ container_pid: 999, host_pid: 101 }];
+    },
+    (value) => {
+      const bare = `/system.slice/docker-${'1'.repeat(64)}.scope`;
+      value.managed_api_runtime.containers[0].cgroup = bare;
+      value.managed_api_runtime.containers[0].process_reports[0].cgroup = bare;
+      value.managed_api_listener.listener_reports[0].cgroup = bare;
+      value.api_listeners[0].cgroup = bare;
+    },
+    (value) => { value.tailnet_production_proxy.listener_pid_map.reverse(); },
+    (value) => { value.tailnet_production_proxy.pid = 304; },
+    (value) => {
+      const web = value.container_runtime.containers.find((item) => item.name === 'biomodstack-web');
+      const cgroup = `0::/system.slice/docker-${'2'.repeat(64)}.scope`;
+      web.host_pids = [202, 999];
+      web.process_reports.push({ pid: 999, cgroup });
+      value.managed_frontend_listener.container_host_pids = [202, 999];
+      value.managed_frontend_listener.listener_inode_owners['180801'] = [202, 999];
+      value.managed_frontend_listener.listener_reports.push({ pid: 999, cgroup });
+      value.frontend_listeners = value.managed_frontend_listener.listener_reports;
+    },
+    (value) => {
+      value.container_runtime.containers.find((item) => item.name === 'biomodstack-web').pid = 203;
+    },
+    (value) => {
+      const cgroup = `0::/system.slice/docker-${'4'.repeat(64)}.scope`;
+      const managed = value.managed_api_runtime.containers[0];
+      Object.assign(managed, {
+        container_id: '4'.repeat(64), image_id: `sha256:${'4'.repeat(64)}`,
+        pid: 401, cgroup, host_pids: [401], process_reports: [{ pid: 401, cgroup }],
+      });
+      Object.assign(value.managed_api_listener, {
+        container_id: '4'.repeat(64), listener_pid_map: [{ container_pid: 1, host_pid: 401 }],
+        host_listener_pids: [401], listener_inode_owners: { 80001: [401] },
+        container_host_pids: [401], runtime_image_id: `sha256:${'4'.repeat(64)}`,
+        listener_reports: [{ pid: 401, cgroup }],
+      });
+      value.api_listeners = value.managed_api_listener.listener_reports;
+    },
   ]) {
     const malformed = receipt('production');
     mutation(malformed);
@@ -594,6 +677,7 @@ test('selection response contract accepts exact development and production recei
     (value) => { value.development_frontend_listener.listener_reports[0].cmdline = 'python -m http.server 5173'; },
     (value) => { value.development_frontend_listener.listener_reports[0].cgroup = '0::/rogue.service'; },
     (value) => { value.frontend_listeners = []; },
+    (value) => { value.development_frontend_listener.unexpected_authority = { pid: 999 }; },
   ]) {
     const malformed = receipt('development');
     mutation(malformed);
