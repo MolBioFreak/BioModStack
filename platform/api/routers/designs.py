@@ -23,6 +23,7 @@ from services.analysis_runs import get_matching_design_analysis_run, load_analys
 from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_chains
 from services.stage_review import REVIEWABLE_STAGES, ensure_stage_review_rows, load_review_gate_snapshot
 from services.structure_utils import get_per_chain_fampnn_psce
+from services.result_contracts import resolve_result_contract
 from antibody_pipeline_contract import infer_antibody_artifact_class_from_stage, normalize_antibody_artifact_class
 
 
@@ -1359,37 +1360,6 @@ def _infer_design_result_set(
     return normalized_artifact, None, None
 
 
-def _resolve_analysis_contract(
-    *,
-    result_set: Optional[str],
-    stage_family: Any,
-    stage_mode: Any,
-    artifact_class: Any,
-    provenance: Optional[Dict[str, Any]],
-) -> tuple[Optional[str], List[str]]:
-    """Map explicit row contract fields to supported analysis surfaces.
-
-    Unknown model/stage/artifact combinations intentionally fail closed instead
-    of inheriting analyzers from metric-shaped payloads.
-    """
-    family = _normalize_stage_token(stage_family)
-    mode = _normalize_stage_token(stage_mode)
-    artifact = normalize_antibody_artifact_class(artifact_class) or _normalize_stage_token(artifact_class)
-    model_id = _normalize_stage_token((provenance or {}).get("model_id"))
-
-    if result_set == "rfantibody_backbones" or family == "rfantibody" or artifact == "backbone_complex":
-        return "antibody_backbone_v1", ["antibody_backbone_v1"]
-    if result_set == "sequence_designs" or artifact == "sequence_designed_complex" or family in {"boltzgen", "fampnn", "proteinmpnn", "antifold", "frustrampnn", "caliby"}:
-        return "sequence_design_v1", ["sequence_design_v1"]
-    if result_set in {"ppiflow_candidates", "ppiflow_passed", "ppiflow_rejected"} or family == "ppiflow" or (mode and ("ppiflow" in mode or "maturation" in mode)):
-        return "ppiflow_maturation_v1", ["ppiflow_maturation_v1"]
-    if artifact == "validated_complex" or family in {"validation", "boltz2", "protenix", "esmfold2"} or model_id in {"boltz2", "boltz_cp_experimental", "protenix", "esmfold2_experimental"}:
-        return "structure_prediction_v1", ["structure_prediction_v1"]
-    if family == "confornets" or model_id == "confornets_experimental":
-        return "confornets_monomer_v1", []
-    return None, []
-
-
 def _fampnn_payload_records(design: Design) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
     try:
@@ -1858,15 +1828,15 @@ def _design_to_response(
         data["artifact_schema_version"] = 1
     data["result_set"] = result_set
     data["result_set_label"] = result_set_label
-    contract_id, supported_analyzers = _resolve_analysis_contract(
+    contract = resolve_result_contract(
         result_set=result_set,
         stage_family=data.get("stage_family"),
         stage_mode=data.get("stage_mode"),
         artifact_class=data.get("artifact_class"),
         provenance=data.get("provenance") if isinstance(data.get("provenance"), dict) else None,
     )
-    data["analysis_contract_id"] = contract_id
-    data["supported_analyzers"] = supported_analyzers
+    data["analysis_contract_id"] = contract.analysis_contract_id
+    data["supported_analyzers"] = contract.supported_analyzers
     data.update(_compute_import_metadata(design))
     return DesignResponse.model_validate(data)
 
