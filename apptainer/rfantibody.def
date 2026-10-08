@@ -50,8 +50,9 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
     mkdir -p /opt/RFantibody/weights
 
 %environment
-    # CRITICAL: Include src/ and include/ in PYTHONPATH for rfantibody module
-    export PYTHONPATH="/opt/RFantibody/src:/opt/RFantibody/include:/opt/RFantibody:$PYTHONPATH"
+    # CRITICAL: Include all necessary paths for rfantibody module imports
+    # parsers.py uses relative imports, so we need to add those directories
+    export PYTHONPATH="/opt/RFantibody/src:/opt/RFantibody/src/rfantibody/rfdiffusion:/opt/RFantibody/src/rfantibody/rf2:/opt/RFantibody/include:/opt/RFantibody:$PYTHONPATH"
     export PATH="/opt/venv/bin:/opt/RFantibody:$PATH"
     export VIRTUAL_ENV=/opt/venv
     # Weights path - should be mounted from host at /opt/RFantibody/weights
