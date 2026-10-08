@@ -420,23 +420,21 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     <div className="flex gap-3">
                         <button
                             onClick={() => setExplorationMode(true)}
-                            className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-2 ${explorationMode
+                            className={`px-4 py-2 rounded-lg font-medium transition-all ${explorationMode
                                 ? 'bg-emerald-600 text-white'
                                 : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                                 }`}
                         >
-                            <span className="text-lg">🚀</span>
-                            Exploration
+                            Parallel
                         </button>
                         <button
                             onClick={() => setExplorationMode(false)}
-                            className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-2 ${!explorationMode
+                            className={`px-4 py-2 rounded-lg font-medium transition-all ${!explorationMode
                                 ? 'bg-purple-600 text-white'
                                 : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                                 }`}
                         >
-                            <span className="text-lg">🔬</span>
-                            Refinement
+                            Serial
                         </button>
                     </div>
                     <p className="text-xs text-slate-500 mt-2">
