@@ -782,13 +782,41 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                 <button
                                     onClick={() => {
                                         setFrustrampnnLoading(true);
-                                        // Placeholder: In production, call API
+                                        // Mock: Generate results based on actual sequence
+                                        // In production, this would call the FrustraMPNN API
                                         setTimeout(() => {
-                                            setFrustrampnnResults([
-                                                { position: 103, aa: 'S', frustration: 0.82, suggestedAAs: ['A', 'T', 'N'], selected: true },
-                                                { position: 105, aa: 'Y', frustration: 0.71, suggestedAAs: ['F', 'W'], selected: true },
-                                                { position: 108, aa: 'G', frustration: 0.45, suggestedAAs: [], selected: false },
-                                            ]);
+                                            if (!baseSequence || baseSequence.length === 0) {
+                                                setFrustrampnnLoading(false);
+                                                return;
+                                            }
+                                            // Generate 3-5 "frustrated" positions from the actual sequence
+                                            const numResults = Math.min(3 + Math.floor(Math.random() * 3), baseSequence.length);
+                                            const positions = new Set<number>();
+                                            while (positions.size < numResults && positions.size < baseSequence.length) {
+                                                // Prefer positions in latter half (typical CDR regions)
+                                                const pos = Math.floor(baseSequence.length * 0.5 + Math.random() * baseSequence.length * 0.5) % baseSequence.length;
+                                                positions.add(pos);
+                                            }
+                                            const suggestedAAOptions: Record<string, string[]> = {
+                                                'A': ['G', 'S', 'V'], 'G': ['A', 'S'], 'S': ['A', 'T', 'N'], 'T': ['S', 'N'],
+                                                'Y': ['F', 'W', 'H'], 'F': ['Y', 'W'], 'W': ['F', 'Y'], 'H': ['Y', 'N'],
+                                                'N': ['D', 'S', 'Q'], 'D': ['E', 'N'], 'E': ['D', 'Q'], 'Q': ['E', 'N'],
+                                                'K': ['R', 'Q'], 'R': ['K', 'Q'], 'I': ['L', 'V'], 'L': ['I', 'V'], 'V': ['I', 'L', 'A'],
+                                                'M': ['L', 'I'], 'C': ['S', 'A'], 'P': ['A'], 'default': ['A', 'S', 'G']
+                                            };
+                                            const mockResults = Array.from(positions).sort((a, b) => a - b).map((pos) => {
+                                                const aa = baseSequence[pos];
+                                                const frustration = 0.5 + Math.random() * 0.4; // 0.5-0.9 range
+                                                const suggested = suggestedAAOptions[aa] || suggestedAAOptions['default'];
+                                                return {
+                                                    position: pos + 1, // 1-indexed for display
+                                                    aa,
+                                                    frustration: Math.round(frustration * 100) / 100,
+                                                    suggestedAAs: suggested.slice(0, 2 + Math.floor(Math.random() * 2)),
+                                                    selected: frustration > 0.6 // Auto-select high frustration
+                                                };
+                                            });
+                                            setFrustrampnnResults(mockResults);
                                             setFrustrampnnLoading(false);
                                         }, 1000);
                                     }}
