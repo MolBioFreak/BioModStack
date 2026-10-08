@@ -36,6 +36,28 @@ from services.frustrampnn.settings import (
 BACKENDS = frozenset({"protenix_v2_ensemble", "confornets", "external_import"})
 
 
+def canonical_msa_params(request: Mapping[str, Any]) -> dict[str, Any]:
+    """Project immutable CM feature authority into the shared Protenix policy."""
+    from .contracts import validate_feature_policy, protenix_msa_settings
+    if request.get("backend") != "protenix_v2_ensemble":
+        if request.get("feature_policy", {}).get("msa_settings") is not None:
+            raise ValueError("CM hosted MSA settings require the Protenix backend")
+        return {}
+    if not isinstance(request.get("feature_policy"), Mapping):
+        raise ValueError("CM Protenix requires an explicit feature_policy")
+    policy = validate_feature_policy(request["feature_policy"])
+    controls = ("protein_msa_enabled", "templates_enabled", "rna_msa_enabled")
+    if any(type(request["feature_policy"].get(key)) is not bool for key in controls):
+        raise ValueError("CM Protenix requires explicit protein-MSA, template, and RNA-MSA controls")
+    if policy["rna_msa_enabled"] is True:
+        raise ValueError("CM RNA-MSA is unsupported by the hosted protein-MSA artifact contract")
+    effective = protenix_msa_settings(policy.get("msa_settings", {})) if policy["protein_msa_enabled"] or "msa_settings" in policy else {}
+    effective.update(protenix_use_msa=policy["protein_msa_enabled"],
+        protenix_use_template=policy["templates_enabled"],
+        protenix_use_rna_msa=policy["rna_msa_enabled"])
+    return effective
+
+
 def canonical_launch_params(request_path: Path | str) -> dict[str, Any]:
     """Project the native request with its mandatory analysis selection."""
 
@@ -803,6 +825,14 @@ def _validate_request_params(
         raise ConformationalMappingRequestError(
             "confornets controls are invalid for the selected backend"
         )
+
+    from .contracts import validate_feature_policy
+    try:
+        validate_feature_policy(request_fields["feature_policy"])
+    except ValueError as exc:
+        raise ConformationalMappingRequestError(str(exc)) from exc
+    if backend != "protenix_v2_ensemble" and "msa_settings" in request_fields["feature_policy"]:
+        raise ConformationalMappingRequestError("CM hosted MSA settings require the Protenix backend")
 
     if backend != "protenix_v2_ensemble" and values.get("protenix_snapshot_id") not in (None, ""):
         raise ConformationalMappingRequestError(
