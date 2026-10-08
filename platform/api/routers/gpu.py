@@ -2134,6 +2134,68 @@ def _sample_cpu_package_power_watts() -> Optional[float]:
     return round(total_power_watts, 1)
 
 
+def _normalize_cpu_frequency_mhz(value: Optional[float]) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric <= 0:
+        return None
+    # Some psutil builds on AMD/Linux report the current clock in GHz while
+    # min/max stay in MHz. Normalize those tiny current values back to MHz.
+    if numeric < 100:
+        return numeric * 1000.0
+    return numeric
+
+
+def _read_cpu_frequency_from_sysfs() -> tuple[Optional[float], Optional[float]]:
+    current_samples: List[float] = []
+    max_samples: List[float] = []
+
+    cpu_root = Path("/sys/devices/system/cpu")
+    for cpu_dir in cpu_root.glob("cpu[0-9]*"):
+        cpufreq_dir = cpu_dir / "cpufreq"
+        if not cpufreq_dir.exists():
+            continue
+
+        for source, bucket in (
+            (cpufreq_dir / "scaling_cur_freq", current_samples),
+            (cpufreq_dir / "scaling_max_freq", max_samples),
+        ):
+            if not source.exists():
+                continue
+            try:
+                raw_value = source.read_text().strip()
+                bucket.append(float(raw_value) / 1000.0)
+            except (TypeError, ValueError, OSError):
+                continue
+
+    current_mhz = sum(current_samples) / len(current_samples) if current_samples else None
+    max_mhz = max(max_samples) if max_samples else None
+    return current_mhz, max_mhz
+
+
+def _read_cpu_frequency_from_proc() -> Optional[float]:
+    samples: List[float] = []
+    try:
+        with open("/proc/cpuinfo", "r", encoding="utf-8", errors="ignore") as handle:
+            for line in handle:
+                if not line.lower().startswith("cpu mhz"):
+                    continue
+                try:
+                    samples.append(float(line.split(":", 1)[1].strip()))
+                except (TypeError, ValueError):
+                    continue
+    except OSError:
+        return None
+
+    if not samples:
+        return None
+    return sum(samples) / len(samples)
+
+
 def get_cpu_stats() -> CPUStatus:
     """Get CPU statistics using psutil."""
     # Get CPU name from /proc/cpuinfo on Linux
@@ -2177,8 +2239,23 @@ def get_cpu_stats() -> CPUStatus:
         sum(per_core_utilization) / max(1, len(per_core_utilization)),
         1,
     )
-    frequency_current_mhz = freq.current if freq else 0.0
-    frequency_max_mhz = freq.max if freq else 0.0
+    sysfs_current_mhz, sysfs_max_mhz = _read_cpu_frequency_from_sysfs()
+    proc_current_mhz = _read_cpu_frequency_from_proc()
+    psutil_current_mhz = _normalize_cpu_frequency_mhz(freq.current if freq else None)
+    psutil_max_mhz = _normalize_cpu_frequency_mhz(freq.max if freq else None)
+
+    frequency_current_mhz = (
+        sysfs_current_mhz
+        or proc_current_mhz
+        or psutil_current_mhz
+        or 0.0
+    )
+    frequency_max_mhz = (
+        sysfs_max_mhz
+        or psutil_max_mhz
+        or frequency_current_mhz
+        or 0.0
+    )
 
     # Get CPU package power via RAPL only. If powercap is unreadable, return null
     # so the UI does not fabricate a wattage value.
