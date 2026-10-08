@@ -16,6 +16,7 @@ const apiMocks = vi.hoisted(() => ({
     createProfile: vi.fn(),
     createView: vi.fn(),
     createViewerSession: vi.fn(),
+    fetchExternalMoveBamCandidates: vi.fn(),
     fetchCalibration: vi.fn(),
     fetchCapabilities: vi.fn(),
     fetchMapping: vi.fn(),
@@ -32,6 +33,7 @@ const apiMocks = vi.hoisted(() => ({
     fetchPooledAssignment: vi.fn(),
     apiGet: vi.fn(),
     requestRawWaveform: vi.fn(),
+    registerExternalMoveBamCandidate: vi.fn(),
     updateViewerSession: vi.fn(),
 }));
 
@@ -76,6 +78,7 @@ vi.mock('../../src/lib/api', () => ({
     createOntSignalMappingProfile: apiMocks.createProfile,
     createOntSignalView: apiMocks.createView,
     createOntSignalViewerSession: apiMocks.createViewerSession,
+    fetchOntExternalMoveBamCandidates: apiMocks.fetchExternalMoveBamCandidates,
     fetchOntMoveSources: apiMocks.fetchMoveSources,
     fetchOntSignalCalibration: apiMocks.fetchCalibration,
     fetchOntSignalMapping: apiMocks.fetchMapping,
@@ -91,6 +94,7 @@ vi.mock('../../src/lib/api', () => ({
     fetchOntSignalViewerSession: apiMocks.fetchViewerSession,
     fetchPooledAssignmentManifest: apiMocks.fetchPooledAssignment,
     requestOntRawSignalWaveform: apiMocks.requestRawWaveform,
+    registerOntExternalMoveBamCandidate: apiMocks.registerExternalMoveBamCandidate,
     updateOntSignalViewerSession: apiMocks.updateViewerSession,
 }));
 
@@ -557,6 +561,14 @@ beforeEach(() => {
     renderMocks.suspension = null;
 
     apiMocks.fetchCapabilities.mockResolvedValue(capabilities());
+    apiMocks.fetchExternalMoveBamCandidates.mockResolvedValue({
+        items: [{
+            candidate_id: 'd'.repeat(64),
+            display_name: 'BFX6NB_1_JAN26-EL-Q2-01.bam',
+            size_bytes: 1234,
+            modified_at_ns: 1700000000000000000,
+        }],
+    });
     apiMocks.fetchMoveSources.mockResolvedValue({ items: [moveSource] });
     apiMocks.fetchProfiles.mockResolvedValue({ items: [] });
     apiMocks.fetchRawWaveform.mockResolvedValue(rawWaveform);
@@ -570,6 +582,13 @@ beforeEach(() => {
     apiMocks.createView.mockResolvedValue(readyView());
     apiMocks.createViewerSession.mockResolvedValue(viewerSession());
     apiMocks.requestRawWaveform.mockResolvedValue(rawWaveform);
+    apiMocks.registerExternalMoveBamCandidate.mockResolvedValue({
+        ...moveSource,
+        move_source_id: 'external-moves-requested',
+        source_job_id: null,
+        external_registration_receipt_id: 'ont-external-move-receipt-1',
+        state: 'requested',
+    });
     apiMocks.updateViewerSession.mockResolvedValue(viewerSession({ revision: 8 }));
     alignmentMocks.fetchRead.mockResolvedValue(selectedRead);
     alignmentMocks.fetchReads.mockResolvedValue({ reads: [selectedRead], next_cursor: null, limit: 50, sequence_included: false, scan_truncated: false });
@@ -603,6 +622,148 @@ afterEach(async () => {
 });
 
 describe('ReadAndSignalWorkbench governed behavior', () => {
+    it('registers one path-opaque external move BAM candidate to the exact run tuple', async () => {
+        await renderWorkbench({ viewerSession: null });
+        await waitUntil(() => expect(container.textContent).toContain('BFX6NB_1_JAN26-EL-Q2-01.bam'));
+
+        const candidate = container.querySelector<HTMLSelectElement>('[aria-label="External move BAM candidate"]');
+        const molecule = container.querySelector<HTMLSelectElement>('[aria-label="External move BAM molecule type"]');
+        expect(candidate).not.toBeNull();
+        expect(molecule).not.toBeNull();
+        await act(async () => {
+            const selectSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
+            selectSetter?.call(candidate, 'd'.repeat(64));
+            candidate?.dispatchEvent(new Event('change', { bubbles: true }));
+            selectSetter?.call(molecule, 'dna');
+            molecule?.dispatchEvent(new Event('change', { bubbles: true }));
+            await Promise.resolve();
+        });
+        await act(async () => {
+            button('Register external move BAM').click();
+            await Promise.resolve();
+        });
+
+        expect(apiMocks.registerExternalMoveBamCandidate).toHaveBeenCalledWith('run-1', 3, {
+            candidate_id: 'd'.repeat(64),
+            raw_representation_id: 'blow5-indexed-1',
+            molecule_type: 'dna',
+        });
+        const publicCandidate = apiMocks.fetchExternalMoveBamCandidates.mock.results[0]?.value;
+        expect(JSON.stringify(publicCandidate)).not.toContain('/mnt/');
+        expect(JSON.stringify(publicCandidate)).not.toContain('path');
+    });
+
+    it('polls a requested external move source through running and refreshes capabilities after ready', async () => {
+        const requestedExternalSource: OntMoveTableSource = {
+            ...moveSource,
+            move_source_id: 'external-moves-requested',
+            source_job_id: null,
+            external_registration_receipt_id: 'ont-external-move-receipt-1',
+            state: 'requested',
+            reason_code: 'move_source_validation_requested',
+        };
+        const runningExternalSource: OntMoveTableSource = {
+            ...requestedExternalSource,
+            state: 'running',
+            reason_code: 'move_source_validation_running',
+        };
+        const readyExternalSource: OntMoveTableSource = {
+            ...requestedExternalSource,
+            state: 'ready',
+            reason_code: 'move_source_exact_read_set_ready',
+        };
+        apiMocks.registerExternalMoveBamCandidate.mockResolvedValue(requestedExternalSource);
+        apiMocks.fetchMoveSources
+            .mockResolvedValueOnce({ items: [moveSource] })
+            .mockResolvedValueOnce({ items: [moveSource, runningExternalSource] })
+            .mockResolvedValue({ items: [moveSource, readyExternalSource] });
+        apiMocks.fetchCapabilities
+            .mockResolvedValueOnce(capabilities())
+            .mockResolvedValue(capabilities({
+                move_source_id: readyExternalSource.move_source_id,
+                mapping_profile_id: null,
+                calibration_job_id: null,
+                calibration_artifact_id: null,
+                signal_to_read_mapping_job_id: null,
+                signal_to_reference_mapping_job_id: null,
+            }));
+
+        vi.useFakeTimers();
+        await renderWorkbench({ viewerSession: null });
+        await settlePromises();
+        await act(async () => {
+            button('Register external move BAM').click();
+            await Promise.resolve();
+        });
+        await settlePromises();
+
+        expect(apiMocks.fetchMoveSources).toHaveBeenCalledTimes(1);
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(1_500);
+        });
+        await settlePromises();
+        expect(apiMocks.fetchMoveSources).toHaveBeenCalledTimes(2);
+
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(1_500);
+        });
+        await settlePromises();
+        expect(apiMocks.fetchMoveSources).toHaveBeenCalledTimes(4);
+        expect(apiMocks.fetchCapabilities).toHaveBeenCalledTimes(2);
+
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(3_000);
+        });
+        await settlePromises();
+        expect(apiMocks.fetchMoveSources).toHaveBeenCalledTimes(4);
+        expect(apiMocks.fetchCapabilities).toHaveBeenCalledTimes(2);
+    });
+
+    it('refreshes capabilities once without polling when external registration is immediately ready', async () => {
+        const readyExternalSource: OntMoveTableSource = {
+            ...moveSource,
+            move_source_id: 'external-moves-ready-replay',
+            source_job_id: null,
+            external_registration_receipt_id: 'ont-external-move-receipt-ready',
+            state: 'ready',
+            reason_code: 'move_source_exact_read_set_ready',
+        };
+        apiMocks.registerExternalMoveBamCandidate.mockResolvedValue(readyExternalSource);
+        apiMocks.fetchMoveSources
+            .mockResolvedValueOnce({ items: [moveSource] })
+            .mockResolvedValue({ items: [moveSource, readyExternalSource] });
+        apiMocks.fetchCapabilities
+            .mockResolvedValueOnce(capabilities())
+            .mockResolvedValue(capabilities({
+                move_source_id: readyExternalSource.move_source_id,
+                mapping_profile_id: null,
+                calibration_job_id: null,
+                calibration_artifact_id: null,
+                signal_to_read_mapping_job_id: null,
+                signal_to_reference_mapping_job_id: null,
+            }));
+
+        vi.useFakeTimers();
+        await renderWorkbench({ viewerSession: null });
+        await settlePromises();
+        await act(async () => {
+            button('Register external move BAM').click();
+            await Promise.resolve();
+        });
+        await settlePromises();
+
+        expect(apiMocks.fetchCapabilities).toHaveBeenCalledTimes(2);
+        expect(apiMocks.fetchMoveSources).toHaveBeenCalledTimes(2);
+        expect(vi.getTimerCount()).toBe(0);
+
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(3_000);
+        });
+        await settlePromises();
+        expect(apiMocks.fetchCapabilities).toHaveBeenCalledTimes(2);
+        expect(apiMocks.fetchMoveSources).toHaveBeenCalledTimes(2);
+    });
+
     it('keeps frontend mapping and move-source request contracts exact to the staged closed router', () => {
         const source = readFileSync(`${process.cwd()}/src/lib/api.ts`, 'utf8');
         const profileContract = source.slice(
