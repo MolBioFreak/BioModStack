@@ -18,6 +18,7 @@ from database import Base, Design, Job, get_session
 from routers.frustrampnn import AnalyzeDesignsRequest, ReanalyzeRequest, router
 from services import nextflow as nextflow_service
 from services.frustrampnn import jobs as child_jobs
+from services.frustrampnn.contracts import canonical_json_bytes
 from services.frustrampnn.settings import FrustraMPNNRequestedSettings, default_settings
 
 
@@ -417,6 +418,88 @@ async def test_child_receipt_is_closed_redacted_projection_without_mutating_inte
     serialized = json.dumps(receipt, default=str)
     assert "/" not in serialized
     assert "frustrampnn_batch_manifest_path" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_child_receipt_binds_manifest_identity_and_every_ordered_group_terminal(
+    child_db,
+) -> None:
+    sessions, _results = child_db
+    selections = [
+        child_jobs.upload_selection(
+            filename=f"candidate-{chain}.pdb",
+            payload=_pdb_for_chain(chain),
+            expected_sha256=None,
+        )
+        for chain in ("A", "B")
+    ]
+    async with sessions() as session:
+        child = await child_jobs.create_child_job(
+            session,
+            selections=selections,
+            source_parent=None,
+            trigger="upload_analyze",
+            requested_settings=_batched_settings(2),
+        )
+        manifest_path = Path(child.params["frustrampnn_batch_manifest_path"])
+        manifest = json.loads(manifest_path.read_bytes())
+        envelope = child.params[child_jobs.ENVELOPE_KEY]
+        records = [
+            {
+                "ordinal": item["ordinal"],
+                "candidate_id": item["candidate_id"],
+                "invocation_id": item["invocation_id"],
+                "pdb_stem": f"{item['ordinal']:04d}_{item['candidate_id']}",
+                "source_sha256": item["source_sha256"],
+                "started_at": "2026-08-27T12:00:00Z",
+                "terminal_at": "2026-08-27T12:00:01Z",
+                "status": "failed",
+                "failure_code": "upstream_output_omitted",
+                "diagnostic": "upstream returned no rows",
+                "row_count": None,
+                "output_csv": None,
+                "output_sha256": None,
+            }
+            for item in manifest["records"]
+        ]
+        terminal = {
+            "schema_name": "bms.frustrampnn.grouped-batch-terminal.v1",
+            "schema_version": 1,
+            "execution_owner_job_id": child.id,
+            "batch_manifest": {
+                "schema_name": manifest["schema_name"],
+                "schema_version": manifest["schema_version"],
+                "sha256": envelope["batch_manifest_sha256"],
+                "size_bytes": envelope["batch_manifest_size_bytes"],
+                "expected_cardinality": manifest["expected_cardinality"],
+                "ordered_candidate_ids": [item["candidate_id"] for item in manifest["records"]],
+                "ordered_invocation_ids": [item["invocation_id"] for item in manifest["records"]],
+            },
+            "record_count": 2,
+            "records": records,
+        }
+        terminal["content_sha256"] = hashlib.sha256(
+            canonical_json_bytes(terminal)
+        ).hexdigest()
+        artifact = Path(child.output_dir) / "frustrampnn" / "batches" / "grouped_batch_terminal_receipt_v1.json"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_bytes(canonical_json_bytes(terminal))
+
+        receipt = await child_jobs.child_receipt(session, child=child)
+        assert receipt["batch_manifest"] == terminal["batch_manifest"]
+        assert receipt["grouped_terminal_artifact"]["content_sha256"] == terminal[
+            "content_sha256"
+        ]
+        assert receipt["grouped_terminal_artifact"]["records"] == records
+
+        tampered = dict(terminal)
+        tampered["records"] = list(reversed(records))
+        tampered["content_sha256"] = hashlib.sha256(
+            canonical_json_bytes({k: v for k, v in tampered.items() if k != "content_sha256"})
+        ).hexdigest()
+        artifact.write_bytes(canonical_json_bytes(tampered))
+        with pytest.raises(child_jobs.FrustraMPNNChildError, match="order"):
+            await child_jobs.child_receipt(session, child=child)
 
 
 def test_child_launch_and_receipt_routes_publish_closed_response_models() -> None:
@@ -839,6 +922,91 @@ async def test_design_dataset_fans_out_into_scheduler_visible_jobs_with_remainde
             [item["design_id"] for item in child.params[child_jobs.ENVELOPE_KEY]["selection"]]
             for child in children
         ] == [["design-0", "design-1"], ["design-2", "design-3"], ["design-4"]]
+
+
+@pytest.mark.asyncio
+async def test_batching_disabled_forces_single_structure_children_without_rewriting_requested_capacity(
+    child_db,
+) -> None:
+    sessions, results = child_db
+    source_root = results / "disabled-batching-source"
+    source_root.mkdir()
+    payloads = [_pdb_for_chain(chain) for chain in ("A", "B", "C")]
+    async with sessions() as session:
+        parent = Job(
+            id="disabled-batching-parent",
+            name="disabled batching parent",
+            status="completed",
+            queue_status="completed",
+            model_id="boltz2",
+            mode="structure_prediction",
+            params={},
+            output_dir=str(source_root),
+            child_output_dir=str(source_root),
+        )
+        session.add(parent)
+        for ordinal, payload in enumerate(payloads):
+            path = source_root / f"design-{ordinal}.pdb"
+            path.write_bytes(payload)
+            session.add(Design(
+                id=f"disabled-design-{ordinal}",
+                job_id=parent.id,
+                name=f"disabled-design-{ordinal}",
+                pdb_path=str(path),
+            ))
+        await session.commit()
+
+    app = FastAPI()
+    app.include_router(router)
+
+    async def override_session():
+        async with sessions() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = override_session
+    requested = default_settings().model_copy(update={"structures_per_job": 3})
+    payload = requested.model_dump(mode="json")
+    payload.pop("settings_value_origin")
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/frustrampnn/jobs/disabled-batching-parent/analyze",
+            json={
+                "selections": [
+                    {
+                        "design_id": f"disabled-design-{ordinal}",
+                        "source_sha256": hashlib.sha256(source).hexdigest(),
+                    }
+                    for ordinal, source in enumerate(payloads)
+                ],
+                "frustrampnn_settings": payload,
+            },
+        )
+
+    assert response.status_code == 202, response.text
+    receipt = response.json()
+    assert receipt["structures_per_job"] == 3
+    assert receipt["effective_structures_per_job"] == 1
+    assert [child["structure_count"] for child in receipt["child_jobs"]] == [1, 1, 1]
+    assert all(
+        child["requested_settings"]["structures_per_job"] == 3
+        and child["requested_settings"]["batching_enabled"] is False
+        for child in receipt["child_jobs"]
+    )
+    async with sessions() as session:
+        children = (
+            await session.execute(
+                select(Job).where(Job.parent_job_id == "disabled-batching-parent")
+            )
+        ).scalars().all()
+        assert len(children) == 3
+        for child in children:
+            manifest = json.loads(
+                Path(child.params["frustrampnn_batch_manifest_path"]).read_text()
+            )
+            assert manifest["batching_enabled"] is False
+            assert manifest["structures_per_job"] == 3
+            assert manifest["expected_cardinality"] == 1
 
 
 @pytest.mark.asyncio

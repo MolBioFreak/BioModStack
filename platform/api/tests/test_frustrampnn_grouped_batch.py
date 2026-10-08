@@ -172,3 +172,69 @@ def test_grouped_runner_executes_one_predict_batch_command_and_finalizes_each_te
     )
     assert result["record_count"] == 2
     assert result["model_load_count"] == 1
+    governed = job_root / "frustrampnn" / "batches" / "grouped_batch_terminal_receipt_v1.json"
+    assert governed.is_file()
+    receipt = json.loads(governed.read_bytes())
+    assert receipt["schema_name"] == "bms.frustrampnn.grouped-batch-terminal.v1"
+    assert receipt["execution_owner_job_id"] == "job-1"
+    assert receipt["batch_manifest"] == {
+        "schema_name": "bms_frustrampnn_scheduler_batch",
+        "schema_version": 3,
+        "sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        "size_bytes": manifest_path.stat().st_size,
+        "expected_cardinality": 2,
+        "ordered_candidate_ids": ["alpha", "beta"],
+        "ordered_invocation_ids": ["invoke-alpha", "invoke-beta"],
+    }
+    assert receipt["records"] == result["records"]
+    assert receipt["record_count"] == 2
+    assert receipt["content_sha256"] == hashlib.sha256(
+        _canonical({key: value for key, value in receipt.items() if key != "content_sha256"})
+    ).hexdigest()
+
+
+def test_grouped_runner_rejects_reordered_or_unbounded_terminal_records() -> None:
+    grouped = _load_grouped_batch()
+    batch = {
+        "execution_owner_job_id": "job-1",
+        "records": [
+            {"ordinal": 0, "candidate_id": "alpha", "invocation_id": "invoke-alpha", "source_sha256": "a" * 64},
+            {"ordinal": 1, "candidate_id": "beta", "invocation_id": "invoke-beta", "source_sha256": "b" * 64},
+        ],
+    }
+    terminal = [
+        {
+            "ordinal": ordinal,
+            "candidate_id": candidate,
+            "invocation_id": invocation,
+            "pdb_stem": f"000{ordinal}_{candidate}",
+            "source_sha256": source,
+            "started_at": "2026-08-27T12:00:00Z",
+            "terminal_at": "2026-08-27T12:00:01Z",
+            "status": "failed",
+            "failure_code": "upstream_output_omitted",
+            "diagnostic": "bounded diagnostic",
+            "row_count": None,
+            "output_csv": None,
+            "output_sha256": None,
+        }
+        for ordinal, candidate, invocation, source in (
+            (0, "alpha", "invoke-alpha", "a" * 64),
+            (1, "beta", "invoke-beta", "b" * 64),
+        )
+    ]
+    evidence = {
+        "schema_name": "frustrampnn_batch_terminal_evidence",
+        "schema_version": 1,
+        "method_identity": "frustrampnn.FrustraMPNN.predict_batch",
+        "upstream_sequential_semantics": grouped.UPSTREAM_SEQUENTIAL_SEMANTICS,
+        "model_load_count": 1,
+        "record_count": 2,
+        "records": list(reversed(terminal)),
+    }
+    with pytest.raises(grouped.GroupedBatchError, match="order"):
+        grouped._validated_ordered_terminals(batch, evidence)
+    evidence["records"] = terminal
+    evidence["records"][0]["diagnostic"] = "x" * 1025
+    with pytest.raises(grouped.GroupedBatchError, match="diagnostic"):
+        grouped._validated_ordered_terminals(batch, evidence)

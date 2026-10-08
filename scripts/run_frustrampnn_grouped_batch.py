@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping, NamedTuple
 
@@ -39,6 +40,12 @@ _RECORD_FIELDS = {
     "source_relative_path", "source_sha256", "source_size_bytes",
     "structure_map_relative_path", "structure_map_sha256", "structure_map_size_bytes",
 }
+_TERMINAL_FIELDS = {
+    "ordinal", "candidate_id", "invocation_id", "pdb_stem", "source_sha256",
+    "started_at", "terminal_at", "status", "failure_code", "diagnostic",
+    "row_count", "output_csv", "output_sha256",
+}
+_TERMINAL_RECEIPT_NAME = "grouped_batch_terminal_receipt_v1.json"
 
 
 class GroupedBatchError(RuntimeError):
@@ -80,6 +87,122 @@ def _read_batch(path: Path) -> dict[str, Any]:
         ):
             raise GroupedBatchError(f"scheduler record identity is invalid at ordinal {ordinal}")
     return value
+
+
+def _timestamp(value: Any, *, label: str) -> datetime:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        raise GroupedBatchError(f"terminal record {label} is invalid")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise GroupedBatchError(f"terminal record {label} is invalid") from exc
+    if parsed.utcoffset() is None:
+        raise GroupedBatchError(f"terminal record {label} is invalid")
+    return parsed
+
+
+def _validated_ordered_terminals(
+    batch: Mapping[str, Any], evidence: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    records = evidence.get("records")
+    expected = batch.get("records")
+    if not isinstance(records, list) or not isinstance(expected, list) or len(records) != len(expected):
+        raise GroupedBatchError("predict_batch terminal evidence cardinality is invalid")
+    validated: list[dict[str, Any]] = []
+    for ordinal, (source, terminal) in enumerate(zip(expected, records, strict=True)):
+        if not isinstance(source, Mapping) or not isinstance(terminal, dict) or set(terminal) != _TERMINAL_FIELDS:
+            raise GroupedBatchError("predict_batch terminal evidence fields are invalid")
+        if (
+            terminal.get("ordinal") != ordinal
+            or terminal.get("candidate_id") != source.get("candidate_id")
+            or terminal.get("invocation_id") != source.get("invocation_id")
+            or terminal.get("source_sha256") != source.get("source_sha256")
+        ):
+            raise GroupedBatchError("predict_batch terminal evidence order or identity is invalid")
+        started = _timestamp(terminal.get("started_at"), label="started_at")
+        ended = _timestamp(terminal.get("terminal_at"), label="terminal_at")
+        if ended < started:
+            raise GroupedBatchError("predict_batch terminal timestamp order is invalid")
+        status = terminal.get("status")
+        row_count = terminal.get("row_count")
+        diagnostic = terminal.get("diagnostic")
+        output_csv = terminal.get("output_csv")
+        output_sha256 = terminal.get("output_sha256")
+        if row_count is not None and (
+            isinstance(row_count, bool) or not isinstance(row_count, int) or row_count < 0
+        ):
+            raise GroupedBatchError("predict_batch terminal row count is invalid")
+        if diagnostic is not None and (
+            not isinstance(diagnostic, str) or not diagnostic or len(diagnostic) > 1024
+        ):
+            raise GroupedBatchError("predict_batch terminal diagnostic is invalid")
+        if status == "succeeded":
+            if (
+                terminal.get("failure_code") is not None
+                or diagnostic is not None
+                or row_count is None
+                or not isinstance(output_csv, str)
+                or Path(output_csv).name != output_csv
+                or not isinstance(output_sha256, str)
+                or len(output_sha256) != 64
+            ):
+                raise GroupedBatchError("successful predict_batch terminal evidence is invalid")
+        elif status == "failed":
+            if (
+                not isinstance(terminal.get("failure_code"), str)
+                or not terminal["failure_code"]
+                or diagnostic is None
+                or output_csv is not None
+                or output_sha256 is not None
+            ):
+                raise GroupedBatchError("failed predict_batch terminal evidence is invalid")
+        else:
+            raise GroupedBatchError("predict_batch terminal status is invalid")
+        validated.append(dict(terminal))
+    return validated
+
+
+def _publish_governed_terminal_receipt(
+    *, root: Path, manifest_path: Path, batch: Mapping[str, Any], records: list[dict[str, Any]]
+) -> tuple[Path, dict[str, Any]]:
+    manifest_payload = manifest_path.read_bytes()
+    receipt: dict[str, Any] = {
+        "schema_name": "bms.frustrampnn.grouped-batch-terminal.v1",
+        "schema_version": 1,
+        "execution_owner_job_id": batch["execution_owner_job_id"],
+        "batch_manifest": {
+            "schema_name": batch["schema_name"],
+            "schema_version": batch["schema_version"],
+            "sha256": hashlib.sha256(manifest_payload).hexdigest(),
+            "size_bytes": len(manifest_payload),
+            "expected_cardinality": batch["expected_cardinality"],
+            "ordered_candidate_ids": [item["candidate_id"] for item in batch["records"]],
+            "ordered_invocation_ids": [item["invocation_id"] for item in batch["records"]],
+        },
+        "record_count": len(records),
+        "records": records,
+    }
+    receipt["content_sha256"] = hashlib.sha256(canonical_json_bytes(receipt)).hexdigest()
+    destination_root = root / "frustrampnn" / "batches"
+    destination_root.mkdir(parents=True, exist_ok=True)
+    destination = destination_root / _TERMINAL_RECEIPT_NAME
+    if destination.exists() or destination.is_symlink():
+        raise GroupedBatchError("governed grouped terminal receipt already exists")
+    temporary = destination_root / f".{_TERMINAL_RECEIPT_NAME}.{os.getpid()}.tmp"
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(canonical_json_bytes(receipt))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, destination)
+        directory_fd = os.open(destination_root, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return destination, receipt
 
 
 def _default_prepare_record(
@@ -220,24 +343,22 @@ def run_grouped_batch(
             or not isinstance(evidence.get("records"), list)
         ):
             raise GroupedBatchError("predict_batch terminal evidence is invalid")
-        terminals = {item.get("ordinal"): item for item in evidence["records"] if isinstance(item, dict)}
-        statuses = [item.get("status") for item in evidence["records"] if isinstance(item, dict)]
+        ordered_terminals = _validated_ordered_terminals(batch, evidence)
+        statuses = [item["status"] for item in ordered_terminals]
         if (
             (completed.returncode == 0 and any(status != "succeeded" for status in statuses))
             or (completed.returncode == 1 and not any(status == "failed" for status in statuses))
             or (completed.returncode == 2 and any(status != "failed" for status in statuses))
         ):
             raise GroupedBatchError("predict_batch exit status contradicts terminal evidence")
-        if set(terminals) != set(range(len(prepared))):
-            raise GroupedBatchError("predict_batch terminal evidence cardinality is invalid")
+        terminal_receipt_path, terminal_receipt = _publish_governed_terminal_receipt(
+            root=root,
+            manifest_path=manifest_path,
+            batch=batch,
+            records=ordered_terminals,
+        )
         bundles = []
-        for candidate in prepared:
-            terminal = terminals[candidate.record["ordinal"]]
-            if (
-                terminal.get("candidate_id") != candidate.record["candidate_id"]
-                or terminal.get("invocation_id") != candidate.record["invocation_id"]
-            ):
-                raise GroupedBatchError("predict_batch terminal evidence identity is invalid")
+        for candidate, terminal in zip(prepared, ordered_terminals, strict=True):
             bundles.append(
                 finalize_candidate(
                     candidate, terminal, output_root=output_root,
@@ -245,7 +366,15 @@ def run_grouped_batch(
                     batch_stderr=stderr_log, physical_gpu_id=physical_gpu_id,
                 )
             )
-        return {**evidence, "bundles": [os.fspath(path) for path in bundles]}
+        return {
+            **evidence,
+            "governed_terminal_receipt": {
+                "artifact_id": f"frustrampnn-grouped-terminal:{batch['execution_owner_job_id']}",
+                "content_sha256": terminal_receipt["content_sha256"],
+                "size_bytes": terminal_receipt_path.stat().st_size,
+            },
+            "bundles": [os.fspath(path) for path in bundles],
+        }
     finally:
         if owned_pin is not None:
             owned_pin.close()
