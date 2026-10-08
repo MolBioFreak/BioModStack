@@ -9,6 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import rfc8785
 from jsonschema import Draft202012Validator
 
@@ -495,3 +496,176 @@ def test_source_notices_and_coordinate_contract_state_required_boundaries() -> N
         "Unknown geometry cannot simulate fragments",
     ):
         assert phrase in contract
+
+
+
+# Phase 1 runtime-loader contract. These tests intentionally import the missing
+# production module only after the Phase 0 source-contract tests above.
+def _phase1_authority(tmp_path: Path):
+    from services.restriction_catalog import CatalogAuthority
+
+    catalog = tmp_path / "catalog.json"
+    manifest = tmp_path / "manifest.json"
+    schema = tmp_path / "schema.json"
+    catalog.write_bytes(CATALOG.read_bytes())
+    manifest.write_bytes(MANIFEST.read_bytes())
+    schema.write_bytes(CATALOG_SCHEMA.read_bytes())
+    return CatalogAuthority(catalog, manifest, schema), catalog, manifest, schema
+
+
+def _rewrite_bound_assets(catalog_path: Path, manifest_path: Path, mutate) -> None:
+    catalog = json.loads(catalog_path.read_bytes())
+    manifest = json.loads(manifest_path.read_bytes())
+    mutate(catalog, manifest)
+    for row in catalog.get("records", []):
+        row["record_sha256"] = _canonical_digest(row, "record_sha256")
+    catalog["content_sha256"] = _canonical_digest(catalog, "content_sha256")
+    manifest["catalog_id"] = catalog.get("catalog_id")
+    manifest["catalog_content_sha256"] = catalog["content_sha256"]
+    manifest["counts"] = catalog.get("counts")
+    manifest["records"] = [
+        {"enzyme_id": row["enzyme_id"], "record_sha256": row["record_sha256"]}
+        for row in catalog.get("records", [])
+    ]
+    manifest["content_sha256"] = _canonical_digest(manifest, "content_sha256")
+    catalog_path.write_bytes(rfc8785.dumps(catalog))
+    manifest_path.write_bytes(rfc8785.dumps(manifest))
+
+
+def test_phase1_loader_publishes_frozen_typed_projection_and_indexes(tmp_path: Path) -> None:
+    from pydantic import ValidationError
+
+    authority, *_ = _phase1_authority(tmp_path)
+    view = authority.require()
+    assert view.catalog_id == "biopython-rebase-404-bms-v1"
+    assert view.content_sha256 == "e9a1e9ec8e5b1845f82fd613f7343722756c0ef8c5f487c704a151646317d73f"
+    assert len(view.records) == 1092
+    assert view.by_id["EcoRI"].canonical_name == "EcoRI"
+    assert view.by_name_casefold["ecori"].enzyme_id == "EcoRI"
+    assert "EcoRI" in {row.enzyme_id for row in view.by_motif["GAATTC"]}
+    assert "EcoRI" in {row.enzyme_id for row in view.by_supplier_code["N"]}
+    assert "EcoRI" in {row.enzyme_id for row in view.by_overhang_kind["five_prime"]}
+    assert "EcoRI" in {row.enzyme_id for row in view.by_palindromic[True]}
+    with pytest.raises((ValidationError, TypeError)):
+        view.records[0].canonical_name = "changed"  # type: ignore[misc]
+
+
+def test_phase1_loader_is_atomic_and_loads_once(tmp_path: Path) -> None:
+    authority, catalog, *_ = _phase1_authority(tmp_path)
+    first = authority.require()
+    catalog.write_text("partial", encoding="utf-8")
+    second = authority.require()
+    assert second is first
+    assert len(second.records) == 1092
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "missing",
+        "malformed",
+        "malformed_schema",
+        "schema",
+        "oversized",
+        "symlink",
+        "special",
+        "digest",
+        "count",
+        "duplicate_id",
+        "duplicate_name",
+        "broken_relation",
+        "wrong_source",
+        "partial",
+        "noncanonical_raw",
+        "manifest_binding",
+    ],
+)
+def test_phase1_loader_fails_closed_for_hostile_assets(tmp_path: Path, case: str) -> None:
+    from services.restriction_catalog import CatalogUnavailable
+
+    authority, catalog, manifest, _schema = _phase1_authority(tmp_path)
+    if case == "missing":
+        catalog.unlink()
+    elif case in {"malformed", "partial"}:
+        catalog.write_bytes(b'{"records":[' if case == "partial" else b"not-json")
+    elif case == "malformed_schema":
+        _schema.write_bytes(b"not-json")
+    elif case == "schema":
+        def mutate_schema(document, _manifest):
+            document["unexpected"] = True
+        _rewrite_bound_assets(catalog, manifest, mutate_schema)
+    elif case == "oversized":
+        catalog.write_bytes(b" " * (2 * 1024 * 1024 + 1))
+    elif case == "symlink":
+        target = tmp_path / "target.json"
+        target.write_bytes(catalog.read_bytes())
+        catalog.unlink()
+        catalog.symlink_to(target)
+    elif case == "special":
+        catalog.unlink()
+        os.mkfifo(catalog)
+    elif case == "digest":
+        document = json.loads(catalog.read_bytes())
+        document["content_sha256"] = "0" * 64
+        catalog.write_bytes(rfc8785.dumps(document))
+    elif case == "count":
+        _rewrite_bound_assets(catalog, manifest, lambda document, _manifest: document["counts"].update(total_discoverable=1))
+    elif case == "duplicate_id":
+        _rewrite_bound_assets(catalog, manifest, lambda document, _manifest: document["records"][1].update(enzyme_id=document["records"][0]["enzyme_id"]))
+    elif case == "duplicate_name":
+        _rewrite_bound_assets(catalog, manifest, lambda document, _manifest: document["records"][1].update(canonical_name=document["records"][0]["canonical_name"]))
+    elif case == "broken_relation":
+        def mutate_relation(document, _manifest):
+            document["records"][0]["relationships"]["equischizomer_ids"] = ["missing-enzyme"]
+        _rewrite_bound_assets(catalog, manifest, mutate_relation)
+    elif case == "wrong_source":
+        def mutate_source(document, _manifest):
+            document["source"]["package_version"] = "9.99"
+            for row in document["records"]:
+                if row["source"]["kind"] == "biopython_restriction_dictionary":
+                    row["source"]["package_version"] = "9.99"
+        _rewrite_bound_assets(catalog, manifest, mutate_source)
+    elif case == "noncanonical_raw":
+        catalog.write_text(json.dumps(json.loads(catalog.read_bytes()), indent=2), encoding="utf-8")
+    elif case == "manifest_binding":
+        document = json.loads(manifest.read_bytes())
+        document["catalog_content_sha256"] = "0" * 64
+        document["content_sha256"] = _canonical_digest(document, "content_sha256")
+        manifest.write_bytes(rfc8785.dumps(document))
+
+    state = authority.state()
+    assert state.ready is False
+    assert state.status == "catalog_unavailable"
+    assert state.metadata is None
+    with pytest.raises(CatalogUnavailable) as error:
+        authority.require()
+    assert str(tmp_path) not in str(error.value)
+    assert case not in str(error.value)
+
+
+def test_phase1_loader_unavailable_state_is_sticky_and_never_partially_recovers(tmp_path: Path) -> None:
+    from services.restriction_catalog import CatalogUnavailable
+
+    authority, catalog, *_ = _phase1_authority(tmp_path)
+    valid = catalog.read_bytes()
+    catalog.write_bytes(b"partial")
+    with pytest.raises(CatalogUnavailable):
+        authority.require()
+    catalog.write_bytes(valid)
+    with pytest.raises(CatalogUnavailable):
+        authority.require()
+
+
+def test_phase1_catalog_readiness_exposes_receipt_age_bounds_and_disabled_capabilities(tmp_path: Path) -> None:
+    authority, *_ = _phase1_authority(tmp_path)
+    readiness = authority.readiness()
+    assert readiness["required"] is True
+    assert readiness["ready"] is True
+    assert readiness["status"] == "ready"
+    assert readiness["catalog_id"] == "biopython-rebase-404-bms-v1"
+    assert readiness["catalog_sha256"] == "e9a1e9ec8e5b1845f82fd613f7343722756c0ef8c5f487c704a151646317d73f"
+    assert readiness["counts"]["total"] == 1092
+    assert readiness["bounds"]["maximum_limit"] == 250
+    assert readiness["source_year"] == 2024
+    assert readiness["analysis_enabled"] is False
+    assert readiness["digest_enabled"] is False

@@ -22,7 +22,7 @@ from build_identity import current_build_identity
 from readiness import collect_runtime_readiness, http_readiness
 from dev_issue_screenshot_upload_limit import DevIssueScreenshotUploadLimitMiddleware
 from frustrampnn_upload_limit import FrustraMPNNUploadLimitMiddleware
-from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, dev_issues, execution_targets, external_imports, experiment_workspaces, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ngs_experiments, molbio_ops, msa, ngs_alignment_sessions, ngs_molbio_n5, nucleotide_sequences, ont_devices, ont_runs, ont_signal_workbench, payload_ownership_audit, plr_results, project_manager, projects, queue, rcsb, ribocentre, rna_structure, sequence_qc, shape_blueprint, smiles_converter, system, telemetry, templates, user_sequences, user_templates, viewer_resources
+from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, dev_issues, execution_targets, external_imports, experiment_workspaces, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ngs_experiments, molbio_ops, molbio_restriction, msa, ngs_alignment_sessions, ngs_molbio_n5, nucleotide_sequences, ont_devices, ont_runs, ont_signal_workbench, payload_ownership_audit, plr_results, project_manager, projects, queue, rcsb, ribocentre, rna_structure, sequence_qc, shape_blueprint, smiles_converter, system, telemetry, templates, user_sequences, user_templates, viewer_resources
 from runtime_policy import (
     WorkflowAdmissionBlocked,
     workflow_launch_block_detail,
@@ -45,6 +45,7 @@ from services.global_experiments.worker import (
 from services.ngs_molbio_n5 import reconcile_startup_admissions
 from routers.gpu import get_gpu_stats
 from services.workflow_adapter import workflow_adapter_base_url
+from services.restriction_catalog import catalog_authority
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -115,6 +116,9 @@ async def lifespan(app: FastAPI):
     global _frustrampnn_statistics_worker
     bioxp_runtime = None
     
+    # Required checked-in scientific authority must be complete before workers start.
+    catalog_authority.require()
+
     # Initialize independently owned core, global experiment, MolBio, and MolBio/NGS state stores.
     await init_db()
     await init_experiment_db()
@@ -372,6 +376,7 @@ app.include_router(telemetry.router, prefix="/api", tags=["telemetry"])
 app.include_router(frameworks.router)  # /api/frameworks/* - SAbDab integration
 app.include_router(boltzgen.router)
 app.include_router(molbio_ops.router)
+app.include_router(molbio_restriction.router)
 app.include_router(rna_structure.router)
 app.include_router(msa.router)
 app.include_router(ribocentre.router, prefix="/api/ribocentre", tags=["ribocentre"])
