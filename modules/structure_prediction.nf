@@ -1030,3 +1030,46 @@ workflow structure_prediction_wf {
     emit:
     structures
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPLEX PREDICTION WORKFLOW
+// ─────────────────────────────────────────────────────────────────────────────
+// Centralized routing for complex (multi-chain + ligand) structure predictions.
+// Dispatches to the appropriate predictor based on params.pred_method.
+// Input: channel of [name, complex_json, msa_file] tuples
+
+workflow complex_prediction_wf {
+    take:
+    input_ch  // Channel of [name, complex_json, msa_file]
+
+    main:
+    def pred_method = params.pred_method ?: 'boltz'
+
+    structures = channel.empty()
+
+    if (pred_method == 'protenix') {
+        // Convert BMS JSON → Protenix-format JSON, then predict
+        PrepProtenixComplex(input_ch)
+        ProtenixFromComplex(PrepProtenixComplex.out.protenix_json)
+        structures = ProtenixFromComplex.out.structures
+    }
+    else if (pred_method == 'all') {
+        // Run both Boltz + Protenix in parallel
+        PrepareComplexWithMSA(input_ch)
+        BoltzFromComplex(PrepareComplexWithMSA.out.prepared)
+
+        PrepProtenixComplex(input_ch)
+        ProtenixFromComplex(PrepProtenixComplex.out.protenix_json)
+
+        structures = BoltzFromComplex.out.pdbs.mix(ProtenixFromComplex.out.structures)
+    }
+    else {
+        // Default: Boltz-2 complex prediction
+        PrepareComplexWithMSA(input_ch)
+        BoltzFromComplex(PrepareComplexWithMSA.out.prepared)
+        structures = BoltzFromComplex.out.pdbs
+    }
+
+    emit:
+    structures
+}

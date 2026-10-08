@@ -24,9 +24,8 @@ include { Compress as CompressBoltz } from './modules/compress'
 include { MergeUncroppedTarget } from './modules/merge_uncropped_target.nf'
 include { BoltzFromSequence } from './modules/structure_prediction.nf'
 include { PrepareComplexWithMSA ; BoltzFromComplex } from './modules/structure_prediction.nf'
-include { PrepProtenixComplex ; ProtenixFromComplex } from './modules/protenix.nf'
 include { RF3FromSequence } from './modules/structure_prediction.nf'
-include { structure_prediction_wf } from './modules/structure_prediction.nf'
+include { structure_prediction_wf ; complex_prediction_wf } from './modules/structure_prediction.nf'
 include { OpenMMRelaxation ; OpenMMScore } from './modules/openmm.nf'
 include { ANARCII } from './modules/utils/anarci'
 include { FrustrampnnQC ; AggregateFrustrationReports } from './modules/frustrampnn.nf'
@@ -488,16 +487,15 @@ workflow {
     // If complex_json_path is provided, run complex prediction (multi-chain + ligands)
     if (params.complex_json_path) {
         def numParallelJobs = params.num_parallel_jobs ?: 1
-        def pred_method = params.pred_method ?: 'boltz'
         println("Running complex-based structure prediction (multi-chain + ligands)")
         println("* Complex definition: ${params.complex_json_path}")
-        println("* Predictor: ${pred_method}")
+        println("* Predictor: ${params.pred_method ?: 'boltz'}")
         println("* Number of simulations: ${numParallelJobs}")
 
         def complex_name = params.sequence_name ?: 'complex_pred'
         def complex_json = file(params.complex_json_path)
 
-        // Create parallel job channels (like structure_prediction workflow)
+        // Create parallel job channels
         def job_indices = Channel.from(0..<numParallelJobs)
         def msa_file = params.msa_path ? file(params.msa_path) : file("${params.code_root}/NO_MSA")
         def complex_ch = job_indices.map { idx ->
@@ -505,44 +503,14 @@ workflow {
             tuple(jobName, complex_json, msa_file)
         }
 
-        // ── Protenix complex routing ────────────────────────────────────
-        if (pred_method == 'protenix') {
-            // Convert BMS JSON → Protenix-format JSON, then predict
-            PrepProtenixComplex(complex_ch)
-            ProtenixFromComplex(PrepProtenixComplex.out.protenix_json)
+        // Centralized routing — dispatches based on params.pred_method
+        complex_prediction_wf(complex_ch)
 
-            ProtenixFromComplex.out.structures
-                .flatten()
-                .collect()
-                .ifEmpty(file("${params.code_root}/lib/placeholder.pdb"))
-                .set { final_pdbs }
-        }
-        // ── "all" mode: run both Boltz + Protenix ───────────────────────
-        else if (pred_method == 'all') {
-            PrepareComplexWithMSA(complex_ch)
-            BoltzFromComplex(PrepareComplexWithMSA.out.prepared)
-
-            PrepProtenixComplex(complex_ch)
-            ProtenixFromComplex(PrepProtenixComplex.out.protenix_json)
-
-            BoltzFromComplex.out.pdbs
-                .mix(ProtenixFromComplex.out.structures)
-                .flatten()
-                .collect()
-                .ifEmpty(file("${params.code_root}/lib/placeholder.pdb"))
-                .set { final_pdbs }
-        }
-        // ── Default: Boltz-2 complex prediction ────────────────────────
-        else {
-            PrepareComplexWithMSA(complex_ch)
-            BoltzFromComplex(PrepareComplexWithMSA.out.prepared)
-
-            BoltzFromComplex.out.pdbs
-                .flatten()
-                .collect()
-                .ifEmpty(file("${params.code_root}/lib/placeholder.pdb"))
-                .set { final_pdbs }
-        }
+        complex_prediction_wf.out.structures
+            .flatten()
+            .collect()
+            .ifEmpty(file("${params.code_root}/lib/placeholder.pdb"))
+            .set { final_pdbs }
 
         // Optional post-run FrustraMPNN QC for complex prediction
         if (params.run_frustrampnn == true) {
@@ -551,7 +519,6 @@ workflow {
                 .flatten()
                 .map { pdb -> tuple([id: pdb.baseName], pdb) }
             FrustrampnnQC(frustra_input)
-            // Extract just the path from (meta, path) tuples before collecting
             AggregateFrustrationReports(FrustrampnnQC.out.summary.map { meta, summary -> summary }.collect())
         }
 
