@@ -45,6 +45,17 @@ process PrepBindCraftInput {
     val remove_unrelaxed_complex
     val remove_binder_monomer
     val save_trajectory_pickle
+    // Phase 2: Residue Mask
+    val mask_mode
+    val redesign_ranges
+    // Phase 3: Template Flexibility
+    val rm_template_seq_design
+    val rm_template_sc_design
+    val predict_initial_guess
+    val use_termini_distance_loss
+    // Phase 4: CDR Sampling
+    val cdr_sampling_enabled
+    val cdr_sampling_count
 
     output:
     path "settings_target.json", emit: target_settings
@@ -101,13 +112,13 @@ process PrepBindCraftInput {
         "max_mpnn_sequences": 4,
         "sampling_temp": 0.1,
         "mpnn_fix_interface": False,
-        # Template settings (default flexibility)
-        "rm_template_seq_design": False,
+        # Template settings (Phase 3: from UI)
+        "rm_template_seq_design": ${rm_template_seq_design ?: 'False'},
         "rm_template_seq_predict": False,
-        "rm_template_sc_design": False,
+        "rm_template_sc_design": ${rm_template_sc_design ?: 'False'},
         "rm_template_sc_predict": False,
-        # Prediction settings
-        "predict_initial_guess": False,
+        # Prediction settings (Phase 3: from UI)
+        "predict_initial_guess": ${predict_initial_guess ?: 'False'},
         "predict_bigbang": False,
         # Iteration counts (4stage defaults)
         "soft_iterations": 100,
@@ -132,8 +143,8 @@ process PrepBindCraftInput {
         "weights_iptm": 0.1,
         "use_rg_loss": True,
         "weights_rg": 0.1,
-        "use_termini_distance_loss": False,
-        "weights_termini_loss": 0,
+        "use_termini_distance_loss": ${use_termini_distance_loss ?: 'False'},
+        "weights_termini_loss": 0.1 if ${use_termini_distance_loss ?: 'False'} else 0,
         # Storage optimization (from UI)
         "zip_animations": ${zip_animations},
         "zip_plots": ${zip_plots},
