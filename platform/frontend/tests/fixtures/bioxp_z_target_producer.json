@@ -1,0 +1,402 @@
+[
+  {
+    "minimum": 500,
+    "requested": 0,
+    "start": 0,
+    "provider": {
+      "current_minimum_steps": 500,
+      "target_preview": {
+        "requested_position_steps": 0,
+        "effective_position_steps": 500
+      },
+      "coordinate_contract": "oem_source_nonnegative_z",
+      "source_min_steps": 0,
+      "source_max_steps": 160000,
+      "ownership_generation": 7
+    },
+    "z_move": {
+      "after_position_steps": null,
+      "before_position_steps": 0,
+      "command_issued": true,
+      "completion_class": "event_128",
+      "controller_command_acknowledged": true,
+      "controller_error_events": [],
+      "controller_terminal_state_verified": false,
+      "coordinate_mode": "absolute",
+      "effective_position_steps": 500,
+      "failure": null,
+      "physical_effect_verified": false,
+      "pseudo_home_steps": 500,
+      "requested_position_steps": 0,
+      "source_noop": null,
+      "source_return_code": 0,
+      "source_return_ok": true,
+      "target_clamped": true,
+      "target_events": [
+        {
+          "event_sequence": 1,
+          "status": 128
+        }
+      ],
+      "target_position_steps": 500,
+      "terminal_speed_steps_s": null,
+      "terminal_stopped": null,
+      "terminal_z_state": {
+        "authority": "serial206_terminal_register_readback",
+        "ok": false,
+        "position_steps": 500,
+        "speed_steps_s": 0
+      }
+    }
+  },
+  {
+    "minimum": 65000,
+    "requested": 0,
+    "start": 0,
+    "provider": {
+      "current_minimum_steps": 65000,
+      "target_preview": {
+        "requested_position_steps": 0,
+        "effective_position_steps": 65000
+      },
+      "coordinate_contract": "oem_source_nonnegative_z",
+      "source_min_steps": 0,
+      "source_max_steps": 160000,
+      "ownership_generation": 7
+    },
+    "z_move": {
+      "after_position_steps": null,
+      "before_position_steps": 0,
+      "command_issued": true,
+      "completion_class": "event_128",
+      "controller_command_acknowledged": true,
+      "controller_error_events": [],
+      "controller_terminal_state_verified": false,
+      "coordinate_mode": "absolute",
+      "effective_position_steps": 65000,
+      "failure": null,
+      "physical_effect_verified": false,
+      "pseudo_home_steps": 65000,
+      "requested_position_steps": 0,
+      "source_noop": null,
+      "source_return_code": 0,
+      "source_return_ok": true,
+      "target_clamped": true,
+      "target_events": [
+        {
+          "event_sequence": 1,
+          "status": 128
+        }
+      ],
+      "target_position_steps": 65000,
+      "terminal_speed_steps_s": null,
+      "terminal_stopped": null,
+      "terminal_z_state": {
+        "authority": "serial206_terminal_register_readback",
+        "ok": false,
+        "position_steps": 65000,
+        "speed_steps_s": 0
+      }
+    }
+  },
+  {
+    "minimum": 500,
+    "requested": 90000,
+    "start": 0,
+    "provider": {
+      "current_minimum_steps": 500,
+      "target_preview": {
+        "requested_position_steps": 90000,
+        "effective_position_steps": 90000
+      },
+      "coordinate_contract": "oem_source_nonnegative_z",
+      "source_min_steps": 0,
+      "source_max_steps": 160000,
+      "ownership_generation": 7
+    },
+    "z_move": {
+      "after_position_steps": null,
+      "before_position_steps": 0,
+      "command_issued": true,
+      "completion_class": "event_128",
+      "controller_command_acknowledged": true,
+      "controller_error_events": [],
+      "controller_terminal_state_verified": false,
+      "coordinate_mode": "absolute",
+      "effective_position_steps": 90000,
+      "failure": null,
+      "physical_effect_verified": false,
+      "pseudo_home_steps": 500,
+      "requested_position_steps": 90000,
+      "source_noop": null,
+      "source_return_code": 0,
+      "source_return_ok": true,
+      "target_clamped": false,
+      "target_events": [
+        {
+          "event_sequence": 1,
+          "status": 128
+        }
+      ],
+      "target_position_steps": 90000,
+      "terminal_speed_steps_s": null,
+      "terminal_stopped": null,
+      "terminal_z_state": {
+        "authority": "serial206_terminal_register_readback",
+        "ok": false,
+        "position_steps": 90000,
+        "speed_steps_s": 0
+      }
+    }
+  },
+  {
+    "minimum": 65000,
+    "requested": 90000,
+    "start": 0,
+    "provider": {
+      "current_minimum_steps": 65000,
+      "target_preview": {
+        "requested_position_steps": 90000,
+        "effective_position_steps": 90000
+      },
+      "coordinate_contract": "oem_source_nonnegative_z",
+      "source_min_steps": 0,
+      "source_max_steps": 160000,
+      "ownership_generation": 7
+    },
+    "z_move": {
+      "after_position_steps": null,
+      "before_position_steps": 0,
+      "command_issued": true,
+      "completion_class": "event_128",
+      "controller_command_acknowledged": true,
+      "controller_error_events": [],
+      "controller_terminal_state_verified": false,
+      "coordinate_mode": "absolute",
+      "effective_position_steps": 90000,
+      "failure": null,
+      "physical_effect_verified": false,
+      "pseudo_home_steps": 65000,
+      "requested_position_steps": 90000,
+      "source_noop": null,
+      "source_return_code": 0,
+      "source_return_ok": true,
+      "target_clamped": false,
+      "target_events": [
+        {
+          "event_sequence": 1,
+          "status": 128
+        }
+      ],
+      "target_position_steps": 90000,
+      "terminal_speed_steps_s": null,
+      "terminal_stopped": null,
+      "terminal_z_state": {
+        "authority": "serial206_terminal_register_readback",
+        "ok": false,
+        "position_steps": 90000,
+        "speed_steps_s": 0
+      }
+    }
+  },
+  {
+    "minimum": 500,
+    "requested": 0,
+    "start": 100000,
+    "provider": {
+      "current_minimum_steps": 500,
+      "target_preview": {
+        "requested_position_steps": 0,
+        "effective_position_steps": 500
+      },
+      "coordinate_contract": "oem_source_nonnegative_z",
+      "source_min_steps": 0,
+      "source_max_steps": 160000,
+      "ownership_generation": 7
+    },
+    "z_move": {
+      "after_position_steps": null,
+      "before_position_steps": 100000,
+      "command_issued": true,
+      "completion_class": "event_128",
+      "controller_command_acknowledged": true,
+      "controller_error_events": [],
+      "controller_terminal_state_verified": false,
+      "coordinate_mode": "absolute",
+      "effective_position_steps": 500,
+      "failure": null,
+      "physical_effect_verified": false,
+      "pseudo_home_steps": 500,
+      "requested_position_steps": 0,
+      "source_noop": null,
+      "source_return_code": 0,
+      "source_return_ok": true,
+      "target_clamped": true,
+      "target_events": [
+        {
+          "event_sequence": 1,
+          "status": 128
+        }
+      ],
+      "target_position_steps": 500,
+      "terminal_speed_steps_s": null,
+      "terminal_stopped": null,
+      "terminal_z_state": {
+        "authority": "serial206_terminal_register_readback",
+        "ok": false,
+        "position_steps": 500,
+        "speed_steps_s": 0
+      }
+    }
+  },
+  {
+    "minimum": 65000,
+    "requested": 0,
+    "start": 100000,
+    "provider": {
+      "current_minimum_steps": 65000,
+      "target_preview": {
+        "requested_position_steps": 0,
+        "effective_position_steps": 65000
+      },
+      "coordinate_contract": "oem_source_nonnegative_z",
+      "source_min_steps": 0,
+      "source_max_steps": 160000,
+      "ownership_generation": 7
+    },
+    "z_move": {
+      "after_position_steps": null,
+      "before_position_steps": 100000,
+      "command_issued": true,
+      "completion_class": "event_128",
+      "controller_command_acknowledged": true,
+      "controller_error_events": [],
+      "controller_terminal_state_verified": false,
+      "coordinate_mode": "absolute",
+      "effective_position_steps": 65000,
+      "failure": null,
+      "physical_effect_verified": false,
+      "pseudo_home_steps": 65000,
+      "requested_position_steps": 0,
+      "source_noop": null,
+      "source_return_code": 0,
+      "source_return_ok": true,
+      "target_clamped": true,
+      "target_events": [
+        {
+          "event_sequence": 1,
+          "status": 128
+        }
+      ],
+      "target_position_steps": 65000,
+      "terminal_speed_steps_s": null,
+      "terminal_stopped": null,
+      "terminal_z_state": {
+        "authority": "serial206_terminal_register_readback",
+        "ok": false,
+        "position_steps": 65000,
+        "speed_steps_s": 0
+      }
+    }
+  },
+  {
+    "minimum": 500,
+    "requested": 90000,
+    "start": 100000,
+    "provider": {
+      "current_minimum_steps": 500,
+      "target_preview": {
+        "requested_position_steps": 90000,
+        "effective_position_steps": 90000
+      },
+      "coordinate_contract": "oem_source_nonnegative_z",
+      "source_min_steps": 0,
+      "source_max_steps": 160000,
+      "ownership_generation": 7
+    },
+    "z_move": {
+      "after_position_steps": null,
+      "before_position_steps": 100000,
+      "command_issued": true,
+      "completion_class": "event_128",
+      "controller_command_acknowledged": true,
+      "controller_error_events": [],
+      "controller_terminal_state_verified": false,
+      "coordinate_mode": "absolute",
+      "effective_position_steps": 90000,
+      "failure": null,
+      "physical_effect_verified": false,
+      "pseudo_home_steps": 500,
+      "requested_position_steps": 90000,
+      "source_noop": null,
+      "source_return_code": 0,
+      "source_return_ok": true,
+      "target_clamped": false,
+      "target_events": [
+        {
+          "event_sequence": 1,
+          "status": 128
+        }
+      ],
+      "target_position_steps": 90000,
+      "terminal_speed_steps_s": null,
+      "terminal_stopped": null,
+      "terminal_z_state": {
+        "authority": "serial206_terminal_register_readback",
+        "ok": false,
+        "position_steps": 90000,
+        "speed_steps_s": 0
+      }
+    }
+  },
+  {
+    "minimum": 65000,
+    "requested": 90000,
+    "start": 100000,
+    "provider": {
+      "current_minimum_steps": 65000,
+      "target_preview": {
+        "requested_position_steps": 90000,
+        "effective_position_steps": 90000
+      },
+      "coordinate_contract": "oem_source_nonnegative_z",
+      "source_min_steps": 0,
+      "source_max_steps": 160000,
+      "ownership_generation": 7
+    },
+    "z_move": {
+      "after_position_steps": null,
+      "before_position_steps": 100000,
+      "command_issued": true,
+      "completion_class": "event_128",
+      "controller_command_acknowledged": true,
+      "controller_error_events": [],
+      "controller_terminal_state_verified": false,
+      "coordinate_mode": "absolute",
+      "effective_position_steps": 90000,
+      "failure": null,
+      "physical_effect_verified": false,
+      "pseudo_home_steps": 65000,
+      "requested_position_steps": 90000,
+      "source_noop": null,
+      "source_return_code": 0,
+      "source_return_ok": true,
+      "target_clamped": false,
+      "target_events": [
+        {
+          "event_sequence": 1,
+          "status": 128
+        }
+      ],
+      "target_position_steps": 90000,
+      "terminal_speed_steps_s": null,
+      "terminal_stopped": null,
+      "terminal_z_state": {
+        "authority": "serial206_terminal_register_readback",
+        "ok": false,
+        "position_steps": 90000,
+        "speed_steps_s": 0
+      }
+    }
+  }
+]
