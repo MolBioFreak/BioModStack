@@ -46,6 +46,20 @@ class InterlinkLifecycleRequest(BaseModel):
     tail: Optional[int] = None
 
 
+class UsbSniffRequest(BaseModel):
+    profile: str = "passive"
+    duration_s: int = 300
+    include_pcap: bool = True
+    include_driver_ledger: bool = True
+    passive_only: bool = True
+    reason: Optional[str] = None
+    operator_ack: Optional[str] = None
+    operator: Optional[str] = "bms-cockpit"
+    stop_existing: bool = False
+    run_id: Optional[str] = None
+    tail: Optional[int] = None
+
+
 def _normalize_url(url: Optional[str]) -> Optional[str]:
     if url is None:
         return None
@@ -247,6 +261,13 @@ ROBOT_LOCAL_EXPECTED_ROUTES: Dict[str, bool] = {
     "/motion/arm/strict_startup": True,
     "/motion/hard_reset": True,
     "/motion/reference/status": True,
+    "/diagnostics/usb-sniff/status": True,
+    "/diagnostics/usb-sniff/runs": True,
+    "/diagnostics/usb-sniff/start": True,
+    "/diagnostics/usb-sniff/stop": True,
+    "/diagnostics/usb-sniff/export": True,
+    "/diagnostics/usb-sniff/runs/{run_id}/tail": True,
+    "/diagnostics/usb-sniff/runs/{run_id}/files": True,
 
     "/motion/axes/current": True,
     "/liquid/status": True,
@@ -567,7 +588,8 @@ async def _probe_active_interlink(timeout: float = 18.0) -> None:
         payload = await proxy_request("GET", "/status", timeout=timeout)
         if isinstance(payload, dict) and not bool(payload.get("hardware_connected")) and bool(payload.get("runtime_available", True)):
             try:
-                power_payload = await proxy_request("GET", "/motion/power/status", timeout=45.0)
+                power_timeout = max(1.0, min(5.0, timeout))
+                power_payload = await proxy_request("GET", "/motion/power/status", timeout=power_timeout)
                 if isinstance(power_payload, dict) and bool(power_payload.get("hardware_connected")):
                     payload = {
                         **payload,
@@ -591,7 +613,7 @@ async def _probe_active_interlink(timeout: float = 18.0) -> None:
 @router.get("/interlink/state")
 async def get_interlink_state(probe: bool = False):
     if probe and _GLOBAL_LINKAGE_URL:
-        await _probe_active_interlink(timeout=18.0)
+        await _probe_active_interlink(timeout=5.0)
     return _interlink_state_response()
 
 
@@ -1211,6 +1233,126 @@ async def bioxp_operations_readiness(request: Request):
             "Movement operations still require operator clear-path acknowledgement.",
         ],
     }
+
+
+USB_SNIFF_ACK = "USB_SNIFF"
+USB_SNIFF_PROFILES = {"passive", "manual_observe", "debug"}
+
+
+def _usb_sniff_payload(payload: UsbSniffRequest | None) -> Dict[str, Any]:
+    return _request_model_dump(payload) if payload is not None else {}
+
+
+def _require_usb_sniff_ack(payload: Dict[str, Any], operation: str) -> None:
+    if str(payload.get("operator_ack") or "") != USB_SNIFF_ACK:
+        raise HTTPException(
+            status_code=409,
+            detail=f"USB packet capture {operation} requires operator_ack exactly {USB_SNIFF_ACK}. Capture controls observe only and must not trigger motion.",
+        )
+
+
+def _validate_usb_sniff_start_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    _require_usb_sniff_ack(payload, "start")
+    reason = str(payload.get("reason") or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="Starting USB packet capture requires a non-empty reason.")
+    profile = str(payload.get("profile") or "passive").strip() or "passive"
+    if profile not in USB_SNIFF_PROFILES:
+        raise HTTPException(status_code=400, detail=f"USB capture profile must be one of {sorted(USB_SNIFF_PROFILES)}")
+    try:
+        duration_s = int(payload.get("duration_s") or 300)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="duration_s must be an integer number of seconds")
+    if not 1 <= duration_s <= 1800:
+        raise HTTPException(status_code=400, detail="duration_s must be between 1 and 1800 seconds")
+    sanitized = dict(payload)
+    sanitized.update(
+        {
+            "profile": profile,
+            "duration_s": duration_s,
+            "reason": reason,
+            "operator_ack": USB_SNIFF_ACK,
+            "operator": payload.get("operator") or "bms-cockpit",
+            "include_pcap": bool(payload.get("include_pcap", True)),
+            "include_driver_ledger": bool(payload.get("include_driver_ledger", True)),
+            "passive_only": bool(payload.get("passive_only", profile == "passive")),
+        }
+    )
+    return sanitized
+
+
+def _validate_usb_sniff_stop_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    _require_usb_sniff_ack(payload, "stop")
+    sanitized = dict(payload)
+    sanitized["operator_ack"] = USB_SNIFF_ACK
+    sanitized["operator"] = payload.get("operator") or "bms-cockpit"
+    if not str(sanitized.get("reason") or "").strip():
+        sanitized["reason"] = "operator stopped USB packet capture"
+    return sanitized
+
+
+def _usb_sniff_unavailable_payload(detail: Any, *, status_code: int | None = None) -> Dict[str, Any]:
+    return {
+        "schema_version": "bioxp.usb_sniff_proxy.v1",
+        "available": False,
+        "active": False,
+        "linkage_configured": bool(_GLOBAL_LINKAGE_URL),
+        "linkage_url": _GLOBAL_LINKAGE_URL,
+        "detail": detail,
+        "proxy_error": {"status_code": status_code, "detail": detail} if status_code else None,
+        "safety_boundary": "BMS exposes capture controls only; robot-local diagnostics own usbmon and driver ledgers. Capture routes do not home, arm, recover, or move axes.",
+    }
+
+
+@router.get("/diagnostics/usb-sniff/status")
+async def usb_sniff_status():
+    if not _GLOBAL_LINKAGE_URL:
+        return _usb_sniff_unavailable_payload("BioXP interlink is inactive; connect before starting robot-local USB capture.", status_code=400)
+    try:
+        return await proxy_request("GET", "/diagnostics/usb-sniff/status", timeout=10.0)
+    except HTTPException as exc:
+        return _usb_sniff_unavailable_payload(exc.detail, status_code=exc.status_code)
+
+
+@router.get("/diagnostics/usb-sniff/runs")
+async def usb_sniff_runs():
+    if not _GLOBAL_LINKAGE_URL:
+        return {**_usb_sniff_unavailable_payload("BioXP interlink is inactive; no robot-local capture runs are reachable.", status_code=400), "runs": []}
+    try:
+        return await proxy_request("GET", "/diagnostics/usb-sniff/runs", timeout=10.0)
+    except HTTPException as exc:
+        return {**_usb_sniff_unavailable_payload(exc.detail, status_code=exc.status_code), "runs": []}
+
+
+@router.post("/diagnostics/usb-sniff/start")
+async def usb_sniff_start(payload: UsbSniffRequest):
+    sanitized = _validate_usb_sniff_start_payload(_usb_sniff_payload(payload))
+    return await proxy_request("POST", "/diagnostics/usb-sniff/start", sanitized, timeout=20.0)
+
+
+@router.post("/diagnostics/usb-sniff/stop")
+async def usb_sniff_stop(payload: UsbSniffRequest | None = None):
+    sanitized = _validate_usb_sniff_stop_payload(_usb_sniff_payload(payload))
+    return await proxy_request("POST", "/diagnostics/usb-sniff/stop", sanitized, timeout=20.0)
+
+
+@router.post("/diagnostics/usb-sniff/export")
+async def usb_sniff_export(payload: UsbSniffRequest | None = None):
+    request_payload = _usb_sniff_payload(payload)
+    if request_payload.get("operator_ack") and str(request_payload.get("operator_ack")) != USB_SNIFF_ACK:
+        _require_usb_sniff_ack(request_payload, "export")
+    return await proxy_request("POST", "/diagnostics/usb-sniff/export", request_payload, timeout=60.0)
+
+
+@router.get("/diagnostics/usb-sniff/runs/{run_id}/tail")
+async def usb_sniff_tail(run_id: str, limit: int = 100):
+    limit = max(1, min(int(limit), 1000))
+    return await proxy_request("GET", f"/diagnostics/usb-sniff/runs/{run_id}/tail", params={"limit": limit}, timeout=15.0)
+
+
+@router.get("/diagnostics/usb-sniff/runs/{run_id}/files")
+async def usb_sniff_files(run_id: str):
+    return await proxy_request("GET", f"/diagnostics/usb-sniff/runs/{run_id}/files", timeout=15.0)
 
 
 @router.post("/operations/motion/prepare-safe")

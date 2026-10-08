@@ -643,3 +643,79 @@ async def test_micro_move_proof_caps_steps(monkeypatch: pytest.MonkeyPatch) -> N
 
     assert exc_info.value.status_code == 400
     assert '+/-500 steps' in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_usb_sniff_status_fails_closed_without_active_linkage(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bioxp, '_GLOBAL_LINKAGE_URL', None)
+
+    response = await bioxp.usb_sniff_status()
+
+    assert response['available'] is False
+    assert response['active'] is False
+    assert response['linkage_configured'] is False
+    assert 'Capture routes do not home, arm, recover, or move axes' in response['safety_boundary']
+
+
+@pytest.mark.asyncio
+async def test_usb_sniff_start_requires_ack_and_reason() -> None:
+    with pytest.raises(HTTPException) as bad_ack:
+        await bioxp.usb_sniff_start(bioxp.UsbSniffRequest(reason='packet trace', operator_ack='WRONG'))
+    assert bad_ack.value.status_code == 409
+    assert 'USB_SNIFF' in str(bad_ack.value.detail)
+
+    with pytest.raises(HTTPException) as missing_reason:
+        await bioxp.usb_sniff_start(bioxp.UsbSniffRequest(operator_ack='USB_SNIFF', reason=''))
+    assert missing_reason.value.status_code == 400
+    assert 'non-empty reason' in str(missing_reason.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_usb_sniff_routes_proxy_sanitized_payloads(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bioxp, '_GLOBAL_LINKAGE_URL', 'http://robot:8123')
+    calls: list[tuple[str, str, dict | None, dict | None, float]] = []
+
+    async def fake_proxy_request(method: str, path: str, json_data=None, params=None, timeout: float = 65.0):
+        calls.append((method, path, json_data, params, timeout))
+        return {'ok': True, 'path': path, 'payload': json_data, 'params': params}
+
+    monkeypatch.setattr(bioxp, 'proxy_request', fake_proxy_request)
+
+    start = await bioxp.usb_sniff_start(
+        bioxp.UsbSniffRequest(
+            profile='passive',
+            duration_s=60,
+            include_pcap=True,
+            include_driver_ledger=True,
+            passive_only=True,
+            reason='capture all Novo USB packets',
+            operator_ack='USB_SNIFF',
+            operator='pytest',
+        )
+    )
+    stop = await bioxp.usb_sniff_stop(bioxp.UsbSniffRequest(operator_ack='USB_SNIFF', reason='done', operator='pytest'))
+    tail = await bioxp.usb_sniff_tail('run-1', limit=5000)
+
+    assert start['payload']['duration_s'] == 60
+    assert start['payload']['operator_ack'] == 'USB_SNIFF'
+    assert stop['payload']['operator_ack'] == 'USB_SNIFF'
+    assert calls == [
+        ('POST', '/diagnostics/usb-sniff/start', start['payload'], None, 20.0),
+        ('POST', '/diagnostics/usb-sniff/stop', stop['payload'], None, 20.0),
+        ('GET', '/diagnostics/usb-sniff/runs/run-1/tail', None, {'limit': 1000}, 15.0),
+    ]
+    assert tail['params'] == {'limit': 1000}
+
+
+def test_usb_sniff_routes_are_advertised_as_bms_proxy_routes() -> None:
+    for route in [
+        '/diagnostics/usb-sniff/status',
+        '/diagnostics/usb-sniff/runs',
+        '/diagnostics/usb-sniff/start',
+        '/diagnostics/usb-sniff/stop',
+        '/diagnostics/usb-sniff/export',
+        '/diagnostics/usb-sniff/runs/{run_id}/tail',
+        '/diagnostics/usb-sniff/runs/{run_id}/files',
+    ]:
+        assert bioxp.ROBOT_LOCAL_EXPECTED_ROUTES[route] is True
+        assert bioxp.BMS_PROXIED_ROUTES[route] is True

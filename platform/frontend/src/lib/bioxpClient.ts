@@ -51,6 +51,11 @@ export interface BioXpInterlinkState {
     recommended_url?: string | null;
     reachable?: boolean | null;
     hardware_connected?: boolean | null;
+    last_probe_reachable?: boolean | null;
+    last_probe_hardware_connected?: boolean | null;
+    probe_fresh?: boolean | null;
+    probe_stale?: boolean | null;
+    probe_fresh_window_seconds?: number;
     maintenance_state?: Record<string, UntypedApiValue> | null;
     last_probe_at?: string | null;
     last_status?: Record<string, UntypedApiValue> | null;
@@ -127,6 +132,30 @@ export interface MotionArtifactBundle {
     snapshot_refs?: string[];
 }
 
+export interface MotionEvidence {
+    prep_params?: Record<string, UntypedApiValue> | null;
+    telemetry?: {
+        before?: Record<string, UntypedApiValue> | null;
+        during?: Array<Record<string, UntypedApiValue>>;
+        after?: Record<string, UntypedApiValue> | null;
+    } | null;
+    events?: Record<string, UntypedApiValue> | null;
+    interlock?: Record<string, UntypedApiValue> | null;
+    classification?: {
+        controller_motion_evidence?: boolean;
+        stall_event_seen?: boolean;
+        target_reached_event_seen?: boolean;
+        voltage_drop_seen?: boolean;
+        max_current_reference_deviation_seen?: boolean;
+        door_latch_event_seen?: boolean;
+        position_delta?: number | null;
+        nonzero_speed_seen?: boolean;
+        physical_motion_confirmed?: boolean;
+        physical_proof_source?: string | null;
+        evidence_level?: string;
+    } | null;
+}
+
 export interface AxisMotionResult {
     axis: AxisName | string;
     board_status?: Record<string, UntypedApiValue> | null;
@@ -134,6 +163,7 @@ export interface AxisMotionResult {
     prep?: Record<string, UntypedApiValue> | null;
     prep_policy?: MotionPrepPolicy | null;
     motion_truth?: MotionTruth | null;
+    motion_evidence?: MotionEvidence | null;
     artifact_bundle?: MotionArtifactBundle | null;
     motion_profile?: Record<string, UntypedApiValue> | null;
     position_before?: { position?: number | null; ok?: boolean } | null;
@@ -197,6 +227,72 @@ export interface MotionInterlockOverridePayload {
     operator_ack: 'INTERLOCK_OVERRIDE';
     operator?: string;
 }
+
+export type UsbSniffProfile = 'passive' | 'manual_observe' | 'debug';
+
+export interface UsbSniffRunSummary {
+    run_id?: string;
+    status?: string;
+    active?: boolean;
+    profile?: UsbSniffProfile | string;
+    started_at?: string;
+    ended_at?: string | null;
+    duration_s?: number;
+    reason?: string;
+    pcap_path?: string | null;
+    driver_ledger_path?: string | null;
+    export_path?: string | null;
+    packet_count?: number;
+    tx_count?: number;
+    rx_count?: number;
+    bytes_total?: number;
+    files?: Record<string, UntypedApiValue> | Array<Record<string, UntypedApiValue>> | null;
+    warning?: string | null;
+    error?: string | null;
+    [key: string]: UntypedApiValue;
+}
+
+export interface UsbSniffStatusResponse {
+    schema_version?: string;
+    available?: boolean;
+    active?: boolean;
+    linkage_configured?: boolean;
+    linkage_url?: string | null;
+    capture_method?: string;
+    current_run?: UsbSniffRunSummary | null;
+    latest_run?: UsbSniffRunSummary | null;
+    runs?: UsbSniffRunSummary[];
+    artifacts_root?: string | null;
+    detail?: UntypedApiValue;
+    proxy_error?: Record<string, UntypedApiValue> | null;
+    safety_boundary?: string;
+    notes?: string[];
+    [key: string]: UntypedApiValue;
+}
+
+export interface UsbSniffCapturePayload {
+    profile?: UsbSniffProfile;
+    duration_s?: number;
+    include_pcap?: boolean;
+    include_driver_ledger?: boolean;
+    passive_only?: boolean;
+    reason?: string;
+    operator_ack: 'USB_SNIFF';
+    operator?: string;
+    stop_existing?: boolean;
+    run_id?: string;
+    tail?: number;
+}
+
+export interface UsbSniffRunsResponse {
+    runs?: UsbSniffRunSummary[];
+    available?: boolean;
+    detail?: UntypedApiValue;
+    proxy_error?: Record<string, UntypedApiValue> | null;
+    [key: string]: UntypedApiValue;
+}
+
+export type UsbSniffActionResponse = UsbSniffStatusResponse & Record<string, UntypedApiValue>;
 
 export type GantryAxisName = Extract<AxisName, 'x' | 'y' | 'z'>;
 
@@ -587,7 +683,7 @@ export const useBioXpInterlinkLogs = () =>
         },
     });
 
-export const useRuntimeStatus = () =>
+export const useRuntimeStatus = (enabled = true) =>
     useQuery<RuntimeStatus, Error>({
         queryKey: ['bioxp', 'runtime'],
         queryFn: async () => {
@@ -597,6 +693,7 @@ export const useRuntimeStatus = () =>
         // Robot-local status probes use the same serialized runtime path as live
         // controls. Do not auto-poll this from the cockpit; repeated background
         // GETs were enough to make arming/motor testing unstable.
+        enabled,
         refetchInterval: false,
         retry: false,
     });
@@ -627,7 +724,7 @@ export const useBioXpCapabilities = (enabled = true) =>
         retry: false,
     });
 
-export const useBioXpOperationCapabilities = (enabled = true) =>
+export const useBioXpOperationCapabilities = (enabled = true, refetchIntervalMs: number | false = false) =>
     useQuery<BioXpOperationCapabilities, Error>({
         queryKey: ['bioxp', 'operations', 'capabilities'],
         queryFn: async () => {
@@ -635,7 +732,7 @@ export const useBioXpOperationCapabilities = (enabled = true) =>
             return res.data;
         },
         enabled,
-        refetchInterval: false,
+        refetchInterval: enabled ? refetchIntervalMs : false,
         retry: false,
     });
 
@@ -1022,6 +1119,75 @@ export const useSetMotionInterlockOverride = () => {
             return res.data;
         },
         onSuccess: () => invalidateBioXp(queryClient),
+    });
+};
+
+const invalidateUsbSniff = (queryClient: ReturnType<typeof useQueryClient>) => {
+    queryClient.invalidateQueries({ queryKey: ['bioxp', 'diagnostics', 'usb-sniff'] });
+};
+
+export const useUsbSniffStatus = (enabled = true, refetchIntervalMs: number | false = 5000) =>
+    useQuery<UsbSniffStatusResponse, Error>({
+        queryKey: ['bioxp', 'diagnostics', 'usb-sniff', 'status'],
+        queryFn: async () => {
+            const res = await api.get('/api/bioxp/diagnostics/usb-sniff/status', { timeout: 8000 });
+            return res.data;
+        },
+        enabled,
+        refetchInterval: enabled ? refetchIntervalMs : false,
+        retry: false,
+    });
+
+export const useUsbSniffRuns = (enabled = true, refetchIntervalMs: number | false = false) =>
+    useQuery<UsbSniffRunsResponse, Error>({
+        queryKey: ['bioxp', 'diagnostics', 'usb-sniff', 'runs'],
+        queryFn: async () => {
+            const res = await api.get('/api/bioxp/diagnostics/usb-sniff/runs', { timeout: 8000 });
+            return res.data;
+        },
+        enabled,
+        refetchInterval: enabled ? refetchIntervalMs : false,
+        retry: false,
+    });
+
+export const useStartUsbSniffCapture = () => {
+    const queryClient = useQueryClient();
+    return useMutation<UsbSniffActionResponse, Error, UsbSniffCapturePayload>({
+        mutationKey: bioxpHardwareMutationKey('diagnostics', 'usb-sniff', 'start'),
+        mutationFn: async (payload) => {
+            const res = await api.post('/api/bioxp/diagnostics/usb-sniff/start', payload, { timeout: 20000 });
+            return res.data;
+        },
+        onSuccess: () => invalidateUsbSniff(queryClient),
+    });
+};
+
+export const useStopUsbSniffCapture = () => {
+    const queryClient = useQueryClient();
+    return useMutation<UsbSniffActionResponse, Error, Partial<UsbSniffCapturePayload> | void>({
+        mutationKey: bioxpHardwareMutationKey('diagnostics', 'usb-sniff', 'stop'),
+        mutationFn: async (payload) => {
+            const requestPayload = payload ?? {};
+            const res = await api.post('/api/bioxp/diagnostics/usb-sniff/stop', {
+                ...requestPayload,
+                operator_ack: 'USB_SNIFF',
+                operator: requestPayload.operator ?? 'bms-cockpit',
+            }, { timeout: 20000 });
+            return res.data;
+        },
+        onSuccess: () => invalidateUsbSniff(queryClient),
+    });
+};
+
+export const useExportUsbSniffCapture = () => {
+    const queryClient = useQueryClient();
+    return useMutation<UsbSniffActionResponse, Error, Partial<UsbSniffCapturePayload> | void>({
+        mutationKey: bioxpHardwareMutationKey('diagnostics', 'usb-sniff', 'export'),
+        mutationFn: async (payload) => {
+            const res = await api.post('/api/bioxp/diagnostics/usb-sniff/export', payload ?? {}, { timeout: 60000 });
+            return res.data;
+        },
+        onSuccess: () => invalidateUsbSniff(queryClient),
     });
 };
 
