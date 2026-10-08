@@ -166,44 +166,9 @@ export default function MolstarViewer({
         }
     }, [isScriptLoaded, residueColors, applyResidueColors, absoluteUrl]);
 
-    // Apply viewport rendering defaults (shadows OFF, outlines ON)
-    // This runs once after structure loads to set user-preferred defaults
-    useEffect(() => {
-        if (!isScriptLoaded || !absoluteUrl) return;
-
-        const applyDefaults = async () => {
-            if (!viewerRef.current) return;
-            const viewer = viewerRef.current as any;
-
-            // Wait for plugin to be fully initialized (longer wait for stability)
-            for (let i = 0; i < 60; i++) {
-                const plugin = viewer.viewerInstance?.plugin;
-                if (plugin?.canvas3d?.props) {
-                    try {
-                        // Use the Mol* plugin's setProps with correct structure
-                        // Only modify shadow - keep outline at Molstar's default (which is on)
-                        plugin.canvas3d.setProps({
-                            postprocessing: {
-                                ...plugin.canvas3d.props.postprocessing,
-                                shadow: { name: 'off', params: {} },
-                            },
-                        });
-                        console.log('Molstar defaults applied: shadows OFF');
-                        return;
-                    } catch (err) {
-                        // Silently fail - user can adjust in Molstar settings
-                        console.debug('Could not apply viewport defaults:', err);
-                        return;
-                    }
-                }
-                await new Promise(r => setTimeout(r, 100));
-            }
-        };
-
-        // Delay to allow structure to load first
-        const timer = setTimeout(applyDefaults, 3000);
-        return () => clearTimeout(timer);
-    }, [isScriptLoaded, absoluteUrl]);
+    // NOTE: Postprocessing settings (shadow, outline, etc) are managed via
+    // Molstar's built-in settings panel. Programmatic setProps calls cause
+    // WebGL shader corruption after extended use. Do not attempt to override.
 
     // Parse background color
     const bgColor = useMemo(() => {
