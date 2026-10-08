@@ -67,6 +67,7 @@ def _worker_attempt(tmp_path: Path, command: list[str]) -> Path:
             "relative_path": "source/.bms-source.tar",
             "size_bytes": source_archive.stat().st_size,
             "sha256": _sha256(source_archive),
+            "mode": source_archive.stat().st_mode & 0o777,
             "role": "source",
             "link_target": None,
         }],
@@ -288,8 +289,14 @@ def test_bundle_preserves_committed_source_and_relocates_managed_paths(
     weights_root = data_root / "weights"
     runtime_root = data_root / "runtime" / "cm-api-python" / "current"
     (runtime_root / "venv" / "bin").mkdir(parents=True)
-    (runtime_root / "venv" / "bin" / "python").write_bytes(b"python-runtime")
-    (runtime_root / "pyvenv.cfg").write_text("home = /usr/bin\n", encoding="utf-8")
+    # Metadata-only fixture; real interpreter/container execution is covered in
+    # test_remote_bundle_runtime_gaps and test_remote_bundle_container_gaps.
+    base_bin = runtime_root / "python-runtime" / "bin"
+    base_bin.mkdir(parents=True)
+    (base_bin / "python3").write_bytes(b"fixture-python-not-executed")
+    (base_bin / "python3").chmod(0o755)
+    (runtime_root / "venv" / "bin" / "python").symlink_to(base_bin / "python3")
+    (runtime_root / "venv" / "pyvenv.cfg").write_text(f"home = {base_bin}\n", encoding="utf-8")
     container_root.mkdir(parents=True)
     weights_root.mkdir(parents=True)
     job_input = data_root / "inputs" / "sequence.fasta"
@@ -333,7 +340,9 @@ def test_bundle_preserves_committed_source_and_relocates_managed_paths(
         assert bundle.envelope.command[0] == "/opt/biomodstack/runner/nextflow"
         assert "/opt/biomodstack/revisions/" in bundle.envelope.command[2]
         assert "/opt/biomodstack/attempts/" in bundle.envelope.command[4]
-        assert bundle.remote_output_alias == str(output_dir)
+        assert bundle.remote_output_alias == bundle.envelope.output_directory
+        assert bundle.remote_output_alias.startswith("/opt/biomodstack/attempts/")
+        assert str(data_root) not in " ".join(bundle.envelope.command)
         assert bundle.envelope.environment["API_BASE_URL"] == "https://bms.example.invalid"
         assert all("token" not in key.lower() for key in bundle.envelope.environment)
         envelope_path = bundle.local_attempt_dir / "execution-envelope.json"

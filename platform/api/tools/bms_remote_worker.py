@@ -13,6 +13,7 @@ import stat
 import subprocess
 import sys
 import time
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -46,20 +47,47 @@ def safe_relative(value: str) -> PurePosixPath:
     return path
 
 
-def atomic_json(path: Path, value: Any) -> None:
+def atomic_json(path: Path, value: Any) -> Any:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
+    if path.name != STATUS_FILE:
+        _write_atomic_json(path, value)
+        return value
+    # Every process publishing attempt status participates, including pollers.
+    with path.with_suffix(path.suffix + ".lock").open("a+b") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        if path.name == STATUS_FILE and path.is_file():
+            current = load_json(path)
+            if current.get("state") in {"cancelled", "succeeded", "failed", "lost"}:
+                return current
+            if value.get("state") == "prepared":
+                return current
+            value = dict(value)
+            for key in ("workflow_pid", "workflow_start_ticks", "supervisor_pid", "supervisor_start_ticks", "started_at"):
+                if current.get(key) is not None and value.get(key) is None:
+                    value[key] = current[key]
+            if current.get("state") == "cancelling":
+                value["state"] = "cancelled" if value.get("state") in {"succeeded", "failed", "lost", "cancelled"} else "cancelling"
+        _write_atomic_json(path, value)
+        return value
+
+
+def _write_atomic_json(path: Path, value: Any) -> None:
     payload = canonical_bytes(value) + b"\n"
-    with temporary.open("wb") as handle:
-        handle.write(payload)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(temporary, path)
-    directory_fd = os.open(path.parent, os.O_DIRECTORY)
+    fd, name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    temporary = Path(name)
     try:
-        os.fsync(directory_fd)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        directory_fd = os.open(path.parent, os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     finally:
-        os.close(directory_fd)
+        temporary.unlink(missing_ok=True)
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -122,6 +150,9 @@ def verify_bundle(attempt_dir: Path) -> dict[str, Any]:
             continue
         if path.is_symlink() or not path.is_file():
             raise RuntimeError(f"bundle file is missing: {relative}")
+        mode = record.get("mode", 0o644)
+        if type(mode) is not int or not 0 <= mode <= 0o777 or path.stat().st_mode & 0o7777 != mode:
+            raise RuntimeError(f"bundle file mode mismatch: {relative}")
         expected_size = record.get("size_bytes")
         expected_sha = str(record.get("sha256") or "")
         if path.stat().st_size != expected_size or sha256_file(path) != expected_sha:
@@ -164,8 +195,7 @@ def base_status(envelope: dict[str, Any], state: str) -> dict[str, Any]:
 def prepare(attempt_dir: Path) -> dict[str, Any]:
     envelope = verify_bundle(attempt_dir)
     status = base_status(envelope, "prepared")
-    atomic_json(status_path(attempt_dir), status)
-    return status
+    return atomic_json(status_path(attempt_dir), status)
 
 
 def start(attempt_dir: Path) -> dict[str, Any]:
@@ -366,28 +396,30 @@ def supervise(attempt_dir: Path) -> int:
 
 
 def status(attempt_dir: Path) -> dict[str, Any]:
-    value = load_json(status_path(attempt_dir))
-    cancellation_requested = (attempt_dir / CANCEL_REQUEST_FILE).exists()
-    if cancellation_requested and value.get("state") == "running":
-        value["state"] = "cancelling"
-    if value.get("state") in {"running", "cancelling"}:
-        workflow_alive = process_matches(value.get("workflow_pid"), value.get("workflow_start_ticks"))
-        supervisor_alive = process_matches(value.get("supervisor_pid"), value.get("supervisor_start_ticks"))
-        if not workflow_alive and not supervisor_alive:
-            value.update(
-                {
-                    "state": "cancelled" if cancellation_requested else "lost",
-                    "completed_at": utc_now(),
-                    "exit_code": -15 if cancellation_requested else value.get("exit_code"),
-                    "error": (
-                        value.get("error")
-                        if cancellation_requested
-                        else "Remote attempt owners disappeared without a terminal receipt"
-                    ),
-                }
-            )
-        atomic_json(status_path(attempt_dir), value)
-    return value
+    with status_path(attempt_dir).with_suffix(".json.lock").open("a+b") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        value = load_json(status_path(attempt_dir))
+        cancellation_requested = (attempt_dir / CANCEL_REQUEST_FILE).exists()
+        if cancellation_requested and value.get("state") == "running":
+            value["state"] = "cancelling"
+        if value.get("state") in {"running", "cancelling"}:
+            workflow_alive = process_matches(value.get("workflow_pid"), value.get("workflow_start_ticks"))
+            supervisor_alive = process_matches(value.get("supervisor_pid"), value.get("supervisor_start_ticks"))
+            if not workflow_alive and not supervisor_alive:
+                value.update(
+                    {
+                        "state": "cancelled" if cancellation_requested else "lost",
+                        "completed_at": utc_now(),
+                        "exit_code": -15 if cancellation_requested else value.get("exit_code"),
+                        "error": (
+                            value.get("error")
+                            if cancellation_requested
+                            else "Remote attempt owners disappeared without a terminal receipt"
+                        ),
+                    }
+                )
+            _write_atomic_json(status_path(attempt_dir), value)
+        return value
 
 
 def cancel(attempt_dir: Path, timeout_seconds: float) -> dict[str, Any]:
@@ -396,7 +428,7 @@ def cancel(attempt_dir: Path, timeout_seconds: float) -> dict[str, Any]:
         return value
     atomic_json(attempt_dir / CANCEL_REQUEST_FILE, {"requested_at": utc_now()})
     value["state"] = "cancelling"
-    atomic_json(status_path(attempt_dir), value)
+    value = atomic_json(status_path(attempt_dir), value)
 
     deadline = time.monotonic() + max(1.0, timeout_seconds)
     signalled: tuple[int, int] | None = None

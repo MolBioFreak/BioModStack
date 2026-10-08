@@ -423,6 +423,8 @@ class QueueStatsResponse(BaseModel):
     queued: int
     running: int
     paused: int
+    preparing: int = 0
+    cancelling: int = 0
     total: int
 
 
@@ -478,7 +480,7 @@ async def list_queue(
     # The stale-state repair above remains deliberately non-MD because durable
     # MD lifecycle state has its own guarded reconciliation semantics.
     query = select(Job).where(
-        Job.queue_status.in_(['queued', 'running', 'paused']),
+        Job.queue_status.in_(['queued', 'running', 'paused', 'preparing', 'cancelling']),
         Job.awaiting_input == False,
         Job.vram_estimate_mb.isnot(None)
     ).order_by(
@@ -539,7 +541,7 @@ async def get_queue_stats(session: AsyncSession = Depends(get_session)):
     # Only count jobs that went through new orchestrator (have vram_estimate_mb set)
     result = await session.execute(
         select(Job).where(
-            Job.queue_status.in_(['queued', 'running', 'paused']),
+            Job.queue_status.in_(['queued', 'running', 'paused', 'preparing', 'cancelling']),
             Job.awaiting_input == False,
             Job.vram_estimate_mb.isnot(None)
         )
@@ -554,6 +556,8 @@ async def get_queue_stats(session: AsyncSession = Depends(get_session)):
         queued=queued,
         running=running,
         paused=paused,
+        preparing=sum(j.queue_status == "preparing" for j in jobs),
+        cancelling=sum(j.queue_status == "cancelling" for j in jobs),
         total=len(jobs)
     )
 

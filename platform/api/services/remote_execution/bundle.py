@@ -6,6 +6,7 @@ import ipaddress
 import json
 import os
 import re
+import shutil
 import subprocess
 import tarfile
 import uuid
@@ -15,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Literal
 
-from paths import get_code_root, get_container_dir, get_data_root, get_weights_root
+from paths import get_code_root, get_container_dir, get_data_root, get_weights_root, get_inputs_dir, get_results_dir
 from services.result_contracts import resolve_result_contract
 
 from .contracts import RemoteExecutionEnvelope, RemoteFileRecord
@@ -32,6 +33,7 @@ _SOURCE_IDENTITY_RE = re.compile(r"^[0-9a-f]{40}$")
 class TransferPlan:
     source: Path
     remote_destination: str
+    origin: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,11 +123,14 @@ def _record_file(
 ) -> RemoteFileRecord:
     if path.is_symlink() or not path.is_file():
         raise RemoteBundleError(f"Package input is not one regular file: {path}")
+    if path.stat().st_mode & 0o7000:
+        raise RemoteBundleError(f"Package file has an unapproved special mode: {path}")
     return RemoteFileRecord(
         relative_path=relative_path,
         size_bytes=path.stat().st_size,
         sha256=_sha256_file(path),
         role=role,
+        mode=path.stat().st_mode & 0o777,
     )
 
 
@@ -206,7 +211,7 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any]) -> list[tu
     container_names: set[str] = set()
     weight_names: set[str] = set()
     extra_paths: set[Path] = set()
-    api_runtime = data_root / "runtime" / "cm-api-python" / "current"
+    api_runtime = Path(os.getenv("BMS_CM_API_RUNTIME_DIR", str(data_root / "runtime" / "cm-api-python"))) / "current"
     if not api_runtime.exists():
         raise RemoteBundleError(f"Managed workflow Python runtime is unavailable: {api_runtime}")
     extra_paths.add(api_runtime.resolve())
@@ -272,7 +277,9 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any]) -> list[tu
     for name in sorted(weight_names):
         assets.append((weights_root / name, f"weights/{name}"))
     for path in sorted(extra_paths):
-        if _under(path, container_root):
+        if path == api_runtime.resolve():
+            assets.append((path, "support-python"))
+        elif _under(path, container_root):
             relative = path.relative_to(container_root).as_posix()
             assets.append((path, f"containers/{relative}"))
         elif _under(path, weights_root):
@@ -306,34 +313,141 @@ def _input_assets(
     output_dir: Path,
 ) -> list[tuple[Path, str]]:
     selected: dict[Path, str] = {}
-    data_root = get_data_root().resolve()
+    input_roots = (get_data_root().resolve(), get_inputs_dir().resolve(), get_results_dir().resolve())
     runtime_roots = [path for path in runtime_paths if path.is_dir()]
+    system_roots = {get_weights_root().resolve(), get_container_dir().resolve()}
     candidates = [*_flatten_strings(params), *(str(value) for value in command[1:])]
     for raw in candidates:
         if not raw.startswith("/"):
             continue
         candidate = Path(raw).expanduser()
-        if candidate.is_symlink():
-            raise RemoteBundleError(f"Input symlink is not allowed: {candidate}")
         path = candidate.resolve()
-        if not path.exists() or path == output_dir.resolve() or _under(path, repo_root):
+        if path in system_roots or path in runtime_paths or any(_under(path, root) for root in runtime_roots):
             continue
-        if not _under(path, data_root):
+        if any(part.is_symlink() for part in (candidate, *candidate.parents)):
+            raise RemoteBundleError(f"Input path traverses a symlink: {candidate}")
+        if path == output_dir.resolve() or _under(path, repo_root):
+            continue
+        if not path.exists():
+            raise RemoteBundleError(f"Declared input is unavailable: {candidate}")
+        if not any(_under(path, root) for root in input_roots):
             raise RemoteBundleError(
                 f"Job input is outside BMS-managed storage and cannot be transferred: {path}"
             )
-        if path in runtime_paths or any(_under(path, root) for root in runtime_roots):
-            continue
         digest = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:16]
         selected[path] = f"{digest}/{path.name}"
     return [(path, relative) for path, relative in sorted(selected.items(), key=lambda item: str(item[0]))]
 
 
 def _rewrite(value: str, path_map: dict[str, str]) -> str:
-    rewritten = value
+    candidate = PurePosixPath(value)
+    if not candidate.is_absolute() or ".." in candidate.parts:
+        return value
     for local, remote in sorted(path_map.items(), key=lambda item: len(item[0]), reverse=True):
-        rewritten = rewritten.replace(local, remote)
-    return rewritten
+        try:
+            relative = candidate.relative_to(PurePosixPath(local))
+        except ValueError:
+            continue
+        return str(PurePosixPath(remote) / relative)
+    return value
+
+
+def compile_remote_dependencies(model_id: str, mode: str, command: list[str]) -> tuple[list[str], dict[str, Any]]:
+    """Compile the normalized launch argv, never the original persisted defaults.
+
+    This boundary runs only for remote packages; local command/model policy is
+    unchanged. The returned argv is the sole authority for runtime and input
+    selection below.
+    """
+    params: dict[str, Any] = {}
+    for index, value in enumerate(command):
+        if value.startswith("--"):
+            raw = command[index + 1] if index + 1 < len(command) and not command[index + 1].startswith("--") else True
+            params[value[2:]] = {"true": True, "false": False}.get(raw, raw) if isinstance(raw, str) else raw
+    omitted: set[str] = set()
+    if model_id.lower() == "protenix":
+        omitted.update({"rfd_models", "af2_models", "boltz_models", "alphafold_params"})
+        omitted.update(key for key in params if key.startswith(("bcp_", "esmf_", "plr_", "md_", "rfantibody_")))
+        omitted.update(key for key in params
+                       if any(token in key for token in ("container_path", "_container", "checkpoint_path", "runtime_lock", "repo_path"))
+                       and not key.startswith(("protenix_", "frustrampnn_")))
+        backend = str(params.get("protenix_msa_backend", "auto")).lower()
+        provider = str(params.get("msa_provider", "")).strip().lower()
+        if backend in {"", "auto"} and provider in {"local", "colabfold_api"}:
+            backend = provider
+            params["protenix_msa_backend"] = backend
+            command = list(command)
+            if "--protenix_msa_backend" in command:
+                for index, value in enumerate(command[:-1]):
+                    if value == "--protenix_msa_backend":
+                        command[index + 1] = backend
+            else:
+                command.extend(["--protenix_msa_backend", backend])
+        if backend == "colabfold_api" or str(params.get("protenix_use_msa", "true")).lower() == "false":
+            omitted.add("msa_local_db")
+    compiled: list[str] = []
+    index = 0
+    while index < len(command):
+        value = command[index]
+        if value.startswith("--") and value[2:] in omitted:
+            index += 1
+            if index < len(command) and not command[index].startswith("--"):
+                index += 1
+            continue
+        compiled.append(value)
+        index += 1
+    return compiled, {key: value for key, value in params.items() if key not in omitted}
+
+
+def _input_command(command: list[str]) -> list[str]:
+    """Exclude typed output/cache/system-root options before input admission."""
+    generated = {"-w", "--work_dir", "--out_dir", "--out", "--data_root", "--code_root",
+                 "--weights_root", "--container_dir", "--msa_cache_dir", "--cm_api_runtime_dir"}
+    return [value for index, value in enumerate(command)
+            if value not in generated and (index == 0 or command[index - 1] not in generated)]
+
+
+def _relocate_python_runtime(source: Path, destination: Path, remote_destination: str) -> Path:
+    """Materialize a self-contained release and hash its final-path bytes later."""
+    source = source.resolve()
+    shutil.copytree(source, destination, symlinks=True,
+                    ignore=lambda directory, names: [".venv"] if Path(directory) == source / "venv" and ".venv" in names else [])
+    mapping = {str(source): remote_destination}
+    # Absolute internal links become relative so validation also works in staging.
+    for original in sorted(source.rglob("*")):
+        relative = original.relative_to(source)
+        copied = destination / relative
+        if relative == Path("venv/.venv"):
+            continue
+        if original.is_symlink():
+            resolved = original.resolve()
+            if not resolved.is_relative_to(source) or not resolved.exists():
+                raise RemoteBundleError(f"Runtime symlink escapes or is missing: {original}")
+            copied.unlink()
+            copied.symlink_to(os.path.relpath(destination / resolved.relative_to(source), copied.parent),
+                              target_is_directory=resolved.is_dir())
+    for config in destination.rglob("pyvenv.cfg"):
+        lines = []
+        for line in config.read_text().splitlines():
+            key, separator, value = line.partition("=")
+            if separator and key.strip() in {"home", "executable"}:
+                base_path = Path(value.strip()).resolve()
+                translated = _rewrite(str(base_path), mapping)
+                if not base_path.is_relative_to(source) or not base_path.exists():
+                    raise RemoteBundleError("Python base runtime is not contained in its managed release")
+                line = f"{key.strip()} = {translated}"
+            lines.append(line)
+        config.write_text("\n".join(lines) + "\n")
+    # Managed venv console scripts may still name the provisioning checkout.
+    for script in (destination / "venv" / "bin").iterdir():
+        if script.is_symlink() or not script.is_file():
+            continue
+        with script.open("rb") as handle:
+            first = handle.readline(4096)
+        if first.startswith(b"#!") and b"python" in first:
+            payload = script.read_bytes()
+            script.write_bytes(f"#!{remote_destination}/venv/bin/python\n".encode() + payload[len(first):])
+    return destination
 
 
 def prepare_remote_bundle(
@@ -359,8 +473,7 @@ def prepare_remote_bundle(
         data_root / "remote-execution",
     )
     if (
-        not _under(local_output, data_root)
-        or local_output == data_root
+        not any(_under(local_output, root) and local_output != root for root in (data_root, get_results_dir().resolve()))
         or any(_under(local_output, reserved_root.resolve()) for reserved_root in reserved_output_roots)
     ):
         raise RemoteBundleError("Remote Job output must remain under BMS-managed storage")
@@ -413,23 +526,30 @@ def prepare_remote_bundle(
     archive_path.replace(archive_copy)
 
     remote_source = f"{remote_root}/revisions/{tree}"
-    runtime_assets = _runtime_assets(str(job.model_id), str(job.mode), dict(job.params or {}))
+    command, effective_params = compile_remote_dependencies(str(job.model_id), str(job.mode), command)
+    runtime_assets = _runtime_assets(str(job.model_id), str(job.mode), effective_params)
     runtime_paths = {path.resolve() for path, _ in runtime_assets}
     runtime_records: list[RemoteFileRecord] = []
     runtime_transfers: list[TransferPlan] = []
     runtime_path_map: dict[str, str] = {}
     remote_runtime = f"{remote_root}/lineages/{safe_root_job_id}/runtime"
     for path, relative in runtime_assets:
-        runtime_records.extend(_records_for_source(path, f"runtime/{relative}", "runtime"))
-        runtime_transfers.append(TransferPlan(path, f"{remote_runtime}/{relative}"))
-        runtime_path_map[str(path.resolve())] = f"{remote_runtime}/{relative}"
+        destination = f"{remote_runtime}/{relative}"
+        source = path
+        if relative == "support-python":
+            source = _relocate_python_runtime(path, staging_root / "support-python", destination)
+            lexical_runtime = Path(os.getenv("BMS_CM_API_RUNTIME_DIR", str(data_root / "runtime" / "cm-api-python")))
+            runtime_path_map[str(lexical_runtime / "current")] = destination
+        runtime_records.extend(_records_for_source(source, f"runtime/{relative}", "runtime"))
+        runtime_transfers.append(TransferPlan(source, destination, origin=path))
+        runtime_path_map[str(path.resolve())] = destination
     runtime_identity = hashlib.sha256(
         _canonical_bytes([record.model_dump(mode="json") for record in runtime_records])
     ).hexdigest()
 
     input_assets = _input_assets(
-        dict(job.params or {}),
-        command=command,
+        {},
+        command=_input_command(command),
         repo_root=repo_root,
         runtime_paths=runtime_paths,
         output_dir=local_output,
@@ -452,16 +572,20 @@ def prepare_remote_bundle(
         str(repo_root): remote_source,
         str(container_root): f"{remote_runtime}/containers",
         str(weights_root): f"{remote_runtime}/weights",
-        str(data_root): str(data_root),
+        str(data_root): f"{remote_attempt}/data",
+        str(local_output): remote_results,
     }
+    for flag, destination in {"-w": f"{remote_attempt}/work", "--work_dir": f"{remote_attempt}/work",
+                              "--msa_cache_dir": f"{remote_attempt}/msa-cache",
+                              "--cm_api_runtime_dir": f"{remote_runtime}/support-python"}.items():
+        if flag in command:
+            path_map[command[command.index(flag) + 1]] = destination
     nextflow_executable = str(command[0]) if command else ""
     translated_command = [_rewrite(str(value), path_map) for value in command]
     if translated_command and Path(nextflow_executable).name == "nextflow":
         translated_command[0] = f"{remote_root}/runner/nextflow"
     elif translated_command and Path(nextflow_executable).name in {"python", "python3"}:
-        translated_command[0] = str(
-            data_root / "runtime" / "cm-api-python" / "current" / "venv" / "bin" / "python"
-        )
+        translated_command[0] = f"{remote_runtime}/support-python/venv/bin/python"
 
     result_contract = resolve_job_result_contract(job)
     assignment = (
@@ -477,12 +601,13 @@ def prepare_remote_bundle(
         assigned_gpu_indices = [] if job.assigned_gpu is None else [int(job.assigned_gpu)]
     effective_environment = {
         "BMS_HOME": remote_source,
-        "BMS_DATA": str(data_root),
-        "BMS_WEIGHTS": str(data_root / "weights"),
-        "BMS_CONTAINER_DIR": str(data_root / "apptainer"),
-        "BMS_API_PYTHON": str(
-            data_root / "runtime" / "cm-api-python" / "current" / "venv" / "bin" / "python"
-        ),
+        "BMS_DATA": f"{remote_attempt}/data",
+        "BMS_WEIGHTS": f"{remote_runtime}/weights",
+        "BMS_CONTAINER_DIR": f"{remote_runtime}/containers",
+        "BMS_CM_API_RUNTIME_DIR": f"{remote_runtime}/support-python",
+        "BMS_API_PYTHON": f"{remote_runtime}/support-python/venv/bin/python",
+        "BMS_MSA_CACHE": f"{remote_attempt}/msa-cache",
+        "BMS_REMOTE_EXECUTION": "1",
         "BMS_WORK": f"{remote_attempt}/work",
         "NXF_CACHE_DIR": f"{remote_attempt}/.nextflow",
         "NXF_HOME": f"{remote_root}/cache/nextflow",
@@ -553,7 +678,7 @@ def prepare_remote_bundle(
         remote_attempt_dir=remote_attempt,
         remote_source_dir=remote_source,
         remote_runtime_dir=remote_runtime,
-        remote_output_alias=str(local_output),
+        remote_output_alias=remote_results,
         local_output_dir=local_output,
         envelope=envelope,
         envelope_sha256=envelope_sha256,

@@ -439,6 +439,8 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
     const stats = {
         queued: queue.filter(j => j.queue_status === 'queued').length,
         running: queue.filter(j => j.queue_status === 'running').length,
+        preparing: queue.filter(j => j.execution_target_id && j.queue_status === 'preparing').length,
+        cancelling: queue.filter(j => j.execution_target_id && j.queue_status === 'cancelling').length,
         paused: queue.filter(j => j.queue_status === 'paused').length,
         total: queue.length,
     };
@@ -452,6 +454,10 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
 
     // Separate running, paused, queued, and pending_msa jobs
     const runningJobs = visibleQueue.filter(j => j.queue_status === 'running');
+    const remoteTransitions = [
+        { phase: 'preparing', label: 'Preparing remote jobs' },
+        { phase: 'cancelling', label: 'Cancelling remote jobs' },
+    ].map(group => ({ ...group, jobs: visibleQueue.filter(j => j.execution_target_id && j.queue_status === group.phase) }));
     const pausedJobs = visibleQueue.filter(j => j.queue_status === 'paused' || j.paused);
     const queuedJobs = visibleQueue.filter(j => j.queue_status === 'queued' && !j.paused);
     const pendingMsaJobs = visibleQueue.filter(j => j.queue_status === 'pending_msa');
@@ -502,6 +508,8 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
                             <span className="px-2 py-0.5 rounded text-xs font-medium bg-blue-500/20 text-blue-400">
                                 {stats.queued} queue
                             </span>
+                            {stats.preparing > 0 && <span className="px-2 py-0.5 rounded text-xs font-medium bg-blue-500/20 text-blue-400">{stats.preparing} preparing</span>}
+                            {stats.cancelling > 0 && <span className="px-2 py-0.5 rounded text-xs font-medium bg-amber-500/20 text-amber-400">{stats.cancelling} cancelling</span>}
                             {stats.paused > 0 && (
                                 <span className="px-2 py-0.5 rounded text-xs font-medium bg-yellow-500/20 text-yellow-400">
                                     {stats.paused} paused
@@ -595,6 +603,19 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
                         </div>
                     ) : (
                         <div className="space-y-3">
+                            {remoteTransitions.filter(group => group.jobs.length > 0).map(group => (
+                                <div key={group.phase}>
+                                    <h4 className="text-xs font-semibold text-slate-400 mb-1 uppercase tracking-wide">{group.label}</h4>
+                                    <div className="space-y-1">
+                                        {group.jobs.map(job => (
+                                            <JobRow key={job.id} job={job}
+                                                onCancel={() => cancelMutation.mutate(job.id)}
+                                                isPending={isPending || group.phase === 'cancelling'}
+                                                elapsedNowMs={elapsedNowMs} gpuCatalog={gpuCatalog} liveGpuOptions={liveGpuOptions} />
+                                        ))}
+                                    </div>
+                                </div>
+                            ))}
                             {/* Running Jobs */}
                             {runningJobs.length > 0 && (
                                 <div>
