@@ -267,6 +267,10 @@ def _job_create_for_ont_submit(
         "bam_path": False,
         "fastq_path": False,
         "reference_fasta": False,
+        "wf_clone_primers": False,
+        "wf_clone_insert_reference": False,
+        "wf_clone_host_reference": False,
+        "wf_clone_regions_bedfile": False,
         "sample_sheet": False,
         "duplex_pairs": False,
     }

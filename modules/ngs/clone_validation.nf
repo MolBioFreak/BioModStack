@@ -39,6 +39,14 @@ process RunCloneValidation {
         error("Unsupported --wf_clone_basecaller_model '${basecallerModel}'. Supported exact identities: ${allowedModels.join(', ')}")
     }
     def largeConstruct = params.wf_clone_large_construct ? '--large_construct' : ''
+    def primersPath = (params.wf_clone_primers ?: '').toString().trim()
+    def insertReferencePath = (params.wf_clone_insert_reference ?: '').toString().trim()
+    def hostReferencePath = (params.wf_clone_host_reference ?: '').toString().trim()
+    def regionsBedfilePath = (params.wf_clone_regions_bedfile ?: '').toString().trim()
+    def primersArg = primersPath ? "--primers ${shellQuote(primersPath)}" : ''
+    def insertReferenceArg = insertReferencePath ? "--insert_reference ${shellQuote(insertReferencePath)}" : ''
+    def hostReferenceArg = hostReferencePath ? "--host_reference ${shellQuote(hostReferencePath)}" : ''
+    def regionsBedfileArg = regionsBedfilePath ? "--regions_bedfile ${shellQuote(regionsBedfilePath)}" : ''
     def referencePath = reference_fasta ? reference_fasta.toString().trim() : ''
     if (!referencePath) {
         error("wf_clone_validation requires an authoritative full reference for P3 construct verification")
@@ -79,6 +87,10 @@ process RunCloneValidation {
         --assembly_tool "${assemblyTool}" \
         --override_basecaller_cfg "${basecallerModel}" \
         --full_reference "${referencePath}" \
+        ${primersArg} \
+        ${insertReferenceArg} \
+        ${hostReferenceArg} \
+        ${regionsBedfileArg} \
         ${largeConstruct}
     wf_clone_rc=\$?
     set -e
