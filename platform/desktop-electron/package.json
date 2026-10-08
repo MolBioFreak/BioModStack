@@ -1,0 +1,17 @@
+{
+  "name": "desktop-electron",
+  "private": true,
+  "type": "commonjs",
+  "main": "dist/src/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "pnpm run build && electron .",
+    "dev": "pnpm run start",
+    "test": "pnpm run build && node --test dist/tests/*.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "electron": "^35.7.5",
+    "typescript": "~5.9.3"
+  }
+}

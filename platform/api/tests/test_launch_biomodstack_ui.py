@@ -46,6 +46,7 @@ def test_none_surface_does_not_open_browser(monkeypatch) -> None:
 def test_electron_surface_fails_clearly_until_shell_exists(monkeypatch) -> None:
     module = load_module()
     started: list[str] = []
+    monkeypatch.setattr(module, "electron_shell_installed", lambda: False)
     monkeypatch.setattr(module, "start_all", lambda project_root=None, runtime_mode=None: started.append(runtime_mode or "dev"))
     monkeypatch.setattr(
         module,
@@ -67,6 +68,7 @@ def test_stored_electron_preference_falls_back_to_browser_until_shell_exists(mon
     module = load_module()
     opened: list[str] = []
     started: list[str] = []
+    monkeypatch.setattr(module, "electron_shell_installed", lambda: False)
     monkeypatch.setattr(module, "start_all", lambda project_root=None, runtime_mode=None: started.append(runtime_mode or "dev"))
     monkeypatch.setattr(
         module,
@@ -87,6 +89,84 @@ def test_stored_electron_preference_falls_back_to_browser_until_shell_exists(mon
 
     assert started == ["container"]
     assert opened == ["http://127.0.0.1:5173/bms/"]
+
+
+def test_explicit_electron_surface_launches_shell_when_installed(monkeypatch) -> None:
+    module = load_module()
+    opened: list[str] = []
+    started: list[str] = []
+    launched: list[dict[str, object]] = []
+    monkeypatch.setattr(module, "electron_shell_installed", lambda: True)
+    monkeypatch.setattr(module, "start_all", lambda project_root=None, runtime_mode=None: started.append(runtime_mode or "dev"))
+    monkeypatch.setattr(
+        module,
+        "runtime_descriptor",
+        lambda project_root=None, runtime_mode=None: {
+            "runtime_mode": runtime_mode or "container",
+            "frontend_origin": "http://127.0.0.1:5173",
+            "browser_url": "http://127.0.0.1:5173/bms/",
+            "router_basename": "/bms/",
+            "launch_preferences": {"default_surface": "browser", "auto_open_hosted_web_on_start": True},
+        },
+    )
+    monkeypatch.setattr(module, "launch_electron_shell", lambda descriptor: launched.append(descriptor))
+    monkeypatch.setattr(module.webbrowser, "open_new_tab", lambda url: opened.append(url))
+
+    descriptor = module.launch_ui(runtime_mode="container", surface="electron")
+
+    assert descriptor["browser_url"] == "http://127.0.0.1:5173/bms/"
+    assert started == ["container"]
+    assert opened == []
+    assert launched == [descriptor]
+
+
+def test_electron_shell_installed_requires_platform_binary(monkeypatch, tmp_path) -> None:
+    module = load_module()
+    shell_dir = tmp_path / "desktop-electron"
+    electron_dist = shell_dir / "node_modules" / "electron" / "dist"
+    electron_dist.mkdir(parents=True)
+    (shell_dir / "package.json").write_text("{}")
+    monkeypatch.setattr(module, "ELECTRON_SHELL_DIR", shell_dir)
+    monkeypatch.setattr(module.sys, "platform", "linux")
+
+    assert module.electron_shell_installed() is False
+
+    (electron_dist / "electron").write_text("")
+    assert module.electron_shell_installed() is True
+
+
+def test_stored_electron_preference_launches_shell_when_installed(monkeypatch) -> None:
+    module = load_module()
+    opened: list[str] = []
+    started: list[str] = []
+    launched: list[dict[str, object]] = []
+    monkeypatch.setattr(module, "electron_shell_installed", lambda: True)
+    monkeypatch.setattr(module, "start_all", lambda project_root=None, runtime_mode=None: started.append(runtime_mode or "dev"))
+    monkeypatch.setattr(
+        module,
+        "load_launch_preferences",
+        lambda: {"default_surface": "electron", "auto_open_hosted_web_on_start": True},
+    )
+    monkeypatch.setattr(
+        module,
+        "runtime_descriptor",
+        lambda project_root=None, runtime_mode=None: {
+            "runtime_mode": runtime_mode or "container",
+            "frontend_origin": "http://127.0.0.1:5173",
+            "browser_url": "http://127.0.0.1:5173/bms/",
+            "router_basename": "/bms/",
+            "launch_preferences": {"default_surface": "electron", "auto_open_hosted_web_on_start": True},
+        },
+    )
+    monkeypatch.setattr(module, "launch_electron_shell", lambda descriptor: launched.append(descriptor))
+    monkeypatch.setattr(module.webbrowser, "open_new_tab", lambda url: opened.append(url))
+
+    descriptor = module.launch_ui(runtime_mode="container")
+
+    assert descriptor["browser_url"] == "http://127.0.0.1:5173/bms/"
+    assert started == ["container"]
+    assert opened == []
+    assert launched == [descriptor]
 
 
 def test_main_reports_missing_dependency_as_error(monkeypatch, capsys) -> None:
