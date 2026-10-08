@@ -82,6 +82,7 @@ process RFDPolyDesign {
         diffuser.T=${params.rfdpoly_diffusion_steps} \\
         inference.ckpt_path=/models/${ckpt_file} \\
         inference.num_designs=${params.rfdpoly_num_designs} \\
+        inference.update_seq_t=True \\
         contigmap.contigs="['${contigs}']" \\
         contigmap.polymer_chains="[${chains_formatted}]" \\
         ${input_arg} \\
