@@ -72,6 +72,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
     const [msaMinDepthWarning, setMsaMinDepthWarning] = useState(initialValues?.msa_min_depth_warning ?? 100);
     const [msaMinDepthFail, setMsaMinDepthFail] = useState(initialValues?.msa_min_depth_fail ?? 0);  // 0 = no fail, just warn
     const [msaForceRefresh, setMsaForceRefresh] = useState(false);  // Purge cache for this sequence
+    const [msaAllowEmptyFallback, setMsaAllowEmptyFallback] = useState(initialValues?.msa_allow_empty_fallback ?? false);
     // NEW: Expansion, EnvDB, and Iterations controls
     const [msaUseExpand, setMsaUseExpand] = useState<boolean | undefined>(initialValues?.msa_use_expand);
     const [msaUseEnv, setMsaUseEnv] = useState<boolean | undefined>(initialValues?.msa_use_env);
@@ -167,6 +168,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
             params.msa_min_depth_warning = msaMinDepthWarning;
             params.msa_min_depth_fail = msaMinDepthFail;
             if (msaForceRefresh) params.msa_force_refresh = true;
+            if (msaAllowEmptyFallback) params.msa_allow_empty_fallback = true;
             // NEW: Expansion, EnvDB, and Iterations overrides
             if (msaUseExpand !== undefined) params.msa_use_expand = msaUseExpand;
             if (msaUseEnv !== undefined) params.msa_use_env = msaUseEnv;
@@ -917,6 +919,18 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                     <div>
                                         <span className="text-[var(--error)] font-medium">Regenerate MSA (Purge Cache)</span>
                                         <p className="text-xs text-[var(--error)]/70">Force fresh MSA search, ignoring cached results for this sequence</p>
+                                    </div>
+                                </label>
+                                <label className="flex items-center gap-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg cursor-pointer hover:bg-amber-500/20 transition-colors">
+                                    <input
+                                        type="checkbox"
+                                        checked={msaAllowEmptyFallback}
+                                        onChange={(e) => setMsaAllowEmptyFallback(e.target.checked)}
+                                        className="w-4 h-4 rounded bg-[var(--bg-primary)] border-amber-500 text-amber-400 focus:ring-amber-500"
+                                    />
+                                    <div>
+                                        <span className="text-amber-300 font-medium">Allow Empty MSA Fallback</span>
+                                        <p className="text-xs text-amber-200/70">If chain MSA generation fails, continue with `msa: empty` instead of failing complex prep</p>
                                     </div>
                                 </label>
                                 <div className="text-xs text-[var(--text-muted)] bg-[var(--bg-tertiary)] p-2 rounded">

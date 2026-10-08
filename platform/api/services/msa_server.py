@@ -513,6 +513,7 @@ def server_status(
     max_seqs: int = 300,
     prefilter_mode: int = 1,
     db_load_mode: int = 0,
+    has_active_batch_job: bool = False,
 ) -> Dict[str, Any]:
     settings = read_server_settings()
     effective_include_envdb = (
@@ -543,6 +544,7 @@ def server_status(
 
     if (
         settings.get("auto_stop_idle_enabled")
+        and not has_active_batch_job
         and any(s.get("running") for s in selected_servers)
     ):
         now = datetime.utcnow()
@@ -584,6 +586,7 @@ def server_status(
     return {
         "running": any(s.get("running") for s in selected_servers),
         "all_running": expected_aliases.issubset(running_aliases),
+        "active_batch_job": bool(has_active_batch_job),
         "effective_gpu_id": effective_gpu_id,
         "gpu_selection_error": selection_error,
         "settings": settings,

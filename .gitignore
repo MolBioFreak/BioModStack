@@ -141,3 +141,7 @@ tools/RFDpoly/
 *.pdf
 img/
 backups/
+
+# Transient local directories
+output/
+platform/api/inputs/

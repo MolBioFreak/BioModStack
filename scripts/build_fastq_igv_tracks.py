@@ -19,6 +19,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bam", required=True, type=Path)
     parser.add_argument("--reference-fasta", required=True, type=Path)
     parser.add_argument("--coverage-tsv", required=False, type=Path, default=None)
+    parser.add_argument(
+        "--samtools-cmd",
+        required=False,
+        nargs="+",
+        default=["samtools"],
+        help="samtools command prefix (e.g. samtools OR apptainer exec /path/dorado.sif samtools)",
+    )
     parser.add_argument("--window-bp", required=False, type=int, default=100)
     parser.add_argument("--hotspot-max", required=False, type=int, default=40)
     parser.add_argument("--out-coverage-depth", required=True, type=Path)
@@ -78,13 +85,15 @@ def build_alignment_evidence(
     bam: Path,
     ref_name: str,
     ref_len: int,
+    samtools_cmd: Sequence[str],
 ) -> Tuple[List[int], List[int], int]:
     split_counts = [0] * (ref_len + 1)
     softclip_counts = [0] * (ref_len + 1)
     mapped_records = 0
 
+    samtools_view_cmd = [*samtools_cmd, "view", "-F", "4", str(bam)]
     proc = subprocess.Popen(
-        ["samtools", "view", "-F", "4", str(bam)],
+        samtools_view_cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -142,7 +151,8 @@ def build_alignment_evidence(
         stderr_text = proc.stderr.read()
     return_code = proc.wait()
     if return_code != 0:
-        raise RuntimeError(f"samtools view failed (exit {return_code}): {stderr_text.strip()}")
+        cmd_str = " ".join(samtools_view_cmd)
+        raise RuntimeError(f"samtools view failed (exit {return_code}) [{cmd_str}]: {stderr_text.strip()}")
 
     return split_counts, softclip_counts, mapped_records
 
@@ -382,7 +392,12 @@ def main() -> None:
         raise RuntimeError(f"Reference FASTA has no sequence: {args.reference_fasta}")
     ref_len = len(ref_seq)
 
-    split_counts, softclip_counts, _mapped_records = build_alignment_evidence(args.bam, ref_name, ref_len)
+    split_counts, softclip_counts, _mapped_records = build_alignment_evidence(
+        args.bam,
+        ref_name,
+        ref_len,
+        args.samtools_cmd,
+    )
     depth_by_pos = read_coverage_depth(args.coverage_tsv, ref_len)
 
     coverage_entries = compress_per_base_values(depth_by_pos)

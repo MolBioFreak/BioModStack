@@ -82,18 +82,40 @@ process DoradoAlign {
     path "align.log", emit: log
 
     script:
+    def bamMinMapq = Math.max((params.bam_min_mapq ?: 0) as Integer, 0)
     """
+    set -euo pipefail
+
     # Sort and align; preserve MM/ML methylation tags
-    dorado aligner \\
-        ${reference} \\
-        ${bam} \\
-        --threads ${task.cpus} \\
-        2>align.log \\
-        | samtools sort -@ ${task.cpus} -o aligned.bam
+    if [[ ${bamMinMapq} -gt 0 ]]; then
+        dorado aligner \\
+            ${reference} \\
+            ${bam} \\
+            --threads ${task.cpus} \\
+            2>align.log \\
+            | samtools view -h -q ${bamMinMapq} - \\
+            | samtools sort -@ ${task.cpus} -o aligned.bam
+        echo "Applied MAPQ filter: >= ${bamMinMapq}" >> align.log
+    else
+        dorado aligner \\
+            ${reference} \\
+            ${bam} \\
+            --threads ${task.cpus} \\
+            2>align.log \\
+            | samtools sort -@ ${task.cpus} -o aligned.bam
+    fi
 
     samtools index aligned.bam
     cp ${reference} reference.fasta
     samtools faidx reference.fasta
+
+    input_records=\$(samtools view -c ${bam})
+    output_records=\$(samtools view -c aligned.bam)
+    {
+        echo "bam_min_mapq=${bamMinMapq}"
+        echo "input_records=\${input_records}"
+        echo "output_records=\${output_records}"
+    } >> align.log
     """
 }
 
@@ -114,12 +136,26 @@ process PrepareBamForAnalysis {
     path "bam_prepare.log", emit: log
 
     script:
+    def bamMinMapq = Math.max((params.bam_min_mapq ?: 0) as Integer, 0)
     """
     set -euo pipefail
 
     # Preserve MM/ML tags while enforcing coordinate-sorted BAM + index for modkit.
-    samtools sort -@ ${task.cpus} -o aligned.bam ${bam} 2> bam_prepare.log
+    if [[ ${bamMinMapq} -gt 0 ]]; then
+        samtools view -h -q ${bamMinMapq} ${bam} 2> bam_prepare.log \\
+            | samtools sort -@ ${task.cpus} -o aligned.bam
+        echo "Applied MAPQ filter: >= ${bamMinMapq}" >> bam_prepare.log
+    else
+        samtools sort -@ ${task.cpus} -o aligned.bam ${bam} 2> bam_prepare.log
+    fi
     samtools index aligned.bam 2>> bam_prepare.log
+    input_records=\$(samtools view -c ${bam})
+    output_records=\$(samtools view -c aligned.bam)
+    {
+        echo "bam_min_mapq=${bamMinMapq}"
+        echo "input_records=\${input_records}"
+        echo "output_records=\${output_records}"
+    } >> bam_prepare.log
     """
 }
 
@@ -261,11 +297,18 @@ process FastqAlign {
     path "fastq_align.log", emit: log
 
     script:
+    def minimapPreset = ((params.fastq_minimap2_preset ?: 'lr:hq') as String).trim()
+    def allowSecondary = (params.fastq_minimap2_allow_secondary == true) ? 'true' : 'false'
     """
     set -euo pipefail
 
-    # Align FASTQ reads to reference with minimap2 (map-ont preset for Nanopore)
-    minimap2 -a -x map-ont --secondary=no -t ${task.cpus} \\
+    # Align FASTQ reads to reference with minimap2 (preset configurable via params).
+    MM2_ARGS=(-a -x "${minimapPreset}" -t ${task.cpus})
+    if [[ "${allowSecondary}" != "true" ]]; then
+        MM2_ARGS+=(--secondary=no)
+    fi
+
+    minimap2 "\${MM2_ARGS[@]}" \\
         ${reference} ${fastq} 2>fastq_align.log \\
         | samtools sort -@ ${task.cpus} -o aligned.bam
 
@@ -307,18 +350,39 @@ process FastqPlasmidQC {
     path "igv_report.html", emit: igv_report
     path "igv_report.log", emit: igv_report_log
     path "fastq_consensus.fasta", emit: consensus
+    path "fastq_consensus.fasta.fai", emit: consensus_index
     path "fastq_consensus.log", emit: consensus_log
     path "fastq_qc.log", emit: log
 
     script:
     def expectedSize = (params.expected_plasmid_size ?: 7000) as Integer
     def minReadLength = (params.min_fastq_read_length ?: 0) as Integer
+    def minimapPreset = ((params.fastq_minimap2_preset ?: 'lr:hq') as String).trim()
+    def minimapAllowSecondary = (params.fastq_minimap2_allow_secondary == true) ? 'true' : 'false'
     def igvTrackWindowBp = (params.igv_track_window_bp ?: 100) as Integer
     def igvReportMaxSites = (params.igv_report_max_sites ?: 40) as Integer
     def igvReportFlankingBp = (params.igv_report_flanking_bp ?: 200) as Integer
     def codeRoot = params.code_root ?: projectDir
     """
     set -euo pipefail
+
+    if command -v samtools >/dev/null 2>&1; then
+        SAMTOOLS_CMD=(samtools)
+    elif command -v apptainer >/dev/null 2>&1 && [[ -f "${params.container_dir}/dorado.sif" ]]; then
+        SAMTOOLS_CMD=(apptainer exec "${params.container_dir}/dorado.sif" samtools)
+    else
+        echo "samtools not found on host and no fallback dorado container available" >&2
+        exit 127
+    fi
+
+    if command -v python3 >/dev/null 2>&1; then
+        PYTHON_CMD=(python3)
+    elif command -v python >/dev/null 2>&1; then
+        PYTHON_CMD=(python)
+    else
+        echo "python interpreter not found (tried python3 and python)" >&2
+        exit 127
+    fi
 
     printf "read_id\\tlength_bp\\n" > read_lengths.tsv
 
@@ -376,15 +440,15 @@ process FastqPlasmidQC {
     }')
 
     cp "${reference}" reference_qc.fasta
-    samtools faidx reference_qc.fasta
+    "\${SAMTOOLS_CMD[@]}" faidx reference_qc.fasta
     reference_name=\$(head -n1 reference_qc.fasta.fai | cut -f1)
     reference_length=\$(head -n1 reference_qc.fasta.fai | cut -f2)
 
-    mapped_reads=\$(samtools view -c -F 4 "${bam}")
-    unmapped_reads=\$(samtools view -c -f 4 "${bam}")
-    primary_mapped_reads=\$(samtools view -c -F 2308 "${bam}")
-    secondary_alignments=\$(samtools view -c -f 256 "${bam}")
-    supplementary_alignments=\$(samtools view -c -f 2048 "${bam}")
+    mapped_reads=\$("\${SAMTOOLS_CMD[@]}" view -c -F 4 "${bam}")
+    unmapped_reads=\$("\${SAMTOOLS_CMD[@]}" view -c -f 4 "${bam}")
+    primary_mapped_reads=\$("\${SAMTOOLS_CMD[@]}" view -c -F 2308 "${bam}")
+    secondary_alignments=\$("\${SAMTOOLS_CMD[@]}" view -c -f 256 "${bam}")
+    supplementary_alignments=\$("\${SAMTOOLS_CMD[@]}" view -c -f 2048 "${bam}")
     total_alignment_records=\$((mapped_reads + unmapped_reads))
     mapping_rate_pct=\$(awk -v mapped="\${mapped_reads}" -v total="\${total_alignment_records}" 'BEGIN {
         if (total > 0) printf "%.4f", (100.0 * mapped) / total
@@ -396,7 +460,7 @@ process FastqPlasmidQC {
     }')
 
     printf "reference\\tposition\\tdepth\\n" > fastq_coverage.tsv
-    samtools depth -aa "${bam}" | awk 'BEGIN { OFS="\\t" } { print \$1, \$2, \$3 }' >> fastq_coverage.tsv
+    "\${SAMTOOLS_CMD[@]}" depth -aa "${bam}" | awk 'BEGIN { OFS="\\t" } { print \$1, \$2, \$3 }' >> fastq_coverage.tsv
     coverage_positions=\$(awk 'NR > 1 {c++} END {print c + 0}' fastq_coverage.tsv)
     covered_positions=\$(awk 'NR > 1 && (\$3 + 0) > 0 {c++} END {print c + 0}' fastq_coverage.tsv)
     mean_coverage=\$(awk 'NR > 1 {s += (\$3 + 0); c++} END {if (c > 0) printf "%.4f", s / c; else printf "0"}' fastq_coverage.tsv)
@@ -418,12 +482,12 @@ process FastqPlasmidQC {
     }')
 
     consensus_status="not_run"
-    if samtools consensus -f fasta "${bam}" > fastq_consensus.fasta 2> fastq_consensus.log; then
+    if "\${SAMTOOLS_CMD[@]}" consensus -f fasta "${bam}" > fastq_consensus.fasta 2> fastq_consensus.log; then
         consensus_status="ok"
     else
         echo "samtools consensus unavailable or failed; attempting mpileup-majority fallback" >> fastq_consensus.log
         if [[ -f "${codeRoot}/scripts/mpileup_majority_consensus.awk" ]] && \
-           samtools mpileup -aa -A -d 1000000 -f reference_qc.fasta "${bam}" 2>> fastq_consensus.log | \
+           "\${SAMTOOLS_CMD[@]}" mpileup -aa -A -d 1000000 -f reference_qc.fasta "${bam}" 2>> fastq_consensus.log | \
            awk -f "${codeRoot}/scripts/mpileup_majority_consensus.awk" > fastq_consensus.fasta.tmp && \
            [[ -s fastq_consensus.fasta.tmp ]]; then
             mv fastq_consensus.fasta.tmp fastq_consensus.fasta
@@ -434,6 +498,7 @@ process FastqPlasmidQC {
             consensus_status="reference_copy_fallback"
         fi
     fi
+    "\${SAMTOOLS_CMD[@]}" faidx fastq_consensus.fasta
 
     consensus_name=\$(awk 'NR == 1 {gsub(/^>/, "", \$0); print \$0; exit}' fastq_consensus.fasta)
     consensus_length=\$(awk 'NR > 1 {gsub(/\\r/, "", \$0); s += length(\$0)} END {print s + 0}' fastq_consensus.fasta)
@@ -445,10 +510,11 @@ process FastqPlasmidQC {
         exit 1
     fi
 
-    python3 "${codeRoot}/scripts/build_fastq_igv_tracks.py" \\
+    "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/build_fastq_igv_tracks.py" \\
         --bam "${bam}" \\
         --reference-fasta reference_qc.fasta \\
         --coverage-tsv fastq_coverage.tsv \\
+        --samtools-cmd "\${SAMTOOLS_CMD[@]}" \\
         --window-bp ${igvTrackWindowBp} \\
         --hotspot-max ${igvReportMaxSites} \\
         --out-coverage-depth igv_coverage_depth.bedgraph \\
@@ -591,6 +657,8 @@ JSON
         echo -e "reference_length\\t\${reference_length}"
         echo -e "expected_plasmid_size\\t${expectedSize}"
         echo -e "min_fastq_read_length\\t${minReadLength}"
+        echo -e "fastq_minimap2_preset\\t${minimapPreset}"
+        echo -e "fastq_minimap2_allow_secondary\\t${minimapAllowSecondary}"
         echo -e "total_reads\\t\${total_reads}"
         echo -e "total_bases\\t\${total_bases}"
         echo -e "mean_read_length_bp\\t\${mean_read_length}"
@@ -629,6 +697,8 @@ JSON
         echo -e "reads_considered\\t\${total_reads}"
         echo -e "mapped_reads\\t\${mapped_reads}"
         echo -e "mapping_rate_pct\\t\${mapping_rate_pct}"
+        echo -e "fastq_minimap2_preset\\t${minimapPreset}"
+        echo -e "fastq_minimap2_allow_secondary\\t${minimapAllowSecondary}"
         echo -e "mean_read_length_bp\\t\${mean_read_length}"
         echo -e "n50_read_length_bp\\t\${n50_read_length}"
         echo -e "estimated_copy_number_mean\\t\${estimated_copy_number_mean}"
@@ -824,9 +894,16 @@ process FastqDimerAnalysis {
     def singleRefMinMapq = (params.single_ref_split_min_mapq ?: 20) as Integer
     def singleRefMinSegBp = (params.single_ref_split_min_segment_bp ?: 250) as Integer
     def singleRefMaxGapBp = (params.single_ref_split_max_query_gap_bp ?: 500) as Integer
+    def minimapPreset = ((params.fastq_minimap2_preset ?: 'lr:hq') as String).trim()
+    def minimapAllowSecondary = (params.fastq_minimap2_allow_secondary == true) ? 'true' : 'false'
     def codeRoot = params.code_root ?: projectDir
     """
     set -euo pipefail
+
+    MM2_ARGS=(-a -x "${minimapPreset}" -t ${task.cpus})
+    if [[ "${minimapAllowSecondary}" != "true" ]]; then
+        MM2_ARGS+=(--secondary=no)
+    fi
 
     : > dimer_candidates.fastq
     : > dimer_candidates.fasta
@@ -967,7 +1044,7 @@ process FastqDimerAnalysis {
     dominant_consensus_read_support_pct=0
 
     if [[ "\${dimer_count}" -gt 0 ]]; then
-        minimap2 -a -x map-ont --secondary=no -t ${task.cpus} \\
+        minimap2 "\${MM2_ARGS[@]}" \\
             dimer_reference.fasta dimer_candidates.fastq \\
             2> dimer_alignment.log \\
             | samtools sort -@ ${task.cpus} -o dimer_candidates.aligned.bam
@@ -1291,7 +1368,7 @@ process FastqDimerAnalysis {
 
         # Secondary pass: remap dimer candidates to single-copy reference and
         # call split transitions between adjacent query segments.
-        if minimap2 -a -x map-ont --secondary=no -t ${task.cpus} \\
+        if minimap2 "\${MM2_ARGS[@]}" \\
             ref_single.fasta dimer_candidates.fastq \\
             2> dimer_single_ref_alignment.log \\
             | samtools sort -@ ${task.cpus} -o dimer_candidates.single_ref.aligned.bam; then

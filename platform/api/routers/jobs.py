@@ -11,6 +11,7 @@ from copy import deepcopy
 import asyncio
 import uuid
 import os
+import hashlib
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -171,6 +172,12 @@ def _resolve_nanopore_fastq_qc_mode(params: Optional[dict]) -> tuple[bool, bool]
     return False, False
 
 
+def _resolve_nanopore_bam_realign(params: Optional[dict]) -> bool:
+    if not isinstance(params, dict):
+        return False
+    return _to_bool(params.get("bam_force_realign"))
+
+
 def _infer_nanopore_stage_outputs(
     output_dir: Optional[str],
     params: Optional[dict] = None,
@@ -198,6 +205,7 @@ def _infer_nanopore_stage_outputs(
             "align/bam_prepare.log",
             "align/reference.fasta",
             "align/reference.fasta.fai",
+            "align/reference_prepare.log",
         ],
         "fastq_align": [
             "align/aligned.bam",
@@ -211,7 +219,20 @@ def _infer_nanopore_stage_outputs(
             "fastq_qc/fastq_qc_summary.tsv",
             "fastq_qc/fastq_alignment_stats.tsv",
             "fastq_qc/fastq_coverage.tsv",
+            "fastq_qc/igv_coverage_depth.bedgraph",
+            "fastq_qc/igv_position_gradient.bedgraph",
+            "fastq_qc/igv_gc_content.bedgraph",
+            "fastq_qc/igv_gc_zscore.bedgraph",
+            "fastq_qc/igv_split_read_density.bedgraph",
+            "fastq_qc/igv_softclip_density.bedgraph",
+            "fastq_qc/igv_junction_hotspots.bed",
+            "fastq_qc/igv_report_sites.bed",
+            "fastq_qc/igv_report_sites.tsv",
+            "fastq_qc/igv_track_config.json",
+            "fastq_qc/igv_report.html",
+            "fastq_qc/igv_report.log",
             "fastq_qc/fastq_consensus.fasta",
+            "fastq_qc/fastq_consensus.fasta.fai",
             "fastq_qc/fastq_consensus.log",
             "fastq_qc/fastq_qc.log",
         ],
@@ -270,13 +291,18 @@ def _infer_nanopore_stage_outputs(
         has_fastq = _is_meaningful_param_value(params.get("fastq_path"))
         has_reference = _is_meaningful_param_value(params.get("reference_fasta"))
         fastq_qc_enabled, legacy_multimer_mode = _resolve_nanopore_fastq_qc_mode(params)
+        bam_force_realign = _resolve_nanopore_bam_realign(params)
 
         allowed_stages = set()
         if has_pod5:
             allowed_stages.add("dorado_basecall")
-        if (has_pod5 and has_reference) or (has_bam and has_reference):
+        if has_pod5 and has_reference:
             allowed_stages.add("dorado_align")
-        if (has_bam and not has_reference) or (has_pod5 and not has_reference):
+        if has_bam and has_reference and bam_force_realign:
+            allowed_stages.add("dorado_align")
+        if has_bam:
+            allowed_stages.add("bam_prepare")
+        if has_pod5 and not has_reference:
             allowed_stages.add("bam_prepare")
         if has_fastq and has_reference:
             allowed_stages.add("fastq_align")
@@ -671,6 +697,24 @@ async def create_job(
                 'msa_force_refresh': job_data.params.get('msa_force_refresh', False),
                 'msa_use_gpu': job_data.params.get('msa_use_gpu', True),
                 'msa_max_seqs': job_data.params.get('msa_max_seqs'),
+                'msa_preset': job_data.params.get('msa_preset', 'fast'),
+                'msa_use_expand': job_data.params.get('msa_use_expand'),
+                'msa_use_env': job_data.params.get('msa_use_env'),
+                'msa_num_iterations': job_data.params.get('msa_num_iterations'),
+                'msa_evalue': job_data.params.get('msa_evalue'),
+                'msa_min_seq_id': job_data.params.get('msa_min_seq_id'),
+                'msa_min_coverage': job_data.params.get('msa_min_coverage'),
+                'msa_taxon_list': job_data.params.get('msa_taxon_list'),
+                'msa_min_depth_warning': job_data.params.get('msa_min_depth_warning'),
+                'msa_min_depth_fail': job_data.params.get('msa_min_depth_fail'),
+                'msa_gpu_mode': job_data.params.get('msa_gpu_mode'),
+                'msa_gpu_threshold': job_data.params.get('msa_gpu_threshold'),
+                'msa_preferred_gpus': job_data.params.get('msa_preferred_gpus'),
+                'msa_excluded_gpus': job_data.params.get('msa_excluded_gpus'),
+                'msa_gpu_server_mode': job_data.params.get('msa_gpu_server_mode'),
+                'msa_gpu_server_wait_timeout': job_data.params.get('msa_gpu_server_wait_timeout'),
+                'msa_gpu_server_db_load_mode': job_data.params.get('msa_gpu_server_db_load_mode'),
+                'msa_gpu_server_startup_wait': job_data.params.get('msa_gpu_server_startup_wait'),
                 # BATCH-STAGE-GATE: Store FrustraMPNN flag for post-batch execution
                 'run_frustrampnn_batch': job_data.params.get('run_frustrampnn', False),
             },
@@ -750,7 +794,17 @@ async def create_job(
             job_name = job_data.name
             output_dir = base_output_dir
             job_params = job_data.params
-        
+
+        if msa_job:
+            sequence_for_hash = str(job_params.get('sequence') or job_params.get('sequence_input') or '')
+            reference_for_hash = str(job_data.params.get('msa_reference_sequence') or '')
+            hash_source = reference_for_hash or sequence_for_hash
+            if hash_source:
+                job_params = {
+                    **job_params,
+                    'msa_sequence_hash': hashlib.sha256(hash_source.encode()).hexdigest(),
+                }
+
         os.makedirs(output_dir, exist_ok=True)
         
         # Determine queue status: if MSA job exists, this job waits for it
@@ -1555,6 +1609,7 @@ async def get_job_stages(
             has_fastq = _is_meaningful_param_value(np_params.get("fastq_path"))
             has_reference = _is_meaningful_param_value(np_params.get("reference_fasta"))
             fastq_qc_enabled, legacy_multimer_mode = _resolve_nanopore_fastq_qc_mode(np_params)
+            bam_force_realign = _resolve_nanopore_bam_realign(np_params)
 
             if has_pod5:
                 display_stages.append("dorado_basecall")
@@ -1563,7 +1618,10 @@ async def get_job_stages(
                 display_stages.append("dorado_align")
 
             if has_bam and has_reference:
-                display_stages.append("dorado_align")
+                if bam_force_realign:
+                    display_stages.append("dorado_align")
+                else:
+                    display_stages.append("bam_prepare")
 
             if (has_bam and not has_reference) or (has_pod5 and not has_reference):
                 display_stages.append("bam_prepare")

@@ -462,6 +462,7 @@ process PrepareComplexWithMSA {
     def msaGpuServerWaitTimeout = params.msa_gpu_server_wait_timeout ?: 120
     def msaGpuServerDbLoadMode = params.msa_gpu_server_db_load_mode ?: 0
     def msaGpuServerStartupWait = params.msa_gpu_server_startup_wait ?: 1.0
+    def msaAllowEmptyFallback = params.msa_allow_empty_fallback != null ? params.msa_allow_empty_fallback.toString() : "false"
     // Per-chain MSA timeout in seconds for complex prep; set <=0 to disable timeout.
     def msaChainTimeoutSeconds = params.msa_chain_timeout_seconds ?: 3600
     """
@@ -512,6 +513,7 @@ msa_gpu_server_mode = "${msaGpuServerMode}"
 msa_gpu_server_wait_timeout = "${msaGpuServerWaitTimeout}"
 msa_gpu_server_db_load_mode = "${msaGpuServerDbLoadMode}"
 msa_gpu_server_startup_wait = "${msaGpuServerStartupWait}"
+msa_allow_empty_fallback = "${msaAllowEmptyFallback}".strip().lower() == "true"
 msa_chain_timeout_seconds = int("${msaChainTimeoutSeconds}")
 msa_fallback_path = "${msa_files}"
 fallback_msa = None
@@ -527,6 +529,7 @@ msa_chain_timeout = None if msa_chain_timeout_seconds <= 0 else msa_chain_timeou
 # Track sequence -> MSA path mappings for homodimer support
 # Boltz-2 requires identical sequences to share the same MSA
 seq_to_msa = {}
+msa_failures = []
 
 for comp in complex_def.get("components", []):
     comp_type = comp.get("type", "protein")
@@ -616,11 +619,21 @@ for comp in complex_def.get("components", []):
                         print(f"Generated MSA: {msa_file}")
                 except Exception as e:
                     print(f"MSA generation failed for chain {chain_id}: {e}")
+                    msa_failures.append(f"protein chain {chain_id}: {e}")
         
-        # Fallback: if no MSA was set, use single-sequence mode (Boltz-2 API: msa: empty)
+        # Fallback policy: by default fail hard for missing protein-chain MSA when use_msa=true.
         if "msa" not in entry["protein"]:
-            entry["protein"]["msa"] = "empty"
-            print(f"No MSA available for chain {comp_id} - using single-sequence mode")
+            if use_msa and not msa_allow_empty_fallback:
+                chain_id = comp_id[0] if isinstance(comp_id, list) else comp_id
+                reason = (
+                    f"No MSA available for protein chain {chain_id} while use_msa=true "
+                    "(set msa_allow_empty_fallback=true to allow msa: empty)"
+                )
+                print(f"ERROR: {reason}")
+                msa_failures.append(reason)
+            else:
+                entry["protein"]["msa"] = "empty"
+                print(f"No MSA available for chain {comp_id} - using single-sequence mode")
                 
     elif comp_type == "ligand":
         entry = {"ligand": {"id": [comp_id] if isinstance(comp_id, str) else comp_id}}
@@ -735,6 +748,12 @@ for comp in complex_def.get("components", []):
 
 if binder_chain:
     boltz_yaml["properties"] = [{"binder": [binder_chain] if isinstance(binder_chain, str) else binder_chain}]
+
+if msa_failures:
+    print("ERROR: Aborting complex preparation because required protein-chain MSA generation failed.")
+    for msg in msa_failures:
+        print(f"  - {msg}")
+    raise SystemExit(2)
 
 yaml_path = f"yamls/{complex_name}.yaml"
 with open(yaml_path, "w") as f:

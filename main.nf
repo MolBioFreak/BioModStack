@@ -82,11 +82,18 @@ workflow {
         def runFastqQc = params.run_fastq_qc != null
             ? (params.run_fastq_qc != false)
             : (params.run_multimer_qc != false)
+        def forceBamRealign = params.bam_force_realign == true
 
         println("Running Nanopore Methylation Workflow")
         println("* POD5 dir: ${params.pod5_dir}")
         println("* BAM path: ${params.bam_path}")
+        println("* BAM force realign: ${forceBamRealign}")
+        println("* BAM min MAPQ: ${(params.bam_min_mapq ?: 0)}")
         println("* FASTQ path: ${params.fastq_path}")
+        if (params.fastq_path && params.fastq_path.toString().trim()) {
+            println("* FASTQ minimap2 preset: ${(params.fastq_minimap2_preset ?: 'lr:hq')}")
+            println("* FASTQ keep secondary alignments: ${(params.fastq_minimap2_allow_secondary == true)}")
+        }
         println("* Dorado model: ${params.dorado_model ?: 'sup'}")
         println("* Modified bases: ${params.modified_bases ?: 'none'}")
         println("* Run modkit: ${params.run_modkit != false}")
@@ -187,7 +194,7 @@ workflow {
                 error("BAM file not found: ${params.bam_path}")
             }
 
-            if (has_reference) {
+            if (has_reference && forceBamRealign) {
                 DoradoAlign(
                     Channel.of(bam_input),
                     Channel.of(reference_file)
@@ -209,10 +216,18 @@ workflow {
                         "${params.out_dir}/align/aligned.bam",
                         "${params.out_dir}/align/aligned.bam.bai",
                         "${params.out_dir}/align/bam_prepare.log",
+                        has_reference ? "${params.out_dir}/align/reference.fasta" : null,
+                        has_reference ? "${params.out_dir}/align/reference.fasta.fai" : null,
+                        has_reference ? "${params.out_dir}/align/reference_prepare.log" : null,
                     ])
                 }
 
                 analysis_bam = PrepareBamForAnalysis.out.aligned
+
+                if (has_reference) {
+                    PrepareReferenceForIGV(Channel.of(reference_file))
+                    PrepareReferenceForIGV.out.log.subscribe { _ -> }
+                }
 
                 if (params.run_modkit != false || params.run_assembly) {
                     ValidateMappedBam(analysis_bam)
@@ -267,6 +282,7 @@ workflow {
                         "${params.out_dir}/fastq_qc/igv_report.html",
                         "${params.out_dir}/fastq_qc/igv_report.log",
                         "${params.out_dir}/fastq_qc/fastq_consensus.fasta",
+                        "${params.out_dir}/fastq_qc/fastq_consensus.fasta.fai",
                         "${params.out_dir}/fastq_qc/fastq_consensus.log",
                         "${params.out_dir}/fastq_qc/fastq_qc.log",
                     ])

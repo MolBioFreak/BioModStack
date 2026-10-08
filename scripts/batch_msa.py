@@ -51,7 +51,7 @@ def compute_sequence_hash(sequence: str) -> str:
     return hashlib.sha256(sequence.encode()).hexdigest()
 
 
-def check_cache(cache_dir: Path, seq_hash: str, preset: str = "balanced") -> Optional[Path]:
+def check_cache(cache_dir: Path, seq_hash: str, preset: str = "fast") -> Optional[Path]:
     """Check if we have a cached MSA for this sequence hash + preset."""
     if not cache_dir:
         return None
@@ -75,7 +75,7 @@ def load_from_cache(cache_path: Path, out_path: Path) -> None:
         f.write(content)
 
 
-def save_to_cache(msa_path: Path, cache_dir: Path, seq_hash: str, preset: str = "balanced") -> Path:
+def save_to_cache(msa_path: Path, cache_dir: Path, seq_hash: str, preset: str = "fast") -> Path:
     """Compress and save MSA to cache with preset-aware naming."""
     cache_subdir = cache_dir / seq_hash[:2]
     cache_subdir.mkdir(parents=True, exist_ok=True)
@@ -87,6 +87,145 @@ def save_to_cache(msa_path: Path, cache_dir: Path, seq_hash: str, preset: str = 
     return cache_file
 
 
+def _run_colabfold_per_sequence(
+    sequences: List[Dict[str, str]],
+    output_dir: Path,
+    db_path: Path,
+    cache_dir: Optional[Path],
+    gpu_id: int,
+    reference_sequence: Optional[str],
+    force_refresh: bool,
+    cpu_only: bool,
+    preset: str,
+    max_seqs: Optional[int],
+    use_expand: Optional[int],
+    use_env: Optional[int],
+    num_iterations: Optional[int],
+    evalue: Optional[float],
+    min_seq_id: Optional[float],
+    min_coverage: Optional[float],
+    taxon_list: Optional[str],
+    min_depth_warning: Optional[int],
+    min_depth_fail: Optional[int],
+    gpu_mode: Optional[str],
+    gpu_threshold: Optional[int],
+    preferred_gpus: Optional[str],
+    excluded_gpus: Optional[str],
+    gpu_server_mode: Optional[str],
+    gpu_server_wait_timeout: Optional[int],
+    gpu_server_db_load_mode: Optional[int],
+    gpu_server_startup_wait: Optional[float],
+) -> List[Dict[str, Any]]:
+    """
+    Fallback path that preserves full run_local_msa.py behavior for quality-critical presets.
+    """
+    run_local_msa_script = Path(__file__).with_name("run_local_msa.py")
+    if not run_local_msa_script.exists():
+        raise RuntimeError(f"Missing run_local_msa.py at {run_local_msa_script}")
+
+    results: List[Dict[str, Any]] = []
+    for seq_info in sequences:
+        name = seq_info["name"]
+        sequence = seq_info["sequence"]
+        cache_key_seq = reference_sequence if reference_sequence else sequence
+        seq_hash = compute_sequence_hash(cache_key_seq)
+        msa_path = output_dir / f"{name}.a3m"
+        quality_path = output_dir / f"{name}_msa_quality.json"
+
+        cmd = [
+            "python3", str(run_local_msa_script),
+            "--sequence", sequence,
+            "--name", name,
+            "--out_dir", str(output_dir),
+            "--db_path", str(db_path),
+            "--preset", preset,
+            "--gpu-id", str(gpu_id),
+        ]
+        if max_seqs is not None:
+            cmd.extend(["--max-seqs", str(max(1, int(max_seqs)))])
+
+        if cache_dir:
+            cmd.extend(["--cache_dir", str(cache_dir)])
+        if reference_sequence:
+            cmd.extend(["--reference-sequence", reference_sequence])
+        if force_refresh:
+            cmd.append("--force_refresh")
+        if cpu_only:
+            cmd.append("--cpu-only")
+        if use_expand is not None:
+            cmd.extend(["--use-expand", str(int(use_expand))])
+        if use_env is not None:
+            cmd.extend(["--use-env", str(int(use_env))])
+        if num_iterations is not None:
+            cmd.extend(["--num-iterations", str(num_iterations)])
+        if evalue is not None:
+            cmd.extend(["--evalue", str(evalue)])
+        if min_seq_id is not None:
+            cmd.extend(["--min-seq-id", str(min_seq_id)])
+        if min_coverage is not None:
+            cmd.extend(["--min-coverage", str(min_coverage)])
+        if taxon_list:
+            cmd.extend(["--taxon-list", taxon_list])
+        if min_depth_warning is not None:
+            cmd.extend(["--min-depth-warning", str(min_depth_warning)])
+        if min_depth_fail is not None:
+            cmd.extend(["--min-depth-fail", str(min_depth_fail)])
+        if gpu_mode:
+            cmd.extend(["--gpu-mode", gpu_mode])
+        if gpu_threshold is not None:
+            cmd.extend(["--gpu-threshold", str(gpu_threshold)])
+        if preferred_gpus:
+            cmd.extend(["--preferred-gpus", preferred_gpus])
+        if excluded_gpus:
+            cmd.extend(["--excluded-gpus", excluded_gpus])
+        if gpu_server_mode:
+            cmd.extend(["--gpu-server-mode", gpu_server_mode])
+        if gpu_server_wait_timeout is not None:
+            cmd.extend(["--gpu-server-wait-timeout", str(gpu_server_wait_timeout)])
+        if gpu_server_db_load_mode is not None:
+            cmd.extend(["--gpu-server-db-load-mode", str(gpu_server_db_load_mode)])
+        if gpu_server_startup_wait is not None:
+            cmd.extend(["--gpu-server-startup-wait", str(gpu_server_startup_wait)])
+
+        print(f"  COLABFOLD MODE: {name} ({preset})")
+        proc = subprocess.run(cmd, text=True, capture_output=True)
+        if proc.stdout:
+            print(proc.stdout, end="")
+        if proc.stderr:
+            print(proc.stderr, end="")
+
+        if proc.returncode == 0 and msa_path.exists():
+            cache_hit = False
+            if quality_path.exists():
+                try:
+                    payload = json.loads(quality_path.read_text(encoding="utf-8"))
+                    cache_hit = bool(payload.get("from_cache"))
+                except Exception:
+                    cache_hit = False
+            results.append(
+                {
+                    "name": name,
+                    "sequence_hash": seq_hash,
+                    "msa_path": str(msa_path.absolute()),
+                    "cache_hit": cache_hit,
+                    "success": True,
+                }
+            )
+        else:
+            results.append(
+                {
+                    "name": name,
+                    "sequence_hash": seq_hash,
+                    "msa_path": None,
+                    "cache_hit": False,
+                    "success": False,
+                    "error": f"run_local_msa.py failed with exit code {proc.returncode}",
+                }
+            )
+
+    return results
+
+
 def run_batch_msa(
     sequences: List[Dict[str, str]],
     output_dir: Path,
@@ -96,23 +235,59 @@ def run_batch_msa(
     reference_sequence: Optional[str] = None,
     force_refresh: bool = False,
     cpu_only: bool = False,
-    max_seqs: int = 300,
+    max_seqs: Optional[int] = None,
+    preset: str = "fast",
+    use_expand: Optional[int] = None,
+    use_env: Optional[int] = None,
+    num_iterations: Optional[int] = None,
+    evalue: Optional[float] = None,
+    min_seq_id: Optional[float] = None,
+    min_coverage: Optional[float] = None,
+    taxon_list: Optional[str] = None,
+    min_depth_warning: Optional[int] = None,
+    min_depth_fail: Optional[int] = None,
+    gpu_mode: Optional[str] = None,
+    gpu_threshold: Optional[int] = None,
+    preferred_gpus: Optional[str] = None,
+    excluded_gpus: Optional[str] = None,
+    gpu_server_mode: Optional[str] = None,
+    gpu_server_wait_timeout: Optional[int] = None,
+    gpu_server_db_load_mode: Optional[int] = None,
+    gpu_server_startup_wait: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
-    Generate MSAs for all sequences in a SINGLE mmseqs search.
-    
-    This is true batching: one database scan for all queries.
+    Generate MSAs for multiple sequences.
+
+    Fast preset uses true batched mmseqs search. Higher-quality presets or advanced
+    overrides defer to run_local_msa.py per sequence for full ColabFold behavior.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
-    tmp_dir = output_dir / "tmp_batch"
-    tmp_dir.mkdir(parents=True, exist_ok=True)
-    
+    preset = str(preset or "fast").strip().lower()
+    if preset not in {"maximum", "balanced", "fast"}:
+        print(f"WARNING: Unknown preset '{preset}', falling back to 'fast'")
+        preset = "fast"
+
+    use_colabfold_mode = (
+        preset != "fast"
+        or use_expand is not None
+        or use_env is not None
+        or num_iterations is not None
+        or evalue is not None
+        or min_seq_id is not None
+        or min_coverage is not None
+        or bool(taxon_list)
+        or min_depth_warning is not None
+        or min_depth_fail is not None
+    )
+
     print(f"\n=== True Batch MSA Generation ===")
     print(f"Sequences: {len(sequences)}")
     print(f"Output: {output_dir}")
     print(f"GPU: {gpu_id}")
     print(f"CPU only: {cpu_only}")
-    print(f"Max seqs: {max_seqs}")
+    print(f"Preset: {preset}")
+    print(f"Max seqs: {max_seqs if max_seqs is not None else 'preset default'}")
+    print(f"Mode: {'colabfold-compatible' if use_colabfold_mode else 'true-batch-fast'}")
     print()
     
     # Determine which sequences need MSA generation (not in cache)
@@ -129,9 +304,10 @@ def run_batch_msa(
         
         msa_path = output_dir / f"{name}.a3m"
         
-        # Check cache
-        if cache_dir and not force_refresh:
-            cached = check_cache(cache_dir, seq_hash)
+        # Fast-mode cache check uses preset-aware key.
+        # ColabFold-compatible mode relies on run_local_msa.py cache handling.
+        if cache_dir and not force_refresh and not use_colabfold_mode:
+            cached = check_cache(cache_dir, seq_hash, preset=preset)
             if cached:
                 load_from_cache(cached, msa_path)
                 print(f"  CACHE HIT: {name}")
@@ -160,8 +336,74 @@ def run_batch_msa(
         with open(manifest_path, 'w') as f:
             json.dump(manifest, f, indent=2)
         return manifest
-    
+
+    if use_colabfold_mode:
+        print(f"\nGenerating {len(sequences_to_process)} MSAs with full ColabFold-compatible workflow...")
+        try:
+            results.extend(
+                _run_colabfold_per_sequence(
+                    sequences=sequences_to_process,
+                    output_dir=output_dir,
+                    db_path=db_path,
+                    cache_dir=cache_dir,
+                    gpu_id=gpu_id,
+                    reference_sequence=reference_sequence,
+                    force_refresh=force_refresh,
+                    cpu_only=cpu_only,
+                    preset=preset,
+                    max_seqs=max_seqs,
+                    use_expand=use_expand,
+                    use_env=use_env,
+                    num_iterations=num_iterations,
+                    evalue=evalue,
+                    min_seq_id=min_seq_id,
+                    min_coverage=min_coverage,
+                    taxon_list=taxon_list,
+                    min_depth_warning=min_depth_warning,
+                    min_depth_fail=min_depth_fail,
+                    gpu_mode=gpu_mode,
+                    gpu_threshold=gpu_threshold,
+                    preferred_gpus=preferred_gpus,
+                    excluded_gpus=excluded_gpus,
+                    gpu_server_mode=gpu_server_mode,
+                    gpu_server_wait_timeout=gpu_server_wait_timeout,
+                    gpu_server_db_load_mode=gpu_server_db_load_mode,
+                    gpu_server_startup_wait=gpu_server_startup_wait,
+                )
+            )
+        except Exception as e:
+            print(f"  BATCH ERROR: {e}")
+            for seq_info in sequences_to_process:
+                name = seq_info["name"]
+                if not any(r["name"] == name for r in results):
+                    results.append({
+                        "name": name,
+                        "sequence_hash": name_to_hash.get(name, ""),
+                        "msa_path": None,
+                        "cache_hit": False,
+                        "success": False,
+                        "error": str(e),
+                    })
+
+        manifest = {
+            "total_sequences": len(sequences),
+            "successful": sum(1 for r in results if r["success"]),
+            "cache_hits": sum(1 for r in results if r.get("cache_hit", False)),
+            "sequences": results
+        }
+        manifest_path = output_dir / "msa_manifest.json"
+        with open(manifest_path, 'w') as f:
+            json.dump(manifest, f, indent=2)
+
+        print(f"\n=== Complete ===")
+        print(f"Successful: {manifest['successful']}/{manifest['total_sequences']}")
+        print(f"Cache hits: {manifest['cache_hits']}")
+        print(f"Manifest: {manifest_path}")
+        return manifest
+
     print(f"\nGenerating {len(sequences_to_process)} MSAs in single batch...")
+    tmp_dir = output_dir / "tmp_batch"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
     
     # ═══════════════════════════════════════════════════════════════════════════
     # STEP 1: Write all sequences to ONE query FASTA
@@ -218,11 +460,12 @@ def run_batch_msa(
         search_tmp.mkdir(exist_ok=True)
         
         print(f"  Running batch search ({'GPU ' + str(gpu_id) if use_gpu else 'CPU'})...")
+        effective_max_seqs = max(1, int(max_seqs)) if max_seqs is not None else 300
         search_cmd = [
             mmseqs_bin, "search",
             str(query_db), str(uniref_db), str(result_db), str(search_tmp),
             "-s", "8.0",
-            "--max-seqs", str(max(1, int(max_seqs))),
+            "--max-seqs", str(effective_max_seqs),
             "-e", "0.001",
             "--split-memory-limit", "16G",
         ]
@@ -306,7 +549,7 @@ def run_batch_msa(
                 
                 # Save to cache
                 if cache_dir:
-                    save_to_cache(msa_path, cache_dir, seq_hash)
+                    save_to_cache(msa_path, cache_dir, seq_hash, preset=preset)
                 
                 print(f"  DONE: {name}")
                 results.append({
@@ -381,10 +624,49 @@ if __name__ == "__main__":
                        help="GPU ID to use for search")
     parser.add_argument("--cpu-only", action="store_true",
                        help="Force CPU mode (disable GPU MMseqs2)")
-    parser.add_argument("--max-seqs", type=int, default=300,
+    parser.add_argument("--max-seqs", type=int, default=None,
                        help="Maximum candidate sequences retained in search")
+    parser.add_argument("--preset", type=str, default="fast",
+                       choices=["maximum", "balanced", "fast"],
+                       help="MSA quality preset")
     parser.add_argument("--reference_sequence", default=None,
                        help="Reference sequence for cache key (mutagenesis sharing)")
+    parser.add_argument("--use-expand", type=int, default=None, choices=[0, 1],
+                       help="Override expansion mode (0/1)")
+    parser.add_argument("--use-env", type=int, default=None, choices=[0, 1],
+                       help="Override environmental DB usage (0/1)")
+    parser.add_argument("--num-iterations", type=int, default=None,
+                       help="Override number of profile iterations")
+    parser.add_argument("--evalue", type=float, default=None,
+                       help="Override e-value threshold")
+    parser.add_argument("--min-seq-id", type=float, default=None,
+                       help="Minimum sequence identity (0-1)")
+    parser.add_argument("--min-coverage", type=float, default=None,
+                       help="Minimum query coverage (0-1)")
+    parser.add_argument("--taxon-list", type=str, default=None,
+                       help="NCBI taxonomy IDs to filter (comma-separated)")
+    parser.add_argument("--min-depth-warning", type=int, default=None,
+                       help="Warn if MSA has fewer sequences")
+    parser.add_argument("--min-depth-fail", type=int, default=None,
+                       help="Fail if MSA has fewer sequences")
+    parser.add_argument("--gpu-mode", type=str, default=None,
+                       choices=["auto", "opportunistic", "required", "cpu"],
+                       help="GPU policy override")
+    parser.add_argument("--gpu-threshold", type=int, default=None,
+                       help="Max util/memory threshold for opportunistic GPU selection")
+    parser.add_argument("--preferred-gpus", type=str, default=None,
+                       help="Comma-separated preferred GPU IDs")
+    parser.add_argument("--excluded-gpus", type=str, default=None,
+                       help="Comma-separated excluded GPU IDs")
+    parser.add_argument("--gpu-server-mode", type=str, default=None,
+                       choices=["auto", "required", "persistent", "off"],
+                       help="MMseqs gpuserver policy override")
+    parser.add_argument("--gpu-server-wait-timeout", type=int, default=None,
+                       help="Seconds to wait for gpuserver handshake")
+    parser.add_argument("--gpu-server-db-load-mode", type=int, default=None, choices=[0, 1, 2, 3],
+                       help="MMseqs db-load-mode for gpuserver-backed searches")
+    parser.add_argument("--gpu-server-startup-wait", type=float, default=None,
+                       help="Seconds to wait after starting gpuserver")
     
     args = parser.parse_args()
     
@@ -406,6 +688,24 @@ if __name__ == "__main__":
         force_refresh=args.force_refresh,
         cpu_only=args.cpu_only,
         max_seqs=args.max_seqs,
+        preset=args.preset,
+        use_expand=args.use_expand,
+        use_env=args.use_env,
+        num_iterations=args.num_iterations,
+        evalue=args.evalue,
+        min_seq_id=args.min_seq_id,
+        min_coverage=args.min_coverage,
+        taxon_list=args.taxon_list,
+        min_depth_warning=args.min_depth_warning,
+        min_depth_fail=args.min_depth_fail,
+        gpu_mode=args.gpu_mode,
+        gpu_threshold=args.gpu_threshold,
+        preferred_gpus=args.preferred_gpus,
+        excluded_gpus=args.excluded_gpus,
+        gpu_server_mode=args.gpu_server_mode,
+        gpu_server_wait_timeout=args.gpu_server_wait_timeout,
+        gpu_server_db_load_mode=args.gpu_server_db_load_mode,
+        gpu_server_startup_wait=args.gpu_server_startup_wait,
     )
     
     # Exit with error if any failed
