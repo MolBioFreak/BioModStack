@@ -240,21 +240,24 @@ process NAMPNNDesign {
     done
     
     # Run NA-MPNN from its working directory (required for data_utils import)
+    # Save original workdir before cd since PWD will change
+    WORKDIR="\$(pwd)"
     cd /app/NA-MPNN
     
-    for pdb in \${PWD}/../input_converted/*.pdb; do
+    for pdb in \${WORKDIR}/input_converted/*.pdb; do
         if [ -f "\$pdb" ]; then
             echo "Running NA-MPNN on \$(basename \$pdb)..."
             python inference/run.py \\
                 --model_type "na_mpnn" \\
                 --mode "design" \\
                 --pdb_path "\$pdb" \\
-                --out_folder "\${PWD}/../nampnn_out" \\
+                --out_folder "\${WORKDIR}/nampnn_out" \\
                 --number_of_batches ${params.nampnn_num_seqs ?: 1}
         fi
     done
     
-    cd -
+    cd "\${WORKDIR}"
+
     
     # Copy designed outputs to designed/ folder
     # NA-MPNN outputs: backbones/<name>_1.pdb, seqs/<name>.fa
