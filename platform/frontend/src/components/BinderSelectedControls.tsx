@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { useQueries } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { downloadDesignPdb, fetchDesignById, fetchJobById, fetchModelById, fetchFiles } from '../lib/api';
@@ -14,16 +14,18 @@ import { parseBC2Document, type BC2Document } from '../lib/bindcraft2StructureIn
 import { BindCraft2SettingsReadback } from './BindCraft2NativeResults';
 import { ParamField } from './ModelParameterField';
 import { SequenceDesignerSettings } from './SequenceDesignerSettings';
+const ProtonPottsSettings = lazy(() => import('./ProtonPottsSettings').then(module => ({ default: module.ProtonPottsSettings })));
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { FrustraMpnnSettingsPanel } from './frustrampnn/FrustraMpnnSettingsPanel';
 import { hydrateFrustraMpnnSettings } from './frustrampnn/frustraMpnnSettingsState';
 
-const models = { refine: 'binder_refinement', caliby: 'caliby_binder', fampnn: 'fampnn', proteinmpnn: 'proteinmpnn', predict_boltz2: 'boltz2', predict_protenix: 'protenix' } as const;
-const modes = { refine: 'refine', caliby: 'design', fampnn: 'binder_design', proteinmpnn: 'design', predict_boltz2: 'complex', predict_protenix: 'complex' } as const;
+const models = { refine: 'binder_refinement', caliby: 'caliby_binder', fampnn: 'fampnn', proteinmpnn: 'proteinmpnn', protonpottsmpnn: 'protonpottsmpnn', predict_boltz2: 'boltz2', predict_protenix: 'protenix' } as const;
+const modes = { refine: 'refine', caliby: 'design', fampnn: 'binder_design', proteinmpnn: 'design', protonpottsmpnn: 'redesign', predict_boltz2: 'complex', predict_protenix: 'complex' } as const;
 const systemInputs = new Set(['pdb_paths', 'source_identity_json', 'selected_input_dir', 'selected_input_manifest', 'input_pdb', 'sequence', 'sequence_name']);
 const modelFields = (model: UntypedApiValue, operation: Exclude<BinderOperation, 'frustrampnn'>) => {
     const mode = model?.modes?.find((item: UntypedApiValue) => item.id === modes[operation]);
     return (model?.params ?? []).filter((p: UntypedApiValue) => !p.hidden && !systemInputs.has(p.name)
+        && !(operation === 'protonpottsmpnn' && p.name === 'target_pdb')
         && (!mode?.params?.length || mode.params.includes(p.name)));
 };
 interface Props {
@@ -212,6 +214,7 @@ export default function BinderSelectedControls({ sourceJobId, selectedDesignIds,
             <option value="refine">Independent repack, anchors and native antibody/nanobody flow</option>
             <option value="fampnn">FA-MPNN binder sequence redesign</option>
             <option value="proteinmpnn">ProteinMPNN sequence design</option>
+            <option value="protonpottsmpnn">ProtonPottsMPNN pH-specific sequence redesign</option>
             <option value="caliby">Caliby</option>
             <option value="predict_boltz2">Boltz-2 protein complex prediction</option>
             <option value="predict_protenix">Protenix protein complex prediction</option>
@@ -221,7 +224,8 @@ export default function BinderSelectedControls({ sourceJobId, selectedDesignIds,
             <FrustraMpnnSettingsPanel value={frustra} onChange={setFrustra}
                 governedSource={inspectionSource ? { kind: 'upload', file: inspectionSource } : null} />
             {inspectionError && <p role="status">Source inspection unavailable: {inspectionError}. The model owner resolves the selected inputs at submission.</p>}
-        </> : <>
+        </> : operation === 'protonpottsmpnn' ? <Suspense fallback={<p>Loading native redesign settings…</p>}><ProtonPottsSettings selected parameters={fields.filter((p: UntypedApiValue) => p.name !== 'target_pdb')} values={params} onChange={updateParam}
+            renderScalar={param => <ParamField key={param.name} param={param} params={params} updateParam={updateParam} setShowFileBrowser={setFileField} setActiveSequenceField={setSequenceField} setShowSequenceManager={setShowSequences} ligandPresets={[]} />} /></Suspense> : <>
             {!model && !error && <p role="status">Loading model settings…</p>}
             <SequenceDesignerSettings fields={fields} renderField={(param: UntypedApiValue) => param.name === 'manual_cdr_definitions' ? <section key={param.name} aria-label="Manual native CDR definitions">
                 <h4>Manual native CDR definitions</h4><p>Assign author residues from the inspected source; no automatic region inference.</p>

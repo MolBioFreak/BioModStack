@@ -5483,7 +5483,7 @@ function ResultsViewerContent() {
                     isShapeResultJob(activeJob) ? (
                         <ShapeResultsWorkspace key={activeJob.id} job={activeJob} />
                     ) : nativeSequenceResultKind(activeJob) ? (
-                        <NativeSequenceResults key={activeJob.id} job={activeJob} />
+                        <NativeSequenceResults key={activeJob.id} job={activeJob} launchContextId={destinationLaunchContextId} />
                     ) : activeJob.model_id === 'bindcraft2' ? (
                         <>
                             <BindCraft2JobResults key={selectedJobId} jobId={selectedJobId} status={activeJob.status}
