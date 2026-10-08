@@ -11,6 +11,7 @@ export default defineConfig({
             './tests/vitest/boltzgenRankControls.test.tsx',
             ...(process.env.BMS_TEST_ACCOUNTING_WIRE ? ['./tests/vitest/candidateAccountingMounted.test.tsx'] : []),
             ...(process.env.BMS_WP06_WIRE ? ['./tests/vitest/wp06ExecutionSettingsMounted.test.tsx'] : []),
+            './tests/vitest/fampnnPscePolicyMounted.test.tsx',
             './tests/vitest/fampnnAnalysisControls.test.tsx',
             './tests/vitest/fampnnLauncherRoundTrip.test.tsx',
             './tests/vitest/fampnnDedicatedRoundTrip.test.tsx',

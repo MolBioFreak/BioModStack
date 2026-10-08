@@ -27,7 +27,6 @@ from paths import resolve_runtime_data_path, to_allowed_relative
 from services.analysis_runs import get_matching_design_analysis_run, load_analysis_result
 from services.cdr_annotator import extract_sequence_from_pdb
 from services.stage_review import REVIEWABLE_STAGES, load_review_gate_snapshot
-from services.structure_utils import get_per_chain_fampnn_psce
 from services.result_contracts import REVIEW_CONTRACT_VERSION, build_review_artifact_manifest, resolve_result_contract, validate_design_analysis_request
 from services.design_metrics import build_design_metric_completeness, build_design_metric_provenance
 from antibody_pipeline_contract import infer_antibody_artifact_class_from_stage, normalize_antibody_artifact_class
@@ -1751,29 +1750,21 @@ def _compute_fampnn_response_metrics(
     )
 
     if include_structure_fallback and (avg_psce is None or max_psce is None or min_psce is None):
-        has_fampnn_hints = avg_psce is not None or bool(payload_records) or str(getattr(design, "stage_family", "") or "").strip().lower() == "fampnn"
-        if has_fampnn_hints and design.pdb_path:
+        # Readback may complete a known policy, never reinterpret an old scalar.
+        from services.structure_utils import fampnn_psce_authority, resolve_fampnn_psce_policy
+        policy = resolve_fampnn_psce_policy(design, {})
+        if policy is not None and design.pdb_path:
             try:
-                chain_profiles = get_per_chain_fampnn_psce(resolve_runtime_data_path(design.pdb_path))
-            except Exception:
-                chain_profiles = {}
-            residue_psces: List[float] = []
-            for profile in chain_profiles.values():
-                values = profile.get("psce") if isinstance(profile, dict) else None
-                if not isinstance(values, list):
-                    continue
-                for value in values:
-                    if isinstance(value, (int, float)):
-                        numeric = float(value)
-                        if math.isfinite(numeric):
-                            residue_psces.append(numeric)
-            if residue_psces:
-                if avg_psce is None:
-                    avg_psce = _round_nullable(sum(residue_psces) / len(residue_psces), 3)
-                if max_psce is None:
-                    max_psce = _round_nullable(max(residue_psces), 3)
-                if min_psce is None:
-                    min_psce = _round_nullable(min(residue_psces), 3)
+                summary = fampnn_psce_authority().compute_psce_profile(
+                    resolve_runtime_data_path(design.pdb_path), policy)["summary"]
+            except (ValueError, OSError):
+                summary = {}
+            if avg_psce is None:
+                avg_psce = _round_nullable(summary.get("avg_psce"), 3)
+            if max_psce is None:
+                max_psce = _round_nullable(summary.get("max_psce"), 3)
+            if min_psce is None:
+                min_psce = _round_nullable(summary.get("min_psce"), 3)
 
     return {
         "fampnn_psce": avg_psce,

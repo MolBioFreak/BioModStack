@@ -72,7 +72,7 @@ from .frustrampnn.persistence import (
     ingest_result_bundle as ingest_frustrampnn_result_bundle,
     load_and_validate_result_bundle as validate_frustrampnn_result_bundle,
 )
-from .structure_utils import calculate_epitope_contacts, compute_contact_geometry_metrics, compute_gyration_radius, get_per_chain_fampnn_psce
+from .structure_utils import calculate_epitope_contacts, compute_contact_geometry_metrics, compute_gyration_radius
 
 
 
@@ -666,47 +666,33 @@ def _compute_binder_metrics_from_structure(structure_path: Optional[Path]) -> Di
     return metrics
 
 
-def _compute_fampnn_metrics_from_structure(structure_path: Optional[Path]) -> Dict[str, Any]:
+def _compute_fampnn_metrics_from_structure(structure_path: Optional[Path], policy=None) -> Dict[str, Any]:
     metrics = _default_fampnn_metrics()
     if not structure_path or not structure_path.exists():
         return metrics
-
     metrics.update(_compute_binder_metrics_from_structure(structure_path))
-
+    from services.structure_utils import fampnn_psce_authority
+    owner = fampnn_psce_authority()
+    # Sidecar-free imports retain the historical fallback's all-chain/CB scope,
+    # but now record it. Never apply this policy to an existing unknown scalar.
+    policy = policy if policy is not None else owner.psce_policy("all_chains", False)
     try:
-        chain_profiles = get_per_chain_fampnn_psce(structure_path)
-    except Exception as exc:
-        print(f"[Ingester] Failed FA-MPNN structure-side metric extraction for {structure_path}: {exc}")
+        profile = owner.compute_psce_profile(structure_path, policy)
+    except owner.NoScoredSidechainError:
         return metrics
-
-    residue_psces: List[float] = []
-    chain_avg_psce: Dict[str, float] = {}
-    for chain_id, profile in chain_profiles.items():
-        chain_scores = [
-            value
-            for value in (profile.get("psce") if isinstance(profile, dict) else []) or []
-            if isinstance(value, (int, float))
-        ]
-        if not chain_scores:
-            continue
-        residue_psces.extend(float(value) for value in chain_scores)
-        chain_avg = safe_float(profile.get("avg_psce") if isinstance(profile, dict) else None)
-        if chain_avg is None:
-            chain_avg = sum(chain_scores) / len(chain_scores)
-        chain_avg_psce[str(chain_id)] = round(float(chain_avg), 2)
-
-    if not residue_psces:
-        return metrics
-
-    metrics["avg_psce"] = round(sum(residue_psces) / len(residue_psces), 2)
-    metrics["max_residue_psce"] = round(max(residue_psces), 2)
-    metrics["min_residue_psce"] = round(min(residue_psces), 2)
-    metrics["chain_avg_psce"] = chain_avg_psce or None
+    summary = profile["summary"]
+    metrics.update(avg_psce=round(summary["avg_psce"], 2),
+                   max_residue_psce=round(summary["max_psce"], 2),
+                   min_residue_psce=round(summary["min_psce"], 2),
+                   chain_avg_psce={c: round(v["avg_psce"], 2) for c, v in profile["chains"].items()},
+                   psce_policy=policy)
     return metrics
 
 
 def _build_fampnn_payload(fam_payload: Optional[Dict[str, Any]], fam_metrics: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     payload = dict(fam_payload or {})
+    if fam_metrics.get("psce_policy") is not None:
+        payload["psce_policy"] = fam_metrics["psce_policy"]
     if fam_metrics.get("chain_avg_psce") and not isinstance(payload.get("chain_avg_psce"), dict):
         payload["chain_avg_psce"] = fam_metrics["chain_avg_psce"]
     if fam_metrics.get("avg_psce") is not None and safe_float(payload.get("fampnn_avg_psce")) is None:
@@ -758,8 +744,7 @@ def _extract_fampnn_metrics(
             chain_avg_psce = normalized_chain_avg or None
 
         avg_psce = safe_float(fam_payload.get("fampnn_avg_psce"))
-        if avg_psce is None and chain_avg_psce:
-            avg_psce = sum(chain_avg_psce.values()) / len(chain_avg_psce)
+        # Chain means cannot reconstruct a residue-weighted overall mean.
 
         max_residue_psce = safe_float(fam_payload.get("fampnn_max_residue_psce"))
         min_residue_psce = safe_float(fam_payload.get("fampnn_min_residue_psce"))
@@ -802,7 +787,22 @@ def _extract_fampnn_metrics(
                 binder_sequence = first_chain
                 binder_length = len(first_chain)
 
-    structure_metrics = _compute_fampnn_metrics_from_structure(structure_path)
+    policy = fam_payload.get("psce_policy") if isinstance(fam_payload, dict) else None
+    if policy is not None:
+        from services.structure_utils import fampnn_psce_authority
+        policy = fampnn_psce_authority().validate_psce_policy(policy)
+        metrics["psce_policy"] = policy
+    # Never fill gaps in an unlabelled historical score using a guessed policy.
+    # Complete producer sidecars need no second parse (including sequence).
+    need_scores = any(v is None for v in (avg_psce, max_residue_psce, min_residue_psce))
+    historical_scores = policy is None and any(v is not None for v in (avg_psce, max_residue_psce, min_residue_psce, chain_avg_psce))
+    structure_metrics = _default_fampnn_metrics()
+    if need_scores and not historical_scores:
+        structure_metrics = _compute_fampnn_metrics_from_structure(structure_path, policy)
+        if structure_metrics.get("psce_policy"):
+            metrics["psce_policy"] = structure_metrics["psce_policy"]
+    elif binder_sequence is None and structure_path:
+        structure_metrics.update(_compute_binder_metrics_from_structure(structure_path))
     if avg_psce is None:
         avg_psce = structure_metrics["avg_psce"]
     if max_residue_psce is None:
